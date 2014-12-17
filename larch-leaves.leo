@@ -68,34 +68,17 @@
 </v>
 <v t="michael.20141215222649.14" a="E"><vh>Files</vh>
 <v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
-<v t="michael.20141215222649.17"><vh>@auto leaves.h</vh></v>
+<v t="michael.20141215222649.17" a="E"><vh>@shadow leaves.h</vh></v>
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
-<v t="michael.20141215222649.81"><vh>@auto bittrie.h</vh></v>
-<v t="michael.20141215222649.65"><vh>@auto memory.h</vh></v>
-<v t="michael.20141215222649.161"><vh>@auto memory.cpp</vh></v>
-<v t="michael.20141215222649.45" a="E"><vh>@auto leaves.cpp</vh></v>
+<v t="michael.20141215222649.81" a="O"><vh>@shadow bittrie.h</vh></v>
+<v t="michael.20141215222649.65" a="E"><vh>@shadow memory.h</vh></v>
+<v t="michael.20141215222649.161" a="E"><vh>@shadow memory.cpp</vh></v>
+<v t="michael.20141215222649.45" a="E"><vh>@shadow leaves.cpp</vh></v>
 </v>
 </v>
 </v>
 <v t="michael.20141215222649.8"><vh>Tests</vh></v>
-<v t="michael.20141215222649.19"><vh>@persistence</vh>
-<v t="michael.20141215222649.20"><vh>@data:@auto leaves.h</vh>
-<v t="michael.20141215222649.202"><vh>@gnxs</vh></v>
-</v>
-<v t="michael.20141215222649.49"><vh>@data:@auto storage.cpp</vh>
-<v t="michael.20141215222649.204"><vh>@gnxs</vh></v>
-</v>
-<v t="michael.20141215222649.69"><vh>@data:@auto memory.h</vh>
-<v t="michael.20141215222649.191"><vh>@gnxs</vh></v>
-</v>
-<v t="michael.20141215222649.87"><vh>@data:@auto bittrie.h</vh>
-<v t="michael.20141215222649.163"><vh>@gnxs</vh></v>
-</v>
-<v t="michael.20141215222649.165"><vh>@data:@auto memory.cpp</vh>
-<v t="michael.20141215222649.186"><vh>@gnxs</vh></v>
-</v>
-</v>
 </vnodes>
 <tnodes>
 <t tx="michael.20141215222649.10"></t>
@@ -112,6 +95,7 @@ inline size_t prefix(const char* s1, const *char s2, size_t size) {
 // Cursor implementation
 // ---------------------
 @others
+
 </t>
 <t tx="michael.20141215222649.11">###############
 Memory Managers
@@ -242,7 +226,7 @@ struct LinkNode {
 </t>
 <t tx="michael.20141215222649.15"></t>
 <t tx="michael.20141215222649.151">// a page is identified by a page id
-// because of copy on write for concurrent storages
+// because of "copy on write" for concurrent storages
 // there can be multiple pages with the same id
 // but each page has a unquie pageoffset_t
 typedef boost::uint32_t pageid_t;     // page id 
@@ -292,37 +276,11 @@ void HeapNodeMemoryManager::free_page(pageid_t pageid) {
     _free_pages++;
   }
 }
+
 </t>
 <t tx="michael.20141215222649.159">@others</t>
 <t tx="michael.20141215222649.16"></t>
 <t tx="michael.20141215222649.160"></t>
-<t tx="michael.20141215222649.163">gnx: michael.20141215222649.82
-unl: includes
-gnx: michael.20141215222649.83
-unl: Nodes
-gnx: michael.20141215222649.99
-unl: Nodes--&gt;NodeHandler
-gnx: michael.20141215222649.85
-unl: Nodes--&gt;Leaf
-gnx: michael.20141215222649.84
-unl: Nodes--&gt;PageLeaf
-gnx: michael.20141215222649.137
-unl: Nodes--&gt;LinkNode
-gnx: michael.20141215222649.93
-unl: Nodes--&gt;Node256
-gnx: michael.20141215222649.94
-unl: Nodes--&gt;Node257
-gnx: michael.20141215222649.126
-unl: Nodes--&gt;CompressNode
-gnx: michael.20141215222649.95
-unl: Nodes--&gt;BitNode
-gnx: michael.20141215222649.96
-unl: Nodes--&gt;BitNode--&gt;32bit
-gnx: michael.20141215222649.97
-unl: Nodes--&gt;BitNode--&gt;64bit
-</t>
-<t tx="michael.20141215222649.165">gnx: michael.20141215222649.161
-</t>
 <t tx="michael.20141215222649.168">class PageMap {
   PageMap
 
@@ -346,21 +304,6 @@ unl: Nodes--&gt;BitNode--&gt;64bit
 typedef boost::interprocess::mapped_region MemorySegment;
   
 </t>
-<t tx="michael.20141215222649.186">gnx: michael.20141215222649.162
-unl: includes
-gnx: michael.20141215222649.155
-unl: class NodeMemoryManager (Implementation)
-gnx: michael.20141215222649.156
-unl: class NodeMemoryManager (Implementation)--&gt;class HeapNodeManager
-gnx: michael.20141215222649.168
-unl: class NodeMemoryManager (Implementation)--&gt;class PageMap
-gnx: michael.20141215222649.159
-unl: class NodeMemoryManager (Implementation)--&gt;class PersistentNodeManager
-gnx: michael.20141215222649.169
-unl: class NodeMemoryManager (Implementation)--&gt;class MemorySegment
-gnx: michael.20141215222649.160
-unl: class NodeMemoryManager (Implementation)--&gt;class MultiProcessNodeMemoryManager
-</t>
 <t tx="michael.20141215222649.188">std::shared_ptr&lt;Storage&gt; Storage::open(const char* path, const Options&amp; options) {
   if (path) {
       if (options.multiprocess)
@@ -382,8 +325,8 @@ unl: class NodeMemoryManager (Implementation)--&gt;class MultiProcessNodeMemoryM
   _node_memory_manager-&gt;flush(false);
   _leaf_memory_manager-&gt;flush(false);
 }
+
 </t>
-<t tx="michael.20141215222649.19"></t>
 <t tx="michael.20141215222649.190">std::shared_ptr&lt;Cursor&gt; Storage::cursor(const Slice&amp; namespace_, 
                                         bool signed_compare=false) {
   if signed_compare
@@ -400,23 +343,6 @@ std::shared_ptr&lt;Cursor&gt; Storage::cursor(bool signed_compare=false) {
 }
 
 </t>
-<t tx="michael.20141215222649.191">gnx: michael.20141215222649.66
-unl: includes
-gnx: michael.20141215222649.110
-unl: namespace larch_leaves
-gnx: michael.20141215222649.151
-unl: namespace larch_leaves--&gt;page types
-gnx: michael.20141215222649.67
-unl: namespace larch_leaves--&gt;struct Page
-gnx: michael.20141215222649.73
-unl: namespace larch_leaves--&gt;class PageRef (Declaration)
-gnx: michael.20141215222649.134
-unl: namespace larch_leaves--&gt;class PageMap
-gnx: michael.20141215222649.135
-unl: namespace larch_leaves--&gt;class NodeMemoryManager (Declaration)
-gnx: michael.20141215222649.136
-unl: namespace larch_leaves--&gt;class LeafMemoryManager
-</t>
 <t tx="michael.20141215222649.198">bool Cursor::is_valid() const {
   if (_search_trace.empty())
     return false;
@@ -424,25 +350,6 @@ unl: namespace larch_leaves--&gt;class LeafMemoryManager
   return is_leaf(_search_trace.back());
 }
 
-</t>
-<t tx="michael.20141215222649.20">gnx: michael.20141215222649.17
-</t>
-<t tx="michael.20141215222649.202">gnx: michael.20141215222649.18
-unl: header comment
-gnx: michael.20141215222649.22
-unl: includes
-gnx: michael.20141215222649.24
-unl: namespace larch_leave
-gnx: michael.20141215222649.122
-unl: namespace larch_leave--&gt;simple types
-gnx: michael.20141215222649.109
-unl: namespace larch_leave--&gt;struct NodePtr
-gnx: michael.20141215222649.38
-unl: namespace larch_leave--&gt;struct Options
-gnx: michael.20141215222649.23
-unl: namespace larch_leave--&gt;class Cursor (Declaration)
-gnx: michael.20141215222649.27
-unl: namespace larch_leave--&gt;class Storage (Declaration)
 </t>
 <t tx="michael.20141215222649.203">void set(const Slice&amp; key, int read_forward=100) {
   if (! is_valid())
@@ -474,25 +381,8 @@ unl: namespace larch_leave--&gt;class Storage (Declaration)
   if (is_leaf(top) &amp;&amp; ! key_equal(top, rest_key)) {
     _search_trace.pop_back();
   }
-}</t>
-<t tx="michael.20141215222649.204">gnx: michael.20141215222649.47
-unl: incluces
-gnx: michael.20141215222649.46
-unl: namespace larch_leave
-gnx: michael.20141215222649.104
-unl: namespace larch_leave--&gt;class Cursor (Implementation)
-gnx: michael.20141215222649.198
-unl: namespace larch_leave--&gt;class Cursor (Implementation)--&gt;is_valid()
-gnx: michael.20141215222649.203
-unl: namespace larch_leave--&gt;class Cursor (Implementation)--&gt;set()
-gnx: michael.20141215222649.44
-unl: namespace larch_leave--&gt;class Storage (Implementation)
-gnx: michael.20141215222649.189
-unl: namespace larch_leave--&gt;class Storage (Implementation)--&gt;~Storage()
-gnx: michael.20141215222649.188
-unl: namespace larch_leave--&gt;class Storage (Implementation)--&gt;open()
-gnx: michael.20141215222649.190
-unl: namespace larch_leave--&gt;class Storage (Implementation)--&gt;cursor()
+}
+
 </t>
 <t tx="michael.20141215222649.23">class Cursor {
  public:
@@ -536,6 +426,7 @@ unl: namespace larch_leave--&gt;class Storage (Implementation)--&gt;cursor()
   friend Storage;
 };
 
+
 </t>
 <t tx="michael.20141215222649.27">class Storage {
  public:
@@ -557,6 +448,8 @@ private:
   std::unique_ptr&lt;NodeMemoryManager&gt; _node_memory_manager;
   std::unique_ptr&lt;LeafMemoryManager&gt; _leaf_memory_manager;
 };
+
+
 </t>
 <t tx="michael.20141215222649.38">struct Options {
   // if true Storage starts with multiprocess support
@@ -570,13 +463,12 @@ private:
   size_t max_leaf_size;
 };
 
+
 </t>
 <t tx="michael.20141215222649.4"></t>
 <t tx="michael.20141215222649.44">// Storage implemenation
 // ---------------------
 @others
-</t>
-<t tx="michael.20141215222649.49">gnx: michael.20141215222649.45
 </t>
 <t tx="michael.20141215222649.5"></t>
 <t tx="michael.20141215222649.6"></t>
@@ -628,9 +520,7 @@ struct Page {
 };
 
 </t>
-<t tx="michael.20141215222649.69">gnx: michael.20141215222649.65
-</t>
-<t tx="michael.20141215222649.72"></t>
+<t tx="michael.20141215222649.72">@others</t>
 <t tx="michael.20141215222649.73">
 class PageRef {
  public:
@@ -666,6 +556,16 @@ class PageRef {
   Page *_page;
 };</t>
 <t tx="michael.20141215222649.8"></t>
+<t tx="michael.20141215222649.81">#ifndef _LARCH_LEAVES_BITTRIE_H
+#define _LARCH_LEAVES_BITTRIE_H
+
+&lt;&lt; includes &gt;&gt;
+
+namespace larch_leaves {
+
+@others
+} // namespace larch_leaves 
+#endif // _LARCH_LEAVES_BITTRIE_H</t>
 <t tx="michael.20141215222649.83">/* 
   All trie nodes are optmized to work inside pages.
 
@@ -695,8 +595,6 @@ struct PageLeaf {
   offset_t pointer;
 };
 </t>
-<t tx="michael.20141215222649.87">gnx: michael.20141215222649.81
-</t>
 <t tx="michael.20141215222649.9"></t>
 <t tx="michael.20141215222649.93">// Node with 256 values
 struct Node256 {
@@ -716,23 +614,32 @@ struct Node257 {
 
 struct BitNode32 {
   boost::uint32_t bits[1];
+  nodeid_t end;
+  nodeid_t children[];
 };
 
 struct BitNode64 {
   boost::uint32_t bits[2];
+  nodeid_t end;
+  nodeid_t children[];
 };
 
 struct BitNode128 {
   boost::uint32_t bits[4];
+  nodeid_t end;
+  nodeid_t children[];
 };
 
 struct BitNode192 {
   boost::uint32_t bits[6];
-
+  nodeid_t end;
+  nodeid_t children[];
 };
 
 struct BitNode256 {
   boost::uint32_t  bits[8];
+  nodeid_t end;
+  nodeid_t children[];
 };
 
 

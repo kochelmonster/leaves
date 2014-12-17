@@ -1,7 +1,12 @@
-#include <boost/interprocess/file_mapping.hpp>
+#ifndef _LARCH_LEAVES_MEMORY_H
+#define _LARCH_LEAVES_MEMORY_H
+
+#include "larch/leaves.h"
+
 namespace larch_leaves {
+
 // a page is identified by a page id
-// because of copy on write for concurrent storages
+// because of "copy on write" for concurrent storages
 // there can be multiple pages with the same id
 // but each page has a unquie pageoffset_t
 typedef boost::uint32_t pageid_t;     // page id 
@@ -86,49 +91,6 @@ class PageRef {
   pageid_t pageid;
   Page *_page;
 };
-// maps pageids to page offsets
-class PageMap {
- public:
-
-  // get the newest page below version
-  pageoffset_t get_newest_below(pageid_t page, version_t version);
-  
-  // get the newest page
-  pageoffset_t get_newest(pageid_t page);
-  
-  // get the oldest page
-  pageoffset_t get_oldest(pageid_t page);
-  
-  void set_newest(pageid_t id, pageoffset_t offset);
-  void set_oldest(pageid_t id, pageoffset_t offset);
-  
-  // returns the needed size for page_count pages
-  size_t calc_size(size_t page_count);
-  
-  // addapt the 
-  void increase(size_t end_size);
-  
-  
- private:
-  struct Entry {
-    versiont_t version[2];
-    pageoffset_t offset[2];
-  };
-
-  boost::uint32_t file_magic;
-  boost::uint32_t file_version;
-  version_t last_read, last_write;
-  size_t node_count;
-  size_t free_node_count;
-  union {
-    char data[];
-    Entry entries[];
-  };
-};
-
-
-class FreePageMap {
-}
 // Memory mangement nodes in pages
 class NodeMemoryManager {
  public:
@@ -223,5 +185,5 @@ class PersistentLeafMemoryManager {
  public:
   PersistentMemoryManager(const char* path);
 };
-}
-
+} // namespace larch_leaves 
+#endif // _LARCH_LEAVES_MEMORY_H

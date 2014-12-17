@@ -1,25 +1,11 @@
-/* 
-    larch leaves key value storage
-*/
+#ifndef _LARCH_LEAVES_H
+#define _LARCH_LEAVES_H
 
-#include <boost/cstdint.hpp>
 #include <vector>
 #include <memory>
 #include <string>
+
 namespace larch_leaves {
-typedef unsigned char byte_t;
-typedef byte_t nodeid_t;
-typedef unsigned long long version_t;
-
-class MemorySegment;
-
-struct NodePtr {
-  std::shared_ptr<MemorySegment> segment; // ensures the segment is alive
-  void* node_ptr;
-  byte_t type;
-  
-  bool is_valid() const { return node_ptr != NULL; }
-};
 
 struct Options {
   // if true Storage starts with multiprocess support
@@ -32,6 +18,29 @@ struct Options {
   // must be smaller than window_size
   size_t max_leaf_size;
 };
+
+
+class Storage {
+ public:
+  // opens a storage in directory "path"
+  // path must exists and end with a separator ("/" or "\")
+  // is path is NULL a in memory database is build
+  static std::shared_ptr<Storage> open(
+      const char* path, const Options& options);
+
+  // returns a cursor inside a namespace
+  // if signed_compare is true the trie table is [-127, 127] instead of [0, 255]
+  std::shared_ptr<Cursor> cursor(const Slice& namespace, bool signed_compare=false);
+  std::shared_ptr<Cursor> cursor(bool signed_compare=false);
+  
+  Storage() {}
+  ~Storage();
+  
+private:
+  std::unique_ptr<NodeMemoryManager> _node_memory_manager;
+  std::unique_ptr<LeafMemoryManager> _leaf_memory_manager;
+};
+
 
 class Cursor {
  public:
@@ -75,25 +84,6 @@ class Cursor {
   friend Storage;
 };
 
-class Storage {
- public:
-  // opens a storage in directory "path"
-  // path must exists and end with a separator ("/" or "\")
-  // is path is NULL a in memory database is build
-  static std::shared_ptr<Storage> open(
-      const char* path, const Options& options);
 
-  // returns a cursor inside a namespace
-  // if signed_compare is true the trie table is [-127, 127] instead of [0, 255]
-  std::shared_ptr<Cursor> cursor(const Slice& namespace, bool signed_compare=false);
-  std::shared_ptr<Cursor> cursor(bool signed_compare=false);
-  
-  Storage() {}
-  ~Storage();
-  
-private:
-  std::unique_ptr<NodeMemoryManager> _node_memory_manager;
-  std::unique_ptr<LeafMemoryManager> _leaf_memory_manager;
-};
-}
-
+} // namespace larch_leaves 
+#endif // _LARCH_LEAVES_H

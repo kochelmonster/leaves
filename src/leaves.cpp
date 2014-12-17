@@ -1,5 +1,5 @@
 #include "larch/leaves.h"
-#include <algorithm>
+
 namespace larch_leaves {
 
 // find prefix common to s1 and s2
@@ -52,12 +52,15 @@ void set(const Slice& key, int read_forward=100) {
     _search_trace.pop_back();
   }
 }
+
+
 // Storage implemenation
 // ---------------------
 Storage::~Storage() {
   _node_memory_manager->flush(false);
   _leaf_memory_manager->flush(false);
 }
+
 std::shared_ptr<Storage> Storage::open(const char* path, const Options& options) {
   if (path) {
       if (options.multiprocess)
@@ -89,6 +92,4 @@ std::shared_ptr<Cursor> Storage::cursor(bool signed_compare=false) {
   return new UnsignedCursor(*this);
 }
 
-
-} // namespace larch_leaves
-
+} // namespace larch_leaves 

@@ -1,4 +1,7 @@
 #include "memory.h"
+
+namespace larch_leaves {
+
 HeapNodeMemoryManager::HeapNodeMemoryManager(): _free_pages(0) {
 
 
@@ -42,6 +45,7 @@ void HeapNodeMemoryManager::free_page(pageid_t pageid) {
     _free_pages++;
   }
 }
+
 class PageMap {
   PageMap
 
@@ -59,9 +63,8 @@ class PageMap {
 };
 
 
-
 // a memory segment of a file
 
 typedef boost::interprocess::mapped_region MemorySegment;
   
-
+} // namespace larch_leaves 
