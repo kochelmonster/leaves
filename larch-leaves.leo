@@ -18,20 +18,21 @@
 <v t="michael.20141215222649.13" a="E"><vh>Logical</vh>
 <v t="michael.20141215222649.12" a="E"><vh>API</vh>
 <v t="michael.20141215222649.38"><vh>struct Options</vh></v>
+<v t="michael.20141217010530.13"><vh>struct NodePtr</vh></v>
 <v t="michael.20141215222649.23"><vh>class Cursor (Declaration)</vh></v>
 <v t="michael.20141215222649.104" a="E"><vh>class Cursor (Implementation)</vh>
 <v t="michael.20141215222649.198"><vh>is_valid()</vh></v>
 <v t="michael.20141215222649.203"><vh>set()</vh></v>
 </v>
 <v t="michael.20141215222649.27"><vh>class Storage (Declaration)</vh></v>
-<v t="michael.20141215222649.44" a="E"><vh>class Storage (Implementation)</vh>
+<v t="michael.20141215222649.44"><vh>class Storage (Implementation)</vh>
 <v t="michael.20141215222649.189"><vh>~Storage()</vh></v>
 <v t="michael.20141215222649.188"><vh>open()</vh></v>
 <v t="michael.20141215222649.190"><vh>cursor()</vh></v>
 </v>
 </v>
 <v t="michael.20141215222649.10" a="E"><vh>BitTrie</vh>
-<v t="michael.20141215222649.83" a="E"><vh>Nodes</vh>
+<v t="michael.20141215222649.83"><vh>Nodes</vh>
 <v t="michael.20141215222649.99"><vh>NodeHandler</vh></v>
 <v t="michael.20141215222649.85"><vh>Leaf</vh></v>
 <v t="michael.20141215222649.84"><vh>PageLeaf</vh></v>
@@ -39,18 +40,18 @@
 <v t="michael.20141215222649.93"><vh>Node256</vh></v>
 <v t="michael.20141215222649.94"><vh>Node257</vh></v>
 <v t="michael.20141215222649.126"><vh>CompressNode</vh></v>
-<v t="michael.20141215222649.95" a="E"><vh>BitNode</vh>
+<v t="michael.20141215222649.95"><vh>BitNode</vh>
 <v t="michael.20141215222649.96"><vh>32bit</vh></v>
 <v t="michael.20141215222649.97"><vh>64bit</vh></v>
 </v>
 </v>
 </v>
 <v t="michael.20141215222649.63" a="E"><vh>Memory Managment</vh>
-<v t="michael.20141215222649.11" a="E"><vh>@rst memory_manager.html</vh>
-<v t="michael.20141215222649.149" a="E"><vh>Links</vh>
+<v t="michael.20141215222649.11"><vh>@rst memory_manager.html</vh>
+<v t="michael.20141215222649.149"><vh>Links</vh>
 <v t="michael.20141215222649.151"><vh>page types</vh></v>
 <v t="michael.20141215222649.135"><vh>class NodeMemoryManager (Declaration)</vh></v>
-<v t="michael.20141215222649.155" a="E"><vh>class NodeMemoryManager (Implementation)</vh>
+<v t="michael.20141215222649.155"><vh>class NodeMemoryManager (Implementation)</vh>
 <v t="michael.20141215222649.156"><vh>class HeapNodeManager</vh></v>
 <v t="michael.20141215222649.168"><vh>class PageMap</vh></v>
 <v t="michael.20141215222649.159"><vh>class PersistentNodeManager</vh></v>
@@ -67,14 +68,16 @@
 </v>
 </v>
 <v t="michael.20141215222649.14" a="E"><vh>Files</vh>
-<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
-<v t="michael.20141215222649.17" a="E"><vh>@shadow leaves.h</vh></v>
+<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.17"><vh>@shadow leaves.h</vh></v>
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141215222649.81" a="O"><vh>@shadow bittrie.h</vh></v>
-<v t="michael.20141215222649.65" a="E"><vh>@shadow memory.h</vh></v>
-<v t="michael.20141215222649.161" a="E"><vh>@shadow memory.cpp</vh></v>
-<v t="michael.20141215222649.45" a="E"><vh>@shadow leaves.cpp</vh></v>
+<v t="michael.20141215222649.65" a="E"
+expanded="michael.20141215222649.72,"><vh>@shadow memory.h</vh></v>
+<v t="michael.20141215222649.161"><vh>@shadow memory.cpp</vh></v>
+<v t="michael.20141215222649.45" a="E"
+expanded="michael.20141215222649.104,"><vh>@shadow leaves.cpp</vh></v>
 </v>
 </v>
 </v>
@@ -747,5 +750,9 @@ struct LeafNodeHandler : public NodeHandler {
 };
 
   </t>
+<t tx="michael.20141217010530.13">struct NodePtr {
+  PagePtr page;
+  nodeid_t node;
+};</t>
 </tnodes>
 </leo_file>
