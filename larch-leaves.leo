@@ -14,8 +14,8 @@
 <v t="michael.20141215222649.5"><vh>@bool shadow_in_home_dir = False</vh></v>
 <v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
 </v>
-<v t="michael.20141215222649.9"><vh>Source</vh>
-<v t="michael.20141215222649.13"><vh>Logical</vh>
+<v t="michael.20141215222649.9" a="E"><vh>Source</vh>
+<v t="michael.20141215222649.13" a="E"><vh>Logical</vh>
 <v t="michael.20141215222649.12"><vh>API</vh>
 <v t="michael.20141215222649.38"><vh>struct Options</vh></v>
 <v t="michael.20141217010530.13"><vh>struct NodePtr</vh></v>
@@ -31,22 +31,16 @@
 <v t="michael.20141215222649.190"><vh>cursor()</vh></v>
 </v>
 </v>
-<v t="michael.20141215222649.10"><vh>BitTrie</vh>
+<v t="michael.20141215222649.10" a="E"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>Nodes</vh>
 <v t="michael.20141215222649.85"><vh>Leaf</vh></v>
 <v t="michael.20141215222649.84"><vh>PageLeaf</vh></v>
+<v t="michael.20141215222649.126"><vh>Compressed</vh></v>
 <v t="michael.20141215222649.137"><vh>LinkNode</vh></v>
-<v t="michael.20141219202729.12" a="E"><vh>TrieNodes</vh>
-<v t="michael.20141215222649.93" a="E"><vh>Node64</vh>
+<v t="michael.20141215222649.93"><vh>Trie</vh>
 <v t="michael.20141220220750.2"><vh>Navigation</vh></v>
 </v>
-<v t="michael.20141215222649.94"><vh>Node257</vh></v>
-<v t="michael.20141215222649.126"><vh>Compressed</vh></v>
-<v t="michael.20141215222649.95" a="E"><vh>BitNode</vh>
-<v t="michael.20141215222649.96"><vh>32bit</vh></v>
-<v t="michael.20141215222649.97"><vh>64bit</vh></v>
-</v>
-</v>
+<v t="michael.20141215222649.95"><vh>BitTrie</vh></v>
 </v>
 </v>
 <v t="michael.20141215222649.63"><vh>Memory Managment</vh>
@@ -61,7 +55,7 @@
 <v t="michael.20141215222649.160"><vh>class MultiProcessNodeMemoryManager</vh></v>
 </v>
 <v t="michael.20141215222649.136"><vh>class LeafStorage</vh></v>
-<v t="michael.20141215222649.72" a="E"><vh>Page</vh>
+<v t="michael.20141215222649.72"><vh>Page</vh>
 <v t="michael.20141215222649.67"><vh>struct Page</vh></v>
 <v t="michael.20141215222649.73"><vh>class PageRef</vh></v>
 </v>
@@ -72,25 +66,25 @@
 <v t="michael.20141215222649.14"><vh>Files</vh>
 <v t="michael.20141215222649.16"><vh>@path include/larch</vh>
 <v t="michael.20141215222649.17"><vh>@shadow leaves.h</vh></v>
-<v t="michael.20141215222649.65" a="E"><vh>@shadow node.h</vh></v>
+<v t="michael.20141215222649.65"><vh>@shadow node.h</vh></v>
 <v t="michael.20141219202729.4"><vh>@shadow leaf.h</vh></v>
 </v>
 <v t="michael.20141215222649.15"><vh>@path src</vh>
-<v t="michael.20141215222649.81" a="E"><vh>@shadow bittrie.h</vh></v>
-<v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20141219202729.12,michael.20141215222649.93,michael.20141215222649.95,"><vh>@shadow bittrie.cpp</vh></v>
+<v t="michael.20141220220750.5"><vh>@shadow port.h</vh></v>
+<v t="michael.20141215222649.81"><vh>@shadow bittrie.h</vh></v>
+<v t="michael.20141219202729.8"><vh>@shadow bittrie.cpp</vh></v>
 <v t="michael.20141215222649.161"><vh>@shadow node.cpp</vh></v>
 <v t="michael.20141215222649.45"><vh>@shadow leaves.cpp</vh></v>
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.8"><vh>Tests</vh></v>
-<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
-<v t="michael.20141215222649.81" a="E"></v>
-<v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20141219202729.12,michael.20141215222649.93,michael.20141215222649.95,"></v>
-<v t="michael.20141215222649.65" a="E"
-expanded="michael.20141215222649.72,"></v>
+<v t="michael.20141215222649.8"><vh>Tests</vh>
+<v t="michael.20141220220750.8"><vh>compressed size &gt; 256</vh></v>
+</v>
+<v t="michael.20141219202729.5"><vh>edit</vh>
+<v t="michael.20141215222649.81"></v>
+<v t="michael.20141219202729.8"></v>
+<v t="michael.20141215222649.65"></v>
 </v>
 </vnodes>
 <tnodes>
@@ -127,12 +121,12 @@ Memory Managers
 @tabwidth -2
 </t>
 <t tx="michael.20141215222649.126">// A Node containing a string part equal to all descendants
+// the equal part fit into a page
 struct Compressed {
   nodeid_t child;
-  boost::uint8_t size;
+  bsize_t size;
   char data[]
 };
-
 
 
 struct CompressHandler : public NodeHandler, public LeafMixin {
@@ -165,6 +159,71 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
       context.trace.nodes.pop_back();
       context.trace.key.resize(key.size()-n-&gt;size);
     }
+    
+  void add(const Slice&amp; key, const Slice&amp; value,
+           NodRef&amp; rnode, HandlerContext&amp; context) {
+      Compressed *n = (Compressed*)rnode.get_node();
+      
+      PageManipulator pm(context);      
+      size_t prefix_size = common_prefix(key.data(), n-&gt;data,
+                                         std::min(n-&gt;size, key.size()));
+      TempCompressed me(n-&gt;data+prefix_size, n-&gt;size-prefix_size);
+      TempTrie trie;
+      nodeid_t child = n-&gt;child;
+      switch(prefix_size) {
+        case 0: {
+            pm.change(rnode.id, trie);
+            pm.add(me, me.data());
+            break;
+          }
+        
+        case 1: {
+            TempTrie parent_trie;
+            pm.change(rnode.id, parent_trie);
+            pm.add(trie);
+            
+            BitTrie* bn = (BitTrie*)pm.parent().get_node();
+            bn-&gt;add(key.trie_index(), trie.id);
+            
+            if (me.size() == 1) {
+              child = pm.move(rnode.page, child);
+              bn = (BitTrie*)pm.current().get_node();
+              bn-&gt;add(me.data().trie_index(), child);
+            }
+            else {  
+              pm.add(me, me.data());
+              child = pm.move(rnode.page, child);
+              n = (Compressed*)pm.current().get_node();
+              n-&gt;child = child;
+            }
+            break;
+          }
+            
+        default: {
+            TempCompressed compressed(key.data(), prefix_size);
+            pm.change(rnode.id, compressed);
+            pm.add(trie)
+            compressed.link(trie);
+          }
+      }
+
+      pm.add(me);
+      trie.set_child(index);
+      
+      // pop back trace to trie
+      context.trace.nodes.back().pop(context);
+      context.trace.nodes.back().add(key.advance(prefix_size), value, context);
+
+      Slice mykey(n-&gt;data+prefix_size, n-&gt;key_size-prefix_size);
+      TempCompressed me(mykey, myvalue);
+                                                                        
+      Slice mykey(n-&gt;data+prefix_size, n-&gt;key_size-prefix_size);
+      Slice myvalue(n-&gt;data+key_size, n-&gt;value_size);
+      TempLeaf me(mykey, myvalue);
+      TempTrie trie;
+      int index = trie.add(mykey);
+
+
 };
 
 static CompressedHandler compressed;</t>
@@ -269,10 +328,11 @@ struct Link {
   pageid_t page;
 };
 
-struct LinkHandler : public NodeHandler, public LinkMixin {
+struct LinkHandler : public NodeHandler, public LeafMixin {
   NodeRef link_node(NodeRef&amp; rnode, HandlerContext&amp; context) {
       Link *l = (Link*)node.get_node();
-      PageRef next_page(context.map.get_page(l-&gt;page));
+      PageRef next_page(context.get_page(l-&gt;page));
+      context.trace.nodes.push_back(rnode);
       return NodeRef(next_page, 0);
     }
 
@@ -280,12 +340,18 @@ struct LinkHandler : public NodeHandler, public LinkMixin {
       link_node(rnode, context).find(key, context);
     }
     
-    void first(NodeRef&amp; rnode, HandlerContext&amp; context) {
+  void first(NodeRef&amp; rnode, HandlerContext&amp; context) {
       link_node(rnode, context).first(context);
     }
     
-    void last(NodeRef&amp; rnode, HandlerContext&amp; context) {
+  void last(NodeRef&amp; rnode, HandlerContext&amp; context) {
       link_node(rnode, context).last(context);
+    }
+    
+  void pop(NodeRef&amp; rnode, HandlerContext&amp; context) {
+      context.trace.nodes.pop_back();
+      NodeRef&amp; parent(context.trace.nodes.back());
+      parent.pop(context);
     }
 };
 
@@ -527,7 +593,7 @@ typedef boost::uint8_t inpage_ptr;
 struct NodePtr {
   inpage_ptr ptr;      // position inside page
   nodetype_t type;     // node type
-  unsigned char extra; // is used by several nodes and
+  nodeid_t extra;      // is used by several nodes and
                        // ensures all nodes are good aligned
 };
 
@@ -608,7 +674,13 @@ class PageRef {
       return (Node*)&amp;_page-&gt;data[_page-&gt;node_ptr[id].ptr*16];
     }
     
-  
+  nodeid_t get_extra(nodeid_t id) const {
+      return _page-&gt;node_ptr[id].extra;
+    }
+    
+  void get_extra(nodeid_t id, nodeid_t v) const {
+      _page-&gt;node_ptr[id].extra = v;
+    }
 
   size_t free_size() const {
       return 4096 - _page.free_start*16 - PAGE_HEADER_SIZE 
@@ -633,20 +705,6 @@ class PageRef {
 */
 
 
-// links do not implement these methods
-struct LinkMixin {
-  virtual void next(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      assert(0);
-    }
-  virtual void prev(NodeRef&amp; rnode, HandlerContext&amp; context)  {
-      assert(0);
-    }
-    
-  virtual void pop(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      assert(0);
-    }
-};
-
 
 struct LeafMixin {
   void next(NodeRef&amp; rnode, HandlerContext&amp; context) {
@@ -665,8 +723,8 @@ NodeHandler* NodeHandler::handlers[200] = {
   &amp;leaf;
   &amp;pageleaf,
   &amp;link,
-  &amp;node256,
-  &amp;node257,
+  &amp;trie,
+  &amp;bittrie,
   &amp;compressed,
 };</t>
 <t tx="michael.20141215222649.84">// a leaf node with key and values &lt;= 256 bytes
@@ -680,7 +738,6 @@ struct PageLeaf {
       return node_size(sizeof(key_size)+sizeof(value_size)+key_size+value_size);
     }
 };
-
 
 
 struct PageLeafHandler : public NodeHandler, public LeafMixin {
@@ -716,41 +773,45 @@ struct PageLeafHandler : public NodeHandler, public LeafMixin {
       PageLeaf *n = (PageLeave*)rnode.get_node();
       
       PageManipulator pm(context);      
-      size_t prefix = common_prefix(key.data(), n-&gt;data, 
-                                    std::min(key.size(), n-&gt;key_size));
-      Slice mykey(n-&gt;data+prefix, n-&gt;key_size - prefix);
+      size_t prefix_size = common_prefix(key.data(), n-&gt;data, 
+                                         std::min(key.size(), n-&gt;key_size));
+      Slice mykey(n-&gt;data+prefix_size, n-&gt;key_size-prefix_size);
       Slice myvalue(n-&gt;data+key_size, n-&gt;value_size);
-      Slice restkey = key.advance(prefix);
-      TempLeaf child1(mykey, myvalue), child2(rest_key, value);
+      TempLeaf me(mykey, myvalue);
       TempTrie trie;
-      int index1 = trie.add(mykey), index2 = trie.add(rest_key);
+      int index = trie.add(mykey);
       
-      switch(prefix) {
+      switch(prefix_size) {
         case 0:
           pm.change(rnode.id, trie);
           break;
         
         case 1: {
             TempTrie parent_trie;
-            int index = parent_trie.add(n-&gt;data[0]);
             pm.change(rnode.id, parent_trie);
-            pm.add(trie);
-            parent_trie.set_child(index, trie);
+            pm.add(trie, key.slice(1));
+            BitTrie* pn = (BitTrie*)pm.parent.get_node();
+            pn-&gt;add(key.trie_index(), trie.id);
             break;
           }
             
         default: {
-            TempCompressed compressed(n-&gt;data, prefix);
+            TempCompressed compressed(key.data(), prefix_size);
             pm.change(rnode.id, compressed);
-            pm.add(trie)
-            compressed.link(trie);
+            pm.add(trie, prefix_size)
+            n = (PageLeaf*)pm.parent().get_node();
+            n.child = 
           }
       }
-                  
-      pm.add(child1);
-      trie.set_child(index1);
-      pm.add(child2);
-      trie.set_child(index2);
+
+      pm.add(me, mykey);
+      
+      BitTrie* tn = (BitTrie*)pm.parent.get_node();
+      tn-&gt;add(mykey.trie_index(), trie.id);
+
+      // pop back trace to trie
+      pm.pop();
+      pm.current().add(key.advance(prefix_size), value, context);
     }
 };
 
@@ -758,6 +819,7 @@ static PageLeafHandler pageleaf;</t>
 <t tx="michael.20141215222649.85">// a leaf node with data in Leaf memory
 struct Leaf {
   offset_t pointer;
+  size_t size;
 };
 
 
@@ -777,97 +839,22 @@ struct LeafHandler : public NodeHandler, public LeafMixin {
     }
 };
 
-static LeafHandler leaf;</t>
+static LeafHandler leaf;
+</t>
 <t tx="michael.20141215222649.9"></t>
 <t tx="michael.20141215222649.93">// Node with the complete alphabet 
 // children count is &gt; 56
-struct Node64 {
+struct Trie {
   nodeid_t children[64];
 };
 
-struct Node256Handler : public NodeHandler {
-  virtual void add_to_trace(int key, NodeRef&amp; rnode, HandlerContext&amp; context) {
-      context.trace.nodes.push_back(rnode);
-      context.trace.key.append((char)key);
-    }
-  
-  void pop(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      context.trace.nodes.pop_back();
-      context.trace.key.pop_back();
-  }
-  
-  @others
-};
-
-static Node256Handler node256;
-
-
-</t>
-<t tx="michael.20141215222649.94">// Node with 257 values (256 for each byte value + 1 for end)
-struct Node257 {
-  nodeid_t children[256];
-  nodeid_t end;
-};
-
-struct Node257Handler : public Node256Handler {
+struct TrieHandler : public NodeHandler {
   virtual void add_to_trace(int key, NodeRef&amp; rnode, HandlerContext&amp; context) {
       context.trace.nodes.push_back(rnode);
       if (key &gt;=0)
         context.trace.key.append((char)key);
       else
         context.trace.last_was_empty = true;
-    }
-    
-  void find(const Slice&amp; key, NodeRef&amp; rnode, HandlerContext&amp; context) {
-      if (key.empty()) {
-        Node257 *n = (Node257*)rnode.get_node();
-        if (n-&gt;end) { 
-          add_to_trace(-1, rnode, context);
-          NodeRef(rnode.page, n-&gt;end).first(context);
-        }
-        return;
-      }
-      Node256Handler::find(key, node, page, context);
-    }
-  
-  void next(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      if (context.trace.last_was_empty) {
-        context.trace.last_was_empty = false;
-        nodeid_t child = _next(rnode, context); // child must be != NULL
-        NodeRef(rnode.page, child).first();
-        return;
-      }
-      Node256Handler::next(rnode, context);
-    }
-    
-  void prev(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      if (context.trace.last_was_empty) {
-        parent_prev(rnode, context);
-        return;
-      }
-    
-      if (_prev(rnode, page, context)) {
-        Node257 *n = (Node257*)node.get_node();
-        if (n-&gt;end) {
-          context.trace.key.pop_back();
-          context.trace.last_was_empty = true;
-          NodeRef(rnode.page, n-&gt;end).last(context);
-        }
-        else {
-          parent_prev(rnode, context);
-      }
-    }
-  }
-
-  void first(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      Node257 *n = (Node257*)rnode.get_node();
-      if (n-&gt;end) {
-        add_to_trace(-1, rnode, context);
-        NodeRef(rnode.page, n-&gt;end).first();
-      }
-      else {
-        Node256Handler::first(node, page, context);
-      }
     }
   
   void pop(Node* node, HandlerContext&amp; context) {
@@ -877,79 +864,82 @@ struct Node257Handler : public Node256Handler {
       else
         context.trace.key.pop_back();
   }
+  
+  void add(const Slice&amp; key, const Slice&amp; value,
+           NodeRef&amp; rnode, HandlerContext&amp; context) {
+      Trie *n = (Trie*)rnode.get_node();
+      PageManipulator pm(context);
+      TempLeaf child(key.advance(1), value);
+      pm.add(child, key.slice(1));  // trace is now at child
+      
+      if (key.empty()) {
+        pm.parent().extra(child.id)
+      }
+      else {
+        n = (Trie*)pm.parent().get_node();
+        n-&gt;children[key.trie_index()] = child.id;
+      }
+    }
+    
+  @others
 };
 
-static Node257Handler node257;
+static TrieHandler trie;
 
 
-    
 </t>
 <t tx="michael.20141215222649.95">// Node with a range
 @others
 
-inline int popcount64(boost::uint64_t b) {
-  b = (b &amp; 0x5555555555555555LU) + (b &gt;&gt; 1 &amp; 0x5555555555555555LU);
-  b = (b &amp; 0x3333333333333333LU) + (b &gt;&gt; 2 &amp; 0x3333333333333333LU);
-  b = b + (b &gt;&gt; 4) &amp; 0x0F0F0F0F0F0F0F0FLU;
-  b = b + (b &gt;&gt; 8);
-  b = b + (b &gt;&gt; 16);
-  b = b + (b &gt;&gt; 32) &amp; 0x0000007F;
-  return (int) b;
-}
 
-
-
-
-struct BitNode32 {
-  boost::uint32_t bits[1];
-  nodeid_t end;
+struct BitTrie {
+  boost::uint64_t bits;
   nodeid_t children[];
+
+  size_t count() const {
+      return popcount(bits);    
+    }
   
-  int get_child_index(trieindex_t index) {
-      if (bits[0] &amp; (1 &lt;&lt; index)) {
-        boost::uint32_t m = ~0;
-        m &gt;&gt;= (31-index)
-        return popcount32(bits[0] &amp; m);
+  int get_child_index(trieindex_t index) const {
+      if (bits &amp; (1&lt;&lt;index)) {
+        boost::uint64_t mask = ~0;
+        mask &lt;&lt;= index;
+        return popcount(bits &amp; ~mask)
       }
       return -1;
     }
+    
+  int first_bit() const {
+      return ffs(bits) - 1;
+   }
+  
+  int lastbit() const {
+      return 64 - clz(bits)
+    }
+  
+  int next_bit(trieindex_t index) const {
+      boost::uint64_t mask = ~0;
+      mask &lt;&lt;= index;
+      return ffs(bits &amp; mask) - 1;
+    }
+    
+  int prev_bit(trieindex_t index) const {
+      boost::uint64_t mask = ~0;
+      mask &lt;&lt;= index;
+      return 64 - clz(bits &amp; ~mask);
+    }
+    
+  void add(trieindex_t index, nodeid_t node) {
+      bits |= 1 &lt;&lt; index;
+      int child_index = get_child_index(index); 
+      memove(children+child_index, children+child_index+1,
+             count()-child_index-1);
+      children[child_index] = node;
+    }
 };
 
-struct BitNode64 {
-  union {
-    boost::uint32_t bits[2];
-    boost::uint64_t lbits[1];
-  };
-  nodeid_t end;
-  nodeid_t children[];
-};
 
-struct BitNode128 {
-  union {
-    boost::uint32_t bits[4];
-    boost::uint64_t lbits[2];
-  };
-  nodeid_t end;
-  nodeid_t children[];
-};
-
-struct BitNode192 {
-  boost::uint32_t bits[6];
-  nodeid_t end;
-  nodeid_t children[];
-};
-
-struct BitNode256 {
-  union {
-    boost::uint32_t bits[8];
-    boost::uint64_t lbits[4];
-  };
-  nodeid_t end;
-  nodeid_t children[];
-};
-
-template&lt;typename node_type, size_t offset, size_t handler_id&gt;
-struct BitNodeHandler : public NodeHandler {
+struct BitTrieHandler : public NodeHandler {
   void add_to_trace(int key, NodeRef&amp; rnode, HandlerContext&amp; context) {
       context.trace.nodes.push_back(rnode);
       if (key &gt;=0)
@@ -959,39 +949,39 @@ struct BitNodeHandler : public NodeHandler {
     }
 
   void find(const Slice&amp; key, NodeRef&amp; rnode, HandlerContext&amp; context) {
-      node_type *n = (node_type*)rnode.get_node();
       if (key.empty()) {
-        if (n-&gt;end) {
-          add_to_trace(-1, n, page, context);
-          NodeRef(page, n-&gt;end.ptr, n-&gt;end.type).first(context);
+        nodeid_t end_child = rnode.extra();
+        if (end_child) { 
+          add_to_trace(-1, rnode, context);
+          NodeRef(rnode.page, end_child).first(context);
         }
         return;
-      }  
-          
+      }
+        
       trieindex_t index = key.trie_index();
-      if (offset &lt;= index &amp;&amp; index &lt; offset+node_type::range) {
-        int child_index = n-&gt;get_child_index(index-offset);
-        if (child_index &gt;= 0) {
-          add_to_trace(index, rnode, context);
-          nodeid_t child = n-&gt;children[child_index];
-          NodeRef(rnode.page, child).find(key.advance(1), context);
-        }
+      BitTrie *n = (BitTrie*)rnode.get_node();
+      int child_index = n-&gt;get_child_index(index);
+      if (child_index &gt;= 0) {
+        add_to_trace(index, rnode, context);
+        nodeid_t child = n-&gt;children[child_index];
+        NodeRef(rnode.page, child).find(key.advance(1), context);
       }
     }
     
   void next(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      node_type *n = (node_type*)rnode.get_node();
+      BitTrie *n = (BitTrie*)rnode.get_node();
       if (context.trace.last_was_empty) {
         context.trace.last_was_empty = false;
+        nodeid_t first_bit = n-&gt;first_bit();
+        context.trace.key.append((char)first_bit);
         NodeRef(rnode.page, n-&gt;children[0]).first();
         return;
       }
       
       trieindex_t *index = (trieindex_t*)&amp;trace.key.back();
-      int child_index = n-&gt;get_child_index(*index-offset) + 1;
-      *index = n-&gt;get_next_bit(*index-offset) + offset;
-      
+      int child_index = n-&gt;get_child_index(*index) + 1;
       if (child_index &lt; n-&gt;count()) {
+        *index = n-&gt;next_bit(*index)
         NodeRef(rnode.page, n-&gt;children[child_index]).first();
         return
       }
@@ -1005,16 +995,17 @@ struct BitNodeHandler : public NodeHandler {
         return;
       }
       
-      node_type *n = (node_type*)rnode.get_node();
+      BitTrie *n = (BitTrie*)rnode.get_node();
       trieindex_t *index = (trieindex_t*)&amp;trace.key.back();
-      int child_index = n-&gt;get_child_index(*index-offset) - 1;
-      *index = n-&gt;get_prev_bit(*index-offset) + offset;
+      int child_index = n-&gt;get_child_index(*index) - 1;
       if (child_index &gt;= 0) {
+        *index = n-&gt;prev_bit(*index);
         NodeRef(rnode.page, n-&gt;children[child_index]).last();
         return
       }
     
-      if (n-&gt;end) {
+      nodeid_t end_child = rnode.extra();
+      if (end_child) {
         context.trace.key.pop_back();
         context.trace.last_was_empty = true;
         NodeRef(rnode.page, n-&gt;end).last(context);
@@ -1025,20 +1016,21 @@ struct BitNodeHandler : public NodeHandler {
     }
     
   void first(NodeRef&amp; rnode, HandlerContext&amp; context) {
-      node_type *n = (node_type*)rnode.get_node();
-      if (n-&gt;end) {
+      BitTrie *n = (BitTrie*)rnode.get_node();
+      nodeid_t end_child = rnode.extra();
+      if (end_child) {
         add_to_trace(-1, rnode, context);
-        NodeRef(rnode.page, n-&gt;end).first();
+        NodeRef(rnode.page, end_child).first();
       }
       else {
-        trieindex_t index = n-&gt;get_first_bit() + offset;
+        trieindex_t index = n-&gt;first_bit();
         add_to_trace(index, rnode, context);
         NodeRef(rnode.page, n-&gt;children[0]).first();
       }
     }
     
   void last(Node* node, PageRef&amp; page, HandlerContext&amp; context) {
-      trieindex_t index = n-&gt;get_last_bit() + offset;
+      trieindex_t index = n-&gt;last_bit();
       bsize_t last = n-&gt;count() - 1;
       add_to_trace(index, rnode, context);
       NodeRef(rnode.page, n-&gt;children[last]).first();
@@ -1051,111 +1043,61 @@ struct BitNodeHandler : public NodeHandler {
       else
         context.trace.key.pop_back();
     }
-};</t>
-<t tx="michael.20141215222649.96">#if UINTPTR_MAX == 0xffffffff
+    
+  void add(const Slice&amp; key, const Slice&amp; value,
+           NodeRef&amp; rnode, HandlerContext&amp; context) {
+      BitTrie *n = (BitTrie*)rnode.get_node();
+      PageManipulator pm(context);      
+      TempLeaf child(key.advance(1), value);
+      
+      if (key.empty()) {
+        pm.add(child);
+        pm.parent().get_node().extra(child.id);
+        return;
+      }
+      
+      size_t count = n-&gt;count();
+      switch(count) {
+        case 56: {
+            TempTrie trie(n);
+            pm.change(rnode.id, trie);
+            pm.add(child);
+            Trie *np = (Trie*)pm.parent().get_node();
+            np-&gt;children[key.trie_index()] = child.id;
+            break;
+          }
+      
+        case 8:
+        case 24:
+        case 40:
+          pm.grow_by(16);
+          
+        default: 
+          pm.add(child);
+          // renew pointer add could change it
+          n = (BitTrie*)pm.parent().get_node();
+          n-&gt;add(key.trie_index(), child.id);
+      }
+    }    
+};
 
-// maybe there is no intrenic
-
-#ifdef __GNUC__
-#  define popcount __builtin_popcountl
-#endif
-
-
-
-typedef unsigned long word_t;
-#  elif UINTPTR_MAX == 0xffffffffffffffff
-#    define popcount __builtin_popcountll
-#  endif
-
-
-
-
-#ifdef _MSC_VER
-#  include &lt;intrin.h&gt;
-
-#ifdef _M_X64
-#pragma intrinsic(_BitScanForward64)
-#define popcount __popcnt64
-typedef boost::uint64_t word_t;
-#else
-#pragma intrinsic(_BitScanForward)
-#define popcount __popcnt
-typedef boost::uint32_t word_t;
-#endif //_M_X64
-#endif
-
-
-#endif</t>
-<t tx="michael.20141215222649.97">#if UINTPTR_MAX == 0xffffffffffffffff
-
-
-#ifdef __GNUC__
-#include &lt;stdint.h&gt;
-#  if UINTPTR_MAX == 0xffffffff
-#    define popcount __builtin_popcountl
-typedef unsigned long word_t;
-#  elif UINTPTR_MAX == 0xffffffffffffffff
-#    define popcount __builtin_popcountll
-#  endif
-
-
-
-
-#ifdef _MSC_VER
-#  include &lt;intrin.h&gt;
-
-#ifdef _M_X64
-#pragma intrinsic(_BitScanForward64)
-#define popcount __popcnt64
-typedef boost::uint64_t word_t;
-#else
-#pragma intrinsic(_BitScanForward)
-#define popcount __popcnt
-typedef boost::uint32_t word_t;
-#endif //_M_X64
-#endif
-
-
-
-#endif</t>
+static BitTrieHandler bittrie;</t>
 <t tx="michael.20141217010530.13">struct NodePtr {
   PagePtr page;
   nodeid_t node;
 };</t>
-<t tx="michael.20141219202729.12">@others</t>
 <t tx="michael.20141219202729.5"></t>
-<t tx="michael.20141220220750.2">bool _prev(NodeRef&amp; rnode, HandlerContext&amp; context) {
-    trieindex_t *index = (trieindex_t*)&amp;context.trace.key.back());
-    Node64 *n = (Node64*)rnode.get_node();
-    while(*index &gt; 0) {
-      (*index)--;
-      nodeid_t child = n-&gt;children[*index];
-      if (child) {
-        NodeRef(rnode.page, child).last();
-        return false;
+<t tx="michael.20141220220750.2">void find(const Slice&amp; key, NodeRef&amp; rnode, HandlerContext&amp; context) {
+    if (key.empty()) {
+      nodeid_t end_child = rnode.extra();
+      if (end_child) { 
+        add_to_trace(-1, rnode, context);
+        NodeRef(rnode.page, end_child).first(context);
       }
-    }
-    return true;
-  }
-
-nodeid_t _next(NodeRef&amp; rnode, HandlerContext&amp; context) {
-    trieindex_t *index = (trieindex_t*)&amp;trace.key.back();
-    Node64 *n = (Node64*)rnode.get_node();
-    while(*index &lt; 0xff) {
-      (*index)++;
-      nodeid_t child = n-&gt;children[*index];
-      if (child) 
-        return child;
-    }
-    return 0;
-  }
-
-void find(const Slice&amp; key, NodeRef&amp; rnode, HandlerContext&amp; context) {
-    if (key.empty())
-      // this node type has no empty
       return;
+    }
 
-    Node256 *n = (Node256*)node.get_node();
+    Trie *n = (Trie*)node.get_node();
     trieindex_t index = key.trie_index();
     nodeid_t child = n-&gt;children[index];
     if (child) {
@@ -1165,21 +1107,67 @@ void find(const Slice&amp; key, NodeRef&amp; rnode, HandlerContext&amp; context)
   }
 
 void next(NodeRef&amp; rnode, HandlerContext&amp; context) {
-    nodeid_t child = _next(node, page, context);
-    if (child)
-      NodeRef(rnode.page, child).first();
-    else
-      parent_next(rnode, context);
+    trieindex_t *index;
+        
+    if (context.trace.last_was_empty) {
+      context.trace.last_was_empty = false;
+      context.trace.key.append((char)0);
+      index = (trieindex_t*)&amp;trace.key.back();
+    }
+    else {
+      index = (trieindex_t*)&amp;trace.key.back();
+      (*index)++;
+    }
+        
+    Trie*n = (Trie*)rnode.get_node();
+    for(; *index &lt; 64; (*index)++) {
+      nodeid_t child = n-&gt;children[*index];
+      if (child) {
+        NodeRef(rnode.page, child).first();
+        return;
+    }
+
+    parent_next(rnode, context);
   }
   
 void prev(NodeRef&amp; rnode, HandlerContext&amp; context) {
-    if (_prev(rnode, context)) 
+    if (context.trace.last_was_empty) {
       parent_prev(rnode, context);
+      return;
+    }
+
+    trieindex_t *index = (trieindex_t*)&amp;context.trace.key.back());
+    Trie *n = (Trie*)rnode.get_node();
+    while(*index &gt; 0) {
+      (*index)--;
+      nodeid_t child = n-&gt;children[*index];
+      if (child) {
+        NodeRef(rnode.page, child).last();
+        return;
+      }
+    }
+    
+    nodeid_t end_child = rnode.extra();
+    if (end_child) {
+      context.trace.key.pop_back();
+      context.trace.last_was_empty = true;
+      NodeRef(rnode.page, end_child).last(context);
+    }
+    else {
+      parent_prev(rnode, context);
+    }
   }
 
 void first(NodeRef&amp; rnode, HandlerContext&amp; context) {
-    Node256 *n = (Node256*)node;
-    for(int index = 0; index &lt;= 0xff; i++) {
+    nodeid_t end_child = rnode.extra();
+
+    if (end_child ) {
+      add_to_trace(-1, rnode, context);
+      NodeRef(rnode.page, end_child ).first();
+    }
+
+    Trie *n = (Trie*)node;
+    for(int index = 0; index &lt; 64; i++) {
       nodeid_t child = n-&gt;children[index];
       if (child) {
         add_to_trace(index, rnode, context);
@@ -1191,8 +1179,8 @@ void first(NodeRef&amp; rnode, HandlerContext&amp; context) {
   }
   
 void last(NodeRef&amp; rnode, HandlerContext&amp; context) {
-    Node256 *n = (Node256*)rnode.get_node();
-    for(int index = 0xff; index &gt;= 0; i--) {
+    Trie *n = (Trie*)rnode.get_node();
+    for(int index = 63; index &gt;= 0; i--) {
       nodeid_t child = n-&gt;children[index];
       if (child) {
         add_to_trace(index, rnode, context);
@@ -1202,5 +1190,6 @@ void last(NodeRef&amp; rnode, HandlerContext&amp; context) {
     }
     assert(0);
   }</t>
+<t tx="michael.20141220220750.8">Insert multiple keys with a common part &gt; 256 bytes</t>
 </tnodes>
 </leo_file>

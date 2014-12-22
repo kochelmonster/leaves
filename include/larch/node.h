@@ -19,7 +19,7 @@ typedef boost::uint8_t inpage_ptr;
 struct NodePtr {
   inpage_ptr ptr;      // position inside page
   nodetype_t type;     // node type
-  unsigned char extra; // is used by several nodes and
+  nodeid_t extra;      // is used by several nodes and
                        // ensures all nodes are good aligned
 };
 
@@ -98,7 +98,13 @@ class PageRef {
       return (Node*)&_page->data[_page->node_ptr[id].ptr*16];
     }
     
-  
+  nodeid_t get_extra(nodeid_t id) const {
+      return _page->node_ptr[id].extra;
+    }
+    
+  void get_extra(nodeid_t id, nodeid_t v) const {
+      _page->node_ptr[id].extra = v;
+    }
 
   size_t free_size() const {
       return 4096 - _page.free_start*16 - PAGE_HEADER_SIZE 
@@ -128,6 +134,13 @@ class NodeRef {
       return page.get_node(id);
     }
     
+  nodeid_t extra() const {
+      return page.get_extra(id);
+    }
+    
+  void extra(nodeid_t v) const {
+      return page.set_extra(id, v);
+    }
  
   // the following methods walks the trie, and fills the trace
   void find(const Slice& key, HandlerContext& context) {
@@ -148,7 +161,15 @@ class NodeRef {
     
   void last(HandlerContext& context) {
       trie_handlers[type()]->last(*this, context);
-    }    
+    }
+  
+  void pop(HandlerContext& context) {
+      trie_handlers[type()]->pop(*this, context);
+    }
+    
+  void add(const Slice& key, const Slice& value, HandlerContext& context) {
+      trie_handlers[type()]->add(key, value, *this, context);
+    }
 
   PageRef page;
   nodeid_t id;
@@ -177,6 +198,12 @@ struct Trace {
 void NodeRef::find(const Slice& key, NodeStorage& storage, 
                    PageMap& map, Trace& trace) {
 }
+
+struct HandlerContext {
+  Trace trace;
+  Pagemap& map;
+  NodeStorage& storage;
+};
 class NodeStorage;
 
 // Translates a pageid to page offset
