@@ -32,7 +32,7 @@ void set(const Slice& key, int read_forward=100) {
   _search_trace.resize(prefix_len+1);
   _key.assign(key.data(), key.size());  
   
-  NodePtr top = _search_trace.back();
+  NodeRef top = _search_trace.back();
   Slice rest_key(_key.data()+prefix_len, key.size()-prefix_len);
   
   for(size_t i = prefix_len; i < _key.size(); i++) {

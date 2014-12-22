@@ -1,28 +1,39 @@
+//@+leo-ver=4-thin
+//@+node:michael.20141215222649.65:@shadow memory.h
 #ifndef _LARCH_LEAVES_MEMORY_H
 #define _LARCH_LEAVES_MEMORY_H
 
-#include "larch/leaves.h"
+//@<< includes >>
+//@+node:michael.20141217010530.12:<< includes >>
+#include "boost/cstdint.h"
+//@nonl
+//@-node:michael.20141217010530.12:<< includes >>
+//@nl
 
 namespace larch_leaves {
 
-// a page is identified by a page id
-// because of "copy on write" for concurrent storages
-// there can be multiple pages with the same id
-// but each page has a unquie pageoffset_t
-typedef boost::uint32_t pageid_t;     // page id 
-typedef boost::uint32_t pageoffset_t; // points to page inside file
+//@+others
+//@+node:michael.20141215222649.72:Page
+//@+others
+//@+node:michael.20141215222649.67:struct Page
+
 
 // A pointer inside a page with a 16 byte alignment (256*16 = 4096)
 typedef byte_t in_page_ptr; 
 
-struct PageNodeRef {
+
+struct NodeInPageRef {
   byte_t type;
   in_page_ptr ptr;
 };
 
 /*
-  A Page has a size 4096 bytes and can contain maximal
-  256 nodes.
+  A Page has a size 4096 bytes and can contain maximal 256 nodes.
+  
+  A Node inside a page is identified by a nodeid which is an index
+  inside the the node_ref table. The node_ref
+  
+  
   
   it has the following layout (2 nodes in the page):
   +----------------------+
@@ -43,7 +54,7 @@ struct PageNodeRef {
   +----------------------+
   
   node 0 is always an ancestor of all other nodes
-  and is called the page root
+  and is called the page root.
 */
 struct Page {
   union {
@@ -51,11 +62,20 @@ struct Page {
     struct {
       byte_t node_count;
       in_page_ptr free_area;
-      PageNodeRef node_ref[256];
+      NodeInPageRef node_ref[256];
     };
   };
   Page() : node_count(0), free_area(255) { }
 };
+
+//@-node:michael.20141215222649.67:struct Page
+//@+node:michael.20141215222649.73:class PageRef
+// a page is identified by a page id
+// because of "copy on write" for concurrent storages
+// there can be multiple pages with the same id
+// but each page has a unique pageoffset_t
+typedef boost::uint32_t pageid_t;     // page id 
+typedef boost::uint32_t pageoffset_t; // points to page inside file
 
 
 class PageRef {
@@ -87,10 +107,41 @@ class PageRef {
   byte_t count() const { return _page->node_count; }
  
  private:
-  std::shared_ptr<MemorySegment> _segment;
-  pageid_t pageid;
+  pageid_t _pageid;
+  pageoffset_t _offset;
   Page *_page;
 };
+
+
+//@-node:michael.20141215222649.73:class PageRef
+//@+node:michael.20141219202729.2:class NodeRef
+// A reference to a Node
+class NodeRef {
+ public:
+  
+ 
+ 
+ private:
+  PageRef _page;
+  in_page_ptr node;
+};
+//@nonl
+//@-node:michael.20141219202729.2:class NodeRef
+//@-others
+//@nonl
+//@-node:michael.20141215222649.72:Page
+//@+node:michael.20141219202729.3:class PageMap
+// Translates a pageid to page offset
+class PageMap {
+  pageoffset_t get_offset(pageid_t pageid);
+  
+ private:
+  version_t version;
+
+};
+//@nonl
+//@-node:michael.20141219202729.3:class PageMap
+//@+node:michael.20141215222649.135:class NodeMemoryManager (Declaration)
 // Memory mangement nodes in pages
 class NodeMemoryManager {
  public:
@@ -156,6 +207,8 @@ class MultiProcessNodeMemoryManager : public PersistentNodeMemoryManager {
   virtual PageRef new_page();
   virtual void free_page(pageid_t pageid);
 }
+//@-node:michael.20141215222649.135:class NodeMemoryManager (Declaration)
+//@+node:michael.20141215222649.136:class LeafMemoryManager
 class LeafMemoryManager {
  public:
   virtual char* get_data(const PageLeaf& leaf) = 0;
@@ -185,5 +238,10 @@ class PersistentLeafMemoryManager {
  public:
   PersistentMemoryManager(const char* path);
 };
+//@-node:michael.20141215222649.136:class LeafMemoryManager
+//@-others
 } // namespace larch_leaves 
 #endif // _LARCH_LEAVES_MEMORY_H
+//@nonl
+//@-node:michael.20141215222649.65:@shadow memory.h
+//@-leo
