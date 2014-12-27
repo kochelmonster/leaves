@@ -6,6 +6,14 @@
 
 namespace larch_leaves {
 
+// a page is identified by a page id
+// because of "copy on write" for concurrent storages
+// there can be multiple pages with the same id
+// but each page has a unique pageoffset_t
+typedef boost::uint32_t pageid_t;     // page id 
+typedef boost::uint32_t pageoffset_t; // points to page inside file
+
+
 // Nodes are identfied by a node id.
 // the node id is the index of the node pointer table.
 
@@ -24,22 +32,34 @@ struct NodePtr {
 };
 
 
+
 /*
   A Page has a size of 4096 bytes: it has the following layout:
   
   +----------------------+
-  | header (2 byte)      |
+  | header (4 byte)      |
   +----------------------+
   | node_ptr[0] (3 byte) |
   +----------------------+
   | node_ptr[1] (3 byte) |
   +----------------------+
   | ...                  |
+  +----------------------+ 
+  | node_ptr[n] (3 byte) | n = node_count -1
+  +----------------------+ <-- link_start poinst to start of links
+  | link_node[0] (4byte) |
   +----------------------+
-  |                      |
+  | link_node[1] (4byte) |
+  +----------------------+
+  | ...                  |
+  +----------------------+
+  | link_node[l] (4byte) | l = link_count -1
+  +----------------------+  
   |                      |
   |                      |
   +----------------------+ <-- free_start points to the end all nodes
+  | node[n] (>= 16 byte) |
+  +----------------------+
   | ...                  |
   +----------------------+
   | node[1] (>= 16 byte) |
@@ -62,56 +82,52 @@ struct Page {
   union {
     char data[4094];
     struct {
-      bsize_t count;  // node count
-      inpage_ptr free_start;
+      union {
+        bsize_t node_count;  // node count
+        bize_t link_count;   // count of link nodes
+        inpage_ptr free_start; 
+        inpage_ptr link_start;
+      };
       NodePtr node_ptr[];
     };
   };      
       
-  Page() : last_node(0), holes(0), first_hole(0), free_start(0) { }
-
+  Page() : node_count(0), link_count(0), free_start(0) { }
 };
-
-// a page is identified by a page id
-// because of "copy on write" for concurrent storages
-// there can be multiple pages with the same id
-// but each page has a unique pageoffset_t
-typedef boost::uint32_t pageid_t;     // page id 
-typedef boost::uint32_t pageoffset_t; // points to page inside file
 
 struct Node;
 
-class PageRef {
- public:
-  PageRef(Page *page, pageid_t id, pageoffset_t offset) :
-    _page(page), _id(id), _offset(offset) { }
+struct PageRef {
+  PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
+    page(page_), id(id_), offset(offset_) { }
 
   NodePtr* get_node_ptr(nodeid_t, id) {
-      return &_page->node_ptr[id];
+      return &page->node_ptr[id];
     }
  
   nodetype_t type(nodeid_t id) const {
-      return _page->node_ptr[id].type;
+      return page->node_ptr[id].type;
     }
     
   Node* get_node(nodeid_t id) const {
-      return (Node*)&_page->data[_page->node_ptr[id].ptr*16];
+      return (Node*)&_page->data[page->node_ptr[id].ptr*16];
     }
     
-  nodeid_t get_extra(nodeid_t id) const {
-      return _page->node_ptr[id].extra;
+  nodeid_t* extra(nodeid_t id) const {
+      return page->node_ptr[id].extra;
     }
     
-  void get_extra(nodeid_t id, nodeid_t v) const {
-      _page->node_ptr[id].extra = v;
+  pageid_t* link(nodeid_t id) const {
+      bsize_t linkid = page->node_ptr[id].ptr;
+      pageid_t* links = (pageid_t*)&page.data[page.link_start];
+      return links+linkid;
     }
 
   size_t free_size() const {
-      return 4096 - _page.free_start*16 - PAGE_HEADER_SIZE 
-        - (_page->last_node+1)*sizeof(NodePtr)
+      return 4096 - page.free_start*16 - PAGE_HEADER_SIZE 
+        - (page->last_node+1)*sizeof(NodePtr)
     }
 
- private:
   Page *_page;
   pageid_t _id;
   pageoffset_t _offset;
@@ -121,8 +137,7 @@ struct Node { };
 struct Trace;
 
 // A reference to a Node
-class NodeRef {
- public:
+struct NodeRef {
   NodeRef(const PageRef& page_, nodeid_t id_)
     : page(page_), id(id_) { }
 
@@ -130,45 +145,45 @@ class NodeRef {
       return page.nodetype(id);
     }
   
-  Node* get_node() const {
+  Node* node() const {
       return page.get_node(id);
     }
     
-  nodeid_t extra() const {
+  pageid_t* link() const {
+      return page.get_link(id);
+    }
+    
+  nodeid_t* extra() const {
       return page.get_extra(id);
     }
     
-  void extra(nodeid_t v) const {
-      return page.set_extra(id, v);
-    }
- 
   // the following methods walks the trie, and fills the trace
-  void find(const Slice& key, HandlerContext& context) {
-      trie_handlers[type()]->find(key, *this, context);
+  void find(const Slice& key, Trace& trace) {
+      trie_handlers[type()]->find(key, *this, trace);
     }
     
-  void next(HandlerContext& context) {
-      trie_handlers[type()]->next(*this, context);
+  void next(Trace& trace) {
+      trie_handlers[type()]->next(*this, trace);
     }
     
-  void prev(HandlerContext& context) {
-      trie_handlers[type()]->prev(*this, context);
+  void prev(Trace& trace) {
+      trie_handlers[type()]->prev(*this, trace);
     }
     
-  void first(HandlerContext& context) {
-      trie_handlers[type()]->first(*this, context);
+  void first(Trace& trace) {
+      trie_handlers[type()]->first(*this, trace);
     }
     
-  void last(HandlerContext& context) {
-      trie_handlers[type()]->last(*this, context);
+  void last(Trace& trace) {
+      trie_handlers[type()]->last(*this, trace);
     }
-  
-  void pop(HandlerContext& context) {
-      trie_handlers[type()]->pop(*this, context);
+   
+  void add(const Slice& key, const Slice& value, Trace& trace) {
+      trie_handlers[type()]->add(key, value, *this, trace);
     }
-    
-  void add(const Slice& key, const Slice& value, HandlerContext& context) {
-      trie_handlers[type()]->add(key, value, *this, context);
+
+  void remove_last(Trace& trace) {
+      trie_handlers[type()]->remove_last(*this, trace);
     }
 
   PageRef page;
@@ -176,33 +191,146 @@ class NodeRef {
 };
 
 
+
 // A stack trace inside a trie
 // nodes[0] is the first node after root
 // nodes[K] is the current node (almost always a leaf)
 // key[0] causes the transition from root to nodes[1]
 struct Trace {
-  std::vector<NodeRef> nodes; 
+  struct Transition {
+    NodeRef node;
+    size_t index; // the index inside Trace.key identifiying
+                  // the part causing the transition to node
+    Transition(NodeRef& node_, size_t index_)
+        : node(node_), index(index_) { }
+  };
+
+  std::vector<Transition> stack;
   std::string key;
-  bool last_was_empty;  // true if the last trie index was empty
+  int last_index; // the key index before the last pop (-1 if complete)
+  bool complete;  // true if key is completely
+  Pagemap& map;   // needed for some operations
+  NodeStorage& storage;  // needed for some operations
   
-  Trace() : last_was_empty(false) { }
+  Trace(Pagemap& map_, NodeStorage& storage_) : 
+      map(map_), storage(storage_), complete(false) { }
   
   void reset() {
       nodes.clear(0);
       key.clear();
-      last_was_empty(false);
+      complete(false);
     }
-};
+    
+  void push(NodeRef& node) {
+      size_t index = key.size();
+      stack.push_back(Transition(node, index));
+    }
+    
+  void pop(bool skiplink=true) {
+      Transitions& back(stack.back());
+      last_index = complete ? -1 : key[back.index];
+      complete = false;
+      key.resize(back.index);
+      stack.pop_back();
+      if (skiplink && current().id == kLink)
+        stack.pop_back();
+    }
+    
+  NodeRef& parent() {
+      NodeRef parent = stack[stack.size()-2];
+      return parent.node.id == kLink ? stack[stack.size()-3] : parent;
+    }
+    
+  NodeRef& current() {
+    return stack.back();
+  }
+    
+  void parent_next() {
+      pop();
+      current().next(*this);
+    };
+      
+  void parent_prev() {
+      pop();
+      current().prev(*this);
+    };
+
+  void remove() {
+      while(stack.size()) {
+        NodeRef& me(current()); 
+        if (me.remove_last_index()) {
+          me.page.normalize();
+          merge_with_parent();
+          return;
+        }
+
+        me.page.free_node(me.id, map);
+        me.pop(false);
+       }
+    }
+  
+  // returns the nodeid that connects parent with current
+  // if current is on another page it conntects the link
+  // with current's page and retuns the nodeid of the link
+  nodeid_t child_of_parent() {
+      Transistion link_or_parent(stack[stack.size()-2);
+      if (link_or_parent.node.type() == kLink) {
+        *link_or_parent.link() = current().page.id;
+        return link_or_parent.id;
+      }
+      return current().id;
+    }
+  
+ void add_node(TempNode& new_node, const Slice& transition_key) {
+      // transistion_key causes transitions from parent to node
+      size_t size = new_node.size();
+      if (current().page.free_size() < size + sizeof(NodePtr))
+        split_page();
+        
+      NodeRef& new_ref(current().page.new_node(new_size));
+      memcpy(new_ref.node(), new_node.node, size);
+      push(new_ref);
+      key.append(transition_key.data(), transition_key.size());
+   }
+  
+  // change current node to type
+  void change_node(TempNode& new_node) {
+      NodeRef &node(current());
+      size_t size = node.size(), new_size = new_node.size();
+      nodeid_t nodeid = node.id;
+      if (node.page.free_size() + size < new_size) 
+        split_page();
+      
+      page.grow(nodeid, new_size-size);
+      memcpy(current().node(), new_node.node(), new_size);
+    }
+   
+  // merges the current page with the parent page if possible 
+  void merge_with_parent() {
+          
+  
+    }
 
 
-void NodeRef::find(const Slice& key, NodeStorage& storage, 
-                   PageMap& map, Trace& trace) {
-}
+  // splits the page in to with about have size on each
+  void split_page() {
+      
+      
+  
+  
+  
+    }
 
-struct HandlerContext {
-  Trace trace;
-  Pagemap& map;
-  NodeStorage& storage;
+  nodeid_t move_node(PageRef& page, nodeid_t id) {
+      NodeRef& node(current());
+      if (node.page.id == page.id)
+        return id;
+  
+      // move the node an its children to current.page
+            
+  
+  
+    }
 };
 class NodeStorage;
 

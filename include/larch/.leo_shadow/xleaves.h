@@ -43,8 +43,8 @@ class Storage {
 
   // returns a cursor inside a namespace
   // if signed_compare is true the trie table is [-127, 127] instead of [0, 255]
-  std::shared_ptr<Cursor> cursor(const Slice& namespace, bool signed_compare=false);
-  std::shared_ptr<Cursor> cursor(bool signed_compare=false);
+  std::shared_ptr<Cursor> read_cursor(const Slice& namespace_);
+  std::shared_ptr<Cursor> write_cursor(const Slice& namespace_);
   
   Storage() {}
   ~Storage();
