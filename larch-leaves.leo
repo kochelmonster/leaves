@@ -14,7 +14,7 @@
 <v t="michael.20141215222649.5"><vh>@bool shadow_in_home_dir = False</vh></v>
 <v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
 </v>
-<v t="michael.20141215222649.9" a="E"><vh>Source</vh>
+<v t="michael.20141215222649.9"><vh>Source</vh>
 <v t="michael.20141215222649.13"><vh>Logical</vh>
 <v t="michael.20141215222649.12"><vh>API</vh>
 <v t="michael.20141215222649.38"><vh>struct Options</vh></v>
@@ -63,14 +63,13 @@
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.14" a="E"><vh>Files</vh>
-<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.14"><vh>Files</vh>
+<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
 <v t="michael.20141215222649.17"><vh>@shadow leaves.h</vh></v>
-<v t="michael.20141215222649.65" a="E"
-expanded="michael.20141215222649.72,"><vh>@shadow node.h</vh></v>
+<v t="michael.20141215222649.65"><vh>@shadow node.h</vh></v>
 <v t="michael.20141219202729.4"><vh>@shadow leaf.h</vh></v>
 </v>
-<v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
+<v t="michael.20141215222649.15"><vh>@path src</vh>
 <v t="michael.20141220220750.5"><vh>@shadow port.h</vh></v>
 <v t="michael.20141215222649.81"><vh>@shadow bittrie.h</vh></v>
 <v t="michael.20141219202729.8"><vh>@shadow bittrie.cpp</vh></v>
@@ -86,9 +85,9 @@ expanded="michael.20141215222649.72,"><vh>@shadow node.h</vh></v>
 </v>
 <v t="michael.20141219202729.5" a="E"><vh>edit</vh>
 <v t="michael.20141215222649.72" a="E"></v>
+<v t="michael.20141220220750.15"><vh>struct Trace</vh></v>
 <v t="michael.20141219202729.2"><vh>struct NodeRef</vh></v>
 <v t="michael.20141215222649.99"><vh>NodeHandler</vh></v>
-<v t="michael.20141220220750.15"><vh>struct Trace</vh></v>
 <v t="michael.20141215222649.83" a="E"></v>
 </v>
 </vnodes>
@@ -126,29 +125,48 @@ Memory Managers
 @tabwidth -2
 </t>
 <t tx="michael.20141215222649.126">// A Node containing a string part equal to all descendants
-// the equal part fit into a page
+// the equal part fit into a page; the data size is in Nodeptr.extra
 struct Compressed {
   nodeid_t child;
-  bsize_t size;
   char data[]
 };
 
 
 struct CompressHandler : public NodeHandler, public LeafMixin {
+  size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      Compressed *n = (Compressed*)rnode.node();
+      if (n-&gt;child) {
+        children[0] = n-&gt;child;
+        return 1;
+      }
+      return 0;
+    }
+    
+  void replace_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      if (n-&gt;child) {
+        n-&gt;child = children[0];
+      }
+    }
+
   void add_to_trace(Compressed* c, NodeRef&amp; child, Trace&amp; trace) {
       trace.push(child);
       trace.key.append(c-&gt;data, c-&gt;size);
     }
-
+    
+  size_t node_size(NodeRef&amp; rnode) {
+      return (bsize_t)*rnode.extra() + sizeof(nodeid_t) + sizeof(NodeRef);
+    }
+    
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
-      Compressed *n = (Compressed*)rnode.gt_node();
-      if (key.size() &lt; n-&gt;size)
+      Compressed *n = (Compressed*)rnode.node();
+      bsize_t size = (bsize_t)*rnode.extra() ;
+      if (key.size() &lt; size)
         return;
         
-      if (memcmp(key.data(), n-&gt;data, n-&gt;size) == 0) {
+      if (memcmp(key.data(), n-&gt;data, size) == 0) {
         NodeRef child(rnode.page, n-&gt;child);
         add_to_trace(n, child, trace);
-        child.find(key.advance(n-&gt;size), trace);
+        child.find(key.advance(size), trace);
       }
     }
     
@@ -166,31 +184,35 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
       child.last(trace);
     }
     
-  void reinsert(Trace&amp; trace, TempCompressed&amp; me, 
-                nodeid_t child, NodRef&amp; rnode, trieindex_t index) {
+  void reinsert(Trace&amp; trace, TempCompressed&amp; rest_me, 
+                NodeRef&amp; child, trieindex_t index) {
       BitTrie* bn;
-      switch(me.size()) {
+      nodeid_t child_id;      
+      switch(rest_me.size()) {
         case 0:
-          child = trace.move_node(rnode.page, child);
+          trace.reserve_space(child.page.size());
+          child_id = trace.move_node(trace.current().page, child);
           bn = (BitTrie*)trace.parent().node();
-          bn-&gt;add(index, child);
+          bn-&gt;add(index, child_id);
           break;
           
         case 1:
           trace.add_node(TempTrie(), Slice(index));
           bn = (BitTrie*)trace.parent().node();
           bn-&gt;add(index, trace.child_of_parent());
-          child = trace.move_node(rnode.page, child);
+          trace.reserve_space(child.page.size());
+          child_id = trace.move_node(trace.current().page, child);
           bn = (BitTrie*)trace.current().node();
-          bn-&gt;add(me.data()[0], child);
+          bn-&gt;add(me.data()[0], child_id);
           trace.pop()
           break;
           
         default: {
           trace.add(me, Slice(index));
-          child = trace.move_node(rnode.page, child);
+          trace.reserve_space(child.page.size());
+          child_id = trace.move_node(trace.current().page, child);
           Compressed *n = (Compressed*)trace.current().node()
-          n-&gt;child = child;
+          n-&gt;child = child_id;
           trace.pop();
           break;
       }
@@ -198,17 +220,25 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
     
   void add(const Slice&amp; key, const Slice&amp; value, NodRef&amp; rnode, Trace&amp; trace) {
       Compressed *n = (Compressed*)rnode.node();
+      bsize_t size = (bsize_t)*rnode.extra() 
       size_t prefix_size = common_prefix(key.data(), n-&gt;data,
-                                         std::min(n-&gt;size, key.size()));
+                                         std::min(size, key.size()));
       trieindex_t first = n-&gt;data[0], second = n-&gt;data[1];
-      TempCompressed me(n-&gt;data+prefix_size+1, n-&gt;size-prefix_size-1);
-      nodeid_t child = n-&gt;child
+      TempCompressed rest_me(n-&gt;data+prefix_size+1, size-prefix_size-1);
+            
+      // move my page descendants to a temporary page to insert them later
+      Page tmp_page_;
+      PageRef tmp_page(&amp;tmp_page, 0, 0);
+      NodeRef child(tmp_page, 0);
+      trace.move_node(tmp_page, NodeRef(rnode.page, n-&gt;child);
+      rnode.page.defragment();
+      n-&gt;child = 0;
       
       switch(prefix_size) {
         case 0: {
             // insert one trie
             trace.change_node(TempTrie());
-            reinsert(trace, me, rnode, child, first);
+            reinsert(trace, rest_me, child, first);
             break;
           }
         
@@ -218,7 +248,7 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
             trace.add_node(TempTrie(), Slice(first));
             BitTrie* bn = (BitTrie*)trace.parent().node();
             bn-&gt;add(first, trace.child_of_parent());
-            reinsert(trace, me, rnode, child, second);
+            reinsert(trace, rest_me, child, second);
             break;
           }
             
@@ -230,7 +260,7 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
             trace.add(trie, Slice(compressed.data(), compressed.size());
             n = (Compressed*)trace.current().node();
             n-&gt;child = trace.child_of_parent();
-            reinsert(trace, me, rnode, child, first);
+            reinsert(trace, rest_me, child, first);
             break;
           }
       }
@@ -348,6 +378,10 @@ struct LinkHandler : public NodeHandler, public LeafMixin {
       NodeRef child(next_page, 0)
       trace.push(child);
       return child;
+    }
+    
+  size_t node_size(NodeRef&amp; rnode) {
+      return sizeof(pageid_t) + sizeof(NodeRef);
     }
 
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
@@ -621,6 +655,14 @@ struct NodePtr {
   +----------------------+
   | header (4 byte)      |
   +----------------------+
+  | link[0] (4byte)      |
+  +----------------------+
+  | link[1] (4byte)      |
+  +----------------------+
+  | ...                  |
+  +----------------------+
+  | link[l] (4byte)      | l = link_count -1
+  +----------------------+  
   | node_ptr[0] (3 byte) |
   +----------------------+
   | node_ptr[1] (3 byte) |
@@ -628,15 +670,7 @@ struct NodePtr {
   | ...                  |
   +----------------------+ 
   | node_ptr[n] (3 byte) | n = node_count -1
-  +----------------------+ &lt;-- link_start poinst to start of links
-  | link_node[0] (4byte) |
-  +----------------------+
-  | link_node[1] (4byte) |
-  +----------------------+
-  | ...                  |
-  +----------------------+
-  | link_node[l] (4byte) | l = link_count -1
-  +----------------------+  
+  +----------------------+ 
   |                      |
   |                      |
   +----------------------+ &lt;-- free_start points to the end all nodes
@@ -665,12 +699,14 @@ struct Page {
     char data[4094];
     struct {
       union {
-        bsize_t node_count;  // node count
-        bize_t link_count;   // count of link nodes
-        inpage_ptr free_start; 
-        inpage_ptr link_start;
+        struct {
+          bsize_t node_count;  // node count
+          bsize_t link_count;   // count of link nodes
+          inpage_ptr free_start; 
+        };
+        char header[4];
       };
-      NodePtr node_ptr[];
+      pageid_t link[];
     };
   };      
       
@@ -680,6 +716,8 @@ struct Page {
 </t>
 <t tx="michael.20141215222649.72">@others</t>
 <t tx="michael.20141215222649.73">struct Node;
+
+#define REMOVE_BIT 0x80
 
 struct PageRef {
   PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
@@ -708,13 +746,59 @@ struct PageRef {
     }
 
   size_t free_size() const {
-      return 4096 - page.free_start*16 - PAGE_HEADER_SIZE 
-        - (page-&gt;last_node+1)*sizeof(NodePtr)
+      return page-&gt;free_start*16 
+        - page-&gt;link_count * sizeof(pageptr_t) 
+        - page-&gt;node_count * sizeof(NodePtr)
+        - sizeof(page-&gt;header);
+    }
+    
+  // returns only the node occupied size (without pageheader)
+  // but with nodeptrs and links
+  size_t size() const {
+      return page-&gt;link_count * sizeof(pageptr_t) // links
+          + page-&gt;node_count * sizeof(NodePtr)    // node_ptr
+          + sizeof(page-&gt;data) - page-&gt;free_start*16);
+    }
+    
+  size_t count() const {
+      return page-&gt;node_count;
     }
 
-  Page *_page;
-  pageid_t _id;
-  pageoffset_t _offset;
+  void defragment() {
+      NodePtr *nodes = &amp;page-&gt;data[sizeof(page-&gt;header)
+                                   +page-&gt;link_count*sizeof(pageptr_t));
+      for(size_t i = 0; i &lt; page-&gt;count; i++) {
+        if (nodes[i].type &amp; REMOVE_BIT) {
+          // found a removed node
+          switch(nodes[i].type &amp; ~REMOVE_BIT) {
+            case kLink:
+              delete_link
+          
+         
+          
+        }
+      }
+  
+  
+    }
+
+  void free_node(nodeid_t id) {
+      if link
+    }
+    
+  void new_node(size_t size) {
+    }
+    
+  void grow_node(nodeid_t size_t size) {
+    }
+    
+  void create_link(node_id node, pageid_t page) {
+    }
+  
+
+  Page *page;
+  pageid_t id;
+  pageoffset_t offset;
 };
 
 </t>
@@ -731,6 +815,18 @@ struct PageRef {
 
 
 struct LeafMixin {
+  size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      return 0;
+    }
+    
+  void replace_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+    }
+    
+  void replace_child(NodeRef&amp; rnode, int index, nodeid_t child) {
+      // this may be only called in trie nodes
+      assert(0);
+    }
+
   void next(NodeRef&amp; rnode, Trace&amp; trace) {
       trace.parent_next();
     }
@@ -751,15 +847,10 @@ NodeHandler* NodeHandler::handlers[200] = {
   &amp;compressed,
 };</t>
 <t tx="michael.20141215222649.84">// a leaf node with key and values &lt;= 256 bytes
-// the leag is saved in the page
+// the key_size is saved in Nodeptr.extra
 struct PageLeaf {
-  boost::uint8_t key_size;
-  boost::uint8_t value_size;
+  bsize_t value_size;
   char data[];
-  
-  size_t size() const {
-      return node_size(sizeof(key_size)+sizeof(value_size)+key_size+value_size);
-    }
 };
 
 
@@ -769,10 +860,18 @@ struct PageLeafHandler : public NodeHandler, public LeafMixin {
       trace.complete = true;
     }
 
+  size_t node_size(NodeRef&amp; rnode) {
+      PageLeaf *n = (PageLeaf*)rnode.node();
+      return (bsize_t)*rnode.extra() 
+          + n-&gt;value_size + sizeof(n-&gt;value_size)
+          + sizeof(NodeRef);
+    }
+
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
       PageLeaf *n = (PageLeaf*)rnode.node();
-      if (key.size() == n-&gt;key_size)
-          &amp;&amp; memcmp(key.data(), n-&gt;data, n-&gt;key_size) == 0) {
+      bsize_t key_size = *rnode.extra();
+      if (key.size() == key_size)
+          &amp;&amp; memcmp(key.data(), n-&gt;data, key_size) == 0) {
         add_to_trace(n, trace);
       }
     }
@@ -787,9 +886,10 @@ struct PageLeafHandler : public NodeHandler, public LeafMixin {
     
   void add(const Slice&amp; key, const Slice&amp; value, NodeRef&amp; rnode, Trace&amp; trace) {
       PageLeaf *n = (PageLeave*)rnode.node();
+      bsize_t key_size = *rnode.extra();
       size_t prefix_size = common_prefix(key.data(), n-&gt;data, 
-                                         std::min(key.size(), n-&gt;key_size));
-      Slice mykey(n-&gt;data+prefix_size, n-&gt;key_size-prefix_size);
+                                         std::min(key.size(), key_size));
+      Slice mykey(n-&gt;data+prefix_size, key_size-prefix_size);
       Slice myvalue(n-&gt;data+key_size, n-&gt;value_size);
       TempLeaf me(mykey, myvalue);
       TempTrie trie;
@@ -868,6 +968,44 @@ struct TrieHandler : public NodeHandler {
       else
         trace.complete = true;
     }
+ 
+  size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      size_t count = 0;
+      Trie *n = (Trie*)rnode.node();
+      for(int i = 0; i &lt; 64; i++) {
+        if (n-&gt;children[i]) 
+          children[count++] = n-&gt;children[i];
+      }
+      if (*rnode.extra())
+        children[count++] = *rnode.extra();
+        
+      return count;
+    }
+   
+  void replace_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      size_t count = 0;
+      Trie *n = (Trie*)rnode.node();
+      for(int i = 0; i &lt; 64; i++) {
+        if (n-&gt;children[i]) 
+          n-&gt;children[i] = children[count++];
+      }
+      if (*rnode.extra())
+        *rnode.extra() = children[count];
+    }
+
+  void replace_child(NodeRef&amp; rnode, int index, nodeid_t child) {
+      if (index &lt; 0) {
+        *rnode.extra() = child;
+      }
+      else {
+        Trie *n = (Trie*)rnode.node();
+        n-&gt;children[index] = child;
+      }
+    }
+ 
+  size_t node_size(NodeRef&amp; rnode) {
+      return sizeof(Trie) + sizeof(NodeRef);
+    }
   
   void add(const Slice&amp; key, const Slice&amp; value, NodeRef&amp; rnode, Trace&amp; trace) {
       Trie *n = (Trie*)rnode.node();
@@ -939,19 +1077,19 @@ struct BitTrie {
       return 64 - clz(bits)
     }
   
-  int next_bit(trieindex_t index) const {
+  int next_bit(int index) const {
       boost::uint64_t mask = ~0;
       mask &lt;&lt;= index;
       return ffs(bits &amp; mask) - 1;
     }
     
-  int prev_bit(trieindex_t index) const {
+  int prev_bit(int index) const {
       boost::uint64_t mask = ~0;
       mask &lt;&lt;= index;
       return 64 - clz(bits &amp; ~mask);
     }
     
-  void add(trieindex_t index, nodeid_t node) {
+  void add(int index, nodeid_t node) {
       bits |= 1 &lt;&lt; index;
       int child_index = get_child_index(index); 
       memove(children+child_index, children+child_index+1,
@@ -959,7 +1097,7 @@ struct BitTrie {
       children[child_index] = node;
     }
     
-  void remove(trieindex_t index) {
+  void remove(int index) {
       int child_index = get_child_index(index);
       assert(child_index &gt;= 0);
       bits &amp;= ~(1 &lt;&lt; index);
@@ -977,6 +1115,47 @@ struct BitTrieHandler : public NodeHandler {
       else
         trace.complete = true;
     }
+    
+  size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      BitTrie *n = (BitTrie*)rnode.node();
+      size_t count = n-&gt;count();
+      for(int i = 0; i &lt; count; i++) 
+          children[i] = n-&gt;children[i];
+
+      if (*rnode.extra())
+        children[count++] = *rnode.extra();
+
+      return count;
+    }
+    
+  void replace_children(NodeRef&amp; rnode, nodeid_t children[65]) {
+      BitTrie *n = (BitTrie*)rnode.node();
+      size_t count = n-&gt;count();
+      for(int i = 0; i &lt; count; i++) 
+          n-&gt;children[i] = children[i];
+
+      if (*rnode.extra())
+        *rnode.extra() = children[count];
+    }
+    
+  void replace_child(NodeRef&amp; rnode, int index, nodeid_t child) {
+      if (index &lt; 0) {
+        *rnode.extra() = child;
+      }
+      else {
+        BitTrie *n = (Trie*)rnode.node();
+        n-&gt;children[n-&gt;get_childindex(index)] = child;
+      }
+    }
+    
+  size_t node_size(NodeRef&amp; rnode) {
+      BitTrie *n = (BitTrie*)rnode.node();
+      size_t s = sizeof(n-&gt;bits) + n-&gt;count();
+      if (s &amp; 0xf)
+        s += 16 - s &amp; 0x15;
+      
+      return sizeof(NodeRef) + s
+    }    
 
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
       if (key.empty()) {
@@ -1100,7 +1279,7 @@ struct BitTrieHandler : public NodeHandler {
         case 8:
         case 24:
         case 40:
-          trace.grow_by(16);
+          trace.grow_node_by(16);
           
         default: 
           trace.add_node(child, key.slice(1));
@@ -1142,7 +1321,7 @@ struct BitTrieHandler : public NodeHandler {
       
         case 24:
         case 40:
-          trace.shrink_node_by(16);
+          trace.grow_node_by(-16);
       }
        
       return true;
@@ -1152,11 +1331,12 @@ struct BitTrieHandler : public NodeHandler {
       switch(child.type()) {
         case kCompressed: {
             Compressed* n = (Compressed*)child.node();
-            if (n-&gt;size &lt; 0xff) {
+            bsize_t size = (bsize_t)*child.extra();
+            if (size &lt; 0xff) {
               TempCompressed compressed;
               compressed.node.data[0] = (char)index;
-              memcpy(node.data+1, n-&gt;data, n-&gt;size);
-              compressed.node.size = n-&gt;size+1;
+              memcpy(node.data+1, n-&gt;data, size);
+              compressed.extra = size+1;
               child.page.free_node(child.id, trace.map);
               trace.change_node(compressed);
             }
@@ -1191,6 +1371,17 @@ typedef boost::uint8_t trieindex_t;
 
 
 struct NodeHandler {
+  // returns the nodes children
+  virtual size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) = 0;
+  // replace the nodes children with the nodeids of children
+  virtual void replace_children(NodeRef&amp; rnode, nodeid_t children[65]) = 0;
+  
+  // replaces a single child
+  virtual void replace_child(NodeRef&amp; rnode, int index, nodeid_t child) = 0;
+  
+  // returns the node size on the page (without descendants)
+  virtual size_t node_size(NodeRef&amp; rnode) = 0;
+
   // finds key in trie, walks until the leaf was found or to the
   // last fitting note. context.trace will be filled on the way
   virtual void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) = 0;
@@ -1264,6 +1455,22 @@ struct NodeRef {
 
   void remove_last(Trace&amp; trace) {
       trie_handlers[type()]-&gt;remove_last(*this, trace);
+    }
+    
+  size_t size() {
+      return trie_handlers[type()]-&gt;size(*this);
+    }
+    
+  size_t get_children(nodeid_t children[65]) {
+      return trie_handlers[type()]-&gt;get_children(*this, children);
+    }
+
+  void replace_children(nodeid_t children[65]) {
+      trie_handlers[type()]-&gt;replace_children(*this, children);
+    }
+    
+  void replace_child(int index, nodeid_t child) {
+      trie_handlers[type()]-&gt;replace_child(*this, index, child);
     }
 
   PageRef page;
@@ -1343,13 +1550,17 @@ struct Trace {
       while(stack.size()) {
         NodeRef&amp; me(current()); 
         if (me.remove_last_index()) {
-          me.page.normalize();
+          me.page.defragment();
           merge_with_parent();
           return;
         }
-
-        me.page.free_node(me.id, map);
-        me.pop(false);
+        
+        if (me.id == 0)
+          map.free_page(me.page.id);
+        else
+          me.page.free_node(me.id);
+          
+        pop(false);
        }
     }
   
@@ -1368,10 +1579,8 @@ struct Trace {
  void add_node(TempNode&amp; new_node, const Slice&amp; transition_key) {
       // transistion_key causes transitions from parent to node
       size_t size = new_node.size();
-      if (current().page.free_size() &lt; size + sizeof(NodePtr))
-        split_page();
-        
-      NodeRef&amp; new_ref(current().page.new_node(new_size));
+      reserve_space(size + sizeof(NodePtr));
+      NodeRef&amp; new_ref(current().page.new_node(size));
       memcpy(new_ref.node(), new_node.node, size);
       push(new_ref);
       key.append(transition_key.data(), transition_key.size());
@@ -1379,42 +1588,132 @@ struct Trace {
   
   // change current node to type
   void change_node(TempNode&amp; new_node) {
-      NodeRef &amp;node(current());
-      size_t size = node.size(), new_size = new_node.size();
-      nodeid_t nodeid = node.id;
-      if (node.page.free_size() + size &lt; new_size) 
-        split_page();
-      
-      page.grow(nodeid, new_size-size);
+      size_t size = current.size(), new_size = new_node.size();
+      grow_node(new_size-size);
       memcpy(current().node(), new_node.node(), new_size);
+      *current().extra() = new_node.extra;
+    }
+   
+  // grows or shrink the current node
+  void grow_node_by(int delta) {
+      if (delta &gt; 0)
+        reserve_space(delta);
+      
+      current().page.grow_node(current().id, delta);  
     }
    
   // merges the current page with the parent page if possible 
   void merge_with_parent() {
+      PageRef&amp; page(current().page)
+      size_t page_size = page.size();
+      
+      for(int i = stack.size()-2; i &gt;= 0; i--) {
+        PageRef parent(stack[i].node.page);
+        if (parent.id != page.id) {
+          if (parent.free_size() &gt;= page.size()) {
+            nodeid_t child = move_node(parent, NodeRef(page, 0));
+            int old_last_index = last_index;
+            pop()
+            current().replace_child(last_index, child);
+            current().find(Slice(last_index), *this);
+            last_index = old_last_index;
+            map.free_page(page.id);
+          }
+          break;
+        }
+      }
+    }
+    
+  // refresh the hash for all nodes belonging to the same page as current()
+  // if node is in trace
+  void refresh_trace_if_contains(NodeRef&amp; node) {
+      pageid_t pageid = node.page.id;
+      size_t key_index = key.size();
+      bool refresh = false;
+      int i;
+      for(i = stack.size()-1; i &gt;= 0; i--) {
+        NodeRef&amp; item(stack[i].node);
+        if (item.page.id == pageid) {
+          key_index = stack[i].index;
+          if (item.id == node.id)
+            refresh = true;
+        }
+        else {
+          // the first item in stack not containing to the same page
+          if (refresh) {
+            string suffix(key, key_index);
+            stack.resize(i+1);
+            current().find(suffix);
+          }
+          return;
+        }
+      }
+    }
+ 
+  size_t calc_sizes(NodeRef&amp; node, size_t sizes[256]) {
+      nodeid_t children[65];
+      size_t size = node.size();
+      size_t count = node.get_children(chidlren);
+      for(size_t i = 0; i &lt; count; i++)
+        size += calc_sizes(NodeRef(node.page, children[i]);
+        
+      sizes[node.id] = size;
+      return size;
+    }
+
+  // enusers that the page of current node has a free_space &gt;  size
+  // place current node to a new page if nessary
+  void reserve_space(size_t size) {
+      // during this loop current() can change its page!
+      while (current().page.free_size() &lt; size) {
+        size_t sizes[256];
+        NodeRef &amp;root(current().page, 0);
+        calc_size(root, sizes);
+        int best = sizeof(Page);
+        nodeid_t best_id = 1;
           
-  
+        // i = 1: it makes no sense to move the root node
+        for(int i = 1; i &lt; root.page.count(); i++) {
+          int delta = abs(sizes[i]-sizeof(Page)/2);
+          if (delta &lt; nearest) {
+            best = delta;
+            best_id = i;
+          }
+        }
+        PageRef newpage = map.new_page();
+        NodeRef to_move(NodeRef(page, best_id))
+        move_node(newpage, to_move);
+        
+        refresh_trace_if_contains(to_move);
+        root.page.defragment();
+        root.page.create_link(best_id, newpage.id);
+      }
     }
 
-
-  // splits the page in to with about have size on each
-  void split_page() {
-      
-      
-  
-  
-  
-    }
-
-  nodeid_t move_node(PageRef&amp; page, nodeid_t id) {
-      NodeRef&amp; node(current());
-      if (node.page.id == page.id)
+  // moves the node to new page returning the id on the new_page
+  // precondition: there must be enough space in new_page
+  nodeid_t move_node(PageRef&amp; new_page, NodeRef&amp; node) {
+      if (new_page.id == node.page.id)
         return id;
   
-      // move the node an its children to current.page
-            
-  
-  
+      nodeid_t children[65];
+      size_t count = node.get_children(children);
+      
+      size_t size = node.size()
+      NodeRef new_node(new_page.new_node(size));
+      memcpy(new_node.node(), node.node(), size);
+      node.page.free_node(node.id);
+      
+      for(size_t i = 0; i &lt; count; i++)
+        children[i] = move_node(new_page, NodeRef(node.page, children[i]));
+      
+      new_node.replace_children(children);
+      return new_node.id;
     }
+    
+    // not solved
+    // compressed move node: ensure there is enough space
+
 };</t>
 <t tx="michael.20141220220750.17"></t>
 <t tx="michael.20141220220750.18"></t>

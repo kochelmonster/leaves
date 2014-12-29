@@ -8,7 +8,8 @@
 
 //@<< includes >>
 //@+node:michael.20141217010530.12:<< includes >>
-#include "boost/cstdint.h"
+#include <boost/cstdint.h>
+#include <stdlib.h> 
 //@nonl
 //@-node:michael.20141217010530.12:<< includes >>
 //@nl
@@ -52,6 +53,14 @@ struct NodePtr {
   +----------------------+
   | header (4 byte)      |
   +----------------------+
+  | link[0] (4byte)      |
+  +----------------------+
+  | link[1] (4byte)      |
+  +----------------------+
+  | ...                  |
+  +----------------------+
+  | link[l] (4byte)      | l = link_count -1
+  +----------------------+  
   | node_ptr[0] (3 byte) |
   +----------------------+
   | node_ptr[1] (3 byte) |
@@ -59,15 +68,7 @@ struct NodePtr {
   | ...                  |
   +----------------------+ 
   | node_ptr[n] (3 byte) | n = node_count -1
-  +----------------------+ <-- link_start poinst to start of links
-  | link_node[0] (4byte) |
-  +----------------------+
-  | link_node[1] (4byte) |
-  +----------------------+
-  | ...                  |
-  +----------------------+
-  | link_node[l] (4byte) | l = link_count -1
-  +----------------------+  
+  +----------------------+ 
   |                      |
   |                      |
   +----------------------+ <-- free_start points to the end all nodes
@@ -96,12 +97,14 @@ struct Page {
     char data[4094];
     struct {
       union {
-        bsize_t node_count;  // node count
-        bize_t link_count;   // count of link nodes
-        inpage_ptr free_start; 
-        inpage_ptr link_start;
+        struct {
+          bsize_t node_count;  // node count
+          bsize_t link_count;   // count of link nodes
+          inpage_ptr free_start; 
+        };
+        char header[4];
       };
-      NodePtr node_ptr[];
+      pageid_t link[];
     };
   };      
       
@@ -111,6 +114,8 @@ struct Page {
 //@-node:michael.20141215222649.67:struct Page
 //@+node:michael.20141215222649.73:struct PageRef
 struct Node;
+
+#define REMOVE_BIT 0x80
 
 struct PageRef {
   PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
@@ -139,13 +144,59 @@ struct PageRef {
     }
 
   size_t free_size() const {
-      return 4096 - page.free_start*16 - PAGE_HEADER_SIZE 
-        - (page->last_node+1)*sizeof(NodePtr)
+      return page->free_start*16 
+        - page->link_count * sizeof(pageptr_t) 
+        - page->node_count * sizeof(NodePtr)
+        - sizeof(page->header);
+    }
+    
+  // returns only the node occupied size (without pageheader)
+  // but with nodeptrs and links
+  size_t size() const {
+      return page->link_count * sizeof(pageptr_t) // links
+          + page->node_count * sizeof(NodePtr)    // node_ptr
+          + sizeof(page->data) - page->free_start*16);
+    }
+    
+  size_t count() const {
+      return page->node_count;
     }
 
-  Page *_page;
-  pageid_t _id;
-  pageoffset_t _offset;
+  void defragment() {
+      NodePtr *nodes = &page->data[sizeof(page->header)
+                                   +page->link_count*sizeof(pageptr_t));
+      for(size_t i = 0; i < page->count; i++) {
+        if (nodes[i].type & REMOVE_BIT) {
+          // found a removed node
+          switch(nodes[i].type & ~REMOVE_BIT) {
+            case kLink:
+              delete_link
+          
+         
+          
+        }
+      }
+  
+  
+    }
+
+  void free_node(nodeid_t id) {
+      if link
+    }
+    
+  void new_node(size_t size) {
+    }
+    
+  void grow_node(nodeid_t size_t size) {
+    }
+    
+  void create_link(node_id node, pageid_t page) {
+    }
+  
+
+  Page *page;
+  pageid_t id;
+  pageoffset_t offset;
 };
 
 //@-node:michael.20141215222649.73:struct PageRef
@@ -204,6 +255,22 @@ struct NodeRef {
 
   void remove_last(Trace& trace) {
       trie_handlers[type()]->remove_last(*this, trace);
+    }
+    
+  size_t size() {
+      return trie_handlers[type()]->size(*this);
+    }
+    
+  size_t get_children(nodeid_t children[65]) {
+      return trie_handlers[type()]->get_children(*this, children);
+    }
+
+  void replace_children(nodeid_t children[65]) {
+      trie_handlers[type()]->replace_children(*this, children);
+    }
+    
+  void replace_child(int index, nodeid_t child) {
+      trie_handlers[type()]->replace_child(*this, index, child);
     }
 
   PageRef page;
@@ -281,13 +348,17 @@ struct Trace {
       while(stack.size()) {
         NodeRef& me(current()); 
         if (me.remove_last_index()) {
-          me.page.normalize();
+          me.page.defragment();
           merge_with_parent();
           return;
         }
-
-        me.page.free_node(me.id, map);
-        me.pop(false);
+        
+        if (me.id == 0)
+          map.free_page(me.page.id);
+        else
+          me.page.free_node(me.id);
+          
+        pop(false);
        }
     }
   
@@ -306,10 +377,8 @@ struct Trace {
  void add_node(TempNode& new_node, const Slice& transition_key) {
       // transistion_key causes transitions from parent to node
       size_t size = new_node.size();
-      if (current().page.free_size() < size + sizeof(NodePtr))
-        split_page();
-        
-      NodeRef& new_ref(current().page.new_node(new_size));
+      reserve_space(size + sizeof(NodePtr));
+      NodeRef& new_ref(current().page.new_node(size));
       memcpy(new_ref.node(), new_node.node, size);
       push(new_ref);
       key.append(transition_key.data(), transition_key.size());
@@ -317,42 +386,132 @@ struct Trace {
   
   // change current node to type
   void change_node(TempNode& new_node) {
-      NodeRef &node(current());
-      size_t size = node.size(), new_size = new_node.size();
-      nodeid_t nodeid = node.id;
-      if (node.page.free_size() + size < new_size) 
-        split_page();
-      
-      page.grow(nodeid, new_size-size);
+      size_t size = current.size(), new_size = new_node.size();
+      grow_node(new_size-size);
       memcpy(current().node(), new_node.node(), new_size);
+      *current().extra() = new_node.extra;
+    }
+   
+  // grows or shrink the current node
+  void grow_node_by(int delta) {
+      if (delta > 0)
+        reserve_space(delta);
+      
+      current().page.grow_node(current().id, delta);  
     }
    
   // merges the current page with the parent page if possible 
   void merge_with_parent() {
+      PageRef& page(current().page)
+      size_t page_size = page.size();
+      
+      for(int i = stack.size()-2; i >= 0; i--) {
+        PageRef parent(stack[i].node.page);
+        if (parent.id != page.id) {
+          if (parent.free_size() >= page.size()) {
+            nodeid_t child = move_node(parent, NodeRef(page, 0));
+            int old_last_index = last_index;
+            pop()
+            current().replace_child(last_index, child);
+            current().find(Slice(last_index), *this);
+            last_index = old_last_index;
+            map.free_page(page.id);
+          }
+          break;
+        }
+      }
+    }
+    
+  // refresh the hash for all nodes belonging to the same page as current()
+  // if node is in trace
+  void refresh_trace_if_contains(NodeRef& node) {
+      pageid_t pageid = node.page.id;
+      size_t key_index = key.size();
+      bool refresh = false;
+      int i;
+      for(i = stack.size()-1; i >= 0; i--) {
+        NodeRef& item(stack[i].node);
+        if (item.page.id == pageid) {
+          key_index = stack[i].index;
+          if (item.id == node.id)
+            refresh = true;
+        }
+        else {
+          // the first item in stack not containing to the same page
+          if (refresh) {
+            string suffix(key, key_index);
+            stack.resize(i+1);
+            current().find(suffix);
+          }
+          return;
+        }
+      }
+    }
+ 
+  size_t calc_sizes(NodeRef& node, size_t sizes[256]) {
+      nodeid_t children[65];
+      size_t size = node.size();
+      size_t count = node.get_children(chidlren);
+      for(size_t i = 0; i < count; i++)
+        size += calc_sizes(NodeRef(node.page, children[i]);
+        
+      sizes[node.id] = size;
+      return size;
+    }
+
+  // enusers that the page of current node has a free_space >  size
+  // place current node to a new page if nessary
+  void reserve_space(size_t size) {
+      // during this loop current() can change its page!
+      while (current().page.free_size() < size) {
+        size_t sizes[256];
+        NodeRef &root(current().page, 0);
+        calc_size(root, sizes);
+        int best = sizeof(Page);
+        nodeid_t best_id = 1;
           
-  
+        // i = 1: it makes no sense to move the root node
+        for(int i = 1; i < root.page.count(); i++) {
+          int delta = abs(sizes[i]-sizeof(Page)/2);
+          if (delta < nearest) {
+            best = delta;
+            best_id = i;
+          }
+        }
+        PageRef newpage = map.new_page();
+        NodeRef to_move(NodeRef(page, best_id))
+        move_node(newpage, to_move);
+        
+        refresh_trace_if_contains(to_move);
+        root.page.defragment();
+        root.page.create_link(best_id, newpage.id);
+      }
     }
 
-
-  // splits the page in to with about have size on each
-  void split_page() {
-      
-      
-  
-  
-  
-    }
-
-  nodeid_t move_node(PageRef& page, nodeid_t id) {
-      NodeRef& node(current());
-      if (node.page.id == page.id)
+  // moves the node to new page returning the id on the new_page
+  // precondition: there must be enough space in new_page
+  nodeid_t move_node(PageRef& new_page, NodeRef& node) {
+      if (new_page.id == node.page.id)
         return id;
   
-      // move the node an its children to current.page
-            
-  
-  
+      nodeid_t children[65];
+      size_t count = node.get_children(children);
+      
+      size_t size = node.size()
+      NodeRef new_node(new_page.new_node(size));
+      memcpy(new_node.node(), node.node(), size);
+      node.page.free_node(node.id);
+      
+      for(size_t i = 0; i < count; i++)
+        children[i] = move_node(new_page, NodeRef(node.page, children[i]));
+      
+      new_node.replace_children(children);
+      return new_node.id;
     }
+    
+    // not solved
+    // compressed move node: ensure there is enough space
+
 };
 //@nonl
 //@-node:michael.20141220220750.15:struct Trace
