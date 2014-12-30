@@ -11,6 +11,8 @@
 
 namespace larch_leaves {
 
+static Slice main_name_space("::main", 6);
+
 //@+others
 //@+node:michael.20141215222649.104:class Cursor (Implementation)
 // find prefix common to s1 and s2
@@ -101,25 +103,40 @@ std::shared_ptr<Storage> Storage::open(const char* path, const Options& options)
 }
 
 //@-node:michael.20141215222649.188:open()
-//@+node:michael.20141215222649.190:cursor()
-std::shared_ptr<Cursor> Storage::cursor(const Slice& namespace_, 
-                                        bool signed_compare=false) {
-  if signed_compare
-    return new SignedNamespaceCursor(*this, namespace_);
-  
-  return new UnsignedNamespaceCursor(*this, namespace_);
-}
-
-std::shared_ptr<Cursor> Storage::cursor(bool signed_compare=false) {
-  if (signed_compare)
-    return new SignedCursor(*this);
-    
-  return new UnsignedCursor(*this);
-}
-
-//@-node:michael.20141215222649.190:cursor()
 //@-others
 //@-node:michael.20141215222649.44:class Storage (Implementation)
+//@+node:michael.20141230111914.3:class MemoryStorage (Implementation)
+struct MemoryCursor : public Cursor {
+  Trace trace;
+  NodeRef root;
+
+};
+
+MemoryStorage::MemoryStorage() {
+  // create the main namespace
+  std::string encoded = to_base64(main_name_space);
+  Trace trace(_nodes, _nodes);
+  trace.push(root());
+  trace.add(TempPageLeaf(encoded, Slice()));
+}
+
+
+std::shared_ptr<Cursor> read_cursor(const Slice& namespace_) {
+  std::string encoded = to_base64(namespace_);
+  MemoryCursor cursor(_nodes);
+  root().find(Slice(endcoded), cursor.trace);
+  
+}
+
+
+std::shared_ptr<Cursor> write_cursor(const Slice& namespace_) {
+  return 
+}
+
+
+//@-node:michael.20141230111914.3:class MemoryStorage (Implementation)
+//@+node:michael.20141230111914.4:class PersistantStorage (Implementation)
+//@-node:michael.20141230111914.4:class PersistantStorage (Implementation)
 //@-others
 } // namespace larch_leaves 
 //@-node:michael.20141215222649.45:@shadow leaves.cpp

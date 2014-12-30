@@ -14,7 +14,7 @@
 <v t="michael.20141215222649.5"><vh>@bool shadow_in_home_dir = False</vh></v>
 <v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
 </v>
-<v t="michael.20141215222649.9"><vh>Source</vh>
+<v t="michael.20141215222649.9" a="E"><vh>Source</vh>
 <v t="michael.20141215222649.13"><vh>Logical</vh>
 <v t="michael.20141215222649.12"><vh>API</vh>
 <v t="michael.20141215222649.38"><vh>struct Options</vh></v>
@@ -28,7 +28,6 @@
 <v t="michael.20141215222649.44"><vh>class Storage (Implementation)</vh>
 <v t="michael.20141215222649.189"><vh>~Storage()</vh></v>
 <v t="michael.20141215222649.188"><vh>open()</vh></v>
-<v t="michael.20141215222649.190"><vh>cursor()</vh></v>
 </v>
 </v>
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
@@ -55,7 +54,7 @@
 <v t="michael.20141215222649.160"><vh>class MultiProcessNodeMemoryManager</vh></v>
 </v>
 <v t="michael.20141215222649.136"><vh>class LeafStorage</vh></v>
-<v t="michael.20141215222649.72" a="E"><vh>Page</vh>
+<v t="michael.20141215222649.72"><vh>Page</vh>
 <v t="michael.20141215222649.67"><vh>struct Page</vh></v>
 <v t="michael.20141215222649.73"><vh>struct PageRef</vh></v>
 </v>
@@ -63,18 +62,19 @@
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.14"><vh>Files</vh>
-<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
-<v t="michael.20141215222649.17"><vh>@shadow leaves.h</vh></v>
-<v t="michael.20141215222649.65"><vh>@shadow node.h</vh></v>
+<v t="michael.20141215222649.14" a="E"><vh>Files</vh>
+<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.17" a="E"><vh>@shadow leaves.h</vh></v>
+<v t="michael.20141215222649.65" a="E"><vh>@shadow node.h</vh></v>
 <v t="michael.20141219202729.4"><vh>@shadow leaf.h</vh></v>
 </v>
-<v t="michael.20141215222649.15"><vh>@path src</vh>
+<v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141220220750.5"><vh>@shadow port.h</vh></v>
 <v t="michael.20141215222649.81"><vh>@shadow bittrie.h</vh></v>
-<v t="michael.20141219202729.8"><vh>@shadow bittrie.cpp</vh></v>
+<v t="michael.20141219202729.8" a="E"
+expanded="michael.20141215222649.83,"><vh>@shadow bittrie.cpp</vh></v>
 <v t="michael.20141215222649.161"><vh>@shadow node.cpp</vh></v>
-<v t="michael.20141215222649.45"><vh>@shadow leaves.cpp</vh></v>
+<v t="michael.20141215222649.45" a="E"><vh>@shadow leaves.cpp</vh></v>
 </v>
 </v>
 </v>
@@ -84,11 +84,9 @@
 <v t="michael.20141220220750.18"><vh>add than next() prev()</vh></v>
 </v>
 <v t="michael.20141219202729.5" a="E"><vh>edit</vh>
-<v t="michael.20141215222649.72" a="E"></v>
-<v t="michael.20141220220750.15"><vh>struct Trace</vh></v>
-<v t="michael.20141219202729.2"><vh>struct NodeRef</vh></v>
-<v t="michael.20141215222649.99"><vh>NodeHandler</vh></v>
-<v t="michael.20141215222649.83" a="E"></v>
+<v t="michael.20141215222649.135"></v>
+<v t="michael.20141215222649.27"></v>
+<v t="michael.20141230111914.3"><vh>class MemoryStorage (Implementation)</vh></v>
 </v>
 </vnodes>
 <tnodes>
@@ -152,11 +150,7 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
       trace.push(child);
       trace.key.append(c-&gt;data, c-&gt;size);
     }
-    
-  size_t node_size(NodeRef&amp; rnode) {
-      return (bsize_t)*rnode.extra() + sizeof(nodeid_t) + sizeof(NodeRef);
-    }
-    
+   
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
       Compressed *n = (Compressed*)rnode.node();
       bsize_t size = (bsize_t)*rnode.extra() ;
@@ -276,68 +270,71 @@ static CompressedHandler compressed;
 <t tx="michael.20141215222649.13"></t>
 <t tx="michael.20141215222649.135">class NodeStorage {
  public:
-  virtual std::shared_ptr&lt;PageMap&gt; get_pagemap(version_t version) = 0;
-  virtual PageRef get_page(pageoffset_t offset, pageid_t id) = 0;
   virtual PageRef new_page() = 0;
-  virtual void free_page(pageid_t id) = 0;
-  virtual void flush(async=true) { }
-  virtual void start_write() {}
-  virtual void end_write() {}
 };
 
 
-class NodeStorageInHeap : public NodeStorage {
- public:
- 
-  class HeapPageMap : public PageMap {
-   virtual pageoffset_t get_offset(pageid_t id) { 
-      return (pageoffset_t*)id; }
-  };
-
- 
-  NodeStorageInHeap() 
-    : _free_pages(0), _pagemap(new HeapPageMap(*this)) {}
-    
-  virtual std::shared_ptr&lt;PageMap&gt; get_pagemap(version_t version) {
-      return _pagemap;
-    }
-    
-  virtual PageRef get_page(pageoffset_t offset, pageid_t id) {
-       return PageRef(_pages[offset].get(), offset, id);
-    }
-    
-  virtual PageRef new_page();
-  virtual void free_page(pageid_t id);
-    
- private:
-  HeapPageMap _pagemap;
+struct NodeStorageInHeap : public NodeStorage, public PageMap {
   typedef std::unique_ptr&lt;Page&gt; _page_ptr;
   std::vector&lt;_page_ptr&gt; _pages;
   size_t _free_pages;  // count of _free_pages inside the vector
+  
+  NodeStorageInHeap()
+    : _free_pages(0) {
+    new_page(); // create root page
+  }
+
+  PageRef get_page(pageid_t id) {
+      return PageRef(_pages[id].get(), id, id);
+  }
+  
+  void free_page(const PageRef&amp; page) {
+    if (page.id == _pages.size()-1) {
+      if (page.id == 0) return;
+      _pages.pop_back();
+    }
+    else {
+      _pages[page.id].release();
+      _free_pages++;
+    }
+  }
+   
+  PageRef new_page() {
+      if (_free_pages) {
+        std::vector&lt;_page_ptr&gt;::iterator i = _pages.begin();
+        for(pageid_t j = 0; i != _pages.end(); i++, j++) {
+          if (! i-&gt;.get()) {
+            i-&gt;reset(new Page);
+            _free_pages--;
+            return PageRef(i-&gt;get(), j, j);
+          }
+        }
+      }
+      pageid_t id(_pages.size());
+      Page* page = new Page;
+      _pages.push_back(page);
+      return PageRef(page, id, id);
+    }
 };
 
 
-class PersistentNodeStorage : public PersistentNodeStorage {
- public:
-  PersistentNodeStorage(const char* path);
-  virtual std::shared_ptr&lt;PageMap&gt; get_pagemap(version_t version) = 0;
-  virtual PageRef new_page();
-  virtual void free_page(pageid_t pageid);
-  virtual void flush(async=true)
-  
- private:
-  void grow_file(size_t size);
-  void shrink_file(size_t size);
- 
+struct PersistentNodeStorage : public NodeStorage {
   PagePositionMap Page;
   boost::interprocess::file_mapping _file_mapping;
-}
+  
+  PersistentNodeStorage(const char* path);
+  std::shared_ptr&lt;PageMap&gt; get_pagemap(version_t version) = 0;
+  virtual PageRef new_page();
+ 
+  void grow_file(size_t size);
+  void shrink_file(size_t size);
+};
 
 
 class MultiProcessNodeStorage : public PersistentNodeStorage {
  public:
   MultiProcessNodeStorage(const char* path);
-}
+};
 </t>
 <t tx="michael.20141215222649.136">class LeafStorage {
  public:
@@ -380,10 +377,6 @@ struct LinkHandler : public NodeHandler, public LeafMixin {
       return child;
     }
     
-  size_t node_size(NodeRef&amp; rnode) {
-      return sizeof(pageid_t) + sizeof(NodeRef);
-    }
-
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
       link_node(rnode, trace).find(key, trace);
     }
@@ -476,22 +469,6 @@ void NodeStorageInHeap::free_page(pageid_t id) {
 }
 
 </t>
-<t tx="michael.20141215222649.190">std::shared_ptr&lt;Cursor&gt; Storage::cursor(const Slice&amp; namespace_, 
-                                        bool signed_compare=false) {
-  if signed_compare
-    return new SignedNamespaceCursor(*this, namespace_);
-  
-  return new UnsignedNamespaceCursor(*this, namespace_);
-}
-
-std::shared_ptr&lt;Cursor&gt; Storage::cursor(bool signed_compare=false) {
-  if (signed_compare)
-    return new SignedCursor(*this);
-    
-  return new UnsignedCursor(*this);
-}
-
-</t>
 <t tx="michael.20141215222649.198">bool Cursor::is_valid() const {
   if (_search_trace.empty())
     return false;
@@ -535,81 +512,82 @@ std::shared_ptr&lt;Cursor&gt; Storage::cursor(bool signed_compare=false) {
 </t>
 <t tx="michael.20141215222649.23">class Cursor {
  public:
+  // returns true if cursor is on a valid position
+  virtual bool is_valid() const = 0;
  
   // returns true if changes have to be commited
-  bool is_dirty() const;
-  
-  // returns true if cursor is on a valid position
-  bool is_valid() const;
+  virtual bool is_dirty() const = 0;
  
   // sets the cursor to key
-  virtual void set(const Slice&amp; key, int read_forward=100);
+  virtual void set(const Slice&amp; key, int read_forward=100) = 0;
   
   // sets the cursor to first
-  void first(int read_forward=100);
-  void last(int read_forward=-100) throw Error;
-  void next(int read_forward=100) throw Error;
-  void prev(int read_forward=-100) throw Error;
-  bool is_valid() const;
-
-  void add(const Slice&amp; key) throw Error;
-  Slice key() const;
-  Slice value() const;
-  void set_value(const Slice&amp; value);
-  void start_commit() throw Error;
-  bool is_comitting() const;
-  void end_commit() throw Error;
-  void commit() throw Error;
-
- protected:
-  virtual byte_t trie_index(char key) = 0;
+  virtual void first(int read_forward=100) = 0;
+  virtual void last(int read_forward=-100) = 0;
+  virtual void next(int read_forward=100) = 0;
+  virtual void prev(int read_forward=-100) = 0;
   
-  Cursor(Storage&amp; storage) : _storage(storage), _transaction(0) {}
-
- private:
-  versiont_t _transaction;
-  std::shared_ptr&lt;Storage&gt; _storage;
-  std::vector&lt;NodePtr&gt; _search_trace;
-  std::string _key;
+  virtual Slice key() const = 0;
+  virtual Slice value() const = 0;
   
-  friend Storage;
+  // sets the value raise an exception if a read curor
+  virtual void set_value(const Slice&amp; value) = 0;
 };
 
 
 </t>
-<t tx="michael.20141215222649.27">class Storage {
+<t tx="michael.20141215222649.27">extern Slice main_name_space;
+
+class Storage {
+ public:
+  virtual std::shared_ptr&lt;Cursor&gt; read_cursor(const Slice&amp; namespace_=main_name_space) = 0;
+  virtual std::shared_ptr&lt;Cursor&gt; write_cursor(const Slice&amp; namespace_=main_name_space) = 0;
+};
+
+
+class MemoryStorage : public Storage {
+public:
+  MemoryStorage();
+  virtual std::shared_ptr&lt;Cursor&gt; read_cursor(const Slice&amp; namespace_=main_name_space);
+  virtual std::shared_ptr&lt;Cursor&gt; write_cursor(const Slice&amp; namespace_=main_name_space);
+
+  NodeRef root() const {
+    return NodeRef(_nodes._get_page(0), 0);
+  }
+  
+private:
+  NodeStorageInHeap _nodes;
+  LeafStorageInHeap _leafs;
+};
+
+
+class PersistentStorage : public Storage {
  public:
   // opens a storage in directory "path"
   // path must exists and end with a separator ("/" or "\")
   // is path is NULL a in memory database is build
-  static std::shared_ptr&lt;Storage&gt; open(
-      const char* path, const Options&amp; options);
-
-  // returns a cursor inside a namespace
-  // if signed_compare is true the trie table is [-127, 127] instead of [0, 255]
-  std::shared_ptr&lt;Cursor&gt; read_cursor(const Slice&amp; namespace_);
-  std::shared_ptr&lt;Cursor&gt; write_cursor(const Slice&amp; namespace_);
-  
-  Storage() {}
-  ~Storage();
-  
-private:
-  std::unique_ptr&lt;NodeMemoryManager&gt; _node_memory_manager;
-  std::unique_ptr&lt;LeafMemoryManager&gt; _leaf_memory_manager;
+  void open(const char* path, const Options&amp; options);
 };
 
 
-</t>
+class CopyOnWriteStorage : public PersistentStorage {
+
+
+};</t>
 <t tx="michael.20141215222649.38">struct Options {
   // if true Storage starts with multiprocess support
   bool multiprocess;
   
-  // size of a map window
-  size_t window_size;
+  // size of a map window for node storage must be a multiple of 4096
+  size_t node_window_size;
   
-  // the maximum size of key+value
-  // must be smaller than window_size
-  size_t max_leaf_size;
+  // size of a map window for leaf storage
+  // value cannot be bigger than leaf_window_size
+  size_t leaf_window_size;
+  
+  Options()
+    : multiprocess(true), node_window_size(4096*4096*8), 
+    node_window_size(4096*4096*8) {}
 };
 
 
@@ -643,7 +621,7 @@ typedef boost::uint8_t inpage_ptr;
 struct NodePtr {
   inpage_ptr ptr;      // position inside page
   nodetype_t type;     // node type
-  nodeid_t extra;      // is used by several nodes and
+  bsize_t extra;       // is used by several nodes and
                        // ensures all nodes are good aligned
 };
 
@@ -696,7 +674,7 @@ struct NodePtr {
 */
 struct Page {
   union {
-    char data[4094];
+    char data[4096];
     struct {
       union {
         struct {
@@ -706,7 +684,7 @@ struct Page {
         };
         char header[4];
       };
-      pageid_t link[];
+      pageid_t links[];
     };
   };      
       
@@ -721,32 +699,45 @@ struct Page {
 
 struct PageRef {
   PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
-    page(page_), id(id_), offset(offset_) { }
+      page(page_), id(id_), offset(offset_) {
+      update_node_ptr();
+     }
 
   NodePtr* get_node_ptr(nodeid_t, id) {
-      return &amp;page-&gt;node_ptr[id];
+      return &amp;node_ptr[id];
     }
  
-  nodetype_t type(nodeid_t id) const {
-      return page-&gt;node_ptr[id].type;
+  nodetype_t get_type(nodeid_t id) const {
+      return node_ptr[id].type;
     }
     
   Node* get_node(nodeid_t id) const {
-      return (Node*)&amp;_page-&gt;data[page-&gt;node_ptr[id].ptr*16];
+      return (Node*)&amp;_page-&gt;data[node_ptr[id].ptr*16];
     }
     
-  nodeid_t* extra(nodeid_t id) const {
-      return page-&gt;node_ptr[id].extra;
+  bsize_t* get_extra(nodeid_t id) const {
+      return node_ptr[id].extra;
     }
     
-  pageid_t* link(nodeid_t id) const {
-      bsize_t linkid = page-&gt;node_ptr[id].ptr;
-      pageid_t* links = (pageid_t*)&amp;page.data[page.link_start];
-      return links+linkid;
+  pageid_t* get_link(nodeid_t id) const {
+      bsize_t linkid = node_ptr[id].ptr;
+      return &amp;page.links[linkid];
+    }
+
+  size_t get_node_size(nodeid_t id) const {
+      NodePtr* ptr = node_ptr();
+      
+      if (ptr[id].type == kLink)
+        return sizeod(pageid_t);
+      
+      if (id == 0)
+        return (256 - ptr[id].ptr) * 16;
+        
+      return (ptr[id-1].ptr - ptr[id].ptr)*16;
     }
 
   size_t free_size() const {
-      return page-&gt;free_start*16 
+      return sizeof(page-&gt;data) - ((size_t)(page-&gt;free_start))*16 
         - page-&gt;link_count * sizeof(pageptr_t) 
         - page-&gt;node_count * sizeof(NodePtr)
         - sizeof(page-&gt;header);
@@ -757,48 +748,125 @@ struct PageRef {
   size_t size() const {
       return page-&gt;link_count * sizeof(pageptr_t) // links
           + page-&gt;node_count * sizeof(NodePtr)    // node_ptr
-          + sizeof(page-&gt;data) - page-&gt;free_start*16);
+          + ((size_t)page-&gt;free_start)*16);
     }
     
   size_t count() const {
       return page-&gt;node_count;
     }
-
+    
+  void update_node_ptr() {
+      node_ptr = (NodePtr*)&amp;page-&gt;data[sizeof(page-&gt;header)
+                                       +page-&gt;link_count*sizeof(pageptr_t));
+    }
+    
   void defragment() {
-      NodePtr *nodes = &amp;page-&gt;data[sizeof(page-&gt;header)
-                                   +page-&gt;link_count*sizeof(pageptr_t));
-      for(size_t i = 0; i &lt; page-&gt;count; i++) {
-        if (nodes[i].type &amp; REMOVE_BIT) {
-          // found a removed node
-          switch(nodes[i].type &amp; ~REMOVE_BIT) {
-            case kLink:
-              delete_link
+      NodePtr new_ptrs[256]; 
+      bsize_t node_count = 0;
+      nodeid_t map[256]; // maps old nodeid_s to new node_ids
+      size_t size[256]; // is needed later
+
+      // create node map 
+      NodePtr *ptrs = node_ptr;
+      for(nodeid_t i = 0; i &lt; page-&gt;count; i++) {
+        map[i] = node_count;
+        if (nodes[i].type &amp; REMOVE_BIT)
+          continue;
           
-         
-          
+        size[node_count] = get_node_size(i);
+        memcpy(&amp;new_ptrs[node_count++], &amp;nodes[i], sizeof(NodePtr));
+      }
+      
+      // move nodes
+      pageid_t *links = page-&gt;links;
+      pageid_t new_links[256];
+      bsize_t link_count = 0;
+      size_t node_start = new_ptrs[0].ptr*16;
+
+      for(nodeid_t id = 1; i &lt; node_count; i++) {
+        switch(new_ptrs[i].type) {
+          case kLink:
+            new_links[link_count] = links[new_ptr[i].ptr];
+            new_ptr[i].ptr = link_count++;
+            break;
+            
+          default:
+            node_start -= size[i];
+            memmove(new_ptrs[i].ptr*16, node_start, size[i]);
         }
       }
-  
-  
+        
+      // update page administration
+      page-&gt;free_start = (sizeof(page-&gt;data)-node_start)/16;
+      page-&gt;link_count = link_count;
+      page-&gt;node_count = node_count;
+      update_node_ptr();
+      memcpy(links, new_links, sizeof(pageid_t)*link_count);
+      memcpy(node_ptr, new_ptrs, sizeof(NodePtr)*node_count);
+        
+      // map the child ids for each node
+      for(nodeid_t i = 0; i &lt; count; i++) {
+        NodeRef node(*this, i);
+        nodeid_t children[65];
+        size_t child_count;
+        child_count = node.get_children(children);
+        for(size_t j = 0; j &lt; count; j++) {
+          children[j] = map[children[j]];
+        node.replace_children(children);
+      }
     }
 
   void free_node(nodeid_t id) {
-      if link
+      node_ptr[id].type |= REMOVE_BIT:
     }
     
-  void new_node(size_t size) {
+  // creates a new node(size must be a multiple of 16)
+  NodeRef new_node(size_t size) {
+      size_t free_start = sizeof(page-&gt;data)-((size_t)page-&gt;free_start)*16;
+      free_start -= size;
+      page-&gt;free_start = (sizeof(page-&gt;data)-free_start)/16;
+      nodeid_t new_id = page-&gt;node_count++;
+      NodePtr *node = node_ptr+new_id;
+      node-&gt;ptr = free_start/16;
+      return NodeRef(*this, new_id);
     }
     
-  void grow_node(nodeid_t size_t size) {
+  // grows or shrinks a node by size. size must be a multiple of 16
+  void grow_node(nodeid_t id, int size) {
+      NodePtr* ptrs = node_ptr;
+      size_t free_start = sizeof(page-&gt;data)-((size_t)page-&gt;free_start)*16;
+      size_t node_start = ((size_t)ptrs[id].ptr) * 16;
+      size_t node_size = get_node_size(id);
+      
+      if (size &lt; 0)
+        node_size += size;
+        
+      memove(free_start, free_start+size, node_start-free_start+node_size);
+      
+      free_start += size;
+      page-&gt;free_start = (sizeof(page-&gt;data)-free_start)/16;
+      
+      size /= 16;
+      for(node_id i = id; i &lt; page-&gt;node_count; i++)
+        ptrs[i].ptr += size;
     }
     
-  void create_link(node_id node, pageid_t page) {
+  void create_link(node_id node_id, pageid_t page_id) {
+      NodePtr* nodes = node_ptr;
+      node[node_id].ptr = page-&gt;linkcount;
+      node[node_id].type = kLink;
+      
+      char* p = (char*)nodes;
+      memove((p, p+sizeof(pageid_t), sizeof(NodePtr)*page-&gt;node_count));
+      page-&gt;links[page-&gt;linkcount++] = page_id;
+      
+      update_node_ptr();
     }
-  
 
   Page *page;
   pageid_t id;
   pageoffset_t offset;
+  NodePtr* node_ptr;
 };
 
 </t>
@@ -858,13 +926,6 @@ struct PageLeafHandler : public NodeHandler, public LeafMixin {
   void add_to_trace(PageLeaf *n, Trace&amp; trace) {
       trace.key.append(n-&gt;data, n-&gt;key_size);
       trace.complete = true;
-    }
-
-  size_t node_size(NodeRef&amp; rnode) {
-      PageLeaf *n = (PageLeaf*)rnode.node();
-      return (bsize_t)*rnode.extra() 
-          + n-&gt;value_size + sizeof(n-&gt;value_size)
-          + sizeof(NodeRef);
     }
 
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
@@ -1003,10 +1064,6 @@ struct TrieHandler : public NodeHandler {
       }
     }
  
-  size_t node_size(NodeRef&amp; rnode) {
-      return sizeof(Trie) + sizeof(NodeRef);
-    }
-  
   void add(const Slice&amp; key, const Slice&amp; value, NodeRef&amp; rnode, Trace&amp; trace) {
       Trie *n = (Trie*)rnode.node();
       TempLeaf child(key.advance(1), value);
@@ -1030,13 +1087,20 @@ struct TrieHandler : public NodeHandler {
       Trie *n = (Trie*)rnode.node();
       n-&gt;children[trace.last_index] = 0;
       
+      nodeid_t children[64];
       size_t count = 0;
       for(int i = 0; i &lt; 64; i++) {
         if (n-&gt;children[i])
           count++;
       }
       if (count &lt; 56) {
-        TempTrie trie(n);
+        TempTrie trie(count);
+        *trie.extra() = *rnode.extra();
+        BitTrie* bt = (BitTrie*)trie.node();
+        for(int i = 0; i &lt; 64; i++) {
+          if (n-&gt;children[i])
+            bt-&gt;add(i, n-&gt;children[i]);
+        }
         trace.change_node(trie);
       }
 
@@ -1147,16 +1211,7 @@ struct BitTrieHandler : public NodeHandler {
         n-&gt;children[n-&gt;get_childindex(index)] = child;
       }
     }
-    
-  size_t node_size(NodeRef&amp; rnode) {
-      BitTrie *n = (BitTrie*)rnode.node();
-      size_t s = sizeof(n-&gt;bits) + n-&gt;count();
-      if (s &amp; 0xf)
-        s += 16 - s &amp; 0x15;
-      
-      return sizeof(NodeRef) + s
-    }    
-
+ 
   void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
       if (key.empty()) {
         nodeid_t *end_child = rnode.extra();
@@ -1330,14 +1385,15 @@ struct BitTrieHandler : public NodeHandler {
   void change_node(NodeRef&amp; child, int index, Trace&amp; trace) {
       switch(child.type()) {
         case kCompressed: {
+        
             Compressed* n = (Compressed*)child.node();
             bsize_t size = (bsize_t)*child.extra();
             if (size &lt; 0xff) {
-              TempCompressed compressed;
-              compressed.node.data[0] = (char)index;
-              memcpy(node.data+1, n-&gt;data, size);
-              compressed.extra = size+1;
-              child.page.free_node(child.id, trace.map);
+              char data[256];
+              data[0] = (char)index;
+              memcpy(data+1, n-&gt;data, size);
+              TempCompressed compressed(data, size+1);
+              trace.free_node(child.page, child.id);
               trace.change_node(compressed);
             }
             break;
@@ -1345,15 +1401,12 @@ struct BitTrieHandler : public NodeHandler {
                 
         case kPageLeaf: 
         case kLeaf: {
-          TempLeaf leaf(child);
-          string key_buffer;
-          if (index &gt;= 0) {
-            // we have to enhance the key
-            key_buffer.append(leaf.key.data(), leaf.key.size());
-            key_buffer.insert(0, 1, (char)index);
-            leaf.key = Slice(key_buffer.data(), key_buffer.size());
-          }
-          child.page.free_node(child.id, trace.map);
+          TempNode leaf;
+          trace.move_node(leaf.page_ref, child);
+          if (index &gt;= 0)
+            leaf.insert_key(index);
+          
+          trace.free_node(child.page, child.id);
           trace.change_node(leaf);
         }
       }
@@ -1365,356 +1418,13 @@ static BitTrieHandler bittrie;
 
 
 </t>
-<t tx="michael.20141215222649.99">// Interface for NodeRefs
-
-typedef boost::uint8_t trieindex_t;
-
-
-struct NodeHandler {
-  // returns the nodes children
-  virtual size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) = 0;
-  // replace the nodes children with the nodeids of children
-  virtual void replace_children(NodeRef&amp; rnode, nodeid_t children[65]) = 0;
-  
-  // replaces a single child
-  virtual void replace_child(NodeRef&amp; rnode, int index, nodeid_t child) = 0;
-  
-  // returns the node size on the page (without descendants)
-  virtual size_t node_size(NodeRef&amp; rnode) = 0;
-
-  // finds key in trie, walks until the leaf was found or to the
-  // last fitting note. context.trace will be filled on the way
-  virtual void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) = 0;
-  virtual void next(NodeRef&amp; rnode, Trace&amp; trace) = 0;
-  virtual void prev(NodeRef&amp; rnode, Trace&amp; trace) = 0;
-  virtual void first(NodeRef&amp; rnode, Trace&amp; trace) = 0;
-  virtual void last(NodeRef&amp; rnode, Trace&amp; trace) = 0;
-  virtual void add(const Slice&amp; key, const Slice&amp; value, 
-                   NodeRef&amp; rnode, Trace&amp; trace) = 0;
-  // remove the traces last_index
-  virtual bool remove_last_index(NodeRef&amp; rnode, Trace&amp; trace) {
-      return false;
-    }
-    
-  static NodeHandler* handlers[200];
-};
-
-</t>
 <t tx="michael.20141217010530.13">struct NodePtr {
   PagePtr page;
   nodeid_t node;
 };</t>
-<t tx="michael.20141219202729.2">struct Node { };
-struct Trace;
-
-// A reference to a Node
-struct NodeRef {
-  NodeRef(const PageRef&amp; page_, nodeid_t id_)
-    : page(page_), id(id_) { }
-
-  nodetype_t type() const {
-      return page.nodetype(id);
-    }
-  
-  Node* node() const {
-      return page.get_node(id);
-    }
-    
-  pageid_t* link() const {
-      return page.get_link(id);
-    }
-    
-  nodeid_t* extra() const {
-      return page.get_extra(id);
-    }
-    
-  // the following methods walks the trie, and fills the trace
-  void find(const Slice&amp; key, Trace&amp; trace) {
-      trie_handlers[type()]-&gt;find(key, *this, trace);
-    }
-    
-  void next(Trace&amp; trace) {
-      trie_handlers[type()]-&gt;next(*this, trace);
-    }
-    
-  void prev(Trace&amp; trace) {
-      trie_handlers[type()]-&gt;prev(*this, trace);
-    }
-    
-  void first(Trace&amp; trace) {
-      trie_handlers[type()]-&gt;first(*this, trace);
-    }
-    
-  void last(Trace&amp; trace) {
-      trie_handlers[type()]-&gt;last(*this, trace);
-    }
-   
-  void add(const Slice&amp; key, const Slice&amp; value, Trace&amp; trace) {
-      trie_handlers[type()]-&gt;add(key, value, *this, trace);
-    }
-
-  void remove_last(Trace&amp; trace) {
-      trie_handlers[type()]-&gt;remove_last(*this, trace);
-    }
-    
-  size_t size() {
-      return trie_handlers[type()]-&gt;size(*this);
-    }
-    
-  size_t get_children(nodeid_t children[65]) {
-      return trie_handlers[type()]-&gt;get_children(*this, children);
-    }
-
-  void replace_children(nodeid_t children[65]) {
-      trie_handlers[type()]-&gt;replace_children(*this, children);
-    }
-    
-  void replace_child(int index, nodeid_t child) {
-      trie_handlers[type()]-&gt;replace_child(*this, index, child);
-    }
-
-  PageRef page;
-  nodeid_t id;
-};
-
-
-
-</t>
 <t tx="michael.20141219202729.5">@language cplusplus
 @tabwidth -2
 </t>
-<t tx="michael.20141220220750.15">// A stack trace inside a trie
-// nodes[0] is the first node after root
-// nodes[K] is the current node (almost always a leaf)
-// key[0] causes the transition from root to nodes[1]
-struct Trace {
-  struct Transition {
-    NodeRef node;
-    size_t index; // the index inside Trace.key identifiying
-                  // the part causing the transition to node
-    Transition(NodeRef&amp; node_, size_t index_)
-        : node(node_), index(index_) { }
-  };
-
-  std::vector&lt;Transition&gt; stack;
-  std::string key;
-  int last_index; // the key index before the last pop (-1 if complete)
-  bool complete;  // true if key is completely
-  Pagemap&amp; map;   // needed for some operations
-  NodeStorage&amp; storage;  // needed for some operations
-  
-  Trace(Pagemap&amp; map_, NodeStorage&amp; storage_) : 
-      map(map_), storage(storage_), complete(false) { }
-  
-  void reset() {
-      nodes.clear(0);
-      key.clear();
-      complete(false);
-    }
-    
-  void push(NodeRef&amp; node) {
-      size_t index = key.size();
-      stack.push_back(Transition(node, index));
-    }
-    
-  void pop(bool skiplink=true) {
-      Transitions&amp; back(stack.back());
-      last_index = complete ? -1 : key[back.index];
-      complete = false;
-      key.resize(back.index);
-      stack.pop_back();
-      if (skiplink &amp;&amp; current().id == kLink)
-        stack.pop_back();
-    }
-    
-  NodeRef&amp; parent() {
-      NodeRef parent = stack[stack.size()-2];
-      return parent.node.id == kLink ? stack[stack.size()-3] : parent;
-    }
-    
-  NodeRef&amp; current() {
-    return stack.back();
-  }
-    
-  void parent_next() {
-      pop();
-      current().next(*this);
-    };
-      
-  void parent_prev() {
-      pop();
-      current().prev(*this);
-    };
-
-  void remove() {
-      while(stack.size()) {
-        NodeRef&amp; me(current()); 
-        if (me.remove_last_index()) {
-          me.page.defragment();
-          merge_with_parent();
-          return;
-        }
-        
-        if (me.id == 0)
-          map.free_page(me.page.id);
-        else
-          me.page.free_node(me.id);
-          
-        pop(false);
-       }
-    }
-  
-  // returns the nodeid that connects parent with current
-  // if current is on another page it conntects the link
-  // with current's page and retuns the nodeid of the link
-  nodeid_t child_of_parent() {
-      Transistion link_or_parent(stack[stack.size()-2);
-      if (link_or_parent.node.type() == kLink) {
-        *link_or_parent.link() = current().page.id;
-        return link_or_parent.id;
-      }
-      return current().id;
-    }
-  
- void add_node(TempNode&amp; new_node, const Slice&amp; transition_key) {
-      // transistion_key causes transitions from parent to node
-      size_t size = new_node.size();
-      reserve_space(size + sizeof(NodePtr));
-      NodeRef&amp; new_ref(current().page.new_node(size));
-      memcpy(new_ref.node(), new_node.node, size);
-      push(new_ref);
-      key.append(transition_key.data(), transition_key.size());
-   }
-  
-  // change current node to type
-  void change_node(TempNode&amp; new_node) {
-      size_t size = current.size(), new_size = new_node.size();
-      grow_node(new_size-size);
-      memcpy(current().node(), new_node.node(), new_size);
-      *current().extra() = new_node.extra;
-    }
-   
-  // grows or shrink the current node
-  void grow_node_by(int delta) {
-      if (delta &gt; 0)
-        reserve_space(delta);
-      
-      current().page.grow_node(current().id, delta);  
-    }
-   
-  // merges the current page with the parent page if possible 
-  void merge_with_parent() {
-      PageRef&amp; page(current().page)
-      size_t page_size = page.size();
-      
-      for(int i = stack.size()-2; i &gt;= 0; i--) {
-        PageRef parent(stack[i].node.page);
-        if (parent.id != page.id) {
-          if (parent.free_size() &gt;= page.size()) {
-            nodeid_t child = move_node(parent, NodeRef(page, 0));
-            int old_last_index = last_index;
-            pop()
-            current().replace_child(last_index, child);
-            current().find(Slice(last_index), *this);
-            last_index = old_last_index;
-            map.free_page(page.id);
-          }
-          break;
-        }
-      }
-    }
-    
-  // refresh the hash for all nodes belonging to the same page as current()
-  // if node is in trace
-  void refresh_trace_if_contains(NodeRef&amp; node) {
-      pageid_t pageid = node.page.id;
-      size_t key_index = key.size();
-      bool refresh = false;
-      int i;
-      for(i = stack.size()-1; i &gt;= 0; i--) {
-        NodeRef&amp; item(stack[i].node);
-        if (item.page.id == pageid) {
-          key_index = stack[i].index;
-          if (item.id == node.id)
-            refresh = true;
-        }
-        else {
-          // the first item in stack not containing to the same page
-          if (refresh) {
-            string suffix(key, key_index);
-            stack.resize(i+1);
-            current().find(suffix);
-          }
-          return;
-        }
-      }
-    }
- 
-  size_t calc_sizes(NodeRef&amp; node, size_t sizes[256]) {
-      nodeid_t children[65];
-      size_t size = node.size();
-      size_t count = node.get_children(chidlren);
-      for(size_t i = 0; i &lt; count; i++)
-        size += calc_sizes(NodeRef(node.page, children[i]);
-        
-      sizes[node.id] = size;
-      return size;
-    }
-
-  // enusers that the page of current node has a free_space &gt;  size
-  // place current node to a new page if nessary
-  void reserve_space(size_t size) {
-      // during this loop current() can change its page!
-      while (current().page.free_size() &lt; size) {
-        size_t sizes[256];
-        NodeRef &amp;root(current().page, 0);
-        calc_size(root, sizes);
-        int best = sizeof(Page);
-        nodeid_t best_id = 1;
-          
-        // i = 1: it makes no sense to move the root node
-        for(int i = 1; i &lt; root.page.count(); i++) {
-          int delta = abs(sizes[i]-sizeof(Page)/2);
-          if (delta &lt; nearest) {
-            best = delta;
-            best_id = i;
-          }
-        }
-        PageRef newpage = map.new_page();
-        NodeRef to_move(NodeRef(page, best_id))
-        move_node(newpage, to_move);
-        
-        refresh_trace_if_contains(to_move);
-        root.page.defragment();
-        root.page.create_link(best_id, newpage.id);
-      }
-    }
-
-  // moves the node to new page returning the id on the new_page
-  // precondition: there must be enough space in new_page
-  nodeid_t move_node(PageRef&amp; new_page, NodeRef&amp; node) {
-      if (new_page.id == node.page.id)
-        return id;
-  
-      nodeid_t children[65];
-      size_t count = node.get_children(children);
-      
-      size_t size = node.size()
-      NodeRef new_node(new_page.new_node(size));
-      memcpy(new_node.node(), node.node(), size);
-      node.page.free_node(node.id);
-      
-      for(size_t i = 0; i &lt; count; i++)
-        children[i] = move_node(new_page, NodeRef(node.page, children[i]));
-      
-      new_node.replace_children(children);
-      return new_node.id;
-    }
-    
-    // not solved
-    // compressed move node: ensure there is enough space
-
-};</t>
 <t tx="michael.20141220220750.17"></t>
 <t tx="michael.20141220220750.18"></t>
 <t tx="michael.20141220220750.2">void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
@@ -1822,5 +1532,34 @@ void last(NodeRef&amp; rnode, Trace&amp; trace) {
 
 </t>
 <t tx="michael.20141220220750.8">Insert multiple keys with a common part &gt; 256 bytes</t>
+<t tx="michael.20141230111914.3">struct MemoryCursor : public Cursor {
+  Trace trace;
+  NodeRef root;
+
+};
+
+MemoryStorage::MemoryStorage() {
+  // create the main namespace
+  std::string encoded = to_base64(main_name_space);
+  Trace trace(_nodes, _nodes);
+  trace.push(root());
+  trace.add(TempPageLeaf(encoded, Slice()));
+}
+
+
+std::shared_ptr&lt;Cursor&gt; read_cursor(const Slice&amp; namespace_) {
+  std::string encoded = to_base64(namespace_);
+  MemoryCursor cursor(_nodes);
+  root().find(Slice(endcoded), cursor.trace);
+  
+}
+
+
+std::shared_ptr&lt;Cursor&gt; write_cursor(const Slice&amp; namespace_) {
+  return 
+}
+
+
+</t>
 </tnodes>
 </leo_file>

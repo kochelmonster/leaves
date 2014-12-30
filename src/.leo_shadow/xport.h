@@ -39,11 +39,7 @@ inline int clz(boost::uint64_t v) {
       return 65;
  }
 
-
-
-
 #define _32BIT
-
 
 #else
 #pragma intrinsic(_BitScanForward)

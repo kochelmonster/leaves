@@ -14,39 +14,106 @@ inline size_t node_size(size_t s) {
   return ((s+15)/16) * 16;
 }
 struct TempNode {
-  Node* node; // points to data or theinserted note
-  nodetype_t node;
-  nodeid_t id; 
-  char data[514]; // the biggest node
+  Page page;
+  PageRef pageref;
+  NodeRef noderef;
+  
+  TempNode()
+    : pageref(&page, 0, 0), noderef(pageref, 0) { 
+      *noderef.extra() = 0;
+    }
+    
+  size_t size() const {
+      return noderef.size();
+    }
+    
+  Node* node() const {
+      return nodref.node();
+    }
+    
+  bsize_t* extra() const {
+      return nodref.extra();
+    }
+
+  nodetype_t type() const {
+      return nodref.type();
+    }
+};
 
 
-
+inline size_t pad16(size_t size) {
+  size_t rest = size & 0xf
+  if (rest)
+    size += 16-rest
+    
+  return size;
 }
-class PageManipulator {
- public:
-  NodeRef& current() {
+
+struct TempLeaf : public TempNode {
+  TempLeaf(const Slice& key, const Slice& value)
+    : TempNode() {
+      size_t size = key.size() + value.size()
+      if (size > 256) {
+        // Leaf
+      }
+      else {
+        // PageLeaf
+        pageref.new_node(pad16(size+sizeof(bsize_t)));
+        *extra() = key.size();
+        PageLeaf* n = (PageLeaf*)node();
+        n->value_size = value.size();
+        memcpy(n->data, key.data(), key.size());
+        memcpy(n->data+key.size(), value.data(), value.size());
+        nodref.set_type(kPageLeaf);
+      }
     }
-  
-  // returns the parent of current() parent is never a linknode
-  NodeRef& parent() {
+    
+    // insert index in the key buffer
+    void insert_key(trieindex_t index) {
+      switch(type()) {
+        case kLeaf:
+          break;
       
+        case kPageLeaf: {
+            PageLeaf* n = (PageLeaf*)node();
+            size_t size = *extra() + n->value_size + sizeof(bsize_t);
+            if (pad16(size) < pad16(size+1))
+              page_ref.grow_node(16);
+              
+            memmove(n->data+1, n->data, *extra()+n->value_size);
+            (*extra())++;
+            n->data[0] = index;
+            break;
+          }
+        }
     }
-  
-  void add(TempNode& node, const Slice& key_add) {
-   }
+};
 
-  void pop() {
+struct TempTrie : public TempNode {
+  TempTrie(size_t child_count=1) 
+    : TempNode() {
+      size_t size;
+      if (child_count >= 56) {
+        pageref.new_node(size=64);
+        nodref.set_type(kTrie);
+      }
+      else {
+        size = pag16(child_count);
+        pageref.new_node(size);
+        nodref.set_type(kBitTrie);
+      }
+
+      memset(node(), 0, size);
     }
+};
 
-  // grows the current node by size bytes
-  void grow_by(size_t size) {
-    }
-
-
-  // returns the node id of parent child
-  // it handles linknodes transparent
-  node_id child_of_parent() const {
-      return;
+struct TempCompressed : public TempNode {
+  TempCompressed(const char* data, size_t size)
+    : TempNode() {
+      *extra() = (bsize_t)size;
+      pageref.new_node(pad16(sizeof(nodeid_t)+size));
+      Compressed* n = (Compressed*)node();
+      memcpy(n->data, data, size);
     }
 };
 /* 
@@ -115,13 +182,6 @@ struct PageLeafHandler : public NodeHandler, public LeafMixin {
   void add_to_trace(PageLeaf *n, Trace& trace) {
       trace.key.append(n->data, n->key_size);
       trace.complete = true;
-    }
-
-  size_t node_size(NodeRef& rnode) {
-      PageLeaf *n = (PageLeaf*)rnode.node();
-      return (bsize_t)*rnode.extra() 
-          + n->value_size + sizeof(n->value_size)
-          + sizeof(NodeRef);
     }
 
   void find(const Slice& key, NodeRef& rnode, Trace& trace) {
@@ -216,11 +276,7 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
       trace.push(child);
       trace.key.append(c->data, c->size);
     }
-    
-  size_t node_size(NodeRef& rnode) {
-      return (bsize_t)*rnode.extra() + sizeof(nodeid_t) + sizeof(NodeRef);
-    }
-    
+   
   void find(const Slice& key, NodeRef& rnode, Trace& trace) {
       Compressed *n = (Compressed*)rnode.node();
       bsize_t size = (bsize_t)*rnode.extra() ;
@@ -347,10 +403,6 @@ struct LinkHandler : public NodeHandler, public LeafMixin {
       return child;
     }
     
-  size_t node_size(NodeRef& rnode) {
-      return sizeof(pageid_t) + sizeof(NodeRef);
-    }
-
   void find(const Slice& key, NodeRef& rnode, Trace& trace) {
       link_node(rnode, trace).find(key, trace);
     }
@@ -414,10 +466,6 @@ struct TrieHandler : public NodeHandler {
       }
     }
  
-  size_t node_size(NodeRef& rnode) {
-      return sizeof(Trie) + sizeof(NodeRef);
-    }
-  
   void add(const Slice& key, const Slice& value, NodeRef& rnode, Trace& trace) {
       Trie *n = (Trie*)rnode.node();
       TempLeaf child(key.advance(1), value);
@@ -441,13 +489,20 @@ struct TrieHandler : public NodeHandler {
       Trie *n = (Trie*)rnode.node();
       n->children[trace.last_index] = 0;
       
+      nodeid_t children[64];
       size_t count = 0;
       for(int i = 0; i < 64; i++) {
         if (n->children[i])
           count++;
       }
       if (count < 56) {
-        TempTrie trie(n);
+        TempTrie trie(count);
+        *trie.extra() = *rnode.extra();
+        BitTrie* bt = (BitTrie*)trie.node();
+        for(int i = 0; i < 64; i++) {
+          if (n->children[i])
+            bt->add(i, n->children[i]);
+        }
         trace.change_node(trie);
       }
 
@@ -659,16 +714,7 @@ struct BitTrieHandler : public NodeHandler {
         n->children[n->get_childindex(index)] = child;
       }
     }
-    
-  size_t node_size(NodeRef& rnode) {
-      BitTrie *n = (BitTrie*)rnode.node();
-      size_t s = sizeof(n->bits) + n->count();
-      if (s & 0xf)
-        s += 16 - s & 0x15;
-      
-      return sizeof(NodeRef) + s
-    }    
-
+ 
   void find(const Slice& key, NodeRef& rnode, Trace& trace) {
       if (key.empty()) {
         nodeid_t *end_child = rnode.extra();
@@ -842,14 +888,15 @@ struct BitTrieHandler : public NodeHandler {
   void change_node(NodeRef& child, int index, Trace& trace) {
       switch(child.type()) {
         case kCompressed: {
+        
             Compressed* n = (Compressed*)child.node();
             bsize_t size = (bsize_t)*child.extra();
             if (size < 0xff) {
-              TempCompressed compressed;
-              compressed.node.data[0] = (char)index;
-              memcpy(node.data+1, n->data, size);
-              compressed.extra = size+1;
-              child.page.free_node(child.id, trace.map);
+              char data[256];
+              data[0] = (char)index;
+              memcpy(data+1, n->data, size);
+              TempCompressed compressed(data, size+1);
+              trace.free_node(child.page, child.id);
               trace.change_node(compressed);
             }
             break;
@@ -857,15 +904,12 @@ struct BitTrieHandler : public NodeHandler {
                 
         case kPageLeaf: 
         case kLeaf: {
-          TempLeaf leaf(child);
-          string key_buffer;
-          if (index >= 0) {
-            // we have to enhance the key
-            key_buffer.append(leaf.key.data(), leaf.key.size());
-            key_buffer.insert(0, 1, (char)index);
-            leaf.key = Slice(key_buffer.data(), key_buffer.size());
-          }
-          child.page.free_node(child.id, trace.map);
+          TempNode leaf;
+          trace.move_node(leaf.page_ref, child);
+          if (index >= 0)
+            leaf.insert_key(index);
+          
+          trace.free_node(child.page, child.id);
           trace.change_node(leaf);
         }
       }

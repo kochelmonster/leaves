@@ -41,7 +41,7 @@ typedef boost::uint8_t inpage_ptr;
 struct NodePtr {
   inpage_ptr ptr;      // position inside page
   nodetype_t type;     // node type
-  nodeid_t extra;      // is used by several nodes and
+  bsize_t extra;       // is used by several nodes and
                        // ensures all nodes are good aligned
 };
 
@@ -94,7 +94,7 @@ struct NodePtr {
 */
 struct Page {
   union {
-    char data[4094];
+    char data[4096];
     struct {
       union {
         struct {
@@ -104,7 +104,7 @@ struct Page {
         };
         char header[4];
       };
-      pageid_t link[];
+      pageid_t links[];
     };
   };      
       
@@ -119,32 +119,45 @@ struct Node;
 
 struct PageRef {
   PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
-    page(page_), id(id_), offset(offset_) { }
+      page(page_), id(id_), offset(offset_) {
+      update_node_ptr();
+     }
 
   NodePtr* get_node_ptr(nodeid_t, id) {
-      return &page->node_ptr[id];
+      return &node_ptr[id];
     }
  
-  nodetype_t type(nodeid_t id) const {
-      return page->node_ptr[id].type;
+  nodetype_t get_type(nodeid_t id) const {
+      return node_ptr[id].type;
     }
     
   Node* get_node(nodeid_t id) const {
-      return (Node*)&_page->data[page->node_ptr[id].ptr*16];
+      return (Node*)&_page->data[node_ptr[id].ptr*16];
     }
     
-  nodeid_t* extra(nodeid_t id) const {
-      return page->node_ptr[id].extra;
+  bsize_t* get_extra(nodeid_t id) const {
+      return node_ptr[id].extra;
     }
     
-  pageid_t* link(nodeid_t id) const {
-      bsize_t linkid = page->node_ptr[id].ptr;
-      pageid_t* links = (pageid_t*)&page.data[page.link_start];
-      return links+linkid;
+  pageid_t* get_link(nodeid_t id) const {
+      bsize_t linkid = node_ptr[id].ptr;
+      return &page.links[linkid];
+    }
+
+  size_t get_node_size(nodeid_t id) const {
+      NodePtr* ptr = node_ptr();
+      
+      if (ptr[id].type == kLink)
+        return sizeod(pageid_t);
+      
+      if (id == 0)
+        return (256 - ptr[id].ptr) * 16;
+        
+      return (ptr[id-1].ptr - ptr[id].ptr)*16;
     }
 
   size_t free_size() const {
-      return page->free_start*16 
+      return sizeof(page->data) - ((size_t)(page->free_start))*16 
         - page->link_count * sizeof(pageptr_t) 
         - page->node_count * sizeof(NodePtr)
         - sizeof(page->header);
@@ -155,48 +168,125 @@ struct PageRef {
   size_t size() const {
       return page->link_count * sizeof(pageptr_t) // links
           + page->node_count * sizeof(NodePtr)    // node_ptr
-          + sizeof(page->data) - page->free_start*16);
+          + ((size_t)page->free_start)*16);
     }
     
   size_t count() const {
       return page->node_count;
     }
-
+    
+  void update_node_ptr() {
+      node_ptr = (NodePtr*)&page->data[sizeof(page->header)
+                                       +page->link_count*sizeof(pageptr_t));
+    }
+    
   void defragment() {
-      NodePtr *nodes = &page->data[sizeof(page->header)
-                                   +page->link_count*sizeof(pageptr_t));
-      for(size_t i = 0; i < page->count; i++) {
-        if (nodes[i].type & REMOVE_BIT) {
-          // found a removed node
-          switch(nodes[i].type & ~REMOVE_BIT) {
-            case kLink:
-              delete_link
+      NodePtr new_ptrs[256]; 
+      bsize_t node_count = 0;
+      nodeid_t map[256]; // maps old nodeid_s to new node_ids
+      size_t size[256]; // is needed later
+
+      // create node map 
+      NodePtr *ptrs = node_ptr;
+      for(nodeid_t i = 0; i < page->count; i++) {
+        map[i] = node_count;
+        if (nodes[i].type & REMOVE_BIT)
+          continue;
           
-         
-          
+        size[node_count] = get_node_size(i);
+        memcpy(&new_ptrs[node_count++], &nodes[i], sizeof(NodePtr));
+      }
+      
+      // move nodes
+      pageid_t *links = page->links;
+      pageid_t new_links[256];
+      bsize_t link_count = 0;
+      size_t node_start = new_ptrs[0].ptr*16;
+
+      for(nodeid_t id = 1; i < node_count; i++) {
+        switch(new_ptrs[i].type) {
+          case kLink:
+            new_links[link_count] = links[new_ptr[i].ptr];
+            new_ptr[i].ptr = link_count++;
+            break;
+            
+          default:
+            node_start -= size[i];
+            memmove(new_ptrs[i].ptr*16, node_start, size[i]);
         }
       }
-  
-  
+        
+      // update page administration
+      page->free_start = (sizeof(page->data)-node_start)/16;
+      page->link_count = link_count;
+      page->node_count = node_count;
+      update_node_ptr();
+      memcpy(links, new_links, sizeof(pageid_t)*link_count);
+      memcpy(node_ptr, new_ptrs, sizeof(NodePtr)*node_count);
+        
+      // map the child ids for each node
+      for(nodeid_t i = 0; i < count; i++) {
+        NodeRef node(*this, i);
+        nodeid_t children[65];
+        size_t child_count;
+        child_count = node.get_children(children);
+        for(size_t j = 0; j < count; j++) {
+          children[j] = map[children[j]];
+        node.replace_children(children);
+      }
     }
 
   void free_node(nodeid_t id) {
-      if link
+      node_ptr[id].type |= REMOVE_BIT:
     }
     
-  void new_node(size_t size) {
+  // creates a new node(size must be a multiple of 16)
+  NodeRef new_node(size_t size) {
+      size_t free_start = sizeof(page->data)-((size_t)page->free_start)*16;
+      free_start -= size;
+      page->free_start = (sizeof(page->data)-free_start)/16;
+      nodeid_t new_id = page->node_count++;
+      NodePtr *node = node_ptr+new_id;
+      node->ptr = free_start/16;
+      return NodeRef(*this, new_id);
     }
     
-  void grow_node(nodeid_t size_t size) {
+  // grows or shrinks a node by size. size must be a multiple of 16
+  void grow_node(nodeid_t id, int size) {
+      NodePtr* ptrs = node_ptr;
+      size_t free_start = sizeof(page->data)-((size_t)page->free_start)*16;
+      size_t node_start = ((size_t)ptrs[id].ptr) * 16;
+      size_t node_size = get_node_size(id);
+      
+      if (size < 0)
+        node_size += size;
+        
+      memove(free_start, free_start+size, node_start-free_start+node_size);
+      
+      free_start += size;
+      page->free_start = (sizeof(page->data)-free_start)/16;
+      
+      size /= 16;
+      for(node_id i = id; i < page->node_count; i++)
+        ptrs[i].ptr += size;
     }
     
-  void create_link(node_id node, pageid_t page) {
+  void create_link(node_id node_id, pageid_t page_id) {
+      NodePtr* nodes = node_ptr;
+      node[node_id].ptr = page->linkcount;
+      node[node_id].type = kLink;
+      
+      char* p = (char*)nodes;
+      memove((p, p+sizeof(pageid_t), sizeof(NodePtr)*page->node_count));
+      page->links[page->linkcount++] = page_id;
+      
+      update_node_ptr();
     }
-  
 
   Page *page;
   pageid_t id;
   pageoffset_t offset;
+  NodePtr* node_ptr;
 };
 
 //@-node:michael.20141215222649.73:struct PageRef
@@ -216,6 +306,10 @@ struct NodeRef {
       return page.nodetype(id);
     }
   
+  void set_type(nodetype_t type) {
+      page.node_ptr[id].type = type;
+    }
+  
   Node* node() const {
       return page.get_node(id);
     }
@@ -224,7 +318,7 @@ struct NodeRef {
       return page.get_link(id);
     }
     
-  nodeid_t* extra() const {
+  bsize_t* extra() const {
       return page.get_extra(id);
     }
     
@@ -258,7 +352,7 @@ struct NodeRef {
     }
     
   size_t size() {
-      return trie_handlers[type()]->size(*this);
+      return page.get_node_size(id);
     }
     
   size_t get_children(nodeid_t children[65]) {
@@ -353,13 +447,17 @@ struct Trace {
           return;
         }
         
-        if (me.id == 0)
-          map.free_page(me.page.id);
-        else
-          me.page.free_node(me.id);
-          
+        free_node(me.page, me.id);
         pop(false);
        }
+    }
+    
+  void free_node(PageRef& page, nodeid_t id) {
+      if (id == 0)
+        map.free_page(page);
+      else 
+        page.free_node(id);
+        // no defragment needed (it is done in remove())
     }
   
   // returns the nodeid that connects parent with current
@@ -379,7 +477,9 @@ struct Trace {
       size_t size = new_node.size();
       reserve_space(size + sizeof(NodePtr));
       NodeRef& new_ref(current().page.new_node(size));
-      memcpy(new_ref.node(), new_node.node, size);
+      memcpy(new_ref.node(), new_node.node(), size);
+      *new_ref.extra() = *new_node.extra();
+      new_ref.set_type(new_node.type());
       push(new_ref);
       key.append(transition_key.data(), transition_key.size());
    }
@@ -389,7 +489,8 @@ struct Trace {
       size_t size = current.size(), new_size = new_node.size();
       grow_node(new_size-size);
       memcpy(current().node(), new_node.node(), new_size);
-      *current().extra() = new_node.extra;
+      *current().extra() = *new_node.extra();
+      *current().set_type(new_node.type());
     }
    
   // grows or shrink the current node
@@ -415,7 +516,7 @@ struct Trace {
             current().replace_child(last_index, child);
             current().find(Slice(last_index), *this);
             last_index = old_last_index;
-            map.free_page(page.id);
+            map.free_page(page);
           }
           break;
         }
@@ -455,6 +556,7 @@ struct Trace {
       for(size_t i = 0; i < count; i++)
         size += calc_sizes(NodeRef(node.page, children[i]);
         
+      size += sizeof(NodeRef);
       sizes[node.id] = size;
       return size;
     }
@@ -478,7 +580,7 @@ struct Trace {
             best_id = i;
           }
         }
-        PageRef newpage = map.new_page();
+        PageRef newpage = storage.new_page();
         NodeRef to_move(NodeRef(page, best_id))
         move_node(newpage, to_move);
         
@@ -508,105 +610,87 @@ struct Trace {
       new_node.replace_children(children);
       return new_node.id;
     }
-    
-    // not solved
-    // compressed move node: ensure there is enough space
-
 };
-//@nonl
+
 //@-node:michael.20141220220750.15:struct Trace
 //@+node:michael.20141219202729.3:class PageMap
 class NodeStorage;
 
 // Translates a pageid to page offset
-class PageMap {
- public:
-  PageMap(NodeStorage& storage) : _storage(storage) { }
- 
-  virtual pageoffset_t get_offset(pageid_t id) = 0;
-  
-  // delegators to _storage
-  
-  PageRef get_page(pageid_t id) {
-      return _storage.get_page(get_offset(id), id);
-    }
-  PageRef new_page() {
-      return _storage.new_page();
-    }
-  void free_page(pageid_t id) {
-      _storage.free_page(id);
-    }
-
- protected:
-  NodeStorage& _storage;
+struct PageMap {
+  virtual PageRef get_page(pageid_t id) = 0;
+  virtual void free_page(const PageRef& page) = 0;
 };
 
 //@-node:michael.20141219202729.3:class PageMap
 //@+node:michael.20141215222649.135:class NodeStorage (Declaration)
 class NodeStorage {
  public:
-  virtual std::shared_ptr<PageMap> get_pagemap(version_t version) = 0;
-  virtual PageRef get_page(pageoffset_t offset, pageid_t id) = 0;
   virtual PageRef new_page() = 0;
-  virtual void free_page(pageid_t id) = 0;
-  virtual void flush(async=true) { }
-  virtual void start_write() {}
-  virtual void end_write() {}
 };
 
 
-class NodeStorageInHeap : public NodeStorage {
- public:
- 
-  class HeapPageMap : public PageMap {
-   virtual pageoffset_t get_offset(pageid_t id) { 
-      return (pageoffset_t*)id; }
-  };
-
- 
-  NodeStorageInHeap() 
-    : _free_pages(0), _pagemap(new HeapPageMap(*this)) {}
-    
-  virtual std::shared_ptr<PageMap> get_pagemap(version_t version) {
-      return _pagemap;
-    }
-    
-  virtual PageRef get_page(pageoffset_t offset, pageid_t id) {
-       return PageRef(_pages[offset].get(), offset, id);
-    }
-    
-  virtual PageRef new_page();
-  virtual void free_page(pageid_t id);
-    
- private:
-  HeapPageMap _pagemap;
+struct NodeStorageInHeap : public NodeStorage, public PageMap {
   typedef std::unique_ptr<Page> _page_ptr;
   std::vector<_page_ptr> _pages;
   size_t _free_pages;  // count of _free_pages inside the vector
+  
+  NodeStorageInHeap()
+    : _free_pages(0) {
+    new_page(); // create root page
+  }
+
+  PageRef get_page(pageid_t id) {
+      return PageRef(_pages[id].get(), id, id);
+  }
+  
+  void free_page(const PageRef& page) {
+    if (page.id == _pages.size()-1) {
+      if (page.id == 0) return;
+      _pages.pop_back();
+    }
+    else {
+      _pages[page.id].release();
+      _free_pages++;
+    }
+  }
+   
+  PageRef new_page() {
+      if (_free_pages) {
+        std::vector<_page_ptr>::iterator i = _pages.begin();
+        for(pageid_t j = 0; i != _pages.end(); i++, j++) {
+          if (! i->.get()) {
+            i->reset(new Page);
+            _free_pages--;
+            return PageRef(i->get(), j, j);
+          }
+        }
+      }
+      pageid_t id(_pages.size());
+      Page* page = new Page;
+      _pages.push_back(page);
+      return PageRef(page, id, id);
+    }
 };
 
 
-class PersistentNodeStorage : public PersistentNodeStorage {
- public:
-  PersistentNodeStorage(const char* path);
-  virtual std::shared_ptr<PageMap> get_pagemap(version_t version) = 0;
-  virtual PageRef new_page();
-  virtual void free_page(pageid_t pageid);
-  virtual void flush(async=true)
-  
- private:
-  void grow_file(size_t size);
-  void shrink_file(size_t size);
- 
+struct PersistentNodeStorage : public NodeStorage {
   PagePositionMap Page;
   boost::interprocess::file_mapping _file_mapping;
-}
+  
+  PersistentNodeStorage(const char* path);
+  std::shared_ptr<PageMap> get_pagemap(version_t version) = 0;
+  virtual PageRef new_page();
+ 
+  void grow_file(size_t size);
+  void shrink_file(size_t size);
+};
 
 
 class MultiProcessNodeStorage : public PersistentNodeStorage {
  public:
   MultiProcessNodeStorage(const char* path);
-}
+};
 //@-node:michael.20141215222649.135:class NodeStorage (Declaration)
 //@-others
 } // namespace larch_leaves 

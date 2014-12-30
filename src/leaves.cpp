@@ -2,6 +2,8 @@
 
 namespace larch_leaves {
 
+static Slice main_name_space("::main", 6);
+
 // find prefix common to s1 and s2
 inline size_t prefix(const char* s1, const *char s2, size_t size) {
   size_t i;
@@ -77,19 +79,32 @@ std::shared_ptr<Storage> Storage::open(const char* path, const Options& options)
   }
 }
 
-std::shared_ptr<Cursor> Storage::cursor(const Slice& namespace_, 
-                                        bool signed_compare=false) {
-  if signed_compare
-    return new SignedNamespaceCursor(*this, namespace_);
-  
-  return new UnsignedNamespaceCursor(*this, namespace_);
+struct MemoryCursor : public Cursor {
+  Trace trace;
+  NodeRef root;
+
+};
+
+MemoryStorage::MemoryStorage() {
+  // create the main namespace
+  std::string encoded = to_base64(main_name_space);
+  Trace trace(_nodes, _nodes);
+  trace.push(root());
+  trace.add(TempPageLeaf(encoded, Slice()));
 }
 
-std::shared_ptr<Cursor> Storage::cursor(bool signed_compare=false) {
-  if (signed_compare)
-    return new SignedCursor(*this);
-    
-  return new UnsignedCursor(*this);
+
+std::shared_ptr<Cursor> read_cursor(const Slice& namespace_) {
+  std::string encoded = to_base64(namespace_);
+  MemoryCursor cursor(_nodes);
+  root().find(Slice(endcoded), cursor.trace);
+  
 }
+
+
+std::shared_ptr<Cursor> write_cursor(const Slice& namespace_) {
+  return 
+}
+
 
 } // namespace larch_leaves 
