@@ -1,3 +1,10 @@
+//@+leo-ver=5-thin
+//@+node:michael.20141220220750.5: * @file port.h
+//@@language cplusplus
+//@@tabwidth -2
+
+//@+others
+//@+node:michael.20141230111914.144: ** GCC
 #ifdef __GNUC__
 
 #ifdef __LP64__
@@ -5,13 +12,14 @@
 #define ffs __builtin_ffsll
 #define clz __builtin_clzll
 #else
-
 #define popcount32 __builtin_popcountl
 #define ffs32 __builtin_ffsl
 #define clz32 __builtin_clzl
+#define _32BIT
 #endif
 
-
+#endif
+//@+node:michael.20141230111914.145: ** Visual C++
 #ifdef _MSC_VER
 #include <intrin.h>
 
@@ -35,9 +43,9 @@ inline int clz(boost::uint64_t v) {
       return 65;
  }
 
-#define _32BIT
+#endif //_M_X64
 
-#else
+
 #pragma intrinsic(_BitScanForward)
 #pragma intrinsic(__popcnt, _BitScanForward, _BitScanReverse)
 #define popcount32 __popcnt
@@ -50,7 +58,7 @@ inline int ffs32(boost::uint32_t v) {
       return 0;
  }
 
-inline int clz(boost::uint32_t v) {
+inline int clz32(boost::uint32_t v) {
     unsigned long index;
     if (_BitScanReverse32(&index, v)) 
       return 31 - index;
@@ -60,8 +68,8 @@ inline int clz(boost::uint32_t v) {
 
 #define _32BIT
 
-#endif //_M_X64
-#endif
+#endif // _MSC_VER
+//@-others
 
 
 #ifdef _32BIT
@@ -117,3 +125,4 @@ inline bool remove_bit(boost::uint64_t v, int bit) {
   }
 
 #endif
+//@-leo

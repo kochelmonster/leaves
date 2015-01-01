@@ -1,9 +1,23 @@
+//@+leo-ver=5-thin
+//@+node:michael.20141215222649.45: * @file leaves.cpp
+//@@language cplusplus
+//@@tabwidth -2
+//@+<< includes >>
+//@+node:michael.20141217010530.10: ** << includes >>
 #include "larch/leaves.h"
+#include "node.h"
+#include "leaf.h"
+
+//@-<< includes >>
 
 namespace larch_leaves {
+void encode(const Slice& input, std::string& output);
+void decode(const std::string& input, std::string& output);
+  
+Slice main_name_space("::main", 6);
 
-static Slice main_name_space("::main", 6);
-
+//@+others
+//@+node:michael.20141215222649.104: ** class NoWhereCursor
 // A Cursor to a non exising namespace
 class NoWhereCursor : public Cursor {
  public:
@@ -14,21 +28,20 @@ class NoWhereCursor : public Cursor {
   void next(int read_forward=100) { }
   void prev(int read_forward=-100) { }
   
-  Slice key() const { throw NoValidPosition(); }
-  Slice value() const { throw NoValidPosition(); }
+  Slice key() { throw NoValidPosition(); }
+  Slice value() { throw NoValidPosition(); }
   
-  void set_value(const Slice& value) { throw NotImpented(); }
+  void set_value(const Slice& value) { throw NotImplemented(); }
+  void remove() { throw NotImplemented(); }
 };
 
 
+//@+node:michael.20141215222649.44: ** class Storage (Implementation)
 // Storage implemenation
 // ---------------------
-Storage::~Storage() {
-  _node_memory_manager->flush(false);
-  _leaf_memory_manager->flush(false);
-}
-
-std::shared_ptr<Storage> Storage::open(const char* path, const Options& options) {
+//@+others
+//@+node:michael.20141215222649.188: *3* open()
+/*std::shared_ptr<Storage> Storage::open(const char* path, const Options& options) {
   if (path) {
       if (options.multiprocess)
         _node_memory_manager = new MultiProcessNodeMemoryManager(path);
@@ -44,18 +57,27 @@ std::shared_ptr<Storage> Storage::open(const char* path, const Options& options)
   }
 }
 
+*/
+//@-others
+//@+node:michael.20141230111914.3: ** MemoryStorage
+//@+others
+//@+node:michael.20141230111914.23: *3* Cursor
 struct ReadMemoryCursor : public Cursor {
   Trace trace;
   NodeRef root;
-  std::string decoded_key;
+  std::string encoding_buffer;
+  std::string decoding_buffer;
   
-  MemoryCursor(NodeStorageInHeap& nodes, NodeRef root_) 
-    : trace(node, node), root(root_) { }
+  ReadMemoryCursor(NodeStorageInHeap& nodes, NodeRef root_) 
+    : trace(nodes, nodes), root(root_) { }
     
-  bool is_valid() const { return trace.complete }
+  bool is_valid() const {
+      return trace.complete;
+    }
+  
   void set(const Slice& key, int read_forward=100) { 
-      std::string encoded = to_base64(key);
-      Slice ekey(encoded);
+      encode(key, encoding_buffer);
+      Slice ekey(encoding_buffer);
       if (trace.find(ekey))
         return;
       trace.reset();
@@ -77,59 +99,85 @@ struct ReadMemoryCursor : public Cursor {
         trace.current().prev(trace);
     }
   
-  Slice key() const { 
-    decoded_key = decode(trace.key());
-    return Slice(decoded_key);
+  Slice key() { 
+    decode(trace.key, decoding_buffer);
+    return Slice(decoding_buffer);
   }
-  Slice value() const { 
+  
+  Slice value() { 
     return trace.value();
   }
   
-  void set_value(const Slice& value) { throw NotImpented(); }
+  void set_value(const Slice& value) { throw NotImplemented(); }
+  void remove() { throw NotImplemented(); }
 };
 
 struct WriteMemoryCursor : public ReadMemoryCursor {
+  WriteMemoryCursor(NodeStorageInHeap& nodes, NodeRef root_)
+    : ReadMemoryCursor(nodes, root_) { }
+  
   void set_value(const Slice& value) {
     trace.set_value(value);
   }
-}
-
-
-
-MemoryStorage::MemoryStorage() {
-  Trace trace(_nodes, _nodes);
-  trace.push(root());
-  trace.add(TempTrie());
-}
-
-
-std::shared_ptr<Cursor> read_cursor(const Slice& namespace_) {
-  std::string encoded = to_base64(namespace_);
-  Trace trace(_nodes, _nodes);
-  root().find(Slice(encoded), trace);
-  if (!trace.complete) {
-    // namespace does not exist
-    return new NoWhereCursor();
+  
+  void remove() { 
+    trace.remove();
   }
-  
-  return new ReadMemoryCursor(_nodes, trace.current());
-}
+};
+//@+node:michael.20141230111914.24: *3* class MemoryStorage
+struct PrivateMemoryStorage : public MemoryStorage {
+  NodeStorageInHeap _nodes;
+  //LeafStorageInHeap _leafs;
 
+  PrivateMemoryStorage() {
+      Trace trace(_nodes, _nodes);
+      NodeRef root_ = root();
+      trace.push(root_);
+      trace.add_node(TempTrie(), Slice());
+    }
 
-std::shared_ptr<Cursor> write_cursor(const Slice& namespace_) {
-  std::string encoded = to_base64(namespace_);
-  Slice ekey(encoded);
-  Trace trace(_nodes, _nodes);
-  trace.push(root());
-  root().find(ekey, trace);
-  
-  if (!trace.complete) {
-    TempTrie ns;
-    trace.current().add_node(ekey.advance(trace.key.size()), ns)
+  NodeRef root() {
+    return NodeRef(_nodes.get_page(0), 0);
   }
+
+  cursor_ptr read_cursor(const Slice& namespace_=main_name_space) {
+      std::string encoded;
+      encode(namespace_, encoded);
+      Trace trace(_nodes, _nodes);
+      root().find(Slice(encoded), trace);
+      if (!trace.complete) {
+        // namespace does not exist
+        return cursor_ptr(new NoWhereCursor);
+      }
+      
+      return cursor_ptr(new ReadMemoryCursor(_nodes, trace.current()));
+    }
   
-  return new WriteMemoryCursor(_nodes, trace.current());
+  cursor_ptr write_cursor(const Slice& namespace_=main_name_space) {
+      std::string encoded;
+      encode(namespace_, encoded);
+      Slice ekey(encoded);
+      Trace trace(_nodes, _nodes);
+      NodeRef root_(root());
+      trace.push(root_);
+      root().find(ekey, trace);
+      
+      if (!trace.complete)
+	 trace.current().add(ekey.advance(trace.key.size()), TempTrie(), trace);
+      
+      return cursor_ptr(new WriteMemoryCursor(_nodes, trace.current()));
+    }
+};
+
+
+std::shared_ptr<MemoryStorage> MemoryStorage::create() {
+  return std::shared_ptr<MemoryStorage>(new PrivateMemoryStorage());
 }
+  
 
+//@-others
 
+//@+node:michael.20141230111914.4: ** class PersistantStorage (Implementation)
+//@-others
 } // namespace larch_leaves 
+//@-leo
