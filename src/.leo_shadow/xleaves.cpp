@@ -14,66 +14,25 @@ namespace larch_leaves {
 static Slice main_name_space("::main", 6);
 
 //@+others
-//@+node:michael.20141215222649.104:class Cursor (Implementation)
-// find prefix common to s1 and s2
-inline size_t prefix(const char* s1, const *char s2, size_t size) {
-  size_t i;
-  for(i = 0; i < size; i++, s1++, s2++) {
-    if (*s1 != *s2)
-      break;
-  }
-  return i;
-}
-
-// Cursor implementation
-// ---------------------
-//@+others
-//@+node:michael.20141215222649.198:is_valid()
-bool Cursor::is_valid() const {
-  if (_search_trace.empty())
-    return false;
-    
-  return is_leaf(_search_trace.back());
-}
-
-//@-node:michael.20141215222649.198:is_valid()
-//@+node:michael.20141215222649.203:set()
-void set(const Slice& key, int read_forward=100) {
-  if (! is_valid())
-    return;
-
-  // to do less search we try to start from a common
-  // prefix    
-  size_t prefix_len = prefix(key.data(), _key.data(), 
-                             std::min(key.size(), _key.size()));
-  _search_trace.resize(prefix_len+1);
-  _key.assign(key.data(), key.size());  
+//@+node:michael.20141215222649.104:class NoWhereCursor
+// A Cursor to a non exising namespace
+class NoWhereCursor : public Cursor {
+ public:
+  bool is_valid() const { return false; }
+  void set(const Slice& key, int read_forward=100) { }
+  void first(int read_forward=100) { }
+  void last(int read_forward=-100) { }
+  void next(int read_forward=100) { }
+  void prev(int read_forward=-100) { }
   
-  NodeRef top = _search_trace.back();
-  Slice rest_key(_key.data()+prefix_len, key.size()-prefix_len);
+  Slice key() const { throw NoValidPosition(); }
+  Slice value() const { throw NoValidPosition(); }
   
-  for(size_t i = prefix_len; i < _key.size(); i++) {
-    byte_t index = trie_index(*rest_key.data());
-    top = find_next(_storage, top, index);
-    
-    if (!top.is_valid()) {
-      top = _search_trace.back();
-      break;
-    }
-    
-    eat(top, rest_key);
-    _search_trace.push_back(top);
-  }
-      
-  if (is_leaf(top) && ! key_equal(top, rest_key)) {
-    _search_trace.pop_back();
-  }
-}
+  void set_value(const Slice& value) { throw NotImpented(); }
+};
 
-//@-node:michael.20141215222649.203:set()
-//@-others
 
-//@-node:michael.20141215222649.104:class Cursor (Implementation)
+//@-node:michael.20141215222649.104:class NoWhereCursor
 //@+node:michael.20141215222649.44:class Storage (Implementation)
 // Storage implemenation
 // ---------------------
@@ -106,31 +65,91 @@ std::shared_ptr<Storage> Storage::open(const char* path, const Options& options)
 //@-others
 //@-node:michael.20141215222649.44:class Storage (Implementation)
 //@+node:michael.20141230111914.3:class MemoryStorage (Implementation)
-struct MemoryCursor : public Cursor {
+struct ReadMemoryCursor : public Cursor {
   Trace trace;
   NodeRef root;
-
+  std::string decoded_key;
+  
+  MemoryCursor(NodeStorageInHeap& nodes, NodeRef root_) 
+    : trace(node, node), root(root_) { }
+    
+  bool is_valid() const { return trace.complete }
+  void set(const Slice& key, int read_forward=100) { 
+      std::string encoded = to_base64(key);
+      Slice ekey(encoded);
+      if (trace.find(ekey))
+        return;
+      trace.reset();
+      root.find(ekey, trace);
+    }
+    
+  void first(int read_forward=100) { 
+      root.first(trace);
+    }
+  void last(int read_forward=-100) { 
+      root.last(trace);
+    }
+  void next(int read_forward=100) { 
+      if (trace.size())
+        trace.current().next(trace);
+    }
+  void prev(int read_forward=-100) {
+      if (trace.size())
+        trace.current().prev(trace);
+    }
+  
+  Slice key() const { 
+    decoded_key = decode(trace.key());
+    return Slice(decoded_key);
+  }
+  Slice value() const { 
+    return trace.value();
+  }
+  
+  void set_value(const Slice& value) { throw NotImpented(); }
 };
 
+struct WriteMemoryCursor : public ReadMemoryCursor {
+  void set_value(const Slice& value) {
+    trace.set_value(value);
+  }
+}
+
+
+
 MemoryStorage::MemoryStorage() {
-  // create the main namespace
-  std::string encoded = to_base64(main_name_space);
   Trace trace(_nodes, _nodes);
   trace.push(root());
-  trace.add(TempPageLeaf(encoded, Slice()));
+  trace.add(TempTrie());
 }
 
 
 std::shared_ptr<Cursor> read_cursor(const Slice& namespace_) {
   std::string encoded = to_base64(namespace_);
-  MemoryCursor cursor(_nodes);
-  root().find(Slice(endcoded), cursor.trace);
+  Trace trace(_nodes, _nodes);
+  root().find(Slice(encoded), trace);
+  if (!trace.complete) {
+    // namespace does not exist
+    return new NoWhereCursor();
+  }
   
+  return new ReadMemoryCursor(_nodes, trace.current());
 }
 
 
 std::shared_ptr<Cursor> write_cursor(const Slice& namespace_) {
-  return 
+  std::string encoded = to_base64(namespace_);
+  Slice ekey(encoded);
+  Trace trace(_nodes, _nodes);
+  trace.push(root());
+  root().find(ekey, trace);
+  
+  if (!trace.complete) {
+    TempTrie ns;
+    trace.current().add_node(ekey.advance(trace.key.size()), ns)
+  }
+  
+  return new WriteMemoryCursor(_nodes, trace.current());
 }
 
 

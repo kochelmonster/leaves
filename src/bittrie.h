@@ -26,7 +26,7 @@ struct NodeHandler {
   virtual void prev(NodeRef& rnode, Trace& trace) = 0;
   virtual void first(NodeRef& rnode, Trace& trace) = 0;
   virtual void last(NodeRef& rnode, Trace& trace) = 0;
-  virtual void add(const Slice& key, const Slice& value, 
+  virtual void add(const Slice& key, TempNode& end, 
                    NodeRef& rnode, Trace& trace) = 0;
   // remove the traces last_index
   virtual bool remove_last_index(NodeRef& rnode, Trace& trace) {

@@ -50,42 +50,20 @@ inline size_t pad16(size_t size) {
 }
 
 struct TempLeaf : public TempNode {
-  TempLeaf(const Slice& key, const Slice& value)
+  TempLeaf(const Slice& value)
     : TempNode() {
-      size_t size = key.size() + value.size()
-      if (size > 256) {
+      size_t size = value.size()
+      if (size > 255) {
         // Leaf
       }
       else {
         // PageLeaf
-        pageref.new_node(pad16(size+sizeof(bsize_t)));
+        pageref.new_node(pad16(size));
         *extra() = key.size();
         PageLeaf* n = (PageLeaf*)node();
-        n->value_size = value.size();
-        memcpy(n->data, key.data(), key.size());
-        memcpy(n->data+key.size(), value.data(), value.size());
+        memcpy(n->data, value.data(), value.size());
         nodref.set_type(kPageLeaf);
       }
-    }
-    
-    // insert index in the key buffer
-    void insert_key(trieindex_t index) {
-      switch(type()) {
-        case kLeaf:
-          break;
-      
-        case kPageLeaf: {
-            PageLeaf* n = (PageLeaf*)node();
-            size_t size = *extra() + n->value_size + sizeof(bsize_t);
-            if (pad16(size) < pad16(size+1))
-              page_ref.grow_node(16);
-              
-            memmove(n->data+1, n->data, *extra()+n->value_size);
-            (*extra())++;
-            n->data[0] = index;
-            break;
-          }
-        }
     }
 };
 
@@ -108,12 +86,13 @@ struct TempTrie : public TempNode {
 };
 
 struct TempCompressed : public TempNode {
-  TempCompressed(const char* data, size_t size)
+  TempCompressed(const Slice& part)
     : TempNode() {
+      size_t size(part.size());
       *extra() = (bsize_t)size;
       pageref.new_node(pad16(sizeof(nodeid_t)+size));
       Compressed* n = (Compressed*)node();
-      memcpy(n->data, data, size);
+      memcpy(n->data, part.data(), size);
     }
 };
 /* 
@@ -149,6 +128,38 @@ struct LeafMixin {
     }
 };
 
+
+struct TrieMixin {
+  virtual void add_node(const Slice& key, TempNode& node, Trace& trace) = 0;
+
+  void add(const Slice& key, TempNode& end, NodeRef& rnode, Trace& trace) {
+      switch(key.size()) {
+        case 0:
+          trace.add_node(end, Slice());
+          *trace.parent().extra() = trace.child_of_parent());
+          trace.complete = true;
+          break;
+          
+        case 1: 
+          add_node(key, end, trace);
+          trace.complete = true;
+          break;
+          
+        case 2:
+          add_node(key.slice(1), TempTrie(), trace);
+          trace.current().add(key.advance(1), end);
+          break;
+          
+        default: {
+          Slice next_key(key.advance(1));
+          add_node(key.slice(1), TempCompressed(next_key), trace);
+          trace.current().add(next_key, end);
+          break;
+      }
+    }
+};    
+  
+
 // a leaf node with data in Leaf memory
 struct Leaf {
   offset_t pointer;
@@ -173,77 +184,63 @@ static LeafHandler leaf;
 // a leaf node with key and values <= 256 bytes
 // the key_size is saved in Nodeptr.extra
 struct PageLeaf {
-  bsize_t value_size;
   char data[];
 };
 
 
 struct PageLeafHandler : public NodeHandler, public LeafMixin {
-  void add_to_trace(PageLeaf *n, Trace& trace) {
-      trace.key.append(n->data, n->key_size);
-      trace.complete = true;
-    }
-
   void find(const Slice& key, NodeRef& rnode, Trace& trace) {
-      PageLeaf *n = (PageLeaf*)rnode.node();
-      bsize_t key_size = *rnode.extra();
-      if (key.size() == key_size)
-          && memcmp(key.data(), n->data, key_size) == 0) {
-        add_to_trace(n, trace);
-      }
+      if (!key.size())
+        trace.complete = true;
     }
   
   void first(NodeRef& rnode, Trace& trace) {
-      add_to_trace((PageLeaf*)rnode.node(), context);
+      trace.complete = true;
     }
     
   void last(NodeRef& rnode, Trace& trace) {
-      add_to_trace((PageLeaf*)rnode.node(), context);
+      trace.complete = true;
     }
     
-  void add(const Slice& key, const Slice& value, NodeRef& rnode, Trace& trace) {
+  void reinsert_me(TempLeaf& me, Trace& trace) {
+      trace.add_node(me, Slice());
+      // extra() is the end node
+      *trace.parent().extra() = trace.child_of_parent());
+      pop(); // back to parent
+    }
+    
+  void add(const Slice& key, TempNode& end, NodeRef& rnode, Trace& trace) {
+      assert(key.size() != 0);
       PageLeaf *n = (PageLeave*)rnode.node();
-      bsize_t key_size = *rnode.extra();
-      size_t prefix_size = common_prefix(key.data(), n->data, 
-                                         std::min(key.size(), key_size));
-      Slice mykey(n->data+prefix_size, key_size-prefix_size);
-      Slice myvalue(n->data+key_size, n->value_size);
-      TempLeaf me(mykey, myvalue);
+      TempLeaf me(Slice(n->value, *rnode.extra()));
       TempTrie trie;
+      Slice rest_key;
       
-      switch(prefix_size) {
-        case 0:
-          trace.change_node(trie);
-          break;
-        
-        case 1: {
-            TempTrie parent_trie;
-            trace.change_node(parent_trie);
-            trace.add_node(trie, key.slice(1));
-            BitTrie* pn = (BitTrie*)trace.parent().node();
-            pn->add(key.trie_index(), trace.child_of_parent());
-            break;
-          }
-            
-        default: {
-            TempCompressed compressed(key.data(), prefix_size);
-            trace.change_node(compressed);
-            trace.add_node(trie, prefix_size)
-            n = (PageLeaf*)trace.parent().node();
-            n.child = trace.child_of_parent();
-          }
+      if (key.size() == 2) {
+        TempTrie parent_trie;
+        trace.change_node(parent_trie);
+        reinsert_me(me, trace);
+        trace.add_node(trie, key.slice(1));
+        BitTrie* pn = (BitTrie*)trace.parent().node();
+        pn->add(key.trie_index(), trace.child_of_parent());
+        rest_key = key.advance(1);
+      }
+      else {
+        trace.change.node(trie);
+        reinsert_me(me, trace);
+        if (key.size() > 2) {
+          rest_key = key.advance(1);
+          TempCompressed compressed(rest_key);
+          trace.add_node(compressed, key.slice(1));
+          BitTrie* pn = (BitTrie*)trace.parent().node();
+          pn->add(key.trie_index(), trace.child_of_parent());
+        }
+        else {
+          rest_key = key;
+        }
       }
 
-      trace.add_node(me, Slice());
-      trace.key.append(mykey.data(), mykey.size());
-      trace.complete = true;
-      
-      BitTrie* tn = (BitTrie*)trace.parent().node();
-      tn->add(mykey.trie_index(), trace.child_of_parent());
-
-      // pop back trace to trie
-      trace.pop();
-      trace.current().add(key.advance(prefix_size), value, context);
+      trace.current().add(rest_key, end, trace);
     }
 };
 
@@ -304,15 +301,30 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
       child.last(trace);
     }
     
-  void reinsert(Trace& trace, TempCompressed& rest_me, 
-                NodeRef& child, trieindex_t index) {
+  nodeid_t move_child(NodeRef& child, Trace& trace) {
+      // moves the child and its descendant to current page
+      PageRef& page(trace.current().page);
+      if (page.id != child.page.id) {
+        size_t sizes[256];
+        memset(sizes, 0, sizeof(sizes));
+        size_t size = calc_sizes(child, sizes);
+        trace.reserve_space(size, current().id);
+        nodeid_t r = trace.move_node(page, child);
+        child.page.defragment();
+        return r;
+      }
+      return child.id;
+    }
+    
+  void reinsert(TempCompressed& rest_me, NodeRef& child, 
+                trieindex_t index, Trace& trace) {
       BitTrie* bn;
-      nodeid_t child_id;      
+      nodeid_t child_id;
+      
       switch(rest_me.size()) {
         case 0:
-          trace.reserve_space(child.page.size());
-          child_id = trace.move_node(trace.current().page, child);
-          bn = (BitTrie*)trace.parent().node();
+          child_id = move_child(child, trace);
+          bn = (BitTrie*)trace.current().node();
           bn->add(index, child_id);
           break;
           
@@ -320,8 +332,8 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
           trace.add_node(TempTrie(), Slice(index));
           bn = (BitTrie*)trace.parent().node();
           bn->add(index, trace.child_of_parent());
-          trace.reserve_space(child.page.size());
-          child_id = trace.move_node(trace.current().page, child);
+          
+          child_id = move_child(child, trace);
           bn = (BitTrie*)trace.current().node();
           bn->add(me.data()[0], child_id);
           trace.pop()
@@ -329,8 +341,7 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
           
         default: {
           trace.add(me, Slice(index));
-          trace.reserve_space(child.page.size());
-          child_id = trace.move_node(trace.current().page, child);
+          child_id = move_child(child, trace);
           Compressed *n = (Compressed*)trace.current().node()
           n->child = child_id;
           trace.pop();
@@ -338,54 +349,58 @@ struct CompressHandler : public NodeHandler, public LeafMixin {
       }
     }
     
-  void add(const Slice& key, const Slice& value, NodRef& rnode, Trace& trace) {
+  void add(const Slice& key, TempnNode& end, NodRef& rnode, Trace& trace) {
       Compressed *n = (Compressed*)rnode.node();
-      bsize_t size = (bsize_t)*rnode.extra() 
+      bsize_t size = (bsize_t)*rnode.extra();
+      
+      if (!n->child) {
+        // we insert a
+        assert(size == key.size());
+        trace.add_node(end, key);
+        n->child = trace.child_of_parent();
+        trace.complete = true;
+        return;
+      }
+      
       size_t prefix_size = common_prefix(key.data(), n->data,
                                          std::min(size, key.size()));
       trieindex_t first = n->data[0], second = n->data[1];
       TempCompressed rest_me(n->data+prefix_size+1, size-prefix_size-1);
             
       // move my page descendants to a temporary page to insert them later
-      Page tmp_page_;
-      PageRef tmp_page(&tmp_page, 0, 0);
-      NodeRef child(tmp_page, 0);
-      trace.move_node(tmp_page, NodeRef(rnode.page, n->child);
-      rnode.page.defragment();
+      NodeRef child(rnode.page, n->child);
       n->child = 0;
       
       switch(prefix_size) {
-        case 0: {
-            // insert one trie
-            trace.change_node(TempTrie());
-            reinsert(trace, rest_me, child, first);
-            break;
-          }
-        
+        case 0:
+          // insert one trie
+          trace.change_node(TempTrie());
+          reinsert(rest_me, child, first, trace);
+          break;
+
         case 1: {
-            // insert two tries
-            trace.change_node(TempTrie());
-            trace.add_node(TempTrie(), Slice(first));
-            BitTrie* bn = (BitTrie*)trace.parent().node();
-            bn->add(first, trace.child_of_parent());
-            reinsert(trace, rest_me, child, second);
-            break;
+          // insert two tries
+          trace.change_node(TempTrie());
+          trace.add_node(TempTrie(), Slice(first));
+          BitTrie* bn = (BitTrie*)trace.parent().node();
+          bn->add(first, trace.child_of_parent());
+          reinsert(rest_me, child, second, trace);
+          break;
           }
             
         default: {
-            // another compressed
-            TempCompressed compressed(key.data(), prefix_size);
-            first = n->data[prefix_size+1];
-            trace.change_node(compressed);
-            trace.add(trie, Slice(compressed.data(), compressed.size());
-            n = (Compressed*)trace.current().node();
-            n->child = trace.child_of_parent();
-            reinsert(trace, rest_me, child, first);
-            break;
-          }
+          // another compressed
+          Slice next_key(key.data(), prefix_size)
+          TempCompressed compressed(next_key);
+          first = n->data[prefix_size+1];
+          trace.change_node(compressed);
+          trace.add(trie, Slice(key.data(), compressed.size());
+          n = (Compressed*)trace.current().node();
+          n->child = trace.child_of_parent();
+          reinsert(rest_me, child, first, trace);
       }
 
-      trace.current().add(key.advance(prefix_size), value, context);
+      trace.current().add(key.advance(prefix_size), end, context);
     }
 };
 
@@ -423,7 +438,7 @@ struct Trie {
   nodeid_t children[64];
 };
 
-struct TrieHandler : public NodeHandler {
+struct TrieHandler : public NodeHandler, public TrieMixin {
   virtual void add_to_trace(int key, NodeRef& child, Trace& trace) {
       trace.push(child);
       if (key >=0)
@@ -465,21 +480,13 @@ struct TrieHandler : public NodeHandler {
         n->children[index] = child;
       }
     }
- 
-  void add(const Slice& key, const Slice& value, NodeRef& rnode, Trace& trace) {
-      Trie *n = (Trie*)rnode.node();
-      TempLeaf child(key.advance(1), value);
-      trace.add_node(child, key.slice(1));  // trace is now at child
-      
-      if (key.empty()) {
-        *trace.parent().extra() = trace.child_of_parent())
-      }
-      else {
-        n = (Trie*)trace.parent().node();
-        n->children[key.trie_index()] = trace.child_of_parent();
-      }
-    }
     
+  void add_node(const Slice& key, TempNode& node, Trace& trace) {
+      trace.add_node(node, key);
+      Trie *n = (Trie*)trace.parent().node();
+      n->children[key.trie_index()] = trace.child_of_parent();
+    }
+ 
   bool remove_last_index(NodeRef& rnode, Trace& trace) {
       if (trace.last_index < 0) {
         *rnode.exra() = 0;
@@ -674,7 +681,7 @@ struct BitTrie {
 };
 
 
-struct BitTrieHandler : public NodeHandler {
+struct BitTrieHandler : public NodeHandler, public TrieMixin  {
   void add_to_trace(int key, NodeRef& child, Trace& trace) {
       trace.push(child);
       if (key >= 0)
@@ -812,24 +819,22 @@ struct BitTrieHandler : public NodeHandler {
       child.first();
     }
     
-  void add(const Slice& key, const Slice& value, NodeRef& rnode, Trace& trace) {
-      BitTrie *n = (BitTrie*)rnode.node();
-      TempLeaf child(key.advance(1), value);
-      
-      if (key.empty()) {
-        trace.add_node(child, Slice());
-        *trace.parent().node().extra() = trace.child_of_parent();
-        trace.complete = true;
-        return;
-      }
-      
+  void add_node(const Slice& key, TempNode& node, Trace& trace) {
+      BitTrie *n = (BitTrie*)trace.current().node();
       size_t count = n->count();
       switch(count) {
         case 56: {
-            TempTrie trie(n);
+            TempTrie trie(count);
+            *trie.extra() = *trace.current().extra();
+            Trie *np = (Trie*)trie.node();
+            int bit = n->first_bit(), i = 0;
+            while(bit >= 0) {
+              np->children[bit] = n->children[i++];
+              bit = n->next_bit(bit);
+            }
             trace.change_node(trie);
-            trace.add_node(child, key.slice(1));
-            Trie *np = (Trie*)trace.parent().node();
+            trace.add_node(node, key);
+            np = (Trie*)trace.parent().node();
             np->children[key.trie_index()] = trace.child_of_parent();
             break;
           }
@@ -840,15 +845,10 @@ struct BitTrieHandler : public NodeHandler {
           trace.grow_node_by(16);
           
         default: 
-          trace.add_node(child, key.slice(1));
-          // renew pointer add could change it
+          trace.add_node(node, key);
           n = (BitTrie*)trace.parent().node();
           n->add(key.trie_index(), trace.child_of_parent());
-        }
       }
-      key = key.adavance(2):
-      trace.key.append(key.data(), key.size());
-      trace.complete = true;
     }
     
   bool remove_last_index(NodeRef& rnode, Trace& trace) {
@@ -888,30 +888,44 @@ struct BitTrieHandler : public NodeHandler {
   void change_node(NodeRef& child, int index, Trace& trace) {
       switch(child.type()) {
         case kCompressed: {
-        
-            Compressed* n = (Compressed*)child.node();
-            bsize_t size = (bsize_t)*child.extra();
-            if (size < 0xff) {
-              char data[256];
-              data[0] = (char)index;
-              memcpy(data+1, n->data, size);
-              TempCompressed compressed(data, size+1);
-              trace.free_node(child.page, child.id);
-              trace.change_node(compressed);
-            }
-            break;
+          assert(index >= 0); // is certainly no end_node
+          Compressed* n = (Compressed*)child.node();
+          bsize_t size = (bsize_t)*child.extra();
+          NodeRef compress_child(child.page, n->child);
+          
+          // insert the index in compressed and replace me with compressed
+          char data[256];
+          data[0] = (char)index;
+          memcpy(data+1, n->data, size);
+          TempCompressed compressed(Slice(data, size+1));
+          trace.free_node(child.page, child.id);
+          trace.change_node(compressed);
+          
+          // ensure compress_child is on same page
+          PageRef& page(trace.current().page);
+          if (page.id != compress_child.page.id) {
+            size_t sizes[256];
+            memset(sizes, 0, sizeof(sizes));
+            size_t size = calc_sizes(child, sizes);
+            trace.reserve_space(size, current().id);
+            compress_child.id = trace.move_node(page, compress_child);
+            compress_child.page.defragment();
+          }
+          
+          n = (Compressed*)current().node()
+          n->child = compress_child.id;
+          break;
           }
                 
         case kPageLeaf: 
-        case kLeaf: {
-          TempNode leaf;
-          trace.move_node(leaf.page_ref, child);
-          if (index >= 0)
-            leaf.insert_key(index);
-          
-          trace.free_node(child.page, child.id);
-          trace.change_node(leaf);
-        }
+        case kLeaf: 
+          if (index < 0) {
+            // make the trie to leaf
+            TempNode leaf;
+            trace.move_node(leaf.page_ref, child);
+            trace.free_node(child.page, child.id);
+            trace.change_node(leaf);
+          }
       }
     }
 };

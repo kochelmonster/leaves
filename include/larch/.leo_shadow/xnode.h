@@ -148,7 +148,7 @@ struct PageRef {
       NodePtr* ptr = node_ptr();
       
       if (ptr[id].type == kLink)
-        return sizeod(pageid_t);
+        return sizeof(pageid_t);
       
       if (id == 0)
         return (256 - ptr[id].ptr) * 16;
@@ -188,7 +188,7 @@ struct PageRef {
 
       // create node map 
       NodePtr *ptrs = node_ptr;
-      for(nodeid_t i = 0; i < page->count; i++) {
+      for(nodeid_t i = 0; i < page->node_count; i++) {
         map[i] = node_count;
         if (nodes[i].type & REMOVE_BIT)
           continue;
@@ -196,6 +196,8 @@ struct PageRef {
         size[node_count] = get_node_size(i);
         memcpy(&new_ptrs[node_count++], &nodes[i], sizeof(NodePtr));
       }
+      if (node_count == page->node_count)
+        return; // not defragmented
       
       // move nodes
       pageid_t *links = page->links;
@@ -343,8 +345,8 @@ struct NodeRef {
       trie_handlers[type()]->last(*this, trace);
     }
    
-  void add(const Slice& key, const Slice& value, Trace& trace) {
-      trie_handlers[type()]->add(key, value, *this, trace);
+  void add(const Slice& key, TempNode& end, Trace& trace) {
+      trie_handlers[type()]->add(key, end, *this, trace);
     }
 
   void remove_last(Trace& trace) {
@@ -382,7 +384,7 @@ struct NodeRef {
 struct Trace {
   struct Transition {
     NodeRef node;
-    size_t index; // the index inside Trace.key identifiying
+    size_t index; // the index inside Trace.key identifying
                   // the part causing the transition to node
     Transition(NodeRef& node_, size_t index_)
         : node(node_), index(index_) { }
@@ -398,6 +400,48 @@ struct Trace {
   Trace(Pagemap& map_, NodeStorage& storage_) : 
       map(map_), storage(storage_), complete(false) { }
   
+  size_t size() const {
+      return stack.size();
+    }
+  
+  // tries to find key inside the trace returns true if found
+  bool find(const Slice& key_) {
+      size_t s = common_prefix(key_.data(), key.data(), 
+                               std::min(key_.size(), key.size()));
+      if (!s)
+        return false;
+        
+      for(int i = 0; i < stack.size(); i++) {
+        if (stack[i].index > s) {
+          complete = false;
+          stack.resize(i);
+          key.resize(stack.back().index);
+          current.find(key_.advance(key.size()), *this);
+          return true;
+        }
+  
+      assert(0);  
+    }
+  
+  Slice value() const {
+      if (!complete)
+        throw NoValidPosition();
+     
+      NodeRef& c(trace.current());
+      if (*c.type() == kPageLeaf) {
+        PageLeaf* n = (PageLeaf*)c.node();
+        return Slice(n->data, *c.extra())
+      }
+      return Slice();
+    }
+    
+  void set_value(const Slice& value) {
+      if (trace.complete)
+        change_node(TempLeaf(value));
+      else 
+        current().add(Slice(), TempLeaf(value), *this);
+    }
+  
   void reset() {
       nodes.clear(0);
       key.clear();
@@ -410,6 +454,9 @@ struct Trace {
     }
     
   void pop(bool skiplink=true) {
+      if (!size())
+        return;
+  
       Transitions& back(stack.back());
       last_index = complete ? -1 : key[back.index];
       complete = false;
@@ -430,12 +477,14 @@ struct Trace {
     
   void parent_next() {
       pop();
-      current().next(*this);
+      if (size())
+        current().next(*this);
     };
       
   void parent_prev() {
       pop();
-      current().prev(*this);
+      if (size())
+        current().prev(*this);
     };
 
   void remove() {
@@ -452,12 +501,16 @@ struct Trace {
        }
     }
     
-  void free_node(PageRef& page, nodeid_t id) {
-      if (id == 0)
+  bool free_node(PageRef& page, nodeid_t id) {
+      if (id == 0) {
         map.free_page(page);
-      else 
+        return false;
+      }
+      else {
         page.free_node(id);
         // no defragment needed (it is done in remove())
+        return true;
+      }
     }
   
   // returns the nodeid that connects parent with current
@@ -553,22 +606,30 @@ struct Trace {
       nodeid_t children[65];
       size_t size = node.size();
       size_t count = node.get_children(chidlren);
+      
       for(size_t i = 0; i < count; i++)
         size += calc_sizes(NodeRef(node.page, children[i]);
         
       size += sizeof(NodeRef);
-      sizes[node.id] = size;
+      if (sizes[node.id])
+        size = sizes[node.id]
+      else
+        sizes[node.id] = size;
+        
       return size;
     }
 
   // enusers that the page of current node has a free_space >  size
   // place current node to a new page if nessary
-  void reserve_space(size_t size) {
+  // if exclude is set this node will not move from page
+  void reserve_space(size_t size, nodeid_t exclude=0) {
       // during this loop current() can change its page!
       while (current().page.free_size() < size) {
         size_t sizes[256];
         NodeRef &root(current().page, 0);
-        calc_size(root, sizes);
+        memset(sizes, 0, sizeof(sizes));
+        sizes[exclude] = sizeof(Page);
+        calc_sizes(root, sizes);
         int best = sizeof(Page);
         nodeid_t best_id = 1;
           
@@ -585,8 +646,8 @@ struct Trace {
         move_node(newpage, to_move);
         
         refresh_trace_if_contains(to_move);
-        root.page.defragment();
         root.page.create_link(best_id, newpage.id);
+        root.page.defragment();
       }
     }
 
@@ -595,6 +656,12 @@ struct Trace {
   nodeid_t move_node(PageRef& new_page, NodeRef& node) {
       if (new_page.id == node.page.id)
         return id;
+        
+      if (node.type() == kLink) {
+        NodeRef new_node(new_page.new_node(0));
+        new_page.create_link(new_node.id, *node.link());
+        return new_node.id;
+      }
   
       nodeid_t children[65];
       size_t count = node.get_children(children);

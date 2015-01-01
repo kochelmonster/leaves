@@ -64,6 +64,10 @@ class Slice {
     : _size(0), _data(NULL) { }
     
 
+  Slice slice(size_t len) const {
+      return Slice(data(), len);
+    }
+
   std::string string() const {
       return std::string(data(), _size);
     }
@@ -125,7 +129,8 @@ class PersistentStorage : public Storage {
 
 
 class CopyOnWriteStorage : public PersistentStorage {
-
+  // returns true if changes have to be commited
+  virtual bool is_dirty() const = 0;
 
 };
 //@nonl
@@ -135,9 +140,6 @@ class Cursor {
  public:
   // returns true if cursor is on a valid position
   virtual bool is_valid() const = 0;
- 
-  // returns true if changes have to be commited
-  virtual bool is_dirty() const = 0;
  
   // sets the cursor to key
   virtual void set(const Slice& key, int read_forward=100) = 0;
