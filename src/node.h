@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <boost/cstdint.hpp>
 #include "larch/leaves.h"
+#ifdef DEBUG
+#include <iomanip>
+#endif
 //@-<< includes >>
 
 namespace larch_leaves {
@@ -75,6 +78,10 @@ struct NodeHandler {
   virtual bool remove_last_index(NodeRef& rnode, Trace& trace) {
       return false;
     }
+    
+#ifdef DEBUG
+  virtual void dump(NodeRef& rnode, std::ostream& out) = 0;
+#endif  
     
   static NodeHandler* handlers[6];
 };
@@ -247,6 +254,10 @@ struct PageRef {
   void grow_node(nodeid_t id, int size);
   //@+node:michael.20141230111914.46: *3* create_link
   void create_link(nodeid_t node_id, pageid_t page_id) const;
+  //@+node:michael.20150101205559.1: *3* dump
+  #ifdef DEBUG
+  void dump(std::ostream& out);
+  #endif
   //@-others
 };
 
@@ -427,9 +438,9 @@ class MultiProcessNodeStorage : public PersistentNodeStorage {
 };
 //@+node:michael.20141220220750.15: ** Trace
 // A stack trace inside a trie
-// nodes[0] is the first node after root
+// nodes[0] is the root
 // nodes[K] is the current node (almost always a leaf)
-// key[0] causes the transition from root to nodes[1]
+// key[nodes[1]] causes the transition from nodes[0] to nodes[1]
 struct Trace {
   struct Transition {
     NodeRef node;
@@ -469,11 +480,18 @@ struct Trace {
         return false;
         
       for(size_t i = 0; i < stack.size(); i++) {
-        if (stack[i].index > s) {
+        size_t index = stack[i].index;
+        if (index > s) {
           complete = false;
           stack.resize(i);
           key.resize(stack.back().index);
           current().find(key_.advance(key.size()), *this);
+          return true;
+        }
+        if (index == s) {
+          complete = false;
+          key.resize(index);
+          current().find(key_.advance(index), *this);
           return true;
         }
       }
@@ -482,8 +500,8 @@ struct Trace {
     }
   //@+node:michael.20141230111914.119: *3* parent
   NodeRef& parent() {
-      NodeRef parent = stack[stack.size()-2].node;
-      return parent.id == kLink ? stack[stack.size()-3].node : parent;
+      NodeRef& parent = stack[stack.size()-2].node;
+      return parent.type() == kLink ? stack[stack.size()-3].node : parent;
     }
   //@+node:michael.20141230111914.114: *3* value
   Slice value() {
@@ -499,7 +517,7 @@ struct Trace {
     }
   //@+node:michael.20141230111914.116: *3* reset
   void reset() {
-      stack.clear();
+      stack.resize(1); // keep the root
       key.clear();
       complete = false;
     }
@@ -604,12 +622,15 @@ struct Trace {
       current().set_type(new_node.type());
     }
   //@+node:michael.20141230111914.115: *3* set_value
-  void set_value(const Slice& value) {
+  void set_value(const Slice& rest_key, const Slice& value) {
       TempLeaf leaf(value);
-      if (complete)
+      if (complete) {
+        assert(rest_key.empty());
         change_node(leaf);
-      else 
-        current().add(Slice(), leaf, *this);
+      }
+      else {
+        current().add(rest_key, leaf, *this);
+      }
     }
   //@+node:michael.20141230111914.133: *3* move_node
   // moves the node to new page returning the id on the new_page

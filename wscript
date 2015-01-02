@@ -34,6 +34,7 @@ def build(bld):
     bld.program(
         source=[join("tests", "simple.cpp")]+sources,
         cxxflags=["-g"],
+        defines=["DEBUG"],
         use="TEST",
         target="simple")
 

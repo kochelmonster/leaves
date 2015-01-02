@@ -114,6 +114,30 @@ void PageRef::create_link(nodeid_t node_id, pageid_t page_id) const {
     
     update_node_ptr();
   }
+//@+node:michael.20150101205559.4: *3* dump
+#ifdef DEBUG
+void PageRef::dump(std::ostream& out) {
+    out << "Page  " << std::endl 
+        << "  id:         " << std::setw(5) << id 
+        << "  offset:     " << std::setw(5) << offset << std::endl
+        << "  node-count: " << std::setw(5) << count() 
+        << "  link-count: " << std::setw(5) 
+                            << (int)page->link_count << std::endl
+        << "  size:       " << std::setw(5) << size()
+        << "  free_size:  " << std::setw(5) << free_size() 
+        << "  sum size:   " << std::setw(5) << size() + free_size()
+        << std::endl;
+      
+    for(nodeid_t id = 0; id < count(); id++) {
+      out << "  node: " 
+          << std::setw(2) << std::setfill('0') 
+          << (int)id 
+          << "(" << (int)node_ptr[id].ptr << ")" << std::endl;
+      NodeRef node(*this, id);
+      NodeHandler::handlers[node.type()]->dump(node, out);
+    }
+  }
+#endif
 //@-others
 
 //@+node:michael.20141215222649.155: ** class NodeStorage (Implementation)

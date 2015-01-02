@@ -11,6 +11,9 @@
 #include <string>
 #include <memory>
 #include <exception>
+#ifdef DEBUG
+#include <ostream>
+#endif
 //@-<< includes >>
 
 namespace larch_leaves {
@@ -101,7 +104,7 @@ class Slice {
     }
     
   Slice advance(size_t size) const {
-      return Slice(data()+1, _size-1);
+      return Slice(data()+size, _size-size);
     }
 
   bool empty() const {
@@ -140,6 +143,9 @@ class Storage {
  public:
   virtual cursor_ptr read_cursor(const Slice& namespace_=main_name_space) = 0;
   virtual cursor_ptr write_cursor(const Slice& namespace_=main_name_space) = 0;
+#ifdef DEBUG
+  virtual void dump(std::ostream& out) = 0;
+#endif
   virtual ~Storage() {}
 };
 
@@ -167,6 +173,10 @@ class CopyOnWriteStorage : public PersistentStorage {
 
  
 //@-others
+
+#ifdef DEBUG
+void dumpb64(const Slice& key, std::ostream& out);
+#endif
 } // namespace larch_leaves 
 #endif // _LARCH_LEAVES_H
 //@-leo

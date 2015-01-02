@@ -9,6 +9,9 @@
 #include <boost/cstdint.hpp>
 #include "conversion.hpp"
 #include "larch/leaves.h"
+#ifdef DEBUG
+#include <iomanip>
+#endif
 //@-<< includes >>
 
 namespace larch_leaves {
@@ -99,8 +102,24 @@ inline boost::uint64_t decode_block(boost::uint64_t block) {
     memcpy((void*)&output[j], &block, pad_size);
   }
 }
+//@+node:michael.20150101205559.9: ** dumpb64
+#ifdef DEBUG
+void dumpb64(const Slice& key, std::ostream& out) {
+    std::string encoded;
+    encode(key, encoded);
+    out << "input: " << key.string() << "(" << key.size() << ")" << std::endl
+        << "output: " 
+        << std::setw(2) << std::setfill('0') 
+        << (int)encoded[0];
+        
+    for(size_t i = 1; i < encoded.size(); i++) 
+        out << "|" 
+            << std::setw(2) << std::setfill('0') 
+            << (int)encoded[i];
+
+    out << std::endl;        
+  }
+#endif
 //@-others
 } // namespace larch_leaves 
-
-
 //@-leo

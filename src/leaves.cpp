@@ -69,7 +69,9 @@ struct ReadMemoryCursor : public Cursor {
   std::string decoding_buffer;
   
   ReadMemoryCursor(NodeStorageInHeap& nodes, NodeRef root_) 
-    : trace(nodes, nodes), root(root_) { }
+    : trace(nodes, nodes), root(root_) { 
+      trace.push(root);
+    }
     
   bool is_valid() const {
       return trace.complete;
@@ -117,7 +119,14 @@ struct WriteMemoryCursor : public ReadMemoryCursor {
     : ReadMemoryCursor(nodes, root_) { }
   
   void set_value(const Slice& value) {
-    trace.set_value(value);
+    if (is_valid()) {
+      trace.set_value(Slice(), value);
+    }
+    else {
+      // the encoding buffer contains the last search key
+      assert(encoding_buffer.compare(0, trace.key.size(), trace.key) == 0);
+      trace.set_value(Slice(encoding_buffer).advance(trace.key.size()), value);      
+    }
   }
   
   void remove() { 
@@ -163,10 +172,21 @@ struct PrivateMemoryStorage : public MemoryStorage {
       root().find(ekey, trace);
       
       if (!trace.complete)
-	 trace.current().add(ekey.advance(trace.key.size()), TempTrie(), trace);
+        trace.current().add(ekey.advance(trace.key.size()), TempTrie(), trace);
       
       return cursor_ptr(new WriteMemoryCursor(_nodes, trace.current()));
     }
+    
+#ifdef DEBUG
+  void dump(std::ostream& out) {
+      out << "State of Memory Storage" << std::endl
+          << "=======================" << std::endl;
+      typedef std::vector<NodeStorageInHeap::_page_ptr>::iterator iter_t;
+      iter_t i = _nodes._pages.begin();
+      for(int j = 0; i != _nodes._pages.end(); i++, j++)
+        PageRef(i->get(), j, j).dump(out);
+    }
+#endif    
 };
 
 

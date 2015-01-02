@@ -41,7 +41,7 @@ struct BitTrie {
     }
   
   int get_child_index(trieindex_t index) const {
-      if (bits & (1<<index)) {
+      if (bits & (((boost::uint64_t)1)<<index)) {
         boost::uint64_t mask = ~0;
         mask <<= index;
         return popcount(bits & ~mask);
@@ -59,7 +59,7 @@ struct BitTrie {
   
   int next_bit(int index) const {
       boost::uint64_t mask = ~0;
-      mask <<= index;
+      mask <<= (index + 1);
       return ffs(bits & mask) - 1;
     }
     
@@ -70,7 +70,7 @@ struct BitTrie {
     }
     
   void add(int index, nodeid_t node) {
-      bits |= 1 << index;
+      bits |= ((boost::uint64_t)1)<<index;
       int child_index = get_child_index(index); 
       memmove(children+child_index, children+child_index+1,
               count()-child_index-1);
@@ -80,7 +80,7 @@ struct BitTrie {
   void remove(int index) {
       int child_index = get_child_index(index);
       assert(child_index >= 0);
-      bits &= ~(1 << index);
+      bits &= ~(((boost::uint64_t)1)<<index);
       memmove(children+child_index+1, children+child_index,
               count()-child_index-1);
     }
@@ -262,7 +262,8 @@ struct CompressedHandler : public LeafBase {
       if (!n->child) {
         // we insert a
         assert(size == key.size());
-        trace.add_node(end, key);
+        trace.key.append(n->data, size);
+        trace.add_node(end, Slice());
         n->child = trace.child_of_parent();
         trace.complete = true;
         return;
@@ -306,6 +307,19 @@ struct CompressedHandler : public LeafBase {
       }
       trace.current().add(key.advance(prefix_size), end, trace);
     }
+  //@+node:michael.20150101205559.5: *4* dump
+  #ifdef DEBUG
+  void dump(NodeRef& rnode, std::ostream& out) {
+      Compressed *n = (Compressed*)rnode.node();
+      out << "    type: compressed" << std::endl;
+      out << "    data: " << std::setw(2) << std::setfill('0') 
+                          << (int)n->data[0];
+      for(size_t i = 1; i < *rnode.extra(); i++)
+        out << "|" << std::setw(2) << std::setfill('0') << (int)n->data[i];
+      out << " (" << (int)*rnode.extra() << ")" << std::endl;
+      out << "    child: " << (int)n->child << std::endl;
+    }
+  #endif
   //@-others
 };
 
@@ -339,6 +353,12 @@ struct LinkHandler : public LeafBase {
   void add(const Slice& key, const TempNode& end, NodeRef& rnode, Trace& trace) {
       assert(0); // may never be called
     }
+    
+#ifdef DEBUG
+  void dump(NodeRef& node, std::ostream& out) {
+      out << "    type: link" << std::endl;
+    }
+#endif    
 };
 
 static LinkHandler link;
@@ -524,6 +544,12 @@ struct TrieHandler : public TrieBase {
 
       return true;
     }
+  //@+node:michael.20150101205559.6: *4* dump
+  #ifdef DEBUG
+  void dump(NodeRef& node, std::ostream& out) {
+      out << "    type: trie" << std::endl;
+    }
+  #endif
   //@-others
 };
 
@@ -782,6 +808,38 @@ struct BitTrieHandler : public TrieBase {
        
       return true;
     }
+  //@+node:michael.20150101205559.7: *4* dump
+  #ifdef DEBUG
+  void dump(NodeRef& rnode, std::ostream& out) {
+      BitTrie *n = (BitTrie*)rnode.node();
+      out << "    type: bittrie" << std::endl;
+      nodeid_t end = *rnode.extra();
+      
+      out << "    data: ";
+      if (end) {
+        out << "E=" 
+            << std::setw(2) << std::setfill('0') 
+            << (int)end;
+            
+        if (n->count())
+          out << "|";
+      }
+      else if (!n->count())
+        out << "empty!";
+        
+      int bit = n->first_bit(), i = 0;
+      while(bit >= 0) {
+        out << std::setw(2) << std::setfill('0') 
+            << bit << ">" 
+            << std::setw(2) << std::setfill('0') 
+            << (int)n->children[i];
+        bit = n->next_bit(bit);
+        i++;
+      }
+      
+      out << std::endl;
+    }
+  #endif
   //@-others
 };
 
@@ -800,6 +858,12 @@ struct Leaf {
 struct LeafHandler : public LeafBase {
   void add(const Slice& key, const TempNode& end, NodeRef& rnode, Trace& trace) {
     }
+    
+#ifdef DEBUG
+  void dump(NodeRef& node, std::ostream& out) {
+      out << "    type: leaf" << std::endl;
+    }
+#endif    
 };
 
 static LeafHandler leaf;
@@ -824,8 +888,7 @@ struct PageLeafHandler : public LeafBase {
       Slice rest_key;
       
       if (key.size() == 2) {
-        TempTrie parent_trie;
-        trace.change_node(parent_trie);
+        trace.change_node(TempTrie());
         reinsert_me(me, trace);
         trace.add_node(trie, key.slice(1));
         BitTrie* pn = (BitTrie*)trace.parent().node();
@@ -849,6 +912,15 @@ struct PageLeafHandler : public LeafBase {
 
       trace.current().add(rest_key, end, trace);
     }
+  //@+node:michael.20150101205559.8: *4* dump
+  #ifdef DEBUG
+  void dump(NodeRef& rnode, std::ostream& out) {
+      PageLeaf *n = (PageLeaf*)rnode.node();
+      std::string data(n->data, *rnode.extra());
+      out << "    type: pageleaf" << std::endl
+          << "    data: " << data << "(" << data.size() << ")" << std::endl;
+    }
+  #endif
   //@-others
 };
 
@@ -887,8 +959,8 @@ TempTrie::TempTrie(size_t child_count) : TempNode() {
     noderef.set_type(kTrie);
   }
   else {
-    child_count = pad16(child_count);
-    pageref.new_node(child_count);
+    size = pad16(child_count);
+    pageref.new_node(size);
     noderef.set_type(kBitTrie);
   }
 
@@ -901,6 +973,7 @@ TempCompressed::TempCompressed(const Slice& part) : TempNode() {
   pageref.new_node(pad16(sizeof(nodeid_t)+size));
   Compressed* n = (Compressed*)node();
   memcpy(n->data, part.data(), size);
+  n->child = 0;
   noderef.set_type(kCompressed);
 }
 //@-others

@@ -28,7 +28,7 @@
 </v>
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
-<v t="michael.20141215222649.126"><vh>Compressed</vh>
+<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
 <v t="michael.20141230111914.81"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.82"><vh>find</vh></v>
 <v t="michael.20141230111914.83"><vh>first</vh></v>
@@ -38,9 +38,10 @@
 <v t="michael.20141230111914.85"><vh>move_child</vh></v>
 <v t="michael.20141230111914.86"><vh>reinsert</vh></v>
 <v t="michael.20141230111914.87"><vh>add</vh></v>
+<v t="michael.20150101205559.5"><vh>dump</vh></v>
 </v>
 <v t="michael.20141215222649.137"><vh>Link</vh></v>
-<v t="michael.20141215222649.93"><vh>Trie</vh>
+<v t="michael.20141215222649.93" a="E"><vh>Trie</vh>
 <v t="michael.20141230111914.88"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.94"><vh>find</vh></v>
 <v t="michael.20141230111914.97"><vh>first</vh></v>
@@ -52,8 +53,9 @@
 <v t="michael.20141230111914.91"><vh>replace_child</vh></v>
 <v t="michael.20141230111914.92"><vh>add_node</vh></v>
 <v t="michael.20141230111914.93"><vh>remove_last_index</vh></v>
+<v t="michael.20150101205559.6"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.95"><vh>BitTrie</vh>
+<v t="michael.20141215222649.95" a="E"><vh>BitTrie</vh>
 <v t="michael.20141230111914.99"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.103"><vh>find</vh></v>
 <v t="michael.20141230111914.106"><vh>first</vh></v>
@@ -66,11 +68,13 @@
 <v t="michael.20141230111914.108"><vh>add_node</vh></v>
 <v t="michael.20141230111914.110"><vh>change_node</vh></v>
 <v t="michael.20141230111914.109"><vh>remove_last_index</vh></v>
+<v t="michael.20150101205559.7"><vh>dump</vh></v>
 </v>
 <v t="michael.20141215222649.85"><vh>Leaf</vh></v>
-<v t="michael.20141215222649.84"><vh>PageLeaf</vh>
+<v t="michael.20141215222649.84" a="E"><vh>PageLeaf</vh>
 <v t="michael.20141230111914.78"><vh>reinsert_me</vh></v>
 <v t="michael.20141230111914.77"><vh>add</vh></v>
+<v t="michael.20150101205559.8"><vh>dump</vh></v>
 </v>
 </v>
 </v>
@@ -97,14 +101,14 @@
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
 <v t="michael.20141215222649.65" a="E"
-expanded="michael.20141215222649.73,michael.20141219202729.2,"><vh>@file node.h</vh></v>
+expanded="michael.20141215222649.73,michael.20141220220750.15,"><vh>@file node.h</vh></v>
 <v t="michael.20141220220750.5" a="E"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,"><vh>@file trie.cpp</vh></v>
+expanded="michael.20141215222649.83,michael.20141215222649.126,michael.20141215222649.93,michael.20141215222649.95,michael.20141215222649.84,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.161" a="E"
-expanded="michael.20141215222649.155,"><vh>@file node.cpp</vh></v>
+expanded="michael.20141230111914.26,"><vh>@file node.cpp</vh></v>
 <v t="michael.20141215222649.45" a="E"
-expanded="michael.20141215222649.44,michael.20141230111914.3,"><vh>@file leaves.cpp</vh></v>
+expanded="michael.20141230111914.3,"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136" a="E"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
@@ -118,6 +122,11 @@ expanded="michael.20141215222649.44,michael.20141230111914.3,"><vh>@file leaves.
 </v>
 </v>
 <v t="michael.20141219202729.5"><vh>edit</vh></v>
+<v t="michael.20150101205559.2" a="E"><vh>Resurrected Nodes</vh>
+<v t="michael.20150101205559.3"><vh>From @file node.h</vh>
+<v t="michael.20150101205559.1"><vh>dump</vh></v>
+</v>
+</v>
 </vnodes>
 <tnodes>
 <t tx="michael.20141215222649.10"></t>
@@ -264,6 +273,12 @@ struct LinkHandler : public LeafBase {
   void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
       assert(0); // may never be called
     }
+    
+#ifdef DEBUG
+  void dump(NodeRef&amp; node, std::ostream&amp; out) {
+      out &lt;&lt; "    type: link" &lt;&lt; std::endl;
+    }
+#endif    
 };
 
 static LinkHandler link;
@@ -370,6 +385,9 @@ class Storage {
  public:
   virtual cursor_ptr read_cursor(const Slice&amp; namespace_=main_name_space) = 0;
   virtual cursor_ptr write_cursor(const Slice&amp; namespace_=main_name_space) = 0;
+#ifdef DEBUG
+  virtual void dump(std::ostream&amp; out) = 0;
+#endif
   virtual ~Storage() {}
 };
 
@@ -522,6 +540,12 @@ struct Leaf {
 struct LeafHandler : public LeafBase {
   void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
     }
+    
+#ifdef DEBUG
+  void dump(NodeRef&amp; node, std::ostream&amp; out) {
+      out &lt;&lt; "    type: leaf" &lt;&lt; std::endl;
+    }
+#endif    
 };
 
 static LeafHandler leaf;
@@ -804,8 +828,7 @@ child.first(trace);
     Slice rest_key;
     
     if (key.size() == 2) {
-      TempTrie parent_trie;
-      trace.change_node(parent_trie);
+      trace.change_node(TempTrie());
       reinsert_me(me, trace);
       trace.add_node(trie, key.slice(1));
       BitTrie* pn = (BitTrie*)trace.parent().node();
@@ -940,7 +963,8 @@ child.first(trace);
     if (!n-&gt;child) {
       // we insert a
       assert(size == key.size());
-      trace.add_node(end, key);
+      trace.key.append(n-&gt;data, size);
+      trace.add_node(end, Slice());
       n-&gt;child = trace.child_of_parent();
       trace.complete = true;
       return;
@@ -1172,5 +1196,73 @@ child.first(trace);
       trace.complete = true;
   }
 </t>
+<t tx="michael.20150101205559.1">#ifdef DEBUG
+void dump() {
+  std::cout 
+    &lt;&lt; "Page  " &lt;&lt; std::endl &lt;&lt; std::setw(5)
+    &lt;&lt; "  id:         " &lt;&lt; id 
+    &lt;&lt; "  offset:     " &lt;&lt; offset &lt;&lt; std::endl
+    &lt;&lt; "  node-count: " &lt;&lt; count() 
+    &lt;&lt; "  link-count: " &lt;&lt; page-&gt;link_count &lt;&lt; std::endl
+}
+#endif</t>
+<t tx="michael.20150101205559.2"></t>
+<t tx="michael.20150101205559.3"></t>
+<t tx="michael.20150101205559.5">#ifdef DEBUG
+void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+    Compressed *n = (Compressed*)rnode.node();
+    out &lt;&lt; "    type: compressed" &lt;&lt; std::endl;
+    out &lt;&lt; "    data: " &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
+                        &lt;&lt; (int)n-&gt;data[0];
+    for(size_t i = 1; i &lt; *rnode.extra(); i++)
+      out &lt;&lt; "|" &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)n-&gt;data[i];
+    out &lt;&lt; " (" &lt;&lt; (int)*rnode.extra() &lt;&lt; ")" &lt;&lt; std::endl;
+    out &lt;&lt; "    child: " &lt;&lt; (int)n-&gt;child &lt;&lt; std::endl;
+  }
+#endif</t>
+<t tx="michael.20150101205559.6">#ifdef DEBUG
+void dump(NodeRef&amp; node, std::ostream&amp; out) {
+    out &lt;&lt; "    type: trie" &lt;&lt; std::endl;
+  }
+#endif</t>
+<t tx="michael.20150101205559.7">#ifdef DEBUG
+void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+    BitTrie *n = (BitTrie*)rnode.node();
+    out &lt;&lt; "    type: bittrie" &lt;&lt; std::endl;
+    nodeid_t end = *rnode.extra();
+    
+    out &lt;&lt; "    data: ";
+    if (end) {
+      out &lt;&lt; "E=" 
+          &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
+          &lt;&lt; (int)end;
+          
+      if (n-&gt;count())
+        out &lt;&lt; "|";
+    }
+    else if (!n-&gt;count())
+      out &lt;&lt; "empty!";
+      
+    int bit = n-&gt;first_bit(), i = 0;
+    while(bit &gt;= 0) {
+      out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
+          &lt;&lt; bit &lt;&lt; "&gt;" 
+          &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
+          &lt;&lt; (int)n-&gt;children[i];
+      bit = n-&gt;next_bit(bit);
+      i++;
+    }
+    
+    out &lt;&lt; std::endl;
+  }
+#endif</t>
+<t tx="michael.20150101205559.8">#ifdef DEBUG
+void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+    PageLeaf *n = (PageLeaf*)rnode.node();
+    std::string data(n-&gt;data, *rnode.extra());
+    out &lt;&lt; "    type: pageleaf" &lt;&lt; std::endl
+        &lt;&lt; "    data: " &lt;&lt; data &lt;&lt; "(" &lt;&lt; data.size() &lt;&lt; ")" &lt;&lt; std::endl;
+  }
+#endif</t>
 </tnodes>
 </leo_file>
