@@ -40,9 +40,14 @@ def build(bld):
         target="simple")
     """
     bld.program(
-        source=[join("tests", "trietest.cpp")]+sources,
+        source=[join("tests", "test_trie.cpp")]+sources,
         use="TEST",
-        target="trietest")
+        target="test_trie")
+    
+    bld.program(
+        source=[join("tests", "test_bits.cpp")]+sources,
+        use="TEST",
+        target="test_bits")
 
 
 #@-leo

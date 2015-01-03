@@ -26,7 +26,7 @@
 </v>
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
-<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
+<v t="michael.20141215222649.126"><vh>Compressed</vh>
 <v t="michael.20141230111914.81"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.82"><vh>find</vh></v>
 <v t="michael.20141230111914.83"><vh>first</vh></v>
@@ -53,7 +53,7 @@
 <v t="michael.20141230111914.93"><vh>remove_last_index</vh></v>
 <v t="michael.20150101205559.6"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.95"><vh>BitTrie</vh>
+<v t="michael.20141215222649.95" a="E"><vh>BitTrie</vh>
 <v t="michael.20141230111914.99"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.103"><vh>find</vh></v>
 <v t="michael.20141230111914.106"><vh>first</vh></v>
@@ -101,10 +101,11 @@
 expanded="michael.20141215222649.73,michael.20141220220750.15,"><vh>@file node.h</vh></v>
 <v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
+expanded="michael.20141215222649.83,michael.20141215222649.95,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.161" a="E"
 expanded="michael.20141230111914.26,"><vh>@file node.cpp</vh></v>
-<v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
+<v t="michael.20141215222649.45" a="E"
+expanded="michael.20141230111914.3,"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
@@ -116,7 +117,8 @@ expanded="michael.20141230111914.26,"><vh>@file node.cpp</vh></v>
 <v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
 <v t="michael.20150101205559.18" a="E"
-expanded="michael.20150101205559.19,"><vh>@file trietest.cpp</vh></v>
+expanded="michael.20150101205559.19,"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.42" a="E"><vh>@file test_bits.cpp</vh></v>
 </v>
 </v>
 <v t="michael.20141219202729.5" a="E"><vh>edit</vh>
@@ -482,13 +484,13 @@ struct TrieBase : public NodeHandler {
           break;
           
         case 2:
-          TESTCASE("TrieBaseAdd");
+          TESTCASE("TrieBaseAdd2");
           add_node(key.slice(1), TempTrie(), trace);
           trace.current().add(key.advance(1), end, trace);
           break;
 
         default: {
-          TESTCASE("TrieBaseAdd");
+          TESTCASE("TrieBaseAdd3");
           Slice next_key(key.advance(1));
           TempCompressed compressed(next_key);
           add_node(key.slice(1), compressed, trace);

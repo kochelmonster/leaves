@@ -1,0 +1,303 @@
+state:
+    - id:         0
+      offset:     0
+      node_count: 59
+      link_count: 0
+      size:       1169
+      free_size:  2923
+      sum_size:   4092
+      nodes: 
+          - id:    0
+            ptr:   255
+            type:  bittrie
+            data:  00>1
+          - id:    1
+            ptr:   251
+            type:  trie
+            data:  00>2|01>3|02>4|03>5|04>6|05>7|06>8|07>9|08>10|09>11|10>12|11>13|12>14|13>15|14>16|15>17|16>18|17>19|18>20|19>21|20>22|21>23|22>24|23>25|24>26|25>27|26>28|27>29|28>30|29>31|30>32|31>33|32>34|33>35|34>36|35>37|36>38|37>39|38>40|39>41|40>42|41>43|42>44|43>45|44>46|45>47|46>48|47>49|48>50|49>51|50>52|51>53|52>54|53>55|54>56|55>57|56>0|57>58|58>0|59>0|60>0|61>0|62>0|63>0
+          - id:    2
+            ptr:   250
+            type:  leaf
+            data:  value-0
+            size:  7
+          - id:    3
+            ptr:   249
+            type:  leaf
+            data:  value-1
+            size:  7
+          - id:    4
+            ptr:   248
+            type:  leaf
+            data:  value-2
+            size:  7
+          - id:    5
+            ptr:   247
+            type:  leaf
+            data:  value-3
+            size:  7
+          - id:    6
+            ptr:   246
+            type:  leaf
+            data:  value-4
+            size:  7
+          - id:    7
+            ptr:   245
+            type:  leaf
+            data:  value-5
+            size:  7
+          - id:    8
+            ptr:   244
+            type:  leaf
+            data:  value-6
+            size:  7
+          - id:    9
+            ptr:   243
+            type:  leaf
+            data:  value-7
+            size:  7
+          - id:    10
+            ptr:   242
+            type:  leaf
+            data:  value-8
+            size:  7
+          - id:    11
+            ptr:   241
+            type:  leaf
+            data:  value-9
+            size:  7
+          - id:    12
+            ptr:   240
+            type:  leaf
+            data:  value-10
+            size:  8
+          - id:    13
+            ptr:   239
+            type:  leaf
+            data:  value-11
+            size:  8
+          - id:    14
+            ptr:   238
+            type:  leaf
+            data:  value-12
+            size:  8
+          - id:    15
+            ptr:   237
+            type:  leaf
+            data:  value-13
+            size:  8
+          - id:    16
+            ptr:   236
+            type:  leaf
+            data:  value-14
+            size:  8
+          - id:    17
+            ptr:   235
+            type:  leaf
+            data:  value-15
+            size:  8
+          - id:    18
+            ptr:   234
+            type:  leaf
+            data:  value-16
+            size:  8
+          - id:    19
+            ptr:   233
+            type:  leaf
+            data:  value-17
+            size:  8
+          - id:    20
+            ptr:   232
+            type:  leaf
+            data:  value-18
+            size:  8
+          - id:    21
+            ptr:   231
+            type:  leaf
+            data:  value-19
+            size:  8
+          - id:    22
+            ptr:   230
+            type:  leaf
+            data:  value-20
+            size:  8
+          - id:    23
+            ptr:   229
+            type:  leaf
+            data:  value-21
+            size:  8
+          - id:    24
+            ptr:   228
+            type:  leaf
+            data:  value-22
+            size:  8
+          - id:    25
+            ptr:   227
+            type:  leaf
+            data:  value-23
+            size:  8
+          - id:    26
+            ptr:   226
+            type:  leaf
+            data:  value-24
+            size:  8
+          - id:    27
+            ptr:   225
+            type:  leaf
+            data:  value-25
+            size:  8
+          - id:    28
+            ptr:   224
+            type:  leaf
+            data:  value-26
+            size:  8
+          - id:    29
+            ptr:   223
+            type:  leaf
+            data:  value-27
+            size:  8
+          - id:    30
+            ptr:   222
+            type:  leaf
+            data:  value-28
+            size:  8
+          - id:    31
+            ptr:   221
+            type:  leaf
+            data:  value-29
+            size:  8
+          - id:    32
+            ptr:   220
+            type:  leaf
+            data:  value-30
+            size:  8
+          - id:    33
+            ptr:   219
+            type:  leaf
+            data:  value-31
+            size:  8
+          - id:    34
+            ptr:   218
+            type:  leaf
+            data:  value-32
+            size:  8
+          - id:    35
+            ptr:   217
+            type:  leaf
+            data:  value-33
+            size:  8
+          - id:    36
+            ptr:   216
+            type:  leaf
+            data:  value-34
+            size:  8
+          - id:    37
+            ptr:   215
+            type:  leaf
+            data:  value-35
+            size:  8
+          - id:    38
+            ptr:   214
+            type:  leaf
+            data:  value-36
+            size:  8
+          - id:    39
+            ptr:   213
+            type:  leaf
+            data:  value-37
+            size:  8
+          - id:    40
+            ptr:   212
+            type:  leaf
+            data:  value-38
+            size:  8
+          - id:    41
+            ptr:   211
+            type:  leaf
+            data:  value-39
+            size:  8
+          - id:    42
+            ptr:   210
+            type:  leaf
+            data:  value-40
+            size:  8
+          - id:    43
+            ptr:   209
+            type:  leaf
+            data:  value-41
+            size:  8
+          - id:    44
+            ptr:   208
+            type:  leaf
+            data:  value-42
+            size:  8
+          - id:    45
+            ptr:   207
+            type:  leaf
+            data:  value-43
+            size:  8
+          - id:    46
+            ptr:   206
+            type:  leaf
+            data:  value-44
+            size:  8
+          - id:    47
+            ptr:   205
+            type:  leaf
+            data:  value-45
+            size:  8
+          - id:    48
+            ptr:   204
+            type:  leaf
+            data:  value-46
+            size:  8
+          - id:    49
+            ptr:   203
+            type:  leaf
+            data:  value-47
+            size:  8
+          - id:    50
+            ptr:   202
+            type:  leaf
+            data:  value-48
+            size:  8
+          - id:    51
+            ptr:   201
+            type:  leaf
+            data:  value-49
+            size:  8
+          - id:    52
+            ptr:   200
+            type:  leaf
+            data:  value-50
+            size:  8
+          - id:    53
+            ptr:   199
+            type:  leaf
+            data:  value-51
+            size:  8
+          - id:    54
+            ptr:   198
+            type:  leaf
+            data:  value-52
+            size:  8
+          - id:    55
+            ptr:   197
+            type:  leaf
+            data:  value-53
+            size:  8
+          - id:    56
+            ptr:   196
+            type:  leaf
+            data:  value-54
+            size:  8
+          - id:    57
+            ptr:   195
+            type:  leaf
+            data:  value-55
+            size:  8
+          - id:    58
+            ptr:   194
+            type:  leaf
+            data:  value-57
+            size:  8
+---

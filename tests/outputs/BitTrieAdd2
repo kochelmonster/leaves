@@ -1,0 +1,28 @@
+state:
+    - id:         0
+      offset:     0
+      node_count: 4
+      link_count: 0
+      size:       76
+      free_size:  4016
+      sum_size:   4092
+      nodes: 
+          - id:    0
+            ptr:   255
+            type:  bittrie
+            data:  00>1
+          - id:    1
+            ptr:   254
+            type:  bittrie
+            data:  00>2|11>3
+          - id:    2
+            ptr:   253
+            type:  leaf
+            data:  value-0
+            size:  7
+          - id:    3
+            ptr:   252
+            type:  leaf
+            data:  value-11
+            size:  8
+---

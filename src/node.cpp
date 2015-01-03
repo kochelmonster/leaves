@@ -95,7 +95,7 @@ void PageRef::grow_node(nodeid_t id, int size) {
     memmove(&page->data[free_start-size], &page->data[free_start],
             node_start-free_start+node_size);
     
-    free_start += size;
+    free_start -= size;
     page->free_start = (sizeof(page->data)-free_start)/16;
     
     size /= 16;

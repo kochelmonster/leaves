@@ -485,16 +485,20 @@ struct Trace {
     }
   //@+node:michael.20141230111914.113: *3* find
   // tries to find key inside the trace returns true if found
-  bool find(const Slice& key_) {
+  void find(const Slice& key_) {
       size_t s = common_prefix(key_.data(), key.data(), 
                                std::min(key_.size(), key.size()));
-      if (!s)
-        return false;
+      if (!s) {
+        reset();
+        current().find(key_, *this);
+      }
+      
+      complete = false;
         
       while(key.size() > s)
         pop();
 
-      return true;
+      current().find(key_.advance(key.size()), *this);
     }
   //@+node:michael.20150101205559.23: *3* next
   void next() {

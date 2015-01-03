@@ -1,5 +1,5 @@
 //@+leo-ver=5-thin
-//@+node:michael.20150101205559.18: * @file trietest.cpp
+//@+node:michael.20150101205559.18: * @file test_trie.cpp
 //@@language cplusplus
 //@@tabwidth -2
 //@+<< includes >>
@@ -9,6 +9,7 @@
 #include <fstream>
 #include <vector>
 #define BOOST_TEST_MODULE TrieTest
+//#define BOOST_TEST_NO_MAIN
 #include <boost/test/included/unit_test.hpp>
 #include "larch/leaves.h"
 #include "node.h"
@@ -38,10 +39,7 @@ struct ReadTestCursor {
   
   void set(const Slice& key) { 
       key_buffer.assign(key.data(), key.size());
-      if (trace.find(key))
-        return;
-      trace.reset();
-      root.find(key, trace);
+      trace.find(key);
     }
     
   void first() { 
@@ -134,39 +132,19 @@ void prepare_case_output() {
   case_output.str("");
 }
 
-void check_cases(size_t case_count, const char** cases) {
-  std::vector<int> done;
-  done.resize(case_count);
-  std::string output(case_output.str());
 
-  while(case_output)  {
-    std::string sub;
-    case_output >> sub;
-    for(size_t i = 0; i < case_count; i++) {
-      if (sub == cases[i])
-        done[i] = 1;
-    }
-    
-    //std::cerr << "sub: " << sub << std::endl;
-  }
-  
-  for(size_t i = 0; i < case_count; i++) {
-    if (! done[i]) {
-      std::cerr << "missing case: " << cases[i] 
-                << " in " << std::endl << output << std::endl;
-      break;
-    }
-  }
-  
-  //std::cerr << case_output.str() << std::endl;
-}
-
+//#define GENERATE
 #ifdef GENERATE
 
 void check_output(const char* fname, std::stringstream& strstr) {
   std::cout << strstr.str();
   std::ofstream out(fname);
   out << strstr.str();
+}
+
+void check_cases(size_t case_count, const char** cases) {
+  std::cerr << "check case:" << case_output.str().size() << std::endl;
+  std::cerr << case_output.str() << std::endl;
 }
  
 #else
@@ -194,9 +172,38 @@ void check_output(const char* fname, std::stringstream& strstr) {
 }
 
 
+void check_cases(size_t case_count, const char** cases) {
+  std::vector<int> done;
+  done.resize(case_count);
+  std::string output(case_output.str());
+  std::stringstream in(output);
+
+  while(in)  {
+    std::string sub;
+    in >> sub;
+    for(size_t i = 0; i < case_count; i++) {
+      if (sub == cases[i])
+        done[i] = 1;
+    }
+    
+    //std::cerr << "sub: " << sub << std::endl;
+  }
+  
+  for(size_t i = 0; i < case_count; i++) {
+    if (! done[i]) {
+      std::cerr << "missing case: " << cases[i] 
+                << " in " << std::endl << output << std::endl;
+      BOOST_REQUIRE(false);
+      break;
+    }
+  }
+  
+  //std::cerr << case_output.str() << std::endl;
+}
+
 #endif
-//@+node:michael.20150101205559.32: ** TestCompress
-struct TestCompress {
+//@+node:michael.20150101205559.39: ** TestBase
+struct TestBase {
   TestDatabase *db;
   WriteTestCursor *cursor;
   std::string input;
@@ -223,7 +230,10 @@ struct TestCompress {
       check_output(fname, strstr);
       check_cases(case_count, cases);
     }
+};
 
+//@+node:michael.20150101205559.32: ** TestCompress
+struct TestCompress : public TestBase {
   void test_CompressAdd0_CompressReinsert0() {
       // is not possible would be a compress node of size1
     }
@@ -312,36 +322,144 @@ struct TestCompress {
 TestCompress test_compress;
 
 //@+node:michael.20150101205559.34: ** TestLeaf
-struct TestLeaf {
-  TestDatabase *db;
-  WriteTestCursor *cursor;
-  std::string input;
-  
-  void prepare() {
-      db = new TestDatabase;
-      cursor = db->writer();
-      input.assign((const char[]){ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }, 10);
-      cursor->set(input);
-      cursor->set_value(Slice("value"));
-      std::cerr << "------------------" << std::endl;
-    }
-    
-  void end() {
-      delete db;
-      delete cursor;
-    }
-
-  void test_LeafAdd2() {
-      prepare();
-      input.append(1, (char)11);
+struct TestLeaf : public TestBase {
+  void test_LeafAdd0() {
+      prepare(5);
+      input.append(1, (char)5);
+      input.append(1, (char)6);
       cursor->set(input);
       cursor->set_value(Slice("value-1"));
-      db->dump(std::cout);
+      const char* cases[] = {"LeafAdd0"};
+      check("LeafAdd0", 1, cases);
       end();
     }
+    
+  void test_LeafAdd1() {
+      prepare(5);
+      input.append(1, (char)5);
+      input.append(1, (char)6);
+      input.append(1, (char)7);
+      
+      cursor->set(input);
+      cursor->set_value(Slice("value-1"));
+      const char* cases[] = {"LeafAdd1"};
+      check("LeafAdd1", 1, cases);
+      end();
+    }
+    
+    void test_LeafAdd2() {
+      prepare(5);
+      input.append(1, (char)5);
+      cursor->set(input);
+      cursor->set_value(Slice("value-1"));
+      const char* cases[] = {"LeafAdd2"};
+      check("LeafAdd2", 1, cases);
+      end();
+    }    
 };
+
+TestLeaf test_leaf;
+//@+node:michael.20150101205559.40: ** TestBitTrie
+struct TestBitTrie : public TestBase {
+
+  void prepare(int count) {
+      db = new TestDatabase;
+      cursor = db->writer();
+      input.clear();
+      input.assign(2, (char)0);
+      
+      for(int i = 0; i < count; i++) {
+        std::stringstream f;
+        f << "value-" << i;
+        input[1] = i;
+        cursor->set(input);
+        cursor->set_value(Slice(f.str()));
+      }
+      prepare_case_output();
+    }
+
+
+  void test_TrieBaseAdd0() {
+      prepare(1);
+     
+      input.resize(1);
+      cursor->set(input);
+      cursor->set_value(Slice("value-e"));
+      
+      const char* cases[] = {"TrieBaseAdd0"};
+      check("TrieBaseAdd0", 1, cases);
+      end();
+    }
+    
+  void test_BitTrieAdd0() {
+      prepare(56);
+      input[1] = 57;
+      
+      cursor->set(input);
+      cursor->set_value(Slice("value-57"));
+            
+      const char* cases[] = {"TrieBaseAdd1", "BitTrieAdd0"};
+      check("BitTrieAdd0", 2, cases);
+      end();
+    }    
+    
+  void test_BitTrieAdd1() {
+      prepare(8);
+      input[1] = 11;
+      
+      cursor->set(input);
+      cursor->set_value(Slice("value-11"));
+            
+      const char* cases[] = {"TrieBaseAdd1", "BitTrieAdd1", "BitTrieAdd2"};
+      check("BitTrieAdd1", 3, cases);
+      end();
+    }    
+    
+  void test_BitTrieAdd2() {
+      prepare(1);
+      input[1] = 11;
+      
+      cursor->set(input);
+      cursor->set_value(Slice("value-11"));
+            
+      const char* cases[] = {"TrieBaseAdd1", "BitTrieAdd2"};
+      check("BitTrieAdd2", 2, cases);
+      end();
+    }
+    
+    
+  void test_TrieBaseAdd2() {
+      prepare(1);
+      input[1] = 1;
+      input.append(1, (char)2);
+      
+      cursor->set(input);
+      cursor->set_value(Slice("value-2"));
+            
+      const char* cases[] = {"TrieBaseAdd2", "BitTrieAdd2"};
+      check("TrieBaseAdd2", 2, cases);
+      end();
+    }
+    
+    
+  void test_TrieBaseAdd3() {
+      prepare(1);
+      input[1] = 1;
+      input.append(1, (char)2);
+      input.append(1, (char)3);
+      
+      cursor->set(input);
+      cursor->set_value(Slice("value-3"));
+            
+      const char* cases[] = {"TrieBaseAdd3", "BitTrieAdd2"};
+      check("TrieBaseAdd3", 2, cases);
+      end();
+    }        
+};
+
+TestBitTrie test_bitrie;
 //@+node:michael.20150101205559.38: ** TestSuite
-BOOST_AUTO_TEST_SUITE(trie_creation_suite)
+//BOOST_AUTO_TEST_SUITE(trie_creation_suite)
 
 BOOST_AUTO_TEST_CASE(CompressAdd0_CompressReinsert0) {
   test_compress.test_CompressAdd0_CompressReinsert0();
@@ -380,8 +498,57 @@ BOOST_AUTO_TEST_CASE(CompressAdd2_CompressReinsert2) {
 }
 
 
+BOOST_AUTO_TEST_CASE(LeafAdd0) {
+  test_leaf.test_LeafAdd0();
+}
 
-BOOST_AUTO_TEST_SUITE_END()
+BOOST_AUTO_TEST_CASE(LeafAdd1) {
+  test_leaf.test_LeafAdd1();
+}
+
+BOOST_AUTO_TEST_CASE(LeafAdd2) {
+  test_leaf.test_LeafAdd2();
+}
+
+BOOST_AUTO_TEST_CASE(BitTrieAdd2) {
+  test_bitrie.test_BitTrieAdd2();
+}
+
+BOOST_AUTO_TEST_CASE(BitTrieAdd1) {
+  test_bitrie.test_BitTrieAdd1();
+}
+  
+BOOST_AUTO_TEST_CASE(BitTrieAdd0) {
+  test_bitrie.test_BitTrieAdd0();
+}
+  
+BOOST_AUTO_TEST_CASE(TrieBaseAdd0) {
+  test_bitrie.test_TrieBaseAdd0();
+}
+  
+BOOST_AUTO_TEST_CASE(TrieBaseAdd2) {
+  test_bitrie.test_TrieBaseAdd2();
+}
+  
+BOOST_AUTO_TEST_CASE(TrieBaseAdd3) {
+  test_bitrie.test_TrieBaseAdd3();
+}
+
+//BOOST_AUTO_TEST_SUITE_END()
+
+
+
+#ifdef BOOST_TEST_NO_MAIN
+int main(int argc, const char* argv[]) {
+  test_bitrie.test_BitTrieAdd2();
+  test_bitrie.test_BitTrieAdd1();
+  test_bitrie.test_BitTrieAdd0();
+  test_bitrie.test_TrieBaseAdd0();
+  test_bitrie.test_TrieBaseAdd2();
+  test_bitrie.test_TrieBaseAdd3();
+  return 0;
+}
+#endif
 //@-others
 
 //@-leo

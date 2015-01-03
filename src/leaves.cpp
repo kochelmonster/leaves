@@ -57,10 +57,7 @@ struct ReadMemoryCursor : public Cursor {
   void set(const Slice& key, int read_forward=100) { 
       encode(key, encoding_buffer);
       Slice ekey(encoding_buffer);
-      if (trace.find(ekey))
-        return;
-      trace.reset();
-      root.find(ekey, trace);
+      trace.find(ekey);
     }
     
   void first(int read_forward=100) { 

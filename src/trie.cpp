@@ -59,7 +59,7 @@ struct BitTrie {
     }
   
   int last_bit() const {
-      return 64 - clz(bits);
+      return 63 - clz(bits);
     }
   
   int next_bit(int index) const {
@@ -71,7 +71,7 @@ struct BitTrie {
   int prev_bit(int index) const {
       boost::uint64_t mask = ~0;
       mask <<= index;
-      return 64 - clz(bits & ~mask);
+      return 63 - clz(bits & ~mask);
     }
     
   void add(int index, nodeid_t node) {
@@ -146,13 +146,13 @@ struct TrieBase : public NodeHandler {
           break;
           
         case 2:
-          TESTCASE("TrieBaseAdd");
+          TESTCASE("TrieBaseAdd2");
           add_node(key.slice(1), TempTrie(), trace);
           trace.current().add(key.advance(1), end, trace);
           break;
 
         default: {
-          TESTCASE("TrieBaseAdd");
+          TESTCASE("TrieBaseAdd3");
           Slice next_key(key.advance(1));
           TempCompressed compressed(next_key);
           add_node(key.slice(1), compressed, trace);
