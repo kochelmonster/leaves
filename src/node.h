@@ -13,6 +13,7 @@
 #include <boost/cstdint.hpp>
 #include "larch/leaves.h"
 #ifdef DEBUG
+#include <iostream>
 #include <iomanip>
 #endif
 //@-<< includes >>
@@ -20,6 +21,12 @@
 namespace larch_leaves {
 
 //@+others
+//@+node:michael.20150101205559.30: ** TestCode
+#ifdef TESTING
+void TESTCASE(const char* str);
+#else
+#define TESTCASE(x)
+#endif
 //@+node:michael.20141230111914.146: ** types
 // a page is identified by a page id
 // because of "copy on write" for concurrent storages
@@ -87,7 +94,7 @@ struct NodeHandler {
 };
 
 enum NodeTypes {
-  kLeaf = 0, kPageLeaf, kLink, kCompressed, kTrie, kBitTrie
+  kLeaf = 0, kBigLeaf, kLink, kCompressed, kTrie, kBitTrie
 };
 //@+node:michael.20141215222649.67: ** Page
 // A pointer inside a page with a 16 byte alignment (256*16 = 4096)
@@ -181,7 +188,7 @@ struct PageRef {
   //@+node:michael.20141230111914.41: *3* update_node_ptr
   void update_node_ptr() const {
       ((PageRef*)this)->node_ptr = (NodePtr*)
-  &page->data[sizeof(page->header)+page->link_count*sizeof(pageid_t)];
+        &page->data[sizeof(page->header)+page->link_count*sizeof(pageid_t)];
     }
   //@+node:michael.20141230111914.47: *3* PageRef
   PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
@@ -259,11 +266,6 @@ struct PageRef {
   void dump(std::ostream& out);
   #endif
   //@-others
-};
-
-//@+node:michael.20141230111914.111: ** Nodes Structs
-struct PageLeaf {
-  char data[];
 };
 
 //@+node:michael.20141219202729.2: ** NodeRef
@@ -467,9 +469,19 @@ struct Trace {
   size_t size() const {
       return stack.size();
     }
+  //@+node:michael.20150101205559.11: *3* check_complete
+  void check_complete() const {
+      if (!complete)
+        throw NoValidPosition();
+    }
   //@+node:michael.20141230111914.120: *3* current
   NodeRef& current() {
       return stack.back().node;
+    }
+  //@+node:michael.20141230111914.119: *3* parent
+  NodeRef& parent() {
+      NodeRef& parent = stack[stack.size()-2].node;
+      return parent.type() == kLink ? stack[stack.size()-3].node : parent;
     }
   //@+node:michael.20141230111914.113: *3* find
   // tries to find key inside the trace returns true if found
@@ -479,41 +491,20 @@ struct Trace {
       if (!s)
         return false;
         
-      for(size_t i = 0; i < stack.size(); i++) {
-        size_t index = stack[i].index;
-        if (index > s) {
-          complete = false;
-          stack.resize(i);
-          key.resize(stack.back().index);
-          current().find(key_.advance(key.size()), *this);
-          return true;
-        }
-        if (index == s) {
-          complete = false;
-          key.resize(index);
-          current().find(key_.advance(index), *this);
-          return true;
-        }
-      }
+      while(key.size() > s)
+        pop();
 
-      assert(0);  
+      return true;
     }
-  //@+node:michael.20141230111914.119: *3* parent
-  NodeRef& parent() {
-      NodeRef& parent = stack[stack.size()-2].node;
-      return parent.type() == kLink ? stack[stack.size()-3].node : parent;
+  //@+node:michael.20150101205559.23: *3* next
+  void next() {
+      if (size())
+          current().next(*this);
     }
-  //@+node:michael.20141230111914.114: *3* value
-  Slice value() {
-      if (!complete)
-        throw NoValidPosition();
-     
-      NodeRef& c(current());
-      if (c.type() == kPageLeaf) {
-        PageLeaf* n = (PageLeaf*)c.node();
-        return Slice(n->data, *c.extra());
-      }
-      return Slice();
+  //@+node:michael.20150101205559.24: *3* prev
+  void prev() {
+      if (size())
+          current().prev(*this);
     }
   //@+node:michael.20141230111914.116: *3* reset
   void reset() {
@@ -532,11 +523,11 @@ struct Trace {
         return;
 
       Transition& back(stack.back());
-      last_index = complete ? -1 : key[back.index];
+      last_index = key[back.index];
       complete = false;
       key.resize(back.index);
       stack.pop_back();
-      if (skiplink && current().id == kLink)
+      if (skiplink && current().type() == kLink)
         stack.pop_back();
     }
   //@+node:michael.20141230111914.121: *3* parent_next
@@ -607,6 +598,9 @@ struct Trace {
   //@+node:michael.20141230111914.128: *3* grow_node_by
   // grows or shrink the current node
   void grow_node_by(int delta) {
+      if (delta == 0)
+        return;
+
       if (delta > 0)
         reserve_space(delta);
       
@@ -621,15 +615,21 @@ struct Trace {
       *current().extra() = *new_node.extra();
       current().set_type(new_node.type());
     }
-  //@+node:michael.20141230111914.115: *3* set_value
-  void set_value(const Slice& rest_key, const Slice& value) {
-      TempLeaf leaf(value);
+  //@+node:michael.20141230111914.115: *3* set_leaf
+  // sets a new leaf, 
+  // precondition: 
+  //   1. this method must be called after a find operation 
+  //      and key_ has the same value as in find
+  //   or
+  //   2. this method must be called after a first(), last(), 
+  //      next() or prev() operation.
+  void set_leaf(const Slice& key_, const TempLeaf& leaf) {
       if (complete) {
-        assert(rest_key.empty());
         change_node(leaf);
       }
       else {
-        current().add(rest_key, leaf, *this);
+        assert(key_.slice(key.size()) == key);
+        current().add(key_.advance(key.size()), leaf, *this);
       }
     }
   //@+node:michael.20141230111914.133: *3* move_node
@@ -731,7 +731,8 @@ struct Trace {
   // if exclude is set this node will not move from page
   void reserve_space(size_t size, nodeid_t exclude=0) {
       // during this loop current() can change its page!
-      while (current().page.free_size() < size) {
+      while (current().page.free_size() < size 
+             || current().page.count() == 255) {
         size_t sizes[256];
         NodeRef root(current().page, 0);
         memset(sizes, 0, sizeof(sizes));

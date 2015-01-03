@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+import sys
+import yaml
+
+class GraphCreator(object):
+    def __call__(self, state, no):
+        lines = ["digraph G{} {{".format(no)]
+        add = lines.append
+
+        for i, page in enumerate(state["state"]):
+            add(" "*4+"subgraph cluster_{} {{".format(i))
+
+            table = "<TR>"\
+                    "<TD>id:</TD>"\
+                    "<TD>{id}</TD>"\
+                    "<TD>offset:</TD>"\
+                    "<TD>{offset}</TD>"\
+                    "</TR>"\
+                    "<TR>"\
+                    "<TD>nodes:</TD>"\
+                    "<TD>{node_count}</TD>"\
+                    "<TD>links:</TD>"\
+                    "<TD>{link_count}</TD>"\
+                    "</TR>"\
+                    "<TR>"\
+                    "<TD>size:</TD>"\
+                    "<TD>{size}</TD>"\
+                    "<TD>free:</TD>"\
+                    "<TD>{free_size}</TD></TR>".format(**page)
+            add(" "*8+'label = <<TABLE border="0">{}</TABLE>>;'.format(table))
+
+            connections = []
+            for node in page["nodes"]:
+                method = getattr(self, "add_"+node["type"])
+                node, conns = method(page, node)
+                add(" "*8+node)
+                connections.extend(conns)
+
+            for c in connections:
+                add(" "*8+c)
+
+            add(" "*4+"}")
+
+        add("}")
+        add("")
+
+        return "\n".join(lines)
+        #return repr(state)
+
+    def _add_trie_kind(self, color, page, node):
+        connections = [p.split(">") for p in node["data"].split("|")]
+        appartments = "|".join("<f{}> {}".format(index, index)
+                               for index, _ in connections)
+        attribs = [
+            "shape=record",
+            "style=filled",
+            "fillcolor={}",
+            'label="{}"'
+        ]
+        label = "{{{}|{{{}}}}}".format(node["id"], appartments)
+        attribs = (",".join(attribs)).format(color, label)
+        node_id = "node{}_{}".format(page["id"], node["id"])
+        node = "{} [{}];".format(node_id, attribs)
+
+        tmpl = node_id+":f{{}} -> node{}_{{}};".format(page["id"])
+        connections = [tmpl.format(index, nid)
+                       for index, nid in connections if int(nid)]
+        return node, connections
+
+    def add_bittrie(self, page, node):
+        return self._add_trie_kind("Azure", page, node)
+    
+    def add_trie(self, page, node):
+        return self._add_trie_kind("Moccasin", page, node)
+    
+    def add_compressed(self, page, node):
+        attribs = [
+            "shape=record",
+            "style=filled",
+            "fillcolor=yellow",
+            'label="{{{}({})|{{{}}}}}"'
+        ]
+        attribs = (",".join(attribs)).format(
+            node["id"], node["size"], str(node["data"]).replace("|", "+"))
+        node_id = "node{}_{}".format(page["id"], node["id"])
+        conn = [node_id+" -> node{}_{};".format(page["id"], node["child"])]
+        node = "{} [{}];".format(node_id, attribs)
+        return node, conn
+
+    def add_leaf(self, page, node):
+        attribs = [
+            "shape=circle",
+            "style=filled",
+            "fillcolor=LightCyan",
+            'label=<{}>'
+        ]
+        table = '<TABLE border="0">'\
+                "<TR>"\
+                "<TD>{id}({size})</TD>"\
+                "</TR>"\
+                "<TR>"\
+                "<TD>{data}</TD>"\
+                "</TR>"\
+                "</TABLE>".format(**node)
+
+        attribs = (",".join(attribs)).format(table)
+        node = "node{}_{} [{}];".format(page["id"], node["id"], attribs)
+        return node, []
+
+
+def main(instream, outstream):
+    all_data = []
+    while True:
+        data = instream.read()
+        if not data:
+            break
+        all_data.append(data)
+
+    obj = yaml.load_all("".join(all_data))
+    i = 0
+    for state in obj:
+        if state is None:
+            continue
+        if "state" not in state:
+            continue
+
+        outstream.write(GraphCreator()(state, i))
+        i += 1
+
+if __name__ == "__main__":
+    main(sys.stdin, sys.stdout)

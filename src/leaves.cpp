@@ -36,30 +36,7 @@ class NoWhereCursor : public Cursor {
 };
 
 
-//@+node:michael.20141215222649.44: ** class Storage (Implementation)
-// Storage implemenation
-// ---------------------
-//@+others
-//@+node:michael.20141215222649.188: *3* open()
-/*std::shared_ptr<Storage> Storage::open(const char* path, const Options& options) {
-  if (path) {
-      if (options.multiprocess)
-        _node_memory_manager = new MultiProcessNodeMemoryManager(path);
-      else
-        _node_memory_manager = new PersistentNodeMemoryManager(path);
-        
-      _leaf_memory_manager = new PersistentLeafMemoryManager(
-          path, options.max_leaf_size);
-  }
-  else {
-    _node_memory_manager = new HeapNodeMemoryManager();
-    _leaf_memory_manager = new HeapLeafMemoryManager();
-  }
-}
-
-*/
-//@-others
-//@+node:michael.20141230111914.3: ** MemoryStorage
+//@+node:michael.20141230111914.3: ** MemoryDatabase
 //@+others
 //@+node:michael.20141230111914.23: *3* Cursor
 struct ReadMemoryCursor : public Cursor {
@@ -93,12 +70,10 @@ struct ReadMemoryCursor : public Cursor {
       root.last(trace);
     }
   void next(int read_forward=100) { 
-      if (trace.size())
-        trace.current().next(trace);
+      trace.next();
     }
   void prev(int read_forward=-100) {
-      if (trace.size())
-        trace.current().prev(trace);
+      trace.prev();
     }
   
   Slice key() { 
@@ -107,7 +82,8 @@ struct ReadMemoryCursor : public Cursor {
   }
   
   Slice value() { 
-    return trace.value();
+    trace.check_complete();
+    return Slice((char*)trace.current().node(), *trace.current().extra());
   }
   
   void set_value(const Slice& value) { throw NotImplemented(); }
@@ -119,37 +95,36 @@ struct WriteMemoryCursor : public ReadMemoryCursor {
     : ReadMemoryCursor(nodes, root_) { }
   
   void set_value(const Slice& value) {
-    if (is_valid()) {
-      trace.set_value(Slice(), value);
-    }
-    else {
-      // the encoding buffer contains the last search key
-      assert(encoding_buffer.compare(0, trace.key.size(), trace.key) == 0);
-      trace.set_value(Slice(encoding_buffer).advance(trace.key.size()), value);      
-    }
+    if (value.size() > 255)
+      throw WrongValue("value may not exceed 255 bytes");
+  
+    trace.set_leaf(encoding_buffer, TempLeaf(value));
   }
   
   void remove() { 
     trace.remove();
   }
 };
-//@+node:michael.20141230111914.24: *3* class MemoryStorage
-struct PrivateMemoryStorage : public MemoryStorage {
+//@+node:michael.20141230111914.24: *3* PrivateMemoryDatabase
+struct PrivateMemoryDatabase : public MemoryDatabase {
   NodeStorageInHeap _nodes;
-  //LeafStorageInHeap _leafs;
 
-  PrivateMemoryStorage() {
+  PrivateMemoryDatabase() {
       Trace trace(_nodes, _nodes);
       NodeRef root_ = root();
       trace.push(root_);
       trace.add_node(TempTrie(), Slice());
+    }
+    
+  PrivateMemoryDatabase(const std::string& data) {
+      //_nodes.load(data);
     }
 
   NodeRef root() {
     return NodeRef(_nodes.get_page(0), 0);
   }
 
-  cursor_ptr read_cursor(const Slice& namespace_=main_name_space) {
+  cursor_ptr reader(const Slice& namespace_=main_name_space) {
       std::string encoded;
       encode(namespace_, encoded);
       Trace trace(_nodes, _nodes);
@@ -162,7 +137,7 @@ struct PrivateMemoryStorage : public MemoryStorage {
       return cursor_ptr(new ReadMemoryCursor(_nodes, trace.current()));
     }
   
-  cursor_ptr write_cursor(const Slice& namespace_=main_name_space) {
+  cursor_ptr writer(const Slice& namespace_=main_name_space) {
       std::string encoded;
       encode(namespace_, encoded);
       Slice ekey(encoded);
@@ -177,6 +152,11 @@ struct PrivateMemoryStorage : public MemoryStorage {
       return cursor_ptr(new WriteMemoryCursor(_nodes, trace.current()));
     }
     
+    std::string data() const {
+        // return _nodes.data();
+        return std::string();
+      }
+    
 #ifdef DEBUG
   void dump(std::ostream& out) {
       out << "State of Memory Storage" << std::endl
@@ -190,14 +170,16 @@ struct PrivateMemoryStorage : public MemoryStorage {
 };
 
 
-std::shared_ptr<MemoryStorage> MemoryStorage::create() {
-  return std::shared_ptr<MemoryStorage>(new PrivateMemoryStorage());
+std::shared_ptr<MemoryDatabase> MemoryDatabase::create() {
+  return std::shared_ptr<MemoryDatabase>(new PrivateMemoryDatabase());
 }
   
+std::shared_ptr<MemoryDatabase> MemoryDatabase::load(const std::string& data) {
+  return std::shared_ptr<MemoryDatabase>(new PrivateMemoryDatabase(data));
+}
 
 //@-others
 
-//@+node:michael.20141230111914.4: ** class PersistantStorage (Implementation)
 //@-others
 } // namespace larch_leaves 
 //@-leo

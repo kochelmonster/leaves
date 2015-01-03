@@ -22,9 +22,7 @@
 <v t="michael.20141215222649.23"><vh>class Cursor (Declaration)</vh></v>
 <v t="michael.20141215222649.104"><vh>class NoWhereCursor</vh></v>
 <v t="michael.20141215222649.27"><vh>class Storage (Declaration)</vh></v>
-<v t="michael.20141215222649.44" a="E"><vh>class Storage (Implementation)</vh>
-<v t="michael.20141215222649.188"><vh>open()</vh></v>
-</v>
+<v t="michael.20141215222649.44"><vh>Database (Implementation)</vh></v>
 </v>
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
@@ -41,7 +39,7 @@
 <v t="michael.20150101205559.5"><vh>dump</vh></v>
 </v>
 <v t="michael.20141215222649.137"><vh>Link</vh></v>
-<v t="michael.20141215222649.93" a="E"><vh>Trie</vh>
+<v t="michael.20141215222649.93"><vh>Trie</vh>
 <v t="michael.20141230111914.88"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.94"><vh>find</vh></v>
 <v t="michael.20141230111914.97"><vh>first</vh></v>
@@ -55,7 +53,7 @@
 <v t="michael.20141230111914.93"><vh>remove_last_index</vh></v>
 <v t="michael.20150101205559.6"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.95" a="E"><vh>BitTrie</vh>
+<v t="michael.20141215222649.95"><vh>BitTrie</vh>
 <v t="michael.20141230111914.99"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.103"><vh>find</vh></v>
 <v t="michael.20141230111914.106"><vh>first</vh></v>
@@ -70,8 +68,7 @@
 <v t="michael.20141230111914.109"><vh>remove_last_index</vh></v>
 <v t="michael.20150101205559.7"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.85"><vh>Leaf</vh></v>
-<v t="michael.20141215222649.84" a="E"><vh>PageLeaf</vh>
+<v t="michael.20141215222649.84"><vh>Leaf</vh>
 <v t="michael.20141230111914.78"><vh>reinsert_me</vh></v>
 <v t="michael.20141230111914.77"><vh>add</vh></v>
 <v t="michael.20150101205559.8"><vh>dump</vh></v>
@@ -82,7 +79,7 @@
 <v t="michael.20141215222649.11"><vh>@rst memory_manager.html</vh>
 <v t="michael.20141215222649.149"><vh>Links</vh>
 <v t="michael.20141215222649.135"><vh>NodeStorage (Declaration)</vh></v>
-<v t="michael.20141215222649.155" a="E"><vh>class NodeStorage (Implementation)</vh>
+<v t="michael.20141215222649.155"><vh>class NodeStorage (Implementation)</vh>
 <v t="michael.20141215222649.159"><vh>class PersistentNodeManager</vh></v>
 <v t="michael.20141215222649.156"><vh>class NodeStorageInHeap</vh></v>
 <v t="michael.20141215222649.160"><vh>class MultiProcessNodeMemoryManager</vh></v>
@@ -95,21 +92,20 @@
 </v>
 <v t="michael.20141215222649.14" a="E"><vh>Files</vh>
 <v t="michael.20141230111914.135"><vh>@file wscript</vh></v>
-<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
-<v t="michael.20141215222649.17" a="E"><vh>@file leaves.h</vh></v>
+<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.17"><vh>@file leaves.h</vh></v>
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
 <v t="michael.20141215222649.65" a="E"
 expanded="michael.20141215222649.73,michael.20141220220750.15,"><vh>@file node.h</vh></v>
-<v t="michael.20141220220750.5" a="E"><vh>@file port.h</vh></v>
+<v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20141215222649.126,michael.20141215222649.93,michael.20141215222649.95,michael.20141215222649.84,"><vh>@file trie.cpp</vh></v>
+expanded="michael.20141215222649.83,michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.161" a="E"
 expanded="michael.20141230111914.26,"><vh>@file node.cpp</vh></v>
-<v t="michael.20141215222649.45" a="E"
-expanded="michael.20141230111914.3,"><vh>@file leaves.cpp</vh></v>
-<v t="michael.20141230111914.136" a="E"><vh>@file base64.cpp</vh></v>
+<v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
+<v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
 </v>
@@ -119,13 +115,14 @@ expanded="michael.20141230111914.3,"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141220220750.18"><vh>add than next() prev()</vh></v>
 <v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
+<v t="michael.20150101205559.18" a="E"
+expanded="michael.20150101205559.19,"><vh>@file trietest.cpp</vh></v>
 </v>
 </v>
-<v t="michael.20141219202729.5"><vh>edit</vh></v>
-<v t="michael.20150101205559.2" a="E"><vh>Resurrected Nodes</vh>
-<v t="michael.20150101205559.3"><vh>From @file node.h</vh>
-<v t="michael.20150101205559.1"><vh>dump</vh></v>
-</v>
+<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
+<v t="michael.20150101205559.27"><vh>main</vh></v>
+<v t="michael.20141230111914.87"></v>
+<v t="michael.20150101205559.27"></v>
 </v>
 </vnodes>
 <tnodes>
@@ -275,8 +272,11 @@ struct LinkHandler : public LeafBase {
     }
     
 #ifdef DEBUG
-  void dump(NodeRef&amp; node, std::ostream&amp; out) {
-      out &lt;&lt; "    type: link" &lt;&lt; std::endl;
+  void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+      const char* t3 = "            ";
+      pageid_t *page_id = (pageid_t*)rnode.link();
+      out &lt;&lt; t3 &lt;&lt; "type:  link" &lt;&lt; std::endl
+          &lt;&lt; t3 &lt;&lt; "child: link" &lt;&lt; *page_id &lt;&lt; std::endl;
     }
 #endif    
 };
@@ -336,29 +336,11 @@ void NodeStorageInHeap::free_page(const PageRef&amp; page) {
 </t>
 <t tx="michael.20141215222649.16"></t>
 <t tx="michael.20141215222649.160"></t>
-<t tx="michael.20141215222649.188">/*std::shared_ptr&lt;Storage&gt; Storage::open(const char* path, const Options&amp; options) {
-  if (path) {
-      if (options.multiprocess)
-        _node_memory_manager = new MultiProcessNodeMemoryManager(path);
-      else
-        _node_memory_manager = new PersistentNodeMemoryManager(path);
-        
-      _leaf_memory_manager = new PersistentLeafMemoryManager(
-          path, options.max_leaf_size);
-  }
-  else {
-    _node_memory_manager = new HeapNodeMemoryManager();
-    _leaf_memory_manager = new HeapLeafMemoryManager();
-  }
-}
-
-*/
-</t>
 <t tx="michael.20141215222649.23">class Cursor {
  public:
   // returns true if cursor is on a valid position
   virtual bool is_valid() const = 0;
- 
+  
   // sets the cursor to key
   virtual void set(const Slice&amp; key, int read_forward=100) = 0;
   
@@ -381,24 +363,26 @@ typedef std::shared_ptr&lt;Cursor&gt; cursor_ptr;
 </t>
 <t tx="michael.20141215222649.27">extern Slice main_name_space;
 
-class Storage {
+class Database {
  public:
-  virtual cursor_ptr read_cursor(const Slice&amp; namespace_=main_name_space) = 0;
-  virtual cursor_ptr write_cursor(const Slice&amp; namespace_=main_name_space) = 0;
+  virtual cursor_ptr reader(const Slice&amp; namespace_=main_name_space) = 0;
+  virtual cursor_ptr writer(const Slice&amp; namespace_=main_name_space) = 0;
 #ifdef DEBUG
   virtual void dump(std::ostream&amp; out) = 0;
 #endif
-  virtual ~Storage() {}
+  virtual ~Database() {}
 };
 
 
-class MemoryStorage : public Storage {
+class MemoryDatabase : public Database {
 public:
-  static std::shared_ptr&lt;MemoryStorage&gt; create();
+  static std::shared_ptr&lt;MemoryDatabase&gt; create();
+  static std::shared_ptr&lt;MemoryDatabase&gt; load(const std::string&amp; data);
+  std::string data() const;
 };
 
 
-class PersistentStorage : public Storage {
+class PersistentDatabase : public Database {
  public:
   // opens a storage in directory "path"
   // path must exists and end with a separator ("/" or "\")
@@ -407,7 +391,7 @@ class PersistentStorage : public Storage {
 };
 
 
-class CopyOnWriteStorage : public PersistentStorage {
+class CopyOnWriteDatabase : public PersistentDatabase {
   // returns true if changes have to be commited
   virtual bool is_dirty() const = 0;
 
@@ -485,24 +469,28 @@ struct TrieBase : public NodeHandler {
   void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
       switch(key.size()) {
         case 0:
+          TESTCASE("TrieBaseAdd0");
           trace.add_node(end, Slice());
           *trace.parent().extra() = trace.child_of_parent();
           trace.complete = true;
           break;
           
         case 1: 
+          TESTCASE("TrieBaseAdd1");
           add_node(key, end, trace);
           trace.complete = true;
           break;
           
         case 2:
-	  add_node(key.slice(1), TempTrie(), trace);
+          TESTCASE("TrieBaseAdd");
+          add_node(key.slice(1), TempTrie(), trace);
           trace.current().add(key.advance(1), end, trace);
           break;
 
         default: {
+          TESTCASE("TrieBaseAdd");
           Slice next_key(key.advance(1));
-	  TempCompressed compressed(next_key);
+          TempCompressed compressed(next_key);
           add_node(key.slice(1), compressed, trace);
           trace.current().add(next_key, end, trace);
           break;
@@ -515,7 +503,7 @@ struct TrieBase : public NodeHandler {
 
 NodeHandler* NodeHandler::handlers[6] = {
   &amp;leaf,
-  &amp;pageleaf,
+  &amp;leaf,
   &amp;link,
   &amp;compressed,
   &amp;trie,
@@ -524,28 +512,8 @@ NodeHandler* NodeHandler::handlers[6] = {
 </t>
 <t tx="michael.20141215222649.84">// a leaf node with key and values &lt;= 256 bytes
 // the key_size is saved in Nodeptr.extra
-struct PageLeafHandler : public LeafBase {
-  @others
-};
-
-static PageLeafHandler pageleaf;
-</t>
-<t tx="michael.20141215222649.85">// a leaf node with data in Leaf memory
-struct Leaf {
-  size_t pointer;
-  size_t size;
-};
-
-
 struct LeafHandler : public LeafBase {
-  void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
-    }
-    
-#ifdef DEBUG
-  void dump(NodeRef&amp; node, std::ostream&amp; out) {
-      out &lt;&lt; "    type: leaf" &lt;&lt; std::endl;
-    }
-#endif    
+  @others
 };
 
 static LeafHandler leaf;
@@ -714,6 +682,7 @@ child.first(trace);
     size_t count = n-&gt;count();
     switch(count) {
       case 56: {
+          TESTCASE("BitTrieAdd0");
           TempTrie trie(count);
           *trie.extra() = *trace.current().extra();
           Trie *np = (Trie*)trie.node();
@@ -732,9 +701,11 @@ child.first(trace);
       case 8:
       case 24:
       case 40:
+        TESTCASE("BitTrieAdd1");
         trace.grow_node_by(16);
         
       default: 
+        TESTCASE("BitTrieAdd2");
         trace.add_node(node, key);
         n = (BitTrie*)trace.parent().node();
         n-&gt;add(key.trieindex(), trace.child_of_parent());
@@ -745,30 +716,37 @@ child.first(trace);
     BitTrie *n = (BitTrie*)rnode.node();
     if (trace.last_index &lt; 0) {
       *rnode.extra() = 0;
-      if (n-&gt;count() == 1)
+      if (n-&gt;count() == 1) {
+        TESTCASE("BitTrieRemove0");
         change_node(NodeRef(rnode.page, n-&gt;children[0]), 
                     n-&gt;first_bit(), trace);
+      }
       return true;
     }
     
     n-&gt;remove(trace.last_index);
     switch(n-&gt;count()) {
       case 0: 
-        if (*rnode.extra())
+        if (*rnode.extra()) {
+          TESTCASE("BitTrieRemove1");
           change_node(NodeRef(rnode.page, *rnode.extra()), -1, trace);
+        }
         else
           return false;
       
         break;
         
       case 1: 
-        if (!*rnode.extra())
+        if (!*rnode.extra()) {
+          TESTCASE("BitTrieRemove2");
           change_node(NodeRef(rnode.page, n-&gt;children[0]),
                       n-&gt;first_bit(), trace);
+        }
         break;
     
       case 24:
       case 40:
+        TESTCASE("BitTrieRemove3");
         trace.grow_node_by(-16);
     }
      
@@ -778,6 +756,7 @@ child.first(trace);
 <t tx="michael.20141230111914.110">void change_node(const NodeRef&amp; child, int index, Trace&amp; trace) {
     switch(child.type()) {
       case kCompressed: {
+        TESTCASE("BitTrieChange0");
         assert(index &gt;= 0); // is certainly no end_node
         Compressed* n = (Compressed*)child.node();
         bsize_t size = (bsize_t)*child.extra();
@@ -794,6 +773,7 @@ child.first(trace);
         // ensure compress_child is on same page
         PageRef&amp; page(trace.current().page);
         if (page.id != compress_child.page.id) {
+          TESTCASE("BitTrieChange1");
           size_t sizes[256];
           memset(sizes, 0, sizeof(sizes));
           size_t size = trace.calc_sizes(child, sizes);
@@ -807,9 +787,10 @@ child.first(trace);
         break;
         }
               
-      case kPageLeaf: 
+      case kBigLeaf: 
       case kLeaf: 
         if (index &lt; 0) {
+          TESTCASE("BitTrieChange2");
           // make the trie to leaf
           TempNode leaf;
           trace.move_node(leaf.pageref, child);
@@ -822,12 +803,13 @@ child.first(trace);
 <t tx="michael.20141230111914.140"></t>
 <t tx="michael.20141230111914.77">void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
     assert(key.size() != 0);
-    PageLeaf *n = (PageLeaf*)rnode.node();
+    Leaf *n = (Leaf*)rnode.node();
     TempLeaf me(Slice(n-&gt;data, *rnode.extra()));
     TempTrie trie;
     Slice rest_key;
     
     if (key.size() == 2) {
+      TESTCASE("LeafAdd0");
       trace.change_node(TempTrie());
       reinsert_me(me, trace);
       trace.add_node(trie, key.slice(1));
@@ -839,6 +821,7 @@ child.first(trace);
       trace.change_node(trie);
       reinsert_me(me, trace);
       if (key.size() &gt; 2) {
+        TESTCASE("LeafAdd1");
         rest_key = key.advance(1);
         TempCompressed compressed(rest_key);
         trace.add_node(compressed, key.slice(1));
@@ -846,6 +829,7 @@ child.first(trace);
         pn-&gt;add(key.trieindex(), trace.child_of_parent());
       }
       else {
+        TESTCASE("LeafAdd2");
         rest_key = key;
       }
     }
@@ -855,6 +839,7 @@ child.first(trace);
 </t>
 <t tx="michael.20141230111914.78">void reinsert_me(TempLeaf&amp; me, Trace&amp; trace) {
     trace.add_node(me, Slice());
+    trace.complete = true;
     // extra() is the end node
     *trace.parent().extra() = trace.child_of_parent();
     trace.pop(); // back to parent
@@ -911,6 +896,7 @@ child.first(trace);
     // moves the child and its descendant to current page
     PageRef&amp; page(trace.current().page);
     if (page.id != child.page.id) {
+      TESTCASE("CompressMoveChild");
       size_t sizes[256];
       memset(sizes, 0, sizeof(sizes));
       size_t size = trace.calc_sizes(child, sizes);
@@ -927,32 +913,39 @@ child.first(trace);
     BitTrie* bn;
     nodeid_t child_id;
     
-    switch(rest_me.size()) {
+    switch(*rest_me.extra()) {
       case 0:
+        TESTCASE("CompressReinsert0");
         child_id = move_child(child, trace);
         bn = (BitTrie*)trace.current().node();
         bn-&gt;add(index, child_id);
         break;
         
       case 1: {
+        TESTCASE("CompressReinsert1");
         trace.add_node(TempTrie(), Slice(index));
         bn = (BitTrie*)trace.parent().node();
         bn-&gt;add(index, trace.child_of_parent());
         
         child_id = move_child(child, trace);
         bn = (BitTrie*)trace.current().node();
-        bn-&gt;add(((char*)rest_me.node())[0], child_id);
+        bn-&gt;add(((Compressed*)rest_me.node())-&gt;data[0], child_id);
         trace.pop();
         break;
-  }
+        }
+        
       default: {
+        TESTCASE("CompressReinsert2");
         trace.add_node(rest_me, Slice(index));
+        bn = (BitTrie*)trace.parent().node();
+        bn-&gt;add(index, trace.child_of_parent());
+        
         child_id = move_child(child, trace);
         Compressed *n = (Compressed*)trace.current().node();
         n-&gt;child = child_id;
         trace.pop();
         break;
-  }
+        }
     }
   }
 </t>
@@ -961,10 +954,10 @@ child.first(trace);
     bsize_t size = (bsize_t)*rnode.extra();
     
     if (!n-&gt;child) {
-      // we insert a
+      // A new leaf with some rest key is inserted
+      TESTCASE("CompressAddNew");
       assert(size == key.size());
-      trace.key.append(n-&gt;data, size);
-      trace.add_node(end, Slice());
+      trace.add_node(end, key);
       n-&gt;child = trace.child_of_parent();
       trace.complete = true;
       return;
@@ -972,39 +965,46 @@ child.first(trace);
     
     size_t prefix_size = common_prefix(key.data(), n-&gt;data,
                                        std::min((size_t)size, key.size()));
-    trieindex_t first = n-&gt;data[0], second = n-&gt;data[1];
     TempCompressed rest_me(Slice(n-&gt;data+prefix_size+1, size-prefix_size-1));
           
-    // move my page descendants to a temporary page to insert them later
     NodeRef child(rnode.page, n-&gt;child);
     n-&gt;child = 0;
-    
+
+    trieindex_t first = n-&gt;data[0], second = n-&gt;data[1];    
     switch(prefix_size) {
       case 0:
         // insert one trie
+        TESTCASE("CompressAdd0");
         trace.change_node(TempTrie());
         reinsert(rest_me, child, first, trace);
         break;
+        
       case 1: {
         // insert two tries
+        TESTCASE("CompressAdd1");
         trace.change_node(TempTrie());
+        
         trace.add_node(TempTrie(), Slice(first));
         BitTrie* bn = (BitTrie*)trace.parent().node();
         bn-&gt;add(first, trace.child_of_parent());
+        
         reinsert(rest_me, child, second, trace);
         break;
         }
       default: {
         // another compressed
+        TESTCASE("CompressAdd2");
+        first = n-&gt;data[prefix_size];
+
         Slice next_key(key.data(), prefix_size);
-        TempCompressed compressed(next_key);
-        first = n-&gt;data[prefix_size+1];
-        trace.change_node(compressed);
-        trace.add_node(TempTrie(), Slice(key.data(), compressed.size()));
-        n = (Compressed*)trace.current().node();
+        trace.change_node(TempCompressed(next_key));
+        
+        trace.add_node(TempTrie(), next_key);
+        n = (Compressed*)trace.parent().node();
         n-&gt;child = trace.child_of_parent();
+        
         reinsert(rest_me, child, first, trace);
-  }
+      }
     }
     trace.current().add(key.advance(prefix_size), end, trace);
   }
@@ -1072,6 +1072,7 @@ child.first(trace);
         count++;
     }
     if (count &lt; 56) {
+      TESTCASE("TrieRemove");
       TempTrie trie(count);
       *trie.extra() = *rnode.extra();
       BitTrie* bt = (BitTrie*)trie.node();
@@ -1196,58 +1197,144 @@ child.first(trace);
       trace.complete = true;
   }
 </t>
-<t tx="michael.20150101205559.1">#ifdef DEBUG
-void dump() {
-  std::cout 
-    &lt;&lt; "Page  " &lt;&lt; std::endl &lt;&lt; std::setw(5)
-    &lt;&lt; "  id:         " &lt;&lt; id 
-    &lt;&lt; "  offset:     " &lt;&lt; offset &lt;&lt; std::endl
-    &lt;&lt; "  node-count: " &lt;&lt; count() 
-    &lt;&lt; "  link-count: " &lt;&lt; page-&gt;link_count &lt;&lt; std::endl
+<t tx="michael.20150101205559.27">#if 0
+int main(int argc, const char* argv[]) {
+  
+#if 0  
+  // case 1
+  // fill bittrie to end
+  
+  std::string input((const char[]){ 0, 1, 2 }, 3);
+  
+  cursor-&gt;set(input);
+  cursor-&gt;set_value(Slice("value"));
+ 
+  //db.dump(std::cout);
+  
+  input.append(1, 0);
+  
+  for(int i = 55; i &gt;= 0; i--) {
+    std::stringstream f;
+    f &lt;&lt; "value-" &lt;&lt; i;
+    input.at(3) = i;
+    cursor-&gt;set(input);
+    cursor-&gt;set_value(Slice(f.str()));
+  }
+  db.dump(std::cout);
+  
+  
+  // remove until 2
+  // case 1.1
+  // remove end
+  
+  
+  // case 1.2
+  // remove value
+  
+  
+#endif
+
+#if 0
+  // case 2
+  // fill bittrie to end
+  
+  std::string input((const char[]){ 0, 1, 2 }, 3);
+  
+  cursor-&gt;set(input);
+  cursor-&gt;set_value(Slice("value"));
+ 
+  //db.dump(std::cout);
+  
+  input.append(1, 0);
+  
+  for(int i = 0; i &lt; 64; i++) {
+    std::stringstream f;
+    f &lt;&lt; "value-" &lt;&lt; i;
+    input.at(3) = i;
+    cursor-&gt;set(input);
+    cursor-&gt;set_value(Slice(f.str()));
+  }
+  db.dump(std::cout);
+  
+  // remove piece by piece to come back to bittrie
+  
+  
+#endif
+  TestCompress tc;
+  //tc.test_CompressAdd0_CompressReinsert0();
+  //tc.test_CompressAdd0_CompressReinsert1();
+  //tc.test_CompressAdd0_CompressReinsert2();
+  //tc.test_CompressAdd1_CompressReinsert0();
+  //tc.test_CompressAdd1_CompressReinsert1();
+  //tc.test_CompressAdd1_CompressReinsert2();
+  //tc.test_CompressAdd2_CompressReinsert0();
+  //tc.test_CompressAdd2_CompressReinsert1();
+  tc.test_CompressAdd2_CompressReinsert2();
+  
 }
 #endif</t>
-<t tx="michael.20150101205559.2"></t>
-<t tx="michael.20150101205559.3"></t>
 <t tx="michael.20150101205559.5">#ifdef DEBUG
 void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+    const char* t3 = "            ";
     Compressed *n = (Compressed*)rnode.node();
-    out &lt;&lt; "    type: compressed" &lt;&lt; std::endl;
-    out &lt;&lt; "    data: " &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
-                        &lt;&lt; (int)n-&gt;data[0];
+    out &lt;&lt; t3 &lt;&lt; "type:  compressed" &lt;&lt; std::endl;
+    out &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
+                           &lt;&lt; (int)n-&gt;data[0];
     for(size_t i = 1; i &lt; *rnode.extra(); i++)
       out &lt;&lt; "|" &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)n-&gt;data[i];
-    out &lt;&lt; " (" &lt;&lt; (int)*rnode.extra() &lt;&lt; ")" &lt;&lt; std::endl;
-    out &lt;&lt; "    child: " &lt;&lt; (int)n-&gt;child &lt;&lt; std::endl;
+    out &lt;&lt; std::endl;
+    out &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; (int)*rnode.extra() &lt;&lt; std::endl
+        &lt;&lt; t3 &lt;&lt; "child: " &lt;&lt; (int)n-&gt;child &lt;&lt; std::endl;
   }
-#endif</t>
+#endif
+</t>
 <t tx="michael.20150101205559.6">#ifdef DEBUG
-void dump(NodeRef&amp; node, std::ostream&amp; out) {
-    out &lt;&lt; "    type: trie" &lt;&lt; std::endl;
+void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+    const char* t3 = "            ";
+    Trie *n = (Trie*)rnode.node();
+    out &lt;&lt; t3 &lt;&lt; "type:  trie" &lt;&lt; std::endl;
+    out &lt;&lt; t3 &lt;&lt; "data:  ";
+    
+    nodeid_t end = *rnode.extra();
+    if (end) {
+      out &lt;&lt; "E&gt;" &lt;&lt; (int)end;
+      out &lt;&lt; "|";
+    }
+          
+    for(size_t i = 0; i &lt; 64; i++) {
+      if (i != 0)
+        out &lt;&lt; "|";
+        
+      out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
+          &lt;&lt; i &lt;&lt; "&gt;" 
+          &lt;&lt; (int)n-&gt;children[i];
+    }
+    
+    out &lt;&lt; std::endl;
   }
-#endif</t>
+#endif
+</t>
 <t tx="michael.20150101205559.7">#ifdef DEBUG
 void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
+    const char* t3 = "            ";
     BitTrie *n = (BitTrie*)rnode.node();
-    out &lt;&lt; "    type: bittrie" &lt;&lt; std::endl;
-    nodeid_t end = *rnode.extra();
+    out &lt;&lt; t3 &lt;&lt; "type:  bittrie" &lt;&lt; std::endl;
+    out &lt;&lt; t3 &lt;&lt; "data:  ";
     
-    out &lt;&lt; "    data: ";
+    nodeid_t end = *rnode.extra();
     if (end) {
-      out &lt;&lt; "E=" 
-          &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
-          &lt;&lt; (int)end;
+      out &lt;&lt; "E&gt;" &lt;&lt; (int)end;
           
       if (n-&gt;count())
         out &lt;&lt; "|";
     }
-    else if (!n-&gt;count())
-      out &lt;&lt; "empty!";
-      
+          
     int bit = n-&gt;first_bit(), i = 0;
     while(bit &gt;= 0) {
+      if (i != 0)
+        out &lt;&lt; "|";
       out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
           &lt;&lt; bit &lt;&lt; "&gt;" 
-          &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
           &lt;&lt; (int)n-&gt;children[i];
       bit = n-&gt;next_bit(bit);
       i++;
@@ -1255,14 +1342,23 @@ void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
     
     out &lt;&lt; std::endl;
   }
-#endif</t>
+#endif
+</t>
 <t tx="michael.20150101205559.8">#ifdef DEBUG
 void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
-    PageLeaf *n = (PageLeaf*)rnode.node();
+    const char* t3 = "            ";
+    Leaf *n = (Leaf*)rnode.node();
     std::string data(n-&gt;data, *rnode.extra());
-    out &lt;&lt; "    type: pageleaf" &lt;&lt; std::endl
-        &lt;&lt; "    data: " &lt;&lt; data &lt;&lt; "(" &lt;&lt; data.size() &lt;&lt; ")" &lt;&lt; std::endl;
+    if (rnode.type() == kLeaf) {
+      out &lt;&lt; t3 &lt;&lt; "type:  leaf" &lt;&lt; std::endl
+          &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; data &lt;&lt; std::endl
+          &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; data.size() &lt;&lt; std::endl;
+    }
+    else {
+      out &lt;&lt; t3 &lt;&lt; "type:  bigleaf" &lt;&lt; std::endl;
+    }
   }
-#endif</t>
+#endif
+</t>
 </tnodes>
 </leo_file>

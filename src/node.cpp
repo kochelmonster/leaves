@@ -49,7 +49,7 @@ void PageRef::defragment() {
         default:
           node_start -= size[id];
           memmove(&page->data[new_ptrs[id].ptr*16],
-		  &page->data[node_start], size[id]);
+                  &page->data[node_start], size[id]);
       }
     }
       
@@ -92,15 +92,15 @@ void PageRef::grow_node(nodeid_t id, int size) {
     if (size < 0)
       node_size += size;
       
-    memmove(&page->data[free_start], &page->data[free_start+size],
-	    node_start-free_start+node_size);
+    memmove(&page->data[free_start-size], &page->data[free_start],
+            node_start-free_start+node_size);
     
     free_start += size;
     page->free_start = (sizeof(page->data)-free_start)/16;
     
     size /= 16;
     for(nodeid_t i = id; i < page->node_count; i++)
-      ptrs[i].ptr += size;
+      ptrs[i].ptr -= size;
   }
 //@+node:michael.20141230111914.31: *3* create_link
 void PageRef::create_link(nodeid_t node_id, pageid_t page_id) const {
@@ -109,7 +109,7 @@ void PageRef::create_link(nodeid_t node_id, pageid_t page_id) const {
     nodes[node_id].type = kLink;
     
     char* p = (char*)nodes;
-    memmove(p, p+sizeof(pageid_t), sizeof(NodePtr)*page->node_count);
+    memmove(p+sizeof(pageid_t), p, sizeof(NodePtr)*page->node_count);
     page->links[page->link_count++] = page_id;
     
     update_node_ptr();
@@ -117,22 +117,21 @@ void PageRef::create_link(nodeid_t node_id, pageid_t page_id) const {
 //@+node:michael.20150101205559.4: *3* dump
 #ifdef DEBUG
 void PageRef::dump(std::ostream& out) {
-    out << "Page  " << std::endl 
-        << "  id:         " << std::setw(5) << id 
-        << "  offset:     " << std::setw(5) << offset << std::endl
-        << "  node-count: " << std::setw(5) << count() 
-        << "  link-count: " << std::setw(5) 
-                            << (int)page->link_count << std::endl
-        << "  size:       " << std::setw(5) << size()
-        << "  free_size:  " << std::setw(5) << free_size() 
-        << "  sum size:   " << std::setw(5) << size() + free_size()
-        << std::endl;
+    const char* t1 = "    ";
+    const char* t2 = "      ";
+    const char* t3 = "          ";
+    out << t1 << "- id:         " << id << std::endl
+        << t2 << "offset:     " << offset << std::endl
+        << t2 << "node_count: " << count() << std::endl
+        << t2 << "link_count: " << (int)page->link_count << std::endl
+        << t2 << "size:       " << size() << std::endl
+        << t2 << "free_size:  " << free_size() << std::endl
+        << t2 << "sum_size:   " << size() + free_size() << std::endl
+        << t2 << "nodes: " << std::endl;
       
     for(nodeid_t id = 0; id < count(); id++) {
-      out << "  node: " 
-          << std::setw(2) << std::setfill('0') 
-          << (int)id 
-          << "(" << (int)node_ptr[id].ptr << ")" << std::endl;
+      out << t3 << "- id:    " << (int)id << std::endl
+          << t3 << "  ptr:   " << (int)node_ptr[id].ptr << std::endl;
       NodeRef node(*this, id);
       NodeHandler::handlers[node.type()]->dump(node, out);
     }

@@ -28,6 +28,19 @@ class NoValidPosition : public LeavesException {
 
 class NotImplemented : public LeavesException {
 };
+
+
+class WrongValue : public LeavesException {
+ private:
+  const char* _msg;
+
+ public:
+  WrongValue(const char* msg) : _msg(msg) {}
+  
+  const char* what() const noexcept {
+    return _msg;
+  }
+};
 //@+node:michael.20141215222649.38: ** struct Options
 struct Options {
   // if true Storage starts with multiprocess support
@@ -87,6 +100,11 @@ class Slice {
   std::string string() const {
       return std::string(data(), _size);
     }
+    
+  bool operator==(const Slice& other) const {
+      return size() == other.size() 
+        && memcmp(data(), other.data(), size()) == 0;
+    }
 
   const char* data() const {
       if (_size < sizeof(const char*))
@@ -116,7 +134,7 @@ class Cursor {
  public:
   // returns true if cursor is on a valid position
   virtual bool is_valid() const = 0;
- 
+  
   // sets the cursor to key
   virtual void set(const Slice& key, int read_forward=100) = 0;
   
@@ -139,24 +157,26 @@ typedef std::shared_ptr<Cursor> cursor_ptr;
 //@+node:michael.20141215222649.27: ** class Storage (Declaration)
 extern Slice main_name_space;
 
-class Storage {
+class Database {
  public:
-  virtual cursor_ptr read_cursor(const Slice& namespace_=main_name_space) = 0;
-  virtual cursor_ptr write_cursor(const Slice& namespace_=main_name_space) = 0;
+  virtual cursor_ptr reader(const Slice& namespace_=main_name_space) = 0;
+  virtual cursor_ptr writer(const Slice& namespace_=main_name_space) = 0;
 #ifdef DEBUG
   virtual void dump(std::ostream& out) = 0;
 #endif
-  virtual ~Storage() {}
+  virtual ~Database() {}
 };
 
 
-class MemoryStorage : public Storage {
+class MemoryDatabase : public Database {
 public:
-  static std::shared_ptr<MemoryStorage> create();
+  static std::shared_ptr<MemoryDatabase> create();
+  static std::shared_ptr<MemoryDatabase> load(const std::string& data);
+  std::string data() const;
 };
 
 
-class PersistentStorage : public Storage {
+class PersistentDatabase : public Database {
  public:
   // opens a storage in directory "path"
   // path must exists and end with a separator ("/" or "\")
@@ -165,7 +185,7 @@ class PersistentStorage : public Storage {
 };
 
 
-class CopyOnWriteStorage : public PersistentStorage {
+class CopyOnWriteDatabase : public PersistentDatabase {
   // returns true if changes have to be commited
   virtual bool is_dirty() const = 0;
 

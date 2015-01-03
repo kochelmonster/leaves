@@ -18,12 +18,14 @@ def configure(cfg):
     import os
     cfg.check_waf_version(mini='1.8.5')
     cfg.load('compiler_cxx boost')
-    #cfg.check_boost(lib='cstdint')
+    #cfg.check_boost(lib='system filesystem')
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING']
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
-    cfg.env.INCLUDES_TEST = [os.path.abspath("include")]
-    cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall"]
+    cfg.env.INCLUDES_TEST = [os.path.abspath("include"), 
+                             os.path.abspath("src")]
+    cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g"]
     cfg.env.STLIBPATH_TEST = []
-    cfg.env.LINKFLAGS_TEST = ["-pthread"]
+    cfg.env.LINKFLAGS_TEST = ["-pthread"]#, "-lboost_filesystem",  "-lboost_system"]
     
     
 
@@ -31,13 +33,16 @@ def build(bld):
     from os.path import join, abspath
     sources = "trie.cpp node.cpp leaves.cpp base64.cpp"
     sources = [join("src", s) for s in sources.split()]
+    """
     bld.program(
         source=[join("tests", "simple.cpp")]+sources,
-        cxxflags=["-g"],
-        defines=["DEBUG"],
         use="TEST",
         target="simple")
-
+    """
+    bld.program(
+        source=[join("tests", "trietest.cpp")]+sources,
+        use="TEST",
+        target="trietest")
 
 
 #@-leo
