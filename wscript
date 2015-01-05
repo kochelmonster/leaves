@@ -8,6 +8,7 @@ top = "."
 out = "build"
 APPNAME = "base64bench"
 VERSION = "0.0"
+ALIGN = 4 # minimum align
 
 def options(opt):
     opt.load('compiler_cxx boost')
@@ -19,7 +20,7 @@ def configure(cfg):
     cfg.check_waf_version(mini='1.8.5')
     cfg.load('compiler_cxx boost')
     #cfg.check_boost(lib='system filesystem')
-    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING']
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN)]
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_TEST = [os.path.abspath("include"), 
                              os.path.abspath("src")]

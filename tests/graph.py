@@ -6,6 +6,7 @@ class GraphCreator(object):
     def __call__(self, state, no):
         lines = ["digraph G{} {{".format(no)]
         add = lines.append
+        self.outer_connections = []
 
         for i, page in enumerate(state["state"]):
             add(" "*4+"subgraph cluster_{} {{".format(i))
@@ -19,8 +20,8 @@ class GraphCreator(object):
                     "<TR>"\
                     "<TD>nodes:</TD>"\
                     "<TD>{node_count}</TD>"\
-                    "<TD>links:</TD>"\
-                    "<TD>{link_count}</TD>"\
+                    "<TD></TD>"\
+                    "<TD></TD>"\
                     "</TR>"\
                     "<TR>"\
                     "<TD>size:</TD>"\
@@ -40,7 +41,8 @@ class GraphCreator(object):
                 add(" "*8+c)
 
             add(" "*4+"}")
-
+            for c in self.outer_connections:
+                add(" "*4+c)
         add("}")
         add("")
 
@@ -57,7 +59,7 @@ class GraphCreator(object):
             "fillcolor={}",
             'label="{}"'
         ]
-        label = "{{{}|{{{}}}}}".format(node["id"], appartments)
+        label = "{{{}({})|{{{}}}}}".format(node["id"], page["id"], appartments)
         attribs = (",".join(attribs)).format(color, label)
         node_id = "node{}_{}".format(page["id"], node["id"])
         node = "{} [{}];".format(node_id, attribs)
@@ -72,16 +74,17 @@ class GraphCreator(object):
     
     def add_trie(self, page, node):
         return self._add_trie_kind("Moccasin", page, node)
-    
+
     def add_compressed(self, page, node):
         attribs = [
             "shape=record",
             "style=filled",
             "fillcolor=yellow",
-            'label="{{{}({})|{{{}}}}}"'
+            'label="{{{}({})-{}|{{{}}}}}"'
         ]
         attribs = (",".join(attribs)).format(
-            node["id"], node["size"], str(node["data"]).replace("|", "+"))
+            node["id"], page["id"], node["size"],
+            str(node["data"]).replace("|", "+"))
         node_id = "node{}_{}".format(page["id"], node["id"])
         conn = [node_id+" -> node{}_{};".format(page["id"], node["child"])]
         node = "{} [{}];".format(node_id, attribs)
@@ -89,14 +92,16 @@ class GraphCreator(object):
 
     def add_leaf(self, page, node):
         attribs = [
-            "shape=circle",
+            "shape=box",
             "style=filled",
-            "fillcolor=LightCyan",
+            "fillcolor=Gold",
             'label=<{}>'
         ]
+        node["page"] = page["id"];
+        node["data"] = node["data"][:10]
         table = '<TABLE border="0">'\
                 "<TR>"\
-                "<TD>{id}({size})</TD>"\
+                "<TD>{id}({page})-{size}</TD>"\
                 "</TR>"\
                 "<TR>"\
                 "<TD>{data}</TD>"\
@@ -107,6 +112,20 @@ class GraphCreator(object):
         node = "node{}_{} [{}];".format(page["id"], node["id"], attribs)
         return node, []
 
+    def add_link(self, page, node):
+        attribs = [
+            "shape=diamond",
+            "style=filled",
+            "fillcolor=orange",
+            'label="{}({})"'
+        ]
+        attribs = (",".join(attribs)).format(node["id"], page["id"])
+        node_id = "node{}_{}".format(page["id"], node["id"])
+        conn = [node_id+" -> node{}_{};".format(node["page"], 0)]
+        node = "{} [{}];".format(node_id, attribs)
+        self.outer_connections.extend(conn)
+        return node, []
+    
 
 def main(instream, outstream):
     all_data = []

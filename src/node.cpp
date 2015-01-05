@@ -14,128 +14,119 @@ namespace larch_leaves {
 //@+node:michael.20141230111914.26: ** PageRef
 //@+others
 //@+node:michael.20141230111914.27: *3* defragment
-void PageRef::defragment() {
-    NodePtr new_ptrs[256]; 
-    bsize_t node_count = 0;
-    nodeid_t map[256]; // maps old nodeid_s to new node_ids
-    size_t size[256]; // is needed later
-
-    // create node map 
-    NodePtr *ptrs = node_ptr;
-    for(nodeid_t i = 0; i < page->node_count; i++) {
-      map[i] = node_count;
-      if (ptrs[i].type & REMOVE_BIT)
+void PageRef::defragment() const {
+  // keep in mind: root is never removed, instead thethe page will be removed
+  NodePtr* ptrs = node_ptr();
+  char* page_start = &page->data[0];
+  char* node_start = page_start + ptrs[0].ptr;
+  char* free_start = page_start + ptrs[page->node_count-1].ptr;
+  NodePtr new_ptrs[256];
+  size_t node_count = 1;
+  nodeid_t map[256]; // maps old nodeids to new nodeids
+  bool nodes_moved = false;
+ 
+  // closes the holes in the page 
+  for(nodeid_t i = 1; i < page->node_count; i++) {
+    size_t node_size = get_node_size(i);
+    node_start -= node_size; 
+    
+    map[i] = node_count;
+    
+    if (ptrs[i].type & REMOVE_BIT) {
+      // a hole
+      if (node_start == free_start)
+        // nothing to do we removed a node from the end
         continue;
         
-      size[node_count] = get_node_size(i);
-      memcpy(&new_ptrs[node_count++], &ptrs[i], sizeof(NodePtr));
+      TESTPOINT("DefragmentNodeMove");
+      nodes_moved = true;
+      memmove(free_start+node_size, free_start, node_start-free_start);
+      node_start += node_size;
+      free_start += node_size;
+      continue;
     }
-    if (node_count == page->node_count)
-      return; // not defragmented
-    
-    // move nodes
-    pageid_t *links = page->links;
-    pageid_t new_links[256];
-    bsize_t link_count = 0;
-    size_t node_start = new_ptrs[0].ptr*16;
-
-    for(nodeid_t id = 1; id < node_count; id++) {
-      switch(new_ptrs[id].type) {
-        case kLink:
-          new_links[link_count] = links[new_ptrs[id].ptr];
-          new_ptrs[id].ptr = link_count++;
-          break;
-          
-        default:
-          node_start -= size[id];
-          memmove(&page->data[new_ptrs[id].ptr*16],
-                  &page->data[node_start], size[id]);
-      }
-    }
+    memcpy(&new_ptrs[node_count], &ptrs[i], sizeof(NodePtr));
+    new_ptrs[node_count].ptr = (inpage_ptr)(node_start-page_start);
       
-    // update page administration
-    page->free_start = (sizeof(page->data)-node_start)/16;
-    page->link_count = link_count;
-    page->node_count = node_count;
-    update_node_ptr();
-    memcpy(links, new_links, sizeof(pageid_t)*link_count);
-    memcpy(node_ptr, new_ptrs, sizeof(NodePtr)*node_count);
-      
-    // map the child ids for each node
-    for(nodeid_t i = 0; i < node_count; i++) {
-      NodeRef node(*this, i);
-      nodeid_t children[65];
-      size_t child_count;
-      child_count = node.get_children(children);
-      for(size_t j = 0; j < child_count; j++)
-        children[j] = map[children[j]];
-      node.replace_children(children);
-    }
+    node_count++;
   }
+
+  page->node_count = node_count;
+    
+  if (!nodes_moved)
+    return;  // not defragmented 
+
+  memcpy(&new_ptrs[0], &ptrs[0], sizeof(NodePtr)); // not done before
+  memcpy(node_ptr(), new_ptrs, sizeof(NodePtr)*node_count);
+
+  // map the child ids for each node
+  map[0] = 0; // is not done before (and is needed for Trie!)
+  for(nodeid_t i = 0; i < node_count; i++) {
+    NodeRef node(*this, i);
+    nodeid_t children[65];
+    size_t child_count = node.get_children(children);
+    for(size_t j = 0; j < child_count; j++)
+      children[j] = map[children[j]];
+    node.replace_children(children);
+  }
+}
 //@+node:michael.20141230111914.29: *3* new_node
 NodeRef PageRef::new_node(size_t size) const {
-    size_t free_start = sizeof(page->data)-((size_t)page->free_start)*16;
-    free_start -= size;
-    page->free_start = (sizeof(page->data)-free_start)/16;
-    nodeid_t new_id = page->node_count++;
-    NodePtr *node = node_ptr+new_id;
-    node->ptr = free_start/16;
-    return NodeRef(*this, new_id);
-  }
-//@+node:michael.20141230111914.30: *3* grow_node
-void PageRef::grow_node(nodeid_t id, int size) {
-    NodePtr* ptrs = node_ptr;
-    size_t free_start = sizeof(page->data)-((size_t)page->free_start)*16;
-    size_t node_start = ((size_t)ptrs[id].ptr) * 16;
-    size_t node_size = get_node_size(id);
+  NodePtr *ptrs = node_ptr();
+  size_t free_start = count() ? ptrs[count()-1].ptr : sizeof(Page);
+  free_start -= size;
+  nodeid_t new_id = page->node_count++;
+  ptrs[new_id].ptr = free_start;
+  return NodeRef(*this, new_id);
+}
+//@+node:michael.20141230111914.30: *3* grow_node_by
+void PageRef::grow_node_by(nodeid_t node_id, int size) const {
+  NodePtr* ptrs = node_ptr();
+  size_t free_start = ptrs[page->node_count-1].ptr;
+  size_t node_start = ptrs[node_id].ptr;
+  size_t node_size = get_node_size(node_id);
+  
+  if (size < 0)
+    node_size += size;
     
-    if (size < 0)
-      node_size += size;
-      
-    memmove(&page->data[free_start-size], &page->data[free_start],
-            node_start-free_start+node_size);
-    
-    free_start -= size;
-    page->free_start = (sizeof(page->data)-free_start)/16;
-    
-    size /= 16;
-    for(nodeid_t i = id; i < page->node_count; i++)
-      ptrs[i].ptr -= size;
-  }
-//@+node:michael.20141230111914.31: *3* create_link
-void PageRef::create_link(nodeid_t node_id, pageid_t page_id) const {
-    NodePtr* nodes = node_ptr;
-    nodes[node_id].ptr = page->link_count;
-    nodes[node_id].type = kLink;
-    
-    char* p = (char*)nodes;
-    memmove(p+sizeof(pageid_t), p, sizeof(NodePtr)*page->node_count);
-    page->links[page->link_count++] = page_id;
-    
-    update_node_ptr();
-  }
+  memmove(&page->data[free_start-size], &page->data[free_start],
+          node_start-free_start+node_size);
+  
+  for(nodeid_t i = node_id; i < page->node_count; i++)
+    ptrs[i].ptr -= size;
+}
+//@+node:michael.20141230111914.31: *3* change_to_link
+void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
+  // first remove the old nodes space
+  int delta = page_pad(sizeof(pageid_t)) - get_node_size(node_id);
+  grow_node_by(node_id, delta);
+  
+  NodePtr *ptrs = node_ptr();
+  ptrs[node_id].extra = 0;
+  ptrs[node_id].type = kLink;
+  *get_link(node_id) = page_id;
+}
 //@+node:michael.20150101205559.4: *3* dump
 #ifdef DEBUG
 void PageRef::dump(std::ostream& out) {
-    const char* t1 = "    ";
-    const char* t2 = "      ";
-    const char* t3 = "          ";
-    out << t1 << "- id:         " << id << std::endl
-        << t2 << "offset:     " << offset << std::endl
-        << t2 << "node_count: " << count() << std::endl
-        << t2 << "link_count: " << (int)page->link_count << std::endl
-        << t2 << "size:       " << size() << std::endl
-        << t2 << "free_size:  " << free_size() << std::endl
-        << t2 << "sum_size:   " << size() + free_size() << std::endl
-        << t2 << "nodes: " << std::endl;
-      
-    for(nodeid_t id = 0; id < count(); id++) {
-      out << t3 << "- id:    " << (int)id << std::endl
-          << t3 << "  ptr:   " << (int)node_ptr[id].ptr << std::endl;
-      NodeRef node(*this, id);
-      NodeHandler::handlers[node.type()]->dump(node, out);
-    }
+  const char* t1 = "    ";
+  const char* t2 = "      ";
+  const char* t3 = "          ";
+  out << t1 << "- id:         " << id << std::endl
+      << t2 << "offset:     " << offset << std::endl
+      << t2 << "node_count: " << count() << std::endl
+      << t2 << "size:       " << size() << std::endl
+      << t2 << "free_size:  " << free_size() << std::endl
+      << t2 << "sum_size:   " << size() + free_size() << std::endl
+      << t2 << "nodes: " << std::endl;
+    
+  for(nodeid_t id = 0; id < count(); id++) {
+    out << t3 << "- id:    " << (int)id << std::endl
+        << t3 << "  ptr:   " << (int)node_ptr()[id].ptr << std::endl;
+    NodeRef node(*this, id);
+    NodeHandler::handlers[node.type()]->dump(node, out);
   }
+}
 #endif
 //@-others
 

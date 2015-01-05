@@ -17,7 +17,7 @@ using namespace larch_leaves;
 //@+node:michael.20150101205559.45: ** Test Utils
 namespace larch_leaves {
 
-void TESTCASE(const char* str) {
+void TESTPOINT(const char* str) {
 }
 
 }
@@ -63,6 +63,8 @@ struct BitTrie {
     }
   
   int last_bit() const {
+      if (!bits)
+        return -1;
       return 63 - clz(bits);
     }
   
@@ -75,7 +77,10 @@ struct BitTrie {
   int prev_bit(int index) const {
       boost::uint64_t mask = ~0;
       mask <<= index;
-      return 63 - clz(bits & ~mask);
+      mask = bits & ~mask;
+      if (!mask)
+        return -1;
+      return 63 - clz(mask);
     }
     
   void add(int index, nodeid_t node) {
@@ -91,7 +96,7 @@ struct BitTrie {
       assert(child_index >= 0);
       bits &= ~(((boost::uint64_t)1)<<index);
       memmove(children+child_index, children+child_index+1,
-              count()-child_index-1);
+              count()-child_index);
     }
 };
 //@+node:michael.20150101205559.44: ** TestSuite
@@ -103,6 +108,9 @@ BOOST_AUTO_TEST_CASE(add_bits) {
   int settings[8] = { 3, 15, 20, 26, 32, 45, 50, 60 };
   
   memset(data, 0, sizeof(data));
+
+  BOOST_REQUIRE_EQUAL(bits.last_bit(), -1);
+  BOOST_REQUIRE_EQUAL(bits.first_bit(), -1);
   
   for(int i = 7; i >= 0; i--) 
     bits.add(settings[i], i+1);
@@ -128,6 +136,20 @@ BOOST_AUTO_TEST_CASE(add_bits) {
     b = bits.prev_bit(b);
     i--;
   }
+  
+  for(int i = 0; i < 8; i++) {
+    int b = settings[i];
+    int ci = bits.get_child_index(b);
+    BOOST_REQUIRE_EQUAL(ci, i);
+    BOOST_REQUIRE_EQUAL(bits.children[ci], i+1);
+    BOOST_REQUIRE_EQUAL(bits.get_child_index(b-1), -1);
+    BOOST_REQUIRE_EQUAL(bits.get_child_index(b+1), -1);
+  }
+  
+  for(int i = 0; i < 8; i++)
+    bits.remove(settings[i]);
+    
+  BOOST_REQUIRE_EQUAL(bits.bits, 0);
 }
 //@-others
 

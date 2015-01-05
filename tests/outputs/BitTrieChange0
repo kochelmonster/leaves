@@ -1,9 +1,9 @@
 state:
     - id:         0
       offset:     0
-      node_count: 5
-      size:       76
-      free_size:  4018
+      node_count: 3
+      size:       44
+      free_size:  4050
       sum_size:   4094
       nodes: 
           - id:    0
@@ -17,17 +17,8 @@ state:
             size:  4
             child: 2
           - id:    2
-            ptr:   4056
-            type:  bittrie
-            data:  E>3|05>4
-          - id:    3
-            ptr:   4048
+            ptr:   4064
             type:  leaf
-            data:  value
-            size:  5
-          - id:    4
-            ptr:   4040
-            type:  leaf
-            data:  value-1
+            data:  value-4
             size:  7
 ---

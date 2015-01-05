@@ -26,14 +26,13 @@
 </v>
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
-<v t="michael.20141215222649.126"><vh>Compressed</vh>
+<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
 <v t="michael.20141230111914.81"><vh>add_to_trace</vh></v>
 <v t="michael.20141230111914.82"><vh>find</vh></v>
 <v t="michael.20141230111914.83"><vh>first</vh></v>
 <v t="michael.20141230111914.84"><vh>last</vh></v>
 <v t="michael.20141230111914.79"><vh>get_children</vh></v>
 <v t="michael.20141230111914.80"><vh>replace_children</vh></v>
-<v t="michael.20141230111914.85"><vh>move_child</vh></v>
 <v t="michael.20141230111914.86"><vh>reinsert</vh></v>
 <v t="michael.20141230111914.87"><vh>add</vh></v>
 <v t="michael.20150101205559.5"><vh>dump</vh></v>
@@ -99,32 +98,29 @@
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
 <v t="michael.20141215222649.65" a="E"
 expanded="michael.20141215222649.73,michael.20141220220750.15,"><vh>@file node.h</vh></v>
-<v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
-<v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20141215222649.95,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.161" a="E"
 expanded="michael.20141230111914.26,"><vh>@file node.cpp</vh></v>
-<v t="michael.20141215222649.45" a="E"
-expanded="michael.20141230111914.3,"><vh>@file leaves.cpp</vh></v>
+<v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
+<v t="michael.20141219202729.8" a="E"
+marks="michael.20141230111914.75,"
+expanded="michael.20141215222649.83,michael.20141215222649.126,michael.20141215222649.95,"><vh>@file trie.cpp</vh></v>
+<v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
 </v>
 <v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
-<v t="michael.20141220220750.8"><vh>compressed size &gt; 256</vh></v>
 <v t="michael.20141220220750.17"><vh>remove than next() prev()</vh></v>
 <v t="michael.20141220220750.18"><vh>add than next() prev()</vh></v>
 <v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
-<v t="michael.20150101205559.18" a="E"
-expanded="michael.20150101205559.19,"><vh>@file test_trie.cpp</vh></v>
-<v t="michael.20150101205559.42" a="E"><vh>@file test_bits.cpp</vh></v>
+<v t="michael.20150101205559.18" a="E"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 </v>
 </v>
-<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
-<v t="michael.20150101205559.27"><vh>main</vh></v>
-<v t="michael.20141230111914.87"></v>
-<v t="michael.20150101205559.27"></v>
+<v t="michael.20141219202729.5"><vh>edit</vh>
+<v t="michael.20141230111914.110"></v>
+<v t="michael.20141230111914.109"></v>
 </v>
 </vnodes>
 <tnodes>
@@ -278,7 +274,7 @@ struct LinkHandler : public LeafBase {
       const char* t3 = "            ";
       pageid_t *page_id = (pageid_t*)rnode.link();
       out &lt;&lt; t3 &lt;&lt; "type:  link" &lt;&lt; std::endl
-          &lt;&lt; t3 &lt;&lt; "child: link" &lt;&lt; *page_id &lt;&lt; std::endl;
+          &lt;&lt; t3 &lt;&lt; "page:  " &lt;&lt; *page_id &lt;&lt; std::endl;
     }
 #endif    
 };
@@ -471,26 +467,26 @@ struct TrieBase : public NodeHandler {
   void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
       switch(key.size()) {
         case 0:
-          TESTCASE("TrieBaseAdd0");
+          TESTPOINT("TrieBaseAdd0");
           trace.add_node(end, Slice());
           *trace.parent().extra() = trace.child_of_parent();
           trace.complete = true;
           break;
           
         case 1: 
-          TESTCASE("TrieBaseAdd1");
+          TESTPOINT("TrieBaseAdd1");
           add_node(key, end, trace);
           trace.complete = true;
           break;
           
         case 2:
-          TESTCASE("TrieBaseAdd2");
+          TESTPOINT("TrieBaseAdd2");
           add_node(key.slice(1), TempTrie(), trace);
           trace.current().add(key.advance(1), end, trace);
           break;
 
         default: {
-          TESTCASE("TrieBaseAdd3");
+          TESTPOINT("TrieBaseAdd3");
           Slice next_key(key.advance(1));
           TempCompressed compressed(next_key);
           add_node(key.slice(1), compressed, trace);
@@ -510,8 +506,7 @@ NodeHandler* NodeHandler::handlers[6] = {
   &amp;compressed,
   &amp;trie,
   &amp;bittrie,
-};
-</t>
+};</t>
 <t tx="michael.20141215222649.84">// a leaf node with key and values &lt;= 256 bytes
 // the key_size is saved in Nodeptr.extra
 struct LeafHandler : public LeafBase {
@@ -533,10 +528,7 @@ static TrieHandler trie;
   @others
 };
 
-
 static BitTrieHandler bittrie;
-
-
 </t>
 <t tx="michael.20141217010530.13">struct NodePtr {
   PagePtr page;
@@ -547,7 +539,6 @@ static BitTrieHandler bittrie;
 </t>
 <t tx="michael.20141220220750.17"></t>
 <t tx="michael.20141220220750.18"></t>
-<t tx="michael.20141220220750.8">Insert multiple keys with a common part &gt; 256 bytes</t>
 <t tx="michael.20141230111914.100">size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) {
     BitTrie *n = (BitTrie*)rnode.node();
     size_t count = n-&gt;count();
@@ -610,7 +601,7 @@ static BitTrieHandler bittrie;
       int first_bit = n-&gt;first_bit();
       NodeRef child(rnode.page, n-&gt;children[0]);
       add_to_trace(first_bit, child, trace);
-child.first(trace);
+      child.first(trace);
       return;
     }
    
@@ -684,8 +675,8 @@ child.first(trace);
     size_t count = n-&gt;count();
     switch(count) {
       case 56: {
-          TESTCASE("BitTrieAdd0");
-          TempTrie trie(count);
+          TESTPOINT("BitTrieAdd0");
+          TempTrie trie(count+1);
           *trie.extra() = *trace.current().extra();
           Trie *np = (Trie*)trie.node();
           int bit = n-&gt;first_bit(), i = 0;
@@ -701,25 +692,27 @@ child.first(trace);
         }
     
       case 8:
+      case 16:
       case 24:
+      case 32:
       case 40:
-        TESTCASE("BitTrieAdd1");
-        trace.grow_node_by(16);
+      case 48:
+        TESTPOINT("BitTrieAdd1");
+        trace.grow_node_by(8);
         
       default: 
-        TESTCASE("BitTrieAdd2");
+        TESTPOINT("BitTrieAdd2");
         trace.add_node(node, key);
         n = (BitTrie*)trace.parent().node();
         n-&gt;add(key.trieindex(), trace.child_of_parent());
     }
-  }
-</t>
+  }</t>
 <t tx="michael.20141230111914.109">bool remove_last_index(NodeRef&amp; rnode, Trace&amp; trace) {
     BitTrie *n = (BitTrie*)rnode.node();
     if (trace.last_index &lt; 0) {
       *rnode.extra() = 0;
       if (n-&gt;count() == 1) {
-        TESTCASE("BitTrieRemove0");
+        TESTPOINT("BitTrieRemove0");
         change_node(NodeRef(rnode.page, n-&gt;children[0]), 
                     n-&gt;first_bit(), trace);
       }
@@ -730,7 +723,7 @@ child.first(trace);
     switch(n-&gt;count()) {
       case 0: 
         if (*rnode.extra()) {
-          TESTCASE("BitTrieRemove1");
+          TESTPOINT("BitTrieRemove1");
           change_node(NodeRef(rnode.page, *rnode.extra()), -1, trace);
         }
         else
@@ -740,68 +733,68 @@ child.first(trace);
         
       case 1: 
         if (!*rnode.extra()) {
-          TESTCASE("BitTrieRemove2");
+          TESTPOINT("BitTrieRemove2");
           change_node(NodeRef(rnode.page, n-&gt;children[0]),
                       n-&gt;first_bit(), trace);
         }
         break;
     
+      case 8:
+      case 16:
       case 24:
+      case 32:
       case 40:
-        TESTCASE("BitTrieRemove3");
-        trace.grow_node_by(-16);
+      case 48:
+        TESTPOINT("BitTrieRemove3");
+        trace.grow_node_by(-8);
     }
      
     return true;
-  }
-</t>
+  }</t>
 <t tx="michael.20141230111914.110">void change_node(const NodeRef&amp; child, int index, Trace&amp; trace) {
     switch(child.type()) {
       case kCompressed: {
-        TESTCASE("BitTrieChange0");
+        TESTPOINT("BitTrieChange0");
         assert(index &gt;= 0); // is certainly no end_node
-        Compressed* n = (Compressed*)child.node();
-        bsize_t size = (bsize_t)*child.extra();
-        NodeRef compress_child(child.page, n-&gt;child);
+
+        TempNode tmp;
+        trace.move_node(tmp.pageref, child);
+        child.page.defragment();
+        // 1. now there is enough space in the original page
+        // 2. child is not in trace =&gt; no trace update needed
         
-        // insert the index in compressed and replace me with compressed
-        char data[256];
-        data[0] = (char)index;
-        memcpy(data+1, n-&gt;data, size);
-        TempCompressed compressed(Slice(data, size+1));
-        trace.free_node(child.page, child.id);
-        trace.change_node(compressed);
+        // we will copy the compresed so we need enough space
+        bsize_t size = (bsize_t)*tmp.extra();
+        bsize_t psize = page_pad(size+sizeof(nodeid_t));
+        bsize_t pnsize = page_pad(size+1+sizeof(nodeid_t));
+        if (psize &lt; pnsize)
+          tmp.pageref.grow_node_by(0, pnsize-psize);
         
-        // ensure compress_child is on same page
-        PageRef&amp; page(trace.current().page);
-        if (page.id != compress_child.page.id) {
-          TESTCASE("BitTrieChange1");
-          size_t sizes[256];
-          memset(sizes, 0, sizeof(sizes));
-          size_t size = trace.calc_sizes(child, sizes);
-          trace.reserve_space(size, trace.current().id);
-          compress_child.id = trace.move_node(page, compress_child);
-          compress_child.page.defragment();
-        }
+        Compressed* n = (Compressed*)tmp.node();
+        memmove(n-&gt;data+1, n-&gt;data, size);
+        n-&gt;data[0] = (char)index;
+        *tmp.extra() = size + 1;
+        
+        trace.change_node(tmp);
+        NodeRef compress_child(tmp.pageref, n-&gt;child);
         
         n = (Compressed*)trace.current().node();
-        n-&gt;child = compress_child.id;
+        n-&gt;child = trace.move_node(child.page, compress_child);
         break;
         }
               
       case kBigLeaf: 
       case kLeaf: 
         if (index &lt; 0) {
-          TESTCASE("BitTrieChange2");
-          // make the trie to leaf
-          TempNode leaf;
-          trace.move_node(leaf.pageref, child);
-          trace.free_node(child.page, child.id);
-          trace.change_node(leaf);
+          TESTPOINT("BitTrieChange2");
+          // make the bittrie to leaf
+          TempNode tmp;
+          trace.move_node(tmp.pageref, child);
+          child.page.defragment();
+          trace.change_node(tmp);
         }
     }
-  }
-</t>
+  }</t>
 <t tx="michael.20141230111914.140"></t>
 <t tx="michael.20141230111914.77">void add(const Slice&amp; key, const TempNode&amp; end, NodeRef&amp; rnode, Trace&amp; trace) {
     assert(key.size() != 0);
@@ -811,7 +804,7 @@ child.first(trace);
     Slice rest_key;
     
     if (key.size() == 2) {
-      TESTCASE("LeafAdd0");
+      TESTPOINT("LeafAdd0");
       trace.change_node(TempTrie());
       reinsert_me(me, trace);
       trace.add_node(trie, key.slice(1));
@@ -823,7 +816,7 @@ child.first(trace);
       trace.change_node(trie);
       reinsert_me(me, trace);
       if (key.size() &gt; 2) {
-        TESTCASE("LeafAdd1");
+        TESTPOINT("LeafAdd1");
         rest_key = key.advance(1);
         TempCompressed compressed(rest_key);
         trace.add_node(compressed, key.slice(1));
@@ -831,14 +824,13 @@ child.first(trace);
         pn-&gt;add(key.trieindex(), trace.child_of_parent());
       }
       else {
-        TESTCASE("LeafAdd2");
+        TESTPOINT("LeafAdd2");
         rest_key = key;
       }
     }
 
     trace.current().add(rest_key, end, trace);
-  }
-</t>
+  }</t>
 <t tx="michael.20141230111914.78">void reinsert_me(TempLeaf&amp; me, Trace&amp; trace) {
     trace.add_node(me, Slice());
     trace.complete = true;
@@ -862,9 +854,9 @@ child.first(trace);
       n-&gt;child = children[0];
   }
 </t>
-<t tx="michael.20141230111914.81">void add_to_trace(Compressed* c, NodeRef&amp; child, Trace&amp; trace) {
+<t tx="michael.20141230111914.81">void add_to_trace(Compressed* c, size_t size, NodeRef&amp; child, Trace&amp; trace) {
     trace.push(child);
-    trace.key.append(c-&gt;data, *child.extra());
+    trace.key.append(c-&gt;data, size);
   }
 </t>
 <t tx="michael.20141230111914.82">void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
@@ -875,7 +867,7 @@ child.first(trace);
       
     if (memcmp(key.data(), n-&gt;data, size) == 0) {
       NodeRef child(rnode.page, n-&gt;child);
-      add_to_trace(n, child, trace);
+      add_to_trace(n, size, child, trace);
       child.find(key.advance(size), trace);
     }
   }
@@ -883,53 +875,34 @@ child.first(trace);
 <t tx="michael.20141230111914.83">void first(NodeRef&amp; rnode, Trace&amp; trace) {
     Compressed *n = (Compressed*)rnode.node();
     NodeRef child(rnode.page, n-&gt;child);
-    add_to_trace(n, child, trace);
+    add_to_trace(n, *rnode.extra(), child, trace);
     child.first(trace);
   }
 </t>
 <t tx="michael.20141230111914.84">void last(NodeRef&amp; rnode, Trace&amp; trace) {
     Compressed *n = (Compressed*)rnode.node();
     NodeRef child(rnode.page, n-&gt;child);
-    add_to_trace(n, child, trace);
+    add_to_trace(n, *rnode.extra(), child, trace);
     child.last(trace);
   }
 </t>
-<t tx="michael.20141230111914.85">nodeid_t move_child(NodeRef&amp; child, Trace&amp; trace) {
-    // moves the child and its descendant to current page
-    PageRef&amp; page(trace.current().page);
-    if (page.id != child.page.id) {
-      TESTCASE("CompressMoveChild");
-      size_t sizes[256];
-      memset(sizes, 0, sizeof(sizes));
-      size_t size = trace.calc_sizes(child, sizes);
-      trace.reserve_space(size, trace.current().id);
-      nodeid_t r = trace.move_node(page, child);
-      child.page.defragment();
-      return r;
-    }
-    return child.id;
-  }
-</t>
-<t tx="michael.20141230111914.86">void reinsert(TempCompressed&amp; rest_me, NodeRef&amp; child, 
+<t tx="michael.20141230111914.86">void reinsert(TempCompressed&amp; rest_me, nodeid_t child_id, 
               trieindex_t index, Trace&amp; trace) {
     BitTrie* bn;
-    nodeid_t child_id;
-    
+
     switch(*rest_me.extra()) {
       case 0:
-        TESTCASE("CompressReinsert0");
-        child_id = move_child(child, trace);
+        TESTPOINT("CompressReinsert0");
         bn = (BitTrie*)trace.current().node();
         bn-&gt;add(index, child_id);
         break;
         
       case 1: {
-        TESTCASE("CompressReinsert1");
+        TESTPOINT("CompressReinsert1");
         trace.add_node(TempTrie(), Slice(index));
         bn = (BitTrie*)trace.parent().node();
         bn-&gt;add(index, trace.child_of_parent());
         
-        child_id = move_child(child, trace);
         bn = (BitTrie*)trace.current().node();
         bn-&gt;add(((Compressed*)rest_me.node())-&gt;data[0], child_id);
         trace.pop();
@@ -937,12 +910,11 @@ child.first(trace);
         }
         
       default: {
-        TESTCASE("CompressReinsert2");
+        TESTPOINT("CompressReinsert2");
         trace.add_node(rest_me, Slice(index));
         bn = (BitTrie*)trace.parent().node();
         bn-&gt;add(index, trace.child_of_parent());
         
-        child_id = move_child(child, trace);
         Compressed *n = (Compressed*)trace.current().node();
         n-&gt;child = child_id;
         trace.pop();
@@ -957,7 +929,7 @@ child.first(trace);
     
     if (!n-&gt;child) {
       // A new leaf with some rest key is inserted
-      TESTCASE("CompressAddNew");
+      TESTPOINT("CompressAddNew");
       assert(size == key.size());
       trace.add_node(end, key);
       n-&gt;child = trace.child_of_parent();
@@ -969,33 +941,38 @@ child.first(trace);
                                        std::min((size_t)size, key.size()));
     TempCompressed rest_me(Slice(n-&gt;data+prefix_size+1, size-prefix_size-1));
           
-    NodeRef child(rnode.page, n-&gt;child);
-    n-&gt;child = 0;
+    trace.reserve_space(48+3*sizeof(NodePtr)); 
+      // the maximum of additional space we need
+      // if necessary current() and its child has
+      // been moved to another page with enough space      
+          
+    n = (Compressed*)trace.current().node();
+    nodeid_t child_id = n-&gt;child;
 
     trieindex_t first = n-&gt;data[0], second = n-&gt;data[1];    
     switch(prefix_size) {
       case 0:
         // insert one trie
-        TESTCASE("CompressAdd0");
+        TESTPOINT("CompressAdd0");
         trace.change_node(TempTrie());
-        reinsert(rest_me, child, first, trace);
+        reinsert(rest_me, child_id, first, trace);
         break;
         
       case 1: {
         // insert two tries
-        TESTCASE("CompressAdd1");
+        TESTPOINT("CompressAdd1");
         trace.change_node(TempTrie());
         
         trace.add_node(TempTrie(), Slice(first));
         BitTrie* bn = (BitTrie*)trace.parent().node();
         bn-&gt;add(first, trace.child_of_parent());
         
-        reinsert(rest_me, child, second, trace);
+        reinsert(rest_me, child_id, second, trace);
         break;
         }
       default: {
         // another compressed
-        TESTCASE("CompressAdd2");
+        TESTPOINT("CompressAdd2");
         first = n-&gt;data[prefix_size];
 
         Slice next_key(key.data(), prefix_size);
@@ -1005,18 +982,15 @@ child.first(trace);
         n = (Compressed*)trace.parent().node();
         n-&gt;child = trace.child_of_parent();
         
-        reinsert(rest_me, child, first, trace);
+        reinsert(rest_me, child_id, first, trace);
       }
     }
     trace.current().add(key.advance(prefix_size), end, trace);
-  }
-</t>
+  }</t>
 <t tx="michael.20141230111914.88">void add_to_trace(int key, NodeRef&amp; child, Trace&amp; trace) {
     trace.push(child);
     if (key &gt;=0)
       trace.key.append(1, (char)key);
-    else
-      trace.complete = true;
   }
 </t>
 <t tx="michael.20141230111914.89">size_t get_children(NodeRef&amp; rnode, nodeid_t children[65]) {
@@ -1073,8 +1047,9 @@ child.first(trace);
       if (n-&gt;children[i])
         count++;
     }
-    if (count &lt; 56) {
-      TESTCASE("TrieRemove");
+    
+    if (count &lt;= 56) {
+      TESTPOINT("TrieRemove");
       TempTrie trie(count);
       *trie.extra() = *rnode.extra();
       BitTrie* bt = (BitTrie*)trie.node();
@@ -1086,8 +1061,7 @@ child.first(trace);
     }
 
     return true;
-  }
-</t>
+  }</t>
 <t tx="michael.20141230111914.94">void find(const Slice&amp; key, NodeRef&amp; rnode, Trace&amp; trace) {
     if (key.empty()) {
       nodeid_t *end_child = rnode.extra();
@@ -1195,86 +1169,8 @@ child.first(trace);
     trace.push(child);
     if (key &gt;= 0)
       trace.key.append(1, (char)key);
-    else
-      trace.complete = true;
   }
 </t>
-<t tx="michael.20150101205559.27">#if 0
-int main(int argc, const char* argv[]) {
-  
-#if 0  
-  // case 1
-  // fill bittrie to end
-  
-  std::string input((const char[]){ 0, 1, 2 }, 3);
-  
-  cursor-&gt;set(input);
-  cursor-&gt;set_value(Slice("value"));
- 
-  //db.dump(std::cout);
-  
-  input.append(1, 0);
-  
-  for(int i = 55; i &gt;= 0; i--) {
-    std::stringstream f;
-    f &lt;&lt; "value-" &lt;&lt; i;
-    input.at(3) = i;
-    cursor-&gt;set(input);
-    cursor-&gt;set_value(Slice(f.str()));
-  }
-  db.dump(std::cout);
-  
-  
-  // remove until 2
-  // case 1.1
-  // remove end
-  
-  
-  // case 1.2
-  // remove value
-  
-  
-#endif
-
-#if 0
-  // case 2
-  // fill bittrie to end
-  
-  std::string input((const char[]){ 0, 1, 2 }, 3);
-  
-  cursor-&gt;set(input);
-  cursor-&gt;set_value(Slice("value"));
- 
-  //db.dump(std::cout);
-  
-  input.append(1, 0);
-  
-  for(int i = 0; i &lt; 64; i++) {
-    std::stringstream f;
-    f &lt;&lt; "value-" &lt;&lt; i;
-    input.at(3) = i;
-    cursor-&gt;set(input);
-    cursor-&gt;set_value(Slice(f.str()));
-  }
-  db.dump(std::cout);
-  
-  // remove piece by piece to come back to bittrie
-  
-  
-#endif
-  TestCompress tc;
-  //tc.test_CompressAdd0_CompressReinsert0();
-  //tc.test_CompressAdd0_CompressReinsert1();
-  //tc.test_CompressAdd0_CompressReinsert2();
-  //tc.test_CompressAdd1_CompressReinsert0();
-  //tc.test_CompressAdd1_CompressReinsert1();
-  //tc.test_CompressAdd1_CompressReinsert2();
-  //tc.test_CompressAdd2_CompressReinsert0();
-  //tc.test_CompressAdd2_CompressReinsert1();
-  tc.test_CompressAdd2_CompressReinsert2();
-  
-}
-#endif</t>
 <t tx="michael.20150101205559.5">#ifdef DEBUG
 void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
     const char* t3 = "            ";
