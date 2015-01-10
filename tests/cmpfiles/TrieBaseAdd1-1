@@ -1,0 +1,13 @@
+state:
+    - id:         0
+      offset:     0
+      node_count: 1
+      size:       20
+      free_size:  4074
+      sum_size:   4094
+      nodes: 
+          - id:    0
+            ptr:   4080
+            type:  bittrie
+            data:  
+---

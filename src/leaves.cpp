@@ -36,146 +36,100 @@ class NoWhereCursor : public Cursor {
 };
 
 
-//@+node:michael.20141230111914.3: ** MemoryDatabase
-//@+others
-//@+node:michael.20141230111914.23: *3* Cursor
-struct ReadMemoryCursor : public Cursor {
+//@+node:michael.20141230111914.24: ** MemoryDatabase
+struct PrivateMemoryDatabase : public MemoryDatabase {
+  NodeStorageInHeap nodes;
   Trace trace;
-  NodeRef root;
-  std::string encoding_buffer;
-  std::string decoding_buffer;
-  
-  ReadMemoryCursor(NodeStorageInHeap& nodes, NodeRef root_) 
-    : trace(nodes, nodes), root(root_) { 
-      trace.push(root);
+  std::string coding_buffer;
+  size_t _count;
+
+  PrivateMemoryDatabase() : trace(nodes, nodes), _count(0) {
+      reinit();
     }
-    
+
+  PrivateMemoryDatabase(const std::string& data) : trace(nodes, nodes), _count(0) {
+      //_nodes.load(data);
+    }
+
+  void reinit() {
+      assert(nodes._free_pages == 0);
+      assert(nodes._pages.empty());
+      assert(trace.size() == 0);
+      
+      NodeRef rroot(nodes.new_page(), 0);
+      TempTrie root;
+      copy_node(rroot.page.new_node(root.size()), root.noderef);
+      trace.push_root(rroot);
+    }
+     
   bool is_valid() const {
-      return trace.complete;
-    }
-  
-  void set(const Slice& key, int read_forward=100) { 
-      encode(key, encoding_buffer);
-      Slice ekey(encoding_buffer);
-      trace.find(ekey);
+      return trace.is_valid();
     }
     
-  void first(int read_forward=100) { 
-      root.first(trace);
+  size_t count() const {
+      return _count;
     }
-  void last(int read_forward=-100) { 
-      root.last(trace);
+  
+  void find(const Slice& key) {
+      if (key.size() > MAX_KEY_SIZE)
+        throw WrongValue(KEY_EXEEDS);
+      
+      encode(key, coding_buffer);
+      trace.find(coding_buffer);
     }
-  void next(int read_forward=100) { 
+    
+  void first() { 
+      trace.first();
+    }
+    
+  void last() { 
+      trace.last();
+    }
+    
+  void next() { 
       trace.next();
     }
-  void prev(int read_forward=-100) {
+    
+  void prev() {
       trace.prev();
     }
   
   Slice key() { 
-    decode(trace.key, decoding_buffer);
-    return Slice(decoding_buffer);
-  }
+      decode(trace.key, coding_buffer);
+      return coding_buffer;
+    }
   
   Slice value() { 
-    trace.check_complete();
-    return Slice((char*)trace.current().node(), *trace.current().extra());
-  }
-  
-  void set_value(const Slice& value) { throw NotImplemented(); }
-  void remove() { throw NotImplemented(); }
-};
+      trace.check_valid();
+      return Slice((char*)trace.current().node(), trace.current().len());
+    }
 
-struct WriteMemoryCursor : public ReadMemoryCursor {
-  WriteMemoryCursor(NodeStorageInHeap& nodes, NodeRef root_)
-    : ReadMemoryCursor(nodes, root_) { }
-  
   void set_value(const Slice& value) {
-    if (value.size() > 255)
-      throw WrongValue("value may not exceed 255 bytes");
-  
-    trace.set_leaf(encoding_buffer, TempLeaf(value));
-  }
+      if (value.size() > 2048)
+        throw WrongValue("value may not exceed 2048 bytes");
+
+      if (trace.set_leaf(TempLeaf(value)))
+        _count++;
+    }
   
   void remove() { 
-    trace.remove();
-  }
-};
-//@+node:michael.20141230111914.24: *3* PrivateMemoryDatabase
-struct PrivateMemoryDatabase : public MemoryDatabase {
-  NodeStorageInHeap _nodes;
-
-  PrivateMemoryDatabase() {
-      Trace trace(_nodes, _nodes);
-      NodeRef root_ = root();
-      trace.push(root_);
-      trace.add_node(TempTrie(), Slice());
-    }
-    
-  PrivateMemoryDatabase(const std::string& data) {
-      //_nodes.load(data);
-    }
-
-  NodeRef root() {
-    return NodeRef(_nodes.get_page(0), 0);
-  }
-
-  cursor_ptr reader(const Slice& namespace_=main_name_space) {
-      std::string encoded;
-      encode(namespace_, encoded);
-      Trace trace(_nodes, _nodes);
-      root().find(Slice(encoded), trace);
-      if (!trace.complete) {
-        // namespace does not exist
-        return cursor_ptr(new NoWhereCursor);
-      }
-      
-      return cursor_ptr(new ReadMemoryCursor(_nodes, trace.current()));
+      if (trace.remove())
+        reinit();
+      _count--;
     }
   
-  cursor_ptr writer(const Slice& namespace_=main_name_space) {
-      std::string encoded;
-      encode(namespace_, encoded);
-      Slice ekey(encoded);
-      Trace trace(_nodes, _nodes);
-      NodeRef root_(root());
-      trace.push(root_);
-      root().find(ekey, trace);
+  void get_data(std::string& buffer) const {
       
-      if (!trace.complete)
-        trace.current().add(ekey.advance(trace.key.size()), TempTrie(), trace);
-      
-      return cursor_ptr(new WriteMemoryCursor(_nodes, trace.current()));
     }
-    
-    std::string data() const {
-        // return _nodes.data();
-        return std::string();
-      }
-    
-#ifdef DEBUG
-  void dump(std::ostream& out) {
-      out << "State of Memory Storage" << std::endl
-          << "=======================" << std::endl;
-      typedef std::vector<NodeStorageInHeap::_page_ptr>::iterator iter_t;
-      iter_t i = _nodes._pages.begin();
-      for(int j = 0; i != _nodes._pages.end(); i++, j++)
-        PageRef(i->get(), j, j).dump(out);
-    }
-#endif    
 };
-
-
-std::shared_ptr<MemoryDatabase> MemoryDatabase::create() {
-  return std::shared_ptr<MemoryDatabase>(new PrivateMemoryDatabase());
+    
+MemoryDatabase* MemoryDatabase::create() {
+  return new PrivateMemoryDatabase();
 }
   
-std::shared_ptr<MemoryDatabase> MemoryDatabase::load(const std::string& data) {
-  return std::shared_ptr<MemoryDatabase>(new PrivateMemoryDatabase(data));
+MemoryDatabase* MemoryDatabase::load(const std::string& data) {
+  return new PrivateMemoryDatabase(data);
 }
-
-//@-others
 
 //@-others
 } // namespace larch_leaves 

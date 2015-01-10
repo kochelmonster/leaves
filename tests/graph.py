@@ -41,8 +41,9 @@ class GraphCreator(object):
                 add(" "*8+c)
 
             add(" "*4+"}")
-            for c in self.outer_connections:
-                add(" "*4+c)
+            
+        for c in self.outer_connections:
+            add(" "*4+c)
         add("}")
         add("")
 
@@ -50,9 +51,14 @@ class GraphCreator(object):
         #return repr(state)
 
     def _add_trie_kind(self, color, page, node):
-        connections = [p.split(">") for p in node["data"].split("|")]
-        appartments = "|".join("<f{}> {}".format(index, index)
-                               for index, _ in connections)
+        if node["data"]:
+            connections = [p.split(">") for p in node["data"].split("|")]
+            appartments = "|".join("<f{}> {}".format(index, index)
+                                   for index, _ in connections)
+        else:
+            connections = []
+            appartments = ""
+            
         attribs = [
             "shape=record",
             "style=filled",
@@ -127,7 +133,7 @@ class GraphCreator(object):
         return node, []
     
 
-def main(instream, outstream):
+def main(instream):
     all_data = []
     while True:
         data = instream.read()
@@ -143,8 +149,10 @@ def main(instream, outstream):
         if "state" not in state:
             continue
 
-        outstream.write(GraphCreator()(state, i))
+        with open("graph-{}.dot".format(i), "w") as f:
+            f.write(GraphCreator()(state, i))
+
         i += 1
 
 if __name__ == "__main__":
-    main(sys.stdin, sys.stdout)
+    main(sys.stdin)

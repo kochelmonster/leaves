@@ -1,0 +1,50 @@
+state:
+    - id:         0
+      offset:     0
+      node_count: 3
+      size:       40
+      free_size:  4054
+      sum_size:   4094
+      nodes: 
+          - id:    0
+            ptr:   4080
+            type:  bittrie
+            data:  60>1
+          - id:    1
+            ptr:   4072
+            type:  compressed
+            data:  60|60|60|60|01
+            size:  5
+            child: 2
+          - id:    2
+            ptr:   4068
+            type:  link
+            page:  1
+    - id:         1
+      offset:     1
+      node_count: 4
+      size:       308
+      free_size:  3786
+      sum_size:   4094
+      nodes: 
+          - id:    0
+            ptr:   4084
+            type:  compressed
+            data:  60|60|60|60|60|00|60|60|60|60|60
+            size:  11
+            child: 1
+          - id:    1
+            ptr:   4068
+            type:  bittrie
+            data:  E>2|00>3
+          - id:    2
+            ptr:   3816
+            type:  leaf
+            data:  value-10--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+            size:  250
+          - id:    3
+            ptr:   3804
+            type:  leaf
+            data:  value-star
+            size:  10
+---

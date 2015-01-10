@@ -17,18 +17,22 @@ using namespace larch_leaves;
 //@+node:michael.20150101205559.45: ** Test Utils
 namespace larch_leaves {
 
-void TESTPOINT(const char* str) {
+void testpoint(const char* str) {
 }
 
 }
+
 //@+node:michael.20141230111914.148: ** Node Structs
 // A Node containing a string part equal to all descendants
-// the equal part fit into a page; the data size is in Nodeptr.extra
+// the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
   char data[];
 };
 
+// A leaf 
+// the data is interpreted by the type (kLeaf od kBitLeaf)
+// the size of data is saved in NodeRef::len()
 struct Leaf {
   char data[];
 };

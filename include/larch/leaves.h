@@ -53,9 +53,14 @@ struct Options {
   // value cannot be bigger than leaf_window_size
   size_t leaf_window_size;
   
+  size_t max_leaf_size_in_node_storage; 
+                  // if size of leaf is greater the leaf
+                  // will be stored in leaf storage
+  
   Options()
     : multiprocess(true), node_window_size(4096*4096*8), 
-    leaf_window_size(4096*4096*8) {}
+    leaf_window_size(4096*4096*8),
+    max_leaf_size_in_node_storage(32) {}
 };
 
 
@@ -72,18 +77,9 @@ class Slice {
   
 
  public:
- Slice(const char *data, size_t size) : _size(size), _data(NULL) {
-      if (size < sizeof(const char*))
-        memcpy(_chars, data, size);
-      else
-        _data = data;
-    }
+  Slice(const char *data, size_t size) : _size(size), _data(data) { }
     
   Slice(const char* str) : Slice(str, strlen(str)) {
-    }
-    
-  Slice(char one) : _size(1), _data(0) {
-      _chars[0] = one;
     }
     
   Slice(const std::string& src)
@@ -101,15 +97,16 @@ class Slice {
       return std::string(data(), _size);
     }
     
-  bool operator==(const Slice& other) const {
+  template <typename ot> bool operator==(const ot& other) const {
       return size() == other.size() 
         && memcmp(data(), other.data(), size()) == 0;
     }
-
+    
+  char operator[](size_t index) const {
+      return data()[index];
+    }
+    
   const char* data() const {
-      if (_size < sizeof(const char*))
-        return _chars;
-        
       return _data;
     }
     
@@ -152,29 +149,38 @@ class Cursor {
   virtual void remove() = 0;
 };
 
-
-typedef std::shared_ptr<Cursor> cursor_ptr;
-//@+node:michael.20141215222649.27: ** class Storage (Declaration)
-extern Slice main_name_space;
-
-class Database {
- public:
-  virtual cursor_ptr reader(const Slice& namespace_=main_name_space) = 0;
-  virtual cursor_ptr writer(const Slice& namespace_=main_name_space) = 0;
-#ifdef DEBUG
-  virtual void dump(std::ostream& out) = 0;
-#endif
-  virtual ~Database() {}
-};
-
-
-class MemoryDatabase : public Database {
+//@+node:michael.20141215222649.27: ** Database (Declaration)
+class MemoryDatabase {
 public:
-  static std::shared_ptr<MemoryDatabase> create();
-  static std::shared_ptr<MemoryDatabase> load(const std::string& data);
-  std::string data() const;
+  virtual bool is_valid() const = 0;
+  virtual size_t count() const = 0;
+  
+  // sets the cursor to key
+  virtual void find(const Slice& key) = 0;
+  
+  // sets the cursor to first
+  virtual void first() = 0;
+  virtual void last() = 0;
+  virtual void next() = 0;
+  virtual void prev() = 0;
+  
+  virtual Slice key() = 0;
+  virtual Slice value() = 0;
+  
+  // sets the value raise an exception if a read curor
+  virtual void set_value(const Slice& value) = 0;
+  virtual void remove() = 0;
+
+  virtual void get_data(std::string& buffer) const = 0;
+  
+  static MemoryDatabase* create();
+  static MemoryDatabase* load(const std::string& data);
 };
 
+
+/*
+
+extern Slice main_name_space;
 
 class PersistentDatabase : public Database {
  public:
@@ -192,11 +198,9 @@ class CopyOnWriteDatabase : public PersistentDatabase {
 };
 
  
+*/
 //@-others
 
-#ifdef DEBUG
-void dumpb64(const Slice& key, std::ostream& out);
-#endif
 } // namespace larch_leaves 
 #endif // _LARCH_LEAVES_H
 //@-leo

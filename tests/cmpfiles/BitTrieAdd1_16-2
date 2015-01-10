@@ -1,0 +1,98 @@
+state:
+    - id:         0
+      offset:     0
+      node_count: 18
+      size:       240
+      free_size:  3854
+      sum_size:   4094
+      nodes: 
+          - id:    0
+            ptr:   4064
+            type:  bittrie
+            data:  00>1|01>2|02>3|03>4|04>5|05>6|06>7|07>8|08>9|09>10|10>11|11>12|12>13|13>14|14>15|15>16|16>17
+          - id:    1
+            ptr:   4056
+            type:  leaf
+            data:  value-0
+            size:  7
+          - id:    2
+            ptr:   4048
+            type:  leaf
+            data:  value-1
+            size:  7
+          - id:    3
+            ptr:   4040
+            type:  leaf
+            data:  value-2
+            size:  7
+          - id:    4
+            ptr:   4032
+            type:  leaf
+            data:  value-3
+            size:  7
+          - id:    5
+            ptr:   4024
+            type:  leaf
+            data:  value-4
+            size:  7
+          - id:    6
+            ptr:   4016
+            type:  leaf
+            data:  value-5
+            size:  7
+          - id:    7
+            ptr:   4008
+            type:  leaf
+            data:  value-6
+            size:  7
+          - id:    8
+            ptr:   4000
+            type:  leaf
+            data:  value-7
+            size:  7
+          - id:    9
+            ptr:   3992
+            type:  leaf
+            data:  value-8
+            size:  7
+          - id:    10
+            ptr:   3984
+            type:  leaf
+            data:  value-9
+            size:  7
+          - id:    11
+            ptr:   3976
+            type:  leaf
+            data:  value-10
+            size:  8
+          - id:    12
+            ptr:   3968
+            type:  leaf
+            data:  value-11
+            size:  8
+          - id:    13
+            ptr:   3960
+            type:  leaf
+            data:  value-12
+            size:  8
+          - id:    14
+            ptr:   3952
+            type:  leaf
+            data:  value-13
+            size:  8
+          - id:    15
+            ptr:   3944
+            type:  leaf
+            data:  value-14
+            size:  8
+          - id:    16
+            ptr:   3936
+            type:  leaf
+            data:  value-15
+            size:  8
+          - id:    17
+            ptr:   3928
+            type:  leaf
+            data:  value-1
+            size:  7
+---
