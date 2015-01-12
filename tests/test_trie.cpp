@@ -2,8 +2,8 @@
 //@+node:michael.20150101205559.18: * @file test_trie.cpp
 //@@language cplusplus
 //@@tabwidth -2
-#define BOOST_TEST_NO_MAIN
-#define GENERATE
+//#define BOOST_TEST_NO_MAIN
+//#define GENERATE
 //@+<< includes >>
 //@+node:michael.20150101205559.22: ** << includes >>
 #include <string.h>
@@ -35,11 +35,10 @@ struct TestDatabase {
       assert(nodes._free_pages == 0);
       assert(nodes._pages.empty());
       assert(trace.size() == 0);
-      
-      NodeRef rroot(nodes.new_page(), 0);
+      PageRef page(nodes.new_page());
       TempTrie root;
-      copy_node(rroot.page.new_node(root.size()), root.noderef);
-      trace.push_root(rroot);
+      copy_node(page.new_node(root.size()), root.noderef);
+      trace.push_root(NodeRef(page, 0));
     }
      
   bool is_valid() const {
@@ -84,9 +83,8 @@ struct TestDatabase {
         reinit();
     }
     
-    
-#ifdef DEBUG
   void dump(std::ostream& out) {
+#ifdef DEBUG  
       out << "state:" << std::endl;
       typedef std::vector<NodeStorageInHeap::_page_ptr>::iterator iter_t;
       iter_t i = nodes._pages.begin();
@@ -96,8 +94,8 @@ struct TestDatabase {
         }
       }
       out << "---" << std::endl;
+#endif      
     }
-#endif    
 };
 
 typedef std::unique_ptr<TestDatabase> db_t;
@@ -128,10 +126,10 @@ void check_dump(const char* fname, db_t& db) {
   db->dump(cstr);
   std::cout << cstr.str();
   
-  /*std::string path(CMPFILES);
+  std::string path(CMPFILES);
   path.append(fname);
   std::ofstream out(path.c_str());
-  out << cstr.str();*/
+  out << cstr.str();
 }
 
 void check_testpoints(size_t case_count, const char* testpoints[]) {
@@ -271,7 +269,7 @@ struct TestLeaf  {
       
       check_dump("LeafAdd1-2", db);
       
-      const char* testpoints[] = {"LeafAdd1"};
+      const char* testpoints[] = {"LeafAdd0"};
       check_testpoints(1, testpoints);
     }
 
@@ -298,10 +296,8 @@ struct TestLeaf  {
 TestLeaf test_leaf;
 //@+node:michael.20150101205559.32: ** TestCompress
 struct TestCompress  {
-  void test_CompressAdd0_CompressReinsert0() {
-      // is not possible would be a compress node of size1
-    }
-
+  //@+others
+  //@+node:michael.20150110130802.14: *3* test_CompressAddNew
   void test_CompressAddNew() {
       db_t db(new TestDatabase);
 
@@ -319,25 +315,25 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAddNew"};
       check_testpoints(1, testpoints);
     }
-
+  //@+node:michael.20150110130802.15: *3* test_CompressAdd0_CompressReinsert1
   void test_CompressAdd0_CompressReinsert1() {
       db_t db(new TestDatabase);
 
       db->find(number(123));
       db->set_value(value(1));
       
-      check_dump("CompressAdd0_CompressReinsert1-1", db);
+      check_dump("CompressAdd0_CompressReinsert1_1-1", db);
       prepare_testpoint_output();
 
       db->find(number(1345));
       db->set_value(value(2));
       
-      check_dump("CompressAdd0_CompressReinsert1-2", db);
+      check_dump("CompressAdd0_CompressReinsert1_1", db);
       
       const char* testpoints[] = {"CompressAdd0", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-
+  //@+node:michael.20150110130802.16: *3* test_CompressAdd0_CompressReinsert2
   void test_CompressAdd0_CompressReinsert2() {
       db_t db(new TestDatabase);
 
@@ -352,10 +348,10 @@ struct TestCompress  {
       
       check_dump("CompressAdd0_CompressReinsert2-2", db);
       
-      const char* testpoints[] = {"CompressAdd0", "CompressReinsert2"};
+      const char* testpoints[] = {"CompressAdd0", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-    
+  //@+node:michael.20150110130802.17: *3* test_CompressAdd1_CompressReinsert0
   void test_CompressAdd1_CompressReinsert0() {
       db_t db(new TestDatabase);
 
@@ -373,7 +369,7 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert0"};
       check_testpoints(2, testpoints);
     }
-
+  //@+node:michael.20150110130802.18: *3* test_CompressAdd1_CompressReinsert1
   void test_CompressAdd1_CompressReinsert1() {
       db_t db(new TestDatabase);
 
@@ -390,8 +386,8 @@ struct TestCompress  {
       
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
-    }    
-
+    }
+  //@+node:michael.20150110130802.19: *3* test_CompressAdd1_CompressReinsert2
   void test_CompressAdd1_CompressReinsert2() {
       db_t db(new TestDatabase);
 
@@ -406,10 +402,10 @@ struct TestCompress  {
       
       check_dump("CompressAdd1_CompressReinsert2-2", db);
       
-      const char* testpoints[] = {"CompressAdd1", "CompressReinsert2"};
+      const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-
+  //@+node:michael.20150110130802.20: *3* test_CompressAdd2_CompressReinsert0
   void test_CompressAdd2_CompressReinsert0() {
       db_t db(new TestDatabase);
 
@@ -424,10 +420,10 @@ struct TestCompress  {
       
       check_dump("CompressAdd2_CompressReinsert0-2", db);
       
-      const char* testpoints[] = {"CompressAdd2", "CompressReinsert0"};
+      const char* testpoints[] = {"CompressAdd1", "CompressReinsert0"};
       check_testpoints(2, testpoints);
     }
-
+  //@+node:michael.20150110130802.21: *3* test_CompressAdd2_CompressReinsert1
   void test_CompressAdd2_CompressReinsert1() {
       db_t db(new TestDatabase);
 
@@ -442,10 +438,10 @@ struct TestCompress  {
       
       check_dump("CompressAdd2_CompressReinsert1-2", db);
       
-      const char* testpoints[] = {"CompressAdd2", "CompressReinsert1"};
+      const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-
+  //@+node:michael.20150110130802.22: *3* test_CompressAdd2_CompressReinsert2
   void test_CompressAdd2_CompressReinsert2() {
       db_t db(new TestDatabase);
 
@@ -460,30 +456,10 @@ struct TestCompress  {
       
       check_dump("CompressAdd2_CompressReinsert2-2", db);
       
-      const char* testpoints[] = {"CompressAdd2", "CompressReinsert2"};
+      const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-    
-  void test_CompressedEatSingle() {
-      db_t db(new TestDatabase);
-
-      db->find(number(123456));
-      db->set_value(value(1));
-      
-      db->find(number(123457));
-      db->set_value(value(2));
-      
-      check_dump("CompressedEatSingle-1", db);
-      prepare_testpoint_output();
-
-      db->remove();
-      
-      check_dump("CompressedEatSingle-2", db);
-      
-      const char* testpoints[] = {"CompressedEatSingle"};
-      check_testpoints(1, testpoints);
-    }
-    
+  //@+node:michael.20150110130802.24: *3* test_CompressedEatCompressed
   std::string sep_number(size_t i) {
       std::string sep(5, 60);
       std::string n = number(i);
@@ -514,18 +490,19 @@ struct TestCompress  {
       // empty second page
       db->find(sep_number(1));
       db->remove();
-      
+            
       for(size_t i = 11; i < 15; i++) {
         db->find(sep_number(i));
         db->remove();
       }
+
       
       // empty first page
       for(size_t i = 0; i < 6; i++) {
         db->find(prefix+number(i));
         db->remove();
       }
-
+     
       for(size_t i = 0; i < 10; i++) {
         if (i != 1) {
           db->find(sep_number(i));
@@ -548,6 +525,7 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressedEatCompressed"};
       check_testpoints(1, testpoints);
     }
+  //@-others
 };
 
 TestCompress test_compress;
@@ -611,7 +589,7 @@ struct TestTrie {
           
       check_dump("TrieBaseAdd3-2", db);
       
-      const char* testpoints[] = {"TrieBaseAdd3"};
+      const char* testpoints[] = {"TrieBaseAdd2"};
       check_testpoints(1, testpoints);
     }
   //@+node:michael.20150101205559.47: *3* test_BitTrieAdd0
@@ -764,6 +742,26 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieRemove1"};
       check_testpoints(1, testpoints);
     }
+  //@+node:michael.20150110130802.25: *3* test_BitTrieRemove2
+  void test_BitTrieRemove2() {
+      db_t db(new TestDatabase);
+
+      db->find(number(123456));
+      db->set_value(value(1));
+      
+      db->find(number(123457));
+      db->set_value(value(2));
+      
+      check_dump("BitTrieRemove2-1", db);
+      prepare_testpoint_output();
+
+      db->remove();
+      
+      check_dump("BitTrieRemove2-2", db);
+      
+      const char* testpoints[] = {"BitTrieRemove2"};
+      check_testpoints(1, testpoints);
+    }
   //@+node:michael.20150101205559.60: *3* test_NodeEatSingle
   void test_NodeEatSingle() {
       db_t db(new TestDatabase);
@@ -786,48 +784,6 @@ struct TestTrie {
       check_dump("NodeEatSingle-2", db);
       
       const char* testpoints[] = {"NodeEatSingle"};
-      check_testpoints(1, testpoints);
-    }
-  //@+node:michael.20150101205559.59: *3* test_BitTrieEatCompressed
-  void test_BitTrieEatCompressed() {
-      db_t db(new TestDatabase);
-      
-      db->find(number(1));
-      db->set_value(value(1));
-      
-      db->find(number(1234));
-      db->set_value(value(1234));
-
-      check_dump("BitTrieEatCompressed-1", db);
-      prepare_testpoint_output();
-
-      db->find(number(1));
-      db->remove();
-          
-      check_dump("BitTrieEatCompressed-2", db);
-      
-      const char* testpoints[] = {"BitTrieEatCompressed"};
-      check_testpoints(1, testpoints);
-    }
-  //@+node:michael.20150101205559.61: *3* test_BitTrieEatSingle
-  void test_BitTrieEatSingle() {
-      db_t db(new TestDatabase);
-      
-      db->find(number(1));
-      db->set_value(value(1));
-      
-      db->find(number(123));
-      db->set_value(value(123));
-
-      check_dump("BitTrieEatSingle-1", db);
-      prepare_testpoint_output();
-
-      db->find(number(1));
-      db->remove();
-          
-      check_dump("BitTrieEatSingle-2", db);
-      
-      const char* testpoints[] = {"BitTrieEatSingle"};
       check_testpoints(1, testpoints);
     }
   //@+node:michael.20150106224503.17: *3* test_TrieMisc
@@ -973,6 +929,11 @@ struct TestPageManagement {
 
 
 TestPageManagement test_pm;
+//@+node:michael.20150106224503.35: ** old
+#if 0
+  //@+others
+  //@-others
+#endif
 //@+node:michael.20150106125629.4: ** TestNavigation
 struct TestNavigation {
   //@+others
@@ -1236,17 +1197,7 @@ struct TestNavigation {
       int i = 0;
       for(db->last(); db->is_valid(); db->prev()) {
         out << "remove " << i << ": " << db->value().string() << std::endl;
-        if (i == 2490) {
-          check_dump("tst-0", db);
-          std::cerr << "break" << std::endl;
-        }
         db->remove();
-        
-        if (i == 2490) {
-          check_dump("tst-1", db);
-          std::cerr << "break" << std::endl;
-        }
-          
         i++;
       }
       out << "stopped remove at: " << i << std::endl;
@@ -1337,11 +1288,6 @@ struct TestNavigation {
 
 
 TestNavigation test_nav;
-//@+node:michael.20150106224503.35: ** old
-#if 0
-  //@+others
-  //@-others
-#endif
 //@+node:michael.20150101205559.38: ** TestSuite
 //@+others
 //@+node:michael.20150106224503.39: *3* boost
@@ -1349,10 +1295,6 @@ BOOST_AUTO_TEST_SUITE(trie_manipulations)
 
 BOOST_AUTO_TEST_CASE(CompressAddNew) {
   test_compress.test_CompressAddNew();
-}
-
-BOOST_AUTO_TEST_CASE(CompressAdd0_CompressReinsert0) {
-  test_compress.test_CompressAdd0_CompressReinsert0();
 }
 
 BOOST_AUTO_TEST_CASE(CompressAdd0_CompressReinsert1) {
@@ -1385,10 +1327,6 @@ BOOST_AUTO_TEST_CASE(CompressAdd2_CompressReinsert1) {
 
 BOOST_AUTO_TEST_CASE(CompressAdd2_CompressReinsert2) {
   test_compress.test_CompressAdd2_CompressReinsert2();
-}
-
-BOOST_AUTO_TEST_CASE(CompressedEatSingle) {
-  test_compress.test_CompressedEatSingle();
 }
 
 BOOST_AUTO_TEST_CASE(CompressedEatCompressed) {
@@ -1457,16 +1395,12 @@ BOOST_AUTO_TEST_CASE(BitTrieRemove1) {
   test_trie.test_BitTrieRemove1(48);
 }
 
+BOOST_AUTO_TEST_CASE(BitTrieRemove2) {
+  test_trie.test_BitTrieRemove2();
+}
+
 BOOST_AUTO_TEST_CASE(NodeEatSingle) {
   test_trie.test_NodeEatSingle();
-}
-
-BOOST_AUTO_TEST_CASE(BitTrieEatCompressed) {
-  test_trie.test_BitTrieEatCompressed();
-}
-
-BOOST_AUTO_TEST_CASE(BitTrieEatSingle) {
-  test_trie.test_BitTrieEatSingle();
 }
 
 BOOST_AUTO_TEST_CASE(TrieMisc) {
@@ -1539,7 +1473,6 @@ BOOST_AUTO_TEST_SUITE_END()
 #ifdef BOOST_TEST_NO_MAIN
 int main(int argc, const char* argv[]) {
   //test_compress.test_CompressAddNew();
-  //test_compress.test_CompressAdd0_CompressReinsert0();
   //test_compress.test_CompressAdd0_CompressReinsert1();
   //test_compress.test_CompressAdd0_CompressReinsert2();
   //test_compress.test_CompressAdd1_CompressReinsert0();
@@ -1548,12 +1481,10 @@ int main(int argc, const char* argv[]) {
   //test_compress.test_CompressAdd2_CompressReinsert0();
   //test_compress.test_CompressAdd2_CompressReinsert1();
   //test_compress.test_CompressAdd2_CompressReinsert2();
-  //test_compress.test_CompressedEatSingle();
   //test_compress.test_CompressedEatCompressed();
   //test_leaf.test_LeafAdd0();
   //test_leaf.test_LeafAdd1();
   //test_leaf.test_LeafAdd2();
-  
   //test_trie.test_TrieBaseAdd0();
   //test_trie.test_TrieBaseAdd1();
   //test_trie.test_TrieBaseAdd2();
@@ -1574,12 +1505,11 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_BitTrieRemove1(32);
   //test_trie.test_BitTrieRemove1(40);
   //test_trie.test_BitTrieRemove1(48);
+  //test_trie.test_BitTrieRemove2();
   //test_trie.test_NodeEatSingle();
-  //test_trie.test_BitTrieEatCompressed();
-  //test_trie.test_BitTrieEatSingle();
   //test_trie.test_TrieMisc();
   //test_pm.test_TwoPages();
-  //test_pm.test_MergePages();
+  test_pm.test_MergePages();
   //test_pm.test_RemoveAll();
   //test_pm.test_NodesInHeap();
   //test_nav.test_RandomFind();
@@ -1589,7 +1519,7 @@ int main(int argc, const char* argv[]) {
   //test_nav.test_IterCompressed();
   //test_nav.test_removeFromTop(0);
   //test_nav.test_removeFromTop(10);
-  test_nav.test_removeFromBottom(0);
+  //test_nav.test_removeFromBottom(0);
   //test_nav.test_removeFromBottom(10);
   //test_nav.test_compress();
   //test_nav.test_ChangeValue();

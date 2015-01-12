@@ -27,7 +27,7 @@
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
 <v t="michael.20150106224503.25"><vh>Eat Tools</vh></v>
-<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
+<v t="michael.20141215222649.126"><vh>Compressed</vh>
 <v t="michael.20150106224503.49"><vh>keycmp</vh></v>
 <v t="michael.20150106224503.59"><vh>keyappend</vh></v>
 <v t="michael.20150106224503.50"><vh>get_len</vh></v>
@@ -70,7 +70,7 @@
 <v t="michael.20150106224503.24"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.7"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.84" a="E"><vh>Leaf</vh>
+<v t="michael.20141215222649.84"><vh>Leaf</vh>
 <v t="michael.20150106224503.51"><vh>find</vh></v>
 <v t="michael.20150110130802.12"><vh>prev</vh></v>
 <v t="michael.20141230111914.78"><vh>reinsert_me</vh></v>
@@ -108,44 +108,39 @@ expanded="michael.20141220220750.15,"><vh>@file node.h</vh></v>
 expanded="michael.20141230111914.26,michael.20150110130802.6,"><vh>@file node.cpp</vh></v>
 <v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20141215222649.126,michael.20141215222649.95,michael.20141215222649.84,"><vh>@file trie.cpp</vh></v>
+expanded="michael.20141215222649.83,michael.20141215222649.95,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
-<v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
+<v t="michael.20141215222649.8"><vh>Tests</vh>
+<v t="michael.20141230111914.140"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
-<v t="michael.20150101205559.18" a="E"
-expanded="michael.20150106125629.4,michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.18"><vh>@file test_trie.cpp</vh></v>
 <v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
 <v t="michael.20150106224503.10"><vh>@path benchmarks</vh>
-<v t="michael.20150106224503.11"><vh>trie</vh></v>
+<v t="michael.20150106224503.11"><vh>trie</vh>
+<v t="michael.20150111145018.91"><vh>@file sbench.cpp</vh></v>
+</v>
+</v>
 </v>
 <v t="michael.20150106224503.12"><vh>@path python</vh>
 <v t="michael.20150106224503.13"><vh>@file setup.py</vh></v>
-<v t="michael.20150106224503.14"><vh>@path src</vh>
-<v t="michael.20150106224503.15"><vh>larch_leaves.pyx</vh></v>
+<v t="michael.20150106224503.14"><vh>@path larch</vh>
+<v t="michael.20150110130802.30"><vh>@file __init__.py</vh></v>
+<v t="michael.20150106224503.15"><vh>@file leaves.pyx</vh></v>
+</v>
+<v t="michael.20150110130802.31"><vh>@path tests</vh>
+<v t="michael.20150110130802.32"><vh>@file test_trie.py</vh></v>
+</v>
+<v t="michael.20150110130802.34"><vh>@path bench</vh>
+<v t="michael.20150110130802.35"><vh>@file bench.py</vh></v>
 </v>
 </v>
-</v>
-<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
-<v t="michael.20150106224503.38"><vh>generate</vh></v>
-<v t="michael.20150106125629.4" a="E"><vh>TestNavigation</vh>
-<v t="michael.20150106224503.2"><vh>test_RandomFind</vh></v>
-<v t="michael.20150106224503.4"><vh>create_trie</vh></v>
-<v t="michael.20150106224503.3"><vh>test_IterTrie</vh></v>
-<v t="michael.20150106224503.5"><vh>test_IterTrieEnd</vh></v>
-<v t="michael.20150106224503.6"><vh>test_Iter</vh></v>
-<v t="michael.20150106224503.46"><vh>test_removeFromTop</vh></v>
-<v t="michael.20150106224503.47"><vh>test_removeFromBottom</vh></v>
-<v t="michael.20150110130802.9"><vh>test_compress</vh></v>
-<v t="michael.20150106224503.7"><vh>test_ChangeValue</vh></v>
-</v>
-</v>
+<v t="michael.20141219202729.5"><vh>edit</vh></v>
 </vnodes>
 <tnodes>
 <t tx="michael.20141215222649.10"></t>
@@ -383,7 +378,13 @@ void NodeStorageInHeap::free_page(const PageRef&amp; page) {
 };
 
 </t>
-<t tx="michael.20141215222649.27">class MemoryDatabase {
+<t tx="michael.20141215222649.27">#define EMBED_BREAKPOINT \
+    asm("0:"                              \
+        ".pushsection embed-breakpoints;" \
+        ".quad 0b;"                       \
+        ".popsection;")
+
+class MemoryDatabase {
 public:
   virtual bool is_valid() const = 0;
   virtual size_t count() const = 0;
@@ -404,10 +405,11 @@ public:
   virtual void set_value(const Slice&amp; value) = 0;
   virtual void remove() = 0;
 
-  virtual void get_data(std::string&amp; buffer) const = 0;
-  
+#ifdef DEBUG
+  virtual void dump(std::ostream&amp; out) = 0;
+#endif
+
   static MemoryDatabase* create();
-  static MemoryDatabase* load(const std::string&amp; data);
 };
 
 
@@ -514,19 +516,13 @@ struct TrieBase : public NodeHandler {
           
         case 1: 
           TESTPOINT(TrieBaseAdd1);
-          add_node(key.trieindex(), leaf, trace);
+          add_node(key[0], leaf, trace);
           break;
           
-        case 2:
-          TESTPOINT(TrieBaseAdd2);
-          add_node(key.trieindex(), TempTrie(), trace);
-          trace.current().add(leaf, trace);
-          break;
-
         default: {
-          TESTPOINT(TrieBaseAdd3);
+          TESTPOINT(TrieBaseAdd2);
           TempCompressed compressed(key.advance(1));
-          add_node(key.trieindex(), compressed, trace);
+          add_node(key[0], compressed, trace);
           trace.current().add(leaf, trace);
           break;
           }
@@ -608,7 +604,7 @@ static BitTrieHandler bittrie;
       return;
     }
       
-    trieindex_t index = key.trieindex();
+    trieindex_t index = key[0];
     BitTrie *n = (BitTrie*)rnode.node();
     int child_index = n-&gt;get_child_index(index);
     if (child_index &gt;= 0) {
@@ -619,7 +615,7 @@ static BitTrieHandler bittrie;
 </t>
 <t tx="michael.20141230111914.104">void next(NodeRef&amp; rnode, Trace&amp; trace) {
     Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key.trieindex();
+    int index = key.empty() ? -1 : key[0];
     BitTrie *n = (BitTrie*)rnode.node();
     
     if (index &lt; 0) {
@@ -647,7 +643,7 @@ static BitTrieHandler bittrie;
 </t>
 <t tx="michael.20141230111914.105">void prev(NodeRef&amp; rnode, Trace&amp; trace) {
     Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key.trieindex();
+    int index = key.empty() ? -1 : key[0];
     
     if (index &lt; 0) {
       trace.parent_prev();
@@ -739,21 +735,44 @@ static BitTrieHandler bittrie;
     }
   }
 </t>
-<t tx="michael.20141230111914.109">bool remove_child(NodeRef&amp; rnode, Trace&amp; trace) {
+<t tx="michael.20141230111914.109">void change_to_compressed(NodeRef&amp; rnode, const CompressBuffer&amp; buffer) {
+    int nsize = (int)page_pad(buffer.size+sizeof(nodeid_t));
+    rnode.page.grow_node_by(rnode.id, nsize -(int)rnode.size());
+    
+    Compressed *c = (Compressed*)rnode.node();
+    c-&gt;child = buffer.child;
+    memcpy(c-&gt;data, buffer.data, buffer.size);
+    rnode.set_len(buffer.size);
+    rnode.set_type(kCompressed);
+  }
+
+bool remove_child(NodeRef&amp; rnode, Trace&amp; trace) {
     Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key.trieindex();
+    int index = key.empty() ? -1 : key[0];
 
     BitTrie *n = (BitTrie*)rnode.node();
     if (index &lt; 0) {
       TESTPOINT(BitTrieRemove0);
       *rnode.extra() = 0;
-      return n-&gt;count() &gt; 0;
     }
-    
-    n-&gt;remove(index);
+    else
+      n-&gt;remove(index);
+      
     switch(n-&gt;count()) {
       case 0: 
         return *rnode.extra() != 0;
+        
+      case 1: 
+        if (!*rnode.extra()) {
+          // change to compressed
+          TESTPOINT(BitTrieRemove2);
+          CompressBuffer buffer;
+          buffer.data[0] = (char)n-&gt;first_bit();
+          buffer.size = 1;
+          buffer.child = n-&gt;children[0];
+          change_to_compressed(rnode, buffer);
+        }
+        return true;
         
       case 8:
       case 16:
@@ -774,29 +793,20 @@ static BitTrieHandler bittrie;
     assert(key.size() != 0);
     Leaf *n = (Leaf*)rnode.node();
     TempLeaf me(Slice(n-&gt;data, rnode.len()));
-    TempTrie trie;
     
-    if (key.size() == 2) {
+    trace.change_node(TempTrie());
+    reinsert_me(me, trace);
+    if (key.size() &gt; 1) {
       TESTPOINT(LeafAdd0);
-      trace.change_node(TempTrie());
-      reinsert_me(me, trace);
-      trace.add_node(trie);
+      TempCompressed compressed(key.advance(1));
+      trace.add_node(compressed);
       BitTrie* pn = (BitTrie*)trace.parent().node();
-      pn-&gt;add(key.trieindex(), trace.child_of_parent());
+      pn-&gt;add(key[0], trace.child_of_parent());
+      trace.current().add(end, trace);
+      return; //debug
     }
     else {
-      trace.change_node(trie);
-      reinsert_me(me, trace);
-      if (key.size() &gt; 2) {
-        TESTPOINT(LeafAdd1);
-        TempCompressed compressed(key.advance(1));
-        trace.add_node(compressed);
-        BitTrie* pn = (BitTrie*)trace.parent().node();
-        pn-&gt;add(key.trieindex(), trace.child_of_parent());
-      }
-      else {
-        TESTPOINT(LeafAdd2);
-      }
+      TESTPOINT(LeafAdd2);
     }
 
     trace.current().add(end, trace);
@@ -846,36 +856,20 @@ static BitTrieHandler bittrie;
               trieindex_t index, Trace&amp; trace) {
     BitTrie* bn;
 
-    switch(rest_me.len()) {
-      case 0:
-        TESTPOINT(CompressReinsert0);
-        bn = (BitTrie*)trace.current().node();
-        bn-&gt;add(index, child_id);
-        break;
-        
-      case 1: {
-        TESTPOINT(CompressReinsert1);
-        trace.add_node(TempTrie());
-        bn = (BitTrie*)trace.parent().node();
-        bn-&gt;add(index, trace.child_of_parent());
-        
-        bn = (BitTrie*)trace.current().node();
-        bn-&gt;add(((Compressed*)rest_me.node())-&gt;data[0], child_id);
-        trace.pop();
-        break;
-        }
-        
-      default: {
-        TESTPOINT(CompressReinsert2);
-        trace.add_node(rest_me);
-        bn = (BitTrie*)trace.parent().node();
-        bn-&gt;add(index, trace.child_of_parent());
-        
-        Compressed *n = (Compressed*)trace.current().node();
-        n-&gt;child = child_id;
-        trace.pop();
-        break;
-        }
+    if (rest_me.len() == 0) {
+      TESTPOINT(CompressReinsert0);
+      bn = (BitTrie*)trace.current().node();
+      bn-&gt;add(index, child_id);
+    }
+    else {
+      TESTPOINT(CompressReinsert1);
+      trace.add_node(rest_me);
+      bn = (BitTrie*)trace.parent().node();
+      bn-&gt;add(index, trace.child_of_parent());
+      
+      Compressed *n = (Compressed*)trace.current().node();
+      n-&gt;child = child_id;
+      trace.pop();
     }
   }
 </t>
@@ -898,7 +892,7 @@ static BitTrieHandler bittrie;
                                        std::min(size, key.size()));
     TempCompressed rest_me(Slice(n-&gt;data+prefix_size+1, size-prefix_size-1));
           
-    trace.reserve_space(48+3*sizeof(NodePtr)); 
+    trace.reserve_space(48+3*sizeof(NodePtr), 2); 
       // the maximum of additional space we need
       // if current() and its child has been moved to 
       // another page with enough space      
@@ -906,42 +900,28 @@ static BitTrieHandler bittrie;
     n = (Compressed*)trace.current().node();
     nodeid_t child_id = n-&gt;child;
 
-    trieindex_t first = n-&gt;data[0], second = n-&gt;data[1];    
-    switch(prefix_size) {
-      case 0:
-        // insert one trie node
-        TESTPOINT(CompressAdd0);
-        trace.change_node(TempTrie());
-        reinsert(rest_me, child_id, first, trace);
-        break;
-        
-      case 1: {
-        // insert two trie nodes
-        TESTPOINT(CompressAdd1);
-        trace.change_node(TempTrie());
-        
-        trace.add_node(TempTrie());
-        BitTrie* bn = (BitTrie*)trace.parent().node();
-        bn-&gt;add(first, trace.child_of_parent());
-        
-        reinsert(rest_me, child_id, second, trace);
-        break;
-        }
-      default: {
-        // another compressed
-        TESTPOINT(CompressAdd2);
-        first = n-&gt;data[prefix_size];
-
-        Slice next_key(key.data(), prefix_size);
-        trace.change_node(TempCompressed(next_key));
-        
-        trace.add_node(TempTrie());
-        n = (Compressed*)trace.parent().node();
-        n-&gt;child = trace.child_of_parent();
-        
-        reinsert(rest_me, child_id, first, trace);
-      }
+    trieindex_t first = n-&gt;data[0];
+    if (prefix_size == 0) {
+      // insert one trie node
+      TESTPOINT(CompressAdd0);
+      trace.change_node(TempTrie());
+      reinsert(rest_me, child_id, first, trace);
     }
+    else {
+      // another compressed
+      TESTPOINT(CompressAdd1);
+      first = n-&gt;data[prefix_size];
+
+      Slice next_key(key.data(), prefix_size);
+      trace.change_node(TempCompressed(next_key));
+      
+      trace.add_node(TempTrie());
+      n = (Compressed*)trace.parent().node();
+      n-&gt;child = trace.child_of_parent();
+      
+      reinsert(rest_me, child_id, first, trace);
+    }
+
     trace.current().add(leaf, trace);
   }
 </t>
@@ -980,7 +960,7 @@ static BitTrieHandler bittrie;
 </t>
 <t tx="michael.20141230111914.93">bool remove_child(NodeRef&amp; rnode, Trace&amp; trace) {
     Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key.trieindex();
+    int index = key.empty() ? -1 : key[0];
 
     if (index &lt; 0) {
       *rnode.extra() = 0;
@@ -1022,7 +1002,7 @@ static BitTrieHandler bittrie;
     }
 
     Trie *n = (Trie*)rnode.node();
-    trieindex_t index = key.trieindex();
+    trieindex_t index = key[0];
     nodeid_t child_id= n-&gt;children[index];
     if (child_id) 
       rnode.child_find(child_id, trace);
@@ -1030,7 +1010,7 @@ static BitTrieHandler bittrie;
 </t>
 <t tx="michael.20141230111914.95">void next(NodeRef&amp; rnode, Trace&amp; trace) {
     Slice key(trace.current_key());
-    int index = key.empty() ? 0 : key.trieindex()+1;
+    int index = key.empty() ? 0 : key[0]+1;
     
     Trie *n = (Trie*)rnode.node();
     for(; index &lt; 64; index++) {
@@ -1054,7 +1034,7 @@ static BitTrieHandler bittrie;
       return;
     }
 
-    int index = ((int)key.trieindex())-1;
+    int index = ((int)key[0])-1;
     Trie *n = (Trie*)rnode.node();
     for(; index &gt;= 0; index--) {
       nodeid_t child_id = n-&gt;children[index];
@@ -1194,61 +1174,10 @@ void dump(NodeRef&amp; rnode, std::ostream&amp; out) {
   }
 #endif
 </t>
-<t tx="michael.20150106125629.4">struct TestNavigation {
-  @others
-};
-
-
-TestNavigation test_nav;
-</t>
 <t tx="michael.20150106224503.10"></t>
 <t tx="michael.20150106224503.11"></t>
 <t tx="michael.20150106224503.12"></t>
 <t tx="michael.20150106224503.14"></t>
-<t tx="michael.20150106224503.15">@first #! /usr/bin/env python
-@language cython
-@tabwidth -4
-</t>
-<t tx="michael.20150106224503.2">void test_RandomFind() {
-    db_t db(new TestDatabase);
-    for(size_t i = 0; i &lt; 5000; i+=2) {
-      db-&gt;find(number(i, 4));
-      db-&gt;set_value(value(i));
-    }
-    
-    int numbers[] = { 580, 2849, 2879, 4228, 3134, 461, 1576, 4889, 3731,
-      2307, 4811, 1004, 4454, 3216, 2233, 318, 3358, 4378, 1482, 4612, 3662,
-      1531, 2371, 933, 2795, 1065, 1945, 2576, 2154, 3791, 4505, 4548, 985,
-      3608, 1530, 2973, 225, 4026, 3566, 4421, 3132, 863, 478, 4382, 3886,
-      1707, 3293, 4003, 1235, 3292, 2324, 410, 2876, 4514, 4827, 3874, 2321,
-      3047, 1178, 1661, 4960, 1040, 2291, 3462, 450, 4558, 2626, 3677, 1897,
-      4243, 2097, 2585, 2570, 949, 4567, 1139, 862, 2804, 1187, 4748, 4132,
-      3261, 3088, 4439, 2220, 2516, 2695, 543, 3633, 857, 3378, 4280, 2038,
-      1651, 3433, 1881, 2038, 4387, 2823, 2064 };
-    const int count = sizeof(numbers)/sizeof(int);
-    for(int i = 0; i &lt; count; i++) {
-      int n = numbers[i];
-      std::string key(number(n, 4));
-      db-&gt;find(key);
-      if (n % 2 == 1) {
-
-        out &lt;&lt; "check " &lt;&lt; n &lt;&lt; ":" &lt;&lt; !db-&gt;is_valid() &lt;&lt; std::endl;
-        BOOST_REQUIRE(!db-&gt;is_valid());
-
-        db-&gt;next();
-        std::string next_key = db-&gt;key().string();
-        
-        key = number(++n, 4);
-      }
-
-      out &lt;&lt; "check " &lt;&lt; n &lt;&lt; ":" &lt;&lt; db-&gt;is_valid() 
-          &lt;&lt; "," &lt;&lt; (db-&gt;key().string() == key)
-          &lt;&lt; std::endl;
-      BOOST_REQUIRE(db-&gt;is_valid());
-      BOOST_REQUIRE(db-&gt;key() == key);
-    }
-  }
-</t>
 <t tx="michael.20150106224503.21">void append_data(NodeRef&amp; rnode, const CompressBuffer&amp; buffer) {
     size_t size = rnode.len();
     size_t nsize = page_pad(size+buffer.size+sizeof(nodeid_t));
@@ -1268,32 +1197,17 @@ bool eat_child(NodeRef&amp; rnode) {
     Compressed *c = (Compressed*)rnode.node();
     NodeRef child(rnode.page, c-&gt;child);
 
-    switch(child.type()) {
-      case kCompressed: 
-        // only when a link was between me and child
-        TESTPOINT(CompressedEatCompressed);
-        save_compressed(child, &amp;buffer);
-        // make space on page
-        rnode.page.grow_node_by(child.id, -(int)child.size());
-        append_data(rnode, buffer);
-        rnode.page.free_node(child.id);
-        return true;
-      
-      case kBitTrie: {
-        SingleChild s_child;
-        if (get_single_child(child, &amp;s_child)) {
-          TESTPOINT(CompressedEatSingle);
-          assert(s_child.index &gt;= 0); // null children are done before
-          buffer.data[0] = (char)s_child.index;
-          buffer.size = 1;
-          buffer.child = s_child.child;
-          rnode.page.grow_node_by(child.id, -(int)child.size());
-          append_data(rnode, buffer);
-          rnode.page.free_node(child.id);
-        }
-        return true;
-        }
+    if (child.type() == kCompressed) {
+      // only when a link was between me and child
+      TESTPOINT(CompressedEatCompressed);
+      save_compressed(child, &amp;buffer);
+      // make space on page
+      rnode.page.grow_node_by(child.id, -(int)child.size());
+      append_data(rnode, buffer);
+      rnode.page.free_node(child.id);
+      return true;
     }
+    
     return false;
   }
 </t>
@@ -1301,54 +1215,7 @@ bool eat_child(NodeRef&amp; rnode) {
     return eat_null_children(rnode);
   }
 </t>
-<t tx="michael.20150106224503.24">void change_to_compressed(NodeRef&amp; rnode, const CompressBuffer&amp; buffer) {
-  int nsize = (int)page_pad(buffer.size+sizeof(nodeid_t));
-  rnode.page.grow_node_by(rnode.id, nsize -(int)rnode.size());
-  
-  Compressed *c = (Compressed*)rnode.node();
-  c-&gt;child = buffer.child;
-  memcpy(c-&gt;data, buffer.data, buffer.size);
-  rnode.set_len(buffer.size);
-  rnode.set_type(kCompressed);
-}
-
-bool eat_child(NodeRef&amp; rnode) {
-    SingleChild me;
-    if (get_single_child(rnode, &amp;me) &amp;&amp; me.index &gt;= 0) {
-      NodeRef child(rnode.page, me.child);
-      switch(child.type())  {
-        case kCompressed: {
-            child.eat_child();
-            TESTPOINT(BitTrieEatCompressed);
-            CompressBuffer buffer;
-            save_compressed(child, &amp;buffer);
-            memmove(buffer.data+1, buffer.data, buffer.size);
-            buffer.data[0] = (char)me.index;
-            buffer.size++;
-            rnode.page.grow_node_by(child.id, -(int)child.size());
-            change_to_compressed(rnode, buffer);
-            rnode.page.free_node(child.id);
-            return true;
-          }
-        
-        case kBitTrie: {
-            SingleChild s_child;
-            if (get_single_child(child, &amp;s_child) &amp;&amp; s_child.index &gt;= 0) {
-              TESTPOINT(BitTrieEatSingle);
-              CompressBuffer buffer;
-              buffer.data[0] = (char)me.index;
-              buffer.data[1] = (char)s_child.index;
-              buffer.size = 2;
-              buffer.child = s_child.child;
-              change_to_compressed(rnode, buffer);
-              rnode.page.free_node(child.id);
-              return true;
-            }
-          }
-      }
-      //if me.index &lt; 0: me must be eaten by parent
-    }
-
+<t tx="michael.20150106224503.24">bool eat_child(NodeRef&amp; rnode) {
     if (eat_null_children(rnode))
       return true;
     
@@ -1358,26 +1225,14 @@ bool eat_child(NodeRef&amp; rnode) {
 <t tx="michael.20150106224503.25">// if bitrie has only one child it fills its index
 // and child_id and returns true or false otherwise
 
-struct SingleChild {
-  int index;   // transitions index to id
-  nodeid_t child;
-};
 
-inline bool get_single_child(const NodeRef&amp; bittrie, SingleChild* child) {
+inline bool get_single_child(const NodeRef&amp; bittrie, nodeid_t* child) {
     assert(bittrie.type() == kBitTrie);
     BitTrie *bt = (BitTrie*)bittrie.node();
     nodeid_t end = *bittrie.extra();
     
     if (end &amp;&amp; bt-&gt;count() == 0) {
-      child-&gt;index = -1;
-      child-&gt;child = end;
-      return true;
-    }
-    
-    if (bt-&gt;count() == 1 &amp;&amp; end == 0) {
-      child-&gt;index = bt-&gt;first_bit();
-      assert(child-&gt;index &gt;= 0);
-      child-&gt;child = bt-&gt;children[bt-&gt;get_child_index(child-&gt;index)];
+      *child = end;
       return true;
     }
     
@@ -1399,9 +1254,9 @@ inline bool eat_null_children(NodeRef&amp; rnode) {
       if (child.type() != kBitTrie) 
         continue;
       
-      SingleChild s_child;
-      if (get_single_child(child, &amp;s_child) &amp;&amp; s_child.index &lt; 0) {
-        children[i] = s_child.child;
+      nodeid_t new_child;
+      if (get_single_child(child, &amp;new_child)) {
+        children[i] = new_child;
         rnode.page.free_node(child_id);
         eaten = true;
       }
@@ -1436,143 +1291,6 @@ inline void save_compressed(const NodeRef&amp; node, CompressBuffer* buffer) {
     return false;
   }
 </t>
-<t tx="michael.20150106224503.3">void test_IterTrie() {
-    db_t db(new TestDatabase);
-    std::string key(2, 0);    
-    create_trie(db, true, false);
-    
-    db-&gt;first();
-    int i = 0;
-    while(db-&gt;is_valid()) {
-      key[1] = i;
-
-      out &lt;&lt; "check " &lt;&lt; i &lt;&lt; ":" 
-          &lt;&lt; (db-&gt;key() == key) &lt;&lt; std::endl;
-      BOOST_REQUIRE(db-&gt;key() == key);
-
-      db-&gt;next();
-      i++;
-      if (i == 10)
-        i++;
-    }
-    BOOST_REQUIRE(i == 64);
-    
-    i = 63;
-    db-&gt;last();
-    while(db-&gt;is_valid()) {
-      key[1] = i;
-
-      out &lt;&lt; "check " &lt;&lt; i &lt;&lt; ":" 
-          &lt;&lt; (db-&gt;key() == key) &lt;&lt; std::endl;
-      BOOST_REQUIRE(db-&gt;key() == key);
-
-      db-&gt;prev();
-      i--;
-      if (i == 10)
-        i--;
-    }
-    BOOST_REQUIRE(i == -1);
-    
-    // and do some finding
-    key.assign(1, (char)0);
-    db-&gt;find(key);
-    BOOST_REQUIRE(!db-&gt;is_valid());    
-    
-    key.append(1, (char)0);
-    db-&gt;find(key);
-    BOOST_REQUIRE(db-&gt;is_valid());    
-    
-    key[1] = 10;
-    db-&gt;find(key);
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    
-    key[1] = 11;
-    db-&gt;find(key);
-    BOOST_REQUIRE(db-&gt;is_valid());
-  }
-</t>
-<t tx="michael.20150106224503.38">#ifdef BOOST_TEST_NO_MAIN
-int main(int argc, const char* argv[]) {
-  //test_compress.test_CompressAddNew();
-  //test_compress.test_CompressAdd0_CompressReinsert0();
-  //test_compress.test_CompressAdd0_CompressReinsert1();
-  //test_compress.test_CompressAdd0_CompressReinsert2();
-  //test_compress.test_CompressAdd1_CompressReinsert0();
-  //test_compress.test_CompressAdd1_CompressReinsert1();
-  //test_compress.test_CompressAdd1_CompressReinsert2();
-  //test_compress.test_CompressAdd2_CompressReinsert0();
-  //test_compress.test_CompressAdd2_CompressReinsert1();
-  //test_compress.test_CompressAdd2_CompressReinsert2();
-  //test_compress.test_CompressedEatSingle();
-  //test_compress.test_CompressedEatCompressed();
-  //test_leaf.test_LeafAdd0();
-  //test_leaf.test_LeafAdd1();
-  //test_leaf.test_LeafAdd2();
-  
-  //test_trie.test_TrieBaseAdd0();
-  //test_trie.test_TrieBaseAdd1();
-  //test_trie.test_TrieBaseAdd2();
-  //test_trie.test_TrieBaseAdd3();
-  //test_trie.test_BitTrieAdd0();
-  //test_trie.test_BitTrieAdd1(8);
-  //test_trie.test_BitTrieAdd1(16);
-  //test_trie.test_BitTrieAdd1(24);
-  //test_trie.test_BitTrieAdd1(32);
-  //test_trie.test_BitTrieAdd1(40);
-  //test_trie.test_BitTrieAdd1(48);
-  //test_trie.test_BitTrieAdd2();
-  //test_trie.test_TrieRemove();
-  //test_trie.test_BitTrieRemove0();
-  //test_trie.test_BitTrieRemove1(8);
-  //test_trie.test_BitTrieRemove1(16);
-  //test_trie.test_BitTrieRemove1(24);
-  //test_trie.test_BitTrieRemove1(32);
-  //test_trie.test_BitTrieRemove1(40);
-  //test_trie.test_BitTrieRemove1(48);
-  //test_trie.test_NodeEatSingle();
-  //test_trie.test_BitTrieEatCompressed();
-  //test_trie.test_BitTrieEatSingle();
-  //test_trie.test_TrieMisc();
-  //test_pm.test_TwoPages();
-  //test_pm.test_MergePages();
-  //test_pm.test_RemoveAll();
-  //test_pm.test_NodesInHeap();
-  //test_nav.test_RandomFind();
-  //test_nav.test_IterTrie();
-  //test_nav.test_IterTrieEnd();
-  //test_nav.test_Iter();
-  //test_nav.test_IterCompressed();
-  //test_nav.test_removeFromTop(0);
-  //test_nav.test_removeFromTop(10);
-  test_nav.test_removeFromBottom(0);
-  //test_nav.test_removeFromBottom(10);
-  //test_nav.test_compress();
-  //test_nav.test_ChangeValue();
-  return 0;
-}
-
-#endif
-</t>
-<t tx="michael.20150106224503.4">void create_trie(db_t&amp; db, bool hole, bool end_node) {
-    std::string key(2, 0);
-   
-    for(int i = 0; i &lt; 64; i++) {
-      if (hole &amp;&amp; i == 10)
-        continue;
-    
-      key[1] = (char)i;
-      db-&gt;find(key);
-      db-&gt;set_value(value(i));
-    }
-
-    if (end_node) {    
-      key.pop_back();
-      db-&gt;find(key);
-      db-&gt;set_value("value");
-    }
-  }
-
-</t>
 <t tx="michael.20150106224503.43">void next(NodeRef&amp; rnode, Trace&amp; trace) {
     nodeid_t child_id;
     if (keycmp(rnode, trace, &amp;child_id) &lt; 0) {
@@ -1595,74 +1313,6 @@ int main(int argc, const char* argv[]) {
     }
   }
 </t>
-<t tx="michael.20150106224503.46">void test_removeFromTop(size_t key_size) {
-    db_t db(new TestDatabase);
-    std::string last_key;
-    for(size_t j = 0; j &lt; 5000; j+=2) {
-      db-&gt;find(number(j, key_size));
-      db-&gt;set_value(value(j));
-    }
-
-    int i = 0;
-    for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next()) {
-      out &lt;&lt; "remove " &lt;&lt; i &lt;&lt; ": " &lt;&lt; db-&gt;value().string() &lt;&lt; std::endl;
-      db-&gt;remove();
-      i++;
-    }
-    out &lt;&lt; "stopped remove at: " &lt;&lt; i &lt;&lt; std::endl;
-    BOOST_REQUIRE(i == 2500);
-      
-    for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next())
-      BOOST_REQUIRE(0);
-      
-    db-&gt;next();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;prev();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;last();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-}    
-
-</t>
-<t tx="michael.20150106224503.47">void test_removeFromBottom(size_t key_size) {
-    db_t db(new TestDatabase);
-    std::string last_key;
-    for(size_t j = 0; j &lt; 5000; j+=2) {
-      db-&gt;find(number(j, key_size));
-      db-&gt;set_value(value(j));
-    }
-
-    int i = 0;
-    for(db-&gt;last(); db-&gt;is_valid(); db-&gt;prev()) {
-      out &lt;&lt; "remove " &lt;&lt; i &lt;&lt; ": " &lt;&lt; db-&gt;value().string() &lt;&lt; std::endl;
-      if (i == 2490) {
-        check_dump("tst-0", db);
-        std::cerr &lt;&lt; "break" &lt;&lt; std::endl;
-      }
-      db-&gt;remove();
-      
-      if (i == 2490) {
-        check_dump("tst-1", db);
-        std::cerr &lt;&lt; "break" &lt;&lt; std::endl;
-      }
-        
-      i++;
-    }
-    out &lt;&lt; "stopped remove at: " &lt;&lt; i &lt;&lt; std::endl;
-    BOOST_REQUIRE(i == 2500);
-      
-    for(db-&gt;last(); db-&gt;is_valid(); db-&gt;prev())
-      BOOST_REQUIRE(0);
-      
-    db-&gt;next();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;prev();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;last();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-}    
-
-</t>
 <t tx="michael.20150106224503.49">// returns 
 //   &lt; 0 if key &lt;  data
 //  == 0 if key == data
@@ -1682,63 +1332,6 @@ int keycmp(NodeRef&amp; rnode, Trace&amp; trace, nodeid_t* child_id) {
     return key.size() &gt;= len ? 0 : -1;
   }
 </t>
-<t tx="michael.20150106224503.5">// iteration with end node
-void test_IterTrieEnd() {
-    db_t db(new TestDatabase);
-    std::string key(2, 0);
-    create_trie(db, false, true);
-    
-    db-&gt;first();
-  
-    key.assign(1, (char)0);
-    out &lt;&lt; "check " &lt;&lt; "end" &lt;&lt; ":" 
-        &lt;&lt; (db-&gt;key() == key) &lt;&lt; std::endl;
-    BOOST_REQUIRE(db-&gt;key() == key);
-    db-&gt;next();
-    
-    key.append(1, (char)0);
-    int i = 0;
-    while(db-&gt;is_valid()) {
-      key[1] = i;
-
-      out &lt;&lt; "check " &lt;&lt; i &lt;&lt; ":" 
-          &lt;&lt; (db-&gt;key() == key) &lt;&lt; std::endl;
-      BOOST_REQUIRE(db-&gt;key() == key);
-
-      db-&gt;next();
-      i++;
-    }
-    BOOST_REQUIRE(i == 64);
-    
-    i = 63;
-    db-&gt;last();
-    while(db-&gt;is_valid() &amp;&amp; i&gt;=0) {
-      key[1] = i;
-
-      out &lt;&lt; "check " &lt;&lt; i &lt;&lt; ":" 
-          &lt;&lt; (db-&gt;key() == key) &lt;&lt; std::endl;
-      BOOST_REQUIRE(db-&gt;key() == key);
-
-      db-&gt;prev();
-      i--;
-    }
-    BOOST_REQUIRE(i == -1);
-    BOOST_REQUIRE(db-&gt;is_valid());
-    
-    key.assign(1, (char)0);
-    out &lt;&lt; "check " &lt;&lt; "end" &lt;&lt; ":" 
-        &lt;&lt; (db-&gt;key() == key) &lt;&lt; std::endl;
-    BOOST_REQUIRE(db-&gt;key() == key);
-    
-    db-&gt;prev();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    
-    // and do some finding
-    key.assign(1, (char)0);
-    db-&gt;find(key);
-    BOOST_REQUIRE(db-&gt;is_valid());
-  }
-</t>
 <t tx="michael.20150106224503.50">size_t get_len(const NodeRef&amp; rnode) {
     return rnode.len();
   }
@@ -1753,81 +1346,6 @@ void test_IterTrieEnd() {
     *child_id = n-&gt;child;
   }
 </t>
-<t tx="michael.20150106224503.6">void do_iter(size_t key_size) {
-    db_t db(new TestDatabase);
-    std::string last_key;
-    for(size_t j = 0; j &lt; 5000; j+=2) {
-      db-&gt;find(number(j, key_size));
-      db-&gt;set_value(value(j));
-    }
-
-    //check_dump("tst", db);
-
-    int i = 0;
-    db-&gt;first();
-    
-    while(db-&gt;is_valid()) {
-      Slice key = db-&gt;key();
-      out &lt;&lt; "down " &lt;&lt; i &lt;&lt; ": " &lt;&lt; db-&gt;value().string() &lt;&lt; std::endl;
-      BOOST_REQUIRE(last_key &lt; key.string());
-      
-      last_key = key.string();
-      i++;
-      db-&gt;next();
-    }
-    BOOST_REQUIRE(i==2500);
-    
-    // iter down
-    last_key.assign(1, (char)99);
-    db-&gt;last();    
-    i = 0;  
-    while(db-&gt;is_valid()) {
-      Slice key = db-&gt;key();
-      out &lt;&lt; "up " &lt;&lt; i &lt;&lt; ": " &lt;&lt; db-&gt;value().string() &lt;&lt; std::endl;
-      BOOST_REQUIRE(last_key &gt; key.string());
-      last_key = key.string();
-      i++;
-      db-&gt;prev();
-    }
-    BOOST_REQUIRE(i==2500);
-}    
-
-void test_Iter() {
-    do_iter(0);
-  }
-  
-void test_IterCompressed() {
-    do_iter(10);
-  }
-</t>
-<t tx="michael.20150106224503.7">void test_ChangeValue() {
-    db_t db(new TestDatabase);
-    
-    for(int i = 0; i &lt; 5; i++) {
-      db-&gt;find(number(i, 5));
-      db-&gt;set_value(value(i));
-    }
-
-    const char* cmp_new[] = {
-      "new_value-0 ppppppppp", // make bigger
-      "new_value-1 ppppppppp",
-      "new_value-2 ppppppppp",
-      "new_value-3 ppppppppp",
-      "new_value-4 ppppppppp" };
-    
-    int i = 0;
-    for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next()) {
-      out &lt;&lt; db-&gt;value().string() &lt;&lt; std::endl;
-      db-&gt;set_value(cmp_new[i++]);
-    }
-    
-    i = 0;
-    for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next()) {
-      out &lt;&lt; db-&gt;value().string() &lt;&lt; std::endl;
-      BOOST_REQUIRE(db-&gt;value().string() == cmp_new[i++]);
-    }
-  }
-</t>
 <t tx="michael.20150110130802.12">void prev(NodeRef&amp; rnode, Trace&amp; trace) {
     Slice key(trace.current_key());
     if (key.empty())
@@ -1835,45 +1353,7 @@ void test_IterCompressed() {
     else
       trace.cut_key();
   }</t>
-<t tx="michael.20150110130802.9">// test prev / next of compress nodes
-void test_compress() {
-    db_t db(new TestDatabase);
-    
-    db-&gt;find(number(10, 5));
-    db-&gt;set_value(value(10));
-    
-    // find before
-    db-&gt;find(number(9, 5));
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;next();
-    BOOST_REQUIRE(db-&gt;is_valid());
-    BOOST_REQUIRE(db-&gt;key() == number(10, 5));
-    
-    db-&gt;find(number(9, 5));
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;prev();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    
-    // find after
-    db-&gt;find(number(11, 5));
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;next();
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    
-    db-&gt;find(number(11, 5));
-    BOOST_REQUIRE(!db-&gt;is_valid());
-    db-&gt;prev();    
-    BOOST_REQUIRE(db-&gt;is_valid());
-    BOOST_REQUIRE(db-&gt;key() == number(10, 5));
-    
-    // compelete testing all operations
-    db-&gt;first();
-    BOOST_REQUIRE(db-&gt;is_valid());
-    BOOST_REQUIRE(db-&gt;key() == number(10, 5));
-    
-    db-&gt;last();
-    BOOST_REQUIRE(db-&gt;is_valid());
-    BOOST_REQUIRE(db-&gt;key() == number(10, 5));
-  }</t>
+<t tx="michael.20150110130802.31"></t>
+<t tx="michael.20150110130802.34"></t>
 </tnodes>
 </leo_file>

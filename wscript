@@ -8,7 +8,7 @@ top = "."
 out = "build"
 APPNAME = "base64bench"
 VERSION = "0.0"
-ALIGN = 4 # minimum align
+ALIGN = 4 # 4 is minimum align
 
 
 def options(opt):
@@ -30,13 +30,30 @@ def configure(cfg):
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_TEST = [os.path.abspath("include"), 
                              os.path.abspath("src")]
-    cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g"]
     cfg.env.STLIBPATH_TEST = []
-    cfg.env.LINKFLAGS_TEST = ["-pthread"]#, "-lboost_filesystem",  "-lboost_system"]
+    if cfg.env.CXX_NAME == "gcc":
+        cfg.env.LINKFLAGS_TEST = ["-pthread"]
+        #, "-lboost_filesystem",  "-lboost_system"]
+        cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
+    
+    cfg.env.DEFINES_TEST += ["ALIGN={}".format(ALIGN),
+                             'CMPFILES="{}"'.format(cmpfiles_path)]
+    
     
     if cfg.options.gcov:
         cfg.env.CXXFLAGS_TEST.extend(["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
         cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
+
+    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN)]
+    cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
+    cfg.env.INCLUDES_BENCH = [os.path.abspath("include"), 
+                              os.path.abspath("src")]
+    cfg.env.STLIBPATH_BENCH = []
+    if cfg.env.CXX_NAME == "gcc":
+        #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
+        #, "-lboost_filesystem",  "-lboost_system"]
+        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-march=corei7", "-g", "-O3"]
+    
     
 
 def build(bld):
@@ -70,7 +87,7 @@ def build(bld):
 
     """
     only for generating test_trie tests
-    """
+
     def generate_graph(task):
         command = abspath(join("build", "test_trie"))
         graph = abspath(join("tests", "graph.py"))
@@ -79,7 +96,12 @@ def build(bld):
         return task.exec_command("dot -Tsvg -O graph-1.dot")
      
     bld.add_post_fun(generate_graph)
+    """
 
-
-    
+    bld.program(
+        source=[join("benchmarks", "sbench.cpp")]+sources,
+        use="BENCH",
+        target="sbench")
+        
+        
 #@-leo

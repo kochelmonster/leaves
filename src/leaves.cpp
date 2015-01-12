@@ -56,10 +56,10 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
       assert(nodes._pages.empty());
       assert(trace.size() == 0);
       
-      NodeRef rroot(nodes.new_page(), 0);
+      PageRef page(nodes.new_page());
       TempTrie root;
-      copy_node(rroot.page.new_node(root.size()), root.noderef);
-      trace.push_root(rroot);
+      copy_node(page.new_node(root.size()), root.noderef);
+      trace.push_root(NodeRef(page, 0));
     }
      
   bool is_valid() const {
@@ -117,20 +117,25 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
         reinit();
       _count--;
     }
-  
-  void get_data(std::string& buffer) const {
-      
+    
+#ifdef DEBUG
+  void dump(std::ostream& out) {
+      out << "state:" << std::endl;
+      typedef std::vector<NodeStorageInHeap::_page_ptr>::iterator iter_t;
+      iter_t i = nodes._pages.begin();
+      for(int j = 0; i != nodes._pages.end(); i++, j++) {
+        if (*i) {
+          PageRef(i->get(), j, j).dump(out);
+        }
+      }
+      out << "---" << std::endl;
     }
+#endif    
 };
     
 MemoryDatabase* MemoryDatabase::create() {
   return new PrivateMemoryDatabase();
 }
-  
-MemoryDatabase* MemoryDatabase::load(const std::string& data) {
-  return new PrivateMemoryDatabase(data);
-}
-
 //@-others
 } // namespace larch_leaves 
 //@-leo

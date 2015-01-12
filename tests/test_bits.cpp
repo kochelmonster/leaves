@@ -23,6 +23,8 @@ void testpoint(const char* str) {
 }
 
 //@+node:michael.20141230111914.148: ** Node Structs
+typedef unsigned char trieindex_t;
+
 // A Node containing a string part equal to all descendants
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {

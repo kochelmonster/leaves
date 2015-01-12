@@ -65,17 +65,11 @@ struct Options {
 
 
 //@+node:michael.20141230111914.5: ** class Slice
-typedef unsigned char trieindex_t;
-
 class Slice {
  private:
   size_t _size;
-  union {
-    const char* _data;
-    char _chars[];
-  };
+  const char* _data;
   
-
  public:
   Slice(const char *data, size_t size) : _size(size), _data(data) { }
     
@@ -114,10 +108,6 @@ class Slice {
       return _size;
     }
 
-  trieindex_t trieindex() const {
-      return data()[0];
-    }
-    
   Slice advance(size_t size) const {
       return Slice(data()+size, _size-size);
     }
@@ -150,6 +140,12 @@ class Cursor {
 };
 
 //@+node:michael.20141215222649.27: ** Database (Declaration)
+#define EMBED_BREAKPOINT \
+    asm("0:"                              \
+        ".pushsection embed-breakpoints;" \
+        ".quad 0b;"                       \
+        ".popsection;")
+
 class MemoryDatabase {
 public:
   virtual bool is_valid() const = 0;
@@ -171,10 +167,11 @@ public:
   virtual void set_value(const Slice& value) = 0;
   virtual void remove() = 0;
 
-  virtual void get_data(std::string& buffer) const = 0;
-  
+#ifdef DEBUG
+  virtual void dump(std::ostream& out) = 0;
+#endif
+
   static MemoryDatabase* create();
-  static MemoryDatabase* load(const std::string& data);
 };
 
 
@@ -202,5 +199,6 @@ class CopyOnWriteDatabase : public PersistentDatabase {
 //@-others
 
 } // namespace larch_leaves 
+
 #endif // _LARCH_LEAVES_H
 //@-leo
