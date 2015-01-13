@@ -83,8 +83,7 @@ class Slice {
  public:
   Slice(const char *data, size_t size) : _size(size), _data(data) { }
     
-  Slice(const char* str) : Slice(str, strlen(str)) {
-    }
+  Slice(const char* str) : _size(strlen(str)), _data(str) { }
     
   Slice(const std::string& src)
     : _size(src.size()), _data(src.data()) { }
