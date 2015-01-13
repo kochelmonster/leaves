@@ -53,7 +53,8 @@ def configure(cfg):
     if cfg.env.CXX_NAME == "gcc":
         #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
         #, "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-march=corei7", "-g", "-O1"]
+        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0", 
+                                  "-march=corei7", "-g", "-O1"]
     
     
 

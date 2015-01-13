@@ -20,6 +20,17 @@ namespace larch_leaves {
 
 //@+others
 //@+node:michael.20141230111914.147: ** Exceptions
+#ifndef _MSC_VER
+  #define NOEXCEPT noexcept
+#else
+  #if _MSC_VER >= 1600
+    #define NOEXCEPT noexcept
+  #else
+    #define NOEXCEPT
+  #endif
+#endif
+
+
 class LeavesException : public std::exception {
 };
 
@@ -29,7 +40,6 @@ class NoValidPosition : public LeavesException {
 class NotImplemented : public LeavesException {
 };
 
-
 class WrongValue : public LeavesException {
  private:
   const char* _msg;
@@ -37,7 +47,7 @@ class WrongValue : public LeavesException {
  public:
   WrongValue(const char* msg) : _msg(msg) {}
   
-  const char* what() const noexcept {
+  const char* what() const NOEXCEPT {
     return _msg;
   }
 };
@@ -77,7 +87,7 @@ class Slice {
     }
     
   Slice(const std::string& src)
-    : Slice(src.data(), src.size()) { }
+    : _size(src.size()), _data(src.data()) { }
 
   Slice()
     : _size(0), _data(NULL) { }
