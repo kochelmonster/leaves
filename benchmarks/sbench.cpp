@@ -168,6 +168,9 @@ unsigned long long startcycles, stopcycles;
 //  naskitis.com:
 //  Free the input buffer used to store the first file.  We must do this before we get the process size below. 
   free (askitis);
+  
+  MaxMem = db->pages()*4096;
+  
   fprintf(stderr, "HatArray@Karl_Malbrain\nDASKITIS option enabled\n-------------------------------\n%-20s %.2f MB\n%-20s %.2f sec\n",
     "Hat Array size:", MaxMem/1000000., "Time to insert:", insert_real_time);
 #if !defined(_WIN32)

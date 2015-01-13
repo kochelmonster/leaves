@@ -11,24 +11,40 @@
 namespace larch_leaves {
 
 //@+others
+//@+node:michael.20150112164548.8: ** Page
+// Page Methods
+// ------------
+//@+others
+//@+node:michael.20141230111914.29: *3* new_node
+nodeid_t Page::new_node(size_t size_) {
+  NodePtr *ptrs = node_ptr;
+  size_t free_start = count ? ptrs[count-1].offset : sizeof(Page);
+  free_start -= size_;
+  nodeid_t new_id = count++;
+  ptrs[new_id].offset = free_start;
+  return new_id;
+}
+//@-others
 //@+node:michael.20141230111914.26: ** PageRef
+// PageRef Methods
+// ---------------
 //@+others
 //@+node:michael.20141230111914.27: *3* defragment
 bool PageRef::defragment(Trace& trace) const {
   // keep in mind: root is never removed, instead thethe page will be removed
-  NodePtr* ptrs = node_ptr();
+  NodePtr* ptrs = page->node_ptr;
+  size_t node_count = 1, old_count = count();
   char* page_start = &page->data[0];
-  char* node_start = page_start + ptrs[0].ptr;
-  char* free_start = page_start + ptrs[page->node_count-1].ptr;
-  NodePtr new_ptrs[256];
-  size_t node_count = 1;
-  nodeid_t map[256]; // maps old nodeids to new nodeids
+  char* node_start = page_start + ptrs[0].offset;
+  char* free_start = page_start + ptrs[count()-1].offset;
+  NodePtr new_ptrs[MAX_NODE_COUNT];
+  nodeid_t map[MAX_NODE_COUNT]; // maps old nodeids to new nodeids
   bool nodes_moved = false;
   size_t hole_size = 0;
   bool moved = false;
    
   // closes the holes in the page 
-  for(size_t i = 1; i < page->node_count; i++) {
+  for(size_t i = 1; i < old_count; i++) {
     size_t node_size = get_node_size(i);
     map[i] = node_count;
     
@@ -57,7 +73,7 @@ bool PageRef::defragment(Trace& trace) const {
     
     node_start -= node_size;     
     memcpy(&new_ptrs[node_count], &ptrs[i], sizeof(NodePtr));
-    new_ptrs[node_count].ptr = (inpage_ptr)(node_start-page_start);
+    new_ptrs[node_count].offset = (inpage_ptr)(node_start-page_start);
       
     node_count++;
   }
@@ -65,45 +81,38 @@ bool PageRef::defragment(Trace& trace) const {
   // if (do_move)
   //    the hole is at the end, we need not do anything just cut
   //    which is done at the next line
-  page->node_count = node_count;
+  page->count = node_count;
     
   if (!nodes_moved)
     return false;  // not defragmented 
 
-  memcpy(&new_ptrs[0], &ptrs[0], sizeof(NodePtr)); // not done before
-  memcpy(node_ptr(), new_ptrs, sizeof(NodePtr)*node_count);
+  // ptrs[0] ist still the same
+  memcpy(&ptrs[1], &new_ptrs[1], sizeof(NodePtr)*(node_count-1));
 
   // map the child ids for each node
   map[0] = 0; // is not done before (and is needed for Trie!)
-  for(size_t i = 0; i < node_count; i++) {
-    NodeRef node(*this, i);
+  for(size_t i = 0; i < node_count; i++, ptrs++) {
+    NodeHandler *handler = NodeHandler::handlers[ptrs->type];
+    Node* node = (Node*)&page->data[ptrs->offset];
     nodeid_t children[65];
-    size_t child_count = node.get_children(children);
+    size_t child_count = handler->get_children(ptrs, node, children);
     for(size_t j = 0; j < child_count; j++)
       children[j] = map[children[j]];
-    node.replace_children(children);
+    handler->replace_children(ptrs, node, children);
   }
   
   trace.refresh_trace();
   return true;
-}
-//@+node:michael.20141230111914.29: *3* new_node
-NodeRef PageRef::new_node(size_t size_) const {
-  NodePtr *ptrs = node_ptr();
-  size_t free_start = count() ? ptrs[count()-1].ptr : sizeof(Page);
-  free_start -= size_;
-  nodeid_t new_id = page->node_count++;
-  ptrs[new_id].ptr = free_start;
-  return NodeRef(*this, new_id);
 }
 //@+node:michael.20141230111914.30: *3* grow_node_by
 void PageRef::grow_node_by(nodeid_t node_id, int size) const {
   if (size == 0)
     return;
 
-  NodePtr* ptrs = node_ptr();
-  size_t free_start = ptrs[page->node_count-1].ptr;
-  size_t node_start = ptrs[node_id].ptr;
+  NodePtr* ptrs = page->node_ptr;
+  size_t count_ = count();
+  size_t free_start = ptrs[count_-1].offset;
+  size_t node_start = ptrs[node_id].offset;
   size_t node_size = get_node_size(node_id);
   
   if (size < 0)
@@ -112,8 +121,8 @@ void PageRef::grow_node_by(nodeid_t node_id, int size) const {
   memmove(&page->data[free_start-size], &page->data[free_start],
           node_start-free_start+node_size);
   
-  for(size_t i = node_id; i < page->node_count; i++)
-    ptrs[i].ptr -= size;
+  for(size_t i = node_id; i < count_; i++)
+    ptrs[i].offset -= size;
 }
 //@+node:michael.20141230111914.31: *3* change_to_link
 void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
@@ -122,10 +131,10 @@ void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   assert(delta <= 0);
   grow_node_by(node_id, delta);
   
-  NodePtr *ptrs = node_ptr();
-  ptrs[node_id].extra = 0;
-  ptrs[node_id].type = kLink;
-  *get_link(node_id) = page_id;
+  NodePtr *ptr = page->node_ptr + node_id;
+  ptr->extra = 0;
+  ptr->type = kLink;
+  *((pageid_t*)&page->data[ptr->offset]) = page_id;
 }
 //@+node:michael.20150101205559.4: *3* dump
 #ifdef DEBUG
@@ -140,18 +149,21 @@ void PageRef::dump(std::ostream& out) {
       << t2 << "free_size:  " << free_size() << std::endl
       << t2 << "sum_size:   " << size() + free_size() << std::endl
       << t2 << "nodes: " << std::endl;
-    
+
   for(size_t id = 0; id < count(); id++) {
+    NodePtr *ptr = page->node_ptr + id;
     out << t3 << "- id:    " << (int)id << std::endl
-        << t3 << "  ptr:   " << (int)node_ptr()[id].ptr << std::endl;
-    NodeRef node(*this, id);
-    NodeHandler::handlers[node.type()]->dump(node, out);
+        << t3 << "  ptr:   " << (int)ptr->offset << std::endl;
+        
+    NodeHandler::handlers[ptr->type]->dump(page, id, out);
   }
 }
 #endif
 //@-others
 
 //@+node:michael.20150110130802.6: ** Trace
+// Trace Methods
+// -------------
 //@+others
 //@+node:michael.20150110130802.8: *3* find
 void Trace::find(const Slice& key_) {
@@ -181,11 +193,26 @@ void Trace::find(const Slice& key_) {
 //@+node:michael.20150110130802.7: *3* reserve_space
 #define MAX_PAGE_FREE_SIZE (sizeof(Page)-PAGE_HEADER_SIZE)
 
+size_t calc_sizes(const NodeRef& node, size_t sizes[MAX_NODE_COUNT]) {
+  nodeid_t children[65];
+  size_t size_ = node.size();
+  size_t count = node.get_children(children);
+  
+  for(size_t i = 0; i < count; i++)
+    size_ += calc_sizes(NodeRef(node.page, children[i]), sizes);
+    
+  size_ += sizeof(NodePtr);
+  sizes[node.id] = size_;
+    
+  return size_;
+}
+
+
 void Trace::reserve_space(size_t size_, size_t nodes) {
   // during this loop current() can change its page!
   while (current().page.free_size() < size_ 
-         || current().page.count()+nodes > 256) {
-    size_t sizes[256];
+         || current().page.count()+nodes > MAX_NODE_COUNT) {
+    size_t sizes[MAX_NODE_COUNT];
     NodeRef root(current().page, 0);
     memset(sizes, 0, sizeof(sizes));
     calc_sizes(root, sizes);
@@ -193,12 +220,13 @@ void Trace::reserve_space(size_t size_, size_t nodes) {
     nodeid_t best_id = 1;
             
     // i = 1: it makes no sense to move the root node
-    for(size_t i = 1; i < root.page.count(); i++) {
+    size_t count = root.page.count();
+    for(size_t i = 1; i < count; i++) {
       if (MAX_PAGE_FREE_SIZE - sizes[i] < size_) 
         // the new page must also have enough free space
         continue;
     
-      int delta = abs((int)sizes[i]-sizeof(Page)/2);
+      int delta = abs((int)sizes[i]-PAGE_SPLIT_SIZE);
       if (delta < best) {
         best = delta;
         best_id = i;
@@ -206,8 +234,8 @@ void Trace::reserve_space(size_t size_, size_t nodes) {
     }
     
     PageRef newpage = storage.new_page();
-    NodeRef to_move(NodeRef(root.page, best_id));
-
+    NodeRef to_move(root.page, best_id);
+    
     move_node(newpage, to_move);
     root.page.change_to_link(best_id, newpage.id);
     if (!root.page.defragment(*this))
@@ -222,7 +250,7 @@ nodeid_t Trace::move_node(const PageRef& new_page, const NodeRef& node) {
   nodeid_t children[65];
   size_t count = node.get_children(children);
   
-  NodeRef new_node(new_page.new_node(node.size()));
+  NodeRef new_node(new_page, new_page.new_node(node.size()));
   copy_node(new_node, node);
       
   for(size_t i = 0; i < count; i++) {

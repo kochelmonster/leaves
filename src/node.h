@@ -32,6 +32,8 @@ namespace larch_leaves {
 #define MAX_KEY_SIZE 1536
 #define MAX_KEY_SIZE_64 2048
 #define KEY_EXEEDS "key may not exceed 1536 bytes"
+#define MAX_NODE_COUNT 256
+#define PAGE_SPLIT_SIZE 2048
 //@+node:michael.20150101205559.30: ** TestCode
 #ifdef TESTING
 void testpoint(const char* str);
@@ -75,6 +77,9 @@ inline size_t pad8(size_t size) {
 struct NodeRef;
 struct Trace;
 struct TempNode;
+struct Node;
+struct NodePtr;
+struct Page;
 
 
 struct NodeHandler {
@@ -83,29 +88,32 @@ struct NodeHandler {
   virtual size_t get_len(const NodeRef& rnode) = 0;
   
   // returns the nodes children
-  virtual size_t get_children(NodeRef& rnode, nodeid_t children[65]) = 0;
+  virtual size_t get_children(NodePtr* ptr, Node* data, 
+                              nodeid_t children[65]) = 0;
   // replace the nodes children with the nodeids of children
-  virtual void replace_children(NodeRef& rnode, nodeid_t children[65]) = 0;
+  virtual void replace_children(NodePtr* ptr, Node* data, 
+                                nodeid_t children[65]) = 0;
   
   // finds key in trie, walks until the leaf was found or to the
   // last fitting note. context.trace will be filled on the way
-  virtual void find(NodeRef& rnode, Trace& trace) = 0;
-  virtual void next(NodeRef& rnode, Trace& trace) = 0;
-  virtual void prev(NodeRef& rnode, Trace& trace) = 0;
-  virtual void first(NodeRef& rnode, Trace& trace) = 0;
-  virtual void last(NodeRef& rnode, Trace& trace) = 0;
-  virtual void add(const TempNode& leaf, NodeRef& rnode, Trace& trace) = 0;
+  virtual void find(NodeRef& rnode, Node* data, Trace& trace) = 0;
+  virtual void next(NodeRef& rnode, Node* data, Trace& trace) = 0;
+  virtual void prev(NodeRef& rnode, Node* data, Trace& trace) = 0;
+  virtual void first(NodeRef& rnode, Node* data, Trace& trace) = 0;
+  virtual void last(NodeRef& rnode, Node* data, Trace& trace) = 0;
+  virtual void add(const TempNode& leaf, NodeRef& rnode, Node* data, 
+                   Trace& trace) = 0;
   // remove the node
-  virtual bool remove_child(NodeRef& rnode, Trace& trace) {
+  virtual bool remove_child(NodeRef& rnode, Node* data, Trace& trace) {
       return false;
     }
     
   // rnode tries to merge the child with itself or to a compressed
-  virtual bool eat_child(NodeRef& rnode) = 0;
+  virtual bool eat_child(NodeRef& rnode, Node* data) = 0;
 
     
 #ifdef DEBUG
-  virtual void dump(NodeRef& rnode, std::ostream& out) = 0;
+  virtual void dump(Page* page, nodeid_t nodeid, std::ostream& out) = 0;
 #endif  
     
   static NodeHandler* handlers[6];
@@ -119,7 +127,7 @@ enum NodeTypes {
 typedef boost::uint16_t inpage_ptr;
 
 struct NodePtr {
-  inpage_ptr ptr;      // position inside page
+  inpage_ptr offset;   // position inside page
   nodetype_t type;     // node type
   bsize_t extra;       // is used by several nodes and
                        // ensures all nodes are good aligned
@@ -127,7 +135,7 @@ struct NodePtr {
 
 
 /*
-  A Page has a size of 4096 bytes: it has the following layout:
+  A Page has the following layout:
   
   +----------------------+
   | header (4 byte)      |
@@ -173,90 +181,96 @@ struct NodePtr {
 */
 
 #define PAGE_HEADER_SIZE sizeof(boost::uint16_t)
-
-
-
+#ifndef PAGE_SIZE 
+#define PAGE_SIZE 4096
+#endif
+#define REMOVE_BIT 0x80
 
 struct Page {
   union {
-    char data[4096];
+    char data[PAGE_SIZE];
     struct {
-      boost::uint16_t node_count; // 16bit is not needed but we pad anyway
+      boost::uint16_t count; // node count
       NodePtr node_ptr[];
-      
     };
   };      
       
-  Page() : node_count(0) { }
+  Page() : count(0) { }
+  
+  nodeid_t new_node(size_t size_);
+  
+  size_t get_node_size(nodeid_t id) const {
+    const NodePtr* ptr = node_ptr + id;
+    return (id ? (ptr-1)->offset : sizeof(Page)) - ptr->offset;
+  }
+  
+  size_t free_size() const {
+      size_t nc = count;
+      if (nc)
+        return node_ptr[nc-1].offset - nc*sizeof(NodePtr) - PAGE_HEADER_SIZE;
+      
+      return sizeof(Page) - PAGE_HEADER_SIZE;
+    }
+  
+  // returns only the node occupied size (without pageheader)
+  size_t size() const {
+      return sizeof(Page) - free_size() - PAGE_HEADER_SIZE;
+    }
+    
+  Node* get_node(nodeid_t id) const {
+      return (Node*)&data[node_ptr[id].offset];
+    }
 };
 
 //@+node:michael.20141215222649.73: ** PageRef
-struct Node { };
-
-#define REMOVE_BIT 0x80
-
 // the access class to Page
 struct PageRef {
   Page *page;
   pageid_t id;
   pageoffset_t offset;
 
-  //@+others
-  //@+node:michael.20141230111914.47: *3* PageRef
   PageRef(Page *page_, pageid_t id_, pageoffset_t offset_) :
-      page(page_), id(id_), offset(offset_) { }
-  //@+node:michael.20141230111914.41: *3* node_ptr
-  NodePtr* node_ptr() const {
-      return page->node_ptr;
+    page(page_), id(id_), offset(offset_) { }
+
+  PageRef() : PageRef(NULL, 0, 0) { }
+
+  //@+others
+  //@+node:michael.20150112164548.4: *3* declarations
+  // returns true f the trace was refresh
+  bool defragment(Trace& trace) const;
+  // grows or shrinks a node by size. size must be a multiple of 16
+  void grow_node_by(nodeid_t node_id, int size) const;
+  void change_to_link(nodeid_t node_id, pageid_t page_id) const;
+
+  #ifdef DEBUG
+    void dump(std::ostream& out);
+  #endif
+  //@+node:michael.20150112164548.5: *3* count
+  size_t count() const {
+      return page->count;
+    }
+  //@+node:michael.20141230111914.39: *3* size
+  size_t size() const {
+      return page->size();
     }
   //@+node:michael.20141230111914.38: *3* free_size
   size_t free_size() const {
-      if (page->node_count)
-        return node_ptr()[page->node_count-1].ptr
-          - page->node_count * sizeof(NodePtr)
-          - PAGE_HEADER_SIZE;
-      
-      return sizeof(Page) - PAGE_HEADER_SIZE;
-    }
-  //@+node:michael.20141230111914.39: *3* size
-  // returns only the node occupied size (without pageheader)
-  // but with nodeptrs and links
-  size_t size() const {
-      return sizeof(Page) - free_size() - PAGE_HEADER_SIZE;
-    }
-  //@+node:michael.20141230111914.40: *3* count
-  size_t count() const {
-      return page->node_count;
-    }
-  //@+node:michael.20141230111914.36: *3* get_link
-  pageid_t* get_link(nodeid_t id) const {
-      return (pageid_t*)&page->data[node_ptr()[id].ptr];
+      return page->free_size();
     }
   //@+node:michael.20141230111914.37: *3* get_node_size
   size_t get_node_size(nodeid_t id) const {
-      NodePtr* ptr = node_ptr() + id;
-      return (id ? (ptr-1)->ptr : sizeof(Page)) - ptr->ptr;
+      return page->get_node_size(id);
     }
-  //@+node:michael.20150106224503.57: *3* new_node
-  NodeRef new_node(size_t size) const;
   //@+node:michael.20141230111914.43: *3* free_node
   void free_node(nodeid_t id) const {
-      node_ptr()[id].type |= REMOVE_BIT;
+      page->node_ptr[id].type |= REMOVE_BIT;
     }
-  //@+node:michael.20141230111914.42: *3* defragment
-  bool defragment(Trace& trace) const;
-  //@+node:michael.20141230111914.45: *3* grow_node_by
-  // grows or shrinks a node by size. size must be a multiple of 16
-  void grow_node_by(nodeid_t node_id, int size) const;
-  //@+node:michael.20141230111914.46: *3* change_to_link
-  void change_to_link(nodeid_t node_id, pageid_t page_id) const;
-  //@+node:michael.20150101205559.1: *3* dump
-  #ifdef DEBUG
-  void dump(std::ostream& out);
-  #endif
+  //@+node:michael.20150112164548.7: *3* new_node
+  nodeid_t new_node(size_t size_) const {
+    return page->new_node(size_);
+  }
   //@-others
 };
-
 //@+node:michael.20141219202729.2: ** NodeRef
 // The Access class to Node
 struct NodeRef {
@@ -265,9 +279,13 @@ struct NodeRef {
   NodePtr* ptr;
   NodeHandler* handler;
     
-  NodeRef(const PageRef& page_, nodeid_t id_)
-    : page(page_), id(id_), ptr(page.node_ptr()+id),
-      handler(NodeHandler::handlers[type()]) { }
+  NodeRef(PageRef page_, nodeid_t id_)
+    : page(page_), id(id_), ptr(NULL), handler(NULL) {
+      if (page_.page) {
+        ptr = page_.page->node_ptr+id;
+        handler = NodeHandler::handlers[type()];
+      }
+    }
 
   nodetype_t type() const {
       return ptr->type;
@@ -279,11 +297,7 @@ struct NodeRef {
     }
   
   Node* node() const {
-      return (Node*)&page.page->data[ptr->ptr];
-    }
-    
-  pageid_t* link() const {
-      return (pageid_t*)&page.page->data[ptr->ptr];
+      return (Node*)&page.page->data[ptr->offset];
     }
     
   bsize_t* extra() const {
@@ -318,43 +332,43 @@ struct NodeRef {
     }
 
   void find(Trace& trace) {
-      handler->find(*this, trace);
+      handler->find(*this, node(), trace);
     }
     
   void next(Trace& trace) {
-      handler->next(*this, trace);
+      handler->next(*this, node(), trace);
     }
     
   void prev(Trace& trace) {
-      handler->prev(*this, trace);
+      handler->prev(*this, node(), trace);
     }
     
   void first(Trace& trace) {
-      handler->first(*this, trace);
+      handler->first(*this, node(), trace);
     }
     
   void last(Trace& trace) {
-      handler->last(*this, trace);
+      handler->last(*this, node(), trace);
     }
    
   void add(const TempNode& leaf, Trace& trace) {
-      handler->add(leaf, *this, trace);
+      handler->add(leaf, *this, node(), trace);
     }
 
   bool remove_child(Trace& trace) {
-      return handler->remove_child(*this, trace);
+      return handler->remove_child(*this, node(), trace);
     }
    
   size_t get_children(nodeid_t children[65]) const {
-      return handler->get_children((NodeRef&)*this, children);
+      return handler->get_children(ptr, node(), children);
     }
 
   void replace_children(nodeid_t children[65]) {
-      handler->replace_children(*this, children);
+      handler->replace_children(ptr, node(), children);
     }
     
   bool eat_child() {
-      return handler->eat_child(*this);
+      return handler->eat_child(*this, node());
     }
     
   void child_find(nodeid_t child_id, Trace& trace);
@@ -363,7 +377,7 @@ struct NodeRef {
   //@-others
 };
 
-inline void copy_node(const NodeRef& dst, const NodeRef& src) {
+template<typename src_t> void copy_node(const NodeRef& dst, const src_t& src) {
     memcpy(dst.node(), src.node(), src.size());
     *dst.extra() = *src.extra();
     dst.set_type(src.type());
@@ -372,37 +386,34 @@ inline void copy_node(const NodeRef& dst, const NodeRef& src) {
 //@+node:michael.20141220220750.4: ** TempNode
 struct TempNode {
   Page page;
-  PageRef pageref;
-  NodeRef noderef;
-  
-  TempNode()
-    : pageref(&page, 0xFFFFFFFF, 0xFFFFFFFF), noderef(pageref, 0) { 
-      *noderef.extra() = 0;
-    }
-    
+   
   size_t size() const {
-      return noderef.size();
-    }
-    
-  size_t len() const {
-      return noderef.len();
+      return page.get_node_size(0);
     }
     
   Node* node() const {
-      return noderef.node();
+      return page.get_node(0);
     }
     
-  bsize_t* extra() const {
-      return noderef.extra();
+  const bsize_t* extra() const {
+      return &page.node_ptr[0].extra;
+    }
+    
+  bsize_t* extra() {
+      return &page.node_ptr[0].extra;
     }
 
   nodetype_t type() const {
-      return noderef.type();
+      return page.node_ptr[0].type;
+    }
+
+  size_t len() const {
+      return size() - *extra();
     }
     
-  size_t get_len() const {
-      return noderef.get_len();
-    }
+  void set_len(size_t len) {
+      *extra() = size() - len;
+    }    
 };
 
 
@@ -477,7 +488,7 @@ struct Trace {
     Transition(const NodeRef& node_, size_t start_, size_t end_)
         : node(node_), start(start_), end(end_) { }
     Transition()
-        : node(PageRef(NULL, 0, 0), 0), start(0), end(0) { }
+        : node(PageRef(), 0), start(0), end(0) { }
   };
 
   std::vector<Transition> stack;
@@ -487,7 +498,9 @@ struct Trace {
   Transition *back;
   
   Trace(PageMap& map_, NodeStorage& storage_) :
-      map(map_), storage(storage_) { }
+      map(map_), storage(storage_) { 
+        key.reserve(MAX_KEY_SIZE_64);
+      }
   
   //@+others
   //@+node:michael.20150111191610.5: *3* declarations
@@ -583,9 +596,10 @@ struct Trace {
       key.clear();
     }
   //@+node:michael.20141230111914.117: *3* push
-  void push(const NodeRef& node) {
+  NodeRef& push(const NodeRef& node) {
       size_t start = back->end;
       _push(Transition(node, start, start+node.get_len()));
+      return current();
     }
       
   void push_root(const NodeRef& node) {
@@ -654,7 +668,7 @@ struct Trace {
   nodeid_t child_of_parent() {
       NodeRef& link_or_parent(stack[stack.size()-2].node);
       if (link_or_parent.type() == kLink) {
-        *link_or_parent.link() = current().page.id;
+        *(pageid_t*)link_or_parent.node() = current().page.id;
         return link_or_parent.id;
       }
       return current().id;
@@ -665,9 +679,9 @@ struct Trace {
       size_t size_ = src.size();
       reserve_space(size_+sizeof(NodePtr));
       
-      NodeRef dst(current().page.new_node(size_));
-      copy_node(dst, src.noderef);
-      
+      nodeid_t newid = current().page.new_node(size_);
+      NodeRef dst(current().page, newid);
+      copy_node(dst, src);
       push(dst);
    }
   //@+node:michael.20141230111914.128: *3* grow_node_by
@@ -683,8 +697,8 @@ struct Trace {
   void change_node(const TempNode& new_node) {
       size_t size_ = current().size(), new_size = new_node.size();
       grow_node_by((int)new_size-(int)size_);
-      copy_node(current(), new_node.noderef);
-      back->end = back->start + new_node.get_len();
+      copy_node(current(), new_node);
+      back->end = back->start + current().get_len();
     }
   //@+node:michael.20141230111914.115: *3* set_leaf
   // sets a new leaf, 
@@ -697,20 +711,6 @@ struct Trace {
         current().add(leaf, *this);
         return true;
       }
-    }
-  //@+node:michael.20141230111914.131: *3* calc_sizes
-  size_t calc_sizes(const NodeRef& node, size_t sizes[256]) {
-      nodeid_t children[65];
-      size_t size_ = node.size();
-      size_t count = node.get_children(children);
-      
-      for(size_t i = 0; i < count; i++)
-        size_ += calc_sizes(NodeRef(node.page, children[i]), sizes);
-        
-      size_ += sizeof(NodePtr);
-      sizes[node.id] = size_;
-        
-      return size_;
     }
   //@+node:michael.20150101205559.69: *3* refresh_trace
   // refresh the trace remapping the nodeids

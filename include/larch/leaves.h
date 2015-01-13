@@ -150,6 +150,7 @@ class MemoryDatabase {
 public:
   virtual bool is_valid() const = 0;
   virtual size_t count() const = 0;
+  virtual size_t pages() const = 0;
   
   // sets the cursor to key
   virtual void find(const Slice& key) = 0;

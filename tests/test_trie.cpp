@@ -37,7 +37,7 @@ struct TestDatabase {
       assert(trace.size() == 0);
       PageRef page(nodes.new_page());
       TempTrie root;
-      copy_node(page.new_node(root.size()), root.noderef);
+      copy_node(NodeRef(page, page.new_node(root.size())), root);
       trace.push_root(NodeRef(page, 0));
     }
      
@@ -126,6 +126,7 @@ void check_dump(const char* fname, db_t& db) {
   db->dump(cstr);
   std::cout << cstr.str();
   
+  return; // do not output page dump
   std::string path(CMPFILES);
   path.append(fname);
   std::ofstream out(path.c_str());
@@ -798,8 +799,12 @@ struct TestTrie {
     
     *trie.extra() = 101;
     
+    NodeHandler* handler = NodeHandler::handlers[kTrie];
+    NodePtr *ptr = trie.page.node_ptr;
+    Node *node = (Node*)&trie.page.data[ptr->offset]; 
+    
     nodeid_t cmps[65];
-    size_t count = trie.noderef.get_children(cmps);
+    size_t count = handler->get_children(ptr, node, cmps);
     BOOST_REQUIRE(count == 33);
     
     for(int i=1, j=0; j < (int)count-1; i+=2, j++) {
@@ -814,7 +819,7 @@ struct TestTrie {
 
     cmps[count-1] = 102;
     
-    trie.noderef.replace_children(cmps);
+    handler->replace_children(ptr, node, cmps);
     
     for(int i = 1; i < 64; i += 2) {
       BOOST_REQUIRE(children[i] == i+1);
@@ -1508,8 +1513,8 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_BitTrieRemove2();
   //test_trie.test_NodeEatSingle();
   //test_trie.test_TrieMisc();
-  //test_pm.test_TwoPages();
-  test_pm.test_MergePages();
+  test_pm.test_TwoPages();
+  //test_pm.test_MergePages();
   //test_pm.test_RemoveAll();
   //test_pm.test_NodesInHeap();
   //test_nav.test_RandomFind();

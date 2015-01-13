@@ -45,6 +45,7 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
 
   PrivateMemoryDatabase() : trace(nodes, nodes), _count(0) {
       reinit();
+      coding_buffer.reserve(MAX_KEY_SIZE_64);
     }
 
   PrivateMemoryDatabase(const std::string& data) : trace(nodes, nodes), _count(0) {
@@ -58,7 +59,7 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
       
       PageRef page(nodes.new_page());
       TempTrie root;
-      copy_node(page.new_node(root.size()), root.noderef);
+      copy_node(NodeRef(page, page.new_node(root.size())), root);
       trace.push_root(NodeRef(page, 0));
     }
      
@@ -68,6 +69,10 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
     
   size_t count() const {
       return _count;
+    }
+    
+  size_t pages() const {
+      return nodes._pages.size() - nodes._free_pages;
     }
   
   void find(const Slice& key) {

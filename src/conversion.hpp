@@ -5,11 +5,17 @@
 //  Distributed under the Boost Software License, Version 1.0.
 //  http://www.boost.org/LICENSE_1_0.txt
 
+// some improvments for intrinsicsby kochelmonster
+
 #ifndef BOOST_ENDIAN_CONVERSION_HPP
 #define BOOST_ENDIAN_CONVERSION_HPP
 
 #include <boost/detail/endian.hpp>
 #include <boost/cstdint.hpp>
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 //------------------------------------- synopsis ---------------------------------------//
 
@@ -77,6 +83,11 @@ namespace endian
 
   inline void reorder(int64_t& x)
   {
+#ifdef __LP64__
+    x = __builtin_bswap64(x);
+#elif defined(_M_X64)
+    x = _byteswap_uint64(x);
+#else
     char* rep = reinterpret_cast<char*>(&x);
     char tmp;
     tmp = *rep;
@@ -91,6 +102,7 @@ namespace endian
     tmp = *(rep+3);
     *(rep+3) = *(rep+4);
     *(rep+4) = tmp;
+#endif
   }
 
   inline void reorder(uint16_t& x)
@@ -116,6 +128,11 @@ namespace endian
 
   inline void reorder(uint64_t& x)
   {
+#ifdef __LP64__
+    x = __builtin_bswap64(x);
+#elif defined(_M_X64)
+    x = _byteswap_uint64(x);
+#else
     char* rep = reinterpret_cast<char*>(&x);
     char tmp;
     tmp = *rep;
@@ -130,6 +147,7 @@ namespace endian
     tmp = *(rep+3);
     *(rep+3) = *(rep+4);
     *(rep+4) = tmp;
+#endif
   }
 
   inline void reorder(int16_t source, int16_t& target)

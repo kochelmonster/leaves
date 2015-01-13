@@ -105,6 +105,17 @@ struct BitTrie {
               count()-child_index);
     }
 };
+
+
+struct Node {
+  union {
+    Compressed c;
+    Leaf l;
+    Trie t;
+    BitTrie b;
+    pageid_t p;
+  };
+};
 //@+node:michael.20150101205559.44: ** TestSuite
 BOOST_AUTO_TEST_CASE(add_bits) {
   union {
