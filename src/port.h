@@ -7,7 +7,7 @@
 //@+node:michael.20141230111914.144: ** GCC
 #ifdef __GNUC__
 
-#ifdef __LP64__
+#if defined(__LP64__) || defined(__x86_64__)
 #define popcount __builtin_popcountll
 #define ffs __builtin_ffsll
 #define clz __builtin_clzll
@@ -74,12 +74,12 @@ inline int clz32(boost::uint32_t v) {
 
 #ifdef _32BIT
 size_t popcount(boost::uint64_t v) {
-    boost::uin32_t *v32 = (boost::uin32_t*)&v;
+    boost::uint32_t *v32 = (boost::uint32_t*)&v;
     return popcount32(v32[0]) + popcount32(v32[1])
   }
   
 inline int ffs(boost::uint64_t v) {
-    boost::uin32_t *v32 = (boost::uin32_t*)&v;
+    boost::uint32_t *v32 = (boost::uint32_t*)&v;
     if (v32[0])
       return ffs32(v32[0]);
      
@@ -87,7 +87,7 @@ inline int ffs(boost::uint64_t v) {
   }
 
 inline int ffs(boost::uint64_t v) {
-    boost::uin32_t *v32 = (boost::uin32_t*)&v;
+    boost::uint32_t *v32 = (boost::uint32_t*)&v;
     if (v32[1])
       return clz32(v32[1]) + 32;
       
@@ -95,17 +95,17 @@ inline int ffs(boost::uint64_t v) {
   }
   
 inline bool test_bit(boost::uint64_t v, int bit) {
-    boost::uin32_t *v32 = (boost::uin32_t*)&v;
+    boost::uint32_t *v32 = (boost::uint32_t*)&v;
     return v32[bit/32] & (1 << (bit&31));
   }
 
 inline bool add_bit(boost::uint64_t v, int bit) {
-    boost::uin32_t *v32 = (boost::uin32_t*)&v;
+    boost::uint32_t *v32 = (boost::uint32_t*)&v;
     return v32[bit/32] | (1 << (bit&31));
   }
 
 inline bool remove_bit(boost::uint64_t v, int bit) {
-    boost::uin32_t *v32 = (boost::uin32_t*)&v;
+    boost::uint32_t *v32 = (boost::uint32_t*)&v;
     return v32[bit/32] | (1 << bit&31);
   }
   

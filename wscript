@@ -32,6 +32,7 @@ def configure(cfg):
     cfg.check_boost()#lib='system filesystem')
         
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
+                             "PAGE_SIZE=8192", 
                              'CMPFILES="{}"'.format(cmpfiles_path)]
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_TEST = [os.path.abspath("include"), 
@@ -41,11 +42,6 @@ def configure(cfg):
         cfg.env.LINKFLAGS_TEST = ["-pthread"]
         #, "-lboost_filesystem",  "-lboost_system"]
         cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
-    
-    cfg.env.DEFINES_TEST += ["ALIGN={}".format(ALIGN),
-                             "PAGE_SIZE=8192", 
-                             'CMPFILES="{}"'.format(cmpfiles_path)
-                             ]
     
     if cfg.options.gcov:
         cfg.env.CXXFLAGS_TEST.extend(["-fprofile-arcs", "-ftest-coverage", "-fPIC"])

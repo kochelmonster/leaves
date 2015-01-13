@@ -83,7 +83,7 @@ namespace endian
 
   inline void reorder(int64_t& x)
   {
-#ifdef __LP64__
+#if defined(__LP64__) || defined(__x86_64__)
     x = __builtin_bswap64(x);
 #elif defined(_M_X64)
     x = _byteswap_uint64(x);
@@ -128,7 +128,7 @@ namespace endian
 
   inline void reorder(uint64_t& x)
   {
-#ifdef __LP64__
+#if defined(__LP64__) || defined(__x86_64__)
     x = __builtin_bswap64(x);
 #elif defined(_M_X64)
     x = _byteswap_uint64(x);
