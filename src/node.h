@@ -32,8 +32,15 @@ namespace larch_leaves {
 #define MAX_KEY_SIZE 1536
 #define MAX_KEY_SIZE_64 2048
 #define KEY_EXEEDS "key may not exceed 1536 bytes"
-#define MAX_NODE_COUNT 256
 #define PAGE_SPLIT_SIZE 2048
+#ifndef PAGE_SIZE 
+#define PAGE_SIZE 8192
+#endif
+#ifndef ALIGN
+#define ALIGN 4
+#endif 
+
+#define MAX_NODE_COUNT (PAGE_SIZE/ALIGN)
 //@+node:michael.20150101205559.30: ** TestCode
 #ifdef TESTING
 void testpoint(const char* str);
@@ -53,10 +60,9 @@ typedef boost::uint32_t pageoffset_t; // points to page inside file
 
 // Nodes are identfied by a node id.
 // the node id is the index of the node pointer table.
-
+typedef boost::uint16_t nodeid_t;
 typedef boost::uint8_t nodetype_t;
-typedef boost::uint8_t nodeid_t;
-typedef boost::uint8_t bsize_t;  // byte size
+
 //@+node:michael.20141230111914.74: ** Utils
 inline size_t common_prefix(const char* s1, const char *s2, size_t size) {
   size_t i;
@@ -65,13 +71,14 @@ inline size_t common_prefix(const char* s1, const char *s2, size_t size) {
   return i;
 }
 
-inline size_t page_pad(size_t size) {
-  return size + ALIGN - 1 - ((size-1)&(ALIGN-1));
+template<size_t align> size_t pad(size_t size) {
+  return size + (align-1) - ((size-1)&(align-1));
 }
 
-inline size_t pad8(size_t size) {
-  return size + 7 - ((size-1)&7);
+inline size_t page_pad(size_t size) {
+  return pad<ALIGN>(size);
 }
+
 
 //@+node:michael.20141215222649.99: ** NodeHandler
 struct NodeRef;
@@ -120,7 +127,7 @@ struct NodeHandler {
 };
 
 enum NodeTypes {
-  kLeaf = 0, kBigLeaf, kLink, kCompressed, kTrie, kBitTrie
+  kLeaf = 0, kBigLeaf, kLink, kCompressed, kTrie, kBitTrie, kRemoved
 };
 //@+node:michael.20141215222649.67: ** Page
 // A pointer inside a page
@@ -128,9 +135,10 @@ typedef boost::uint16_t inpage_ptr;
 
 struct NodePtr {
   inpage_ptr offset;   // position inside page
-  nodetype_t type;     // node type
-  bsize_t extra;       // is used by several nodes and
-                       // ensures all nodes are good aligned
+  struct {
+    boost::uint16_t type:4;    // node type
+    boost::uint16_t extra:12;  // is used by several nodes
+  };                       
 };
 
 
@@ -181,10 +189,6 @@ struct NodePtr {
 */
 
 #define PAGE_HEADER_SIZE sizeof(boost::uint16_t)
-#ifndef PAGE_SIZE 
-#define PAGE_SIZE 4096
-#endif
-#define REMOVE_BIT 0x80
 
 struct Page {
   union {
@@ -263,7 +267,7 @@ struct PageRef {
     }
   //@+node:michael.20141230111914.43: *3* free_node
   void free_node(nodeid_t id) const {
-      page->node_ptr[id].type |= REMOVE_BIT;
+      page->node_ptr[id].type = kRemoved;
     }
   //@+node:michael.20150112164548.7: *3* new_node
   nodeid_t new_node(size_t size_) const {
@@ -300,8 +304,12 @@ struct NodeRef {
       return (Node*)&page.page->data[ptr->offset];
     }
     
-  bsize_t* extra() const {
-      return &ptr->extra;
+  nodeid_t extra() const {
+      return ptr->extra;
+    }
+    
+  void set_extra(nodeid_t extra) const {
+      ptr->extra = extra;
     }
 
   size_t size() const {
@@ -318,11 +326,11 @@ struct NodeRef {
     
   // for leaf and compress nodes
   size_t len() const {
-      return size() - *extra();
+      return extra();
     }
     
   void set_len(size_t len) const {
-      *extra() = size() - len;
+      set_extra(len);
     }
     
   //@+others
@@ -379,13 +387,15 @@ struct NodeRef {
 
 template<typename src_t> void copy_node(const NodeRef& dst, const src_t& src) {
     memcpy(dst.node(), src.node(), src.size());
-    *dst.extra() = *src.extra();
+    dst.set_extra(src.extra());
     dst.set_type(src.type());
   }
 
 //@+node:michael.20141220220750.4: ** TempNode
 struct TempNode {
   Page page;
+   
+  TempNode() { assert(page.count == 0); }
    
   size_t size() const {
       return page.get_node_size(0);
@@ -395,24 +405,24 @@ struct TempNode {
       return page.get_node(0);
     }
     
-  const bsize_t* extra() const {
-      return &page.node_ptr[0].extra;
+  nodeid_t extra() const {
+      return page.node_ptr[0].extra;
     }
     
-  bsize_t* extra() {
-      return &page.node_ptr[0].extra;
-    }
+  void set_extra(nodeid_t extra) {
+      page.node_ptr[0].extra = extra;
+    }    
 
   nodetype_t type() const {
       return page.node_ptr[0].type;
     }
 
   size_t len() const {
-      return size() - *extra();
+      return extra();
     }
     
   void set_len(size_t len) {
-      *extra() = size() - len;
+      set_extra(len);
     }    
 };
 
@@ -513,7 +523,7 @@ struct Trace {
   // ensures that the page of current node has a free_space >  size
   // place current node to a new page if nessary
   // if exclude is set this node will not move from page
-  void reserve_space(size_t size_, size_t nodes=1);
+  void reserve_space(size_t size_);
   //@+node:michael.20141230111914.112: *3* size
   size_t size() const {
       return stack.size();
@@ -724,21 +734,15 @@ struct Trace {
 
 //@+node:michael.20150106224503.61: ** NodeRef-inlines
 inline void NodeRef::child_find(nodeid_t child_id, Trace& trace) {
-  NodeRef child(page, child_id);
-  trace.push(child);
-  child.find(trace);
+  trace.push(NodeRef(page, child_id)).find(trace);
 }
 
 inline void NodeRef::child_first(nodeid_t child_id, Trace& trace) {
-  NodeRef child(page, child_id);
-  trace.push(child);
-  child.first(trace);
+  trace.push(NodeRef(page, child_id)).first(trace);
 }
 
 inline void NodeRef::child_last(nodeid_t child_id, Trace& trace) {
-  NodeRef child(page, child_id);
-  trace.push(child);
-  child.last(trace);
+  trace.push(NodeRef(page, child_id)).last(trace);
 }
 //@-others
 } // namespace larch_leaves 

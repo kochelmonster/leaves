@@ -475,53 +475,18 @@ struct TestCompress  {
   void test_CompressedEatCompressed() {
       db_t db(new TestDatabase);
       
-      // fill to page break
-      for(size_t i = 0; i < 15; i++) {
-        db->find(sep_number(i));
-        db->set_value(value(i, 250));
-      }
-
-      // fill first page
-      std::string prefix = sep_number(0);
-      for(size_t i = 0; i < 6; i++) {
-        db->find(prefix+number(i));
-        db->set_value(value(i, 250));
-      }
-
-      // empty second page
       db->find(sep_number(1));
-      db->remove();
-            
-      for(size_t i = 11; i < 15; i++) {
-        db->find(sep_number(i));
-        db->remove();
-      }
+      db->set_value(value(1));
 
-      
-      // empty first page
-      for(size_t i = 0; i < 6; i++) {
-        db->find(prefix+number(i));
-        db->remove();
-      }
-     
-      for(size_t i = 0; i < 10; i++) {
-        if (i != 1) {
-          db->find(sep_number(i));
-          db->remove();
-        }
-      }
-
-      std::string star_key = sep_number(10) + number(0);
-      db->find(star_key);
-      db->set_value(value("star"));
+      db->find(sep_number(10));
+      db->set_value(value(10));
 
       check_dump("CompressedEatCompressed-1", db);
       prepare_testpoint_output();
-      
-      db->find(star_key);
-      db->remove();
-      
       check_dump("CompressedEatCompressed-2", db);
+      
+      db->find(sep_number(1));
+      db->remove();
       
       const char* testpoints[] = {"CompressedEatCompressed"};
       check_testpoints(1, testpoints);
@@ -797,7 +762,7 @@ struct TestTrie {
     for(int i = 1; i < 64; i += 2)
       children[i] = i;
     
-    *trie.extra() = 101;
+    trie.set_extra(101);
     
     NodeHandler* handler = NodeHandler::handlers[kTrie];
     NodePtr *ptr = trie.page.node_ptr;
@@ -825,7 +790,7 @@ struct TestTrie {
       BOOST_REQUIRE(children[i] == i+1);
     }
     
-    BOOST_REQUIRE(*trie.extra() == 102);
+    BOOST_REQUIRE(trie.extra() == 102);
   }
   //@-others
 };
@@ -833,42 +798,45 @@ struct TestTrie {
 TestTrie test_trie;
 //@+node:michael.20150101205559.62: ** TestPageManagement
 struct TestPageManagement {
+  #define VALUE_PAD 300
+  #define TWO_PAGE_COUNT 26
   void test_TwoPages() {
       db_t db(new TestDatabase);
       
-      for(size_t i = 0; i < 19; i++) {
-        db->find(number(i));
-        db->set_value(value(i, 200));
+      
+      for(size_t i = 0; i < TWO_PAGE_COUNT; i++) {
+        db->find(number(i, 5));
+        db->set_value(value(i, VALUE_PAD));
       }
       
       check_dump("TwoPages-1", db);
   
-      db->find(number(19));
-      db->set_value(value(19, 200));
+      db->find(number(TWO_PAGE_COUNT, 5));
+      db->set_value(value(TWO_PAGE_COUNT, VALUE_PAD));
                 
       check_dump("TwoPages-2", db);
       
-      db->find(number(12));
+      db->find(number(20, 5));
       BOOST_REQUIRE(db->is_valid());
-      BOOST_REQUIRE(db->value() == value(12, 200));
+      BOOST_REQUIRE(db->value() == value(20, VALUE_PAD));
 
-      db->find(number(5));
+      db->find(number(5, 5));
       BOOST_REQUIRE(db->is_valid());
-      BOOST_REQUIRE(db->value() == value(5, 200));
+      BOOST_REQUIRE(db->value() == value(5, VALUE_PAD));
     }
 
   void test_MergePages() {
       db_t db(new TestDatabase);
       
-      for(size_t i = 0; i < 20; i++) {
+      for(size_t i = 0; i <= TWO_PAGE_COUNT; i++) {
         db->find(number(i));
-        db->set_value(value(i, 200));
+        db->set_value(value(i, VALUE_PAD));
       }
       
       check_dump("MergePages-1", db);
       prepare_testpoint_output();
   
-      db->find(number(11));
+      db->find(number(20));
       db->remove();
                 
       check_dump("MergePages-2", db);

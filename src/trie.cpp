@@ -88,7 +88,7 @@ struct BitTrie {
       bits |= ((boost::uint64_t)1)<<index;
       int child_index = get_child_index(index); 
       memmove(children+child_index+1, children+child_index,
-              count()-child_index-1);
+              sizeof(nodeid_t)*(count()-child_index-1));
       children[child_index] = node;
     }
     
@@ -97,7 +97,7 @@ struct BitTrie {
       assert(child_index >= 0);
       bits &= ~(((boost::uint64_t)1)<<index);
       memmove(children+child_index, children+child_index+1,
-              count()-child_index);
+              sizeof(nodeid_t)*(count()-child_index));
     }
 };
 
@@ -155,7 +155,7 @@ struct TrieBase : public NodeHandler {
         case 0:
           TESTPOINT(TrieBaseAdd0);
           trace.add_node(leaf);
-          *trace.parent().extra() = trace.child_of_parent();
+          trace.parent().set_extra(trace.child_of_parent());
           break;
           
         case 1: 
@@ -183,7 +183,7 @@ struct TrieBase : public NodeHandler {
 inline bool get_single_child(const NodeRef& bittrie, nodeid_t* child) {
     assert(bittrie.type() == kBitTrie);
     BitTrie *bt = (BitTrie*)bittrie.node();
-    nodeid_t end = *bittrie.extra();
+    nodeid_t end = bittrie.extra();
     
     if (end && bt->count() == 0) {
       *child = end;
@@ -352,7 +352,7 @@ struct CompressedHandler : public NodeHandler {
       TempCompressed rest_me(Slice(data->c.data+prefix_size+1, 
                                    size-prefix_size-1));
             
-      trace.reserve_space(48+3*sizeof(NodePtr), 2); 
+      trace.reserve_space(48+3*sizeof(NodePtr)); 
         // the maximum of additional space we need
         // if current() and its child has been moved to 
         // another page with enough space      
@@ -422,7 +422,7 @@ struct CompressedHandler : public NodeHandler {
       
       NodePtr *ptr = page->node_ptr + nodeid;
       Compressed *n = &page->get_node(nodeid)->c;
-      size_t len = page->get_node_size(nodeid) - ptr->extra;
+      size_t len = ptr->extra;
       
       out << t3 << "type:  compressed" << std::endl;
       out << t3 << "data:  " << std::setw(2) << std::setfill('0') 
@@ -489,7 +489,7 @@ struct TrieHandler : public TrieBase {
       Slice key(trace.current_key());
       
       if (key.empty()) {
-        nodeid_t end_child = *rnode.extra();
+        nodeid_t end_child = rnode.extra();
         if (end_child)
           rnode.child_find(end_child, trace);
         return;
@@ -502,7 +502,7 @@ struct TrieHandler : public TrieBase {
     }
   //@+node:michael.20141230111914.97: *4* first
   void first(NodeRef& rnode, Node* data, Trace& trace) {
-      nodeid_t end_child = *rnode.extra();
+      nodeid_t end_child = rnode.extra();
       if (end_child) {
         rnode.child_first(end_child, trace);
         return;
@@ -571,7 +571,7 @@ struct TrieHandler : public TrieBase {
         }
       }
       
-      nodeid_t end_child = *rnode.extra();
+      nodeid_t end_child = rnode.extra();
       if (end_child) {
         trace.cut_key();
         rnode.child_last(end_child, trace);
@@ -616,7 +616,7 @@ struct TrieHandler : public TrieBase {
       int index = key.empty() ? -1 : key[0];
 
       if (index < 0) {
-        *rnode.extra() = 0;
+        rnode.set_extra(0);
         return true;
       }
 
@@ -632,7 +632,7 @@ struct TrieHandler : public TrieBase {
       if (count <= 56) {
         TESTPOINT(TrieRemove);
         TempTrie trie(count);
-        *trie.extra() = *rnode.extra();
+        trie.set_extra(rnode.extra());
         BitTrie* bt = (BitTrie*)trie.node();
         for(int i = 0; i < 64; i++) {
           if (n->children[i])
@@ -687,17 +687,17 @@ struct BitTrieHandler : public TrieBase {
   //@+others
   //@+node:michael.20141230111914.103: *4* find
   void find(NodeRef& rnode, Node* data, Trace& trace) {
+      BitTrie *n = &data->b;
       Slice key(trace.current_key());
       
       if (key.empty()) {
-        nodeid_t end_child = *rnode.extra();
+        nodeid_t end_child = rnode.extra();
         if (end_child)
           rnode.child_find(end_child, trace);
         return;
       }
         
       trieindex_t index = key[0];
-      BitTrie *n = &data->b;
       int child_index = n->get_child_index(index);
       if (child_index >= 0) {
         nodeid_t child_id = n->children[child_index];
@@ -707,7 +707,7 @@ struct BitTrieHandler : public TrieBase {
   //@+node:michael.20141230111914.106: *4* first
   void first(NodeRef& rnode, Node* data, Trace& trace) {
       BitTrie *n = &data->b;
-      nodeid_t end_child = *rnode.extra();
+      nodeid_t end_child = rnode.extra();
       if (end_child) {
         rnode.child_first(end_child, trace);
       }
@@ -779,7 +779,7 @@ struct BitTrieHandler : public TrieBase {
         return;
       }
     
-      nodeid_t end_child = *rnode.extra();
+      nodeid_t end_child = rnode.extra();
       if (end_child) {
         trace.cut_key();
         rnode.child_last(end_child, trace);
@@ -815,39 +815,32 @@ struct BitTrieHandler : public TrieBase {
   void add_node(Node* data, trieindex_t index, const TempNode& node, Trace& trace) {
       BitTrie *n = &data->b;
       size_t count = n->count();
-      switch(count) {
-        case 56: {
-            TESTPOINT(BitTrieAdd0);
-            TempTrie trie(count+1);
-            *trie.extra() = *trace.current().extra();
-            Trie *np = (Trie*)trie.node();
-            int bit = n->first_bit(), i = 0;
-            while(bit >= 0) {
-              np->children[bit] = n->children[i++];
-              bit = n->next_bit(bit);
-            }
-            trace.change_node(trie);
-            trace.add_node(node);
-            np = (Trie*)trace.parent().node();
-            np->children[index] = trace.child_of_parent();
-            break;
+      if (count == 56) {
+          TESTPOINT(BitTrieAdd0);
+          TempTrie trie(count+1);
+          trie.set_extra(trace.current().extra());
+          Trie *np = (Trie*)trie.node();
+          int bit = n->first_bit(), i = 0;
+          while(bit >= 0) {
+            np->children[bit] = n->children[i++];
+            bit = n->next_bit(bit);
           }
-      
-        case 8:
-        case 16:
-        case 24:
-        case 32:
-        case 40:
-        case 48:
-          TESTPOINT(BitTrieAdd1);
-          trace.grow_node_by(8);
-          
-        default: 
-          TESTPOINT(BitTrieAdd2);
+          trace.change_node(trie);
           trace.add_node(node);
-          n = (BitTrie*)trace.parent().node();
-          n->add(index, trace.child_of_parent());
+          np = (Trie*)trace.parent().node();
+          np->children[index] = trace.child_of_parent();
+          return;
+        }
+    
+      if (count % 4 == 0) {
+        TESTPOINT(BitTrieAdd1);
+        trace.grow_node_by(4*sizeof(nodeid_t));
       }
+        
+      TESTPOINT(BitTrieAdd2);
+      trace.add_node(node);
+      n = (BitTrie*)trace.parent().node();
+      n->add(index, trace.child_of_parent());
     }
   //@+node:michael.20141230111914.109: *4* remove_child
   void change_to_compressed(NodeRef& rnode, const CompressBuffer& buffer) {
@@ -868,17 +861,18 @@ struct BitTrieHandler : public TrieBase {
       BitTrie *n = &data->b;
       if (index < 0) {
         TESTPOINT(BitTrieRemove0);
-        *rnode.extra() = 0;
+        rnode.set_extra(0);
       }
       else
         n->remove(index);
         
-      switch(n->count()) {
+      size_t count = n->count();
+      switch(count) {
         case 0: 
-          return *rnode.extra() != 0;
+          return rnode.extra() != 0;
           
         case 1: 
-          if (!*rnode.extra()) {
+          if (!rnode.extra()) {
             // change to compressed
             TESTPOINT(BitTrieRemove2);
             CompressBuffer buffer;
@@ -888,15 +882,12 @@ struct BitTrieHandler : public TrieBase {
             change_to_compressed(rnode, buffer);
           }
           return true;
-          
-        case 8:
-        case 16:
-        case 24:
-        case 32:
-        case 40:
-        case 48:
-          TESTPOINT(BitTrieRemove1);
-          trace.grow_node_by(-8);
+        
+        default:
+          if (count % 4 == 0) {
+            TESTPOINT(BitTrieRemove1);
+            trace.grow_node_by(-4*sizeof(nodeid_t));
+          }
       }
        
       return true;
@@ -964,7 +955,7 @@ struct LeafHandler : public LeafBase {
   void reinsert_me(TempLeaf& me, Trace& trace) {
       trace.add_node(me);
       // extra() is the end node
-      *trace.parent().extra() = trace.child_of_parent();
+      trace.parent().set_extra(trace.child_of_parent());
       trace.pop(); // back to parent
     }
   //@+node:michael.20141230111914.77: *4* add
@@ -1002,7 +993,7 @@ struct LeafHandler : public LeafBase {
       
       NodePtr *ptr = page->node_ptr + nodeid;
       Leaf *n = &page->get_node(nodeid)->l;
-      size_t len = page->get_node_size(nodeid) - ptr->extra;
+      size_t len = ptr->extra;
       
       std::string data(n->data, len);
       if (ptr->type == kLeaf) {
@@ -1030,7 +1021,7 @@ NodeHandler* NodeHandler::handlers[6] = {
   &bittrie,
 };
 //@+node:michael.20141230111914.75: ** TempNode
-TempLeaf::TempLeaf(const Slice& value) : TempNode() {
+TempLeaf::TempLeaf(const Slice& value) {
   size_t size = value.size();
   page.new_node(page_pad(size));
   set_len(value.size());
@@ -1039,22 +1030,24 @@ TempLeaf::TempLeaf(const Slice& value) : TempNode() {
   page.node_ptr[0].type = kLeaf;
 }
 
-TempTrie::TempTrie(size_t child_count) : TempNode() {
-  size_t size;
+TempTrie::TempTrie(size_t child_count) {
+  
   if (child_count > 56) {
-    page.new_node(size=64);
+    page.new_node(page_pad(sizeof(Trie)));
     page.node_ptr[0].type = kTrie;
-    memset(node(), 0, size);
+    memset(node(), 0, sizeof(Trie));
   }
   else {
-    size = page_pad(pad8(sizeof(BitTrie)+child_count));
+    size_t size = page_pad(
+      pad<8*sizeof(nodeid_t)>(sizeof(BitTrie)+child_count*sizeof(nodeid_t)));
     page.new_node(size);
     page.node_ptr[0].type = kBitTrie;
     node()->b.bits = 0;
   }
+  page.node_ptr[0].extra = 0;
 }
 
-TempCompressed::TempCompressed(const Slice& part) : TempNode() {
+TempCompressed::TempCompressed(const Slice& part) {
   size_t size(part.size());
   page.new_node(page_pad(sizeof(nodeid_t)+size));
   set_len(size);

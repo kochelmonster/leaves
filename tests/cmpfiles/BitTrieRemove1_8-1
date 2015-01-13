@@ -2,56 +2,56 @@ state:
     - id:         0
       offset:     0
       node_count: 10
-      size:       136
-      free_size:  3958
-      sum_size:   4094
+      size:       152
+      free_size:  8038
+      sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   4072
+            ptr:   8152
             type:  bittrie
             data:  00>1|01>2|02>3|03>4|04>5|05>6|06>7|07>8|08>9
           - id:    1
-            ptr:   4064
+            ptr:   8144
             type:  leaf
             data:  value-0
             size:  7
           - id:    2
-            ptr:   4056
+            ptr:   8136
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   4048
+            ptr:   8128
             type:  leaf
             data:  value-2
             size:  7
           - id:    4
-            ptr:   4040
+            ptr:   8120
             type:  leaf
             data:  value-3
             size:  7
           - id:    5
-            ptr:   4032
+            ptr:   8112
             type:  leaf
             data:  value-4
             size:  7
           - id:    6
-            ptr:   4024
+            ptr:   8104
             type:  leaf
             data:  value-5
             size:  7
           - id:    7
-            ptr:   4016
+            ptr:   8096
             type:  leaf
             data:  value-6
             size:  7
           - id:    8
-            ptr:   4008
+            ptr:   8088
             type:  leaf
             data:  value-7
             size:  7
           - id:    9
-            ptr:   4000
+            ptr:   8080
             type:  leaf
             data:  value-8
             size:  7

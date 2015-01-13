@@ -48,7 +48,7 @@ bool PageRef::defragment(Trace& trace) const {
     size_t node_size = get_node_size(i);
     map[i] = node_count;
     
-    if (ptrs[i].type & REMOVE_BIT) {
+    if (ptrs[i].type == kRemoved) {
       // a hole
 
       // holes are often continuous to avoid many costly
@@ -198,41 +198,54 @@ size_t calc_sizes(const NodeRef& node, size_t sizes[MAX_NODE_COUNT]) {
   size_t size_ = node.size();
   size_t count = node.get_children(children);
   
-  for(size_t i = 0; i < count; i++)
-    size_ += calc_sizes(NodeRef(node.page, children[i]), sizes);
+  for(size_t i = 0; i < count; i++) {
+    size_t child_size = calc_sizes(NodeRef(node.page, children[i]), sizes);
+    if (child_size >= PAGE_SIZE) {
+      sizes[node.id] = PAGE_SIZE;
+      return PAGE_SIZE;
+    }
+    size_ += child_size;
+  }
     
   size_ += sizeof(NodePtr);
+  
+  if (size_ >= 2*PAGE_SPLIT_SIZE)
+    size_ = PAGE_SIZE;
+  
   sizes[node.id] = size_;
-    
   return size_;
 }
 
-
-void Trace::reserve_space(size_t size_, size_t nodes) {
+void Trace::reserve_space(size_t size_) {
   // during this loop current() can change its page!
-  while (current().page.free_size() < size_ 
-         || current().page.count()+nodes > MAX_NODE_COUNT) {
+  while (current().page.free_size() < size_) {
     size_t sizes[MAX_NODE_COUNT];
-    NodeRef root(current().page, 0);
     memset(sizes, 0, sizeof(sizes));
-    calc_sizes(root, sizes);
-    int best = sizeof(Page);
+    int best = PAGE_SIZE;
     nodeid_t best_id = 1;
             
-    // i = 1: it makes no sense to move the root node
+    NodeRef root(current().page, 0);    
     size_t count = root.page.count();
-    for(size_t i = 1; i < count; i++) {
-      if (MAX_PAGE_FREE_SIZE - sizes[i] < size_) 
+
+    // i >= 1: it makes no sense to move the root node    
+    for(size_t i = count-1; i >= 1; i--) {
+      size_t node_size = sizes[i];
+      if (!node_size)
+        node_size = calc_sizes(NodeRef(root.page, i), sizes);
+    
+      if (MAX_PAGE_FREE_SIZE - node_size < size_) 
         // the new page must also have enough free space
         continue;
     
-      int delta = abs((int)sizes[i]-PAGE_SPLIT_SIZE);
+      int delta = abs((int)node_size-PAGE_SPLIT_SIZE);
       if (delta < best) {
         best = delta;
         best_id = i;
+        if (best < 100)
+          break;
       }
     }
-    
+
     PageRef newpage = storage.new_page();
     NodeRef to_move(root.page, best_id);
     

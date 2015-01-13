@@ -12,7 +12,7 @@ ALIGN = 4 # 4 is minimum align
 
 
 def options(opt):
-    opt.load('compiler_cxx boost waf_unit_test')
+    opt.load('compiler_cxx boost waf_unit_test msvc')
     opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
 
 
@@ -37,14 +37,15 @@ def configure(cfg):
         cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
     
     cfg.env.DEFINES_TEST += ["ALIGN={}".format(ALIGN),
-                             'CMPFILES="{}"'.format(cmpfiles_path)]
-    
+                             "PAGE_SIZE=8192", 
+                             'CMPFILES="{}"'.format(cmpfiles_path)
+                             ]
     
     if cfg.options.gcov:
         cfg.env.CXXFLAGS_TEST.extend(["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
         cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
 
-    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN)]
+    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN), "PAGE_SIZE=8192"]
     cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_BENCH = [os.path.abspath("include"), 
                               os.path.abspath("src")]
@@ -60,12 +61,6 @@ def build(bld):
     from os.path import join, abspath
     sources = "trie.cpp node.cpp leaves.cpp base64.cpp"
     sources = [join("src", s) for s in sources.split()]
-    """
-    bld.program(
-        source=[join("tests", "simple.cpp")]+sources,
-        use="TEST",
-        target="simple")
-    """
     
     bld.program(
         features="test",
@@ -87,7 +82,7 @@ def build(bld):
 
     """
     only for generating test_trie tests
-
+    
     def generate_graph(task):
         command = abspath(join("build", "test_trie"))
         graph = abspath(join("tests", "graph.py"))
@@ -102,6 +97,5 @@ def build(bld):
         source=[join("benchmarks", "sbench.cpp")]+sources,
         use="BENCH",
         target="sbench")
-        
-        
+
 #@-leo

@@ -169,9 +169,9 @@ unsigned long long startcycles, stopcycles;
 //  Free the input buffer used to store the first file.  We must do this before we get the process size below. 
   free (askitis);
   
-  MaxMem = db->pages()*4096;
+  MaxMem = db->pages()*PAGE_SIZE;
   
-  fprintf(stderr, "HatArray@Karl_Malbrain\nDASKITIS option enabled\n-------------------------------\n%-20s %.2f MB\n%-20s %.2f sec\n",
+  fprintf(stderr, "BitTrie\nDASKITIS option enabled\n-------------------------------\n%-20s %.2f MB\n%-20s %.2f sec\n",
     "Hat Array size:", MaxMem/1000000., "Time to insert:", insert_real_time);
 #if !defined(_WIN32)
   fprintf(stderr, "%-20s %.2f MB\n", "Process Size:", report_process_size()/1000000.);

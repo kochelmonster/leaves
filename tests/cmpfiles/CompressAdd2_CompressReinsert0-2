@@ -2,31 +2,31 @@ state:
     - id:         0
       offset:     0
       node_count: 5
-      size:       72
-      free_size:  4022
-      sum_size:   4094
+      size:       80
+      free_size:  8110
+      sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   4080
+            ptr:   8168
             type:  bittrie
             data:  01>1
           - id:    1
-            ptr:   4076
+            ptr:   8164
             type:  compressed
             data:  02|03
             size:  2
             child: 3
           - id:    2
-            ptr:   4068
+            ptr:   8156
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   4052
+            ptr:   8140
             type:  bittrie
             data:  04>2|05>4
           - id:    4
-            ptr:   4044
+            ptr:   8132
             type:  leaf
             data:  value-2
             size:  7

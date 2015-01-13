@@ -2,216 +2,216 @@ state:
     - id:         0
       offset:     0
       node_count: 42
-      size:       552
-      free_size:  3542
-      sum_size:   4094
+      size:       600
+      free_size:  7590
+      sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   4040
+            ptr:   8088
             type:  bittrie
             data:  00>1|01>2|02>3|03>4|04>5|05>6|06>7|07>8|08>9|09>10|10>11|11>12|12>13|13>14|14>15|15>16|16>17|17>18|18>19|19>20|20>21|21>22|22>23|23>24|24>25|25>26|26>27|27>28|28>29|29>30|30>31|31>32|32>33|33>34|34>35|35>36|36>37|37>38|38>39|39>40|40>41
           - id:    1
-            ptr:   4032
+            ptr:   8080
             type:  leaf
             data:  value-0
             size:  7
           - id:    2
-            ptr:   4024
+            ptr:   8072
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   4016
+            ptr:   8064
             type:  leaf
             data:  value-2
             size:  7
           - id:    4
-            ptr:   4008
+            ptr:   8056
             type:  leaf
             data:  value-3
             size:  7
           - id:    5
-            ptr:   4000
+            ptr:   8048
             type:  leaf
             data:  value-4
             size:  7
           - id:    6
-            ptr:   3992
+            ptr:   8040
             type:  leaf
             data:  value-5
             size:  7
           - id:    7
-            ptr:   3984
+            ptr:   8032
             type:  leaf
             data:  value-6
             size:  7
           - id:    8
-            ptr:   3976
+            ptr:   8024
             type:  leaf
             data:  value-7
             size:  7
           - id:    9
-            ptr:   3968
+            ptr:   8016
             type:  leaf
             data:  value-8
             size:  7
           - id:    10
-            ptr:   3960
+            ptr:   8008
             type:  leaf
             data:  value-9
             size:  7
           - id:    11
-            ptr:   3952
+            ptr:   8000
             type:  leaf
             data:  value-10
             size:  8
           - id:    12
-            ptr:   3944
+            ptr:   7992
             type:  leaf
             data:  value-11
             size:  8
           - id:    13
-            ptr:   3936
+            ptr:   7984
             type:  leaf
             data:  value-12
             size:  8
           - id:    14
-            ptr:   3928
+            ptr:   7976
             type:  leaf
             data:  value-13
             size:  8
           - id:    15
-            ptr:   3920
+            ptr:   7968
             type:  leaf
             data:  value-14
             size:  8
           - id:    16
-            ptr:   3912
+            ptr:   7960
             type:  leaf
             data:  value-15
             size:  8
           - id:    17
-            ptr:   3904
+            ptr:   7952
             type:  leaf
             data:  value-16
             size:  8
           - id:    18
-            ptr:   3896
+            ptr:   7944
             type:  leaf
             data:  value-17
             size:  8
           - id:    19
-            ptr:   3888
+            ptr:   7936
             type:  leaf
             data:  value-18
             size:  8
           - id:    20
-            ptr:   3880
+            ptr:   7928
             type:  leaf
             data:  value-19
             size:  8
           - id:    21
-            ptr:   3872
+            ptr:   7920
             type:  leaf
             data:  value-20
             size:  8
           - id:    22
-            ptr:   3864
+            ptr:   7912
             type:  leaf
             data:  value-21
             size:  8
           - id:    23
-            ptr:   3856
+            ptr:   7904
             type:  leaf
             data:  value-22
             size:  8
           - id:    24
-            ptr:   3848
+            ptr:   7896
             type:  leaf
             data:  value-23
             size:  8
           - id:    25
-            ptr:   3840
+            ptr:   7888
             type:  leaf
             data:  value-24
             size:  8
           - id:    26
-            ptr:   3832
+            ptr:   7880
             type:  leaf
             data:  value-25
             size:  8
           - id:    27
-            ptr:   3824
+            ptr:   7872
             type:  leaf
             data:  value-26
             size:  8
           - id:    28
-            ptr:   3816
+            ptr:   7864
             type:  leaf
             data:  value-27
             size:  8
           - id:    29
-            ptr:   3808
+            ptr:   7856
             type:  leaf
             data:  value-28
             size:  8
           - id:    30
-            ptr:   3800
+            ptr:   7848
             type:  leaf
             data:  value-29
             size:  8
           - id:    31
-            ptr:   3792
+            ptr:   7840
             type:  leaf
             data:  value-30
             size:  8
           - id:    32
-            ptr:   3784
+            ptr:   7832
             type:  leaf
             data:  value-31
             size:  8
           - id:    33
-            ptr:   3776
+            ptr:   7824
             type:  leaf
             data:  value-32
             size:  8
           - id:    34
-            ptr:   3768
+            ptr:   7816
             type:  leaf
             data:  value-33
             size:  8
           - id:    35
-            ptr:   3760
+            ptr:   7808
             type:  leaf
             data:  value-34
             size:  8
           - id:    36
-            ptr:   3752
+            ptr:   7800
             type:  leaf
             data:  value-35
             size:  8
           - id:    37
-            ptr:   3744
+            ptr:   7792
             type:  leaf
             data:  value-36
             size:  8
           - id:    38
-            ptr:   3736
+            ptr:   7784
             type:  leaf
             data:  value-37
             size:  8
           - id:    39
-            ptr:   3728
+            ptr:   7776
             type:  leaf
             data:  value-38
             size:  8
           - id:    40
-            ptr:   3720
+            ptr:   7768
             type:  leaf
             data:  value-39
             size:  8
           - id:    41
-            ptr:   3712
+            ptr:   7760
             type:  leaf
             data:  value-40
             size:  8

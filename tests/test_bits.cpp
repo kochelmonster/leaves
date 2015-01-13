@@ -93,7 +93,7 @@ struct BitTrie {
       bits |= ((boost::uint64_t)1)<<index;
       int child_index = get_child_index(index); 
       memmove(children+child_index+1, children+child_index,
-              count()-child_index-1);
+              sizeof(nodeid_t)*(count()-child_index-1));
       children[child_index] = node;
     }
     
@@ -102,7 +102,7 @@ struct BitTrie {
       assert(child_index >= 0);
       bits &= ~(((boost::uint64_t)1)<<index);
       memmove(children+child_index, children+child_index+1,
-              count()-child_index);
+              sizeof(nodeid_t)*(count()-child_index));
     }
 };
 

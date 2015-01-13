@@ -2,34 +2,34 @@ state:
     - id:         0
       offset:     0
       node_count: 6
-      size:       100
-      free_size:  3994
-      sum_size:   4094
+      size:       124
+      free_size:  8066
+      sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   4080
+            ptr:   8168
             type:  bittrie
             data:  01>1
           - id:    1
-            ptr:   4064
+            ptr:   8144
             type:  bittrie
             data:  E>2|01>3
           - id:    2
-            ptr:   4056
+            ptr:   8136
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   4040
+            ptr:   8112
             type:  bittrie
             data:  E>4|01>5
           - id:    4
-            ptr:   4032
+            ptr:   8104
             type:  leaf
             data:  value-11
             size:  8
           - id:    5
-            ptr:   4020
+            ptr:   8092
             type:  leaf
             data:  value-111
             size:  9

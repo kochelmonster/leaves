@@ -3,11 +3,11 @@ state:
       offset:     0
       node_count: 1
       size:       20
-      free_size:  4074
-      sum_size:   4094
+      free_size:  8170
+      sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   4080
+            ptr:   8176
             type:  bittrie
             data:  
 ---

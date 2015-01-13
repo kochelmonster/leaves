@@ -25,9 +25,9 @@
 <v t="michael.20141215222649.44"><vh>Database (Implementation)</vh></v>
 </v>
 <v t="michael.20141215222649.10"><vh>BitTrie</vh>
-<v t="michael.20141215222649.83"><vh>NodeHandlers</vh>
+<v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
 <v t="michael.20150106224503.25"><vh>Eat Tools</vh></v>
-<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
+<v t="michael.20141215222649.126"><vh>Compressed</vh>
 <v t="michael.20150106224503.49"><vh>keycmp</vh></v>
 <v t="michael.20150106224503.59"><vh>keyappend</vh></v>
 <v t="michael.20150106224503.50"><vh>get_len</vh></v>
@@ -57,7 +57,7 @@
 <v t="michael.20150106224503.23"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.6"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.95"><vh>BitTrie</vh>
+<v t="michael.20141215222649.95" a="E"><vh>BitTrie</vh>
 <v t="michael.20141230111914.103"><vh>find</vh></v>
 <v t="michael.20141230111914.106"><vh>first</vh></v>
 <v t="michael.20141230111914.107"><vh>last</vh></v>
@@ -102,11 +102,13 @@
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65" a="E"><vh>@file node.h</vh></v>
-<v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
+<v t="michael.20141215222649.65" a="E"
+expanded="michael.20141219202729.2,michael.20141220220750.15,"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.161" a="E"
+expanded="michael.20150112164548.8,michael.20150110130802.6,"><vh>@file node.cpp</vh></v>
 <v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
+expanded="michael.20141215222649.83,michael.20141215222649.95,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
@@ -115,12 +117,13 @@ expanded="michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
 <v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
-<v t="michael.20150101205559.18" a="E"><vh>@file test_trie.cpp</vh></v>
-<v t="michael.20150101205559.42" a="E"><vh>@file test_bits.cpp</vh></v>
+<v t="michael.20150101205559.18" a="E"
+expanded="michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
-<v t="michael.20150106224503.10"><vh>@path benchmarks</vh>
-<v t="michael.20150106224503.11"><vh>trie</vh>
+<v t="michael.20150106224503.10" a="E"><vh>@path benchmarks</vh>
+<v t="michael.20150106224503.11" a="E"><vh>trie</vh>
 <v t="michael.20150111145018.91"><vh>@file sbench.cpp</vh></v>
 </v>
 </v>
@@ -138,7 +141,10 @@ expanded="michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20150110130802.35"><vh>@file bench.py</vh></v>
 </v>
 </v>
-<v t="michael.20141219202729.5"><vh>edit</vh></v>
+<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
+<v t="michael.20150106224503.38"><vh>generate</vh></v>
+<v t="michael.20150101205559.62"><vh>TestPageManagement</vh></v>
+</v>
 </vnodes>
 <tnodes>
 <t tx="michael.20141215222649.10"></t>
@@ -507,7 +513,7 @@ struct TrieBase : public NodeHandler {
         case 0:
           TESTPOINT(TrieBaseAdd0);
           trace.add_node(leaf);
-          *trace.parent().extra() = trace.child_of_parent();
+          trace.parent().set_extra(trace.child_of_parent());
           break;
           
         case 1: 
@@ -590,17 +596,17 @@ static BitTrieHandler bittrie;
   }
 </t>
 <t tx="michael.20141230111914.103">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    BitTrie *n = &amp;data-&gt;b;
     Slice key(trace.current_key());
     
     if (key.empty()) {
-      nodeid_t end_child = *rnode.extra();
+      nodeid_t end_child = rnode.extra();
       if (end_child)
         rnode.child_find(end_child, trace);
       return;
     }
       
     trieindex_t index = key[0];
-    BitTrie *n = &amp;data-&gt;b;
     int child_index = n-&gt;get_child_index(index);
     if (child_index &gt;= 0) {
       nodeid_t child_id = n-&gt;children[child_index];
@@ -655,7 +661,7 @@ static BitTrieHandler bittrie;
       return;
     }
   
-    nodeid_t end_child = *rnode.extra();
+    nodeid_t end_child = rnode.extra();
     if (end_child) {
       trace.cut_key();
       rnode.child_last(end_child, trace);
@@ -667,7 +673,7 @@ static BitTrieHandler bittrie;
 </t>
 <t tx="michael.20141230111914.106">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     BitTrie *n = &amp;data-&gt;b;
-    nodeid_t end_child = *rnode.extra();
+    nodeid_t end_child = rnode.extra();
     if (end_child) {
       rnode.child_first(end_child, trace);
     }
@@ -695,39 +701,32 @@ static BitTrieHandler bittrie;
 <t tx="michael.20141230111914.108">void add_node(Node* data, trieindex_t index, const TempNode&amp; node, Trace&amp; trace) {
     BitTrie *n = &amp;data-&gt;b;
     size_t count = n-&gt;count();
-    switch(count) {
-      case 56: {
-          TESTPOINT(BitTrieAdd0);
-          TempTrie trie(count+1);
-          *trie.extra() = *trace.current().extra();
-          Trie *np = (Trie*)trie.node();
-          int bit = n-&gt;first_bit(), i = 0;
-          while(bit &gt;= 0) {
-            np-&gt;children[bit] = n-&gt;children[i++];
-            bit = n-&gt;next_bit(bit);
-          }
-          trace.change_node(trie);
-          trace.add_node(node);
-          np = (Trie*)trace.parent().node();
-          np-&gt;children[index] = trace.child_of_parent();
-          break;
+    if (count == 56) {
+        TESTPOINT(BitTrieAdd0);
+        TempTrie trie(count+1);
+        trie.set_extra(trace.current().extra());
+        Trie *np = (Trie*)trie.node();
+        int bit = n-&gt;first_bit(), i = 0;
+        while(bit &gt;= 0) {
+          np-&gt;children[bit] = n-&gt;children[i++];
+          bit = n-&gt;next_bit(bit);
         }
-    
-      case 8:
-      case 16:
-      case 24:
-      case 32:
-      case 40:
-      case 48:
-        TESTPOINT(BitTrieAdd1);
-        trace.grow_node_by(8);
-        
-      default: 
-        TESTPOINT(BitTrieAdd2);
+        trace.change_node(trie);
         trace.add_node(node);
-        n = (BitTrie*)trace.parent().node();
-        n-&gt;add(index, trace.child_of_parent());
+        np = (Trie*)trace.parent().node();
+        np-&gt;children[index] = trace.child_of_parent();
+        return;
+      }
+  
+    if (count % 4 == 0) {
+      TESTPOINT(BitTrieAdd1);
+      trace.grow_node_by(4*sizeof(nodeid_t));
     }
+      
+    TESTPOINT(BitTrieAdd2);
+    trace.add_node(node);
+    n = (BitTrie*)trace.parent().node();
+    n-&gt;add(index, trace.child_of_parent());
   }
 </t>
 <t tx="michael.20141230111914.109">void change_to_compressed(NodeRef&amp; rnode, const CompressBuffer&amp; buffer) {
@@ -748,17 +747,18 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     BitTrie *n = &amp;data-&gt;b;
     if (index &lt; 0) {
       TESTPOINT(BitTrieRemove0);
-      *rnode.extra() = 0;
+      rnode.set_extra(0);
     }
     else
       n-&gt;remove(index);
       
-    switch(n-&gt;count()) {
+    size_t count = n-&gt;count();
+    switch(count) {
       case 0: 
-        return *rnode.extra() != 0;
+        return rnode.extra() != 0;
         
       case 1: 
-        if (!*rnode.extra()) {
+        if (!rnode.extra()) {
           // change to compressed
           TESTPOINT(BitTrieRemove2);
           CompressBuffer buffer;
@@ -768,15 +768,12 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
           change_to_compressed(rnode, buffer);
         }
         return true;
-        
-      case 8:
-      case 16:
-      case 24:
-      case 32:
-      case 40:
-      case 48:
-        TESTPOINT(BitTrieRemove1);
-        trace.grow_node_by(-8);
+      
+      default:
+        if (count % 4 == 0) {
+          TESTPOINT(BitTrieRemove1);
+          trace.grow_node_by(-4*sizeof(nodeid_t));
+        }
     }
      
     return true;
@@ -809,7 +806,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
 <t tx="michael.20141230111914.78">void reinsert_me(TempLeaf&amp; me, Trace&amp; trace) {
     trace.add_node(me);
     // extra() is the end node
-    *trace.parent().extra() = trace.child_of_parent();
+    trace.parent().set_extra(trace.child_of_parent());
     trace.pop(); // back to parent
   }
 </t>
@@ -878,7 +875,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     TempCompressed rest_me(Slice(data-&gt;c.data+prefix_size+1, 
                                  size-prefix_size-1));
           
-    trace.reserve_space(48+3*sizeof(NodePtr), 2); 
+    trace.reserve_space(48+3*sizeof(NodePtr)); 
       // the maximum of additional space we need
       // if current() and its child has been moved to 
       // another page with enough space      
@@ -945,7 +942,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     int index = key.empty() ? -1 : key[0];
 
     if (index &lt; 0) {
-      *rnode.extra() = 0;
+      rnode.set_extra(0);
       return true;
     }
 
@@ -961,7 +958,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     if (count &lt;= 56) {
       TESTPOINT(TrieRemove);
       TempTrie trie(count);
-      *trie.extra() = *rnode.extra();
+      trie.set_extra(rnode.extra());
       BitTrie* bt = (BitTrie*)trie.node();
       for(int i = 0; i &lt; 64; i++) {
         if (n-&gt;children[i])
@@ -977,7 +974,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     Slice key(trace.current_key());
     
     if (key.empty()) {
-      nodeid_t end_child = *rnode.extra();
+      nodeid_t end_child = rnode.extra();
       if (end_child)
         rnode.child_find(end_child, trace);
       return;
@@ -1027,7 +1024,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       }
     }
     
-    nodeid_t end_child = *rnode.extra();
+    nodeid_t end_child = rnode.extra();
     if (end_child) {
       trace.cut_key();
       rnode.child_last(end_child, trace);
@@ -1037,7 +1034,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
   }
 </t>
 <t tx="michael.20141230111914.97">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    nodeid_t end_child = *rnode.extra();
+    nodeid_t end_child = rnode.extra();
     if (end_child) {
       rnode.child_first(end_child, trace);
       return;
@@ -1074,7 +1071,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     
     NodePtr *ptr = page-&gt;node_ptr + nodeid;
     Compressed *n = &amp;page-&gt;get_node(nodeid)-&gt;c;
-    size_t len = page-&gt;get_node_size(nodeid) - ptr-&gt;extra;
+    size_t len = ptr-&gt;extra;
     
     out &lt;&lt; t3 &lt;&lt; "type:  compressed" &lt;&lt; std::endl;
     out &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
@@ -1116,6 +1113,112 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
   }
 #endif
 </t>
+<t tx="michael.20150101205559.62">struct TestPageManagement {
+  #define VALUE_PAD 300
+  #define TWO_PAGE_COUNT 26
+  void test_TwoPages() {
+      db_t db(new TestDatabase);
+      
+      
+      for(size_t i = 0; i &lt; TWO_PAGE_COUNT; i++) {
+        db-&gt;find(number(i, 5));
+        db-&gt;set_value(value(i, VALUE_PAD));
+      }
+      
+      check_dump("TwoPages-1", db);
+  
+      db-&gt;find(number(TWO_PAGE_COUNT, 5));
+      db-&gt;set_value(value(TWO_PAGE_COUNT, VALUE_PAD));
+                
+      check_dump("TwoPages-2", db);
+      
+      db-&gt;find(number(20, 5));
+      BOOST_REQUIRE(db-&gt;is_valid());
+      BOOST_REQUIRE(db-&gt;value() == value(20, VALUE_PAD));
+
+      db-&gt;find(number(5, 5));
+      BOOST_REQUIRE(db-&gt;is_valid());
+      BOOST_REQUIRE(db-&gt;value() == value(5, VALUE_PAD));
+    }
+
+  void test_MergePages() {
+      db_t db(new TestDatabase);
+      
+      for(size_t i = 0; i &lt;= TWO_PAGE_COUNT; i++) {
+        db-&gt;find(number(i));
+        db-&gt;set_value(value(i, VALUE_PAD));
+      }
+      
+      check_dump("MergePages-1", db);
+      prepare_testpoint_output();
+  
+      db-&gt;find(number(20));
+      db-&gt;remove();
+                
+      check_dump("MergePages-2", db);
+      
+      const char* testpoints[] = {"MergePages", "DefragmentNodeMove"};
+      check_testpoints(2, testpoints);
+    }
+
+  void test_RemoveAll() {
+      db_t db(new TestDatabase);
+      
+      for(size_t i = 0; i &lt; 200; i++) {
+        db-&gt;find(number(i));
+        db-&gt;set_value(value(i, 200));
+      }
+      
+      for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next())
+        db-&gt;remove();
+
+      db-&gt;first();
+      BOOST_REQUIRE(!db-&gt;is_valid());
+
+      db-&gt;find(number(10));
+      BOOST_REQUIRE(!db-&gt;is_valid());
+      db-&gt;set_value(value(10));
+      BOOST_REQUIRE(db-&gt;is_valid());
+  }
+
+  void test_NodesInHeap() {
+      NodeStorageInHeap nodes;
+      PageRef p1 = nodes.new_page();
+      PageRef p2 = nodes.new_page();
+      PageRef p3 = nodes.new_page();
+      PageRef p4 = nodes.new_page();
+      PageRef p5 = nodes.new_page();
+      
+      BOOST_REQUIRE(p1.id == 0);
+      BOOST_REQUIRE(p2.id == 1);
+      BOOST_REQUIRE(p3.id == 2);
+      BOOST_REQUIRE(p4.id == 3);
+      BOOST_REQUIRE(p5.id == 4);
+      
+      nodes.free_page(p2);
+      BOOST_REQUIRE(nodes._free_pages == 1);
+      
+      p2 = nodes.new_page();
+      BOOST_REQUIRE(p2.id == 1);
+      BOOST_REQUIRE(nodes._free_pages == 0);
+      
+      nodes.free_page(p3);
+      nodes.free_page(p4);
+      BOOST_REQUIRE(nodes._free_pages == 2);
+      
+      nodes.free_page(p5);
+      BOOST_REQUIRE(nodes._free_pages == 0);
+      
+      p3 = nodes.new_page();
+      BOOST_REQUIRE(p3.id == 2);
+      
+      BOOST_REQUIRE(nodes._pages.size() == 3);
+    }
+};
+
+
+TestPageManagement test_pm;
+</t>
 <t tx="michael.20150101205559.7">#ifdef DEBUG
 void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     const char* t3 = "            ";
@@ -1155,7 +1258,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     
     NodePtr *ptr = page-&gt;node_ptr + nodeid;
     Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
-    size_t len = page-&gt;get_node_size(nodeid) - ptr-&gt;extra;
+    size_t len = ptr-&gt;extra;
     
     std::string data(n-&gt;data, len);
     if (ptr-&gt;type == kLeaf) {
@@ -1224,7 +1327,7 @@ bool eat_child(NodeRef&amp; rnode, Node* data) {
 inline bool get_single_child(const NodeRef&amp; bittrie, nodeid_t* child) {
     assert(bittrie.type() == kBitTrie);
     BitTrie *bt = (BitTrie*)bittrie.node();
-    nodeid_t end = *bittrie.extra();
+    nodeid_t end = bittrie.extra();
     
     if (end &amp;&amp; bt-&gt;count() == 0) {
       *child = end;
@@ -1285,6 +1388,64 @@ inline void save_compressed(const NodeRef&amp; node, CompressBuffer* buffer) {
     assert(0);
     return false;
   }
+</t>
+<t tx="michael.20150106224503.38">#ifdef BOOST_TEST_NO_MAIN
+int main(int argc, const char* argv[]) {
+  //test_compress.test_CompressAddNew();
+  //test_compress.test_CompressAdd0_CompressReinsert1();
+  //test_compress.test_CompressAdd0_CompressReinsert2();
+  //test_compress.test_CompressAdd1_CompressReinsert0();
+  //test_compress.test_CompressAdd1_CompressReinsert1();
+  //test_compress.test_CompressAdd1_CompressReinsert2();
+  //test_compress.test_CompressAdd2_CompressReinsert0();
+  //test_compress.test_CompressAdd2_CompressReinsert1();
+  //test_compress.test_CompressAdd2_CompressReinsert2();
+  //test_compress.test_CompressedEatCompressed();
+  //test_leaf.test_LeafAdd0();
+  //test_leaf.test_LeafAdd1();
+  //test_leaf.test_LeafAdd2();
+  //test_trie.test_TrieBaseAdd0();
+  //test_trie.test_TrieBaseAdd1();
+  //test_trie.test_TrieBaseAdd2();
+  //test_trie.test_TrieBaseAdd3();
+  //test_trie.test_BitTrieAdd0();
+  //test_trie.test_BitTrieAdd1(8);
+  //test_trie.test_BitTrieAdd1(16);
+  //test_trie.test_BitTrieAdd1(24);
+  //test_trie.test_BitTrieAdd1(32);
+  //test_trie.test_BitTrieAdd1(40);
+  //test_trie.test_BitTrieAdd1(48);
+  //test_trie.test_BitTrieAdd2();
+  //test_trie.test_TrieRemove();
+  //test_trie.test_BitTrieRemove0();
+  //test_trie.test_BitTrieRemove1(8);
+  //test_trie.test_BitTrieRemove1(16);
+  //test_trie.test_BitTrieRemove1(24);
+  //test_trie.test_BitTrieRemove1(32);
+  //test_trie.test_BitTrieRemove1(40);
+  //test_trie.test_BitTrieRemove1(48);
+  //test_trie.test_BitTrieRemove2();
+  //test_trie.test_NodeEatSingle();
+  //test_trie.test_TrieMisc();
+  test_pm.test_TwoPages();
+  //test_pm.test_MergePages();
+  //test_pm.test_RemoveAll();
+  //test_pm.test_NodesInHeap();
+  //test_nav.test_RandomFind();
+  //test_nav.test_IterTrie();
+  //test_nav.test_IterTrieEnd();
+  //test_nav.test_Iter();
+  //test_nav.test_IterCompressed();
+  //test_nav.test_removeFromTop(0);
+  //test_nav.test_removeFromTop(10);
+  //test_nav.test_removeFromBottom(0);
+  //test_nav.test_removeFromBottom(10);
+  //test_nav.test_compress();
+  //test_nav.test_ChangeValue();
+  return 0;
+}
+
+#endif
 </t>
 <t tx="michael.20150106224503.43">void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     if (keycmp(rnode, data, trace) &lt; 0) {
