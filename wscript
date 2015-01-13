@@ -12,7 +12,7 @@ ALIGN = 4 # 4 is minimum align
 
 
 def options(opt):
-    opt.load('compiler_cxx boost waf_unit_test msvc')
+    opt.load('compiler_cxx boost waf_unit_test')
     opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
 
 
@@ -20,11 +20,17 @@ def configure(cfg):
     import os
     
     cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
-    
-    cfg.check_waf_version(mini='1.8.5')
-    cfg.load('compiler_cxx boost waf_unit_test')
+
+    load_modules = 'compiler_cxx boost waf_unit_test'
+    if os.name == "nt":
+        cfg.env['MSVC_VERSIONS'] = ['wsdk 8.0']
+        cfg.env['MSVC_TARGETS'] = ['x64']
+        load_modules += " msvc"
         
-    #cfg.check_boost(lib='system filesystem')
+    cfg.check_waf_version(mini='1.8.5')
+    cfg.load(load_modules)
+    cfg.check_boost()#lib='system filesystem')
+        
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
                              'CMPFILES="{}"'.format(cmpfiles_path)]
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
@@ -66,17 +72,17 @@ def build(bld):
     bld.program(
         features="test",
         source=[join("tests", "test_trie.cpp")]+sources,
-        use="TEST",
+        use="TEST BOOST",
         target="test_trie")
     
     bld.program(
         features="test",
         source=[join("tests", "test_bits.cpp")]+sources,
-        use="TEST",
+        use="TEST BOOST",
         target="test_bits")
 
     bld.program(
-        features="test",
+        features="test BOOST",
         source=[join("tests", "test_memorydb.cpp")]+sources,
         use="TEST",
         target="test_memorydb")
@@ -96,7 +102,7 @@ def build(bld):
 
     bld.program(
         source=[join("benchmarks", "sbench.cpp")]+sources,
-        use="BENCH",
+        use="BENCH BOOST",
         target="sbench")
 
 #@-leo
