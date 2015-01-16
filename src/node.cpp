@@ -199,7 +199,11 @@ size_t calc_sizes(const NodeRef& node, size_t sizes[MAX_NODE_COUNT]) {
   size_t count = node.get_children(children);
   
   for(size_t i = 0; i < count; i++) {
-    size_t child_size = calc_sizes(NodeRef(node.page, children[i]), sizes);
+    nodeid_t child = children[i];
+    size_t child_size = sizes[child];
+    if (!child_size)
+      child_size = calc_sizes(NodeRef(node.page, child), sizes);
+      
     if (child_size >= PAGE_SIZE) {
       sizes[node.id] = PAGE_SIZE;
       return PAGE_SIZE;
