@@ -102,8 +102,9 @@
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65"><vh>@file node.h</vh></v>
-<v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
+<v t="michael.20141215222649.65" a="E"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.161" a="E"
+expanded="michael.20150112164548.8,michael.20150110130802.6,"><vh>@file node.cpp</vh></v>
 <v t="michael.20141220220750.5" a="E"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
@@ -111,10 +112,10 @@
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.8"><vh>Tests</vh>
-<v t="michael.20141230111914.140"><vh>@path tests</vh>
+<v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
+<v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
-<v t="michael.20150101205559.18"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.18" a="E"><vh>@file test_trie.cpp</vh></v>
 <v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
@@ -1496,7 +1497,8 @@ int keycmp(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
         trace.parent_prev();
     else
       trace.cut_key();
-  }</t>
+  }
+</t>
 <t tx="michael.20150110130802.31"></t>
 <t tx="michael.20150110130802.34"></t>
 </tnodes>

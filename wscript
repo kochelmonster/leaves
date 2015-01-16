@@ -34,6 +34,7 @@ def configure(cfg):
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
                              "PAGE_SIZE=8192", 
                              'CMPFILES="{}"'.format(cmpfiles_path)]
+                             
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_TEST = [os.path.abspath("include"), 
                              os.path.abspath("src")]
@@ -78,9 +79,9 @@ def build(bld):
         target="test_bits")
 
     bld.program(
-        features="test BOOST",
+        features="test",
         source=[join("tests", "test_memorydb.cpp")]+sources,
-        use="TEST",
+        use="TEST BOOST",
         target="test_memorydb")
 
     """
