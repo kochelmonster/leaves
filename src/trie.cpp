@@ -24,14 +24,14 @@ typedef unsigned char trieindex_t;
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
-  char data[];
+  char data[1];
 };
 
 // A leaf 
 // the data is interpreted by the type (kLeaf od kBitLeaf)
 // the size of data is saved in NodeRef::len()
 struct Leaf {
-  char data[];
+  char data[1];
 };
 
 
@@ -44,7 +44,7 @@ struct Trie {
 // Node with a range
 struct BitTrie {
   boost::uint64_t bits;
-  nodeid_t children[];
+  nodeid_t children[1];
 
   size_t count() const {
       return popcount(bits);    
@@ -54,7 +54,7 @@ struct BitTrie {
       if (bits & (((boost::uint64_t)1)<<index)) {
         boost::uint64_t mask = ~0;
         mask <<= index;
-        return popcount(bits & ~mask);
+        return (int)popcount(bits & ~mask);
       }
       return -1;
     }
@@ -387,7 +387,7 @@ struct CompressedHandler : public NodeHandler {
       size_t size = rnode.len();
       size_t nsize = page_pad(size+buffer.size+sizeof(nodeid_t));
       // it is guaranteed that enough space is on page (see eat_child)
-      rnode.page.grow_node_by(rnode.id, nsize-rnode.size());
+      rnode.page.grow_node_by(rnode.id, (int)nsize-(int)rnode.size());
       Compressed& c(rnode.node()->c);
       memcpy(c.data+size, buffer.data, buffer.size);
       rnode.set_len(size+buffer.size);
@@ -886,7 +886,7 @@ struct BitTrieHandler : public TrieBase {
         default:
           if (count % 4 == 0) {
             TESTPOINT(BitTrieRemove1);
-            trace.grow_node_by(-4*sizeof(nodeid_t));
+            trace.grow_node_by(-4*(int)sizeof(nodeid_t));
           }
       }
        

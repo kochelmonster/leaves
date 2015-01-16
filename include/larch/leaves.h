@@ -23,11 +23,7 @@ namespace larch_leaves {
 #ifndef _MSC_VER
   #define NOEXCEPT noexcept
 #else
-  #if _MSC_VER >= 1600
-    #define NOEXCEPT noexcept
-  #else
-    #define NOEXCEPT
-  #endif
+  #define NOEXCEPT
 #endif
 
 

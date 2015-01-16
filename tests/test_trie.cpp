@@ -212,7 +212,7 @@ std::string sequence(size_t size, size_t start=0) {
 }
 
 
-std::string number(int number, size_t size=0) {
+std::string number(size_t number, size_t size=0) {
   std::string result;
   std::stringstream f;
   f << std::setw(size) << std::setfill('0') << number;
@@ -564,7 +564,7 @@ struct TestTrie {
 
       std::string key = sequence(1);
       for(size_t i = 0; i < 56; i++) {
-        key[0] = i;
+        key[0] = (char)i;
         db->find(key);
         db->set_value(value(i));
       }
@@ -588,7 +588,7 @@ struct TestTrie {
 
       std::string key = sequence(1);
       for(size_t i = 0; i < border; i++) {
-        key[0] = i;
+        key[0] = (char)i;
         db->find(key);
         db->set_value(value(i));
       }
@@ -597,7 +597,7 @@ struct TestTrie {
       check_dump(cstr.str().c_str(), db);
       prepare_testpoint_output();
 
-      key[0] = border;
+      key[0] = (char)border;
       db->find(key);
       db->set_value(value(1));
           
@@ -617,7 +617,7 @@ struct TestTrie {
 
       std::string key = sequence(1);
       for(size_t i = 0; i < 3; i++) {
-        key[0] = i;
+        key[0] = (char)i;
         db->find(key);
         db->set_value(value(i));
       }
@@ -640,7 +640,7 @@ struct TestTrie {
 
       std::string key = sequence(1);
       for(size_t i = 0; i < 57; i++) {
-        key[0] = i;
+        key[0] = (char)i;
         db->find(key);
         db->set_value(value(i));
       }
@@ -685,7 +685,7 @@ struct TestTrie {
 
       std::string key = sequence(1);
       for(size_t i = 0; i < border+1; i++) {
-        key[0] = i;
+        key[0] = (char)i;
         db->find(key);
         db->set_value(value(i));
       }

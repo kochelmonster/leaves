@@ -43,8 +43,7 @@ inline int clz(boost::uint64_t v) {
       return 65;
  }
 
-#endif //_M_X64
-
+#else 
 
 #pragma intrinsic(_BitScanForward)
 #pragma intrinsic(__popcnt, _BitScanForward, _BitScanReverse)
@@ -67,7 +66,7 @@ inline int clz32(boost::uint32_t v) {
  }
 
 #define _32BIT
-
+#endif //_M_X64
 #endif // _MSC_VER
 //@-others
 
@@ -93,36 +92,6 @@ inline int ffs(boost::uint64_t v) {
       
     return clz32(v32[0])
   }
-  
-inline bool test_bit(boost::uint64_t v, int bit) {
-    boost::uint32_t *v32 = (boost::uint32_t*)&v;
-    return v32[bit/32] & (1 << (bit&31));
-  }
-
-inline bool add_bit(boost::uint64_t v, int bit) {
-    boost::uint32_t *v32 = (boost::uint32_t*)&v;
-    return v32[bit/32] | (1 << (bit&31));
-  }
-
-inline bool remove_bit(boost::uint64_t v, int bit) {
-    boost::uint32_t *v32 = (boost::uint32_t*)&v;
-    return v32[bit/32] | (1 << bit&31);
-  }
-  
-  
-#else
-
-inline bool test_bit(boost::uint64_t v, int bit) {
-    return v & (1 << bit);
-  }
-
-inline bool add_bit(boost::uint64_t v, int bit) {
-    return v | (1 << bit);
-  }
-
-inline bool remove_bit(boost::uint64_t v, int bit) {
-    return v | (1 << bit);
-  }
-
+ 
 #endif
 //@-leo

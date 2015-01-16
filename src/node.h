@@ -10,6 +10,7 @@
 //@+node:michael.20141217010530.12: ** << includes >>
 #include <cassert>
 #include <algorithm>
+#include <vector>
 #include <boost/cstdint.hpp>
 #include "larch/leaves.h"
 #ifdef DEBUG
@@ -195,7 +196,7 @@ struct Page {
     char data[PAGE_SIZE];
     struct {
       boost::uint16_t count; // node count
-      NodePtr node_ptr[];
+      NodePtr node_ptr[1];
     };
   };      
       
@@ -330,7 +331,7 @@ struct NodeRef {
     }
     
   void set_len(size_t len) const {
-      set_extra(len);
+      set_extra((nodeid_t)len);
     }
     
   //@+others
@@ -422,7 +423,7 @@ struct TempNode {
     }
     
   void set_len(size_t len) {
-      set_extra(len);
+      set_extra((nodeid_t)len);
     }    
 };
 
@@ -628,7 +629,7 @@ struct Trace {
     }
   //@+node:michael.20141230111914.123: *3* remove
   bool _eat_child(size_t ancestor) {
-    int index = size()-1-ancestor;
+    int index = (int)(size()-1-ancestor);
     return index>0 ? stack[index].node.eat_child() : false;
   }
 
