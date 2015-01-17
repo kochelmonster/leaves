@@ -24,10 +24,10 @@
 <v t="michael.20141215222649.27"><vh>Database (Declaration)</vh></v>
 <v t="michael.20141215222649.44"><vh>Database (Implementation)</vh></v>
 </v>
-<v t="michael.20141215222649.10" a="E"><vh>BitTrie</vh>
+<v t="michael.20141215222649.10"><vh>BitTrie</vh>
 <v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
 <v t="michael.20150106224503.25"><vh>Eat Tools</vh></v>
-<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
+<v t="michael.20141215222649.126"><vh>Compressed</vh>
 <v t="michael.20150106224503.49"><vh>keycmp</vh></v>
 <v t="michael.20150106224503.59"><vh>keyappend</vh></v>
 <v t="michael.20150106224503.50"><vh>get_len</vh></v>
@@ -70,7 +70,8 @@
 <v t="michael.20150106224503.24"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.7"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.84" a="E"><vh>Leaf</vh>
+<v t="michael.20141215222649.84"><vh>Leaf</vh>
+<v t="kochelmonster-.20150117183203.2"><vh>is_valid</vh></v>
 <v t="michael.20150106224503.51"><vh>find</vh></v>
 <v t="michael.20150110130802.12"><vh>prev</vh></v>
 <v t="michael.20141230111914.78"><vh>reinsert_me</vh></v>
@@ -78,7 +79,36 @@
 <v t="michael.20150106224503.26"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.8"><vh>dump</vh></v>
 </v>
-<v t="michael.20150116155028.16"><vh>Bucket</vh></v>
+<v t="michael.20150116155028.16"><vh>Bucket</vh>
+<v t="kochelmonster-.20150117183203.18"><vh>is_valid</vh></v>
+<v t="kochelmonster-.20150117183203.5"><vh>find</vh></v>
+<v t="kochelmonster-.20150117183203.4"><vh>sort</vh></v>
+<v t="kochelmonster-.20150117183203.14"><vh>prev</vh></v>
+<v t="kochelmonster-.20150117183203.15"><vh>next</vh></v>
+<v t="kochelmonster-.20150117183203.13"><vh>first</vh></v>
+<v t="kochelmonster-.20150117183203.12"><vh>last</vh></v>
+<v t="kochelmonster-.20150117183203.6"><vh>change_to_hash</vh></v>
+<v t="kochelmonster-.20150117183203.7"><vh>remove_value</vh></v>
+<v t="kochelmonster-.20150117183203.8"><vh>add</vh></v>
+<v t="kochelmonster-.20150117183203.9"><vh>remove_child</vh></v>
+<v t="kochelmonster-.20150117183203.10"><vh>eat_child</vh></v>
+<v t="kochelmonster-.20150117183203.11"><vh>dump</vh></v>
+</v>
+<v t="kochelmonster-.20150117183203.20"><vh>Hash</vh>
+<v t="kochelmonster-.20150117183203.21"><vh>is_valid</vh></v>
+<v t="kochelmonster-.20150117183203.22"><vh>find</vh></v>
+<v t="kochelmonster-.20150117183203.23"><vh>sort</vh></v>
+<v t="kochelmonster-.20150117183203.24"><vh>prev</vh></v>
+<v t="kochelmonster-.20150117183203.25"><vh>next</vh></v>
+<v t="kochelmonster-.20150117183203.26"><vh>first</vh></v>
+<v t="kochelmonster-.20150117183203.27"><vh>last</vh></v>
+<v t="kochelmonster-.20150117183203.28"><vh>change_to_hash</vh></v>
+<v t="kochelmonster-.20150117183203.29"><vh>remove_value</vh></v>
+<v t="kochelmonster-.20150117183203.30"><vh>add</vh></v>
+<v t="kochelmonster-.20150117183203.31"><vh>remove_child</vh></v>
+<v t="kochelmonster-.20150117183203.32"><vh>eat_child</vh></v>
+<v t="kochelmonster-.20150117183203.33"><vh>dump</vh></v>
+</v>
 </v>
 </v>
 <v t="michael.20141215222649.63"><vh>Memory Managment</vh>
@@ -96,18 +126,19 @@
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.14"><vh>Files</vh>
+<v t="michael.20141215222649.14" a="E"><vh>Files</vh>
 <v t="michael.20141230111914.135"><vh>@file wscript</vh></v>
 <v t="michael.20141215222649.16"><vh>@path include/larch</vh>
 <v t="michael.20141215222649.17"><vh>@file leaves.h</vh></v>
 </v>
-<v t="michael.20141215222649.15"><vh>@path src</vh>
+<v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.65" a="E"
+expanded="michael.20141219202729.2,michael.20141220220750.15,"><vh>@file node.h</vh></v>
 <v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
 <v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
-<v t="michael.20141219202729.8"
-expanded="michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
+<v t="michael.20141219202729.8" a="E"
+expanded="michael.20141230111914.148,michael.20141215222649.83,kochelmonster-.20150117183203.20,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
@@ -141,14 +172,348 @@ expanded="michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
 </v>
 </v>
 <v t="michael.20141219202729.5" a="E"><vh>edit</vh>
-<v t="michael.20150116155028.21"><vh>Bucket</vh></v>
+<v t="kochelmonster-.20150117183203.20"></v>
 <v t="michael.20150116155028.16"></v>
 <v t="michael.20150117120355.4"><vh>Sorter</vh></v>
-<v t="michael.20141215222649.84" a="E"></v>
+<v t="michael.20141215222649.84"></v>
 <v t="michael.20150106224503.38"><vh>generate</vh></v>
 </v>
 </vnodes>
 <tnodes>
+<t tx="kochelmonster-.20150117183203.10">bool eat_child(NodeRef&amp; rnode, Node* data) {
+    assert(0);
+    return false;
+  }</t>
+<t tx="kochelmonster-.20150117183203.11">#ifdef DEBUG
+void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
+  NodePtr *ptr = page-&gt;node_ptr + nodeid;
+  Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
+  size_t count = ptr-&gt;extra;
+
+  out &lt;&lt; t3 &lt;&lt; "type:   bucket" &lt;&lt; std::endl
+      &lt;&lt; t3 &lt;&lt; "count:  " &lt;&lt; count &lt;&lt; std::endl;
+      
+  char* pos = data-&gt;e.data;
+  char *key, *value;
+  psize_t ksize;
+  vsize_t vsize;
+  
+  psize_t key_size;
+  for(psize_t i = 0; i &lt; count; i++) {
+    pos = Bucket::get_key_value(pos, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
+    
+    out &lt;&lt; t3 &lt;&lt; "key" &lt;&lt; (int)i &lt;&lt; ":   ";
+    dump_key(key, ksize);
+    out &lt;&lt; std::endl;
+    
+    std::string val(value, vsize&amp;0x3f);
+    out &lt;&lt; t3 &lt;&lt; "value" &lt;&lt; (int)i &lt;&lt; ": " &lt;&lt; val.c_str() &lt;&lt; std::endl;
+  }
+}
+#endif</t>
+<t tx="kochelmonster-.20150117183203.12">void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.last(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.13">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.first(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.14">void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.prev(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.15">void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.next(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.18">bool is_valid(const NodeRef&amp; rnode, Trace&amp; trace) {
+    return trace.sorter.is_valid(trace.current_key());
+  }</t>
+<t tx="kochelmonster-.20150117183203.2">bool is_valid(const NodeRef&amp; rnode, Trace&amp; trace) {
+    return trace.back-&gt;end == trace.key.size();
+  }</t>
+<t tx="kochelmonster-.20150117183203.20">// A hash node
+struct HashHandler : public LeafBase {
+  @others
+};
+
+static HashHandler hash;</t>
+<t tx="kochelmonster-.20150117183203.21">bool is_valid(const NodeRef&amp; rnode, Trace&amp; trace) {
+    return trace.sorter.is_valid(trace.current_key());
+  }</t>
+<t tx="kochelmonster-.20150117183203.22">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    Slice key(trace.current_key());
+    data = 
+    
+    
+    data
+    psize_t count = rnode.extra();
+    char* pos = data-&gt;e.data;
+    char* item_key;
+    psize_t ksize;
+    for(psize_t i = 0; i &lt; count; i++) {
+      char *old_pos = pos;
+      pos = Bucket::get_key(pos, &amp;item_key, &amp;size);
+      if (key.size() == ksize &amp;&amp; memcmp(item_key, key.data(), ksize) == 0) {
+        trace.sorter.index = 0;
+        trace.sorter.pointers[0] = old_pos;
+        return;
+      }
+    }
+  }</t>
+<t tx="kochelmonster-.20150117183203.23">void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    size_t count = rnode.extra();
+    if (trace.sorter.prepare_sort(data, count))
+      return;
+
+    char *pos = data-&gt;e.data;      
+    for(size_t i = 0; i &lt; count; i++) {
+      sorter.pointers[i] = pos;
+      pos = Bucket::next(pos);
+    }
+    sorter.sort();
+  }</t>
+<t tx="kochelmonster-.20150117183203.24">void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.prev(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.25">void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.next(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.26">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.first(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.27">void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    sort(rnode, data, trace);
+    tracer.sorter.last(trace);
+  }</t>
+<t tx="kochelmonster-.20150117183203.28">void change_to_hash(const TempNode&amp; leaf, NodeRef&amp; rnode, 
+                             Node* data, Trace&amp; trace) {
+    Slice key(trace.current_key());
+    std::string current_key(key.data(), key.size()); 
+    
+    // save the bucket data
+    psize_t count = rnode.count();
+    char data[MAX_BUCKET_SIZE];
+    memcpy(data, data-&gt;e.data, rnode.size());
+      
+    trace.change_to_hash();
+    
+    // reinsert the bucket data
+    char *p = data;
+    for(psize_t i = 0; i &lt; count; i++) {
+      char *key, *value;
+      psize_t ksize;
+      vsize_t vsize;
+      p = Bucket::get_key_value(p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
+      
+      trace.cut_key();
+      trace.key.append(keys[i], ksizes[i]);
+      trace.current().add(TempLeaf(value, vsize));
+    }                                   
+
+    // add the new key        
+    trace.cut_key();
+    trace.key.append(current_key);
+    trace.current().add(leaf);
+  }</t>
+<t tx="kochelmonster-.20150117183203.29">void remove_value(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    char *p1 = trace.sorter.pointers[trace.sorter.index];
+    char *p2 = Bucket::next(p1);
+    size_t node_size = rnode.size();
+    memmove(p1, p2, node_size - (p2 - data-&gt;e.data));
+  }</t>
+<t tx="kochelmonster-.20150117183203.30">bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    Slice key(trace.current_key());
+    bool result = true;
+    size_t count = rnode.extra();
+    
+    trace.sorter.clear();
+    if (trace.is_valid) {
+      // the key is inside the bucket
+      remove_value(leaf, rnode, data, trace);
+      result = false;
+    }
+    else if (count == MAX_BUCKET_COUNT) {
+      change_to_hash(leaf, rnode, data, trace)
+      return true;
+    }
+    
+    size_t bsize = data-&gt;e.size();
+    size_t kv_size = Bucket::slot_size(key.size(), rnode.extra());
+    size_t new_node_size = pad&lt;BUCKET_ALIGN&gt;(bsize+kv_size);
+    size_t node_size = rnode.size();
+    
+    if (new_node_size &gt; node_size) 
+      trace.grow_node_size(new_node_size-node_size);
+      
+    data = trace.current().node();
+    char* p = data-&gt;e.data;
+    for(psize_t i = 0; i &lt; count; i++)
+      p = Bucket::next(p);
+      
+    Bucket::set_key_value(
+      p, key, key.size(), leaf.node()-&gt;l.data, leaf.extra());
+   
+    trace.current().set_extra(count+1);
+    return result;
+  }</t>
+<t tx="kochelmonster-.20150117183203.31">bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    size_t count = rnode.extra();
+    trace.sorter.clear();
+    if (count == 1)
+      return false;
+      
+    remove_value(rnode, data, trace);
+    trace.current().set_extra(count-1);
+
+    return true;
+  }</t>
+<t tx="kochelmonster-.20150117183203.32">bool eat_child(NodeRef&amp; rnode, Node* data) {
+    assert(0);
+    return false;
+  }</t>
+<t tx="kochelmonster-.20150117183203.33">#ifdef DEBUG
+void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
+  NodePtr *ptr = page-&gt;node_ptr + nodeid;
+  Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
+  size_t count = ptr-&gt;extra;
+
+  out &lt;&lt; t3 &lt;&lt; "type:   bucket" &lt;&lt; std::endl
+      &lt;&lt; t3 &lt;&lt; "count:  " &lt;&lt; count &lt;&lt; std::endl;
+      
+  char* pos = data-&gt;e.data;
+  char *key, *value;
+  psize_t ksize;
+  vsize_t vsize;
+  
+  psize_t key_size;
+  for(psize_t i = 0; i &lt; count; i++) {
+    pos = Bucket::get_key_value(pos, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
+    
+    out &lt;&lt; t3 &lt;&lt; "key" &lt;&lt; (int)i &lt;&lt; ":   ";
+    dump_key(key, ksize);
+    out &lt;&lt; std::endl;
+    
+    std::string val(value, vsize&amp;0x3f);
+    out &lt;&lt; t3 &lt;&lt; "value" &lt;&lt; (int)i &lt;&lt; ": " &lt;&lt; val.c_str() &lt;&lt; std::endl;
+  }
+}
+#endif</t>
+<t tx="kochelmonster-.20150117183203.4">void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    size_t count = rnode.extra();
+    if (trace.sorter.prepare_sort(data, count))
+      return;
+
+    char *pos = data-&gt;e.data;      
+    for(size_t i = 0; i &lt; count; i++) {
+      sorter.pointers[i] = pos;
+      pos = Bucket::next(pos);
+    }
+    sorter.sort();
+  }</t>
+<t tx="kochelmonster-.20150117183203.5">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    Slice key(trace.current_key());
+    
+    psize_t count = rnode.extra();
+    char* pos = data-&gt;e.data;
+    char* item_key;
+    psize_t ksize;
+    for(psize_t i = 0; i &lt; count; i++) {
+      char *old_pos = pos;
+      pos = Bucket::get_key(pos, &amp;item_key, &amp;size);
+      if (key.size() == ksize &amp;&amp; memcmp(item_key, key.data(), ksize) == 0) {
+        trace.sorter.index = 0;
+        trace.sorter.pointers[0] = old_pos;
+        return;
+      }
+    }
+  }</t>
+<t tx="kochelmonster-.20150117183203.6">void change_to_hash(const TempNode&amp; leaf, NodeRef&amp; rnode, 
+                             Node* data, Trace&amp; trace) {
+    Slice key(trace.current_key());
+    std::string current_key(key.data(), key.size()); 
+    
+    // save the bucket data
+    psize_t count = rnode.count();
+    char data[MAX_BUCKET_SIZE];
+    memcpy(data, data-&gt;e.data, rnode.size());
+      
+    trace.change_to_hash();
+    
+    // reinsert the bucket data
+    char *p = data;
+    for(psize_t i = 0; i &lt; count; i++) {
+      char *key, *value;
+      psize_t ksize;
+      vsize_t vsize;
+      p = Bucket::get_key_value(p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
+      
+      trace.cut_key();
+      trace.key.append(keys[i], ksizes[i]);
+      trace.current().add(TempLeaf(value, vsize));
+    }                                   
+
+    // add the new key        
+    trace.cut_key();
+    trace.key.append(current_key);
+    trace.current().add(leaf);
+  }</t>
+<t tx="kochelmonster-.20150117183203.7">void remove_value(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    char *p1 = trace.sorter.pointers[trace.sorter.index];
+    char *p2 = Bucket::next(p1);
+    size_t node_size = rnode.size();
+    memmove(p1, p2, node_size - (p2 - data-&gt;e.data));
+  }</t>
+<t tx="kochelmonster-.20150117183203.8">bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    Slice key(trace.current_key());
+    bool result = true;
+    size_t count = rnode.extra();
+    
+    trace.sorter.clear();
+    if (trace.is_valid) {
+      // the key is inside the bucket
+      remove_value(leaf, rnode, data, trace);
+      result = false;
+    }
+    else if (count == MAX_BUCKET_COUNT) {
+      change_to_hash(leaf, rnode, data, trace)
+      return true;
+    }
+    
+    size_t bsize = data-&gt;e.size();
+    size_t kv_size = Bucket::slot_size(key.size(), rnode.extra());
+    size_t new_node_size = pad&lt;BUCKET_ALIGN&gt;(bsize+kv_size);
+    size_t node_size = rnode.size();
+    
+    if (new_node_size &gt; node_size) 
+      trace.grow_node_size(new_node_size-node_size);
+      
+    data = trace.current().node();
+    char* p = data-&gt;e.data;
+    for(psize_t i = 0; i &lt; count; i++)
+      p = Bucket::next(p);
+      
+    Bucket::set_key_value(
+      p, key, key.size(), leaf.node()-&gt;l.data, leaf.extra());
+   
+    trace.current().set_extra(count+1);
+    return result;
+  }</t>
+<t tx="kochelmonster-.20150117183203.9">bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    size_t count = rnode.extra();
+    trace.sorter.clear();
+    if (count == 1)
+      return false;
+      
+    remove_value(rnode, data, trace);
+    trace.current().set_extra(count-1);
+
+    return true;
+  }</t>
 <t tx="michael.20141215222649.10"></t>
 <t tx="michael.20141215222649.104">// A Cursor to a non exising namespace
 class NoWhereCursor : public Cursor {
@@ -548,6 +913,7 @@ void dump_key(const char data, size_t size, std::ostream&amp; out) {
 
 NodeHandler* NodeHandler::handlers[6] = {
   &amp;leaf,
+  &amp;bucket,
   &amp;link,
   &amp;compressed,
   &amp;trie,
@@ -1409,333 +1775,47 @@ int keycmp(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
 </t>
 <t tx="michael.20150110130802.31"></t>
 <t tx="michael.20150110130802.34"></t>
-<t tx="michael.20150116155028.16">   
-struct BucketHandler {
-  size_t get_len(const NodeRef&amp; rnode) {
-      return 0; 
-    }
-  
-  size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-      return 0;
-    }
-    
-  void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    }
-  
-  void add_key_to_trace(Trace&amp; trace) {
-      char key[MAX_KEY_SIZE_64];
-      psize_t size;
-      bucket_get_key(trace.sorted.pointers[trace.sorter.index], key, &amp;ize);
-      trace.cut_key();
-      trace.append(key, size);
-    }
-    
-  
-  void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      size_t count = rnode.extra();
-      if (trace.sorter.prepare_sort(data, count))
-        return;
-
-      char *pos = data-&gt;e.data;      
-      for(size_t i = 0; i &lt; count; i++) {
-        sorter.pointers[i] = pos;
-        pos = Bucket::next(pos);
-      }
-      sorter.sort();
-    }
-  
-  void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      Slice key(trace.current_key());
-      
-      psize_t count = rnode.extra();
-      char* pos = data-&gt;e.data;
-      char* item_key;
-      psize_t ksize;
-      for(psize_t i = 0; i &lt; count; i++) {
-        char *old_pos = pos;
-        pos = Bucket::get_key(pos, &amp;item_key, &amp;size);
-        if (key.size() == ksize &amp;&amp; memcmp(item_key, key.data(), ksize) == 0) {
-          trace.is_valid = true;
-          trace.sorter.index = 0;
-          trace.sorter.pointers[0] = old_pos;
-          return;
-        }
-      }
-    }
-  
-  void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      sort(rnode, data, trace)
-      
-      size_t index = trace.sorter.find(trace.current_key)
-      
-      
-      
-      if (!trace.sorter.next(trace.current_key))
-        trace.parent_next();
-  
-  
-      if (trace.sorter.sort(rnode, data)) {
-        trace.sorter.index = 0;
-      }
-      else {
-        trace.sorter.index++;
-        if (trace.sorter.index &gt;=rnode.extra()) {
-          trace.parent_next();
-          return;
-        }
-      }
-
-      add_key_to_trace(trace);
-    }
-  
-  void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      if (trace.sorter.sort(rnode, data)) {
-        trace.sorter.index = rnode.extra()-1;
-      }
-      else {
-        if (trace.sorter.index == 0) {
-          trace.parent_prev();
-          return;
-        }
-          
-        trace.sorter.index--;
-      }
-
-      add_key_to_trace(trace);
-    }
-  
-  void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      trace.sorter.sort(rnode, data);
-      trace.sorter.index = 0;
-      add_key_to_trace(trace);
-      trace.is_valid = true;
-    }
-  
-  void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      trace.sorter.sort(rnode, data);
-      trace.sorter.index = rnode.extra()-1;
-      add_key_to_trace(trace);
-      trace.is_valid = true;      
-    }
-    
-  void change_to_hash(const TempNode&amp; leaf, NodeRef&amp; rnode, 
-                      Node* data, Trace&amp; trace) {
-      Slice key(trace.current_key());
-      std::string current_key(key.data(), key.size()); 
-      
-      // save the bucket data
-      psize_t count = rnode.count();
-      char data[MAX_BUCKET_SIZE];
-      memcpy(data, data-&gt;e.data, rnode.size());
-        
-      trace.change_to_hash();
-      
-      // reinsert the bucket data
-      char *p = data;
-      for(psize_t i = 0; i &lt; count; i++) {
-        char *key, *value;
-        psize_t ksize;
-        vsize_t vsize;
-        p = Bucket::get_key_value(p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
-        
-        trace.cut_key();
-        trace.key.append(keys[i], ksizes[i]);
-        trace.current().add(TempLeaf(value, vsize));
-      }                                   
-
-      // add the new key        
-      trace.cut_key();
-      trace.key.append(current_key);
-      trace.current().add(leaf);
-    }
-    
-  void remove_value(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      char *p1 = trace.sorter.pointers[trace.sorter.index];
-      char *p2 = Bucket::next(p1);
-      size_t node_size = rnode.size();
-      memmove(p1, p2, node_size - (p2 - data-&gt;e.data));
-    }    
-  
-  bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      Slice key(trace.current_key());
-      bool result = true;
-      size_t count = rnode.extra();
-      
-      trace.sorter.clear();
-      if (trace.is_valid) {
-        // the key is inside the bucket
-        remove_value(leaf, rnode, data, trace);
-        result = false;
-      }
-      else if (count == MAX_BUCKET_COUNT) {
-        change_to_hash(leaf, rnode, data, trace)
-        return true;
-      }
-      
-      size_t bsize = data-&gt;e.size();
-      size_t kv_size = Bucket::slot_size(key.size(), rnode.extra());
-      size_t new_node_size = pad&lt;BUCKET_ALIGN&gt;(bsize+kv_size);
-      size_t node_size = rnode.size();
-      
-      if (new_node_size &gt; node_size) 
-        trace.grow_node_size(new_node_size-node_size);
-        
-      data = trace.current().node();
-      char* p = data-&gt;e.data;
-      for(psize_t i = 0; i &lt; count; i++)
-        p = Bucket::next(p);
-        
-      Bucket::set_key_value(
-        p, key, key.size(), leaf.node()-&gt;l.data, leaf.extra());
-     
-      trace.current().set_extra(count+1);
-      return result;
-    }
-  
-  bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      size_t count = rnode.extra();
-      trace.sorter.clear();
-      if (count == 1)
-        return false;
-        
-      remove_value(rnode, data, trace);
-      trace.current().set_extra(count-1);
-  
-      return true;
-    }
-    
-  bool eat_child(NodeRef&amp; rnode, Node* data) {
-      assert(0);
-      return false;
-    }
-
-    
-#ifdef DEBUG
-  void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
-      NodePtr *ptr = page-&gt;node_ptr + nodeid;
-      Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
-      size_t count = ptr-&gt;extra;
-    
-      out &lt;&lt; t3 &lt;&lt; "type:   bucket" &lt;&lt; std::endl
-          &lt;&lt; t3 &lt;&lt; "count:  " &lt;&lt; count &lt;&lt; std::endl;
-          
-      char* pos = data-&gt;e.data;
-      char *key, *value;
-      psize_t ksize;
-      vsize_t vsize;
-      
-      psize_t key_size;
-      for(psize_t i = 0; i &lt; count; i++) {
-        pos = Bucket::get_key_value(pos, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
-        
-        out &lt;&lt; t3 &lt;&lt; "key" &lt;&lt; (int)i &lt;&lt; ":   ";
-        dump_key(key, ksize);
-        out &lt;&lt; std::endl;
-        
-        std::string val(value, vsize&amp;0x3f);
-        out &lt;&lt; t3 &lt;&lt; "value" &lt;&lt; (int)i &lt;&lt; ": " &lt;&lt; val.c_str() &lt;&lt; std::endl;
-      }
-    }
-#endif  
-};
-</t>
-<t tx="michael.20150116155028.21">// maximal 10 key/value pairs
-// the format per key value pair is
-// [KeyValueSize(2)][key0(1)]...[keyN(1)][val0(1)]...[valN(1)]
-
-struct KeyValueSize {
-  union {
-    boost::uint16 vsize:7;
-    struct {
-      boost::uint16 value_is_link:1;
-      boost::uint16 value_size:6;
-    };
-  };
-  boost::uint16 key_size: 9;
+<t tx="michael.20150116155028.16">// A single bucket node
+struct BucketHandler : public LeafBase {
+  @others
 };
 
-struct Bucket {
-  char data[];
-  
-  // get the key and value of current positions and returns the
-  // position of the next key, value storage
-  static char *get_key_value(char* pos, 
-                             char** key, psize_t* ksize,
-                             char** value, vsize_t* vsize) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      *ksize = kvs.key_size;
-      *vsize = kvs.vsize;
-      pos += sizeof(KeyValueSize);
-  
-      *key = pos;
-      pos += kvs.key_size;
-      *value = pos;
-      return pos + kvs.value_size
-    }
-    
-  static void set_key_value(char* pos, 
-                            char* key, psize_t ksize,
-                            char* value, vsize_t vsize) {
-      KeyValueSize kvs;
-      kvs.vsize = vsize;
-      kvs.key_size = ksize;
-      *(KeyValueSize*)pos = kvs;
-      pos += sizeof(KeyValueSize);
-  
-      memcpy(pos, key, kvs.key_size);
-      pos += kvs.key_size;
-
-      memcpy(pos, value, kvs.value_size);
-    }
-    
-  static char *get_key(char* pos, char** key, psize_t* ksize) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      *ksize = kvs.key_size;
-      pos += sizeof(KeyValueSize);
-      *key = pos;
-      return pos + kvs.key_size + kvs.value_size;
-    }
-
-  static char* value(char* pos, vsize_t* vsize) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      *vsize = kvs.vsize;
-      return pos + sizeof(KeyValueSize) + kvs.key_size;
-    }
-
-  static char *next(char* pos) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      return pos + sizeof(KeyValueSize) + kvs.key_size +  kvs.value_size;
-    }
-    
-  static size_t slot_size(size_t ksize, size_t vsize) {
-      return sizeof(KeyValueSize) + ksize + vsize &amp; 0x3f;
-    }
-    
-  // returns the real size of the bucket &lt;= node.size()
-  size_t size(psize_t count) {
-      char* p = data;
-      for(psize_t i = 0; i &lt; count; i++)
-        p = bucket_next(p);
-      
-      return p - start;
-    }
-};
-
-</t>
+static BucketHandler bucket;</t>
 <t tx="michael.20150117120355.4">// sorter for buckets and hash nodes
 struct Sorter {
   typedef char* ptr;
   Node* current_data; // the data to the currently sorted node
   size_t index;       // index to the current pointer;
   std::vector&lt;ptr&gt; pointers;  
-  
+    
   Sorter() : current_data(NULL) {
       pointer.reserve(4096);
     }
  
+  void add_key_to_trace(Trace&amp; trace);
+  void sort();
+  size_t find(const Slice&amp; key);
+  // true if key == pointers[index]
+  bool is_valid(const Slice&amp; key) const;
+  void next(Trace&amp; trace);
+  void prev(Trace&amp; trace) ;
+
+  void first(Trace&amp; trace)  {
+      index = 0;
+      add_key_to_trace(trace);
+    }
+    
+  void last(Trace&amp; trace)  {
+      index = size() - 1;
+      add_key_to_trace(trace);
+    }
+  
   size_t size() const {
       return pointers.size();
     }   
+  
+  void init_hash(Node* data, PageRef&amp; pages[10]) {
+    }
     
   bool prepare_sort(Node* data, size_t count) {
       if (current_data == data &amp;&amp; pointer.size() == count)
@@ -1745,19 +1825,12 @@ struct Sorter {
       return false;
     }
     
-  void sort();
-  
-  bool find(Slice key);
-  
-  
   void clear() {
-      current_data = NULL;
-      pointers.resize(1); // at least one pointer is always active
+      if (current_data) {
+        current_data = NULL;
+        pointers.resize(1); // at least one pointer is always active
+      }
     }
-    
-
-
-
 };
 
 int compare_slot(const char *a, const char* b) {
@@ -1781,23 +1854,71 @@ void Sorter::sort(Slice key) {
     find(key);
 }
 
-
-
-
-size_t Sorter::find(Slice key) {
+bool Sorter::is_valid(const Slice&amp; key const) {
   char *key_;
   psize_t ksize;
   Bucket::get_key(pointers[index], &amp;key_, &amp;ksize);
-  if (ksize == key.size() &amp;&amp; memcmp(key.data(), key_, ksize) == 0)
-    return index;
+  return ksize == key.size() &amp;&amp; memcmp(key.data(), key_, ksize) == 0;
+}
 
+size_t Sorter::find(const Slice&amp; key) {
   char key_buffer[MAX_KEY_SIZE_64+sizeof(KeyValueSize)];
   ((KeyValueSize*)key_buffer)-&gt;ksize = key.size();
   memcpy(key_buffer+sizeof(KeyValueSize), key.data(), key.size());
-  
   index = std::lower_bound(pointer::begin(), pointer.end(), 
                            key_buffer, compare_slot) - pointer.begin();
   return index;
-}</t>
+}
+
+void Sorter::add_key_to_trace(Trace&amp; trace) {
+  char key;
+  psize_t size;
+  Bucket::get_key(pointers[index], &amp;key, &amp;ize);
+  trace.cut_key();
+  trace.append(key, size);
+}
+
+
+void Sorter:next(Trace&amp; trace) {
+  Slice key(trace.current_key());
+  if (is_valid(key)) {
+    if (index == size()-1)
+      trace.parent_next();
+      return;
+    }
+    index++;
+  } 
+  else if (find(key) &gt;= size()) {
+    // after the last item
+    trace.parent_next();
+    return;
+  }
+  trace.cut_key();
+  add_key_to_trace(trace);
+}
+    
+void Sorter::prev(Trace&amp; trace) {
+  Slice key(trace.current_key());
+  if (is_valid(key)) {
+    if (index == 0)
+      trace.parent_prev();
+      return;
+    }
+    index--;
+  } 
+  else {
+    find(key);
+    if (index == 0) {
+      // before the first item
+      trace.parent_prev();
+      return;
+    }
+    index--;
+  }
+  trace.cut_key();
+  add_key_to_trace(trace);
+}    
+
+  </t>
 </tnodes>
 </leo_file>

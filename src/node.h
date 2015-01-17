@@ -130,6 +130,11 @@ struct NodeHandler {
   // tries==1, compressed>1, leaves==0
   virtual size_t get_len(const NodeRef& rnode) = 0;
   
+  // returns true if the last rnode points to a valid key position
+  virtual bool is_valid(const NodeRef& rnode, Trace& trace) {
+      return false;
+    }
+  
   // returns the nodes children
   virtual size_t get_children(NodePtr* ptr, Node* data, 
                               nodeid_t children[65]) = 0;
@@ -378,6 +383,10 @@ struct NodeRef {
       return handler->get_len(*this);
     }
 
+  bool is_valid(Trace& trace) const {
+      return handler->is_valid(*this, trace);
+    }
+
   void find(Trace& trace) {
       handler->find(*this, node(), trace);
     }
@@ -531,14 +540,35 @@ struct Sorter {
   Node* current_data; // the data to the currently sorted node
   size_t index;       // index to the current pointer;
   std::vector<ptr> pointers;  
-  
+    
   Sorter() : current_data(NULL) {
       pointer.reserve(4096);
     }
  
+  void add_key_to_trace(Trace& trace);
+  void sort();
+  size_t find(const Slice& key);
+  // true if key == pointers[index]
+  bool is_valid(const Slice& key) const;
+  void next(Trace& trace);
+  void prev(Trace& trace) ;
+
+  void first(Trace& trace)  {
+      index = 0;
+      add_key_to_trace(trace);
+    }
+    
+  void last(Trace& trace)  {
+      index = size() - 1;
+      add_key_to_trace(trace);
+    }
+  
   size_t size() const {
       return pointers.size();
     }   
+  
+  void init_hash(Node* data, PageRef& pages[10]) {
+    }
     
   bool prepare_sort(Node* data, size_t count) {
       if (current_data == data && pointer.size() == count)
@@ -548,19 +578,12 @@ struct Sorter {
       return false;
     }
     
-  void sort();
-  
-  bool find(Slice key);
-  
-  
   void clear() {
-      current_data = NULL;
-      pointers.resize(1); // at least one pointer is always active
+      if (current_data) {
+        current_data = NULL;
+        pointers.resize(1); // at least one pointer is always active
+      }
     }
-    
-
-
-
 };
 
 int compare_slot(const char *a, const char* b) {
@@ -584,24 +607,72 @@ void Sorter::sort(Slice key) {
     find(key);
 }
 
-
-
-
-size_t Sorter::find(Slice key) {
+bool Sorter::is_valid(const Slice& key const) {
   char *key_;
   psize_t ksize;
   Bucket::get_key(pointers[index], &key_, &ksize);
-  if (ksize == key.size() && memcmp(key.data(), key_, ksize) == 0)
-    return index;
+  return ksize == key.size() && memcmp(key.data(), key_, ksize) == 0;
+}
 
+size_t Sorter::find(const Slice& key) {
   char key_buffer[MAX_KEY_SIZE_64+sizeof(KeyValueSize)];
   ((KeyValueSize*)key_buffer)->ksize = key.size();
   memcpy(key_buffer+sizeof(KeyValueSize), key.data(), key.size());
-  
   index = std::lower_bound(pointer::begin(), pointer.end(), 
                            key_buffer, compare_slot) - pointer.begin();
   return index;
 }
+
+void Sorter::add_key_to_trace(Trace& trace) {
+  char key;
+  psize_t size;
+  Bucket::get_key(pointers[index], &key, &ize);
+  trace.cut_key();
+  trace.append(key, size);
+}
+
+
+void Sorter:next(Trace& trace) {
+  Slice key(trace.current_key());
+  if (is_valid(key)) {
+    if (index == size()-1)
+      trace.parent_next();
+      return;
+    }
+    index++;
+  } 
+  else if (find(key) >= size()) {
+    // after the last item
+    trace.parent_next();
+    return;
+  }
+  trace.cut_key();
+  add_key_to_trace(trace);
+}
+    
+void Sorter::prev(Trace& trace) {
+  Slice key(trace.current_key());
+  if (is_valid(key)) {
+    if (index == 0)
+      trace.parent_prev();
+      return;
+    }
+    index--;
+  } 
+  else {
+    find(key);
+    if (index == 0) {
+      // before the first item
+      trace.parent_prev();
+      return;
+    }
+    index--;
+  }
+  trace.cut_key();
+  add_key_to_trace(trace);
+}    
+
+  
 //@+node:michael.20141220220750.15: ** Trace
 // A stack trace inside a trie
 // nodes[0] is the root
@@ -658,7 +729,7 @@ struct Trace {
   //@+node:michael.20150106224503.48: *3* is_valid
   // returns true if it points to a valid position
   bool is_valid() const {
-      return back->end >= key.size() && back->node.is_leaf();
+      return current().is_valid(*this);
     }
   //@+node:michael.20150101205559.11: *3* check_valid
   void check_valid() const {
