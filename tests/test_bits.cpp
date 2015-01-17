@@ -25,27 +25,28 @@ void testpoint(const char* str) {
 //@+node:michael.20141230111914.148: ** Node Structs
 typedef unsigned char trieindex_t;
 
+//@+others
+//@+node:michael.20150116155028.17: *3* Compressed
 // A Node containing a string part equal to all descendants
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
   char data[];
 };
-
+//@+node:michael.20150116155028.18: *3* Leaf
 // A leaf 
 // the data is interpreted by the type (kLeaf od kBitLeaf)
 // the size of data is saved in NodeRef::len()
 struct Leaf {
   char data[];
 };
-
-
+//@+node:michael.20150116155028.19: *3* Trie
 // Node with the complete alphabet 
 // children count is > 56
 struct Trie {
   nodeid_t children[64];
 };
-
+//@+node:michael.20150116155028.20: *3* BitTrie
 // Node with a range
 struct BitTrie {
   boost::uint64_t bits;
@@ -105,8 +106,95 @@ struct BitTrie {
               sizeof(nodeid_t)*(count()-child_index));
     }
 };
+//@+node:michael.20150116155028.21: *3* Bucket
+// maximal 10 key/value pairs
+// the format per key value pair is
+// [KeyValueSize(2)][key0(1)]...[keyN(1)][val0(1)]...[valN(1)]
 
+struct KeyValueSize {
+  union {
+    boost::uint16 vsize:7;
+    struct {
+      boost::uint16 value_is_link:1;
+      boost::uint16 value_size:6;
+    };
+  };
+  boost::uint16 key_size: 9;
+};
 
+struct Bucket {
+  char data[];
+  
+  // get the key and value of current positions and returns the
+  // position of the next key, value storage
+  static char *get_key_value(char* pos, 
+                             char** key, psize_t* ksize,
+                             char** value, vsize_t* vsize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *ksize = kvs.key_size;
+      *vsize = kvs.vsize;
+      pos += sizeof(KeyValueSize);
+  
+      *key = pos;
+      pos += kvs.key_size;
+      *value = pos;
+      return pos + kvs.value_size
+    }
+    
+  static void set_key_value(char* pos, 
+                            char* key, psize_t ksize,
+                            char* value, vsize_t vsize) {
+      KeyValueSize kvs;
+      kvs.vsize = vsize;
+      kvs.key_size = ksize;
+      *(KeyValueSize*)pos = kvs;
+      pos += sizeof(KeyValueSize);
+  
+      memcpy(pos, key, kvs.key_size);
+      pos += kvs.key_size;
+
+      memcpy(pos, value, kvs.value_size);
+    }
+    
+  static char *get_key(char* pos, char** key, psize_t* ksize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *ksize = kvs.key_size;
+      pos += sizeof(KeyValueSize);
+      *key = pos;
+      return pos + kvs.key_size + kvs.value_size;
+    }
+
+  static char* value(char* pos, vsize_t* vsize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *vsize = kvs.vsize;
+      return pos + sizeof(KeyValueSize) + kvs.key_size;
+    }
+
+  static char *next(char* pos) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      return pos + sizeof(KeyValueSize) + kvs.key_size +  kvs.value_size;
+    }
+    
+  static size_t slot_size(size_t ksize, size_t vsize) {
+      return sizeof(KeyValueSize) + ksize + vsize & 0x3f;
+    }
+    
+  // returns the real size of the bucket <= node.size()
+  size_t size(psize_t count) {
+      char* p = data;
+      for(psize_t i = 0; i < count; i++)
+        p = bucket_next(p);
+      
+      return p - start;
+    }
+};
+
+//@+node:michael.20150116155028.22: *3* Hash
+// a link to a hash Page
+struct Hash {
+  pageid_t pageid;
+};
+//@+node:michael.20150116155028.23: *3* Node
 struct Node {
   union {
     Compressed c;
@@ -114,8 +202,11 @@ struct Node {
     Trie t;
     BitTrie b;
     pageid_t p;
+    Bucket e;
+    Hash h;
   };
 };
+//@-others
 //@+node:michael.20150101205559.44: ** TestSuite
 BOOST_AUTO_TEST_CASE(add_bits) {
   union {

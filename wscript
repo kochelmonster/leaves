@@ -16,9 +16,9 @@ def options(opt):
     opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
 
 
-def configure(cfg):
+
+def configure_test(cfg):
     import os
-    
     cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
 
     load_modules = 'compiler_cxx boost waf_unit_test'
@@ -36,8 +36,6 @@ def configure(cfg):
                              'CMPFILES="{}"'.format(cmpfiles_path)]
                              
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
-    cfg.env.INCLUDES_TEST = [os.path.abspath("include"), 
-                             os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []
     if cfg.env.CXX_NAME == "gcc":
         cfg.env.LINKFLAGS_TEST = ["-pthread"]
@@ -47,18 +45,27 @@ def configure(cfg):
     if cfg.options.gcov:
         cfg.env.CXXFLAGS_TEST.extend(["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
         cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
+   
 
+def configure_bench(cfg):
     cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN), "PAGE_SIZE=8192"]
     cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
-    cfg.env.INCLUDES_BENCH = [os.path.abspath("include"), 
-                              os.path.abspath("src")]
+    
     cfg.env.STLIBPATH_BENCH = []
     if cfg.env.CXX_NAME == "gcc":
         #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
         #, "-lboost_filesystem",  "-lboost_system"]
         cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0", 
                                   "-march=corei7", "-g", "-O1"]
-    
+
+
+def configure(cfg):
+    import os
+    cfg.env.INCLUDES = [os.path.abspath("include"), 
+                        os.path.abspath("src")]
+
+    configure_test(cfg)
+    configure_bench(cfg)
     
 
 def build(bld):
@@ -83,6 +90,13 @@ def build(bld):
         source=[join("tests", "test_memorydb.cpp")]+sources,
         use="TEST BOOST",
         target="test_memorydb")
+        
+    bld.program(
+        features="test",
+        source=[join("tests", "test_base64.cpp"), 
+                join("src", "base64.cpp")],
+        use="TEST BOOST",
+        target="test_base64")        
 
     """
     only for generating test_trie tests

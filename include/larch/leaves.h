@@ -72,7 +72,7 @@ struct Options {
 
 //@+node:michael.20141230111914.5: ** class Slice
 class Slice {
- private:
+ protected:
   size_t _size;
   const char* _data;
   

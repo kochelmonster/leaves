@@ -20,31 +20,32 @@ namespace larch_leaves {
 //@+node:michael.20141230111914.148: ** Node Structs
 typedef unsigned char trieindex_t;
 
+//@+others
+//@+node:michael.20150116155028.17: *3* Compressed
 // A Node containing a string part equal to all descendants
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
-  char data[1];
+  char data[];
 };
-
+//@+node:michael.20150116155028.18: *3* Leaf
 // A leaf 
 // the data is interpreted by the type (kLeaf od kBitLeaf)
 // the size of data is saved in NodeRef::len()
 struct Leaf {
-  char data[1];
+  char data[];
 };
-
-
+//@+node:michael.20150116155028.19: *3* Trie
 // Node with the complete alphabet 
 // children count is > 56
 struct Trie {
   nodeid_t children[64];
 };
-
+//@+node:michael.20150116155028.20: *3* BitTrie
 // Node with a range
 struct BitTrie {
   boost::uint64_t bits;
-  nodeid_t children[1];
+  nodeid_t children[];
 
   size_t count() const {
       return popcount(bits);    
@@ -54,7 +55,7 @@ struct BitTrie {
       if (bits & (((boost::uint64_t)1)<<index)) {
         boost::uint64_t mask = ~0;
         mask <<= index;
-        return (int)popcount(bits & ~mask);
+        return popcount(bits & ~mask);
       }
       return -1;
     }
@@ -100,8 +101,95 @@ struct BitTrie {
               sizeof(nodeid_t)*(count()-child_index));
     }
 };
+//@+node:michael.20150116155028.21: *3* Bucket
+// maximal 10 key/value pairs
+// the format per key value pair is
+// [KeyValueSize(2)][key0(1)]...[keyN(1)][val0(1)]...[valN(1)]
 
+struct KeyValueSize {
+  union {
+    boost::uint16 vsize:7;
+    struct {
+      boost::uint16 value_is_link:1;
+      boost::uint16 value_size:6;
+    };
+  };
+  boost::uint16 key_size: 9;
+};
 
+struct Bucket {
+  char data[];
+  
+  // get the key and value of current positions and returns the
+  // position of the next key, value storage
+  static char *get_key_value(char* pos, 
+                             char** key, psize_t* ksize,
+                             char** value, vsize_t* vsize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *ksize = kvs.key_size;
+      *vsize = kvs.vsize;
+      pos += sizeof(KeyValueSize);
+  
+      *key = pos;
+      pos += kvs.key_size;
+      *value = pos;
+      return pos + kvs.value_size
+    }
+    
+  static void set_key_value(char* pos, 
+                            char* key, psize_t ksize,
+                            char* value, vsize_t vsize) {
+      KeyValueSize kvs;
+      kvs.vsize = vsize;
+      kvs.key_size = ksize;
+      *(KeyValueSize*)pos = kvs;
+      pos += sizeof(KeyValueSize);
+  
+      memcpy(pos, key, kvs.key_size);
+      pos += kvs.key_size;
+
+      memcpy(pos, value, kvs.value_size);
+    }
+    
+  static char *get_key(char* pos, char** key, psize_t* ksize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *ksize = kvs.key_size;
+      pos += sizeof(KeyValueSize);
+      *key = pos;
+      return pos + kvs.key_size + kvs.value_size;
+    }
+
+  static char* value(char* pos, vsize_t* vsize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *vsize = kvs.vsize;
+      return pos + sizeof(KeyValueSize) + kvs.key_size;
+    }
+
+  static char *next(char* pos) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      return pos + sizeof(KeyValueSize) + kvs.key_size +  kvs.value_size;
+    }
+    
+  static size_t slot_size(size_t ksize, size_t vsize) {
+      return sizeof(KeyValueSize) + ksize + vsize & 0x3f;
+    }
+    
+  // returns the real size of the bucket <= node.size()
+  size_t size(psize_t count) {
+      char* p = data;
+      for(psize_t i = 0; i < count; i++)
+        p = bucket_next(p);
+      
+      return p - start;
+    }
+};
+
+//@+node:michael.20150116155028.22: *3* Hash
+// a link to a hash Page
+struct Hash {
+  pageid_t pageid;
+};
+//@+node:michael.20150116155028.23: *3* Node
 struct Node {
   union {
     Compressed c;
@@ -109,8 +197,11 @@ struct Node {
     Trie t;
     BitTrie b;
     pageid_t p;
+    Bucket e;
+    Hash h;
   };
 };
+//@-others
 //@+node:michael.20141215222649.83: ** NodeHandlers
 struct LeafBase : public NodeHandler {
   size_t get_len(const NodeRef& rnode) {
@@ -148,7 +239,7 @@ struct TrieBase : public NodeHandler {
   virtual void add_node(Node* data, trieindex_t index, const TempNode& node, 
                         Trace& trace) = 0;
 
-  void add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       Slice key(trace.current_key());
   
       switch(key.size()) {
@@ -171,8 +262,17 @@ struct TrieBase : public NodeHandler {
           break;
           }
       }
+      return true;
     }
 };
+ 
+#ifdef DEBUG
+void dump_key(const char data, size_t size, std::ostream& out) {
+  std::setw(2) << std::setfill('0') << (int)data[0];
+  for(size_t i = 1; i < size; i++)
+      out << "|" << std::setw(2) << std::setfill('0') << (int)data[i];
+}
+#endif
  
 //@+others
 //@+node:michael.20150106224503.25: *3* Eat Tools
@@ -334,7 +434,7 @@ struct CompressedHandler : public NodeHandler {
       }
     }
   //@+node:michael.20141230111914.87: *4* add
-  void add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       Slice key(trace.current_key());
       size_t size = rnode.len();
       
@@ -344,7 +444,7 @@ struct CompressedHandler : public NodeHandler {
         assert(size == key.size());
         trace.add_node(leaf);
         trace.parent().node()->c.child = trace.child_of_parent();
-        return;
+        return true;
       }
       
       size_t prefix_size = common_prefix(key.data(), data->c.data,
@@ -381,6 +481,7 @@ struct CompressedHandler : public NodeHandler {
       }
 
       trace.current().add(leaf, trace);
+      return true;
     }
   //@+node:michael.20150106224503.21: *4* eat_child
   void append_data(NodeRef& rnode, const CompressBuffer& buffer) {
@@ -425,10 +526,8 @@ struct CompressedHandler : public NodeHandler {
       size_t len = ptr->extra;
       
       out << t3 << "type:  compressed" << std::endl;
-      out << t3 << "data:  " << std::setw(2) << std::setfill('0') 
-                             << (int)n->data[0];
-      for(size_t i = 1; i < len; i++)
-        out << "|" << std::setw(2) << std::setfill('0') << (int)n->data[i];
+      out << t3 << "data:  ";
+      dump_key(n->data, len, out);
       out << std::endl;
       out << t3 << "size:  " << (int)len << std::endl
           << t3 << "child: " << (int)n->child << std::endl;
@@ -461,8 +560,9 @@ struct LinkHandler : public LeafBase {
       link_node(rnode, data, trace).last(trace);
     }
     
-  void add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       assert(0); // may never be called
+      return true;
     }
     
   bool eat_child(NodeRef& rnode, Node* data) {
@@ -959,11 +1059,15 @@ struct LeafHandler : public LeafBase {
       trace.pop(); // back to parent
     }
   //@+node:michael.20141230111914.77: *4* add
-  void add(const TempNode& end, NodeRef& rnode, Node* data, Trace& trace) {
+  bool add(const TempNode& end, NodeRef& rnode, Node* data, Trace& trace) {
       Slice key(trace.current_key());
-      assert(key.size() != 0);
-      TempLeaf me(Slice(data->l.data, rnode.len()));
       
+      if (key.size() == 0) {
+        trace.change_node(end);
+        return false;
+      }
+      
+      TempLeaf me(Slice(data->l.data, rnode.len()));
       trace.change_node(TempTrie());
       reinsert_me(me, trace);
       if (key.size() > 1) {
@@ -973,13 +1077,14 @@ struct LeafHandler : public LeafBase {
         BitTrie* pn = &trace.parent().node()->b;
         pn->add(key[0], trace.child_of_parent());
         trace.current().add(end, trace);
-        return; //debug
+        return true; //debug
       }
       else {
         TESTPOINT(LeafAdd2);
       }
 
       trace.current().add(end, trace);
+      return true;
     }
   //@+node:michael.20150106224503.26: *4* eat_child
   bool eat_child(NodeRef& rnode, Node* data) {
@@ -993,16 +1098,12 @@ struct LeafHandler : public LeafBase {
       
       NodePtr *ptr = page->node_ptr + nodeid;
       Leaf *n = &page->get_node(nodeid)->l;
-      size_t len = ptr->extra;
+      size_t len = ptr->extra & 0x3f;
       
       std::string data(n->data, len);
-      if (ptr->type == kLeaf) {
-        out << t3 << "type:  leaf" << std::endl
-            << t3 << "data:  " << data << std::endl
-            << t3 << "size:  " << data.size() << std::endl;
-      }
-      else {
-        out << t3 << "type:  bigleaf" << std::endl;
+      out << t3 << "type:  leaf" << std::endl
+          << t3 << "data:  " << data << std::endl
+          << t3 << "size:  " << data.size() << std::endl;
       }
     }
   #endif
@@ -1010,10 +1111,239 @@ struct LeafHandler : public LeafBase {
 };
 
 static LeafHandler leaf;
+//@+node:michael.20150116155028.16: *3* Bucket
+   
+struct BucketHandler {
+  size_t get_len(const NodeRef& rnode) {
+      return 0; 
+    }
+  
+  size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
+      return 0;
+    }
+    
+  void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
+    }
+  
+  void add_key_to_trace(Trace& trace) {
+      char key[MAX_KEY_SIZE_64];
+      psize_t size;
+      bucket_get_key(trace.sorted.pointers[trace.sorter.index], key, &ize);
+      trace.cut_key();
+      trace.append(key, size);
+    }
+    
+  
+  void sort(NodeRef& rnode, Node* data, Trace& trace) {
+      size_t count = rnode.extra();
+      if (trace.sorter.prepare_sort(data, count))
+        return;
+
+      char *pos = data->e.data;      
+      for(size_t i = 0; i < count; i++) {
+        sorter.pointers[i] = pos;
+        pos = Bucket::next(pos);
+      }
+      sorter.sort();
+    }
+  
+  void find(NodeRef& rnode, Node* data, Trace& trace) {
+      Slice key(trace.current_key());
+      
+      psize_t count = rnode.extra();
+      char* pos = data->e.data;
+      char* item_key;
+      psize_t ksize;
+      for(psize_t i = 0; i < count; i++) {
+        char *old_pos = pos;
+        pos = Bucket::get_key(pos, &item_key, &size);
+        if (key.size() == ksize && memcmp(item_key, key.data(), ksize) == 0) {
+          trace.is_valid = true;
+          trace.sorter.index = 0;
+          trace.sorter.pointers[0] = old_pos;
+          return;
+        }
+      }
+    }
+  
+  void next(NodeRef& rnode, Node* data, Trace& trace) {
+      sort(rnode, data, trace)
+      
+      size_t index = trace.sorter.find(trace.current_key)
+      
+      
+      
+      if (!trace.sorter.next(trace.current_key))
+        trace.parent_next();
+  
+  
+      if (trace.sorter.sort(rnode, data)) {
+        trace.sorter.index = 0;
+      }
+      else {
+        trace.sorter.index++;
+        if (trace.sorter.index >=rnode.extra()) {
+          trace.parent_next();
+          return;
+        }
+      }
+
+      add_key_to_trace(trace);
+    }
+  
+  void prev(NodeRef& rnode, Node* data, Trace& trace) {
+      if (trace.sorter.sort(rnode, data)) {
+        trace.sorter.index = rnode.extra()-1;
+      }
+      else {
+        if (trace.sorter.index == 0) {
+          trace.parent_prev();
+          return;
+        }
+          
+        trace.sorter.index--;
+      }
+
+      add_key_to_trace(trace);
+    }
+  
+  void first(NodeRef& rnode, Node* data, Trace& trace) {
+      trace.sorter.sort(rnode, data);
+      trace.sorter.index = 0;
+      add_key_to_trace(trace);
+      trace.is_valid = true;
+    }
+  
+  void last(NodeRef& rnode, Node* data, Trace& trace) {
+      trace.sorter.sort(rnode, data);
+      trace.sorter.index = rnode.extra()-1;
+      add_key_to_trace(trace);
+      trace.is_valid = true;      
+    }
+    
+  void change_to_hash(const TempNode& leaf, NodeRef& rnode, 
+                      Node* data, Trace& trace) {
+      Slice key(trace.current_key());
+      std::string current_key(key.data(), key.size()); 
+      
+      // save the bucket data
+      psize_t count = rnode.count();
+      char data[MAX_BUCKET_SIZE];
+      memcpy(data, data->e.data, rnode.size());
+        
+      trace.change_to_hash();
+      
+      // reinsert the bucket data
+      char *p = data;
+      for(psize_t i = 0; i < count; i++) {
+        char *key, *value;
+        psize_t ksize;
+        vsize_t vsize;
+        p = Bucket::get_key_value(p, &key, &ksize, &value, &vsize);
+        
+        trace.cut_key();
+        trace.key.append(keys[i], ksizes[i]);
+        trace.current().add(TempLeaf(value, vsize));
+      }                                   
+
+      // add the new key        
+      trace.cut_key();
+      trace.key.append(current_key);
+      trace.current().add(leaf);
+    }
+    
+  void remove_value(NodeRef& rnode, Node* data, Trace& trace) {
+      char *p1 = trace.sorter.pointers[trace.sorter.index];
+      char *p2 = Bucket::next(p1);
+      size_t node_size = rnode.size();
+      memmove(p1, p2, node_size - (p2 - data->e.data));
+    }    
+  
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
+      Slice key(trace.current_key());
+      bool result = true;
+      size_t count = rnode.extra();
+      
+      trace.sorter.clear();
+      if (trace.is_valid) {
+        // the key is inside the bucket
+        remove_value(leaf, rnode, data, trace);
+        result = false;
+      }
+      else if (count == MAX_BUCKET_COUNT) {
+        change_to_hash(leaf, rnode, data, trace)
+        return true;
+      }
+      
+      size_t bsize = data->e.size();
+      size_t kv_size = Bucket::slot_size(key.size(), rnode.extra());
+      size_t new_node_size = pad<BUCKET_ALIGN>(bsize+kv_size);
+      size_t node_size = rnode.size();
+      
+      if (new_node_size > node_size) 
+        trace.grow_node_size(new_node_size-node_size);
+        
+      data = trace.current().node();
+      char* p = data->e.data;
+      for(psize_t i = 0; i < count; i++)
+        p = Bucket::next(p);
+        
+      Bucket::set_key_value(
+        p, key, key.size(), leaf.node()->l.data, leaf.extra());
+     
+      trace.current().set_extra(count+1);
+      return result;
+    }
+  
+  bool remove_child(NodeRef& rnode, Node* data, Trace& trace) {
+      size_t count = rnode.extra();
+      trace.sorter.clear();
+      if (count == 1)
+        return false;
+        
+      remove_value(rnode, data, trace);
+      trace.current().set_extra(count-1);
+  
+      return true;
+    }
+    
+  bool eat_child(NodeRef& rnode, Node* data) {
+      assert(0);
+      return false;
+    }
+
+    
+#ifdef DEBUG
+  void dump(Page* page, nodeid_t nodeid, std::ostream& out) {
+      NodePtr *ptr = page->node_ptr + nodeid;
+      Leaf *n = &page->get_node(nodeid)->l;
+      size_t count = ptr->extra;
+    
+      out << t3 << "type:   bucket" << std::endl
+          << t3 << "count:  " << count << std::endl;
+          
+      char* pos = data->e.data;
+      char *key, *value;
+      psize_t ksize;
+      vsize_t vsize;
+      
+      psize_t key_size;
+      for(psize_t i = 0; i < count; i++) {
+        pos = Bucket::get_key_value(pos, &key, &ksize, &value, &vsize);
+        
+        out << t3 << "key" << (int)i << ":   ";
+        dump_key(key, ksize);
+        out << std::endl;
+        
+        std::string val(value, vsize&0x3f);
+        out << t3 << "value" << (int)i << ": " << val.c_str() << std::endl;
+      }
+    }
+#endif  
+};
 //@-others
 
 NodeHandler* NodeHandler::handlers[6] = {
-  &leaf,
   &leaf,
   &link,
   &compressed,
@@ -1023,6 +1353,7 @@ NodeHandler* NodeHandler::handlers[6] = {
 //@+node:michael.20141230111914.75: ** TempNode
 TempLeaf::TempLeaf(const Slice& value) {
   size_t size = value.size();
+  assert(size < MAX_PAGE_VALUE_SIZE);
   page.new_node(page_pad(size));
   set_len(value.size());
   Leaf* n = &node()->l;

@@ -15,7 +15,7 @@
 <v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
 </v>
 <v t="michael.20141215222649.9" a="E"><vh>Source</vh>
-<v t="michael.20141215222649.13"><vh>Logical</vh>
+<v t="michael.20141215222649.13" a="E"><vh>Logical</vh>
 <v t="michael.20141215222649.12"><vh>API</vh>
 <v t="michael.20141215222649.38"><vh>struct Options</vh></v>
 <v t="michael.20141217010530.13"><vh>struct NodePtr</vh></v>
@@ -24,10 +24,10 @@
 <v t="michael.20141215222649.27"><vh>Database (Declaration)</vh></v>
 <v t="michael.20141215222649.44"><vh>Database (Implementation)</vh></v>
 </v>
-<v t="michael.20141215222649.10"><vh>BitTrie</vh>
-<v t="michael.20141215222649.83"><vh>NodeHandlers</vh>
+<v t="michael.20141215222649.10" a="E"><vh>BitTrie</vh>
+<v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
 <v t="michael.20150106224503.25"><vh>Eat Tools</vh></v>
-<v t="michael.20141215222649.126"><vh>Compressed</vh>
+<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
 <v t="michael.20150106224503.49"><vh>keycmp</vh></v>
 <v t="michael.20150106224503.59"><vh>keyappend</vh></v>
 <v t="michael.20150106224503.50"><vh>get_len</vh></v>
@@ -70,7 +70,7 @@
 <v t="michael.20150106224503.24"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.7"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.84"><vh>Leaf</vh>
+<v t="michael.20141215222649.84" a="E"><vh>Leaf</vh>
 <v t="michael.20150106224503.51"><vh>find</vh></v>
 <v t="michael.20150110130802.12"><vh>prev</vh></v>
 <v t="michael.20141230111914.78"><vh>reinsert_me</vh></v>
@@ -78,6 +78,7 @@
 <v t="michael.20150106224503.26"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.8"><vh>dump</vh></v>
 </v>
+<v t="michael.20150116155028.16"><vh>Bucket</vh></v>
 </v>
 </v>
 <v t="michael.20141215222649.63"><vh>Memory Managment</vh>
@@ -95,27 +96,28 @@
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.14" a="E"><vh>Files</vh>
+<v t="michael.20141215222649.14"><vh>Files</vh>
 <v t="michael.20141230111914.135"><vh>@file wscript</vh></v>
 <v t="michael.20141215222649.16"><vh>@path include/larch</vh>
 <v t="michael.20141215222649.17"><vh>@file leaves.h</vh></v>
 </v>
-<v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
+<v t="michael.20141215222649.15"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65" a="E"><vh>@file node.h</vh></v>
-<v t="michael.20141215222649.161" a="E"
-expanded="michael.20150112164548.8,michael.20150110130802.6,"><vh>@file node.cpp</vh></v>
-<v t="michael.20141220220750.5" a="E"><vh>@file port.h</vh></v>
-<v t="michael.20141219202729.8"><vh>@file trie.cpp</vh></v>
+<v t="michael.20141215222649.65"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
+<v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
+<v t="michael.20141219202729.8"
+expanded="michael.20141215222649.126,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
-<v t="michael.20141230111914.136" a="E"><vh>@file base64.cpp</vh></v>
+<v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
-<v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
+<v t="michael.20141215222649.8"><vh>Tests</vh>
+<v t="michael.20141230111914.140"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
-<v t="michael.20150101205559.18" a="E"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150116155028.13"><vh>@file test_base64.cpp</vh></v>
+<v t="michael.20150101205559.18"><vh>@file test_trie.cpp</vh></v>
 <v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
@@ -138,9 +140,12 @@ expanded="michael.20150112164548.8,michael.20150110130802.6,"><vh>@file node.cpp
 <v t="michael.20150110130802.35"><vh>@file bench.py</vh></v>
 </v>
 </v>
-<v t="michael.20141219202729.5"><vh>edit</vh>
+<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
+<v t="michael.20150116155028.21"><vh>Bucket</vh></v>
+<v t="michael.20150116155028.16"></v>
+<v t="michael.20150117120355.4"><vh>Sorter</vh></v>
+<v t="michael.20141215222649.84" a="E"></v>
 <v t="michael.20150106224503.38"><vh>generate</vh></v>
-<v t="michael.20150101205559.62"><vh>TestPageManagement</vh></v>
 </v>
 </vnodes>
 <tnodes>
@@ -279,8 +284,9 @@ struct LinkHandler : public LeafBase {
       link_node(rnode, data, trace).last(trace);
     }
     
-  void add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+  bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       assert(0); // may never be called
+      return true;
     }
     
   bool eat_child(NodeRef&amp; rnode, Node* data) {
@@ -503,7 +509,7 @@ struct TrieBase : public NodeHandler {
   virtual void add_node(Node* data, trieindex_t index, const TempNode&amp; node, 
                         Trace&amp; trace) = 0;
 
-  void add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+  bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       Slice key(trace.current_key());
   
       switch(key.size()) {
@@ -526,13 +532,21 @@ struct TrieBase : public NodeHandler {
           break;
           }
       }
+      return true;
     }
 };
+ 
+#ifdef DEBUG
+void dump_key(const char data, size_t size, std::ostream&amp; out) {
+  std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)data[0];
+  for(size_t i = 1; i &lt; size; i++)
+      out &lt;&lt; "|" &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)data[i];
+}
+#endif
  
 @others
 
 NodeHandler* NodeHandler::handlers[6] = {
-  &amp;leaf,
   &amp;leaf,
   &amp;link,
   &amp;compressed,
@@ -769,7 +783,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       default:
         if (count % 4 == 0) {
           TESTPOINT(BitTrieRemove1);
-          trace.grow_node_by(-4*sizeof(nodeid_t));
+          trace.grow_node_by(-4*(int)sizeof(nodeid_t));
         }
     }
      
@@ -777,11 +791,15 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
   }
 </t>
 <t tx="michael.20141230111914.140"></t>
-<t tx="michael.20141230111914.77">void add(const TempNode&amp; end, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+<t tx="michael.20141230111914.77">bool add(const TempNode&amp; end, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     Slice key(trace.current_key());
-    assert(key.size() != 0);
-    TempLeaf me(Slice(data-&gt;l.data, rnode.len()));
     
+    if (key.size() == 0) {
+      trace.change_node(end);
+      return false;
+    }
+    
+    TempLeaf me(Slice(data-&gt;l.data, rnode.len()));
     trace.change_node(TempTrie());
     reinsert_me(me, trace);
     if (key.size() &gt; 1) {
@@ -791,13 +809,14 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       BitTrie* pn = &amp;trace.parent().node()-&gt;b;
       pn-&gt;add(key[0], trace.child_of_parent());
       trace.current().add(end, trace);
-      return; //debug
+      return true; //debug
     }
     else {
       TESTPOINT(LeafAdd2);
     }
 
     trace.current().add(end, trace);
+    return true;
   }
 </t>
 <t tx="michael.20141230111914.78">void reinsert_me(TempLeaf&amp; me, Trace&amp; trace) {
@@ -854,7 +873,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     }
   }
 </t>
-<t tx="michael.20141230111914.87">void add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+<t tx="michael.20141230111914.87">bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     Slice key(trace.current_key());
     size_t size = rnode.len();
     
@@ -864,7 +883,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       assert(size == key.size());
       trace.add_node(leaf);
       trace.parent().node()-&gt;c.child = trace.child_of_parent();
-      return;
+      return true;
     }
     
     size_t prefix_size = common_prefix(key.data(), data-&gt;c.data,
@@ -901,6 +920,7 @@ bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     }
 
     trace.current().add(leaf, trace);
+    return true;
   }
 </t>
 <t tx="michael.20141230111914.89">size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
@@ -1071,10 +1091,8 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     size_t len = ptr-&gt;extra;
     
     out &lt;&lt; t3 &lt;&lt; "type:  compressed" &lt;&lt; std::endl;
-    out &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
-                           &lt;&lt; (int)n-&gt;data[0];
-    for(size_t i = 1; i &lt; len; i++)
-      out &lt;&lt; "|" &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)n-&gt;data[i];
+    out &lt;&lt; t3 &lt;&lt; "data:  ";
+    dump_key(n-&gt;data, len, out);
     out &lt;&lt; std::endl;
     out &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; (int)len &lt;&lt; std::endl
         &lt;&lt; t3 &lt;&lt; "child: " &lt;&lt; (int)n-&gt;child &lt;&lt; std::endl;
@@ -1109,112 +1127,6 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     out &lt;&lt; std::endl;
   }
 #endif
-</t>
-<t tx="michael.20150101205559.62">struct TestPageManagement {
-  #define VALUE_PAD 300
-  #define TWO_PAGE_COUNT 26
-  void test_TwoPages() {
-      db_t db(new TestDatabase);
-      
-      
-      for(size_t i = 0; i &lt; TWO_PAGE_COUNT; i++) {
-        db-&gt;find(number(i, 5));
-        db-&gt;set_value(value(i, VALUE_PAD));
-      }
-      
-      check_dump("TwoPages-1", db);
-  
-      db-&gt;find(number(TWO_PAGE_COUNT, 5));
-      db-&gt;set_value(value(TWO_PAGE_COUNT, VALUE_PAD));
-                
-      check_dump("TwoPages-2", db);
-      
-      db-&gt;find(number(20, 5));
-      BOOST_REQUIRE(db-&gt;is_valid());
-      BOOST_REQUIRE(db-&gt;value() == value(20, VALUE_PAD));
-
-      db-&gt;find(number(5, 5));
-      BOOST_REQUIRE(db-&gt;is_valid());
-      BOOST_REQUIRE(db-&gt;value() == value(5, VALUE_PAD));
-    }
-
-  void test_MergePages() {
-      db_t db(new TestDatabase);
-      
-      for(size_t i = 0; i &lt;= TWO_PAGE_COUNT; i++) {
-        db-&gt;find(number(i));
-        db-&gt;set_value(value(i, VALUE_PAD));
-      }
-      
-      check_dump("MergePages-1", db);
-      prepare_testpoint_output();
-  
-      db-&gt;find(number(20));
-      db-&gt;remove();
-                
-      check_dump("MergePages-2", db);
-      
-      const char* testpoints[] = {"MergePages", "DefragmentNodeMove"};
-      check_testpoints(2, testpoints);
-    }
-
-  void test_RemoveAll() {
-      db_t db(new TestDatabase);
-      
-      for(size_t i = 0; i &lt; 200; i++) {
-        db-&gt;find(number(i));
-        db-&gt;set_value(value(i, 200));
-      }
-      
-      for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next())
-        db-&gt;remove();
-
-      db-&gt;first();
-      BOOST_REQUIRE(!db-&gt;is_valid());
-
-      db-&gt;find(number(10));
-      BOOST_REQUIRE(!db-&gt;is_valid());
-      db-&gt;set_value(value(10));
-      BOOST_REQUIRE(db-&gt;is_valid());
-  }
-
-  void test_NodesInHeap() {
-      NodeStorageInHeap nodes;
-      PageRef p1 = nodes.new_page();
-      PageRef p2 = nodes.new_page();
-      PageRef p3 = nodes.new_page();
-      PageRef p4 = nodes.new_page();
-      PageRef p5 = nodes.new_page();
-      
-      BOOST_REQUIRE(p1.id == 0);
-      BOOST_REQUIRE(p2.id == 1);
-      BOOST_REQUIRE(p3.id == 2);
-      BOOST_REQUIRE(p4.id == 3);
-      BOOST_REQUIRE(p5.id == 4);
-      
-      nodes.free_page(p2);
-      BOOST_REQUIRE(nodes._free_pages == 1);
-      
-      p2 = nodes.new_page();
-      BOOST_REQUIRE(p2.id == 1);
-      BOOST_REQUIRE(nodes._free_pages == 0);
-      
-      nodes.free_page(p3);
-      nodes.free_page(p4);
-      BOOST_REQUIRE(nodes._free_pages == 2);
-      
-      nodes.free_page(p5);
-      BOOST_REQUIRE(nodes._free_pages == 0);
-      
-      p3 = nodes.new_page();
-      BOOST_REQUIRE(p3.id == 2);
-      
-      BOOST_REQUIRE(nodes._pages.size() == 3);
-    }
-};
-
-
-TestPageManagement test_pm;
 </t>
 <t tx="michael.20150101205559.7">#ifdef DEBUG
 void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
@@ -1255,16 +1167,12 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     
     NodePtr *ptr = page-&gt;node_ptr + nodeid;
     Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
-    size_t len = ptr-&gt;extra;
+    size_t len = ptr-&gt;extra &amp; 0x3f;
     
     std::string data(n-&gt;data, len);
-    if (ptr-&gt;type == kLeaf) {
-      out &lt;&lt; t3 &lt;&lt; "type:  leaf" &lt;&lt; std::endl
-          &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; data &lt;&lt; std::endl
-          &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; data.size() &lt;&lt; std::endl;
-    }
-    else {
-      out &lt;&lt; t3 &lt;&lt; "type:  bigleaf" &lt;&lt; std::endl;
+    out &lt;&lt; t3 &lt;&lt; "type:  leaf" &lt;&lt; std::endl
+        &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; data &lt;&lt; std::endl
+        &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; data.size() &lt;&lt; std::endl;
     }
   }
 #endif
@@ -1277,7 +1185,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     size_t size = rnode.len();
     size_t nsize = page_pad(size+buffer.size+sizeof(nodeid_t));
     // it is guaranteed that enough space is on page (see eat_child)
-    rnode.page.grow_node_by(rnode.id, nsize-rnode.size());
+    rnode.page.grow_node_by(rnode.id, (int)nsize-(int)rnode.size());
     Compressed&amp; c(rnode.node()-&gt;c);
     memcpy(c.data+size, buffer.data, buffer.size);
     rnode.set_len(size+buffer.size);
@@ -1501,5 +1409,395 @@ int keycmp(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
 </t>
 <t tx="michael.20150110130802.31"></t>
 <t tx="michael.20150110130802.34"></t>
+<t tx="michael.20150116155028.16">   
+struct BucketHandler {
+  size_t get_len(const NodeRef&amp; rnode) {
+      return 0; 
+    }
+  
+  size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
+      return 0;
+    }
+    
+  void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
+    }
+  
+  void add_key_to_trace(Trace&amp; trace) {
+      char key[MAX_KEY_SIZE_64];
+      psize_t size;
+      bucket_get_key(trace.sorted.pointers[trace.sorter.index], key, &amp;ize);
+      trace.cut_key();
+      trace.append(key, size);
+    }
+    
+  
+  void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      size_t count = rnode.extra();
+      if (trace.sorter.prepare_sort(data, count))
+        return;
+
+      char *pos = data-&gt;e.data;      
+      for(size_t i = 0; i &lt; count; i++) {
+        sorter.pointers[i] = pos;
+        pos = Bucket::next(pos);
+      }
+      sorter.sort();
+    }
+  
+  void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      Slice key(trace.current_key());
+      
+      psize_t count = rnode.extra();
+      char* pos = data-&gt;e.data;
+      char* item_key;
+      psize_t ksize;
+      for(psize_t i = 0; i &lt; count; i++) {
+        char *old_pos = pos;
+        pos = Bucket::get_key(pos, &amp;item_key, &amp;size);
+        if (key.size() == ksize &amp;&amp; memcmp(item_key, key.data(), ksize) == 0) {
+          trace.is_valid = true;
+          trace.sorter.index = 0;
+          trace.sorter.pointers[0] = old_pos;
+          return;
+        }
+      }
+    }
+  
+  void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      sort(rnode, data, trace)
+      
+      size_t index = trace.sorter.find(trace.current_key)
+      
+      
+      
+      if (!trace.sorter.next(trace.current_key))
+        trace.parent_next();
+  
+  
+      if (trace.sorter.sort(rnode, data)) {
+        trace.sorter.index = 0;
+      }
+      else {
+        trace.sorter.index++;
+        if (trace.sorter.index &gt;=rnode.extra()) {
+          trace.parent_next();
+          return;
+        }
+      }
+
+      add_key_to_trace(trace);
+    }
+  
+  void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      if (trace.sorter.sort(rnode, data)) {
+        trace.sorter.index = rnode.extra()-1;
+      }
+      else {
+        if (trace.sorter.index == 0) {
+          trace.parent_prev();
+          return;
+        }
+          
+        trace.sorter.index--;
+      }
+
+      add_key_to_trace(trace);
+    }
+  
+  void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      trace.sorter.sort(rnode, data);
+      trace.sorter.index = 0;
+      add_key_to_trace(trace);
+      trace.is_valid = true;
+    }
+  
+  void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      trace.sorter.sort(rnode, data);
+      trace.sorter.index = rnode.extra()-1;
+      add_key_to_trace(trace);
+      trace.is_valid = true;      
+    }
+    
+  void change_to_hash(const TempNode&amp; leaf, NodeRef&amp; rnode, 
+                      Node* data, Trace&amp; trace) {
+      Slice key(trace.current_key());
+      std::string current_key(key.data(), key.size()); 
+      
+      // save the bucket data
+      psize_t count = rnode.count();
+      char data[MAX_BUCKET_SIZE];
+      memcpy(data, data-&gt;e.data, rnode.size());
+        
+      trace.change_to_hash();
+      
+      // reinsert the bucket data
+      char *p = data;
+      for(psize_t i = 0; i &lt; count; i++) {
+        char *key, *value;
+        psize_t ksize;
+        vsize_t vsize;
+        p = Bucket::get_key_value(p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
+        
+        trace.cut_key();
+        trace.key.append(keys[i], ksizes[i]);
+        trace.current().add(TempLeaf(value, vsize));
+      }                                   
+
+      // add the new key        
+      trace.cut_key();
+      trace.key.append(current_key);
+      trace.current().add(leaf);
+    }
+    
+  void remove_value(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      char *p1 = trace.sorter.pointers[trace.sorter.index];
+      char *p2 = Bucket::next(p1);
+      size_t node_size = rnode.size();
+      memmove(p1, p2, node_size - (p2 - data-&gt;e.data));
+    }    
+  
+  bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      Slice key(trace.current_key());
+      bool result = true;
+      size_t count = rnode.extra();
+      
+      trace.sorter.clear();
+      if (trace.is_valid) {
+        // the key is inside the bucket
+        remove_value(leaf, rnode, data, trace);
+        result = false;
+      }
+      else if (count == MAX_BUCKET_COUNT) {
+        change_to_hash(leaf, rnode, data, trace)
+        return true;
+      }
+      
+      size_t bsize = data-&gt;e.size();
+      size_t kv_size = Bucket::slot_size(key.size(), rnode.extra());
+      size_t new_node_size = pad&lt;BUCKET_ALIGN&gt;(bsize+kv_size);
+      size_t node_size = rnode.size();
+      
+      if (new_node_size &gt; node_size) 
+        trace.grow_node_size(new_node_size-node_size);
+        
+      data = trace.current().node();
+      char* p = data-&gt;e.data;
+      for(psize_t i = 0; i &lt; count; i++)
+        p = Bucket::next(p);
+        
+      Bucket::set_key_value(
+        p, key, key.size(), leaf.node()-&gt;l.data, leaf.extra());
+     
+      trace.current().set_extra(count+1);
+      return result;
+    }
+  
+  bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+      size_t count = rnode.extra();
+      trace.sorter.clear();
+      if (count == 1)
+        return false;
+        
+      remove_value(rnode, data, trace);
+      trace.current().set_extra(count-1);
+  
+      return true;
+    }
+    
+  bool eat_child(NodeRef&amp; rnode, Node* data) {
+      assert(0);
+      return false;
+    }
+
+    
+#ifdef DEBUG
+  void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
+      NodePtr *ptr = page-&gt;node_ptr + nodeid;
+      Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
+      size_t count = ptr-&gt;extra;
+    
+      out &lt;&lt; t3 &lt;&lt; "type:   bucket" &lt;&lt; std::endl
+          &lt;&lt; t3 &lt;&lt; "count:  " &lt;&lt; count &lt;&lt; std::endl;
+          
+      char* pos = data-&gt;e.data;
+      char *key, *value;
+      psize_t ksize;
+      vsize_t vsize;
+      
+      psize_t key_size;
+      for(psize_t i = 0; i &lt; count; i++) {
+        pos = Bucket::get_key_value(pos, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
+        
+        out &lt;&lt; t3 &lt;&lt; "key" &lt;&lt; (int)i &lt;&lt; ":   ";
+        dump_key(key, ksize);
+        out &lt;&lt; std::endl;
+        
+        std::string val(value, vsize&amp;0x3f);
+        out &lt;&lt; t3 &lt;&lt; "value" &lt;&lt; (int)i &lt;&lt; ": " &lt;&lt; val.c_str() &lt;&lt; std::endl;
+      }
+    }
+#endif  
+};
+</t>
+<t tx="michael.20150116155028.21">// maximal 10 key/value pairs
+// the format per key value pair is
+// [KeyValueSize(2)][key0(1)]...[keyN(1)][val0(1)]...[valN(1)]
+
+struct KeyValueSize {
+  union {
+    boost::uint16 vsize:7;
+    struct {
+      boost::uint16 value_is_link:1;
+      boost::uint16 value_size:6;
+    };
+  };
+  boost::uint16 key_size: 9;
+};
+
+struct Bucket {
+  char data[];
+  
+  // get the key and value of current positions and returns the
+  // position of the next key, value storage
+  static char *get_key_value(char* pos, 
+                             char** key, psize_t* ksize,
+                             char** value, vsize_t* vsize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *ksize = kvs.key_size;
+      *vsize = kvs.vsize;
+      pos += sizeof(KeyValueSize);
+  
+      *key = pos;
+      pos += kvs.key_size;
+      *value = pos;
+      return pos + kvs.value_size
+    }
+    
+  static void set_key_value(char* pos, 
+                            char* key, psize_t ksize,
+                            char* value, vsize_t vsize) {
+      KeyValueSize kvs;
+      kvs.vsize = vsize;
+      kvs.key_size = ksize;
+      *(KeyValueSize*)pos = kvs;
+      pos += sizeof(KeyValueSize);
+  
+      memcpy(pos, key, kvs.key_size);
+      pos += kvs.key_size;
+
+      memcpy(pos, value, kvs.value_size);
+    }
+    
+  static char *get_key(char* pos, char** key, psize_t* ksize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *ksize = kvs.key_size;
+      pos += sizeof(KeyValueSize);
+      *key = pos;
+      return pos + kvs.key_size + kvs.value_size;
+    }
+
+  static char* value(char* pos, vsize_t* vsize) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      *vsize = kvs.vsize;
+      return pos + sizeof(KeyValueSize) + kvs.key_size;
+    }
+
+  static char *next(char* pos) {
+      KeyValueSize kvs = *(KeyValueSize*)pos;
+      return pos + sizeof(KeyValueSize) + kvs.key_size +  kvs.value_size;
+    }
+    
+  static size_t slot_size(size_t ksize, size_t vsize) {
+      return sizeof(KeyValueSize) + ksize + vsize &amp; 0x3f;
+    }
+    
+  // returns the real size of the bucket &lt;= node.size()
+  size_t size(psize_t count) {
+      char* p = data;
+      for(psize_t i = 0; i &lt; count; i++)
+        p = bucket_next(p);
+      
+      return p - start;
+    }
+};
+
+</t>
+<t tx="michael.20150117120355.4">// sorter for buckets and hash nodes
+struct Sorter {
+  typedef char* ptr;
+  Node* current_data; // the data to the currently sorted node
+  size_t index;       // index to the current pointer;
+  std::vector&lt;ptr&gt; pointers;  
+  
+  Sorter() : current_data(NULL) {
+      pointer.reserve(4096);
+    }
+ 
+  size_t size() const {
+      return pointers.size();
+    }   
+    
+  bool prepare_sort(Node* data, size_t count) {
+      if (current_data == data &amp;&amp; pointer.size() == count)
+        return true;
+      current_data = data;
+      pointers.resize(count);
+      return false;
+    }
+    
+  void sort();
+  
+  bool find(Slice key);
+  
+  
+  void clear() {
+      current_data = NULL;
+      pointers.resize(1); // at least one pointer is always active
+    }
+    
+
+
+
+};
+
+int compare_slot(const char *a, const char* b) {
+  KeyValueSize kvsa = *(KeyValueSize*)a;
+  KeyValueSize kvsb = *(KeyValueSize*)b;
+  a += sizeof(KeyValueSize);
+  b += sizeof(KeyValueSize);
+  
+  int result = memcmp(a, b, std::min(kvsa.key_size, kvsb.key_size));
+  if (result == 0)
+    return (int)(kvsa.key_size-kvsb.key_size);
+
+  return result;
+}
+
+
+void Sorter::sort(Slice key) {
+  index = 0;
+  std::sort(pointers.begin(), pointers.end(), compare_slot);
+  if (!key.empty())
+    find(key);
+}
+
+
+
+
+size_t Sorter::find(Slice key) {
+  char *key_;
+  psize_t ksize;
+  Bucket::get_key(pointers[index], &amp;key_, &amp;ksize);
+  if (ksize == key.size() &amp;&amp; memcmp(key.data(), key_, ksize) == 0)
+    return index;
+
+  char key_buffer[MAX_KEY_SIZE_64+sizeof(KeyValueSize)];
+  ((KeyValueSize*)key_buffer)-&gt;ksize = key.size();
+  memcpy(key_buffer+sizeof(KeyValueSize), key.data(), key.size());
+  
+  index = std::lower_bound(pointer::begin(), pointer.end(), 
+                           key_buffer, compare_slot) - pointer.begin();
+  return index;
+}</t>
 </tnodes>
 </leo_file>

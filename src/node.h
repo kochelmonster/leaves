@@ -23,16 +23,33 @@ namespace larch_leaves {
 
 //@+others
 //@+node:michael.20150106224503.60: ** Macros
-/* the maximum key key size
-   could be increased but compressed node
-   may not exceed a page:
-     MAX_KEY_SIZE_64 < 4096 + overhead
-     
+/* 
+  the maximum key key size
+  
+  it is choosen arcording to MAX_BUCKET_SIZE (see below)
+  
   MAX_KEY_SIZE = 3/4 * MAX_KEY_SIZE_64
+  
+  
+  360 byte is not very much, but for a key usually quite enought.
+  
+  Here is a method to store bigger keys:
+     cut the key and add a hash of the key so it 
+     does not exceed 360 bytes, eg:
+       key[:296] + sha-512
+       
+     and store the complete key in the value (if it is needed)
+     so the key are sorted and distinct.
+    
+  if this method is not sufficient use another db.  
 */
-#define MAX_KEY_SIZE 1536
-#define MAX_KEY_SIZE_64 2048
-#define KEY_EXEEDS "key may not exceed 1536 bytes"
+#define MAX_KEY_SIZE 360
+#define MAX_KEY_SIZE_64 480
+#define KEY_EXEEDS "key may not exceed 360 bytes"
+
+#define MAX_PAGE_VALUE_SIZE 32
+#define VALUE_EXEEDS "value may not exceed 32 bytes"
+
 #define PAGE_SPLIT_SIZE 2048
 #ifndef PAGE_SIZE 
 #define PAGE_SIZE 8192
@@ -42,6 +59,20 @@ namespace larch_leaves {
 #endif 
 
 #define MAX_NODE_COUNT (PAGE_SIZE/ALIGN)
+
+// the max bucket size depends directly to MAX_KEY_SIZE_64
+// and MAX_PAGE_VALUE_SIZE:
+// Since a bucket contains maximal 8 key/value pairs
+// the maximal size is:
+// (size_struct(2bytes)+MAX_KEY_SIZE_64+MAX_PAGE_VALUE_SIZE)*10
+// (Since a bucket must easily fit in a Page the MAX_KEY_SIZE_64
+//  and MAX_PAGE_VALUE_SIZE were assigned according this constraint)
+#define MAX_BUCKET_SIZE 4112 
+
+// buckets grows in 64 byte blocks can be changed)
+#define BUCKET_ALIGN 64
+
+#define MAX_BUCKET_COUNT 8
 //@+node:michael.20150101205559.30: ** TestCode
 #ifdef TESTING
 void testpoint(const char* str);
@@ -64,6 +95,10 @@ typedef boost::uint32_t pageoffset_t; // points to page inside file
 typedef boost::uint16_t nodeid_t;
 typedef boost::uint8_t nodetype_t;
 
+// a value size: either a value below 127
+// or 0x88 which is a (8byte) pointer to leaf storage
+// (the byte size can be determined with v & 7f)
+typedef boost::uint8_t vsize_t; 
 //@+node:michael.20141230111914.74: ** Utils
 inline size_t common_prefix(const char* s1, const char *s2, size_t size) {
   size_t i;
@@ -109,7 +144,9 @@ struct NodeHandler {
   virtual void prev(NodeRef& rnode, Node* data, Trace& trace) = 0;
   virtual void first(NodeRef& rnode, Node* data, Trace& trace) = 0;
   virtual void last(NodeRef& rnode, Node* data, Trace& trace) = 0;
-  virtual void add(const TempNode& leaf, NodeRef& rnode, Node* data, 
+  
+  // returns true if a node is inserted, false if just the value was changed
+  virtual bool add(const TempNode& leaf, NodeRef& rnode, Node* data, 
                    Trace& trace) = 0;
   // remove the node
   virtual bool remove_child(NodeRef& rnode, Node* data, Trace& trace) {
@@ -128,11 +165,12 @@ struct NodeHandler {
 };
 
 enum NodeTypes {
-  kLeaf = 0, kBigLeaf, kLink, kCompressed, kTrie, kBitTrie, kRemoved
+  kLeaf = 0, /*kHash, kBucket,*/ kLink, kCompressed, kTrie, kBitTrie, kRemoved
 };
 //@+node:michael.20141215222649.67: ** Page
 // A pointer inside a page
 typedef boost::uint16_t inpage_ptr;
+typedef boost::uint16_t psize_t; // size of an object within a page
 
 struct NodePtr {
   inpage_ptr offset;   // position inside page
@@ -322,7 +360,7 @@ struct NodeRef {
     }
   
   bool is_leaf() const {
-      return type() <= kBigLeaf;
+      return type() == kLeaf;
     }
     
   // for leaf and compress nodes
@@ -360,8 +398,8 @@ struct NodeRef {
       handler->last(*this, node(), trace);
     }
    
-  void add(const TempNode& leaf, Trace& trace) {
-      handler->add(leaf, *this, node(), trace);
+  bool add(const TempNode& leaf, Trace& trace) {
+      return handler->add(leaf, *this, node(), trace);
     }
 
   bool remove_child(Trace& trace) {
@@ -486,6 +524,84 @@ class MultiProcessNodeStorage : public PersistentNodeStorage {
   /*public:
     MultiProcessNodeStorage(const char* path);*/
 };
+//@+node:michael.20150117120355.4: ** Sorter
+// sorter for buckets and hash nodes
+struct Sorter {
+  typedef char* ptr;
+  Node* current_data; // the data to the currently sorted node
+  size_t index;       // index to the current pointer;
+  std::vector<ptr> pointers;  
+  
+  Sorter() : current_data(NULL) {
+      pointer.reserve(4096);
+    }
+ 
+  size_t size() const {
+      return pointers.size();
+    }   
+    
+  bool prepare_sort(Node* data, size_t count) {
+      if (current_data == data && pointer.size() == count)
+        return true;
+      current_data = data;
+      pointers.resize(count);
+      return false;
+    }
+    
+  void sort();
+  
+  bool find(Slice key);
+  
+  
+  void clear() {
+      current_data = NULL;
+      pointers.resize(1); // at least one pointer is always active
+    }
+    
+
+
+
+};
+
+int compare_slot(const char *a, const char* b) {
+  KeyValueSize kvsa = *(KeyValueSize*)a;
+  KeyValueSize kvsb = *(KeyValueSize*)b;
+  a += sizeof(KeyValueSize);
+  b += sizeof(KeyValueSize);
+  
+  int result = memcmp(a, b, std::min(kvsa.key_size, kvsb.key_size));
+  if (result == 0)
+    return (int)(kvsa.key_size-kvsb.key_size);
+
+  return result;
+}
+
+
+void Sorter::sort(Slice key) {
+  index = 0;
+  std::sort(pointers.begin(), pointers.end(), compare_slot);
+  if (!key.empty())
+    find(key);
+}
+
+
+
+
+size_t Sorter::find(Slice key) {
+  char *key_;
+  psize_t ksize;
+  Bucket::get_key(pointers[index], &key_, &ksize);
+  if (ksize == key.size() && memcmp(key.data(), key_, ksize) == 0)
+    return index;
+
+  char key_buffer[MAX_KEY_SIZE_64+sizeof(KeyValueSize)];
+  ((KeyValueSize*)key_buffer)->ksize = key.size();
+  memcpy(key_buffer+sizeof(KeyValueSize), key.data(), key.size());
+  
+  index = std::lower_bound(pointer::begin(), pointer.end(), 
+                           key_buffer, compare_slot) - pointer.begin();
+  return index;
+}
 //@+node:michael.20141220220750.15: ** Trace
 // A stack trace inside a trie
 // nodes[0] is the root
@@ -714,15 +830,13 @@ struct Trace {
   //@+node:michael.20141230111914.115: *3* set_leaf
   // sets a new leaf, 
   bool set_leaf(const TempLeaf& leaf) {
-      if (is_valid()) {
-        change_node(leaf);
-        return false;
-      }
-      else {
-        current().add(leaf, *this);
-        return true;
-      }
+      return current().add(leaf, *this);
     }
+
+  bool set_bucket(const TempLeaf& leaf) {
+    return false; 
+
+  }
   //@+node:michael.20150101205559.69: *3* refresh_trace
   // refresh the trace remapping the nodeids
   void refresh_trace() {

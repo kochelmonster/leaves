@@ -110,8 +110,8 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
     }
 
   void set_value(const Slice& value) {
-      if (value.size() > 2048)
-        throw WrongValue("value may not exceed 2048 bytes");
+      if (value.size() > MAX_PAGE_VALUE_SIZE)
+        throw WrongValue(VALUE_EXEEDS);
 
       if (trace.set_leaf(TempLeaf(value)))
         _count++;
