@@ -105,8 +105,7 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
     }
   
   Slice value() { 
-      trace.check_valid();
-      return Slice((char*)trace.current().node(), trace.current().len());
+      return trace.get_value();
     }
 
   void set_value(const Slice& value) {

@@ -52,7 +52,7 @@ bool PageRef::defragment(Trace& trace) const {
       // a hole
 
       // holes are often continuous to avoid many costly
-      // memmove operations we will do it at thee next item
+      // memmove operations we will do it at the next item
       hole_size += node_size;
       node_start -= node_size;
       moved = true; // hole_size can be 0 if node_size is 0
@@ -136,29 +136,6 @@ void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   ptr->type = kLink;
   *((pageid_t*)&page->data[ptr->offset]) = page_id;
 }
-//@+node:michael.20150101205559.4: *3* dump
-#ifdef DEBUG
-void PageRef::dump(std::ostream& out) {
-  const char* t1 = "    ";
-  const char* t2 = "      ";
-  const char* t3 = "          ";
-  out << t1 << "- id:         " << id << std::endl
-      << t2 << "offset:     " << offset << std::endl
-      << t2 << "node_count: " << count() << std::endl
-      << t2 << "size:       " << size() << std::endl
-      << t2 << "free_size:  " << free_size() << std::endl
-      << t2 << "sum_size:   " << size() + free_size() << std::endl
-      << t2 << "nodes: " << std::endl;
-
-  for(size_t id = 0; id < count(); id++) {
-    NodePtr *ptr = page->node_ptr + id;
-    out << t3 << "- id:    " << (int)id << std::endl
-        << t3 << "  ptr:   " << (int)ptr->offset << std::endl;
-        
-    NodeHandler::handlers[ptr->type]->dump(page, id, out);
-  }
-}
-#endif
 //@-others
 
 //@+node:michael.20150110130802.6: ** Trace
@@ -193,68 +170,69 @@ void Trace::find(const Slice& key_) {
 //@+node:michael.20150110130802.7: *3* reserve_space
 #define MAX_PAGE_FREE_SIZE (sizeof(Page)-PAGE_HEADER_SIZE)
 
-size_t calc_sizes(const NodeRef& node, size_t sizes[MAX_NODE_COUNT]) {
+struct BestFitting {
+  size_t best;
+  size_t sizes[MAX_NODE_COUNT];
+  size_t min_size;
+  nodeid_t best_id;
+  bool found;
+    
+  BestFitting(Page* page, size_t min_size_) 
+    : best(PAGE_SIZE), min_size(min_size_), best_id(1), found(false) {
+      page->init_sizes(sizes);
+    }
+};
+
+
+size_t calc_sizes(const NodeRef& node, BestFitting& bf) {
+  if (bf.found)
+    return 0;
+
   nodeid_t children[65];
-  size_t size_ = node.size();
+  size_t size = bf.sizes[node.id];
   size_t count = node.get_children(children);
   
   for(size_t i = 0; i < count; i++) {
-    nodeid_t child = children[i];
-    size_t child_size = sizes[child];
-    if (!child_size)
-      child_size = calc_sizes(NodeRef(node.page, child), sizes);
-      
-    if (child_size >= PAGE_SIZE) {
-      sizes[node.id] = PAGE_SIZE;
-      return PAGE_SIZE;
-    }
-    size_ += child_size;
+    size += calc_sizes(NodeRef(node.page, children[i]), bf);
+    if (bf.found)
+      return 0;
   }
     
-  size_ += sizeof(NodePtr);
-  
-  if (size_ >= 2*PAGE_SPLIT_SIZE)
-    size_ = PAGE_SIZE;
-  
-  sizes[node.id] = size_;
-  return size_;
+  if (size >= bf.min_size && size + bf.min_size <= MAX_PAGE_FREE_SIZE) {
+    size_t delta;
+    if (size > PAGE_SPLIT_SIZE) {
+      delta = size - PAGE_SPLIT_SIZE;
+      delta += delta / 2;
+    }
+    else {
+      delta = PAGE_SPLIT_SIZE - size;
+    }
+    if (delta < bf.best) {
+      bf.best = delta;
+      bf.best_id = node.id;
+      if (bf.best < 512)
+        bf.found = true;
+    }
+  }
+
+  return size;
 }
 
 void Trace::reserve_space(size_t size_) {
   // during this loop current() can change its page!
   while (current().page.free_size() < size_) {
-    size_t sizes[MAX_NODE_COUNT];
-    memset(sizes, 0, sizeof(sizes));
-    int best = PAGE_SIZE;
-    nodeid_t best_id = 1;
-            
     NodeRef root(current().page, 0);    
-    size_t count = root.page.count();
-
-    // i >= 1: it makes no sense to move the root node    
-    for(size_t i = count-1; i >= 1; i--) {
-      size_t node_size = sizes[i];
-      if (!node_size)
-        node_size = calc_sizes(NodeRef(root.page, i), sizes);
-    
-      if (MAX_PAGE_FREE_SIZE - node_size < size_) 
-        // the new page must also have enough free space
-        continue;
-    
-      int delta = abs((int)node_size-PAGE_SPLIT_SIZE);
-      if (delta < best) {
-        best = delta;
-        best_id = i;
-        if (best < 100)
-          break;
-      }
-    }
+    BestFitting bf(root.page.page, size_);
+    //try {
+      calc_sizes(root, bf);
+    //}
+    //catch(...) {}
 
     PageRef newpage = storage.new_page();
-    NodeRef to_move(root.page, best_id);
+    NodeRef to_move(root.page, bf.best_id);
     
     move_node(newpage, to_move);
-    root.page.change_to_link(best_id, newpage.id);
+    root.page.change_to_link(bf.best_id, newpage.id);
     if (!root.page.defragment(*this))
       refresh_trace();
   }
@@ -292,8 +270,7 @@ void Trace::merge_pages() {
     if (link.page.id != page.id) {
       assert(link.type() == kLink);
       
-      if (link.page.free_size() >= page.size() 
-          && link.page.count() + page.count() <= 230) {
+      if (link.page.free_size() >= page.size()) {
         TESTPOINT(MergePages);
         
         NodeRef& parent(stack[i-1].node); // the child's parent

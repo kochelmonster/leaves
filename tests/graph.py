@@ -7,8 +7,10 @@ class GraphCreator(object):
         lines = ["digraph G{} {{".format(no)]
         add = lines.append
         self.outer_connections = []
+        state = state["state"]
+        pages = state["pages"]
 
-        for i, page in enumerate(state["state"]):
+        for i, page in enumerate(pages):
             add(" "*4+"subgraph cluster_{} {{".format(i))
 
             table = "<TR>"\
@@ -31,7 +33,7 @@ class GraphCreator(object):
             add(" "*8+'label = <<TABLE border="0">{}</TABLE>>;'.format(table))
 
             connections = []
-            for node in page["nodes"]:
+            for node in (page["nodes"] or ()):
                 method = getattr(self, "add_"+node["type"])
                 node, conns = method(page, node)
                 add(" "*8+node)
@@ -47,7 +49,13 @@ class GraphCreator(object):
         add("}")
         add("")
 
-        return "\n".join(lines)
+        dot = "\n".join(lines)
+
+        if "fname" in state:
+            with open(state["fname"]+".dot", "w") as f:
+                f.write(dot)
+            
+        return dot
         #return repr(state)
 
     def _add_trie_kind(self, color, page, node):
@@ -81,6 +89,43 @@ class GraphCreator(object):
     def add_trie(self, page, node):
         return self._add_trie_kind("Moccasin", page, node)
 
+    def add_bucket(self, page, node):
+        attribs = [
+            "shape=box",
+            "style=filled",
+            "fillcolor=darkolivegreen3",
+            'label=<{}>'
+        ]
+        node["page"] = page["id"];
+        table = '<TABLE border="0">'\
+                "<TR>"\
+                '<TD colspan="2">{id}({page})</TD>'\
+                "</TR>".format(**node)
+
+        for i in range(int(node["count"])):
+            key = node["key"+str(i)]
+            value = node["value"+str(i)]
+            table += "<TR>"\
+                     "<TD>{}</TD>"\
+                     "<TD>{}</TD>"\
+                     "</TR>".format(key, value)
+
+        table += "</TABLE>"
+        attribs = (",".join(attribs)).format(table)
+        node = "node{}_{} [{}];".format(page["id"], node["id"], attribs)
+        return node, []
+
+    def add_hash(self, page, node):
+        attribs = [
+            "shape=box",
+            "style=filled",
+            "fillcolor=deeppink",
+            'label="{}({})"'
+        ]
+        attribs = (",".join(attribs)).format(node["id"], page["id"])
+        node = "node{}_{} [{}];".format(page["id"], node["id"], attribs)
+        return node, []
+    
     def add_compressed(self, page, node):
         attribs = [
             "shape=record",

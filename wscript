@@ -66,11 +66,11 @@ def configure(cfg):
 
     configure_test(cfg)
     configure_bench(cfg)
-    
+
 
 def build(bld):
     from os.path import join, abspath
-    sources = "trie.cpp node.cpp leaves.cpp base64.cpp"
+    sources = "trie.cpp node.cpp leaves.cpp base64.cpp murmurhash3.cpp"
     sources = [join("src", s) for s in sources.split()]
     
     bld.program(
@@ -100,7 +100,7 @@ def build(bld):
 
     """
     only for generating test_trie tests
-    
+    """
     def generate_graph(task):
         command = abspath(join("build", "test_trie"))
         graph = abspath(join("tests", "graph.py"))
@@ -109,11 +109,11 @@ def build(bld):
         return task.exec_command("dot -Tsvg -O graph-1.dot")
      
     bld.add_post_fun(generate_graph)
-    """
 
     bld.program(
         source=[join("benchmarks", "sbench.cpp")]+sources,
         use="BENCH BOOST",
         target="sbench")
+
 
 #@-leo

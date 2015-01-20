@@ -1,0 +1,6 @@
+digraph G0 {
+    subgraph cluster_0 {
+        label = <<TABLE border="0"><TR><TD>id:</TD><TD>0</TD><TD>offset:</TD><TD>0</TD></TR><TR><TD>nodes:</TD><TD>1</TD><TD></TD><TD></TD></TR><TR><TD>size:</TD><TD>20</TD><TD>free:</TD><TD>8170</TD></TR></TABLE>>;
+        node0_0 [shape=record,style=filled,fillcolor=Azure,label="{0(0)|{}}"];
+    }
+}

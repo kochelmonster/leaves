@@ -1,4 +1,6 @@
 state:
+  fname: TrieRemove-2
+  pages: 
     - id:         0
       offset:     0
       node_count: 57

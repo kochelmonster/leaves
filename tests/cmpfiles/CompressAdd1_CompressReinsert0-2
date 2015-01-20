@@ -1,38 +1,40 @@
 state:
+  fname: CompressAdd1_CompressReinsert0-2
+  pages: 
     - id:         0
       offset:     0
       node_count: 6
-      size:       88
-      free_size:  8102
+      size:       80
+      free_size:  8110
       sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   8168
+            ptr:   8176
             type:  bittrie
             data:  01>1
           - id:    1
-            ptr:   8164
+            ptr:   8172
             type:  compressed
             data:  02
             size:  1
             child: 3
           - id:    2
-            ptr:   8156
+            ptr:   8164
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   8140
+            ptr:   8148
             type:  bittrie
             data:  03>2|04>4
           - id:    4
-            ptr:   8136
+            ptr:   8144
             type:  compressed
             data:  05
             size:  1
             child: 5
           - id:    5
-            ptr:   8128
+            ptr:   8136
             type:  leaf
             data:  value-2
             size:  7

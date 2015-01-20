@@ -1,17 +1,19 @@
 state:
+  fname: LeafAdd2-1
+  pages: 
     - id:         0
       offset:     0
       node_count: 2
-      size:       40
-      free_size:  8150
+      size:       32
+      free_size:  8158
       sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   8168
+            ptr:   8176
             type:  bittrie
             data:  01>1
           - id:    1
-            ptr:   8160
+            ptr:   8168
             type:  leaf
             data:  value-1
             size:  7

@@ -113,13 +113,16 @@ struct BitTrie {
 
 struct KeyValueSize {
   union {
-    boost::uint16 vsize:7;
     struct {
-      boost::uint16 value_is_link:1;
-      boost::uint16 value_size:6;
+      boost::uint16_t vsize:7;
+      boost::uint16_t padd: 9;
+    };
+    struct {
+      boost::uint16_t value_size:6;
+      boost::uint16_t value_is_link:1;
+      boost::uint16_t key_size: 9;
     };
   };
-  boost::uint16 key_size: 9;
 };
 
 struct Bucket {
@@ -138,12 +141,12 @@ struct Bucket {
       *key = pos;
       pos += kvs.key_size;
       *value = pos;
-      return pos + kvs.value_size
+      return pos + kvs.value_size;
     }
     
   static void set_key_value(char* pos, 
-                            char* key, psize_t ksize,
-                            char* value, vsize_t vsize) {
+                            const char* key, psize_t ksize,
+                            const char* value, vsize_t vsize) {
       KeyValueSize kvs;
       kvs.vsize = vsize;
       kvs.key_size = ksize;
@@ -175,25 +178,128 @@ struct Bucket {
       return pos + sizeof(KeyValueSize) + kvs.key_size +  kvs.value_size;
     }
     
-  static size_t slot_size(size_t ksize, size_t vsize) {
-      return sizeof(KeyValueSize) + ksize + vsize & 0x3f;
+  static size_t needed_size(size_t ksize, size_t vsize) {
+      return sizeof(KeyValueSize) + ksize + (vsize & 0x3f);
     }
     
   // returns the real size of the bucket <= node.size()
   size_t size(psize_t count) {
       char* p = data;
       for(psize_t i = 0; i < count; i++)
-        p = bucket_next(p);
+        p = next(p);
       
-      return p - start;
+      return p - data;
     }
 };
 
 //@+node:michael.20150116155028.22: *3* Hash
 // a link to a hash Page
+
 struct Hash {
-  pageid_t pageid;
+  pageid_t pageids[HASH_PAGE_COUNT];
 };
+
+
+
+/*
+  A Hash table page.
+  
+  This is one page inside a collection of 32 pages forming a hashtable.
+  Each hash page has a table of 128 entries => the complete hash table
+  has 128*32 = 4096 slots.
+  
+  Every slot points to a BucketNode. Because each BucketNode is aligned
+  on a 64 byte address a 8byte value (256*64 == 16384 > 8192) is sufficent
+  to address all slots on a page.
+
+  every slot starts with a count byte (containing the count of buckets)
+  followed by a Bucket Node.
+  
+  Like the Node Page BucketNodes grow from bottom up.
+*/
+
+#define HASHPAGE_HEADER (3*sizeof(boost::uint16_t)+sizeof(boost::uint8_t)*(PAGE_HASH_SIZE))
+
+struct HashPage {
+  typedef boost::uint8_t ptr; 
+  union {
+    char data[PAGE_SIZE];
+    struct {
+      boost::uint16_t type;
+      boost::uint16_t count;     // node count
+      boost::uint16_t end;
+      ptr slots[PAGE_HASH_SIZE]; // pages hash table 
+    };
+  };
+
+  void init() {
+      type = kHashPage;
+      count = 0;
+      end = sizeof(data);
+      memset(slots, 0, sizeof(slots));
+    }
+    
+  char* get_slot(size_t slot_id) {
+      ptr slot = slots[slot_id];
+      if (!slot)
+        return NULL; // slot does not exist yet
+        
+      return &data[((size_t)slot)*BUCKET_ALIGN];
+    }
+  
+  char* new_slot(size_t slotid, size_t size) {
+    assert(size % BUCKET_ALIGN == 0);
+  
+    if (end < HASHPAGE_HEADER + size)
+      return NULL; // overflow
+  
+    end -= size;
+    slots[slotid] = (ptr)(end / BUCKET_ALIGN);
+    char *slot = &data[end];
+    *slot = 0;
+    return slot;
+  }
+  
+  void remove_slot(size_t slotid, size_t size) {
+      char* slot = &data[((size_t)slots[slotid])*BUCKET_ALIGN];
+      slots[slotid] = 0;
+      grow_slot(slot, size, 0);
+    }
+  
+  char* grow_slot(char* slot, size_t old_size, size_t new_size) {
+    if (new_size == old_size)
+      return slot;
+  
+    assert(new_size % BUCKET_ALIGN == 0);
+    assert(old_size % BUCKET_ALIGN == 0);
+    assert(slot - data > 0);
+    assert(slot - data < PAGE_SIZE);
+    
+    int delta = (int)new_size - old_size;
+    
+    if (old_size < new_size) {
+      if (end < HASHPAGE_HEADER + delta)
+        return NULL; // overflow
+      
+      memmove(&data[end-delta], &data[end], slot-&data[end]+old_size);
+    }
+    else {
+      memmove(&data[end-delta], &data[end], slot-&data[end]+new_size);
+    }
+    
+    end -= delta;
+    delta /= BUCKET_ALIGN;
+    
+    ptr slot_ptr = (ptr)((slot-data)/BUCKET_ALIGN);
+    ptr* p = slots;
+    for(size_t i = 0; i < PAGE_HASH_SIZE; i++, p++) {
+      if (*p && *p <= slot_ptr)
+        *p -= delta;
+    }
+    return slot-delta;
+  }
+};
+
 //@+node:michael.20150116155028.23: *3* Node
 struct Node {
   union {

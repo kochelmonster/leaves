@@ -1,38 +1,25 @@
 state:
+  fname: CompressedEatCompressed-2
+  pages: 
     - id:         0
       offset:     0
-      node_count: 6
-      size:       100
-      free_size:  8090
+      node_count: 3
+      size:       56
+      free_size:  8134
       sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   8168
+            ptr:   8176
             type:  bittrie
             data:  60>1
           - id:    1
             ptr:   8156
             type:  compressed
-            data:  60|60|60|60|01|60|60|60|60|60
-            size:  10
+            data:  60|60|60|60|01|60|60|60|60|60|00|60|60|60|60|60
+            size:  16
             child: 2
           - id:    2
-            ptr:   8140
-            type:  bittrie
-            data:  E>3|00>4
-          - id:    3
-            ptr:   8132
-            type:  leaf
-            data:  value-1
-            size:  7
-          - id:    4
-            ptr:   8124
-            type:  compressed
-            data:  60|60|60|60|60
-            size:  5
-            child: 5
-          - id:    5
-            ptr:   8116
+            ptr:   8148
             type:  leaf
             data:  value-10
             size:  8

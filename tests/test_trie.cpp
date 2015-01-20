@@ -2,8 +2,8 @@
 //@+node:michael.20150101205559.18: * @file test_trie.cpp
 //@@language cplusplus
 //@@tabwidth -2
-//#define BOOST_TEST_NO_MAIN
-//#define GENERATE
+#define BOOST_TEST_NO_MAIN
+#define GENERATE
 //@+<< includes >>
 //@+node:michael.20150101205559.22: ** << includes >>
 #include <string.h>
@@ -69,13 +69,12 @@ struct TestDatabase {
       return Slice(trace.key);
     }
   
-  Slice value() { 
-      trace.check_valid();
-      return Slice((char*)trace.current().node(), trace.current().len());
-    }
+  Slice value() {
+    return trace.get_value();
+  }
 
-  void set_value(const Slice& value) {
-      trace.set_leaf(TempLeaf(value));
+  void set_value(const Slice& value, bool with_buckets=false) {
+      trace.set_leaf(TempLeaf(value), with_buckets);
     }
   
   void remove() { 
@@ -83,9 +82,11 @@ struct TestDatabase {
         reinit();
     }
     
-  void dump(std::ostream& out) {
+  void dump(const char* fname, std::ostream& out) {
 #ifdef DEBUG  
       out << "state:" << std::endl;
+      out << "  fname: " << fname << std::endl;
+      out << "  pages: " << std::endl;
       typedef std::vector<NodeStorageInHeap::_page_ptr>::iterator iter_t;
       iter_t i = nodes._pages.begin();
       for(int j = 0; i != nodes._pages.end(); i++, j++) {
@@ -123,10 +124,10 @@ std::ostream& out(std::cout);
 
 void check_dump(const char* fname, db_t& db) {
   std::stringstream cstr;
-  db->dump(cstr);
+  db->dump(fname, cstr);
   std::cout << cstr.str();
   
-  return; // do not output page dump
+  //return; // do not output page dump
   std::string path(CMPFILES);
   path.append(fname);
   std::ofstream out(path.c_str());
@@ -145,7 +146,7 @@ std::ostream& out(dumy);
   
 void check_dump(const char* fname, db_t& db) {
   std::stringstream cstr;
-  db->dump(cstr);
+  db->dump(fname, cstr);
 
   std::string path(CMPFILES);
   path.append(fname);
@@ -481,12 +482,11 @@ struct TestCompress  {
       db->find(sep_number(10));
       db->set_value(value(10));
 
-      check_dump("CompressedEatCompressed-1", db);
       prepare_testpoint_output();
-      check_dump("CompressedEatCompressed-2", db);
-      
+      check_dump("CompressedEatCompressed-1", db);
       db->find(sep_number(1));
       db->remove();
+      check_dump("CompressedEatCompressed-2", db);
       
       const char* testpoints[] = {"CompressedEatCompressed"};
       check_testpoints(1, testpoints);
@@ -608,6 +608,9 @@ struct TestTrie {
       // 12 bytes for additional leaf node and 8 bytes for 
       // growing bitrie.
       
+      if (border == 4)
+        return;
+        
       const char* testpoints[] = {"BitTrieAdd1"};
       check_testpoints(1, testpoints);
     }
@@ -705,6 +708,9 @@ struct TestTrie {
       // 12 bytes for removed leaf node and 8 bytes for 
       // shrinking bitrie.
       
+      if (border == 4)
+        return;
+      
       const char* testpoints[] = {"BitTrieRemove1"};
       check_testpoints(1, testpoints);
     }
@@ -755,18 +761,23 @@ struct TestTrie {
   //@+node:michael.20150106224503.17: *3* test_TrieMisc
   // some test to complete the test cover
   void test_TrieMisc() {
+    Page page;
     TempTrie trie(60);
       
-    nodeid_t* children = (nodeid_t*)trie.node();
-    memset(children, 0, sizeof(nodeid_t)*64);
-    for(int i = 1; i < 64; i += 2)
-      children[i] = i;
-    
     trie.set_extra(101);
     
     NodeHandler* handler = NodeHandler::handlers[kTrie];
-    NodePtr *ptr = trie.page.node_ptr;
-    Node *node = (Node*)&trie.page.data[ptr->offset]; 
+    page.new_node(trie.size());
+    NodePtr *ptr = page.node_ptr;
+    Node *node = (Node*)&page.data[ptr->offset]; 
+    memcpy(node, trie.node(), trie.size());
+    ptr->type = trie.type();
+    ptr->extra = trie.extra();
+    
+    nodeid_t* children = (nodeid_t*)node;
+    memset(children, 0, sizeof(nodeid_t)*64);
+    for(int i = 1; i < 64; i += 2)
+      children[i] = i;
     
     nodeid_t cmps[65];
     size_t count = handler->get_children(ptr, node, cmps);
@@ -790,7 +801,7 @@ struct TestTrie {
       BOOST_REQUIRE(children[i] == i+1);
     }
     
-    BOOST_REQUIRE(trie.extra() == 102);
+    BOOST_REQUIRE(ptr->extra == 102);
   }
   //@-others
 };
@@ -798,12 +809,11 @@ struct TestTrie {
 TestTrie test_trie;
 //@+node:michael.20150101205559.62: ** TestPageManagement
 struct TestPageManagement {
-  #define VALUE_PAD 300
-  #define TWO_PAGE_COUNT 26
+  #define VALUE_PAD 32
+  #define TWO_PAGE_COUNT 203
   void test_TwoPages() {
       db_t db(new TestDatabase);
-      
-      
+            
       for(size_t i = 0; i < TWO_PAGE_COUNT; i++) {
         db->find(number(i, 5));
         db->set_value(value(i, VALUE_PAD));
@@ -829,14 +839,14 @@ struct TestPageManagement {
       db_t db(new TestDatabase);
       
       for(size_t i = 0; i <= TWO_PAGE_COUNT; i++) {
-        db->find(number(i));
+        db->find(number(i, 5));
         db->set_value(value(i, VALUE_PAD));
       }
       
       check_dump("MergePages-1", db);
       prepare_testpoint_output();
   
-      db->find(number(20));
+      db->find(number(20, 5));
       db->remove();
                 
       check_dump("MergePages-2", db);
@@ -848,9 +858,9 @@ struct TestPageManagement {
   void test_RemoveAll() {
       db_t db(new TestDatabase);
       
-      for(size_t i = 0; i < 200; i++) {
+      for(size_t i = 0; i < 2000; i++) {
         db->find(number(i));
-        db->set_value(value(i, 200));
+        db->set_value(value(i, 20));
       }
       
       for(db->first(); db->is_valid(); db->next())
@@ -902,11 +912,6 @@ struct TestPageManagement {
 
 
 TestPageManagement test_pm;
-//@+node:michael.20150106224503.35: ** old
-#if 0
-  //@+others
-  //@-others
-#endif
 //@+node:michael.20150106125629.4: ** TestNavigation
 struct TestNavigation {
   //@+others
@@ -1259,8 +1264,167 @@ struct TestNavigation {
   //@-others
 };
 
-
 TestNavigation test_nav;
+//@+node:michael.20150118002311.10: ** TestBucket
+struct TestBucket {
+  //@+others
+  //@+node:michael.20150118002311.15: *3* test_Create1
+  void test_Create1() {
+      db_t db(new TestDatabase);
+
+      db->find(number(1, 10));
+      db->set_value(value(1), true);
+
+      check_dump("BucketCreate1-1", db);
+
+      db->find(number(2, 10));
+      db->set_value(value(2), true);
+
+      check_dump("BucketCreate1-2", db);
+    }
+  //@+node:michael.20150118002311.16: *3* test_Navigate1
+  void test_Navigate1() {
+      db_t db(new TestDatabase);
+      size_t i;
+
+      for(i = 16; i >= 2; i -= 2) {
+        db->find(number(i, 10));
+        db->set_value(value(i), true);
+      }
+
+      for(i = 4; i < 16; i+=2) {
+        out << "check: " << i << std::endl;
+        
+        db->find(number(i, 10));
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+        
+        db->next();
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i+2, 10));
+        BOOST_REQUIRE(db->value() == value(i+2));
+
+        db->prev();
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+        
+        db->find(number(i, 10));
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+        
+        db->prev();
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i-2, 10));
+        BOOST_REQUIRE(db->value() == value(i-2));
+    }
+     
+    for(i = 5; i < 15; i+=2) {
+        out << "check: " << i << std::endl;
+        
+        db->find(number(i, 10));
+        BOOST_REQUIRE(!db->is_valid());
+        
+        db->next();
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i+1, 10));
+        BOOST_REQUIRE(db->value() == value(i+1));
+       
+        db->find(number(i, 10));
+        BOOST_REQUIRE(!db->is_valid());
+        
+        db->prev();
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i-1, 10));
+        BOOST_REQUIRE(db->value() == value(i-1));
+    }
+      
+    for(db->first(), i = 2; db->is_valid(); db->next(), i+=2) {
+      BOOST_REQUIRE(db->is_valid());
+      BOOST_REQUIRE(db->key() == number(i, 10));
+      BOOST_REQUIRE(db->value() == value(i));
+    }
+    
+    for(db->last(), i = 16; db->is_valid(); db->prev(), i-=2) {
+      BOOST_REQUIRE(db->is_valid());
+      BOOST_REQUIRE(db->key() == number(i, 10));
+      BOOST_REQUIRE(db->value() == value(i));
+    }
+  }
+  //@+node:michael.20150118002311.17: *3* test_Remove1
+  void test_Remove1() {
+      db_t db(new TestDatabase);
+      size_t i;
+
+      for(i = 16; i >= 2; i -= 2) {
+        db->find(number(i, 10));
+        db->set_value(value(i), true);
+      }
+      
+      //check_dump("tst", db);
+      
+      for(db->first(), i = 2; db->is_valid(); db->next(), i+=2) {
+        out << "remove: " << i << std::endl;
+        BOOST_REQUIRE(db->is_valid());
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+        db->remove();
+        BOOST_REQUIRE(!db->is_valid());
+      }
+      
+      db->first();
+      BOOST_REQUIRE(!db->is_valid());
+      
+      db->last();
+      BOOST_REQUIRE(!db->is_valid());
+    }
+  //@+node:michael.20150118002311.18: *3* test_ChangeToHash1
+  void test_ChangeToHash1() {
+      db_t db(new TestDatabase);
+      size_t i;
+
+      for(i = 0; i < 8; i++) {
+        db->find(number(i, 10));
+        db->set_value(value(i), true);
+      }
+      
+      check_dump("ChangeToHash1-1", db);
+      
+      db->find(number(i, 8));
+      db->set_value(value(8), true);
+      
+      check_dump("ChangeToHash1-2", db);
+    }
+  //@-others
+};
+
+TestBucket test_bucket;
+//@+node:michael.20150118002311.22: ** TestHash
+struct TestHash {
+  //@+others
+  //@+node:michael.20150118002311.23: *3* test_Burst
+  void test_Burst() {
+      db_t db(new TestDatabase);
+      size_t i;
+
+      for(i = 0; i < 2800; i++) {
+        db->find(number(i, 10));
+        db->set_value(value(i), true);
+      }
+      
+      check_dump("ChangeToHash1-1", db);
+      /*
+      db->find(number(i, 8));
+      db->set_value(value(8), true);
+      
+      check_dump("ChangeToHash1-2", db);*/
+    }
+  //@-others
+};
+
+TestHash test_hash;
 //@+node:michael.20150101205559.38: ** TestSuite
 //@+others
 //@+node:michael.20150106224503.39: *3* boost
@@ -1360,6 +1524,7 @@ BOOST_AUTO_TEST_CASE(BitTrieRemove0) {
 }
 
 BOOST_AUTO_TEST_CASE(BitTrieRemove1) {
+  test_trie.test_BitTrieRemove1(4);
   test_trie.test_BitTrieRemove1(8);
   test_trie.test_BitTrieRemove1(16);
   test_trie.test_BitTrieRemove1(24);
@@ -1463,6 +1628,7 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_TrieBaseAdd2();
   //test_trie.test_TrieBaseAdd3();
   //test_trie.test_BitTrieAdd0();
+  //test_trie.test_BitTrieAdd1(4);
   //test_trie.test_BitTrieAdd1(8);
   //test_trie.test_BitTrieAdd1(16);
   //test_trie.test_BitTrieAdd1(24);
@@ -1472,6 +1638,7 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_BitTrieAdd2();
   //test_trie.test_TrieRemove();
   //test_trie.test_BitTrieRemove0();
+  //test_trie.test_BitTrieRemove1(4);
   //test_trie.test_BitTrieRemove1(8);
   //test_trie.test_BitTrieRemove1(16);
   //test_trie.test_BitTrieRemove1(24);
@@ -1481,7 +1648,7 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_BitTrieRemove2();
   //test_trie.test_NodeEatSingle();
   //test_trie.test_TrieMisc();
-  test_pm.test_TwoPages();
+  //test_pm.test_TwoPages();
   //test_pm.test_MergePages();
   //test_pm.test_RemoveAll();
   //test_pm.test_NodesInHeap();
@@ -1496,9 +1663,13 @@ int main(int argc, const char* argv[]) {
   //test_nav.test_removeFromBottom(10);
   //test_nav.test_compress();
   //test_nav.test_ChangeValue();
+  //test_bucket.test_Create1();
+  //test_bucket.test_Navigate1();
+  //test_bucket.test_Remove1();
+  //test_bucket.test_ChangeToHash1();
+  test_hash.test_Burst();
   return 0;
 }
-
 #endif
 //@-others
 //@-others

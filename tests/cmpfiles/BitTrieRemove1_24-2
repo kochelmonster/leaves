@@ -1,132 +1,134 @@
 state:
+  fname: BitTrieRemove1_24-2
+  pages: 
     - id:         0
       offset:     0
       node_count: 25
-      size:       356
-      free_size:  7834
+      size:       348
+      free_size:  7842
       sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   8128
+            ptr:   8136
             type:  bittrie
             data:  00>1|01>2|02>3|04>4|05>5|06>6|07>7|08>8|09>9|10>10|11>11|12>12|13>13|14>14|15>15|16>16|17>17|18>18|19>19|20>20|21>21|22>22|23>23|24>24
           - id:    1
-            ptr:   8120
+            ptr:   8128
             type:  leaf
             data:  value-0
             size:  7
           - id:    2
-            ptr:   8112
+            ptr:   8120
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   8104
+            ptr:   8112
             type:  leaf
             data:  value-2
             size:  7
           - id:    4
-            ptr:   8096
+            ptr:   8104
             type:  leaf
             data:  value-4
             size:  7
           - id:    5
-            ptr:   8088
+            ptr:   8096
             type:  leaf
             data:  value-5
             size:  7
           - id:    6
-            ptr:   8080
+            ptr:   8088
             type:  leaf
             data:  value-6
             size:  7
           - id:    7
-            ptr:   8072
+            ptr:   8080
             type:  leaf
             data:  value-7
             size:  7
           - id:    8
-            ptr:   8064
+            ptr:   8072
             type:  leaf
             data:  value-8
             size:  7
           - id:    9
-            ptr:   8056
+            ptr:   8064
             type:  leaf
             data:  value-9
             size:  7
           - id:    10
-            ptr:   8048
+            ptr:   8056
             type:  leaf
             data:  value-10
             size:  8
           - id:    11
-            ptr:   8040
+            ptr:   8048
             type:  leaf
             data:  value-11
             size:  8
           - id:    12
-            ptr:   8032
+            ptr:   8040
             type:  leaf
             data:  value-12
             size:  8
           - id:    13
-            ptr:   8024
+            ptr:   8032
             type:  leaf
             data:  value-13
             size:  8
           - id:    14
-            ptr:   8016
+            ptr:   8024
             type:  leaf
             data:  value-14
             size:  8
           - id:    15
-            ptr:   8008
+            ptr:   8016
             type:  leaf
             data:  value-15
             size:  8
           - id:    16
-            ptr:   8000
+            ptr:   8008
             type:  leaf
             data:  value-16
             size:  8
           - id:    17
-            ptr:   7992
+            ptr:   8000
             type:  leaf
             data:  value-17
             size:  8
           - id:    18
-            ptr:   7984
+            ptr:   7992
             type:  leaf
             data:  value-18
             size:  8
           - id:    19
-            ptr:   7976
+            ptr:   7984
             type:  leaf
             data:  value-19
             size:  8
           - id:    20
-            ptr:   7968
+            ptr:   7976
             type:  leaf
             data:  value-20
             size:  8
           - id:    21
-            ptr:   7960
+            ptr:   7968
             type:  leaf
             data:  value-21
             size:  8
           - id:    22
-            ptr:   7952
+            ptr:   7960
             type:  leaf
             data:  value-22
             size:  8
           - id:    23
-            ptr:   7944
+            ptr:   7952
             type:  leaf
             data:  value-23
             size:  8
           - id:    24
-            ptr:   7936
+            ptr:   7944
             type:  leaf
             data:  value-24
             size:  8

@@ -1,52 +1,54 @@
 state:
+  fname: BitTrieRemove1_8-2
+  pages: 
     - id:         0
       offset:     0
       node_count: 9
-      size:       132
-      free_size:  8058
+      size:       124
+      free_size:  8066
       sum_size:   8190
       nodes: 
           - id:    0
-            ptr:   8160
+            ptr:   8168
             type:  bittrie
             data:  00>1|01>2|02>3|04>4|05>5|06>6|07>7|08>8
           - id:    1
-            ptr:   8152
+            ptr:   8160
             type:  leaf
             data:  value-0
             size:  7
           - id:    2
-            ptr:   8144
+            ptr:   8152
             type:  leaf
             data:  value-1
             size:  7
           - id:    3
-            ptr:   8136
+            ptr:   8144
             type:  leaf
             data:  value-2
             size:  7
           - id:    4
-            ptr:   8128
+            ptr:   8136
             type:  leaf
             data:  value-4
             size:  7
           - id:    5
-            ptr:   8120
+            ptr:   8128
             type:  leaf
             data:  value-5
             size:  7
           - id:    6
-            ptr:   8112
+            ptr:   8120
             type:  leaf
             data:  value-6
             size:  7
           - id:    7
-            ptr:   8104
+            ptr:   8112
             type:  leaf
             data:  value-7
             size:  7
           - id:    8
-            ptr:   8096
+            ptr:   8104
             type:  leaf
             data:  value-8
             size:  7
