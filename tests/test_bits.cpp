@@ -31,14 +31,14 @@ typedef unsigned char trieindex_t;
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
-  char data[];
+  char data[1];
 };
 //@+node:michael.20150116155028.18: *3* Leaf
 // A leaf 
 // the data is interpreted by the type (kLeaf od kBitLeaf)
 // the size of data is saved in NodeRef::len()
 struct Leaf {
-  char data[];
+  char data[1];
 };
 //@+node:michael.20150116155028.19: *3* Trie
 // Node with the complete alphabet 
@@ -50,7 +50,7 @@ struct Trie {
 // Node with a range
 struct BitTrie {
   boost::uint64_t bits;
-  nodeid_t children[];
+  nodeid_t children[1];
 
   size_t count() const {
       return popcount(bits);    
@@ -60,7 +60,7 @@ struct BitTrie {
       if (bits & (((boost::uint64_t)1)<<index)) {
         boost::uint64_t mask = ~0;
         mask <<= index;
-        return popcount(bits & ~mask);
+        return (int)popcount(bits & ~mask);
       }
       return -1;
     }
@@ -126,7 +126,7 @@ struct KeyValueSize {
 };
 
 struct Bucket {
-  char data[];
+  char data[1];
   
   // get the key and value of current positions and returns the
   // position of the next key, value storage
@@ -183,9 +183,9 @@ struct Bucket {
     }
     
   // returns the real size of the bucket <= node.size()
-  size_t size(psize_t count) {
+  size_t size(size_t count) {
       char* p = data;
-      for(psize_t i = 0; i < count; i++)
+      for(size_t i = 0; i < count; i++)
         p = next(p);
       
       return p - data;
@@ -198,7 +198,6 @@ struct Bucket {
 struct Hash {
   pageid_t pageids[HASH_PAGE_COUNT];
 };
-
 
 
 /*
@@ -240,10 +239,12 @@ struct HashPage {
     }
     
   char* get_slot(size_t slot_id) {
+      assert(slot_id < PAGE_HASH_SIZE);
       ptr slot = slots[slot_id];
       if (!slot)
         return NULL; // slot does not exist yet
         
+      assert(((size_t)slot)*BUCKET_ALIGN < PAGE_SIZE);
       return &data[((size_t)slot)*BUCKET_ALIGN];
     }
   
@@ -253,7 +254,7 @@ struct HashPage {
     if (end < HASHPAGE_HEADER + size)
       return NULL; // overflow
   
-    end -= size;
+    end -= (boost::uint16_t)size;
     slots[slotid] = (ptr)(end / BUCKET_ALIGN);
     char *slot = &data[end];
     *slot = 0;
@@ -275,7 +276,7 @@ struct HashPage {
     assert(slot - data > 0);
     assert(slot - data < PAGE_SIZE);
     
-    int delta = (int)new_size - old_size;
+    int delta = (int)(new_size - old_size);
     
     if (old_size < new_size) {
       if (end < HASHPAGE_HEADER + delta)
@@ -287,16 +288,19 @@ struct HashPage {
       memmove(&data[end-delta], &data[end], slot-&data[end]+new_size);
     }
     
+    ptr slot_ptr = (ptr)((slot - data) / BUCKET_ALIGN);
     end -= delta;
+    slot -= delta;
     delta /= BUCKET_ALIGN;
     
-    ptr slot_ptr = (ptr)((slot-data)/BUCKET_ALIGN);
     ptr* p = slots;
     for(size_t i = 0; i < PAGE_HASH_SIZE; i++, p++) {
       if (*p && *p <= slot_ptr)
         *p -= delta;
+
+      assert(*p < PAGE_SIZE / BUCKET_ALIGN);
     }
-    return slot-delta;
+    return slot;
   }
 };
 
@@ -316,7 +320,7 @@ struct Node {
 //@+node:michael.20150101205559.44: ** TestSuite
 BOOST_AUTO_TEST_CASE(add_bits) {
   union {
-    boost::uint64_t data[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    boost::uint64_t data[8];
     BitTrie bits;
   };
   int settings[8] = { 3, 15, 20, 26, 32, 45, 50, 60 };

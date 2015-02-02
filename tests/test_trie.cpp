@@ -128,10 +128,10 @@ void check_dump(const char* fname, db_t& db) {
   std::cout << cstr.str();
   
   //return; // do not output page dump
-  std::string path(CMPFILES);
+/*  std::string path(CMPFILES);
   path.append(fname);
   std::ofstream out(path.c_str());
-  out << cstr.str();
+  out << cstr.str();*/
 }
 
 void check_testpoints(size_t case_count, const char* testpoints[]) {
@@ -1409,17 +1409,71 @@ struct TestHash {
       db_t db(new TestDatabase);
       size_t i;
 
-      for(i = 0; i < 2800; i++) {
+      for(i = 0; i < 6766; i++) {
+        if (i % 100 == 0)
+          std::cout << "insert " << i << std::endl;
+
         db->find(number(i, 10));
         db->set_value(value(i), true);
       }
-      
+
+      prepare_testpoint_output();    
       check_dump("ChangeToHash1-1", db);
-      /*
-      db->find(number(i, 8));
-      db->set_value(value(8), true);
+      db->find(number(i, 6766));
+      db->set_value(value(6766), true);
+
+      check_dump("ChangeToHash1-2", db);
+      const char* testpoints[] = { "HashBurst" };
+      check_testpoints(1, testpoints);
+    }
+
+  //@+node:kochelmonster-.20150127114946.32: *3* test_Iterate
+  void test_Iterate() {
+      db_t db(new TestDatabase);
+      size_t i;
+
+      for(i = 0; i < 2000; i+=2) {
+        if (i % 100 == 0)
+          std::cout << "insert " << i << std::endl;
+
+        db->find(number(i, 10));
+        db->set_value(value(i), true);
+      }
+
+      for(db->first(), i = 0; db->is_valid(); db->next(), i+=2) {
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+      }
       
-      check_dump("ChangeToHash1-2", db);*/
+      //std::cout << "done: " << i << std::endl;
+      for(db->last(), i = 1998; db->is_valid(); db->prev(), i-=2) {
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+      }
+      
+      //std::cout << "done: " << i << std::endl;
+    }
+  //@+node:kochelmonster-.20150131141515.40: *3* test_Remove
+  void test_Remove() {
+      db_t db(new TestDatabase);
+      size_t i;
+
+      for(i = 0; i < 2000; i+=2) {
+        if (i % 100 == 0)
+          std::cout << "insert " << i << std::endl;
+
+        db->find(number(i, 10));
+        db->set_value(value(i), true);
+      }
+
+      for(db->first(), i = 0; db->is_valid(); db->next(), i+=2) {
+        BOOST_REQUIRE(db->key() == number(i, 10));
+        BOOST_REQUIRE(db->value() == value(i));
+        db->remove();
+        BOOST_REQUIRE(!db->is_valid());
+      }
+      
+      std::cout << "done: " << i << std::endl;
     }
   //@-others
 };
@@ -1667,7 +1721,9 @@ int main(int argc, const char* argv[]) {
   //test_bucket.test_Navigate1();
   //test_bucket.test_Remove1();
   //test_bucket.test_ChangeToHash1();
-  test_hash.test_Burst();
+  //test_hash.test_Burst();
+  //test_hash.test_Iterate();
+  test_hash.test_Remove();
   return 0;
 }
 #endif

@@ -591,6 +591,7 @@ class MultiProcessNodeStorage : public PersistentNodeStorage {
 // sorter for buckets and hash nodes
 struct Sorter {
   typedef char* ptr;
+  typedef std::vector<ptr>::iterator iterator;
   Node* current_data; // the data to the currently sorted node
   size_t index;       // index to the current pointer;
   size_t hash;        // the current hash value
@@ -598,8 +599,8 @@ struct Sorter {
   PageRef hash_pages[HASH_PAGE_COUNT];
   
     
-  Sorter() : current_data(NULL) {
-      pointers.reserve(4096);
+  Sorter() : current_data(NULL), index(0) {
+      pointers.reserve(8192);
       pointers.resize(1);
     }
  
@@ -640,12 +641,16 @@ struct Sorter {
       return false;
     }
     
+  void reset_sorting() {
+      index = 0;
+      pointers.resize(1); // at least one pointer is always active
+      pointers[0] = NULL;
+    }
+
   void clear() {
       if (current_data) {
         current_data = NULL;
-        index = 0;
-        pointers.resize(1); // at least one pointer is always active
-        pointers[0] = NULL;
+        reset_sorting();
         PageRef null, *dst = hash_pages;
         for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++)
           *dst = null;
@@ -792,9 +797,8 @@ struct Trace {
       _push(Transition(node, 0, node.get_len()));
     }
   //@+node:michael.20141230111914.118: *3* pop
-  // returns the node id of the skipped link  or 0
-  nodeid_t pop() {
-      sorter.clear();
+  // special pop for HashHandler::burst does not change the sorter
+  nodeid_t pop_for_burst() {
       _pop();
       if (size() && current().type() == kLink) {
         nodeid_t skipped_id = current().id;
@@ -802,6 +806,12 @@ struct Trace {
         return skipped_id;
       }
       return 0;
+  }
+
+  // returns the node id of the skipped link  or 0
+  nodeid_t pop() {
+      sorter.clear();
+      return pop_for_burst();
     }
   //@+node:michael.20141230111914.123: *3* remove
   bool _eat_child(size_t ancestor) {
@@ -827,6 +837,13 @@ struct Trace {
          
           return false;
         }
+
+        if (size() == 1) {
+          stack.clear();
+          free_node(me.page, me.id);
+          break;
+        }
+
         nodeid_t skipped_id = pop();
         if (skipped_id)
           free_node(current().page, skipped_id);

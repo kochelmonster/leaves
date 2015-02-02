@@ -38,9 +38,9 @@ inline int ffs(boost::uint64_t v) {
 inline int clz(boost::uint64_t v) {
     unsigned long index;
     if (_BitScanReverse64(&index, v)) 
-      return 64 - index;
+      return 63-index;
     else
-      return 65;
+      return 64;
  }
 
 #else 

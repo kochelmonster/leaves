@@ -47,12 +47,12 @@
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65" a="E"><vh>@file node.h</vh></v>
-<v t="michael.20141215222649.161" a="E"
-expanded="michael.20141230111914.26,"><vh>@file node.cpp</vh></v>
-<v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
+<v t="michael.20141215222649.65" a="E"
+expanded="michael.20141220220750.15,"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
+<v t="michael.20141220220750.5" a="E"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="michael.20141230111914.148,michael.20141215222649.83,michael.20141215222649.126,michael.20141215222649.93,michael.20141215222649.84,michael.20150116155028.16,kochelmonster-.20150117183203.20,michael.20150118002311.21,"><vh>@file trie.cpp</vh></v>
+expanded="kochelmonster-.20150117183203.20,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141215222649.45" a="E"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
@@ -63,8 +63,8 @@ expanded="michael.20141230111914.148,michael.20141215222649.83,michael.201412152
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
 <v t="michael.20150116155028.13"><vh>@file test_base64.cpp</vh></v>
 <v t="michael.20150101205559.18" a="E"
-expanded="michael.20150106125629.4,michael.20150118002311.10,michael.20150118002311.22,michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
-<v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
+expanded="michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.42" a="E"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
 <v t="michael.20150106224503.10"><vh>@path benchmarks</vh>
@@ -87,15 +87,20 @@ expanded="michael.20150106125629.4,michael.20150118002311.10,michael.20150118002
 </v>
 </v>
 <v t="michael.20141219202729.5" a="E"><vh>edit</vh>
-<v t="michael.20150118002311.10" a="E"><vh>TestBucket</vh>
+<v t="michael.20150118002311.10"><vh>TestBucket</vh>
 <v t="michael.20150118002311.15"><vh>test_Create1</vh></v>
 <v t="michael.20150118002311.16"><vh>test_Navigate1</vh></v>
 <v t="michael.20150118002311.17"><vh>test_Remove1</vh></v>
 <v t="michael.20150118002311.18"><vh>test_ChangeToHash1</vh></v>
 </v>
+<v t="michael.20150118002311.22"><vh>TestHash</vh>
+<v t="michael.20150118002311.23"><vh>test_Burst</vh></v>
+<v t="kochelmonster-.20150127114946.32"><vh>test_Iterate</vh></v>
+<v t="kochelmonster-.20150131141515.40"><vh>test_Remove</vh></v>
+</v>
 <v t="michael.20150116155028.22"><vh>Hash</vh></v>
 <v t="michael.20150117120355.4"><vh>Sorter</vh></v>
-<v t="kochelmonster-.20150117183203.20" a="E"><vh>Hash</vh>
+<v t="kochelmonster-.20150117183203.20"><vh>Hash</vh>
 <v t="michael.20150118002311.4"><vh>get_slot</vh></v>
 <v t="kochelmonster-.20150117183203.22"><vh>find</vh></v>
 <v t="michael.20150118002311.6"><vh>calc_node_count</vh></v>
@@ -118,7 +123,7 @@ expanded="michael.20150106125629.4,michael.20150118002311.10,michael.20150118002
 <v t="kochelmonster-.20150117183203.10"><vh>eat_child</vh></v>
 <v t="kochelmonster-.20150117183203.11"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.84" a="E"><vh>Leaf</vh>
+<v t="michael.20141215222649.84"><vh>Leaf</vh>
 <v t="kochelmonster-.20150117183203.2"><vh>is_valid</vh></v>
 <v t="michael.20150118002311.12"><vh>get_value</vh></v>
 <v t="michael.20150106224503.51"><vh>find</vh></v>
@@ -185,34 +190,28 @@ static HashHandler hash;
     
     if (! slot)
       return;
-    
-    size_t count = *slot++;
+
+    size_t count = *(slot++);
     char* item_key;
     psize_t ksize;
     for(psize_t i = 0; i &lt; count; i++) {
       char *old_pos = slot;
-      slot= Bucket::get_key(slot, &amp;item_key, &amp;ksize);
+      assert(slot - (char*)p &lt; PAGE_SIZE);
+      slot = Bucket::get_key(slot, &amp;item_key, &amp;ksize);
       if (key.size() == ksize &amp;&amp; memcmp(item_key, key.data(), ksize) == 0) {
-        trace.sorter.index = 0;
+        trace.sorter.reset_sorting();
         trace.sorter.pointers[0] = old_pos;
-        trace.sorter.clear();
         return;
       }
     }
   }
 </t>
-<t tx="kochelmonster-.20150117183203.23">void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    trace.sorter.init_hash(data, data-&gt;h.pageids, trace);
-    if (trace.sorter.prepare_sort_hash(data))
-      return;
-
-    Slice key(trace.current_key());
-    bool do_find = trace.sorter.is_valid(key);
+<t tx="kochelmonster-.20150117183203.23">void collect(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     size_t count = calc_node_count(trace);
     trace.sorter.pointers.resize(count);    
 
     // fill pointers
-    char **dst = &amp;trace.sorter.pointers[0];
+    Sorter::iterator dst = trace.sorter.pointers.begin();
     PageRef* p = trace.sorter.hash_pages;
     for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, p++) {
       HashPage* page = (HashPage*)p-&gt;page;
@@ -233,7 +232,18 @@ static HashHandler hash;
         }
       }
     }
-              
+  }
+
+void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    trace.sorter.init_hash(data, data-&gt;h.pageids, trace);
+    if (trace.sorter.prepare_sort_hash(data))
+      return;
+
+    Slice key(trace.current_key());
+    bool do_find = trace.sorter.is_valid(key);
+
+    collect(rnode, data, trace);
+    
     trace.sorter.sort();
     if (do_find)
       trace.sorter.find(key);
@@ -335,13 +345,13 @@ static HashHandler hash;
     for(psize_t i = 0; i &lt; count; i++)
       p = Bucket::next(p);
       
-    Bucket::set_key_value(
-      p, key.data(), key.size(), leaf.node()-&gt;l.data, leaf.len());
+    Bucket::set_key_value(p, key.data(), (psize_t)key.size(), 
+                          leaf.node()-&gt;l.data, (vsize_t)leaf.len());
       
     (*slot)++;
     page-&gt;count++;
 
-    trace.sorter.clear();
+    trace.sorter.reset_sorting();
     return result;
   }
 </t>
@@ -469,6 +479,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     // add the new key        
     trace.cut_key();
     trace.key.append(current_key);
+    handler-&gt;find(current, data, trace);
     trace.current().add(leaf, true, trace);
   }
 </t>
@@ -508,12 +519,12 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     for(psize_t i = 0; i &lt; count; i++)
       p = Bucket::next(p);
       
-    Bucket::set_key_value(
-      p, key.data(), key.size(), leaf.node()-&gt;l.data, leaf.len());
+    Bucket::set_key_value(p, key.data(), (psize_t)key.size(), 
+                          leaf.node()-&gt;l.data, (vsize_t)leaf.len());
    
-    trace.current().set_extra(count+1);
+    trace.current().set_extra((nodeid_t)count+1);
     
-    trace.sorter.clear();
+    trace.sorter.reset_sorting();
     return result;
   }
 </t>
@@ -523,7 +534,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
       return false;
       
     remove_bucket(rnode, data, trace);
-    trace.current().set_extra(--count);
+    trace.current().set_extra((nodeid_t)--count);
     trace.sorter.clear();
     
     size_t bsize = data-&gt;e.size(count);
@@ -533,6 +544,54 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
       trace.grow_node_by((int)(new_node_size-node_size));    
     
     return true;
+  }
+</t>
+<t tx="kochelmonster-.20150127114946.32">void test_Iterate() {
+    db_t db(new TestDatabase);
+    size_t i;
+
+    for(i = 0; i &lt; 2000; i+=2) {
+      if (i % 100 == 0)
+        std::cout &lt;&lt; "insert " &lt;&lt; i &lt;&lt; std::endl;
+
+      db-&gt;find(number(i, 10));
+      db-&gt;set_value(value(i), true);
+    }
+
+    for(db-&gt;first(), i = 0; db-&gt;is_valid(); db-&gt;next(), i+=2) {
+      BOOST_REQUIRE(db-&gt;key() == number(i, 10));
+      BOOST_REQUIRE(db-&gt;value() == value(i));
+    }
+    
+    //std::cout &lt;&lt; "done: " &lt;&lt; i &lt;&lt; std::endl;
+    for(db-&gt;last(), i = 1998; db-&gt;is_valid(); db-&gt;prev(), i-=2) {
+      BOOST_REQUIRE(db-&gt;key() == number(i, 10));
+      BOOST_REQUIRE(db-&gt;value() == value(i));
+    }
+    
+    //std::cout &lt;&lt; "done: " &lt;&lt; i &lt;&lt; std::endl;
+  }
+</t>
+<t tx="kochelmonster-.20150131141515.40">void test_Remove() {
+    db_t db(new TestDatabase);
+    size_t i;
+
+    for(i = 0; i &lt; 2000; i+=2) {
+      if (i % 100 == 0)
+        std::cout &lt;&lt; "insert " &lt;&lt; i &lt;&lt; std::endl;
+
+      db-&gt;find(number(i, 10));
+      db-&gt;set_value(value(i), true);
+    }
+
+    for(db-&gt;first(), i = 0; db-&gt;is_valid(); db-&gt;next(), i+=2) {
+      BOOST_REQUIRE(db-&gt;key() == number(i, 10));
+      BOOST_REQUIRE(db-&gt;value() == value(i));
+      db-&gt;remove();
+      BOOST_REQUIRE(!db-&gt;is_valid());
+    }
+    
+    std::cout &lt;&lt; "done: " &lt;&lt; i &lt;&lt; std::endl;
   }
 </t>
 <t tx="michael.20141215222649.10"></t>
@@ -657,7 +716,7 @@ PageRef NodeStorageInHeap::new_page() {
     std::vector&lt;_page_ptr&gt;::iterator i;
     for(i = _pages.begin(); i != _pages.end(); i++) {
       if (!i-&gt;get()) {
-        pageid_t id = i - _pages.begin();
+        pageid_t id = (pageid_t)(i - _pages.begin());
         Page* page = new Page;
         i-&gt;reset(page);
         _free_pages--;
@@ -667,7 +726,7 @@ PageRef NodeStorageInHeap::new_page() {
     _free_pages = 0;
   }
 
-  pageid_t id(_pages.size());
+  pageid_t id((pageid_t)_pages.size());
   Page* page = new Page;
   _pages.push_back(_page_ptr(page));
   return PageRef(page, id, (pageoffset_t)id);
@@ -811,9 +870,6 @@ class CopyOnWriteDatabase : public PersistentDatabase {
 <t tx="michael.20141215222649.8"></t>
 <t tx="michael.20141215222649.84">// a leaf node
 struct LeafHandler : public LeafBase {
-
-
-
   @others
 };
 
@@ -950,7 +1006,9 @@ int main(int argc, const char* argv[]) {
   //test_bucket.test_Navigate1();
   //test_bucket.test_Remove1();
   //test_bucket.test_ChangeToHash1();
-  test_hash.test_Burst();
+  //test_hash.test_Burst();
+  //test_hash.test_Iterate();
+  test_hash.test_Remove();
   return 0;
 }
 #endif
@@ -980,7 +1038,6 @@ static BucketHandler bucket;
 struct Hash {
   pageid_t pageids[HASH_PAGE_COUNT];
 };
-
 
 
 /*
@@ -1022,10 +1079,12 @@ struct HashPage {
     }
     
   char* get_slot(size_t slot_id) {
+      assert(slot_id &lt; PAGE_HASH_SIZE);
       ptr slot = slots[slot_id];
       if (!slot)
         return NULL; // slot does not exist yet
         
+      assert(((size_t)slot)*BUCKET_ALIGN &lt; PAGE_SIZE);
       return &amp;data[((size_t)slot)*BUCKET_ALIGN];
     }
   
@@ -1035,7 +1094,7 @@ struct HashPage {
     if (end &lt; HASHPAGE_HEADER + size)
       return NULL; // overflow
   
-    end -= size;
+    end -= (boost::uint16_t)size;
     slots[slotid] = (ptr)(end / BUCKET_ALIGN);
     char *slot = &amp;data[end];
     *slot = 0;
@@ -1057,7 +1116,7 @@ struct HashPage {
     assert(slot - data &gt; 0);
     assert(slot - data &lt; PAGE_SIZE);
     
-    int delta = (int)new_size - old_size;
+    int delta = (int)(new_size - old_size);
     
     if (old_size &lt; new_size) {
       if (end &lt; HASHPAGE_HEADER + delta)
@@ -1069,16 +1128,19 @@ struct HashPage {
       memmove(&amp;data[end-delta], &amp;data[end], slot-&amp;data[end]+new_size);
     }
     
+    ptr slot_ptr = (ptr)((slot - data) / BUCKET_ALIGN);
     end -= delta;
+    slot -= delta;
     delta /= BUCKET_ALIGN;
     
-    ptr slot_ptr = (ptr)((slot-data)/BUCKET_ALIGN);
     ptr* p = slots;
     for(size_t i = 0; i &lt; PAGE_HASH_SIZE; i++, p++) {
       if (*p &amp;&amp; *p &lt;= slot_ptr)
         *p -= delta;
+
+      assert(*p &lt; PAGE_SIZE / BUCKET_ALIGN);
     }
-    return slot-delta;
+    return slot;
   }
 };
 
@@ -1086,6 +1148,7 @@ struct HashPage {
 <t tx="michael.20150117120355.4">// sorter for buckets and hash nodes
 struct Sorter {
   typedef char* ptr;
+  typedef std::vector&lt;ptr&gt;::iterator iterator;
   Node* current_data; // the data to the currently sorted node
   size_t index;       // index to the current pointer;
   size_t hash;        // the current hash value
@@ -1093,8 +1156,8 @@ struct Sorter {
   PageRef hash_pages[HASH_PAGE_COUNT];
   
     
-  Sorter() : current_data(NULL) {
-      pointers.reserve(4096);
+  Sorter() : current_data(NULL), index(0) {
+      pointers.reserve(8192);
       pointers.resize(1);
     }
  
@@ -1135,12 +1198,16 @@ struct Sorter {
       return false;
     }
     
+  void reset_sorting() {
+      index = 0;
+      pointers.resize(1); // at least one pointer is always active
+      pointers[0] = NULL;
+    }
+
   void clear() {
       if (current_data) {
         current_data = NULL;
-        index = 0;
-        pointers.resize(1); // at least one pointer is always active
-        pointers[0] = NULL;
+        reset_sorting();
         PageRef null, *dst = hash_pages;
         for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, dst++)
           *dst = null;
@@ -1152,10 +1219,12 @@ struct Sorter {
   @others
 };
 
-TestBucket test_bucket;</t>
+TestBucket test_bucket;
+</t>
 <t tx="michael.20150118002311.12">Slice get_value(const NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     return Slice(data-&gt;l.data, rnode.len());
-  }</t>
+  }
+</t>
 <t tx="michael.20150118002311.15">void test_Create1() {
     db_t db(new TestDatabase);
 
@@ -1168,7 +1237,8 @@ TestBucket test_bucket;</t>
     db-&gt;set_value(value(2), true);
 
     check_dump("BucketCreate1-2", db);
-  }</t>
+  }
+</t>
 <t tx="michael.20150118002311.16">void test_Navigate1() {
     db_t db(new TestDatabase);
     size_t i;
@@ -1238,7 +1308,8 @@ TestBucket test_bucket;</t>
     BOOST_REQUIRE(db-&gt;key() == number(i, 10));
     BOOST_REQUIRE(db-&gt;value() == value(i));
   }
-}</t>
+}
+</t>
 <t tx="michael.20150118002311.17">void test_Remove1() {
     db_t db(new TestDatabase);
     size_t i;
@@ -1264,7 +1335,8 @@ TestBucket test_bucket;</t>
     
     db-&gt;last();
     BOOST_REQUIRE(!db-&gt;is_valid());
-  }</t>
+  }
+</t>
 <t tx="michael.20150118002311.18">void test_ChangeToHash1() {
     db_t db(new TestDatabase);
     size_t i;
@@ -1280,7 +1352,37 @@ TestBucket test_bucket;</t>
     db-&gt;set_value(value(8), true);
     
     check_dump("ChangeToHash1-2", db);
-  }</t>
+  }
+</t>
+<t tx="michael.20150118002311.22">struct TestHash {
+  @others
+};
+
+TestHash test_hash;
+</t>
+<t tx="michael.20150118002311.23">void test_Burst() {
+    db_t db(new TestDatabase);
+    size_t i;
+
+    for(i = 0; i &lt; 6766; i++) {
+      if (i % 100 == 0)
+        std::cout &lt;&lt; "insert " &lt;&lt; i &lt;&lt; std::endl;
+
+      db-&gt;find(number(i, 10));
+      db-&gt;set_value(value(i), true);
+    }
+
+    prepare_testpoint_output();    
+    check_dump("ChangeToHash1-1", db);
+    db-&gt;find(number(i, 6766));
+    db-&gt;set_value(value(6766), true);
+
+    check_dump("ChangeToHash1-2", db);
+    const char* testpoints[] = { "HashBurst" };
+    check_testpoints(1, testpoints);
+  }
+
+</t>
 <t tx="michael.20150118002311.4">char* get_slot(HashPage** page, size_t* slotid, Trace&amp; trace) {
     size_t page_index = trace.sorter.hash / PAGE_HASH_SIZE;
     *slotid = trace.sorter.hash % PAGE_HASH_SIZE;
@@ -1293,16 +1395,25 @@ TestBucket test_bucket;</t>
       return NULL;
     
     return (*page)-&gt;get_slot(*slotid);
-  }</t>
+  }
+</t>
 <t tx="michael.20150118002311.5">void burst(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    sort(rnode, data, trace);
+    TESTPOINT(HashBurst);
+
+    trace.sorter.init_hash(data, data-&gt;h.pageids, trace);
+    if (! trace.sorter.prepare_sort_hash(data))
+        collect(rnode, data, trace);
+        
     size_t count = trace.sorter.size();
-    char **p = &amp;trace.sorter.pointers[0];
+    Sorter::iterator p = trace.sorter.pointers.begin();
     
-    trace.pop();
+    trace.pop_for_burst();
+    assert(trace.current().type() == kBitTrie || trace.current().type() == kTrie);
+    trace.current().remove_child(trace);
+    
     if (trace.free_node(rnode.page, rnode.id))
       rnode.page.defragment(trace);
-    
+
     size_t tsize = trace.size();
     
     for(size_t i = 0; i &lt; count; i++, p++) {
@@ -1310,7 +1421,6 @@ TestBucket test_bucket;</t>
       psize_t ksize;
       vsize_t vsize;
       Bucket::get_key_value(*p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
-      
       trace.cut_key();
       trace.key.append(key, ksize);
       trace.current().find(trace); 
@@ -1323,7 +1433,8 @@ TestBucket test_bucket;</t>
       trace.map.free_page(*dst);
 
     trace.sorter.clear();
-  }</t>
+  }
+</t>
 <t tx="michael.20150118002311.6">size_t calc_node_count(Trace &amp;trace) {
     size_t count = 0;
     PageRef* p = trace.sorter.hash_pages;
@@ -1332,6 +1443,7 @@ TestBucket test_bucket;</t>
         count += ((HashPage*)p-&gt;page)-&gt;count;
     }
     return count;
-  }</t>
+  }
+</t>
 </tnodes>
 </leo_file>

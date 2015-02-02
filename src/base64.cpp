@@ -49,7 +49,7 @@ void encode(const Slice& input, std::string& output) {
 
   const char* s = input.data();
   boost::uint64_t* d = (boost::uint64_t*)&output[0];
-  int max_i = size-8, i = 0, j = 0;
+  int max_i = (int)(size-8), i = 0, j = 0;
   for(; i <= max_i; i += 6, j += 8, s += 6, d++)
     *d = encode_block(*(boost::uint64_t*)s);
 
@@ -105,11 +105,10 @@ inline boost::uint64_t decode_block(boost::uint64_t block) {
 
   boost::uint64_t* s = (boost::uint64_t*)&input[0];
   char* d = &output[0];
-  int max_j = output_size - 8, i = 0, j = 0;
+  int max_j = (int)(output_size - 8), i = 0, j = 0;
   
   for(; j < max_j; i += 8, j += 6, s++, d += 6)
     *(boost::uint64_t*)d = decode_block(*s);
-
   
   max_j = (int)(output_size - j);
   boost::uint64_t block = 0;

@@ -21,7 +21,7 @@ nodeid_t Page::new_node(size_t size_) {
   size_t free_start = count ? ptrs[count-1].offset : sizeof(Page);
   free_start -= size_;
   nodeid_t new_id = count++;
-  ptrs[new_id].offset = free_start;
+  ptrs[new_id].offset = (inpage_ptr)free_start;
   return new_id;
 }
 //@-others
@@ -45,8 +45,8 @@ bool PageRef::defragment(Trace& trace) const {
    
   // closes the holes in the page 
   for(size_t i = 1; i < old_count; i++) {
-    size_t node_size = get_node_size(i);
-    map[i] = node_count;
+    size_t node_size = get_node_size((nodeid_t)i);
+    map[i] = (nodeid_t)node_count;
     
     if (ptrs[i].type == kRemoved) {
       // a hole
@@ -81,7 +81,7 @@ bool PageRef::defragment(Trace& trace) const {
   // if (do_move)
   //    the hole is at the end, we need not do anything just cut
   //    which is done at the next line
-  page->count = node_count;
+  page->count = (boost::uint16_t)node_count;
     
   if (!nodes_moved)
     return false;  // not defragmented 
@@ -127,7 +127,7 @@ void PageRef::grow_node_by(nodeid_t node_id, int size) const {
 //@+node:michael.20141230111914.31: *3* change_to_link
 void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   // first remove the old nodes space
-  int delta = page_pad(sizeof(pageid_t)) - get_node_size(node_id);
+  int delta = (int)(page_pad(sizeof(pageid_t)) - get_node_size(node_id));
   assert(delta <= 0);
   grow_node_by(node_id, delta);
   
@@ -264,7 +264,7 @@ void Trace::merge_pages() {
   // this is never called by the trace root
   // => stack.size() >= 2
   
-  for(int i = stack.size()-2; i >= 0; i--) {
+  for(int i = (int)stack.size()-2; i >= 0; i--) {
     NodeRef& link(stack[i].node);
     
     if (link.page.id != page.id) {
@@ -314,7 +314,7 @@ PageRef NodeStorageInHeap::new_page() {
     std::vector<_page_ptr>::iterator i;
     for(i = _pages.begin(); i != _pages.end(); i++) {
       if (!i->get()) {
-        pageid_t id = i - _pages.begin();
+        pageid_t id = (pageid_t)(i - _pages.begin());
         Page* page = new Page;
         i->reset(page);
         _free_pages--;
@@ -324,7 +324,7 @@ PageRef NodeStorageInHeap::new_page() {
     _free_pages = 0;
   }
 
-  pageid_t id(_pages.size());
+  pageid_t id((pageid_t)_pages.size());
   Page* page = new Page;
   _pages.push_back(_page_ptr(page));
   return PageRef(page, id, (pageoffset_t)id);

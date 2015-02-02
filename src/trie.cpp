@@ -27,14 +27,14 @@ typedef unsigned char trieindex_t;
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
-  char data[];
+  char data[1];
 };
 //@+node:michael.20150116155028.18: *3* Leaf
 // A leaf 
 // the data is interpreted by the type (kLeaf od kBitLeaf)
 // the size of data is saved in NodeRef::len()
 struct Leaf {
-  char data[];
+  char data[1];
 };
 //@+node:michael.20150116155028.19: *3* Trie
 // Node with the complete alphabet 
@@ -46,7 +46,7 @@ struct Trie {
 // Node with a range
 struct BitTrie {
   boost::uint64_t bits;
-  nodeid_t children[];
+  nodeid_t children[1];
 
   size_t count() const {
       return popcount(bits);    
@@ -56,7 +56,7 @@ struct BitTrie {
       if (bits & (((boost::uint64_t)1)<<index)) {
         boost::uint64_t mask = ~0;
         mask <<= index;
-        return popcount(bits & ~mask);
+        return (int)popcount(bits & ~mask);
       }
       return -1;
     }
@@ -122,7 +122,7 @@ struct KeyValueSize {
 };
 
 struct Bucket {
-  char data[];
+  char data[1];
   
   // get the key and value of current positions and returns the
   // position of the next key, value storage
@@ -179,9 +179,9 @@ struct Bucket {
     }
     
   // returns the real size of the bucket <= node.size()
-  size_t size(psize_t count) {
+  size_t size(size_t count) {
       char* p = data;
-      for(psize_t i = 0; i < count; i++)
+      for(size_t i = 0; i < count; i++)
         p = next(p);
       
       return p - data;
@@ -194,7 +194,6 @@ struct Bucket {
 struct Hash {
   pageid_t pageids[HASH_PAGE_COUNT];
 };
-
 
 
 /*
@@ -236,10 +235,12 @@ struct HashPage {
     }
     
   char* get_slot(size_t slot_id) {
+      assert(slot_id < PAGE_HASH_SIZE);
       ptr slot = slots[slot_id];
       if (!slot)
         return NULL; // slot does not exist yet
         
+      assert(((size_t)slot)*BUCKET_ALIGN < PAGE_SIZE);
       return &data[((size_t)slot)*BUCKET_ALIGN];
     }
   
@@ -249,7 +250,7 @@ struct HashPage {
     if (end < HASHPAGE_HEADER + size)
       return NULL; // overflow
   
-    end -= size;
+    end -= (boost::uint16_t)size;
     slots[slotid] = (ptr)(end / BUCKET_ALIGN);
     char *slot = &data[end];
     *slot = 0;
@@ -271,7 +272,7 @@ struct HashPage {
     assert(slot - data > 0);
     assert(slot - data < PAGE_SIZE);
     
-    int delta = (int)new_size - old_size;
+    int delta = (int)(new_size - old_size);
     
     if (old_size < new_size) {
       if (end < HASHPAGE_HEADER + delta)
@@ -283,16 +284,19 @@ struct HashPage {
       memmove(&data[end-delta], &data[end], slot-&data[end]+new_size);
     }
     
+    ptr slot_ptr = (ptr)((slot - data) / BUCKET_ALIGN);
     end -= delta;
+    slot -= delta;
     delta /= BUCKET_ALIGN;
     
-    ptr slot_ptr = (ptr)((slot-data)/BUCKET_ALIGN);
     ptr* p = slots;
     for(size_t i = 0; i < PAGE_HASH_SIZE; i++, p++) {
       if (*p && *p <= slot_ptr)
         *p -= delta;
+
+      assert(*p < PAGE_SIZE / BUCKET_ALIGN);
     }
-    return slot-delta;
+    return slot;
   }
 };
 
@@ -1222,9 +1226,6 @@ static BitTrieHandler bittrie;
 //@+node:michael.20141215222649.84: *3* Leaf
 // a leaf node
 struct LeafHandler : public LeafBase {
-
-
-
   //@+others
   //@+node:kochelmonster-.20150117183203.2: *4* is_valid
   bool is_valid(const NodeRef& rnode, const Trace& trace) const {
@@ -1394,6 +1395,7 @@ struct BucketHandler : public BucketBase {
       // add the new key        
       trace.cut_key();
       trace.key.append(current_key);
+      handler->find(current, data, trace);
       trace.current().add(leaf, true, trace);
     }
   //@+node:kochelmonster-.20150117183203.7: *4* remove_bucket
@@ -1433,12 +1435,12 @@ struct BucketHandler : public BucketBase {
       for(psize_t i = 0; i < count; i++)
         p = Bucket::next(p);
         
-      Bucket::set_key_value(
-        p, key.data(), key.size(), leaf.node()->l.data, leaf.len());
+      Bucket::set_key_value(p, key.data(), (psize_t)key.size(), 
+                            leaf.node()->l.data, (vsize_t)leaf.len());
      
-      trace.current().set_extra(count+1);
+      trace.current().set_extra((nodeid_t)count+1);
       
-      trace.sorter.clear();
+      trace.sorter.reset_sorting();
       return result;
     }
   //@+node:kochelmonster-.20150117183203.9: *4* remove_child
@@ -1448,7 +1450,7 @@ struct BucketHandler : public BucketBase {
         return false;
         
       remove_bucket(rnode, data, trace);
-      trace.current().set_extra(--count);
+      trace.current().set_extra((nodeid_t)--count);
       trace.sorter.clear();
       
       size_t bsize = data->e.size(count);
@@ -1524,17 +1526,17 @@ struct HashHandler : public BucketBase {
       
       if (! slot)
         return;
-      
-      size_t count = *slot++;
+
+      size_t count = *(slot++);
       char* item_key;
       psize_t ksize;
       for(psize_t i = 0; i < count; i++) {
         char *old_pos = slot;
-        slot= Bucket::get_key(slot, &item_key, &ksize);
+        assert(slot - (char*)p < PAGE_SIZE);
+        slot = Bucket::get_key(slot, &item_key, &ksize);
         if (key.size() == ksize && memcmp(item_key, key.data(), ksize) == 0) {
-          trace.sorter.index = 0;
+          trace.sorter.reset_sorting();
           trace.sorter.pointers[0] = old_pos;
-          trace.sorter.clear();
           return;
         }
       }
@@ -1550,18 +1552,12 @@ struct HashHandler : public BucketBase {
       return count;
     }
   //@+node:kochelmonster-.20150117183203.23: *4* sort
-  void sort(NodeRef& rnode, Node* data, Trace& trace) {
-      trace.sorter.init_hash(data, data->h.pageids, trace);
-      if (trace.sorter.prepare_sort_hash(data))
-        return;
-
-      Slice key(trace.current_key());
-      bool do_find = trace.sorter.is_valid(key);
+  void collect(NodeRef& rnode, Node* data, Trace& trace) {
       size_t count = calc_node_count(trace);
       trace.sorter.pointers.resize(count);    
 
       // fill pointers
-      char **dst = &trace.sorter.pointers[0];
+      Sorter::iterator dst = trace.sorter.pointers.begin();
       PageRef* p = trace.sorter.hash_pages;
       for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
         HashPage* page = (HashPage*)p->page;
@@ -1582,21 +1578,40 @@ struct HashHandler : public BucketBase {
           }
         }
       }
-                
+    }
+
+  void sort(NodeRef& rnode, Node* data, Trace& trace) {
+      trace.sorter.init_hash(data, data->h.pageids, trace);
+      if (trace.sorter.prepare_sort_hash(data))
+        return;
+
+      Slice key(trace.current_key());
+      bool do_find = trace.sorter.is_valid(key);
+
+      collect(rnode, data, trace);
+      
       trace.sorter.sort();
       if (do_find)
         trace.sorter.find(key);
     }
   //@+node:michael.20150118002311.5: *4* burst
   void burst(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
-      sort(rnode, data, trace);
+      TESTPOINT(HashBurst);
+
+      trace.sorter.init_hash(data, data->h.pageids, trace);
+      if (! trace.sorter.prepare_sort_hash(data))
+          collect(rnode, data, trace);
+          
       size_t count = trace.sorter.size();
-      char **p = &trace.sorter.pointers[0];
+      Sorter::iterator p = trace.sorter.pointers.begin();
       
-      trace.pop();
+      trace.pop_for_burst();
+      assert(trace.current().type() == kBitTrie || trace.current().type() == kTrie);
+      trace.current().remove_child(trace);
+      
       if (trace.free_node(rnode.page, rnode.id))
         rnode.page.defragment(trace);
-      
+
       size_t tsize = trace.size();
       
       for(size_t i = 0; i < count; i++, p++) {
@@ -1604,7 +1619,6 @@ struct HashHandler : public BucketBase {
         psize_t ksize;
         vsize_t vsize;
         Bucket::get_key_value(*p, &key, &ksize, &value, &vsize);
-        
         trace.cut_key();
         trace.key.append(key, ksize);
         trace.current().find(trace); 
@@ -1678,13 +1692,13 @@ struct HashHandler : public BucketBase {
       for(psize_t i = 0; i < count; i++)
         p = Bucket::next(p);
         
-      Bucket::set_key_value(
-        p, key.data(), key.size(), leaf.node()->l.data, leaf.len());
+      Bucket::set_key_value(p, key.data(), (psize_t)key.size(), 
+                            leaf.node()->l.data, (vsize_t)leaf.len());
         
       (*slot)++;
       page->count++;
 
-      trace.sorter.clear();
+      trace.sorter.reset_sorting();
       return result;
     }
   //@+node:kochelmonster-.20150117183203.28: *4* change_to_bucket
@@ -1959,7 +1973,8 @@ void PageRef::dump(std::ostream& out) {
       << t2 << "offset:     " << offset << std::endl;
       
   if (page->type == kTriePage) {
-    out << t2 << "node_count: " << count() << std::endl
+    out << t2 << "type:       TriePage" << std::endl
+        << t2 << "node_count: " << count() << std::endl
         << t2 << "size:       " << size() << std::endl
         << t2 << "free_size:  " << free_size() << std::endl
         << t2 << "sum_size:   " << size() + free_size() << std::endl
@@ -1970,12 +1985,13 @@ void PageRef::dump(std::ostream& out) {
       out << t3 << "- id:    " << (int)id << std::endl
           << t3 << "  ptr:   " << (int)ptr->offset << std::endl;
           
-      NodeHandler::handlers[ptr->type]->dump(page, id, out);
+      NodeHandler::handlers[ptr->type]->dump(page, (nodeid_t)id, out);
     }
   }
   else {
     HashPage* hpage = (HashPage*)page;
-    out << t2 << "node_count: " << hpage->count << std::endl
+    out << t2 << "type:       HashPage" << std::endl
+        << t2 << "node_count: " << hpage->count << std::endl
         << t2 << "size:       " << sizeof(Page)-hpage->end << std::endl
         << t2 << "free_size:  " << hpage->end-HASHPAGE_HEADER << std::endl
         << t2 << "nodes: " << std::endl;
