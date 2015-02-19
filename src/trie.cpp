@@ -1386,7 +1386,7 @@ struct BucketHandler : public BucketBase {
         vsize_t vsize;
         p = Bucket::get_key_value(p, &key, &ksize, &value, &vsize);
         
-        trace.cut_key();
+        trace.key.resize(trace.back->end);
         trace.key.append(key, ksize);
         handler->find(current, data, trace);
         handler->add(TempLeaf(Slice(value, vsize)), true, current, data, trace);
@@ -1536,34 +1536,28 @@ struct HashHandler : public BucketBase {
         slot = Bucket::get_key(slot, &item_key, &ksize);
         if (key.size() == ksize && memcmp(item_key, key.data(), ksize) == 0) {
           trace.sorter.reset_sorting();
+          trace.sorter.index = 0;
           trace.sorter.pointers[0] = old_pos;
           return;
         }
       }
     }
-  //@+node:michael.20150118002311.6: *4* calc_node_count
-  size_t calc_node_count(Trace &trace) {
-      size_t count = 0;
-      PageRef* p = trace.sorter.hash_pages;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
-        if (p->page)
-          count += ((HashPage*)p->page)->count;
-      }
-      return count;
-    }
   //@+node:kochelmonster-.20150117183203.23: *4* sort
   void collect(NodeRef& rnode, Node* data, Trace& trace) {
-      size_t count = calc_node_count(trace);
-      trace.sorter.pointers.resize(count);    
-
+      size_t count = 0;
+      
       // fill pointers
-      Sorter::iterator dst = trace.sorter.pointers.begin();
       PageRef* p = trace.sorter.hash_pages;
       for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
         HashPage* page = (HashPage*)p->page;
         if (!page)
           continue;
-          
+      
+        size_t index = count;
+        count += page->count;
+        trace.sorter.pointers.resize(count);    
+        Sorter::iterator dst = trace.sorter.pointers.begin() + index;
+        
         for(size_t j = 0; j < PAGE_HASH_SIZE; j++) {
           char* bucket = page->get_slot(j);
           if (!bucket)
@@ -1601,7 +1595,8 @@ struct HashHandler : public BucketBase {
       trace.sorter.init_hash(data, data->h.pageids, trace);
       if (! trace.sorter.prepare_sort_hash(data))
           collect(rnode, data, trace);
-          
+
+      typedef std::unique_ptr<Sorter> sorter = trace.take_sorter();    
       size_t count = trace.sorter.size();
       Sorter::iterator p = trace.sorter.pointers.begin();
       
@@ -1619,7 +1614,7 @@ struct HashHandler : public BucketBase {
         psize_t ksize;
         vsize_t vsize;
         Bucket::get_key_value(*p, &key, &ksize, &value, &vsize);
-        trace.cut_key();
+        trace.key.resize(trace.back->end);
         trace.key.append(key, ksize);
         trace.current().find(trace); 
         trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
@@ -1703,6 +1698,9 @@ struct HashHandler : public BucketBase {
     }
   //@+node:kochelmonster-.20150117183203.28: *4* change_to_bucket
   void change_to_bucket(NodeRef& rnode, Node* data, Trace& trace) {
+      Slice ck(trace.current_key());
+      std::string current_key(ck.data(), ck.size());
+      
       sort(rnode, data, trace);
       size_t count = trace.sorter.size();
 
@@ -1731,11 +1729,17 @@ struct HashHandler : public BucketBase {
         trace.current().add(TempLeaf(Slice(value, vsize)), true, trace);
       }
 
+      trace.cut_key();
+      trace.key.append(current_key);
+      trace.current().find(trace);
+        
       PageRef null;
       dst = pages;
       for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++) {
-        trace.map.free_page(*dst);
-        *dst = null;
+        if (dst->page) {
+          trace.map.free_page(*dst);
+          *dst = null;
+        }
       }
     }
   //@+node:kochelmonster-.20150117183203.31: *4* remove_child
@@ -1765,7 +1769,10 @@ struct HashHandler : public BucketBase {
         trace.sorter.hash_pages[page_index] = PageRef();
       }
       
-      if (calc_node_count(trace) <= 8)
+      count = trace.sorter.size() - 1;
+      trace.sorter.remove(trace);
+      
+      if (count <= 8)
         change_to_bucket(rnode, data, trace);
       
       return true;
@@ -1889,6 +1896,9 @@ void Sorter::sort() {
 }
 
 bool Sorter::is_valid(const Slice& key) const {
+  if (index >= size())
+    return false;
+
   char *key_, *p = pointers[index];
   psize_t ksize;
   
@@ -1920,6 +1930,18 @@ void Sorter::add_key_to_trace(Trace& trace) {
   Bucket::get_key(pointers[index], &key, &size);
   trace.cut_key();
   trace.key.append(key, size);
+  hash = calc_hash(key, size) % HASH_SIZE;
+}
+
+void Sorter::remove(Trace& trace) {
+  Slice key(trace.current_key());
+  if (is_valid(key)) {
+    pointers.erase(pointers.begin()+index);
+    index = size();
+  }
+  else {
+    reset_sorting();
+  }
 }
 
 void Sorter::next(Trace& trace) {

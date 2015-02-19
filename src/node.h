@@ -614,6 +614,7 @@ struct Sorter {
   void next(Trace& trace);
   void prev(Trace& trace) ;
   void init_hash(Node* data, pageid_t pageids[HASH_PAGE_COUNT], Trace& trace);
+  void remove(Trace& trace);
 
   void first(Trace& trace)  {
       index = 0;
@@ -642,7 +643,7 @@ struct Sorter {
     }
     
   void reset_sorting() {
-      index = 0;
+      index = 1;
       pointers.resize(1); // at least one pointer is always active
       pointers[0] = NULL;
     }

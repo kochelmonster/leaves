@@ -6,13 +6,22 @@
 #include <assert.h>
 #include <stdio.h>
 #include <time.h>
+#if defined(__APPLE__) || defined(linux)
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/time.h>
+#include <sys/times.h>
+#else
+#include <windows.h>
+#include <io.h>
+#endif
 #include "larch/leaves.h"
 #include <memory>
 #include <iostream>
+
+#ifndef PAGE_SIZE 
+#define PAGE_SIZE 8192
+#endif
 
 using namespace larch_leaves;
 
@@ -115,14 +124,14 @@ unsigned long long startcycles, stopcycles;
   askitis = (char*)malloc(size);
   lseek (fileno(in), 0L, 0);
 #else
-  size = _lseeki64 (fileno(in), 0L, 2);
-  askitis = malloc(size);
-  _lseeki64 (fileno(in), 0L, 0);
+  size = _lseeki64 (_fileno(in), 0L, 2);
+  askitis = (char*)malloc(size);
+  _lseeki64 (_fileno(in), 0L, 0);
 #endif
   off = 0;
 
   do {
-    prev = read (fileno(in), askitis+off,size-off > 65536 ? 65536 : size-off);
+    prev = _read (_fileno(in), askitis+off,size-off > 65536 ? 65536 : size-off);
     off += prev;
   } while( off < size );
 
@@ -204,14 +213,14 @@ unsigned long long startcycles, stopcycles;
   askitis = (char*)malloc(size);
   lseek (fileno(in2), 0L, 0);
 #else
-  size = _lseeki64 (fileno(in2), 0L, 2);
-  askitis = malloc(size);
-  _lseeki64 (fileno(in2), 0L, 0);
+  size = _lseeki64 (_fileno(in2), 0L, 2);
+  askitis = (char*)malloc(size);
+  _lseeki64 (_fileno(in2), 0L, 0);
 #endif
   off = 0;
 
   while( off < size ) {
-    prev = read (fileno(in2), askitis+off,size-off > 65536 ? 65536 : size-off);
+    prev = _read (_fileno(in2), askitis+off,size-off > 65536 ? 65536 : size-off);
     off += prev;
   }
 

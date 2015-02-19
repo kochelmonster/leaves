@@ -1661,6 +1661,41 @@ BOOST_AUTO_TEST_CASE(ChangeValue) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
+BOOST_AUTO_TEST_SUITE(bucket_manipulations)
+
+BOOST_AUTO_TEST_CASE(Create) {
+  test_bucket.test_Create1();
+}
+
+BOOST_AUTO_TEST_CASE(Navigate) {
+  test_bucket.test_Navigate1();
+}
+
+BOOST_AUTO_TEST_CASE(Remove) {
+  test_bucket.test_Remove1();
+}
+
+BOOST_AUTO_TEST_CASE(ChangeToHash) {
+  test_bucket.test_ChangeToHash1();
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(hash_manipulations)
+
+BOOST_AUTO_TEST_CASE(Burst) {
+  test_hash.test_Burst();
+}
+
+BOOST_AUTO_TEST_CASE(Iterate) {
+  test_hash.test_Iterate();
+}
+
+BOOST_AUTO_TEST_CASE(Remove) {
+  test_hash.test_Remove();
+}
+
+BOOST_AUTO_TEST_SUITE_END()
 //@+node:michael.20150106224503.38: *3* generate
 #ifdef BOOST_TEST_NO_MAIN
 int main(int argc, const char* argv[]) {
@@ -1721,9 +1756,9 @@ int main(int argc, const char* argv[]) {
   //test_bucket.test_Navigate1();
   //test_bucket.test_Remove1();
   //test_bucket.test_ChangeToHash1();
-  //test_hash.test_Burst();
+  test_hash.test_Burst();
   //test_hash.test_Iterate();
-  test_hash.test_Remove();
+  //test_hash.test_Remove();
   return 0;
 }
 #endif

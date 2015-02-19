@@ -10,7 +10,7 @@
 <preferences/>
 <find_panel_settings/>
 <vnodes>
-<v t="michael.20141215222649.4"><vh>@settings</vh>
+<v t="michael.20141215222649.4" a="E"><vh>@settings</vh>
 <v t="michael.20141215222649.5"><vh>@bool shadow_in_home_dir = False</vh></v>
 <v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
 </v>
@@ -42,18 +42,17 @@
 </v>
 <v t="michael.20141215222649.14" a="E"><vh>Files</vh>
 <v t="michael.20141230111914.135"><vh>@file wscript</vh></v>
-<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
 <v t="michael.20141215222649.17"><vh>@file leaves.h</vh></v>
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65" a="E"
-expanded="michael.20141220220750.15,"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.65" a="E"><vh>@file node.h</vh></v>
 <v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
-<v t="michael.20141220220750.5" a="E"><vh>@file port.h</vh></v>
+<v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
 <v t="michael.20141219202729.8" a="E"
-expanded="kochelmonster-.20150117183203.20,"><vh>@file trie.cpp</vh></v>
-<v t="michael.20141215222649.45" a="E"><vh>@file leaves.cpp</vh></v>
+expanded="michael.20141215222649.83,michael.20150116155028.16,kochelmonster-.20150117183203.20,"><vh>@file trie.cpp</vh></v>
+<v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
@@ -63,12 +62,12 @@ expanded="kochelmonster-.20150117183203.20,"><vh>@file trie.cpp</vh></v>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
 <v t="michael.20150116155028.13"><vh>@file test_base64.cpp</vh></v>
 <v t="michael.20150101205559.18" a="E"
-expanded="michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
-<v t="michael.20150101205559.42" a="E"><vh>@file test_bits.cpp</vh></v>
+expanded="michael.20150101205559.32,michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
-<v t="michael.20150106224503.10"><vh>@path benchmarks</vh>
-<v t="michael.20150106224503.11"><vh>trie</vh>
+<v t="michael.20150106224503.10" a="E"><vh>@path benchmarks</vh>
+<v t="michael.20150106224503.11" a="E"><vh>trie</vh>
 <v t="michael.20150111145018.91"><vh>@file sbench.cpp</vh></v>
 </v>
 </v>
@@ -100,10 +99,9 @@ expanded="michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
 </v>
 <v t="michael.20150116155028.22"><vh>Hash</vh></v>
 <v t="michael.20150117120355.4"><vh>Sorter</vh></v>
-<v t="kochelmonster-.20150117183203.20"><vh>Hash</vh>
+<v t="kochelmonster-.20150117183203.20" a="E"><vh>Hash</vh>
 <v t="michael.20150118002311.4"><vh>get_slot</vh></v>
 <v t="kochelmonster-.20150117183203.22"><vh>find</vh></v>
-<v t="michael.20150118002311.6"><vh>calc_node_count</vh></v>
 <v t="kochelmonster-.20150117183203.23"><vh>sort</vh></v>
 <v t="michael.20150118002311.5"><vh>burst</vh></v>
 <v t="kochelmonster-.20150117183203.29"><vh>remove_bucket</vh></v>
@@ -200,6 +198,7 @@ static HashHandler hash;
       slot = Bucket::get_key(slot, &amp;item_key, &amp;ksize);
       if (key.size() == ksize &amp;&amp; memcmp(item_key, key.data(), ksize) == 0) {
         trace.sorter.reset_sorting();
+        trace.sorter.index = 0;
         trace.sorter.pointers[0] = old_pos;
         return;
       }
@@ -207,17 +206,20 @@ static HashHandler hash;
   }
 </t>
 <t tx="kochelmonster-.20150117183203.23">void collect(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    size_t count = calc_node_count(trace);
-    trace.sorter.pointers.resize(count);    
-
+    size_t count = 0;
+    
     // fill pointers
-    Sorter::iterator dst = trace.sorter.pointers.begin();
     PageRef* p = trace.sorter.hash_pages;
     for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, p++) {
       HashPage* page = (HashPage*)p-&gt;page;
       if (!page)
         continue;
-        
+    
+      size_t index = count;
+      count += page-&gt;count;
+      trace.sorter.pointers.resize(count);    
+      Sorter::iterator dst = trace.sorter.pointers.begin() + index;
+      
       for(size_t j = 0; j &lt; PAGE_HASH_SIZE; j++) {
         char* bucket = page-&gt;get_slot(j);
         if (!bucket)
@@ -250,6 +252,9 @@ void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
   }
 </t>
 <t tx="kochelmonster-.20150117183203.28">void change_to_bucket(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
+    Slice ck(trace.current_key());
+    std::string current_key(ck.data(), ck.size());
+    
     sort(rnode, data, trace);
     size_t count = trace.sorter.size();
 
@@ -278,11 +283,17 @@ void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       trace.current().add(TempLeaf(Slice(value, vsize)), true, trace);
     }
 
+    trace.cut_key();
+    trace.key.append(current_key);
+    trace.current().find(trace);
+      
     PageRef null;
     dst = pages;
     for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, dst++) {
-      trace.map.free_page(*dst);
-      *dst = null;
+      if (dst-&gt;page) {
+        trace.map.free_page(*dst);
+        *dst = null;
+      }
     }
   }
 </t>
@@ -381,7 +392,10 @@ void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       trace.sorter.hash_pages[page_index] = PageRef();
     }
     
-    if (calc_node_count(trace) &lt;= 8)
+    count = trace.sorter.size() - 1;
+    trace.sorter.remove(trace);
+    
+    if (count &lt;= 8)
       change_to_bucket(rnode, data, trace);
     
     return true;
@@ -470,7 +484,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
       vsize_t vsize;
       p = Bucket::get_key_value(p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
       
-      trace.cut_key();
+      trace.key.resize(trace.back-&gt;end);
       trace.key.append(key, ksize);
       handler-&gt;find(current, data, trace);
       handler-&gt;add(TempLeaf(Slice(value, vsize)), true, current, data, trace);
@@ -1006,9 +1020,9 @@ int main(int argc, const char* argv[]) {
   //test_bucket.test_Navigate1();
   //test_bucket.test_Remove1();
   //test_bucket.test_ChangeToHash1();
-  //test_hash.test_Burst();
+  test_hash.test_Burst();
   //test_hash.test_Iterate();
-  test_hash.test_Remove();
+  //test_hash.test_Remove();
   return 0;
 }
 #endif
@@ -1171,6 +1185,7 @@ struct Sorter {
   void next(Trace&amp; trace);
   void prev(Trace&amp; trace) ;
   void init_hash(Node* data, pageid_t pageids[HASH_PAGE_COUNT], Trace&amp; trace);
+  void remove(Trace&amp; trace);
 
   void first(Trace&amp; trace)  {
       index = 0;
@@ -1199,7 +1214,7 @@ struct Sorter {
     }
     
   void reset_sorting() {
-      index = 0;
+      index = 1;
       pointers.resize(1); // at least one pointer is always active
       pointers[0] = NULL;
     }
@@ -1403,7 +1418,8 @@ TestHash test_hash;
     trace.sorter.init_hash(data, data-&gt;h.pageids, trace);
     if (! trace.sorter.prepare_sort_hash(data))
         collect(rnode, data, trace);
-        
+
+    typedef std::unique_ptr&lt;Sorter&gt; sorter = trace.take_sorter();    
     size_t count = trace.sorter.size();
     Sorter::iterator p = trace.sorter.pointers.begin();
     
@@ -1421,7 +1437,7 @@ TestHash test_hash;
       psize_t ksize;
       vsize_t vsize;
       Bucket::get_key_value(*p, &amp;key, &amp;ksize, &amp;value, &amp;vsize);
-      trace.cut_key();
+      trace.key.resize(trace.back-&gt;end);
       trace.key.append(key, ksize);
       trace.current().find(trace); 
       trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
@@ -1433,16 +1449,6 @@ TestHash test_hash;
       trace.map.free_page(*dst);
 
     trace.sorter.clear();
-  }
-</t>
-<t tx="michael.20150118002311.6">size_t calc_node_count(Trace &amp;trace) {
-    size_t count = 0;
-    PageRef* p = trace.sorter.hash_pages;
-    for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, p++) {
-      if (p-&gt;page)
-        count += ((HashPage*)p-&gt;page)-&gt;count;
-    }
-    return count;
   }
 </t>
 </tnodes>
