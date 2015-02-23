@@ -112,7 +112,7 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
       if (value.size() > MAX_PAGE_VALUE_SIZE)
         throw WrongValue(VALUE_EXEEDS);
 
-      if (trace.set_leaf(TempLeaf(value)))
+      if (trace.set_leaf(TempLeaf(value), false))
         _count++;
     }
   
@@ -120,6 +120,25 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
       if (trace.remove())
         reinit();
       _count--;
+    }
+    
+  void reset_statistics() {
+      trace.reset_statistics();
+    }
+    
+  void print_statistics() {
+      double avg_trace = (double)trace.stat_find_trace/(double)trace.stat_find_count;
+      double avg_reuse = (double)trace.stat_reuse_trace/(double)trace.stat_find_count;
+      double avg_tries = (double)trace.stat_tries/(double)trace.stat_find_count;
+      double avg_compressed = (double)trace.stat_compressed/(double)trace.stat_find_count;
+      double avg_link = (double)trace.stat_link/(double)trace.stat_find_count;
+      std::cerr << "avg trace: " << avg_trace << std::endl;
+      std::cerr << "avg reuse: " << avg_reuse << std::endl;
+      std::cerr << "avg tries: " << avg_tries << std::endl;
+      std::cerr << "avg compressed: " << avg_compressed << std::endl;
+      std::cerr << "avg links: " << avg_link << std::endl;
+      std::cerr << "pages: " << pages() << std::endl;
+      std::cerr << "free pages: " << nodes._free_pages << std::endl;
     }
     
 #ifdef DEBUG

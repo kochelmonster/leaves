@@ -10,7 +10,7 @@
 <preferences/>
 <find_panel_settings/>
 <vnodes>
-<v t="michael.20141215222649.4" a="E"><vh>@settings</vh>
+<v t="michael.20141215222649.4"><vh>@settings</vh>
 <v t="michael.20141215222649.5"><vh>@bool shadow_in_home_dir = False</vh></v>
 <v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
 </v>
@@ -42,27 +42,25 @@
 </v>
 <v t="michael.20141215222649.14" a="E"><vh>Files</vh>
 <v t="michael.20141230111914.135"><vh>@file wscript</vh></v>
-<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
 <v t="michael.20141215222649.17"><vh>@file leaves.h</vh></v>
 </v>
 <v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
 <v t="michael.20141219202729.4"><vh>@file leaf.h</vh></v>
-<v t="michael.20141215222649.65" a="E"><vh>@file node.h</vh></v>
+<v t="michael.20141215222649.65"><vh>@file node.h</vh></v>
 <v t="michael.20141215222649.161"><vh>@file node.cpp</vh></v>
 <v t="michael.20141220220750.5"><vh>@file port.h</vh></v>
-<v t="michael.20141219202729.8" a="E"
-expanded="michael.20141215222649.83,michael.20150116155028.16,kochelmonster-.20150117183203.20,"><vh>@file trie.cpp</vh></v>
-<v t="michael.20141215222649.45"><vh>@file leaves.cpp</vh></v>
+<v t="michael.20141219202729.8"><vh>@file trie.cpp</vh></v>
+<v t="michael.20141215222649.45" a="E"><vh>@file leaves.cpp</vh></v>
 <v t="michael.20141230111914.136"><vh>@file base64.cpp</vh></v>
 </v>
 </v>
 </v>
 <v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
-<v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
+<v t="michael.20141230111914.140"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@file simple.cpp</vh></v>
 <v t="michael.20150116155028.13"><vh>@file test_base64.cpp</vh></v>
-<v t="michael.20150101205559.18" a="E"
-expanded="michael.20150101205559.32,michael.20150101205559.38,"><vh>@file test_trie.cpp</vh></v>
+<v t="michael.20150101205559.18"><vh>@file test_trie.cpp</vh></v>
 <v t="michael.20150101205559.42"><vh>@file test_bits.cpp</vh></v>
 <v t="michael.20150106224503.8"><vh>@file test_memorydb.cpp</vh></v>
 </v>
@@ -85,7 +83,7 @@ expanded="michael.20150101205559.32,michael.20150101205559.38,"><vh>@file test_t
 <v t="michael.20150110130802.35"><vh>@file bench.py</vh></v>
 </v>
 </v>
-<v t="michael.20141219202729.5" a="E"><vh>edit</vh>
+<v t="michael.20141219202729.5"><vh>edit</vh>
 <v t="michael.20150118002311.10"><vh>TestBucket</vh>
 <v t="michael.20150118002311.15"><vh>test_Create1</vh></v>
 <v t="michael.20150118002311.16"><vh>test_Navigate1</vh></v>
@@ -99,7 +97,7 @@ expanded="michael.20150101205559.32,michael.20150101205559.38,"><vh>@file test_t
 </v>
 <v t="michael.20150116155028.22"><vh>Hash</vh></v>
 <v t="michael.20150117120355.4"><vh>Sorter</vh></v>
-<v t="kochelmonster-.20150117183203.20" a="E"><vh>Hash</vh>
+<v t="kochelmonster-.20150117183203.20"><vh>Hash</vh>
 <v t="michael.20150118002311.4"><vh>get_slot</vh></v>
 <v t="kochelmonster-.20150117183203.22"><vh>find</vh></v>
 <v t="kochelmonster-.20150117183203.23"><vh>sort</vh></v>
@@ -111,7 +109,7 @@ expanded="michael.20150101205559.32,michael.20150101205559.38,"><vh>@file test_t
 <v t="kochelmonster-.20150117183203.32"><vh>eat_child</vh></v>
 <v t="kochelmonster-.20150117183203.33"><vh>dump</vh></v>
 </v>
-<v t="michael.20150116155028.16" a="E"><vh>Bucket</vh>
+<v t="michael.20150116155028.16"><vh>Bucket</vh>
 <v t="kochelmonster-.20150117183203.5"><vh>find</vh></v>
 <v t="kochelmonster-.20150117183203.4"><vh>sort</vh></v>
 <v t="kochelmonster-.20150117183203.6"><vh>change_to_hash</vh></v>
@@ -172,6 +170,45 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
 <t tx="kochelmonster-.20150117183203.20">// A hash node
 struct HashHandler : public BucketBase {
   @others
+  virtual void check(NodeRef&amp; rnode, Node* data, const char *msg, Trace&amp; trace) {
+      pageid_t *p = data-&gt;h.pageids;
+      
+      std::cerr &lt;&lt; "check: " &lt;&lt; msg &lt;&lt; ", " &lt;&lt; rnode.page.id &lt;&lt; ", " &lt;&lt; rnode.id &lt;&lt; " = ";
+      bool sep = false;
+      for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, p++) {
+        if (! *p)
+          continue;
+      
+        if (sep)
+          std::cerr &lt;&lt; ", ";
+            
+        PageRef pr = trace.map.get_page(*p);
+        HashPage* hp = (HashPage*)pr.page;
+            
+        std::cerr &lt;&lt; i &lt;&lt; ":" &lt;&lt; *p &lt;&lt; "(" &lt;&lt; (hp != NULL) &lt;&lt; ")";
+        sep = true;
+      }
+      std::cerr &lt;&lt;  std::endl;
+      
+      p = data-&gt;h.pageids;
+      for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, p++) {
+        if (*p) {
+          PageRef pr = trace.map.get_page(*p);
+          HashPage* hp = (HashPage*)pr.page;
+          
+          /*std::cerr &lt;&lt; "check: " &lt;&lt; msg 
+                    &lt;&lt; ", " &lt;&lt; i 
+                    &lt;&lt; ", " &lt;&lt; *p 
+                    &lt;&lt; ", " &lt;&lt; pr.id 
+                    &lt;&lt; ", " &lt;&lt; (size_t)hp
+                    &lt;&lt; std::endl;*/
+          
+          if (hp) {
+            hp-&gt;debug_check_page(msg, i, rnode);
+          }
+        }
+      }
+    }
 };
 
 static HashHandler hash;
@@ -327,6 +364,7 @@ void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     if (!page) {
       PageRef new_page = trace.storage.new_page();
       size_t page_index = trace.sorter.hash / PAGE_HASH_SIZE;
+      assert(page_index &lt; HASH_PAGE_COUNT);
       trace.sorter.hash_pages[page_index] = new_page;
       data-&gt;h.pageids[page_index] = new_page.id;
       page = (HashPage*)new_page.page;
@@ -361,7 +399,7 @@ void sort(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       
     (*slot)++;
     page-&gt;count++;
-
+    
     trace.sorter.reset_sorting();
     return result;
   }
@@ -469,6 +507,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     memcpy(data_, data-&gt;e.data, rnode.size());
       
     trace.change_node(TempHash());
+    trace.sorter.clear();
     
     // adding nodes to hash will not change the page!
     // so we can use static pointers to hash
@@ -648,6 +687,7 @@ Memory Managers
 <t tx="michael.20141215222649.135">class NodeStorage {
  public:
   virtual PageRef new_page() = 0;
+  virtual void check(const char *msg, Trace&amp; trace) { }
 };
 
 
@@ -664,6 +704,8 @@ struct NodeStorageInHeap : public NodeStorage, public PageMap {
   
   void free_page(const PageRef&amp; page);
   PageRef new_page();
+  
+  void check(const char *msg, Trace&amp; trace);
 };
 
 
@@ -762,8 +804,18 @@ void NodeStorageInHeap::free_page(const PageRef&amp; page) {
   }
 }
 
-
-</t>
+void NodeStorageInHeap::check(const char *msg, Trace&amp; trace) {
+  typedef std::vector&lt;_page_ptr&gt;::iterator iter_t;
+  iter_t i = _pages.begin();
+  for(int j = 0; i != _pages.end(); i++, j++) {
+    if (j != 0)
+      continue;
+      
+    if (*i) {
+      PageRef(i-&gt;get(), j, j).check(msg, trace);
+    }
+  }
+}</t>
 <t tx="michael.20141215222649.159">@others
 </t>
 <t tx="michael.20141215222649.16"></t>
@@ -822,6 +874,9 @@ public:
 #ifdef DEBUG
   virtual void dump(std::ostream&amp; out) = 0;
 #endif
+
+  virtual void reset_statistics() = 0;
+  virtual void print_statistics() = 0;
 
   static MemoryDatabase* create();
 };
@@ -1020,7 +1075,7 @@ int main(int argc, const char* argv[]) {
   //test_bucket.test_Navigate1();
   //test_bucket.test_Remove1();
   //test_bucket.test_ChangeToHash1();
-  test_hash.test_Burst();
+  //test_hash.test_Burst();
   //test_hash.test_Iterate();
   //test_hash.test_Remove();
   return 0;
@@ -1156,6 +1211,18 @@ struct HashPage {
     }
     return slot;
   }
+  
+  void debug_check_page(const char* msg, size_t pid, NodeRef&amp; rnode) {
+      for(size_t i = 0; i &lt; PAGE_HASH_SIZE; i++) {
+        if (((size_t)slots[i])*BUCKET_ALIGN &gt;= PAGE_SIZE) {
+          std::cerr &lt;&lt; "wrong slot: " &lt;&lt; msg &lt;&lt; ", " &lt;&lt; pid &lt;&lt; "," 
+                    &lt;&lt; ((size_t)slots[i]) 
+                    &lt;&lt; " rnode: " &lt;&lt; rnode.page.id &lt;&lt; ", " &lt;&lt; rnode.id
+                    &lt;&lt; std::endl;
+        }
+        assert(((size_t)slots[i])*BUCKET_ALIGN &lt; PAGE_SIZE);
+      }
+    }
 };
 
 </t>
@@ -1381,7 +1448,7 @@ TestHash test_hash;
 
     for(i = 0; i &lt; 6766; i++) {
       if (i % 100 == 0)
-        std::cout &lt;&lt; "insert " &lt;&lt; i &lt;&lt; std::endl;
+        std::cerr &lt;&lt; "insert " &lt;&lt; i &lt;&lt; std::endl;
 
       db-&gt;find(number(i, 10));
       db-&gt;set_value(value(i), true);
@@ -1414,24 +1481,23 @@ TestHash test_hash;
 </t>
 <t tx="michael.20150118002311.5">void burst(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
     TESTPOINT(HashBurst);
-
+    
     trace.sorter.init_hash(data, data-&gt;h.pageids, trace);
     if (! trace.sorter.prepare_sort_hash(data))
         collect(rnode, data, trace);
 
-    typedef std::unique_ptr&lt;Sorter&gt; sorter = trace.take_sorter();    
-    size_t count = trace.sorter.size();
-    Sorter::iterator p = trace.sorter.pointers.begin();
-    
-    trace.pop_for_burst();
+    Sorter sorter(trace.sorter);
+    size_t count = sorter.size();
+    Sorter::iterator p = sorter.pointers.begin();
+    trace.pop();
     assert(trace.current().type() == kBitTrie || trace.current().type() == kTrie);
     trace.current().remove_child(trace);
-    
+   
     if (trace.free_node(rnode.page, rnode.id))
       rnode.page.defragment(trace);
-
+      
+    //std::cerr &lt;&lt; "burst" &lt;&lt; std::endl;
     size_t tsize = trace.size();
-    
     for(size_t i = 0; i &lt; count; i++, p++) {
       char *key, *value;
       psize_t ksize;
@@ -1440,15 +1506,18 @@ TestHash test_hash;
       trace.key.resize(trace.back-&gt;end);
       trace.key.append(key, ksize);
       trace.current().find(trace); 
-      trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
+      //trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
+      //std::cerr &lt;&lt; "  add: " &lt;&lt; trace.size() &lt;&lt; ", " &lt;&lt; tsize &lt;&lt; std::endl;
+      trace.current().add(TempLeaf(Slice(value, vsize)), trace.size()-tsize &gt; 4, trace); 
       trace.resize(tsize);
     }
 
-    PageRef *dst = trace.sorter.hash_pages;
-    for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, dst++)
-      trace.map.free_page(*dst);
-
-    trace.sorter.clear();
+    PageRef *dst = sorter.hash_pages;
+    for(size_t i = 0; i &lt; HASH_PAGE_COUNT; i++, dst++) {
+      if (dst-&gt;page) {
+        trace.map.free_page(*dst);
+      }
+    }
   }
 </t>
 </tnodes>

@@ -48,7 +48,7 @@ def configure_test(cfg):
    
 
 def configure_bench(cfg):
-    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN), "PAGE_SIZE=8192"]
+    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN), "PAGE_SIZE=8192", "DEBUG"]
     cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
     
     cfg.env.STLIBPATH_BENCH = []
@@ -56,7 +56,7 @@ def configure_bench(cfg):
         #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
         #, "-lboost_filesystem",  "-lboost_system"]
         cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0", 
-                                  "-march=corei7", "-g", "-O1"]
+                                  "-march=corei7", "-g",] #"-O1"]
 
 
 def configure(cfg):

@@ -302,6 +302,18 @@ struct HashPage {
     }
     return slot;
   }
+  
+  void debug_check_page(const char* msg, size_t pid, NodeRef& rnode) {
+      for(size_t i = 0; i < PAGE_HASH_SIZE; i++) {
+        if (((size_t)slots[i])*BUCKET_ALIGN >= PAGE_SIZE) {
+          std::cerr << "wrong slot: " << msg << ", " << pid << "," 
+                    << ((size_t)slots[i]) 
+                    << " rnode: " << rnode.page.id << ", " << rnode.id
+                    << std::endl;
+        }
+        assert(((size_t)slots[i])*BUCKET_ALIGN < PAGE_SIZE);
+      }
+    }
 };
 
 //@+node:michael.20150116155028.23: *3* Node

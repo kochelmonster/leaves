@@ -11,6 +11,8 @@
 #include <cassert>
 #include <algorithm>
 #include <vector>
+#include <unordered_map>
+#include <list>
 #include <boost/cstdint.hpp>
 #include "larch/leaves.h"
 #ifdef DEBUG
@@ -183,7 +185,9 @@ struct NodeHandler {
     
 #ifdef DEBUG
   virtual void dump(Page* page, nodeid_t nodeid, std::ostream& out) = 0;
-#endif  
+#endif
+
+  virtual void check(NodeRef& rnode, Node* data, const char *msg, Trace& trace) {}
     
   static NodeHandler* handlers[7];
 };
@@ -327,6 +331,8 @@ struct PageRef {
   #ifdef DEBUG
     void dump(std::ostream& out);
   #endif
+
+  void check(const char *msg, Trace& trace);
   //@+node:michael.20150112164548.5: *3* count
   size_t count() const {
       return page->count;
@@ -344,8 +350,8 @@ struct PageRef {
       return page->get_node_size(id);
     }
   //@+node:michael.20141230111914.43: *3* free_node
-  void free_node(nodeid_t id) const {
-      page->node_ptr[id].type = kRemoved;
+  void free_node(nodeid_t id_) const {
+      page->node_ptr[id_].type = kRemoved;
     }
   //@+node:michael.20150112164548.7: *3* new_node
   nodeid_t new_node(size_t size_) const {
@@ -468,6 +474,10 @@ struct NodeRef {
   void child_find(nodeid_t child_id, Trace& trace);
   void child_first(nodeid_t child_id, Trace& trace);
   void child_last(nodeid_t child_id, Trace& trace);
+
+  void check(const char *msg, Trace& trace) {
+      return handler->check(*this, node(), msg, trace);
+    }
   //@-others
 };
 
@@ -551,6 +561,7 @@ struct PageMap {
 class NodeStorage {
  public:
   virtual PageRef new_page() = 0;
+  virtual void check(const char *msg, Trace& trace) { }
 };
 
 
@@ -567,6 +578,8 @@ struct NodeStorageInHeap : public NodeStorage, public PageMap {
   
   void free_page(const PageRef& page);
   PageRef new_page();
+  
+  void check(const char *msg, Trace& trace);
 };
 
 
@@ -659,6 +672,57 @@ struct Sorter {
     }
 };
 //@+node:michael.20141220220750.15: ** Trace
+template<typename key_t, typename value_t>
+class lru_cache {
+public:
+	typedef typename std::pair<key_t, value_t> key_value_pair_t;
+	typedef typename std::list<key_value_pair_t>::iterator list_iterator_t;
+
+	lru_cache(size_t max_size) :
+		_max_size(max_size) {
+	}
+	
+	void put(const key_t& key, const value_t& value) {
+		auto it = _cache_items_map.find(key);
+		if (it != _cache_items_map.end()) {
+			_cache_items_list.erase(it->second);
+			_cache_items_map.erase(it);
+		}
+			
+		_cache_items_list.push_front(key_value_pair_t(key, value));
+		_cache_items_map[key] = _cache_items_list.begin();
+		
+		if (_cache_items_map.size() > _max_size) {
+			auto last = _cache_items_list.end();
+			last--;
+			_cache_items_map.erase(last->first);
+			_cache_items_list.pop_back();
+		}
+	}
+	
+	const value_t* get(const key_t& key) {
+		auto it = _cache_items_map.find(key);
+		if (it == _cache_items_map.end()) {
+			return NULL;
+		} else {
+			_cache_items_list.splice(_cache_items_list.begin(), _cache_items_list, it->second);
+			return &it->second->second;
+		}
+	}
+	
+  void clear() {
+      _cache_items_list.clear();
+      _cache_items_map.clear();
+    }
+  
+private:
+	std::list<key_value_pair_t> _cache_items_list;
+	std::unordered_map<key_t, list_iterator_t> _cache_items_map;
+	size_t _max_size;
+};
+
+
+#define CACHE_PREFIX 5
 // A stack trace inside a trie
 // nodes[0] is the root
 // nodes[K] is the current node (almost always a leaf)
@@ -674,17 +738,43 @@ struct Trace {
         : node(PageRef(), 0), start(0), end(0) { }
   };
 
-  std::vector<Transition> stack;
+  typedef std::vector<Transition> stack_t;
+  typedef lru_cache<std::string, stack_t> stack_cache_t;
+
+  stack_cache_t cache;
+  stack_t stack;
   std::string key;       // the key the trace points to
   PageMap& map;          // needed for some operations
   NodeStorage& storage;  // needed for some operations
   Transition *back;
   Sorter sorter;
   
+  
+  size_t stat_find_trace;
+  size_t stat_reuse_trace;
+  size_t stat_find_count;
+  size_t stat_compressed;
+  size_t stat_tries;
+  size_t stat_link;
+  
+  void reset_statistics() {
+      stat_find_count = 0;
+      stat_reuse_trace = 0;
+      stat_find_trace = 0;
+      stat_tries = 0;
+      stat_compressed = 0;
+      stat_link = 0;
+    }
+  
   Trace(PageMap& map_, NodeStorage& storage_) :
-      map(map_), storage(storage_) { 
+      cache(30000), map(map_), storage(storage_) { 
         key.reserve(MAX_KEY_SIZE_64);
+        reset_statistics();
       }
+
+  void check(const char *msg) { 
+      storage.check(msg, *this);
+    }
   
   //@+others
   //@+node:michael.20150111191610.5: *3* declarations
@@ -798,8 +888,9 @@ struct Trace {
       _push(Transition(node, 0, node.get_len()));
     }
   //@+node:michael.20141230111914.118: *3* pop
-  // special pop for HashHandler::burst does not change the sorter
-  nodeid_t pop_for_burst() {
+  // returns the node id of the skipped link  or 0
+  nodeid_t pop() {
+      sorter.clear();
       _pop();
       if (size() && current().type() == kLink) {
         nodeid_t skipped_id = current().id;
@@ -807,12 +898,6 @@ struct Trace {
         return skipped_id;
       }
       return 0;
-  }
-
-  // returns the node id of the skipped link  or 0
-  nodeid_t pop() {
-      sorter.clear();
-      return pop_for_burst();
     }
   //@+node:michael.20141230111914.123: *3* remove
   bool _eat_child(size_t ancestor) {
@@ -883,7 +968,6 @@ struct Trace {
       // transistion_key causes transitions from parent to node
       size_t size_ = src.size();
       reserve_space(size_+sizeof(NodePtr));
-      
       nodeid_t newid = current().page.new_node(size_);
       NodeRef dst(current().page, newid);
       copy_node(dst, src);
@@ -908,6 +992,7 @@ struct Trace {
   //@+node:michael.20141230111914.115: *3* set_leaf
   // sets a new leaf, 
   bool set_leaf(const TempLeaf& leaf, bool with_buckets=true) {
+      cache.clear();
       return current().add(leaf, with_buckets, *this);
     }
 
@@ -919,11 +1004,28 @@ struct Trace {
   //@+node:michael.20150101205559.69: *3* refresh_trace
   // refresh the trace remapping the nodeids
   void refresh_trace() {
+      cache.clear();
       stack.resize(1);
       back = &stack.back();
       current().find(*this);
     }
   //@-others
+  
+  std::string sub;
+  void add_trace_cache() {
+      if (sub.empty())
+        return;
+        
+      stack_t::iterator i;
+      for(i = stack.begin(); i != stack.end(); i++) {
+          if (i->end > CACHE_PREFIX) {
+            i++;
+            break;
+          }
+      }
+  
+      cache.put(sub, stack_t(stack.begin(), i));
+    }
 };
 
 //@+node:michael.20150106224503.61: ** NodeRef-inlines

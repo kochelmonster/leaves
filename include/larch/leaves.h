@@ -177,6 +177,9 @@ public:
   virtual void dump(std::ostream& out) = 0;
 #endif
 
+  virtual void reset_statistics() = 0;
+  virtual void print_statistics() = 0;
+
   static MemoryDatabase* create();
 };
 

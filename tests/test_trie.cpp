@@ -1411,7 +1411,7 @@ struct TestHash {
 
       for(i = 0; i < 6766; i++) {
         if (i % 100 == 0)
-          std::cout << "insert " << i << std::endl;
+          std::cerr << "insert " << i << std::endl;
 
         db->find(number(i, 10));
         db->set_value(value(i), true);
@@ -1756,7 +1756,7 @@ int main(int argc, const char* argv[]) {
   //test_bucket.test_Navigate1();
   //test_bucket.test_Remove1();
   //test_bucket.test_ChangeToHash1();
-  test_hash.test_Burst();
+  //test_hash.test_Burst();
   //test_hash.test_Iterate();
   //test_hash.test_Remove();
   return 0;

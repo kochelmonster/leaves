@@ -298,6 +298,18 @@ struct HashPage {
     }
     return slot;
   }
+  
+  void debug_check_page(const char* msg, size_t pid, NodeRef& rnode) {
+      for(size_t i = 0; i < PAGE_HASH_SIZE; i++) {
+        if (((size_t)slots[i])*BUCKET_ALIGN >= PAGE_SIZE) {
+          std::cerr << "wrong slot: " << msg << ", " << pid << "," 
+                    << ((size_t)slots[i]) 
+                    << " rnode: " << rnode.page.id << ", " << rnode.id
+                    << std::endl;
+        }
+        assert(((size_t)slots[i])*BUCKET_ALIGN < PAGE_SIZE);
+      }
+    }
 };
 
 //@+node:michael.20150116155028.23: *3* Node
@@ -595,6 +607,7 @@ struct CompressedHandler : public NodeHandler {
       Slice old(old_key, size);
       Slice new_(new_key, key.size());
       
+      data->c.child = 0;
       if (trace.free_node(child.page, child.id))
         child.page.defragment(trace);
       
@@ -1123,7 +1136,7 @@ struct BitTrieHandler : public TrieBase {
         TESTPOINT(BitTrieAdd1);
         trace.grow_node_by(4*sizeof(nodeid_t));
       }
-        
+      
       TESTPOINT(BitTrieAdd2);
       trace.add_node(node);
       n = (BitTrie*)trace.parent().node();
@@ -1371,6 +1384,7 @@ struct BucketHandler : public BucketBase {
       memcpy(data_, data->e.data, rnode.size());
         
       trace.change_node(TempHash());
+      trace.sorter.clear();
       
       // adding nodes to hash will not change the page!
       // so we can use static pointers to hash
@@ -1591,24 +1605,23 @@ struct HashHandler : public BucketBase {
   //@+node:michael.20150118002311.5: *4* burst
   void burst(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       TESTPOINT(HashBurst);
-
+      
       trace.sorter.init_hash(data, data->h.pageids, trace);
       if (! trace.sorter.prepare_sort_hash(data))
           collect(rnode, data, trace);
 
-      typedef std::unique_ptr<Sorter> sorter = trace.take_sorter();    
-      size_t count = trace.sorter.size();
-      Sorter::iterator p = trace.sorter.pointers.begin();
-      
-      trace.pop_for_burst();
+      Sorter sorter(trace.sorter);
+      size_t count = sorter.size();
+      Sorter::iterator p = sorter.pointers.begin();
+      trace.pop();
       assert(trace.current().type() == kBitTrie || trace.current().type() == kTrie);
       trace.current().remove_child(trace);
-      
+     
       if (trace.free_node(rnode.page, rnode.id))
         rnode.page.defragment(trace);
-
+        
+      //std::cerr << "burst" << std::endl;
       size_t tsize = trace.size();
-      
       for(size_t i = 0; i < count; i++, p++) {
         char *key, *value;
         psize_t ksize;
@@ -1617,15 +1630,18 @@ struct HashHandler : public BucketBase {
         trace.key.resize(trace.back->end);
         trace.key.append(key, ksize);
         trace.current().find(trace); 
-        trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
+        //trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
+        //std::cerr << "  add: " << trace.size() << ", " << tsize << std::endl;
+        trace.current().add(TempLeaf(Slice(value, vsize)), trace.size()-tsize > 4, trace); 
         trace.resize(tsize);
       }
 
-      PageRef *dst = trace.sorter.hash_pages;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++)
-        trace.map.free_page(*dst);
-
-      trace.sorter.clear();
+      PageRef *dst = sorter.hash_pages;
+      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++) {
+        if (dst->page) {
+          trace.map.free_page(*dst);
+        }
+      }
     }
   //@+node:kochelmonster-.20150117183203.29: *4* remove_bucket
   size_t remove_bucket(char *bucket, size_t slot_size, Trace& trace) {
@@ -1658,6 +1674,7 @@ struct HashHandler : public BucketBase {
       if (!page) {
         PageRef new_page = trace.storage.new_page();
         size_t page_index = trace.sorter.hash / PAGE_HASH_SIZE;
+        assert(page_index < HASH_PAGE_COUNT);
         trace.sorter.hash_pages[page_index] = new_page;
         data->h.pageids[page_index] = new_page.id;
         page = (HashPage*)new_page.page;
@@ -1692,7 +1709,7 @@ struct HashHandler : public BucketBase {
         
       (*slot)++;
       page->count++;
-
+      
       trace.sorter.reset_sorting();
       return result;
     }
@@ -1789,6 +1806,45 @@ struct HashHandler : public BucketBase {
   }
   #endif
   //@-others
+  virtual void check(NodeRef& rnode, Node* data, const char *msg, Trace& trace) {
+      pageid_t *p = data->h.pageids;
+      
+      std::cerr << "check: " << msg << ", " << rnode.page.id << ", " << rnode.id << " = ";
+      bool sep = false;
+      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
+        if (! *p)
+          continue;
+      
+        if (sep)
+          std::cerr << ", ";
+            
+        PageRef pr = trace.map.get_page(*p);
+        HashPage* hp = (HashPage*)pr.page;
+            
+        std::cerr << i << ":" << *p << "(" << (hp != NULL) << ")";
+        sep = true;
+      }
+      std::cerr <<  std::endl;
+      
+      p = data->h.pageids;
+      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
+        if (*p) {
+          PageRef pr = trace.map.get_page(*p);
+          HashPage* hp = (HashPage*)pr.page;
+          
+          /*std::cerr << "check: " << msg 
+                    << ", " << i 
+                    << ", " << *p 
+                    << ", " << pr.id 
+                    << ", " << (size_t)hp
+                    << std::endl;*/
+          
+          if (hp) {
+            hp->debug_check_page(msg, i, rnode);
+          }
+        }
+      }
+    }
 };
 
 static HashHandler hash;
@@ -1883,10 +1939,12 @@ void Sorter::init_hash(Node* data, pageid_t pageids[HASH_PAGE_COUNT],
     
   current_data = data;
   pageid_t *p = pageids;
-  PageRef *dst = hash_pages;
+  PageRef null, *dst = hash_pages;
   for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++, dst++) {
     if (*p)
       *dst = trace.map.get_page(*p);
+    else
+      *dst = null;
   }
 }
 
@@ -1985,6 +2043,7 @@ void Sorter::prev(Trace& trace) {
 }
 
 //@+node:michael.20150118002311.21: ** PageRef
+//@+others
 //@+node:michael.20150118002311.20: *3* dump
 #ifdef DEBUG
 void PageRef::dump(std::ostream& out) {
@@ -2044,6 +2103,23 @@ void PageRef::dump(std::ostream& out) {
   }
 }
 #endif
+//@-others
+
+void PageRef::check(const char *msg, Trace& trace) {
+  if (page->type == kTriePage) {
+    size_t c = count();
+    for(size_t i = 0; i < c; i++) {
+      NodeRef r(*this, i);
+      if (i == 7 || i == 6 || true) {
+        /*std::cerr << "page_check: " << id 
+                  << ", " << r.id
+                  << ", " << (int)r.type() << std::endl;*/
+        r.check(msg, trace);
+      }
+    }
+  }
+}
+
 //@-others
 } // namespace larch_leaves 
 //@-leo

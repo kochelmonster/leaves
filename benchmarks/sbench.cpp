@@ -1,16 +1,18 @@
 //@+leo-ver=5-thin
 //@+node:michael.20150111145018.91: * @file sbench.cpp
+//@@language cplusplus
+//@@tabwidth -2
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
 #include <time.h>
-#if defined(__APPLE__) || defined(linux)
+#if defined(__APPLE__) || defined(__linux__)
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/times.h>
+#include <sys/time.h>
 #else
 #include <windows.h>
 #include <io.h>
@@ -26,6 +28,9 @@
 using namespace larch_leaves;
 
 #if !defined(_WIN32)
+#define _fileno  fileno
+#define _read  read
+
 unsigned long long rd_clock ()
 {
 unsigned int low, high;
@@ -135,6 +140,9 @@ unsigned long long startcycles, stopcycles;
     off += prev;
   } while( off < size );
 
+
+  db->reset_statistics();
+
 //  naskitis.com:
 //  Start the timer. 
   
@@ -149,6 +157,12 @@ unsigned long long startcycles, stopcycles;
   for( prev = off = 0; off < size; off++ )
     if( askitis[off] == '\n' ) {
       Words++;
+      //printf("insert %i\n", Words);
+      if (Words == 308) {
+        askitis[off] = 0;
+        printf("break %s\n", askitis+prev);
+      }
+      
       db->find(Slice(askitis+prev, off-prev));
       if (db->is_valid()) {
         Found++;
@@ -156,7 +170,7 @@ unsigned long long startcycles, stopcycles;
         db->set_value(Slice());
         Inserts++;
       }
-    prev = off + 1;
+      prev = off + 1;
     }
 
 //  naskitis.com:
@@ -196,6 +210,8 @@ unsigned long long startcycles, stopcycles;
 
   //for( idx = 4; idx <= HatMax; idx++ )
   //  fprintf(stderr, "HAT_%.4d Nodes:      %d\n", HatSize[idx], hat->counts[idx]);
+  db->print_statistics();
+  
 
   Words = 0;
   Probes = 0;
@@ -205,6 +221,7 @@ unsigned long long startcycles, stopcycles;
   Inserts = 0;
   Missing = 0;
   Found = 0;
+  db->reset_statistics();
 
 //  search hat array
 
@@ -240,7 +257,7 @@ unsigned long long startcycles, stopcycles;
       else
         Missing++;
         
-    prev = off + 1;
+      prev = off + 1;
     }
 
 //  naskitis.com:
@@ -270,6 +287,7 @@ unsigned long long startcycles, stopcycles;
   //fprintf(stderr, "%-20s %.2f\n", "Pail/Search:", (double)Pail / Searches);
   //fprintf(stderr, "%-20s %.2f\n", "Bucket/Search:", (double)Bucket / Words);
   //fprintf(stderr, "%-20s %.2f\n", "Radix/Search:", (double)Radix / Words);
+  db->print_statistics();
 
   exit(0);
 }

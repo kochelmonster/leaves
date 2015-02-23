@@ -137,13 +137,42 @@ void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   *((pageid_t*)&page->data[ptr->offset]) = page_id;
 }
 //@-others
-
 //@+node:michael.20150110130802.6: ** Trace
 // Trace Methods
 // -------------
 //@+others
 //@+node:michael.20150110130802.8: *3* find
 void Trace::find(const Slice& key_) {
+#if 1
+  if (key_.size() >= CACHE_PREFIX) {
+    sub.assign(key_.data(), CACHE_PREFIX);
+    const stack_t *cstack = cache.get(sub);
+    if (cstack) {
+      stack = *cstack;
+      back = &stack.back();
+      sub.clear();
+    }
+    else {
+      resize(1);
+    }
+  }
+  else {
+    sub.clear();
+    resize(1);
+  }
+   
+  key.assign(key_.data(), key_.size());
+  if (back->node.is_leaf()) {
+    if (back->end < key.size()) {
+      _pop();
+    } else {
+      assert(back->end == key.size());
+      return; // we are already here
+    }
+  }    
+#endif  
+  
+#if 0
   size_t pl = common_prefix(key_.data(), key.data(), 
                             std::min(key_.size(), key.size()));
   std::vector<Transition>::iterator i;
@@ -164,8 +193,35 @@ void Trace::find(const Slice& key_) {
       return; // we are already here
     }
   }
+#endif  
   
+  size_t trace_size = size();
   current().find(*this); // not back.node (pop_back!)
+  
+  add_trace_cache();
+  
+  stat_find_count++;
+  stat_reuse_trace += trace_size;
+  stat_find_trace += size() - trace_size;
+  {
+    std::vector<Transition>::iterator i;
+    for(i = stack.begin()+trace_size; i != stack.end(); i++) {
+      switch(i->node.type()) {
+        case kBitTrie:
+        case kTrie:
+          stat_tries++;
+          break;
+          
+        case kCompressed:
+          stat_compressed++;
+          break;
+          
+        case kLink:
+          stat_link++;
+          break;
+      }
+    }
+  }
 }
 //@+node:michael.20150110130802.7: *3* reserve_space
 #define MAX_PAGE_FREE_SIZE (sizeof(Page)-PAGE_HEADER_SIZE)
@@ -182,7 +238,6 @@ struct BestFitting {
       page->init_sizes(sizes);
     }
 };
-
 
 size_t calc_sizes(const NodeRef& node, BestFitting& bf) {
   if (bf.found)
@@ -223,15 +278,12 @@ void Trace::reserve_space(size_t size_) {
   while (current().page.free_size() < size_) {
     NodeRef root(current().page, 0);    
     BestFitting bf(root.page.page, size_);
-    //try {
-      calc_sizes(root, bf);
-    //}
-    //catch(...) {}
-
+    calc_sizes(root, bf);
+    
     PageRef newpage = storage.new_page();
     NodeRef to_move(root.page, bf.best_id);
-    
     move_node(newpage, to_move);
+      
     root.page.change_to_link(bf.best_id, newpage.id);
     if (!root.page.defragment(*this))
       refresh_trace();
@@ -346,7 +398,18 @@ void NodeStorageInHeap::free_page(const PageRef& page) {
   }
 }
 
-
+void NodeStorageInHeap::check(const char *msg, Trace& trace) {
+  typedef std::vector<_page_ptr>::iterator iter_t;
+  iter_t i = _pages.begin();
+  for(int j = 0; i != _pages.end(); i++, j++) {
+    if (j != 0)
+      continue;
+      
+    if (*i) {
+      PageRef(i->get(), j, j).check(msg, trace);
+    }
+  }
+}
 //@+node:michael.20141215222649.160: *3* class MultiProcessNodeMemoryManager
 //@-others
 //@-others
