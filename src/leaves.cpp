@@ -112,7 +112,7 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
       if (value.size() > MAX_PAGE_VALUE_SIZE)
         throw WrongValue(VALUE_EXEEDS);
 
-      if (trace.set_leaf(TempLeaf(value), false))
+      if (trace.set_leaf(TempLeaf(value)))
         _count++;
     }
   
@@ -137,8 +137,12 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
       std::cerr << "avg tries: " << avg_tries << std::endl;
       std::cerr << "avg compressed: " << avg_compressed << std::endl;
       std::cerr << "avg links: " << avg_link << std::endl;
+      std::cerr << "stat_short_find: " << trace.stat_short_find << std::endl;
+      std::cerr << "stat_wrong_prefix: " << trace.stat_wrong_prefix << std::endl;
       std::cerr << "pages: " << pages() << std::endl;
       std::cerr << "free pages: " << nodes._free_pages << std::endl;
+      std::cerr << "max_page_key: " << trace.max_page_key << std::endl;
+      std::cerr << "min_page_key: " << trace.min_page_key << std::endl;
     }
     
 #ifdef DEBUG

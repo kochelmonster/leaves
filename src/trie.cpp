@@ -102,216 +102,6 @@ struct BitTrie {
               sizeof(nodeid_t)*(count()-child_index));
     }
 };
-//@+node:michael.20150116155028.21: *3* Bucket
-// maximal 10 key/value pairs
-// the format per key value pair is
-// [KeyValueSize(2)][key0(1)]...[keyN(1)][val0(1)]...[valN(1)]
-
-struct KeyValueSize {
-  union {
-    struct {
-      boost::uint16_t vsize:7;
-      boost::uint16_t padd: 9;
-    };
-    struct {
-      boost::uint16_t value_size:6;
-      boost::uint16_t value_is_link:1;
-      boost::uint16_t key_size: 9;
-    };
-  };
-};
-
-struct Bucket {
-  char data[1];
-  
-  // get the key and value of current positions and returns the
-  // position of the next key, value storage
-  static char *get_key_value(char* pos, 
-                             char** key, psize_t* ksize,
-                             char** value, vsize_t* vsize) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      *ksize = kvs.key_size;
-      *vsize = kvs.vsize;
-      pos += sizeof(KeyValueSize);
-  
-      *key = pos;
-      pos += kvs.key_size;
-      *value = pos;
-      return pos + kvs.value_size;
-    }
-    
-  static void set_key_value(char* pos, 
-                            const char* key, psize_t ksize,
-                            const char* value, vsize_t vsize) {
-      KeyValueSize kvs;
-      kvs.vsize = vsize;
-      kvs.key_size = ksize;
-      *(KeyValueSize*)pos = kvs;
-      pos += sizeof(KeyValueSize);
-  
-      memcpy(pos, key, kvs.key_size);
-      pos += kvs.key_size;
-
-      memcpy(pos, value, kvs.value_size);
-    }
-    
-  static char *get_key(char* pos, char** key, psize_t* ksize) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      *ksize = kvs.key_size;
-      pos += sizeof(KeyValueSize);
-      *key = pos;
-      return pos + kvs.key_size + kvs.value_size;
-    }
-
-  static char* value(char* pos, vsize_t* vsize) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      *vsize = kvs.vsize;
-      return pos + sizeof(KeyValueSize) + kvs.key_size;
-    }
-
-  static char *next(char* pos) {
-      KeyValueSize kvs = *(KeyValueSize*)pos;
-      return pos + sizeof(KeyValueSize) + kvs.key_size +  kvs.value_size;
-    }
-    
-  static size_t needed_size(size_t ksize, size_t vsize) {
-      return sizeof(KeyValueSize) + ksize + (vsize & 0x3f);
-    }
-    
-  // returns the real size of the bucket <= node.size()
-  size_t size(size_t count) {
-      char* p = data;
-      for(size_t i = 0; i < count; i++)
-        p = next(p);
-      
-      return p - data;
-    }
-};
-
-//@+node:michael.20150116155028.22: *3* Hash
-// a link to a hash Page
-
-struct Hash {
-  pageid_t pageids[HASH_PAGE_COUNT];
-};
-
-
-/*
-  A Hash table page.
-  
-  This is one page inside a collection of 32 pages forming a hashtable.
-  Each hash page has a table of 128 entries => the complete hash table
-  has 128*32 = 4096 slots.
-  
-  Every slot points to a BucketNode. Because each BucketNode is aligned
-  on a 64 byte address a 8byte value (256*64 == 16384 > 8192) is sufficent
-  to address all slots on a page.
-
-  every slot starts with a count byte (containing the count of buckets)
-  followed by a Bucket Node.
-  
-  Like the Node Page BucketNodes grow from bottom up.
-*/
-
-#define HASHPAGE_HEADER (3*sizeof(boost::uint16_t)+sizeof(boost::uint8_t)*(PAGE_HASH_SIZE))
-
-struct HashPage {
-  typedef boost::uint8_t ptr; 
-  union {
-    char data[PAGE_SIZE];
-    struct {
-      boost::uint16_t type;
-      boost::uint16_t count;     // node count
-      boost::uint16_t end;
-      ptr slots[PAGE_HASH_SIZE]; // pages hash table 
-    };
-  };
-
-  void init() {
-      type = kHashPage;
-      count = 0;
-      end = sizeof(data);
-      memset(slots, 0, sizeof(slots));
-    }
-    
-  char* get_slot(size_t slot_id) {
-      assert(slot_id < PAGE_HASH_SIZE);
-      ptr slot = slots[slot_id];
-      if (!slot)
-        return NULL; // slot does not exist yet
-        
-      assert(((size_t)slot)*BUCKET_ALIGN < PAGE_SIZE);
-      return &data[((size_t)slot)*BUCKET_ALIGN];
-    }
-  
-  char* new_slot(size_t slotid, size_t size) {
-    assert(size % BUCKET_ALIGN == 0);
-  
-    if (end < HASHPAGE_HEADER + size)
-      return NULL; // overflow
-  
-    end -= (boost::uint16_t)size;
-    slots[slotid] = (ptr)(end / BUCKET_ALIGN);
-    char *slot = &data[end];
-    *slot = 0;
-    return slot;
-  }
-  
-  void remove_slot(size_t slotid, size_t size) {
-      char* slot = &data[((size_t)slots[slotid])*BUCKET_ALIGN];
-      slots[slotid] = 0;
-      grow_slot(slot, size, 0);
-    }
-  
-  char* grow_slot(char* slot, size_t old_size, size_t new_size) {
-    if (new_size == old_size)
-      return slot;
-  
-    assert(new_size % BUCKET_ALIGN == 0);
-    assert(old_size % BUCKET_ALIGN == 0);
-    assert(slot - data > 0);
-    assert(slot - data < PAGE_SIZE);
-    
-    int delta = (int)(new_size - old_size);
-    
-    if (old_size < new_size) {
-      if (end < HASHPAGE_HEADER + delta)
-        return NULL; // overflow
-      
-      memmove(&data[end-delta], &data[end], slot-&data[end]+old_size);
-    }
-    else {
-      memmove(&data[end-delta], &data[end], slot-&data[end]+new_size);
-    }
-    
-    ptr slot_ptr = (ptr)((slot - data) / BUCKET_ALIGN);
-    end -= delta;
-    slot -= delta;
-    delta /= BUCKET_ALIGN;
-    
-    ptr* p = slots;
-    for(size_t i = 0; i < PAGE_HASH_SIZE; i++, p++) {
-      if (*p && *p <= slot_ptr)
-        *p -= delta;
-
-      assert(*p < PAGE_SIZE / BUCKET_ALIGN);
-    }
-    return slot;
-  }
-  
-  void debug_check_page(const char* msg, size_t pid, NodeRef& rnode) {
-      for(size_t i = 0; i < PAGE_HASH_SIZE; i++) {
-        if (((size_t)slots[i])*BUCKET_ALIGN >= PAGE_SIZE) {
-          std::cerr << "wrong slot: " << msg << ", " << pid << "," 
-                    << ((size_t)slots[i]) 
-                    << " rnode: " << rnode.page.id << ", " << rnode.id
-                    << std::endl;
-        }
-        assert(((size_t)slots[i])*BUCKET_ALIGN < PAGE_SIZE);
-      }
-    }
-};
-
 //@+node:michael.20150116155028.23: *3* Node
 struct Node {
   union {
@@ -320,8 +110,6 @@ struct Node {
     Trie t;
     BitTrie b;
     pageid_t p;
-    Bucket e;
-    Hash h;
   };
 };
 //@-others
@@ -353,37 +141,6 @@ struct LeafBase : public NodeHandler {
     }
 };
 
-struct BucketBase : public LeafBase {
-  virtual void sort(NodeRef& rnode, Node* data, Trace& trace) = 0;
-
-  bool is_valid(const NodeRef& rnode, const Trace& trace) const {
-      return trace.sorter.is_valid(trace.current_key());
-    }
-    
-  Slice get_value(const NodeRef& rnode, Node* data, Trace& trace) {
-      return trace.sorter.get_value();
-    }  
-
-  void prev(NodeRef& rnode, Node* data, Trace& trace) {
-      sort(rnode, data, trace);
-      trace.sorter.prev(trace);
-    }
-  
-  void next(NodeRef& rnode, Node* data, Trace& trace) {
-    sort(rnode, data, trace);
-    trace.sorter.next(trace);
-  }
-  
-  void first(NodeRef& rnode, Node* data, Trace& trace) {
-    sort(rnode, data, trace);
-    trace.sorter.first(trace);
-  }
-
-  void last(NodeRef& rnode, Node* data, Trace& trace) {
-      sort(rnode, data, trace);
-      trace.sorter.last(trace);
-    }
-};
 
 struct TrieBase : public NodeHandler {
   size_t get_len(const NodeRef& rnode) {
@@ -393,8 +150,7 @@ struct TrieBase : public NodeHandler {
   virtual void add_node(Node* data, trieindex_t index, const TempNode& node, 
                         Trace& trace) = 0;
 
-  bool add(const TempNode& leaf, bool with_buckets, NodeRef& rnode, 
-           Node* data, Trace& trace) {
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       Slice key(trace.current_key());
   
       switch(key.size()) {
@@ -413,7 +169,7 @@ struct TrieBase : public NodeHandler {
           TESTPOINT(TrieBaseAdd2);
           TempCompressed compressed(key.advance(1));
           add_node(data, key[0], compressed, trace);
-          trace.current().add(leaf, with_buckets, trace);
+          trace.current().add(leaf, trace);
           break;
           }
       }
@@ -590,60 +346,20 @@ struct CompressedHandler : public NodeHandler {
       }
     }
   //@+node:michael.20141230111914.87: *4* add
-  bool change_to_bucket(const Slice& key, const TempNode& leaf, NodeRef& rnode, 
-                        Node* data, Trace& trace) {
-                        
-    NodeRef child(rnode.page, data->c.child);
-    if (child.type() == kLeaf) {
-      // change to bucket
-      char new_key[MAX_KEY_SIZE_64];
-      char old_key[MAX_KEY_SIZE_64];
-      char value_buffer[MAX_PAGE_VALUE_SIZE];
-      size_t size = rnode.len();
-      TempLeaf child_leaf(Slice(value_buffer, child.len()));
-      memcpy(value_buffer, child.node(), child.len() & 0x3f);
-      memcpy(new_key, key.data(), key.size());
-      memcpy(old_key, data->c.data, size);
-      Slice old(old_key, size);
-      Slice new_(new_key, key.size());
-      
-      data->c.child = 0;
-      if (trace.free_node(child.page, child.id))
-        child.page.defragment(trace);
-      
-      trace.change_node(TempBucket());
-      
-      trace.cut_key();
-      trace.key.append(old.data(), old.size());
-      trace.current().find(trace);
-      trace.current().add(child_leaf, true, trace);
-      
-      trace.cut_key();
-      trace.key.append(new_.data(), new_.size());
-      trace.current().find(trace);
-      trace.current().add(leaf, true, trace); 
-      return true;
-    }
-    return false;
-  }
-    
-  bool add(const TempNode& leaf, bool with_buckets, NodeRef& rnode, 
-           Node* data, Trace& trace) {
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       Slice key(trace.current_key());
       size_t size = rnode.len();
       
       if (!data->c.child) {
         // A new leaf with some rest key is inserted
         TESTPOINT(CompressAddNew);
+        if (size != key.size()) {
+          std::cerr << "wrong size: " << size << "!=" << key.size() << std::endl;
+        }
         assert(size == key.size());
         trace.add_node(leaf);
         trace.parent().node()->c.child = trace.child_of_parent();
         return true;
-      }
-      
-      if (with_buckets) {
-        if (change_to_bucket(key, leaf, rnode, data, trace))
-          return true;    
       }
       
       size_t prefix_size = common_prefix(key.data(), data->c.data,
@@ -679,7 +395,7 @@ struct CompressedHandler : public NodeHandler {
         reinsert(rest_me, child_id, first, trace);
       }
 
-      trace.current().add(leaf, with_buckets, trace);
+      trace.current().add(leaf, trace);
       return true;
     }
   //@+node:michael.20150106224503.21: *4* eat_child
@@ -733,6 +449,12 @@ struct CompressedHandler : public NodeHandler {
     }
   #endif
   //@-others
+  
+  Slice append(NodeRef& rnode, Node* data, nodeid_t child, Slice& key) {
+      assert(data->c.child == child);
+      memcpy((char*)key.data()+key.size(), data->c.data, rnode.len());
+      return Slice(key.data(), key.size()+rnode.len());
+    }
 };
 
 static CompressedHandler compressed;
@@ -759,8 +481,7 @@ struct LinkHandler : public LeafBase {
       link_node(rnode, data, trace).last(trace);
     }
     
-  bool add(const TempNode& leaf, bool with_buckets, NodeRef& rnode, 
-           Node* data, Trace& trace) {
+  bool add(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
       assert(0); // may never be called
       return true;
     }
@@ -977,6 +698,20 @@ struct TrieHandler : public TrieBase {
     }
   #endif
   //@-others
+  
+  Slice append(NodeRef& rnode, Node* data, nodeid_t child, Slice& key) {
+      if (child == rnode.extra())
+        return key;
+        
+      Trie *n = &data->t;
+      for(size_t i = 0; i < 64; i++) {
+        if (n->children[i] == child) {
+          ((char*)key.data())[key.size()] = (char)i;
+          return Slice(key.data(), key.size()+1);
+        }
+      }
+      assert(0);
+    }
 };
 
 static TrieHandler trie;
@@ -1233,6 +968,21 @@ struct BitTrieHandler : public TrieBase {
     }
   #endif
   //@-others
+  
+  Slice append(NodeRef& rnode, Node* data, nodeid_t child, Slice& key) {
+      if (child == rnode.extra())
+        return key;
+        
+      BitTrie *n = &data->b;
+      for(int b = n->first_bit(); b >= 0; b = n->next_bit(b)) {
+        int ci = n->get_child_index(b);
+        if (n->children[ci] == child) {
+          ((char*)key.data())[key.size()] = (char)b;
+          return Slice(key.data(), key.size()+1);
+        }
+      }
+      assert(0);
+    }
 };
 
 static BitTrieHandler bittrie;
@@ -1267,8 +1017,7 @@ struct LeafHandler : public LeafBase {
       trace.pop(); // back to parent
     }
   //@+node:michael.20141230111914.77: *4* add
-  bool add(const TempNode& end, bool with_buckets, NodeRef& rnode, 
-           Node* data, Trace& trace) {
+  bool add(const TempNode& end, NodeRef& rnode, Node* data, Trace& trace) {
       Slice key(trace.current_key());
       
       if (key.size() == 0) {
@@ -1288,14 +1037,12 @@ struct LeafHandler : public LeafBase {
         trace.add_node(compressed);
         BitTrie* pn = &trace.parent().node()->b;
         pn->add(key[0], trace.child_of_parent());
-        trace.current().add(end, with_buckets, trace);
-        return true; //debug
       }
       else {
         TESTPOINT(LeafAdd2);
       }
 
-      trace.current().add(end, with_buckets, trace);
+      trace.current().add(end, trace);
       return true;
     }
   //@+node:michael.20150106224503.26: *4* eat_child
@@ -1322,538 +1069,10 @@ struct LeafHandler : public LeafBase {
 };
 
 static LeafHandler leaf;
-//@+node:michael.20150116155028.16: *3* Bucket
-// A single bucket node
-struct BucketHandler : public BucketBase {
-  //@+others
-  //@+node:kochelmonster-.20150117183203.5: *4* find
-  void find(NodeRef& rnode, Node* data, Trace& trace) {
-      Slice key(trace.current_key());
-      psize_t count = rnode.extra();
-      
-      if (trace.sorter.current_data == data && trace.sorter.size() == count) {
-        trace.sorter.find(key);
-        return;
-      }
-      
-      char* pos = data->e.data;
-      char* item_key;
-      psize_t ksize;
-      for(psize_t i = 0; i < count; i++) {
-        char *old_pos = pos;
-        pos = Bucket::get_key(pos, &item_key, &ksize);
-        if (key.size() == ksize && memcmp(item_key, key.data(), ksize) == 0) {
-          trace.sorter.index = 0;
-          trace.sorter.pointers[0] = old_pos;
-          return;
-        }
-      }
-    }
-  //@+node:kochelmonster-.20150117183203.4: *4* sort
-  void sort(NodeRef& rnode, Node* data, Trace& trace) {
-      size_t count = rnode.extra();
-      if (trace.sorter.prepare_sort_bucket(data, count))
-        return;
-
-      Slice key(trace.current_key());
-      bool do_find = trace.sorter.is_valid(key);
-      char *pos = data->e.data;  
-      char **dst = &trace.sorter.pointers[0];
-      
-      size_t i = 0;
-      while(true) {
-        *dst++ = pos;
-        if (++i >= count)
-          break; // don't do an unnecessary Bucket::next
-        pos = Bucket::next(pos);
-      }
-
-      trace.sorter.sort();
-      if (do_find)
-        trace.sorter.find(key);
-    }
-  //@+node:kochelmonster-.20150117183203.6: *4* change_to_hash
-  void change_to_hash(const TempNode& leaf, NodeRef& rnode, 
-                      Node* data, Trace& trace) {
-      Slice key(trace.current_key());
-      std::string current_key(key.data(), key.size()); 
-      
-      // save the bucket data
-      psize_t count = rnode.extra();
-      char data_[MAX_BUCKET_SIZE];
-      memcpy(data_, data->e.data, rnode.size());
-        
-      trace.change_node(TempHash());
-      trace.sorter.clear();
-      
-      // adding nodes to hash will not change the page!
-      // so we can use static pointers to hash
-      NodeRef& current = trace.current();
-      data = current.node();
-      NodeHandler *handler = current.handler;
-      
-      // reinsert the bucket data
-      char *p = data_;
-      for(psize_t i = 0; i < count; i++) {
-        char *key, *value;
-        psize_t ksize;
-        vsize_t vsize;
-        p = Bucket::get_key_value(p, &key, &ksize, &value, &vsize);
-        
-        trace.key.resize(trace.back->end);
-        trace.key.append(key, ksize);
-        handler->find(current, data, trace);
-        handler->add(TempLeaf(Slice(value, vsize)), true, current, data, trace);
-      }                                   
-
-      // add the new key        
-      trace.cut_key();
-      trace.key.append(current_key);
-      handler->find(current, data, trace);
-      trace.current().add(leaf, true, trace);
-    }
-  //@+node:kochelmonster-.20150117183203.7: *4* remove_bucket
-  void remove_bucket(NodeRef& rnode, Node* data, Trace& trace) {
-      char *p1 = trace.sorter.pointers[trace.sorter.index];
-      char *p2 = Bucket::next(p1);
-      size_t node_size = rnode.size();
-      memmove(p1, p2, node_size - (p2 - data->e.data));
-    }
-  //@+node:kochelmonster-.20150117183203.8: *4* add
-  bool add(const TempNode& leaf, bool with_buckets, NodeRef& rnode, 
-           Node* data, Trace& trace) {
-      Slice key(trace.current_key());
-      bool result = true;
-      size_t count = rnode.extra();
-      
-      if (trace.sorter.is_valid(key)) {
-        // the key is inside the bucket
-        remove_bucket(rnode, data, trace);
-        result = false;
-      }
-      else if (count == MAX_BUCKET_COUNT) {
-        change_to_hash(leaf, rnode, data, trace);
-        return true;
-      }
-      
-      size_t bsize = data->e.size(count);
-      size_t kv_size = Bucket::needed_size(key.size(), leaf.len());
-      size_t new_node_size = pad<BUCKET_ALIGN>(bsize+kv_size);
-      size_t node_size = rnode.size();
-      
-      if (new_node_size > node_size) 
-        trace.grow_node_by((int)(new_node_size-node_size));
-        
-      data = trace.current().node();
-      char* p = data->e.data;
-      for(psize_t i = 0; i < count; i++)
-        p = Bucket::next(p);
-        
-      Bucket::set_key_value(p, key.data(), (psize_t)key.size(), 
-                            leaf.node()->l.data, (vsize_t)leaf.len());
-     
-      trace.current().set_extra((nodeid_t)count+1);
-      
-      trace.sorter.reset_sorting();
-      return result;
-    }
-  //@+node:kochelmonster-.20150117183203.9: *4* remove_child
-  bool remove_child(NodeRef& rnode, Node* data, Trace& trace) {
-      size_t count = rnode.extra();
-      if (count == 1) // no clear necessary (trace.remove will call pop)
-        return false;
-        
-      remove_bucket(rnode, data, trace);
-      trace.current().set_extra((nodeid_t)--count);
-      trace.sorter.clear();
-      
-      size_t bsize = data->e.size(count);
-      size_t new_node_size = pad<BUCKET_ALIGN>(bsize);
-      size_t node_size = rnode.size();
-      if (new_node_size != node_size) 
-        trace.grow_node_by((int)(new_node_size-node_size));    
-      
-      return true;
-    }
-  //@+node:kochelmonster-.20150117183203.10: *4* eat_child
-  bool eat_child(NodeRef& rnode, Node* data) {
-      return false;
-    }
-  //@+node:kochelmonster-.20150117183203.11: *4* dump
-  #ifdef DEBUG
-  void dump(Page* page, nodeid_t nodeid, std::ostream& out) {
-    const char* t3 = "            ";
-    NodePtr *ptr = page->node_ptr + nodeid;
-    size_t count = ptr->extra;
-
-    out << t3 << "type:   bucket" << std::endl
-        << t3 << "count:  " << count << std::endl;
-        
-    char* pos = page->get_node(nodeid)->e.data;
-    char *key, *value;
-    psize_t ksize;
-    vsize_t vsize;
-    for(psize_t i = 0; i < count; i++) {
-      pos = Bucket::get_key_value(pos, &key, &ksize, &value, &vsize);
-      
-      out << t3 << "key" << (int)i << ":   ";
-      dump_key(key, ksize, out);
-      out << std::endl;
-      
-      std::string val(value, vsize&0x3f);
-      out << t3 << "value" << (int)i << ": " << val.c_str() << std::endl;
-    }
-  }
-  #endif
-  //@-others
-};
-
-static BucketHandler bucket;
-//@+node:kochelmonster-.20150117183203.20: *3* Hash
-// A hash node
-struct HashHandler : public BucketBase {
-  //@+others
-  //@+node:michael.20150118002311.4: *4* get_slot
-  char* get_slot(HashPage** page, size_t* slotid, Trace& trace) {
-      size_t page_index = trace.sorter.hash / PAGE_HASH_SIZE;
-      *slotid = trace.sorter.hash % PAGE_HASH_SIZE;
-      
-      assert(page_index >= 0);
-      assert(page_index < HASH_PAGE_COUNT);
-      PageRef& page_ = trace.sorter.hash_pages[page_index];
-      *page = (HashPage*)page_.page;
-      if (!*page) 
-        return NULL;
-      
-      return (*page)->get_slot(*slotid);
-    }
-  //@+node:kochelmonster-.20150117183203.22: *4* find
-  void find(NodeRef& rnode, Node* data, Trace& trace) {
-      Slice key(trace.current_key());
-      
-      trace.sorter.init_hash(data, data->h.pageids, trace);
-      trace.sorter.hash = calc_hash(key.data(), key.size()) % HASH_SIZE;
-      
-      HashPage *p;
-      size_t slotid;
-      char *slot = get_slot(&p, &slotid, trace);
-      
-      if (! slot)
-        return;
-
-      size_t count = *(slot++);
-      char* item_key;
-      psize_t ksize;
-      for(psize_t i = 0; i < count; i++) {
-        char *old_pos = slot;
-        assert(slot - (char*)p < PAGE_SIZE);
-        slot = Bucket::get_key(slot, &item_key, &ksize);
-        if (key.size() == ksize && memcmp(item_key, key.data(), ksize) == 0) {
-          trace.sorter.reset_sorting();
-          trace.sorter.index = 0;
-          trace.sorter.pointers[0] = old_pos;
-          return;
-        }
-      }
-    }
-  //@+node:kochelmonster-.20150117183203.23: *4* sort
-  void collect(NodeRef& rnode, Node* data, Trace& trace) {
-      size_t count = 0;
-      
-      // fill pointers
-      PageRef* p = trace.sorter.hash_pages;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
-        HashPage* page = (HashPage*)p->page;
-        if (!page)
-          continue;
-      
-        size_t index = count;
-        count += page->count;
-        trace.sorter.pointers.resize(count);    
-        Sorter::iterator dst = trace.sorter.pointers.begin() + index;
-        
-        for(size_t j = 0; j < PAGE_HASH_SIZE; j++) {
-          char* bucket = page->get_slot(j);
-          if (!bucket)
-            continue;
-            
-          size_t k = 0, count = *bucket++;
-          while(true) {
-            *dst++ = bucket;
-            if (++k >= count)
-              break; // don't do an unnecessary Bucket::next
-            bucket = Bucket::next(bucket);
-          }
-        }
-      }
-    }
-
-  void sort(NodeRef& rnode, Node* data, Trace& trace) {
-      trace.sorter.init_hash(data, data->h.pageids, trace);
-      if (trace.sorter.prepare_sort_hash(data))
-        return;
-
-      Slice key(trace.current_key());
-      bool do_find = trace.sorter.is_valid(key);
-
-      collect(rnode, data, trace);
-      
-      trace.sorter.sort();
-      if (do_find)
-        trace.sorter.find(key);
-    }
-  //@+node:michael.20150118002311.5: *4* burst
-  void burst(const TempNode& leaf, NodeRef& rnode, Node* data, Trace& trace) {
-      TESTPOINT(HashBurst);
-      
-      trace.sorter.init_hash(data, data->h.pageids, trace);
-      if (! trace.sorter.prepare_sort_hash(data))
-          collect(rnode, data, trace);
-
-      Sorter sorter(trace.sorter);
-      size_t count = sorter.size();
-      Sorter::iterator p = sorter.pointers.begin();
-      trace.pop();
-      assert(trace.current().type() == kBitTrie || trace.current().type() == kTrie);
-      trace.current().remove_child(trace);
-     
-      if (trace.free_node(rnode.page, rnode.id))
-        rnode.page.defragment(trace);
-        
-      //std::cerr << "burst" << std::endl;
-      size_t tsize = trace.size();
-      for(size_t i = 0; i < count; i++, p++) {
-        char *key, *value;
-        psize_t ksize;
-        vsize_t vsize;
-        Bucket::get_key_value(*p, &key, &ksize, &value, &vsize);
-        trace.key.resize(trace.back->end);
-        trace.key.append(key, ksize);
-        trace.current().find(trace); 
-        //trace.current().add(TempLeaf(Slice(value, vsize)), false, trace); 
-        //std::cerr << "  add: " << trace.size() << ", " << tsize << std::endl;
-        trace.current().add(TempLeaf(Slice(value, vsize)), trace.size()-tsize > 4, trace); 
-        trace.resize(tsize);
-      }
-
-      PageRef *dst = sorter.hash_pages;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++) {
-        if (dst->page) {
-          trace.map.free_page(*dst);
-        }
-      }
-    }
-  //@+node:kochelmonster-.20150117183203.29: *4* remove_bucket
-  size_t remove_bucket(char *bucket, size_t slot_size, Trace& trace) {
-      char *p1 = trace.sorter.pointers[trace.sorter.index];
-      char *p2 = Bucket::next(p1);
-      memmove(p1, p2, slot_size - (p2 - bucket));
-      return p2 - p1;
-    }
-  //@+node:kochelmonster-.20150117183203.30: *4* add
-  bool add(const TempNode& leaf, bool with_buckets, NodeRef& rnode, 
-           Node* data, Trace& trace) {
-      Slice key(trace.current_key());
-      bool result = true;
-      size_t slotid, bucket_size = 0, slot_size = 0, count = 0;
-      HashPage *page;
-      char *slot = get_slot(&page, &slotid, trace);
-      
-      if (slot) {
-        count = *slot;
-        bucket_size = ((Bucket*)(slot+1))->size(count) + 1; // +1 = count byte
-        slot_size = pad<BUCKET_ALIGN>(bucket_size);
-      }
-      
-      if (trace.sorter.is_valid(key)) {
-        // the key is inside the hash
-        remove_bucket(slot+1, slot_size, trace);
-        result = false;
-      }
-
-      if (!page) {
-        PageRef new_page = trace.storage.new_page();
-        size_t page_index = trace.sorter.hash / PAGE_HASH_SIZE;
-        assert(page_index < HASH_PAGE_COUNT);
-        trace.sorter.hash_pages[page_index] = new_page;
-        data->h.pageids[page_index] = new_page.id;
-        page = (HashPage*)new_page.page;
-        page->init();
-      }
-      
-      size_t kv_size = Bucket::needed_size(key.size(), leaf.len());
-      
-      if (! slot) {
-        bucket_size = kv_size+1;
-        slot_size = pad<BUCKET_ALIGN>(bucket_size);
-        slot = page->new_slot(slotid, slot_size);
-      }
-      else {
-        size_t new_slot_size = pad<BUCKET_ALIGN>(bucket_size + kv_size);
-        slot = page->grow_slot(slot, slot_size, new_slot_size); 
-      }
-      
-      if (!slot) {
-        // hash overflow
-        burst(leaf, rnode, data, trace);
-        return result;
-      }
-       
-      char *p = slot+1;
-      // go to end of 
-      for(psize_t i = 0; i < count; i++)
-        p = Bucket::next(p);
-        
-      Bucket::set_key_value(p, key.data(), (psize_t)key.size(), 
-                            leaf.node()->l.data, (vsize_t)leaf.len());
-        
-      (*slot)++;
-      page->count++;
-      
-      trace.sorter.reset_sorting();
-      return result;
-    }
-  //@+node:kochelmonster-.20150117183203.28: *4* change_to_bucket
-  void change_to_bucket(NodeRef& rnode, Node* data, Trace& trace) {
-      Slice ck(trace.current_key());
-      std::string current_key(ck.data(), ck.size());
-      
-      sort(rnode, data, trace);
-      size_t count = trace.sorter.size();
-
-      // copy the pointers beause bucket will use the sorter
-      PageRef pages[HASH_PAGE_COUNT];
-      PageRef *dst = pages, *src = trace.sorter.hash_pages;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++)
-        *dst++ = *src++;
-      
-      char *pointers[8];
-      memcpy(pointers, &trace.sorter.pointers[0], 8*sizeof(char*));
-      
-      trace.sorter.clear();
-      trace.change_node(TempBucket());
-      
-      char **p = pointers;
-      for(size_t i = 0; i < count; i++, p++) {
-        char *key, *value;
-        psize_t ksize;
-        vsize_t vsize;
-        Bucket::get_key_value(*p, &key, &ksize, &value, &vsize);
-        
-        trace.cut_key();
-        trace.key.append(key, ksize);
-        trace.current().find(trace);
-        trace.current().add(TempLeaf(Slice(value, vsize)), true, trace);
-      }
-
-      trace.cut_key();
-      trace.key.append(current_key);
-      trace.current().find(trace);
-        
-      PageRef null;
-      dst = pages;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++) {
-        if (dst->page) {
-          trace.map.free_page(*dst);
-          *dst = null;
-        }
-      }
-    }
-  //@+node:kochelmonster-.20150117183203.31: *4* remove_child
-  bool remove_child(NodeRef& rnode, Node* data, Trace& trace) {
-      size_t slotid, count, bucket_size, slot_size;
-      HashPage *page;
-      char *slot = get_slot(&page, &slotid, trace);
-      count = *slot;
-      bucket_size = ((Bucket*)(slot+1))->size(count) + 1; // +1 = count byte
-      slot_size = pad<BUCKET_ALIGN>(bucket_size);
-      
-      if (count == 1) {
-        page->remove_slot(slotid, slot_size);
-      }
-      else {
-        size_t delta = remove_bucket(slot+1, slot_size, trace);
-        size_t new_slot_size = pad<BUCKET_ALIGN>(bucket_size-delta);
-        slot = page->grow_slot(slot, slot_size, new_slot_size);
-        (*slot)--;
-      }
-      
-      page->count--;
-      if (page->count == 0) {
-        size_t page_index = trace.sorter.hash / PAGE_HASH_SIZE;
-        data->h.pageids[page_index] = 0;
-        trace.map.free_page(trace.sorter.hash_pages[page_index]);
-        trace.sorter.hash_pages[page_index] = PageRef();
-      }
-      
-      count = trace.sorter.size() - 1;
-      trace.sorter.remove(trace);
-      
-      if (count <= 8)
-        change_to_bucket(rnode, data, trace);
-      
-      return true;
-    }
-  //@+node:kochelmonster-.20150117183203.32: *4* eat_child
-  bool eat_child(NodeRef& rnode, Node* data) {
-      return false;
-    }
-  //@+node:kochelmonster-.20150117183203.33: *4* dump
-  #ifdef DEBUG
-  void dump(Page* page, nodeid_t nodeid, std::ostream& out) {
-    const char* t3 = "            ";
-    out << t3 << "type:   hash" << std::endl;
-  }
-  #endif
-  //@-others
-  virtual void check(NodeRef& rnode, Node* data, const char *msg, Trace& trace) {
-      pageid_t *p = data->h.pageids;
-      
-      std::cerr << "check: " << msg << ", " << rnode.page.id << ", " << rnode.id << " = ";
-      bool sep = false;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
-        if (! *p)
-          continue;
-      
-        if (sep)
-          std::cerr << ", ";
-            
-        PageRef pr = trace.map.get_page(*p);
-        HashPage* hp = (HashPage*)pr.page;
-            
-        std::cerr << i << ":" << *p << "(" << (hp != NULL) << ")";
-        sep = true;
-      }
-      std::cerr <<  std::endl;
-      
-      p = data->h.pageids;
-      for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++) {
-        if (*p) {
-          PageRef pr = trace.map.get_page(*p);
-          HashPage* hp = (HashPage*)pr.page;
-          
-          /*std::cerr << "check: " << msg 
-                    << ", " << i 
-                    << ", " << *p 
-                    << ", " << pr.id 
-                    << ", " << (size_t)hp
-                    << std::endl;*/
-          
-          if (hp) {
-            hp->debug_check_page(msg, i, rnode);
-          }
-        }
-      }
-    }
-};
-
-static HashHandler hash;
 //@-others
 
 NodeHandler* NodeHandler::handlers[7] = {
   &leaf,
-  &hash,
-  &bucket,
   &link,
   &compressed,
   &trie,
@@ -1903,145 +1122,6 @@ TempCompressed::TempCompressed(const Slice& part) {
   memcpy(n->data, part.data(), part.size());
   n->child = 0;
 }
-
-TempBucket::TempBucket() {
-  _type = kBucket;
-  _node = (Node*)_data;
-  _size = BUCKET_ALIGN;
-  set_extra(0);
-}
-
-TempHash::TempHash() {
-  _type = kHash;
-  _node = (Node*)_pageids;
-  _size = sizeof(Hash);
-  set_extra(0);
-  memset(node(), 0, sizeof(Hash));
-}
-//@+node:michael.20150118002311.7: ** Sorter
-int compare_slot(const char *a, const char* b) {
-  KeyValueSize kvsa = *(KeyValueSize*)a;
-  KeyValueSize kvsb = *(KeyValueSize*)b;
-  a += sizeof(KeyValueSize);
-  b += sizeof(KeyValueSize);
-  
-  int result = memcmp(a, b, std::min(kvsa.key_size, kvsb.key_size));
-  if (result == 0)
-    return kvsa.key_size < kvsb.key_size;
-
-  return result < 0;
-}
-
-void Sorter::init_hash(Node* data, pageid_t pageids[HASH_PAGE_COUNT],
-                       Trace& trace) {
-  if (current_data == data)
-    return;
-    
-  current_data = data;
-  pageid_t *p = pageids;
-  PageRef null, *dst = hash_pages;
-  for(size_t i = 0; i < HASH_PAGE_COUNT; i++, p++, dst++) {
-    if (*p)
-      *dst = trace.map.get_page(*p);
-    else
-      *dst = null;
-  }
-}
-
-void Sorter::sort() {
-  index = 0;
-  std::sort(pointers.begin(), pointers.end(), compare_slot);
-}
-
-bool Sorter::is_valid(const Slice& key) const {
-  if (index >= size())
-    return false;
-
-  char *key_, *p = pointers[index];
-  psize_t ksize;
-  
-  if (!p)
-    return false;
-    
-  Bucket::get_key(p, &key_, &ksize);
-  return ksize == key.size() && memcmp(key.data(), key_, ksize) == 0;
-}
-
-Slice Sorter::get_value() const {
-    vsize_t vsize;
-    char *value = Bucket::value(pointers[index], &vsize);
-    return Slice(value, vsize);
-}
-
-size_t Sorter::find(const Slice& key) {
-  char key_buffer[MAX_KEY_SIZE_64+sizeof(KeyValueSize)];
-  ((KeyValueSize*)key_buffer)->key_size = key.size();
-  memcpy(key_buffer+sizeof(KeyValueSize), key.data(), key.size());
-  index = std::lower_bound(pointers.begin(), pointers.end(), 
-                           key_buffer, compare_slot) - pointers.begin();
-  return index;
-}
-
-void Sorter::add_key_to_trace(Trace& trace) {
-  char *key;
-  psize_t size;
-  Bucket::get_key(pointers[index], &key, &size);
-  trace.cut_key();
-  trace.key.append(key, size);
-  hash = calc_hash(key, size) % HASH_SIZE;
-}
-
-void Sorter::remove(Trace& trace) {
-  Slice key(trace.current_key());
-  if (is_valid(key)) {
-    pointers.erase(pointers.begin()+index);
-    index = size();
-  }
-  else {
-    reset_sorting();
-  }
-}
-
-void Sorter::next(Trace& trace) {
-  Slice key(trace.current_key());
-  if (is_valid(key)) {
-    if (index == size()-1) {
-      trace.parent_next();
-      return;
-    }
-    index++;
-  } 
-    // after the last item
-  else if (find(key) >= size()) {
-    trace.parent_next();
-    return;
-  }
-  trace.cut_key();
-  add_key_to_trace(trace);
-}
-    
-void Sorter::prev(Trace& trace) {
-  Slice key(trace.current_key());
-  if (is_valid(key)) {
-    if (index == 0) {
-      trace.parent_prev();
-      return;
-    }
-    index--;
-  } 
-  else {
-    find(key);
-    if (index == 0) {
-      // before the first item
-      trace.parent_prev();
-      return;
-    }
-    index--;
-  }
-  trace.cut_key();
-  add_key_to_trace(trace);
-}
-
 //@+node:michael.20150118002311.21: ** PageRef
 //@+others
 //@+node:michael.20150118002311.20: *3* dump
@@ -2069,57 +1149,9 @@ void PageRef::dump(std::ostream& out) {
       NodeHandler::handlers[ptr->type]->dump(page, (nodeid_t)id, out);
     }
   }
-  else {
-    HashPage* hpage = (HashPage*)page;
-    out << t2 << "type:       HashPage" << std::endl
-        << t2 << "node_count: " << hpage->count << std::endl
-        << t2 << "size:       " << sizeof(Page)-hpage->end << std::endl
-        << t2 << "free_size:  " << hpage->end-HASHPAGE_HEADER << std::endl
-        << t2 << "nodes: " << std::endl;
-        
-    for(size_t id = 0; id < PAGE_HASH_SIZE; id++) {
-      char *slot = hpage->get_slot(id);
-      if (slot) {
-        size_t count = *slot++;
-        out << t3 << "- id:    " << (int)id << std::endl
-            << t3 << "  type:  bucket" << std::endl
-            << t3 << "  count:  " << count << std::endl;
-        
-        char *key, *value;
-        psize_t ksize;
-        vsize_t vsize;
-        for(psize_t i = 0; i < count; i++) {
-          slot = Bucket::get_key_value(slot, &key, &ksize, &value, &vsize);
-          
-          out << t3 << "  key" << (int)i << ":   ";
-          dump_key(key, ksize, out);
-          out << std::endl;
-          
-          std::string val(value, vsize&0x3f);
-          out << t3 << "  value" << (int)i << ": " << val.c_str() << std::endl;
-        }
-      }
-    }
-  }
 }
 #endif
 //@-others
-
-void PageRef::check(const char *msg, Trace& trace) {
-  if (page->type == kTriePage) {
-    size_t c = count();
-    for(size_t i = 0; i < c; i++) {
-      NodeRef r(*this, i);
-      if (i == 7 || i == 6 || true) {
-        /*std::cerr << "page_check: " << id 
-                  << ", " << r.id
-                  << ", " << (int)r.type() << std::endl;*/
-        r.check(msg, trace);
-      }
-    }
-  }
-}
-
 //@-others
 } // namespace larch_leaves 
 //@-leo

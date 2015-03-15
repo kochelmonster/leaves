@@ -45,13 +45,12 @@ inline int clz(boost::uint64_t v) {
 
 #else 
 
-#pragma intrinsic(_BitScanForward)
 #pragma intrinsic(__popcnt, _BitScanForward, _BitScanReverse)
 #define popcount32 __popcnt
 
 inline int ffs32(boost::uint32_t v) {
     unsigned long index;
-    if (_BitScanForward64(&index, v)) 
+    if (_BitScanForward(&index, v)) 
       return index+1;
     else
       return 0;
@@ -59,7 +58,7 @@ inline int ffs32(boost::uint32_t v) {
 
 inline int clz32(boost::uint32_t v) {
     unsigned long index;
-    if (_BitScanReverse32(&index, v)) 
+    if (_BitScanReverse(&index, v)) 
       return 31 - index;
     else
       return 32;

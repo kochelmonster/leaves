@@ -58,36 +58,10 @@ namespace larch_leaves {
 #ifndef ALIGN
 #define ALIGN 4
 #endif 
-#define PAGE_SPLIT_SIZE (3*PAGE_SIZE/4)
+//#define PAGE_SPLIT_SIZE (3*PAGE_SIZE/4)
+#define PAGE_SPLIT_SIZE (PAGE_SIZE/2)
 
 #define MAX_NODE_COUNT (PAGE_SIZE/ALIGN)
-
-// Bucket node definitions
-//---------------------------
-
-// the max bucket size depends directly to MAX_KEY_SIZE_64
-// and MAX_PAGE_VALUE_SIZE:
-// Since a bucket contains maximal 8 key/value pairs
-// the maximal size is:
-// (size_struct(2bytes)+MAX_KEY_SIZE_64+MAX_PAGE_VALUE_SIZE)*10
-// (Since a bucket must easily fit in a Page the MAX_KEY_SIZE_64
-//  and MAX_PAGE_VALUE_SIZE were assigned according this constraint)
-#define MAX_BUCKET_SIZE 4112 
-
-// buckets grows in 64 byte blocks can be changed)
-#define BUCKET_ALIGN 64
-
-// maximal count of key, values pairs in a Bucket nde
-#define MAX_BUCKET_COUNT 8
-
-// Hash node definitions
-//---------------------------
-
-// an assumption
-#define AVERAGE_BUCKET_SIZE 64 
-#define HASH_SIZE 4096
-#define PAGE_HASH_SIZE (PAGE_SIZE / AVERAGE_BUCKET_SIZE)
-#define HASH_PAGE_COUNT (HASH_SIZE / PAGE_HASH_SIZE)
 //@+node:michael.20150101205559.30: ** TestCode
 #ifdef TESTING
 void testpoint(const char* str);
@@ -172,9 +146,14 @@ struct NodeHandler {
   virtual void first(NodeRef& rnode, Node* data, Trace& trace) = 0;
   virtual void last(NodeRef& rnode, Node* data, Trace& trace) = 0;
   
+  // appends the key for the transition to child
+  virtual Slice append(NodeRef& rnode, Node* data, nodeid_t child, Slice& key) {
+      return key;
+    }
+  
   // returns true if a node is inserted, false if just the value was changed
-  virtual bool add(const TempNode& leaf, bool with_buckets, 
-                   NodeRef& rnode, Node* data, Trace& trace) = 0;
+  virtual bool add(const TempNode& leaf, NodeRef& rnode, 
+                   Node* data, Trace& trace) = 0;
   // remove the node
   virtual bool remove_child(NodeRef& rnode, Node* data, Trace& trace) {
       return false;
@@ -187,17 +166,15 @@ struct NodeHandler {
   virtual void dump(Page* page, nodeid_t nodeid, std::ostream& out) = 0;
 #endif
 
-  virtual void check(NodeRef& rnode, Node* data, const char *msg, Trace& trace) {}
-    
   static NodeHandler* handlers[7];
 };
 
 enum NodeTypes {
-  kLeaf = 0, kHash, kBucket, kLink, kCompressed, kTrie, kBitTrie, kRemoved
+  kLeaf = 0, kLink, kCompressed, kTrie, kBitTrie, kRemoved
 };
 //@+node:michael.20141215222649.67: ** Page
 enum PageTypes {
-  kTriePage = 0, kHashPage
+  kTriePage = 0
 };
 
 // A pointer inside a page
@@ -451,8 +428,12 @@ struct NodeRef {
       handler->last(*this, node(), trace);
     }
    
-  bool add(const TempNode& leaf, bool with_buckets, Trace& trace) {
-      return handler->add(leaf, with_buckets, *this, node(), trace);
+  Slice append(nodeid_t child, Slice& key) {
+      return handler->append(*this, node(), child, key);
+    }
+
+  bool add(const TempNode& leaf, Trace& trace) {
+      return handler->add(leaf, *this, node(), trace);
     }
 
   bool remove_child(Trace& trace) {
@@ -475,9 +456,7 @@ struct NodeRef {
   void child_first(nodeid_t child_id, Trace& trace);
   void child_last(nodeid_t child_id, Trace& trace);
 
-  void check(const char *msg, Trace& trace) {
-      return handler->check(*this, node(), msg, trace);
-    }
+
   //@-others
 };
 
@@ -541,15 +520,6 @@ struct TempCompressed : public TempNode {
   TempCompressed(const Slice& part);
 };
 
-struct TempHash : public TempNode {
-  pageid_t _pageids[HASH_PAGE_COUNT];
-  TempHash();
-};
-
-struct TempBucket : public TempNode {
-  char _data[BUCKET_ALIGN];
-  TempBucket();
-};
 //@+node:michael.20141219202729.3: ** PageMap
 // Translates a pageid to page offset
 struct PageMap {
@@ -578,8 +548,6 @@ struct NodeStorageInHeap : public NodeStorage, public PageMap {
   
   void free_page(const PageRef& page);
   PageRef new_page();
-  
-  void check(const char *msg, Trace& trace);
 };
 
 
@@ -600,129 +568,7 @@ class MultiProcessNodeStorage : public PersistentNodeStorage {
   /*public:
     MultiProcessNodeStorage(const char* path);*/
 };
-//@+node:michael.20150117120355.4: ** Sorter
-// sorter for buckets and hash nodes
-struct Sorter {
-  typedef char* ptr;
-  typedef std::vector<ptr>::iterator iterator;
-  Node* current_data; // the data to the currently sorted node
-  size_t index;       // index to the current pointer;
-  size_t hash;        // the current hash value
-  std::vector<ptr> pointers;
-  PageRef hash_pages[HASH_PAGE_COUNT];
-  
-    
-  Sorter() : current_data(NULL), index(0) {
-      pointers.reserve(8192);
-      pointers.resize(1);
-    }
- 
-  void add_key_to_trace(Trace& trace);
-  void sort();
-  size_t find(const Slice& key);
-  // true if key == pointers[index]
-  bool is_valid(const Slice& key) const;
-  Slice get_value() const;
-
-  void next(Trace& trace);
-  void prev(Trace& trace) ;
-  void init_hash(Node* data, pageid_t pageids[HASH_PAGE_COUNT], Trace& trace);
-  void remove(Trace& trace);
-
-  void first(Trace& trace)  {
-      index = 0;
-      add_key_to_trace(trace);
-    }
-    
-  void last(Trace& trace)  {
-      index = size() - 1;
-      add_key_to_trace(trace);
-    }
-  
-  size_t size() const {
-      return pointers.size();
-    }   
-    
-  bool prepare_sort_hash(Node* data) {
-      return pointers.size() > 1;
-    }
-    
-  bool prepare_sort_bucket(Node* data, size_t count) {
-      if (current_data == data && pointers.size() == count)
-        return true;
-      current_data = data;
-      pointers.resize(count);
-      return false;
-    }
-    
-  void reset_sorting() {
-      index = 1;
-      pointers.resize(1); // at least one pointer is always active
-      pointers[0] = NULL;
-    }
-
-  void clear() {
-      if (current_data) {
-        current_data = NULL;
-        reset_sorting();
-        PageRef null, *dst = hash_pages;
-        for(size_t i = 0; i < HASH_PAGE_COUNT; i++, dst++)
-          *dst = null;
-      }
-    }
-};
 //@+node:michael.20141220220750.15: ** Trace
-template<typename key_t, typename value_t>
-class lru_cache {
-public:
-	typedef typename std::pair<key_t, value_t> key_value_pair_t;
-	typedef typename std::list<key_value_pair_t>::iterator list_iterator_t;
-
-	lru_cache(size_t max_size) :
-		_max_size(max_size) {
-	}
-	
-	void put(const key_t& key, const value_t& value) {
-		auto it = _cache_items_map.find(key);
-		if (it != _cache_items_map.end()) {
-			_cache_items_list.erase(it->second);
-			_cache_items_map.erase(it);
-		}
-			
-		_cache_items_list.push_front(key_value_pair_t(key, value));
-		_cache_items_map[key] = _cache_items_list.begin();
-		
-		if (_cache_items_map.size() > _max_size) {
-			auto last = _cache_items_list.end();
-			last--;
-			_cache_items_map.erase(last->first);
-			_cache_items_list.pop_back();
-		}
-	}
-	
-	const value_t* get(const key_t& key) {
-		auto it = _cache_items_map.find(key);
-		if (it == _cache_items_map.end()) {
-			return NULL;
-		} else {
-			_cache_items_list.splice(_cache_items_list.begin(), _cache_items_list, it->second);
-			return &it->second->second;
-		}
-	}
-	
-  void clear() {
-      _cache_items_list.clear();
-      _cache_items_map.clear();
-    }
-  
-private:
-	std::list<key_value_pair_t> _cache_items_list;
-	std::unordered_map<key_t, list_iterator_t> _cache_items_map;
-	size_t _max_size;
-};
-
-
-#define CACHE_PREFIX 5
 // A stack trace inside a trie
 // nodes[0] is the root
 // nodes[K] is the current node (almost always a leaf)
@@ -739,24 +585,24 @@ struct Trace {
   };
 
   typedef std::vector<Transition> stack_t;
-  typedef lru_cache<std::string, stack_t> stack_cache_t;
 
-  stack_cache_t cache;
   stack_t stack;
   std::string key;       // the key the trace points to
   PageMap& map;          // needed for some operations
   NodeStorage& storage;  // needed for some operations
   Transition *back;
-  Sorter sorter;
-  
-  
+    
   size_t stat_find_trace;
   size_t stat_reuse_trace;
   size_t stat_find_count;
   size_t stat_compressed;
   size_t stat_tries;
   size_t stat_link;
-  
+  size_t stat_short_find;
+  size_t stat_wrong_prefix;
+  size_t min_page_key;
+  size_t max_page_key;
+    
   void reset_statistics() {
       stat_find_count = 0;
       stat_reuse_trace = 0;
@@ -764,12 +610,16 @@ struct Trace {
       stat_tries = 0;
       stat_compressed = 0;
       stat_link = 0;
+      stat_short_find = 0;
+      stat_wrong_prefix = 0;
     }
   
   Trace(PageMap& map_, NodeStorage& storage_) :
-      cache(30000), map(map_), storage(storage_) { 
+      map(map_), storage(storage_) { 
         key.reserve(MAX_KEY_SIZE_64);
         reset_statistics();
+        min_page_key = MAX_KEY_SIZE_64;
+        max_page_key = 0;
       }
 
   void check(const char *msg) { 
@@ -801,6 +651,39 @@ struct Trace {
   void _pop() {
     stack.pop_back();
     back = &stack.back();
+  }
+  //@+node:michael.20150303095026.5: *3* new_page_in_hash
+  // returns true if a new page should be hashed
+  bool new_page_in_hash() const {
+      size_t link_count = 0;
+      stack_t::const_iterator i;
+      for(i = stack.cbegin(); i != stack.cend(); i++) {
+        if (i->node.type() == kLink && ++link_count > 2)
+          return true;
+      }
+      return false;
+   }
+  //@+node:michael.20150303095026.6: *3* add_page_to_hash
+  struct PageHashVal {
+    pageid_t pageid;
+    size_t root_start;
+
+    PageHashVal(pageid_t id=0, size_t start=0)
+      : pageid(id), root_start(start) { 
+      }
+  };
+
+  std::unordered_map<std::string, PageHashVal> page_hash;
+
+    
+  void add_page_to_hash(Slice& key, const PageRef& page) {
+    size_t reduced_len = key.size(); // / 4;
+    std::string ks = key.string();
+    page_hash[ks] = PageHashVal(page.id, ks.size());
+    min_page_key = std::min(min_page_key, reduced_len);
+    max_page_key = std::max(max_page_key, reduced_len);
+    //std::cerr << "--add page: " << page.id << ", " << trace_len << ", " 
+    //          << reduced_len << ", " << key.size() << std::endl;
   }
   //@+node:michael.20150106224503.48: *3* is_valid
   // returns true if it points to a valid position
@@ -890,7 +773,6 @@ struct Trace {
   //@+node:michael.20141230111914.118: *3* pop
   // returns the node id of the skipped link  or 0
   nodeid_t pop() {
-      sorter.clear();
       _pop();
       if (size() && current().type() == kLink) {
         nodeid_t skipped_id = current().id;
@@ -991,9 +873,8 @@ struct Trace {
     }
   //@+node:michael.20141230111914.115: *3* set_leaf
   // sets a new leaf, 
-  bool set_leaf(const TempLeaf& leaf, bool with_buckets=true) {
-      cache.clear();
-      return current().add(leaf, with_buckets, *this);
+  bool set_leaf(const TempLeaf& leaf) {
+      return current().add(leaf, *this);
     }
 
   //@+node:michael.20150118002311.14: *3* get_value
@@ -1004,28 +885,11 @@ struct Trace {
   //@+node:michael.20150101205559.69: *3* refresh_trace
   // refresh the trace remapping the nodeids
   void refresh_trace() {
-      cache.clear();
       stack.resize(1);
       back = &stack.back();
       current().find(*this);
     }
   //@-others
-  
-  std::string sub;
-  void add_trace_cache() {
-      if (sub.empty())
-        return;
-        
-      stack_t::iterator i;
-      for(i = stack.begin(); i != stack.end(); i++) {
-          if (i->end > CACHE_PREFIX) {
-            i++;
-            break;
-          }
-      }
-  
-      cache.put(sub, stack_t(stack.begin(), i));
-    }
 };
 
 //@+node:michael.20150106224503.61: ** NodeRef-inlines

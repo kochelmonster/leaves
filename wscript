@@ -20,16 +20,6 @@ def options(opt):
 def configure_test(cfg):
     import os
     cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
-
-    load_modules = 'compiler_cxx boost waf_unit_test'
-    if os.name == "nt":
-        cfg.env['MSVC_VERSIONS'] = ['wsdk 8.0']
-        cfg.env['MSVC_TARGETS'] = ['x64']
-        load_modules += " msvc"
-        
-    cfg.check_waf_version(mini='1.8.5')
-    cfg.load(load_modules)
-    cfg.check_boost()#lib='system filesystem')
         
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
                              "PAGE_SIZE=8192", 
@@ -56,11 +46,22 @@ def configure_bench(cfg):
         #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
         #, "-lboost_filesystem",  "-lboost_system"]
         cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0", 
-                                  "-march=corei7", "-g",] #"-O1"]
+                                  "-march=corei7", "-O0", "-g"]
 
 
 def configure(cfg):
     import os
+    
+    load_modules = 'compiler_cxx boost waf_unit_test'
+    if os.name == "nt":
+        cfg.env['MSVC_VERSIONS'] = ['wsdk 8.0']
+        cfg.env['MSVC_TARGETS'] = ['x64']
+        load_modules += " msvc"
+        
+    cfg.check_waf_version(mini='1.8.5')
+    cfg.load(load_modules)
+    cfg.check_boost()#lib='system filesystem')
+    
     cfg.env.INCLUDES = [os.path.abspath("include"), 
                         os.path.abspath("src")]
 

@@ -158,7 +158,7 @@ unsigned long long startcycles, stopcycles;
     if( askitis[off] == '\n' ) {
       Words++;
       //printf("insert %i\n", Words);
-      if (Words == 308) {
+      if (Words == 2371 && false) {
         askitis[off] = 0;
         printf("break %s\n", askitis+prev);
       }
@@ -251,6 +251,7 @@ unsigned long long startcycles, stopcycles;
   for( prev = off = 0; off < size; off++ )
     if( askitis[off] == '\n' ) {
       Words++;
+      
       db->find(Slice(askitis+prev, off-prev));
       if (db->is_valid())
         Found++;

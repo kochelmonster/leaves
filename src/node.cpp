@@ -143,33 +143,92 @@ void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
 //@+others
 //@+node:michael.20150110130802.8: *3* find
 void Trace::find(const Slice& key_) {
-#if 1
-  if (key_.size() >= CACHE_PREFIX) {
-    sub.assign(key_.data(), CACHE_PREFIX);
-    const stack_t *cstack = cache.get(sub);
-    if (cstack) {
-      stack = *cstack;
-      back = &stack.back();
-      sub.clear();
-    }
-    else {
-      resize(1);
-    }
-  }
-  else {
-    sub.clear();
-    resize(1);
-  }
-   
+  resize(1);
   key.assign(key_.data(), key_.size());
-  if (back->node.is_leaf()) {
-    if (back->end < key.size()) {
-      _pop();
-    } else {
-      assert(back->end == key.size());
-      return; // we are already here
+
+#if 1
+
+  size_t trace_len = key_.size();
+  max_page_key = 12;
+  trace_len = std::min(trace_len, max_page_key);
+  std::string k = key_.string();
+  bool f = false;
+  for(size_t i = 0; i < 4 && trace_len>=min_page_key; i++, trace_len--) {
+    std::unordered_map<std::string, PageHashVal>::iterator found;
+    found = page_hash.find(k.substr(0, trace_len));
+    if (found != page_hash.end()) {
+      /*if (found->second.prefix != k.substr(0, found->second.prefix.size())) {
+        //std::cerr << "wrong prefix" << std::endl;
+        stat_wrong_prefix++;
+        continue;
+      }*/
+      /*std::cerr << "found page: " << found->second.pageid 
+                << " ," << found->second.prefix.size() << ", " << trace_len 
+                << ", " << found->second.root_start
+                << std::endl;*/
+      f = true;
+      
+      /*std::string &key_(found->second.prefix);
+      std::cerr << "  prefix:";
+      for(size_t j = 0; j < key_.size(); j++) {
+        std::cerr << " " << std::hex << (int)key_[j];
+      }
+      std::cerr << std::dec << std::endl;*/
+      
+      stat_short_find += 1;
+      NodeRef node(map.get_page(found->second.pageid), 0);
+      size_t start = found->second.root_start;
+      _push(Transition(node, start, start+node.get_len()));
+      break;
     }
-  }    
+  }
+  
+  if (!f) {
+    //std::cerr << "not found: " << trace_len << ", " << key_.size() << std::endl;
+  }
+  else if (0) {
+    // muss übereinstimmen
+    current().find(*this); // not back.node (pop_back!)
+    
+    stack_t cmp(stack);
+
+    resize(1);
+    
+    current().find(*this); // not back.node (pop_back!)
+    
+    stack_t::reverse_iterator j, k;
+    j = stack.rbegin();
+    k = cmp.rbegin();
+    
+    std::cerr << "cmp: " << cmp.size() << "==" << stack.size() << std::endl;
+    if (j->node.page.id != k->node.page.id) {
+      std::cerr << "cmp: " << cmp.size() << "==" << stack.size() << std::endl;
+      
+      stack_t::iterator i;
+      for(i = stack.begin(); i != stack.end(); i++) {
+        std::cerr << "org: " <<  i->start <<  ", " << i->end 
+                  << "  " << i->node.page.id 
+                  << ", " << i->node.id 
+                  << ", " << (int)i->node.type() << std::endl;
+      }
+  
+      for(i = cmp.begin(); i != cmp.end(); i++) {
+        std::cerr << "sht: " <<  i->start <<  ", " << i->end 
+                  << "  " << i->node.page.id << ", " << i->node.id << std::endl;
+      }
+      
+      
+      std::cerr << "  key:";
+      for(size_t j = 0; j < key.size(); j++) {
+        std::cerr << " " << std::hex << (int)key[j];
+      }
+      std::cerr << std::dec << std::endl;
+    }
+    assert(j->node.page.id == k->node.page.id);
+    assert(j->node.id == k->node.id);
+  }
+
+
 #endif  
   
 #if 0
@@ -197,8 +256,6 @@ void Trace::find(const Slice& key_) {
   
   size_t trace_size = size();
   current().find(*this); // not back.node (pop_back!)
-  
-  add_trace_cache();
   
   stat_find_count++;
   stat_reuse_trace += trace_size;
@@ -232,6 +289,8 @@ struct BestFitting {
   size_t min_size;
   nodeid_t best_id;
   bool found;
+  nodeid_t stack[MAX_NODE_COUNT];
+  nodeid_t best_stack[MAX_NODE_COUNT];
     
   BestFitting(Page* page, size_t min_size_) 
     : best(PAGE_SIZE), min_size(min_size_), best_id(1), found(false) {
@@ -239,16 +298,14 @@ struct BestFitting {
     }
 };
 
-size_t calc_sizes(const NodeRef& node, BestFitting& bf) {
-  if (bf.found)
-    return 0;
-
+size_t calc_sizes(const NodeRef& node, BestFitting& bf, size_t index) {
   nodeid_t children[65];
   size_t size = bf.sizes[node.id];
   size_t count = node.get_children(children);
+  bf.stack[index++] = node.id;
   
   for(size_t i = 0; i < count; i++) {
-    size += calc_sizes(NodeRef(node.page, children[i]), bf);
+    size += calc_sizes(NodeRef(node.page, children[i]), bf, index);
     if (bf.found)
       return 0;
   }
@@ -263,6 +320,7 @@ size_t calc_sizes(const NodeRef& node, BestFitting& bf) {
       delta = PAGE_SPLIT_SIZE - size;
     }
     if (delta < bf.best) {
+      memcpy(bf.best_stack, bf.stack, sizeof(nodeid_t)*index);
       bf.best = delta;
       bf.best_id = node.id;
       if (bf.best < 512)
@@ -278,9 +336,61 @@ void Trace::reserve_space(size_t size_) {
   while (current().page.free_size() < size_) {
     NodeRef root(current().page, 0);    
     BestFitting bf(root.page.page, size_);
-    calc_sizes(root, bf);
+    calc_sizes(root, bf, 0);
     
     PageRef newpage = storage.new_page();
+
+    if (new_page_in_hash()) {
+      PageRef &pr(current().page);
+      bool show = false;
+      if (show) {
+        std::cerr << "hash page: " << pr.id << " - " << newpage.id 
+                  << " key_len: " << key.size() 
+                  << "| bestid: " << bf.best_id << std::endl;
+                  
+        stack_t::iterator i;
+        for(i = stack.begin(); i != stack.end(); i++) {
+          std::cerr << "org: " 
+                    <<  i->start <<  ", " << i->end << " = " << (int)key[i->start]
+                    << "|" << i->node.page.id 
+                    << ", " << i->node.id 
+                    << ", " << (int)i->node.type() << std::endl;
+        }
+      }
+      
+      std::vector<Transition>::reverse_iterator i;
+      for(i = stack.rbegin(); i != stack.rend(); i++) {
+        if (i->node.id == 0) {
+          char key_buffer[MAX_KEY_SIZE_64];
+          Slice key_(key_buffer, i->start);
+          memcpy(key_buffer, key.data(), key_.size());
+          if (show) {
+            std::cerr << "  found root: " << i->node.page.id << ", " << i->start 
+                      << ", " << (int)key[i->start-1] << std::endl;
+          }
+          for(nodeid_t *id = bf.best_stack; *id != bf.best_id; id++) {
+            NodeRef n(pr, *id);
+            key_ = n.append(*(id+1), key_);
+            if (show) {
+              std::cerr << "   add stack: " << *id << ", " 
+                        << n.get_len() << ", " << key_.size() << std::endl;
+            }
+          }
+          if (show) {
+            std::cerr << "  prefix:";
+            for(size_t j = 0; j < key_.size(); j++) {
+              std::cerr << " " << std::hex << (int)key_[j];
+            }
+            std::cerr << std::dec << std::endl;
+            //assert(0);
+          }
+            
+          add_page_to_hash(key_, newpage);
+          break;
+        }
+      }
+    }
+      
     NodeRef to_move(root.page, bf.best_id);
     move_node(newpage, to_move);
       
@@ -395,19 +505,6 @@ void NodeStorageInHeap::free_page(const PageRef& page) {
   else {
     _pages[page.id].reset();
     _free_pages++;
-  }
-}
-
-void NodeStorageInHeap::check(const char *msg, Trace& trace) {
-  typedef std::vector<_page_ptr>::iterator iter_t;
-  iter_t i = _pages.begin();
-  for(int j = 0; i != _pages.end(); i++, j++) {
-    if (j != 0)
-      continue;
-      
-    if (*i) {
-      PageRef(i->get(), j, j).check(msg, trace);
-    }
   }
 }
 //@+node:michael.20141215222649.160: *3* class MultiProcessNodeMemoryManager
