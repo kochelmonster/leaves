@@ -1,9 +1,4 @@
 #! /usr/bin/env python
-#@+leo-ver=5-thin
-#@+node:michael.20141230111914.135: * @file wscript
-#@@first
-#@@language python
-#@@tabwidth -4
 top = "."
 out = "build"
 APPNAME = "base64bench"
@@ -117,4 +112,3 @@ def build(bld):
         target="sbench")
 
 
-#@-leo

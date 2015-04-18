@@ -1,14 +1,7 @@
-//@+leo-ver=5-thin
-//@+node:michael.20141215222649.45: * @file leaves.cpp
-//@@language cplusplus
-//@@tabwidth -2
-//@+<< includes >>
-//@+node:michael.20141217010530.10: ** << includes >>
 #include "larch/leaves.h"
 #include "node.h"
 #include "leaf.h"
 
-//@-<< includes >>
 
 namespace larch_leaves {
 void encode(const Slice& input, std::string& output);
@@ -16,8 +9,6 @@ void decode(const std::string& input, std::string& output);
   
 Slice main_name_space("::main", 6);
 
-//@+others
-//@+node:michael.20141215222649.104: ** class NoWhereCursor
 // A Cursor to a non exising namespace
 class NoWhereCursor : public Cursor {
  public:
@@ -36,7 +27,6 @@ class NoWhereCursor : public Cursor {
 };
 
 
-//@+node:michael.20141230111914.24: ** MemoryDatabase
 struct PrivateMemoryDatabase : public MemoryDatabase {
   NodeStorageInHeap nodes;
   Trace trace;
@@ -163,6 +153,4 @@ struct PrivateMemoryDatabase : public MemoryDatabase {
 MemoryDatabase* MemoryDatabase::create() {
   return new PrivateMemoryDatabase();
 }
-//@-others
 } // namespace larch_leaves 
-//@-leo

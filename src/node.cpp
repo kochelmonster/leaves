@@ -1,21 +1,10 @@
-//@+leo-ver=5-thin
-//@+node:michael.20141215222649.161: * @file node.cpp
-//@@language cplusplus
-//@@tabwidth -2
-//@+<< includes >>
-//@+node:michael.20141217010530.11: ** << includes >>
 #include <memory.h>
 #include "node.h"
-//@-<< includes >>
 
 namespace larch_leaves {
 
-//@+others
-//@+node:michael.20150112164548.8: ** Page
 // Page Methods
 // ------------
-//@+others
-//@+node:michael.20141230111914.29: *3* new_node
 nodeid_t Page::new_node(size_t size_) {
   NodePtr *ptrs = node_ptr;
   size_t free_start = count ? ptrs[count-1].offset : sizeof(Page);
@@ -24,12 +13,8 @@ nodeid_t Page::new_node(size_t size_) {
   ptrs[new_id].offset = (inpage_ptr)free_start;
   return new_id;
 }
-//@-others
-//@+node:michael.20141230111914.26: ** PageRef
 // PageRef Methods
 // ---------------
-//@+others
-//@+node:michael.20141230111914.27: *3* defragment
 bool PageRef::defragment(Trace& trace) const {
   // keep in mind: root is never removed, instead thethe page will be removed
   NodePtr* ptrs = page->node_ptr;
@@ -104,7 +89,6 @@ bool PageRef::defragment(Trace& trace) const {
   trace.refresh_trace();
   return true;
 }
-//@+node:michael.20141230111914.30: *3* grow_node_by
 void PageRef::grow_node_by(nodeid_t node_id, int size) const {
   if (size == 0)
     return;
@@ -124,7 +108,6 @@ void PageRef::grow_node_by(nodeid_t node_id, int size) const {
   for(size_t i = node_id; i < count_; i++)
     ptrs[i].offset -= size;
 }
-//@+node:michael.20141230111914.31: *3* change_to_link
 void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   // first remove the old nodes space
   int delta = (int)(page_pad(sizeof(pageid_t)) - get_node_size(node_id));
@@ -136,12 +119,8 @@ void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   ptr->type = kLink;
   *((pageid_t*)&page->data[ptr->offset]) = page_id;
 }
-//@-others
-//@+node:michael.20150110130802.6: ** Trace
 // Trace Methods
 // -------------
-//@+others
-//@+node:michael.20150110130802.8: *3* find
 void Trace::find(const Slice& key_) {
   resize(1);
   key.assign(key_.data(), key_.size());
@@ -280,7 +259,6 @@ void Trace::find(const Slice& key_) {
     }
   }
 }
-//@+node:michael.20150110130802.7: *3* reserve_space
 #define MAX_PAGE_FREE_SIZE (sizeof(Page)-PAGE_HEADER_SIZE)
 
 struct BestFitting {
@@ -399,7 +377,6 @@ void Trace::reserve_space(size_t size_) {
       refresh_trace();
   }
 }
-//@+node:michael.20150111191610.4: *3* move_node
 nodeid_t Trace::move_node(const PageRef& new_page, const NodeRef& node) {
   if (new_page.id == node.page.id)
     return node.id;
@@ -419,7 +396,6 @@ nodeid_t Trace::move_node(const PageRef& new_page, const NodeRef& node) {
   node.page.free_node(node.id);
   return new_node.id;
 }
-//@+node:michael.20150110130802.26: *3* merge_pages
 void Trace::merge_pages() {
   PageRef page(current().page);
   
@@ -461,13 +437,6 @@ void Trace::merge_pages() {
     }
   }
 }
-//@-others
-//@+node:michael.20141215222649.155: ** class NodeStorage (Implementation)
-//@+others
-//@+node:michael.20141215222649.159: *3* class PersistentNodeManager
-//@+others
-//@-others
-//@+node:michael.20141215222649.156: *3* class NodeStorageInHeap
 // NodeStorageInHeap implementation
 // --------------------------------
 
@@ -507,8 +476,4 @@ void NodeStorageInHeap::free_page(const PageRef& page) {
     _free_pages++;
   }
 }
-//@+node:michael.20141215222649.160: *3* class MultiProcessNodeMemoryManager
-//@-others
-//@-others
 } // namespace larch_leaves 
-//@-leo

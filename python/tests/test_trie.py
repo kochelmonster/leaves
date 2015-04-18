@@ -1,7 +1,3 @@
-#@+leo-ver=5-thin
-#@+node:michael.20150110130802.32: * @file test_trie.py
-#@@language python
-#@@tabwidth -4
 import unittest 
 from larch.leaves import MemoryDatabaseBytes 
 
@@ -52,4 +48,3 @@ class MemotryDBTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
             
-#@-leo

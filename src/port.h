@@ -1,10 +1,4 @@
-//@+leo-ver=5-thin
-//@+node:michael.20141220220750.5: * @file port.h
-//@@language cplusplus
-//@@tabwidth -2
 
-//@+others
-//@+node:michael.20141230111914.144: ** GCC
 #ifdef __GNUC__
 
 #if defined(__LP64__) || defined(__x86_64__)
@@ -19,7 +13,6 @@
 #endif
 
 #endif
-//@+node:michael.20141230111914.145: ** Visual C++
 #ifdef _MSC_VER
 #include <intrin.h>
 
@@ -67,7 +60,6 @@ inline int clz32(boost::uint32_t v) {
 #define _32BIT
 #endif //_M_X64
 #endif // _MSC_VER
-//@-others
 
 
 #ifdef _32BIT
@@ -93,4 +85,3 @@ inline int ffs(boost::uint64_t v) {
   }
  
 #endif
-//@-leo

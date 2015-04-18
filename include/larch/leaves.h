@@ -1,12 +1,6 @@
-//@+leo-ver=5-thin
-//@+node:michael.20141215222649.17: * @file leaves.h
-//@@language cplusplus
-//@@tabwidth -2
 #ifndef _LARCH_LEAVES_H
 #define _LARCH_LEAVES_H
 
-//@+<< includes >>
-//@+node:michael.20141217010530.9: ** << includes >>
 #include <string.h>
 #include <string>
 #include <memory>
@@ -14,12 +8,9 @@
 #ifdef DEBUG
 #include <ostream>
 #endif
-//@-<< includes >>
 
 namespace larch_leaves {
 
-//@+others
-//@+node:michael.20141230111914.147: ** Exceptions
 #ifndef _MSC_VER
   #define NOEXCEPT noexcept
 #else
@@ -47,7 +38,6 @@ class WrongValue : public LeavesException {
     return _msg;
   }
 };
-//@+node:michael.20141215222649.38: ** struct Options
 struct Options {
   // if true Storage starts with multiprocess support
   bool multiprocess;
@@ -70,7 +60,6 @@ struct Options {
 };
 
 
-//@+node:michael.20141230111914.5: ** class Slice
 class Slice {
  protected:
   size_t _size;
@@ -121,7 +110,6 @@ class Slice {
       return _size == 0;
     }
 };
-//@+node:michael.20141215222649.23: ** class Cursor (Declaration)
 class Cursor {
  public:
   // returns true if cursor is on a valid position
@@ -144,7 +132,6 @@ class Cursor {
   virtual void remove() = 0;
 };
 
-//@+node:michael.20141215222649.27: ** Database (Declaration)
 #define EMBED_BREAKPOINT \
     asm("0:"                              \
         ".pushsection embed-breakpoints;" \
@@ -205,9 +192,7 @@ class CopyOnWriteDatabase : public PersistentDatabase {
 
  
 */
-//@-others
 
 } // namespace larch_leaves 
 
 #endif // _LARCH_LEAVES_H
-//@-leo

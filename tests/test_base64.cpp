@@ -1,5 +1,3 @@
-//@+leo-ver=5-thin
-//@+node:michael.20150116155028.13: * @file test_base64.cpp
 #define BOOST_TEST_MODULE Base64
 #include <boost/test/included/unit_test.hpp>
 #include <string>
@@ -41,4 +39,3 @@ BOOST_AUTO_TEST_CASE(encode_decode)
 
 BOOST_AUTO_TEST_SUITE_END()
 
-//@-leo

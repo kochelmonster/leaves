@@ -1,9 +1,4 @@
 #cython: boundscheck=False, profile=False
-#@+leo-ver=5-thin
-#@+node:michael.20150106224503.15: * @file leaves.pyx
-#@@first
-#@@language cython
-#@@tabwidth -4
 from libcpp.string cimport string
 from libcpp cimport bool 
 from cpython.ref cimport Py_XINCREF, Py_XDECREF, PyObject
@@ -159,4 +154,3 @@ cdef class MemoryDatabaseBytes(_MemoryDatabase):
             
             self.pthis.next()
         
-#@-leo

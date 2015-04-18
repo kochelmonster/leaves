@@ -1,11 +1,5 @@
-//@+leo-ver=5-thin
-//@+node:michael.20150101205559.18: * @file test_trie.cpp
-//@@language cplusplus
-//@@tabwidth -2
 #define BOOST_TEST_NO_MAIN
 #define GENERATE
-//@+<< includes >>
-//@+node:michael.20150101205559.22: ** << includes >>
 #include <string.h>
 #include <stdlib.h>
 #include <iostream>
@@ -17,12 +11,9 @@
 #include "larch/leaves.h"
 #include "node.h"
 
-//@-<< includes >>
 
 using namespace larch_leaves;
 
-//@+others
-//@+node:michael.20150101205559.21: ** TestDatabase
 struct TestDatabase {
   NodeStorageInHeap nodes;
   Trace trace;
@@ -100,7 +91,6 @@ struct TestDatabase {
 };
 
 typedef std::unique_ptr<TestDatabase> db_t;
-//@+node:michael.20150101205559.31: ** Test Utils
 std::stringstream tp_output;
 
 namespace larch_leaves {
@@ -201,7 +191,6 @@ void check_testpoints(size_t case_count, const char* testpoints[]) {
 
 #endif
 
-//@+node:michael.20150106224503.32: ** Key Creators
 // Key Creators
 
 std::string sequence(size_t size, size_t start=0) {
@@ -224,7 +213,6 @@ std::string number(size_t number, size_t size=0) {
   return result;
 }
 
-//@+node:michael.20150106224503.34: ** Value Creators
 template<typename content_t> std::string 
 value(content_t content, size_t size=0) {
   std::stringstream f;
@@ -235,7 +223,6 @@ value(content_t content, size_t size=0) {
     
   return result;
 }
-//@+node:michael.20150101205559.34: ** TestLeaf
 struct TestLeaf  {
   void test_LeafAdd0() {
       db_t db(new TestDatabase);
@@ -296,10 +283,7 @@ struct TestLeaf  {
 };
 
 TestLeaf test_leaf;
-//@+node:michael.20150101205559.32: ** TestCompress
 struct TestCompress  {
-  //@+others
-  //@+node:michael.20150110130802.14: *3* test_CompressAddNew
   void test_CompressAddNew() {
       db_t db(new TestDatabase);
 
@@ -317,7 +301,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAddNew"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150110130802.15: *3* test_CompressAdd0_CompressReinsert1
   void test_CompressAdd0_CompressReinsert1() {
       db_t db(new TestDatabase);
 
@@ -335,7 +318,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd0", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.16: *3* test_CompressAdd0_CompressReinsert2
   void test_CompressAdd0_CompressReinsert2() {
       db_t db(new TestDatabase);
 
@@ -353,7 +335,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd0", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.17: *3* test_CompressAdd1_CompressReinsert0
   void test_CompressAdd1_CompressReinsert0() {
       db_t db(new TestDatabase);
 
@@ -371,7 +352,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert0"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.18: *3* test_CompressAdd1_CompressReinsert1
   void test_CompressAdd1_CompressReinsert1() {
       db_t db(new TestDatabase);
 
@@ -389,7 +369,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.19: *3* test_CompressAdd1_CompressReinsert2
   void test_CompressAdd1_CompressReinsert2() {
       db_t db(new TestDatabase);
 
@@ -407,7 +386,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.20: *3* test_CompressAdd2_CompressReinsert0
   void test_CompressAdd2_CompressReinsert0() {
       db_t db(new TestDatabase);
 
@@ -425,7 +403,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert0"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.21: *3* test_CompressAdd2_CompressReinsert1
   void test_CompressAdd2_CompressReinsert1() {
       db_t db(new TestDatabase);
 
@@ -443,7 +420,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.22: *3* test_CompressAdd2_CompressReinsert2
   void test_CompressAdd2_CompressReinsert2() {
       db_t db(new TestDatabase);
 
@@ -461,7 +437,6 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
       check_testpoints(2, testpoints);
     }
-  //@+node:michael.20150110130802.24: *3* test_CompressedEatCompressed
   std::string sep_number(size_t i) {
       std::string sep(5, 60);
       std::string n = number(i);
@@ -491,14 +466,10 @@ struct TestCompress  {
       const char* testpoints[] = {"CompressedEatCompressed"};
       check_testpoints(1, testpoints);
     }
-  //@-others
 };
 
 TestCompress test_compress;
-//@+node:michael.20150101205559.40: ** TestTrie
 struct TestTrie {
-  //@+others
-  //@+node:michael.20150101205559.46: *3* test_TrieBaseAdd0
   void test_TrieBaseAdd0() {
       db_t db(new TestDatabase);
 
@@ -513,7 +484,6 @@ struct TestTrie {
       const char* testpoints[] = {"TrieBaseAdd0"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150106224503.41: *3* test_TrieBaseAdd1
   void test_TrieBaseAdd1() {
       db_t db(new TestDatabase);
 
@@ -528,7 +498,6 @@ struct TestTrie {
       const char* testpoints[] = {"TrieBaseAdd1"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.50: *3* test_TrieBaseAdd2
   void test_TrieBaseAdd2() {
       db_t db(new TestDatabase);
 
@@ -543,7 +512,6 @@ struct TestTrie {
       const char* testpoints[] = {"TrieBaseAdd2"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.51: *3* test_TrieBaseAdd3
   void test_TrieBaseAdd3() {
       db_t db(new TestDatabase);
 
@@ -558,7 +526,6 @@ struct TestTrie {
       const char* testpoints[] = {"TrieBaseAdd2"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.47: *3* test_BitTrieAdd0
   void test_BitTrieAdd0() {
       db_t db(new TestDatabase);
 
@@ -581,7 +548,6 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieAdd0"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.48: *3* test_BitTrieAdd1
   void test_BitTrieAdd1(size_t border) {
       db_t db(new TestDatabase);
       std::stringstream cstr;
@@ -614,7 +580,6 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieAdd1"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.49: *3* test_BitTrieAdd2
   void test_BitTrieAdd2() {
       db_t db(new TestDatabase);
 
@@ -637,7 +602,6 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieAdd2"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.52: *3* test_TrieRemove
   void test_TrieRemove() {
       db_t db(new TestDatabase);
 
@@ -660,7 +624,6 @@ struct TestTrie {
       const char* testpoints[] = {"TrieRemove"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.58: *3* test_BitTrieRemove0
   void test_BitTrieRemove0() {
       db_t db(new TestDatabase);
       
@@ -681,7 +644,6 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieRemove0"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150106224503.42: *3* test_BitTrieRemove1
   void test_BitTrieRemove1(size_t border) {
       db_t db(new TestDatabase);
       std::stringstream cstr;
@@ -714,7 +676,6 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieRemove1"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150110130802.25: *3* test_BitTrieRemove2
   void test_BitTrieRemove2() {
       db_t db(new TestDatabase);
 
@@ -734,7 +695,6 @@ struct TestTrie {
       const char* testpoints[] = {"BitTrieRemove2"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150101205559.60: *3* test_NodeEatSingle
   void test_NodeEatSingle() {
       db_t db(new TestDatabase);
       
@@ -758,7 +718,6 @@ struct TestTrie {
       const char* testpoints[] = {"NodeEatSingle"};
       check_testpoints(1, testpoints);
     }
-  //@+node:michael.20150106224503.17: *3* test_TrieMisc
   // some test to complete the test cover
   void test_TrieMisc() {
     Page page;
@@ -803,11 +762,9 @@ struct TestTrie {
     
     BOOST_REQUIRE(ptr->extra == 102);
   }
-  //@-others
 };
 
 TestTrie test_trie;
-//@+node:michael.20150101205559.62: ** TestPageManagement
 struct TestPageManagement {
   #define VALUE_PAD 32
   #define TWO_PAGE_COUNT 203
@@ -912,10 +869,7 @@ struct TestPageManagement {
 
 
 TestPageManagement test_pm;
-//@+node:michael.20150106125629.4: ** TestNavigation
 struct TestNavigation {
-  //@+others
-  //@+node:michael.20150106224503.2: *3* test_RandomFind
   void test_RandomFind() {
       db_t db(new TestDatabase);
       for(size_t i = 0; i < 5000; i+=2) {
@@ -955,7 +909,6 @@ struct TestNavigation {
         BOOST_REQUIRE(db->key() == key);
       }
     }
-  //@+node:michael.20150106224503.4: *3* create_trie
   void create_trie(db_t& db, bool hole, bool end_node) {
       std::string key(2, 0);
      
@@ -975,7 +928,6 @@ struct TestNavigation {
       }
     }
 
-  //@+node:michael.20150106224503.3: *3* test_IterTrie
   void test_IterTrie() {
       db_t db(new TestDatabase);
       std::string key(2, 0);    
@@ -1030,7 +982,6 @@ struct TestNavigation {
       db->find(key);
       BOOST_REQUIRE(db->is_valid());
     }
-  //@+node:michael.20150106224503.5: *3* test_IterTrieEnd
   // iteration with end node
   void test_IterTrieEnd() {
       db_t db(new TestDatabase);
@@ -1087,7 +1038,6 @@ struct TestNavigation {
       db->find(key);
       BOOST_REQUIRE(db->is_valid());
     }
-  //@+node:michael.20150106224503.6: *3* test_Iter
   void do_iter(size_t key_size) {
       db_t db(new TestDatabase);
       std::string last_key;
@@ -1134,7 +1084,6 @@ struct TestNavigation {
   void test_IterCompressed() {
       do_iter(10);
     }
-  //@+node:michael.20150106224503.46: *3* test_removeFromTop
   void test_removeFromTop(size_t key_size) {
       db_t db(new TestDatabase);
       std::string last_key;
@@ -1163,7 +1112,6 @@ struct TestNavigation {
       BOOST_REQUIRE(!db->is_valid());
   }    
 
-  //@+node:michael.20150106224503.47: *3* test_removeFromBottom
   void test_removeFromBottom(size_t key_size) {
       db_t db(new TestDatabase);
       std::string last_key;
@@ -1192,7 +1140,6 @@ struct TestNavigation {
       BOOST_REQUIRE(!db->is_valid());
   }    
 
-  //@+node:michael.20150110130802.9: *3* test_compress
   // test prev / next of compress nodes
   void test_compress() {
       db_t db(new TestDatabase);
@@ -1233,7 +1180,6 @@ struct TestNavigation {
       BOOST_REQUIRE(db->is_valid());
       BOOST_REQUIRE(db->key() == number(10, 5));
     }
-  //@+node:michael.20150106224503.7: *3* test_ChangeValue
   void test_ChangeValue() {
       db_t db(new TestDatabase);
       
@@ -1261,13 +1207,9 @@ struct TestNavigation {
         BOOST_REQUIRE(db->value().string() == cmp_new[i++]);
       }
     }
-  //@-others
 };
 
 TestNavigation test_nav;
-//@+node:michael.20150101205559.38: ** TestSuite
-//@+others
-//@+node:michael.20150106224503.39: *3* boost
 BOOST_AUTO_TEST_SUITE(trie_manipulations)
 
 BOOST_AUTO_TEST_CASE(CompressAddNew) {
@@ -1447,7 +1389,6 @@ BOOST_AUTO_TEST_CASE(ChangeValue) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-//@+node:michael.20150106224503.38: *3* generate
 #ifdef BOOST_TEST_NO_MAIN
 int main(int argc, const char* argv[]) {
   //test_compress.test_CompressAddNew();
@@ -1513,7 +1454,4 @@ int main(int argc, const char* argv[]) {
   return 0;
 }
 #endif
-//@-others
-//@-others
 
-//@-leo

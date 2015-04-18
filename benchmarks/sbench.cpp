@@ -1,7 +1,3 @@
-//@+leo-ver=5-thin
-//@+node:michael.20150111145018.91: * @file sbench.cpp
-//@@language cplusplus
-//@@tabwidth -2
 #include <stdlib.h>
 #include <memory.h>
 #include <string.h>
@@ -293,4 +289,3 @@ unsigned long long startcycles, stopcycles;
   exit(0);
 }
 
-//@-leo

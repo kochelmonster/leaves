@@ -1,11 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-#@+leo-ver=5-thin
-#@+node:michael.20150110130802.35: * @file bench.py
-#@@first
-#@@first
-#@@language python
-#@@tabwidth -4
 from __future__ import absolute_import, unicode_literals, division
 import random
 import string
@@ -60,7 +54,7 @@ def bench(name, timer, descr='M ops/sec', op_count=0.1, repeats=3, runs=5,
     try:
         times = []
         for x in range(runs):
-            times.append(timer.timeit(repeats))k
+            times.append(timer.timeit(repeats))
 
         def op_time(time):
             return op_count*repeats / time
@@ -280,4 +274,3 @@ if __name__ == '__main__':
     #profiling()
     #memory()
     print('\n~~~~~~~~~~~~~~\n')
-#@-leo

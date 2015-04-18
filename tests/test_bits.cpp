@@ -1,20 +1,11 @@
-//@+leo-ver=5-thin
-//@+node:michael.20150101205559.42: * @file test_bits.cpp
-//@@language cplusplus
-//@@tabwidth -2
-//@+<< includes >>
-//@+node:michael.20150101205559.43: ** << includes >>
 #define BOOST_TEST_MODULE TrieTest
 //#define BOOST_TEST_NO_MAIN
 #include <boost/test/included/unit_test.hpp>
 #include "larch/leaves.h"
 #include "node.h"
 #include "port.h"
-//@-<< includes >>
 using namespace larch_leaves;
 
-//@+others
-//@+node:michael.20150101205559.45: ** Test Utils
 namespace larch_leaves {
 
 void testpoint(const char* str) {
@@ -22,31 +13,25 @@ void testpoint(const char* str) {
 
 }
 
-//@+node:michael.20141230111914.148: ** Node Structs
 typedef unsigned char trieindex_t;
 
-//@+others
-//@+node:michael.20150116155028.17: *3* Compressed
 // A Node containing a string part equal to all descendants
 // the equal part fit into a page; the data size in NodeRef::len()
 struct Compressed {
   nodeid_t child;
   char data[1];
 };
-//@+node:michael.20150116155028.18: *3* Leaf
 // A leaf 
 // the data is interpreted by the type (kLeaf od kBitLeaf)
 // the size of data is saved in NodeRef::len()
 struct Leaf {
   char data[1];
 };
-//@+node:michael.20150116155028.19: *3* Trie
 // Node with the complete alphabet 
 // children count is > 56
 struct Trie {
   nodeid_t children[64];
 };
-//@+node:michael.20150116155028.20: *3* BitTrie
 // Node with a range
 struct BitTrie {
   boost::uint64_t bits;
@@ -106,7 +91,6 @@ struct BitTrie {
               sizeof(nodeid_t)*(count()-child_index));
     }
 };
-//@+node:michael.20150116155028.23: *3* Node
 struct Node {
   union {
     Compressed c;
@@ -116,8 +100,6 @@ struct Node {
     pageid_t p;
   };
 };
-//@-others
-//@+node:michael.20150101205559.44: ** TestSuite
 BOOST_AUTO_TEST_CASE(add_bits) {
   union {
     boost::uint64_t data[8];
@@ -169,6 +151,4 @@ BOOST_AUTO_TEST_CASE(add_bits) {
     
   BOOST_REQUIRE_EQUAL(bits.bits, 0);
 }
-//@-others
 
-//@-leo

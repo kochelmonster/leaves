@@ -1,10 +1,4 @@
-//@+leo-ver=5-thin
-//@+node:michael.20141230111914.136: * @file base64.cpp
-//@@language cplusplus
-//@@tabwidth -2
 
-//@+<< includes >>
-//@+node:michael.20141230111914.137: ** << includes >>
 #include <vector>
 #include <boost/cstdint.hpp>
 #include "conversion.hpp"
@@ -12,12 +6,9 @@
 #ifdef DEBUG
 #include <iomanip>
 #endif
-//@-<< includes >>
 
 namespace larch_leaves {
 
-//@+others
-//@+node:michael.20141230111914.138: ** encode
 inline boost::uint64_t encode_block(boost::uint64_t block) {
   boost::endian::big_to_native(block);
   block = block >> 2;
@@ -71,7 +62,6 @@ void encode(const Slice& input, std::string& output) {
     memcpy(d, &block, output_size-j);
   }
 }
-//@+node:michael.20141230111914.139: ** decode
 inline boost::uint64_t decode_block(boost::uint64_t block) {
   boost::endian::big_to_native(block);
   block = (block & 0xFFFFFFFFFFFFFF00) | ((block & 0x00000000000000FF) << 2);
@@ -129,7 +119,6 @@ inline boost::uint64_t decode_block(boost::uint64_t block) {
     memcpy(d, &block, max_j);
   }
 }
-//@+node:michael.20150101205559.9: ** dumpb64
 #ifdef DEBUG
 void dumpb64(const Slice& key, std::ostream& out) {
     std::string encoded;
@@ -147,6 +136,4 @@ void dumpb64(const Slice& key, std::ostream& out) {
     out << std::endl;        
   }
 #endif
-//@-others
 } // namespace larch_leaves 
-//@-leo

@@ -1,7 +1,3 @@
-//@+leo-ver=5-thin
-//@+node:michael.20141230111914.141: * @file simple.cpp
-//@@language cplusplus
-//@@tabwidth -2
 #include <iostream>
 #include <sstream>
 #include "larch/leaves.h"
@@ -45,4 +41,3 @@ int main(int argc, const char* argv[]) {
     db->dump(std::cout);
   }
 }
-//@-leo

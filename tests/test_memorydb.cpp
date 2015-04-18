@@ -1,11 +1,5 @@
-//@+leo-ver=5-thin
-//@+node:michael.20150106224503.8: * @file test_memorydb.cpp
-//@@language cplusplus
-//@@tabwidth -2
 //#define BOOST_TEST_NO_MAIN
 //#define GENERATE
-//@+<< includes >>
-//@+node:michael.20150106224503.9: ** << includes >>
 #include <string.h>
 #include <stdlib.h>
 #include <iostream>
@@ -16,11 +10,8 @@
 #include <boost/test/included/unit_test.hpp>
 #include "larch/leaves.h"
 #include "node.h"
-//@-<< includes >>
 using namespace larch_leaves;
 
-//@+others
-//@+node:michael.20150106224503.20: ** Test Utils
 namespace larch_leaves {
 
 void testpoint(const char* str) {
@@ -41,7 +32,6 @@ std::stringstream dumy;
 std::ostream& out(dumy);
   
 #endif
-//@+node:michael.20150106224503.34: ** Value Creators
 template<typename content_t> std::string 
 value(content_t content, size_t size=0) {
   std::stringstream f;
@@ -52,7 +42,6 @@ value(content_t content, size_t size=0) {
     
   return result;
 }
-//@+node:michael.20150106224503.19: ** TestMemoryDB
 struct TestMemoryDB {
   MemoryDatabase *db;
   
@@ -232,7 +221,6 @@ struct TestMemoryDB {
 
 
 TestMemoryDB test_mdb;
-//@+node:michael.20150106224503.18: ** TestSuite
 
 BOOST_AUTO_TEST_CASE(Access) {
   test_mdb.test_Access();
@@ -280,6 +268,4 @@ struct SetTerminate {
 SetTerminate s;
 #endif
 #endif
-//@-others
 
-//@-leo
