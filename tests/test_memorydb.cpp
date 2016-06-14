@@ -8,8 +8,7 @@
 #include <vector>
 #define BOOST_TEST_MODULE TrieTest
 #include <boost/test/included/unit_test.hpp>
-#include "larch/leaves.h"
-#include "node.h"
+#include "../src/node.hpp"
 using namespace larch_leaves;
 
 namespace larch_leaves {
@@ -25,36 +24,36 @@ std::ostream& out(std::cerr);
 
 #undef BOOST_REQUIRE
 #define BOOST_REQUIRE(x) assert(x)
- 
+
 #else
 
 std::stringstream dumy;
 std::ostream& out(dumy);
-  
+
 #endif
-template<typename content_t> std::string 
+template<typename content_t> std::string
 value(content_t content, size_t size=0) {
   std::stringstream f;
   f << "value-" << content;
   std::string result(f.str());
   while(result.size() < size)
     result.push_back('-');
-    
+
   return result;
 }
 struct TestMemoryDB {
   MemoryDatabase *db;
-  
+
   std::string number(int number, size_t size=0) {
       std::stringstream f;
       f << std::setw(size) << std::setfill('0') << number;
       return f.str();
     }
-    
+
   void test_Access()  {
       int i;
       std::unique_ptr<MemoryDatabase> db(MemoryDatabase::create());
-      
+
       for(i = 0; i < 10000; i+=2) {
         std::string n = number(i, 6);
         db->find(n);
@@ -68,25 +67,25 @@ struct TestMemoryDB {
         BOOST_REQUIRE(db->key() == n);
         BOOST_REQUIRE(db->value() == n);
       }
-      
+
       BOOST_REQUIRE(i == 10000);
       out << "forward iteration passed" << std::endl;
-      
+
       for(db->last(), i = 10000-2; db->is_valid(); db->prev(), i-=2) {
         std::string n = number(i, 6);
         BOOST_REQUIRE(db->key() == n);
         BOOST_REQUIRE(db->value() == n);
       }
-      
+
       BOOST_REQUIRE(i == -2);
       out << "backward iteration passed" << std::endl;
-            
+
       std::string n = number(1000, 6);
       db->find(n);
       BOOST_REQUIRE(db->is_valid());
       BOOST_REQUIRE(db->key() == n);
       BOOST_REQUIRE(db->value() == n);
-      
+
       n = number(1001, 6);
       db->find(n);
       BOOST_REQUIRE(!db->is_valid());
@@ -95,7 +94,7 @@ struct TestMemoryDB {
       BOOST_REQUIRE(db->is_valid());
       BOOST_REQUIRE(db->key() == n);
       BOOST_REQUIRE(db->value() == n);
-     
+
       n = number(1001, 6);
       db->find(n);
       BOOST_REQUIRE(!db->is_valid());
@@ -105,21 +104,21 @@ struct TestMemoryDB {
       BOOST_REQUIRE(db->key() == n);
       BOOST_REQUIRE(db->value() == n);
       out << "find passed" << std::endl;
-      
+
       for(db->first(); db->is_valid(); db->next())
         db->remove();
-      
+
       out << "removed passed" << db->count() << std::endl;
       for(db->first(); db->is_valid(); db->next())
         BOOST_REQUIRE(0);
-        
+
       out << "removed passed" << db->count() << std::endl;
       BOOST_REQUIRE(db->count() == 0);
     }
-    
+
     void test_Random() {
         std::unique_ptr<MemoryDatabase> db(MemoryDatabase::create());
-                
+
         const char* data[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
           "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
           "Acadia", "Acadia's", "Adas", "Adella's", "Adena's", "Adey's",
@@ -208,7 +207,7 @@ struct TestMemoryDB {
           "Columbia", "Columbine", "Comdr's", "Comintern's", "Communists",
           "Como's", "Concepcion", "Congress's", "Conrade's", "Conroy",
           "Consolata's", "Constantinople", "Continent's", NULL };
-        
+
         for(int i = 0; true; i++) {
           if (!data[i])
             break;
@@ -268,4 +267,3 @@ struct SetTerminate {
 SetTerminate s;
 #endif
 #endif
-

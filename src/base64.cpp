@@ -1,8 +1,7 @@
-
 #include <vector>
 #include <boost/cstdint.hpp>
 #include "conversion.hpp"
-#include "larch/leaves.h"
+#include "../include/larch/leaves.hpp"
 #ifdef DEBUG
 #include <iomanip>
 #endif
@@ -24,42 +23,30 @@ inline boost::uint64_t encode_block(boost::uint64_t block) {
 }
 
 void encode(const Slice& input, std::string& output) {
-  size_t size = input.size();
-  size_t output_size = 8*(size/6);
-  size_t div_size = size % 6;
-  
-  switch(div_size) {
-    case 1: output_size += 2; break;
-    case 2: output_size += 3; break;
-    case 3: output_size += 4; break;
-    case 4: output_size += 6; break;
-    case 5: output_size += 7; break;
+  size_t main_size, pad_size = 0;
+
+  main_size = 8*(input.size()/6);
+  switch(input.size()%6) {
+  case 1: pad_size = 2; break;
+  case 2: pad_size = 3; break;
+  case 3: pad_size = 4; break;
+  case 4: pad_size = 6; break;
+  case 5: pad_size = 7; break;
   }
 
-  output.resize(output_size);
-
-  const char* s = input.data();
-  boost::uint64_t* d = (boost::uint64_t*)&output[0];
-  int max_i = (int)(size-8), i = 0, j = 0;
-  for(; i <= max_i; i += 6, j += 8, s += 6, d++)
-    *d = encode_block(*(boost::uint64_t*)s);
-
-  max_i = (int)(size - i);
-  boost::uint64_t block = 0;
-  if (max_i >= 6) {
-    memcpy(&block, s, 6);
-    *d = encode_block(block);
-    max_i -= 6;
-    j += 8;
-    s += 6;
-    d++;
+  output.resize(main_size+pad_size);
+  size_t i, j;
+  for(i = j = 0; i < input.size(); i += 6, j+= 8) {
+    *(boost::uint64_t*)&output[j] = encode_block(*(boost::uint64_t*)
+						 (input.data()+i));
   }
-  
-  if (max_i > 0) {
-    block = 0;
-    memcpy(&block, s, max_i);
+  if (pad_size) {
+    i -= 6;
+    j -= 8;
+    boost::uint64_t block = 0;
+    memcpy(&block, input.data()+i, input.size()-i);
     block = encode_block(block);
-    memcpy(d, &block, output_size-j);
+    memcpy((void*)&output[j], &block, pad_size);
   }
 }
 inline boost::uint64_t decode_block(boost::uint64_t block) {
@@ -77,46 +64,31 @@ inline boost::uint64_t decode_block(boost::uint64_t block) {
 }
 
   void decode(const std::string& input, std::string& output) {
-  size_t size = input.size();
-  size_t output_size = 6*(size/8);
-  size_t div_size = size % 8;
+  size_t main_size, pad_size = 0;
 
-  switch(div_size) {
-    case 1: assert(0);
-    case 2: output_size += 1; break;
-    case 3: output_size += 2; break;
-    case 4: output_size += 3; break;
-    case 5: assert(0);
-    case 6: output_size += 4; break;
-    case 7: output_size += 5; break;
+  main_size = 6*(input.size()/8);
+  switch(input.size()%8) {
+  case 2: pad_size = 1; break;
+  case 3: pad_size = 2; break;
+  case 4: pad_size = 3; break;
+  case 6: pad_size = 4; break;
+  case 7: pad_size = 5; break;
   }
 
-  output.resize(output_size);
-
-  boost::uint64_t* s = (boost::uint64_t*)&input[0];
-  char* d = &output[0];
-  int max_j = (int)(output_size - 8), i = 0, j = 0;
-  
-  for(; j < max_j; i += 8, j += 6, s++, d += 6)
-    *(boost::uint64_t*)d = decode_block(*s);
-  
-  max_j = (int)(output_size - j);
-  boost::uint64_t block = 0;
-  if (max_j >= 6) {
-    block = *s;
-    block = decode_block(block);
-    memcpy(d, &block, 6);
-    max_j -= 6;
-    i += 8;
-    s++;
-    d += 6;
+  output.resize(main_size+pad_size);
+  size_t i, j;
+  boost::uint64_t block;
+  for(i = j = 0; i < input.size(); i += 8, j+= 6) {
+    block = decode_block(*(boost::uint64_t*)(input.data()+i));
+    memcpy((void*)&output[j], &block, 6);
   }
-  
-  if (max_j > 0) {
+  if (pad_size) {
+    i -= 8;
+    j -= 6;
     block = 0;
-    memcpy(&block, s, size-i);
+    memcpy(&block, input.data()+i, input.size()-i);
     block = decode_block(block);
-    memcpy(d, &block, max_j);
+    memcpy((void*)&output[j], &block, pad_size);
   }
 }
 #ifdef DEBUG
@@ -124,16 +96,16 @@ void dumpb64(const Slice& key, std::ostream& out) {
     std::string encoded;
     encode(key, encoded);
     out << "input: " << key.string() << "(" << key.size() << ")" << std::endl
-        << "output: " 
-        << std::setw(2) << std::setfill('0') 
+        << "output: "
+        << std::setw(2) << std::setfill('0')
         << (int)encoded[0];
-        
-    for(size_t i = 1; i < encoded.size(); i++) 
-        out << "|" 
-            << std::setw(2) << std::setfill('0') 
+
+    for(size_t i = 1; i < encoded.size(); i++)
+        out << "|"
+            << std::setw(2) << std::setfill('0')
             << (int)encoded[i];
 
-    out << std::endl;        
+    out << std::endl;
   }
 #endif
-} // namespace larch_leaves 
+} // namespace larch_leaves

@@ -1,479 +1,785 @@
-#include <memory.h>
-#include "node.h"
+/*
+  Handlers for all trie nodes
+*/
+
+#include "bittrie.hpp"
+#include <string.h>
 
 namespace larch_leaves {
 
-// Page Methods
-// ------------
-nodeid_t Page::new_node(size_t size_) {
-  NodePtr *ptrs = node_ptr;
-  size_t free_start = count ? ptrs[count-1].offset : sizeof(Page);
-  free_start -= size_;
-  nodeid_t new_id = count++;
-  ptrs[new_id].offset = (inpage_ptr)free_start;
-  return new_id;
-}
-// PageRef Methods
-// ---------------
-bool PageRef::defragment(Trace& trace) const {
-  // keep in mind: root is never removed, instead thethe page will be removed
-  NodePtr* ptrs = page->node_ptr;
-  size_t node_count = 1, old_count = count();
-  char* page_start = &page->data[0];
-  char* node_start = page_start + ptrs[0].offset;
-  char* free_start = page_start + ptrs[count()-1].offset;
-  NodePtr new_ptrs[MAX_NODE_COUNT];
-  nodeid_t map[MAX_NODE_COUNT]; // maps old nodeids to new nodeids
-  bool nodes_moved = false;
-  size_t hole_size = 0;
-  bool moved = false;
-   
-  // closes the holes in the page 
-  for(size_t i = 1; i < old_count; i++) {
-    size_t node_size = get_node_size((nodeid_t)i);
-    map[i] = (nodeid_t)node_count;
-    
-    if (ptrs[i].type == kRemoved) {
-      // a hole
+struct LeafBase : public NodeHandler {
+  size_t len(const Node *rnode) { return 0; }
 
-      // holes are often continuous to avoid many costly
-      // memmove operations we will do it at the next item
-      hole_size += node_size;
-      node_start -= node_size;
-      moved = true; // hole_size can be 0 if node_size is 0
-                    // ==> hole_size>0 cannot be used as moved indicator
-      continue;
-    }
-    
-    if (moved) {
-      TESTPOINT(DefragmentNodeMove);
-      // node_start points still to the last hole!
-      memmove(free_start+hole_size, free_start, node_start-free_start);
-      free_start += hole_size;
-      node_start += hole_size;
-      hole_size = 0;
-      moved = false;
-      nodes_moved = true;
-    }
-    
-    node_start -= node_size;     
-    memcpy(&new_ptrs[node_count], &ptrs[i], sizeof(NodePtr));
-    new_ptrs[node_count].offset = (inpage_ptr)(node_start-page_start);
-      
-    node_count++;
-  }
+  size_t count(const Node *node) { return 0; }
 
-  // if (do_move)
-  //    the hole is at the end, we need not do anything just cut
-  //    which is done at the next line
-  page->count = (boost::uint16_t)node_count;
-    
-  if (!nodes_moved)
-    return false;  // not defragmented 
+  void next(Trace &trace) { trace.parent_next(); }
 
-  // ptrs[0] ist still the same
-  memcpy(&ptrs[1], &new_ptrs[1], sizeof(NodePtr)*(node_count-1));
+  void prev(Trace &trace) { trace.parent_prev(); }
 
-  // map the child ids for each node
-  map[0] = 0; // is not done before (and is needed for Trie!)
-  for(size_t i = 0; i < node_count; i++, ptrs++) {
-    NodeHandler *handler = NodeHandler::handlers[ptrs->type];
-    Node* node = (Node*)&page->data[ptrs->offset];
-    nodeid_t children[65];
-    size_t child_count = handler->get_children(ptrs, node, children);
-    for(size_t j = 0; j < child_count; j++)
-      children[j] = map[children[j]];
-    handler->replace_children(ptrs, node, children);
-  }
-  
-  trace.refresh_trace();
-  return true;
-}
-void PageRef::grow_node_by(nodeid_t node_id, int size) const {
-  if (size == 0)
-    return;
+  void first(Trace &trace) {}
 
-  NodePtr* ptrs = page->node_ptr;
-  size_t count_ = count();
-  size_t free_start = ptrs[count_-1].offset;
-  size_t node_start = ptrs[node_id].offset;
-  size_t node_size = get_node_size(node_id);
-  
-  if (size < 0)
-    node_size += size;
-    
-  memmove(&page->data[free_start-size], &page->data[free_start],
-          node_start-free_start+node_size);
-  
-  for(size_t i = node_id; i < count_; i++)
-    ptrs[i].offset -= size;
-}
-void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
-  // first remove the old nodes space
-  int delta = (int)(page_pad(sizeof(pageid_t)) - get_node_size(node_id));
-  assert(delta <= 0);
-  grow_node_by(node_id, delta);
-  
-  NodePtr *ptr = page->node_ptr + node_id;
-  ptr->extra = 0;
-  ptr->type = kLink;
-  *((pageid_t*)&page->data[ptr->offset]) = page_id;
-}
-// Trace Methods
-// -------------
-void Trace::find(const Slice& key_) {
-  resize(1);
-  key.assign(key_.data(), key_.size());
-
-#if 1
-
-  size_t trace_len = key_.size();
-  max_page_key = 12;
-  trace_len = std::min(trace_len, max_page_key);
-  std::string k = key_.string();
-  bool f = false;
-  for(size_t i = 0; i < 4 && trace_len>=min_page_key; i++, trace_len--) {
-    std::unordered_map<std::string, PageHashVal>::iterator found;
-    found = page_hash.find(k.substr(0, trace_len));
-    if (found != page_hash.end()) {
-      /*if (found->second.prefix != k.substr(0, found->second.prefix.size())) {
-        //std::cerr << "wrong prefix" << std::endl;
-        stat_wrong_prefix++;
-        continue;
-      }*/
-      /*std::cerr << "found page: " << found->second.pageid 
-                << " ," << found->second.prefix.size() << ", " << trace_len 
-                << ", " << found->second.root_start
-                << std::endl;*/
-      f = true;
-      
-      /*std::string &key_(found->second.prefix);
-      std::cerr << "  prefix:";
-      for(size_t j = 0; j < key_.size(); j++) {
-        std::cerr << " " << std::hex << (int)key_[j];
-      }
-      std::cerr << std::dec << std::endl;*/
-      
-      stat_short_find += 1;
-      NodeRef node(map.get_page(found->second.pageid), 0);
-      size_t start = found->second.root_start;
-      _push(Transition(node, start, start+node.get_len()));
-      break;
-    }
-  }
-  
-  if (!f) {
-    //std::cerr << "not found: " << trace_len << ", " << key_.size() << std::endl;
-  }
-  else if (0) {
-    // muss übereinstimmen
-    current().find(*this); // not back.node (pop_back!)
-    
-    stack_t cmp(stack);
-
-    resize(1);
-    
-    current().find(*this); // not back.node (pop_back!)
-    
-    stack_t::reverse_iterator j, k;
-    j = stack.rbegin();
-    k = cmp.rbegin();
-    
-    std::cerr << "cmp: " << cmp.size() << "==" << stack.size() << std::endl;
-    if (j->node.page.id != k->node.page.id) {
-      std::cerr << "cmp: " << cmp.size() << "==" << stack.size() << std::endl;
-      
-      stack_t::iterator i;
-      for(i = stack.begin(); i != stack.end(); i++) {
-        std::cerr << "org: " <<  i->start <<  ", " << i->end 
-                  << "  " << i->node.page.id 
-                  << ", " << i->node.id 
-                  << ", " << (int)i->node.type() << std::endl;
-      }
-  
-      for(i = cmp.begin(); i != cmp.end(); i++) {
-        std::cerr << "sht: " <<  i->start <<  ", " << i->end 
-                  << "  " << i->node.page.id << ", " << i->node.id << std::endl;
-      }
-      
-      
-      std::cerr << "  key:";
-      for(size_t j = 0; j < key.size(); j++) {
-        std::cerr << " " << std::hex << (int)key[j];
-      }
-      std::cerr << std::dec << std::endl;
-    }
-    assert(j->node.page.id == k->node.page.id);
-    assert(j->node.id == k->node.id);
-  }
-
-
-#endif  
-  
-#if 0
-  size_t pl = common_prefix(key_.data(), key.data(), 
-                            std::min(key_.size(), key.size()));
-  std::vector<Transition>::iterator i;
-  for(i = stack.begin(); i != stack.end(); i++) {
-    if (i->end > pl) {
-      stack.erase(i+1, stack.end());
-      back = &stack.back();
-      break;
-    }
-  }
-  
-  key.assign(key_.data(), key_.size());
-  if (back->node.is_leaf()) {
-    if (back->end < key.size()) {
-      _pop();
-    } else {
-      assert(back->end == key.size());
-      return; // we are already here
-    }
-  }
-#endif  
-  
-  size_t trace_size = size();
-  current().find(*this); // not back.node (pop_back!)
-  
-  stat_find_count++;
-  stat_reuse_trace += trace_size;
-  stat_find_trace += size() - trace_size;
-  {
-    std::vector<Transition>::iterator i;
-    for(i = stack.begin()+trace_size; i != stack.end(); i++) {
-      switch(i->node.type()) {
-        case kBitTrie:
-        case kTrie:
-          stat_tries++;
-          break;
-          
-        case kCompressed:
-          stat_compressed++;
-          break;
-          
-        case kLink:
-          stat_link++;
-          break;
-      }
-    }
-  }
-}
-#define MAX_PAGE_FREE_SIZE (sizeof(Page)-PAGE_HEADER_SIZE)
-
-struct BestFitting {
-  size_t best;
-  size_t sizes[MAX_NODE_COUNT];
-  size_t min_size;
-  nodeid_t best_id;
-  bool found;
-  nodeid_t stack[MAX_NODE_COUNT];
-  nodeid_t best_stack[MAX_NODE_COUNT];
-    
-  BestFitting(Page* page, size_t min_size_) 
-    : best(PAGE_SIZE), min_size(min_size_), best_id(1), found(false) {
-      page->init_sizes(sizes);
-    }
+  void last(Trace &trace) {}
 };
 
-size_t calc_sizes(const NodeRef& node, BestFitting& bf, size_t index) {
-  nodeid_t children[65];
-  size_t size = bf.sizes[node.id];
-  size_t count = node.get_children(children);
-  bf.stack[index++] = node.id;
-  
-  for(size_t i = 0; i < count; i++) {
-    size += calc_sizes(NodeRef(node.page, children[i]), bf, index);
-    if (bf.found)
-      return 0;
+struct TrieBase : public NodeHandler {
+  size_t len(const Node *node) { return 1; }
+
+  void data(Node *node, const void *data) {}
+
+  Slice data(const Node *node) { return Slice(); }
+
+  virtual void add_node(NodeRef &rnode, trieindex_t index, const TempNode &node,
+                        Trace &trace) = 0;
+
+  void add(const TempNode &leaf, Trace &trace) {
+    Slice key(trace.current_key());
+    NodeRef &rnode(trace.current());
+
+    switch (key.size()) {
+    case 0:
+      TESTPOINT(TrieBaseAdd0);
+      leaf.add_to(trace);
+      trace.parent().node->children_[0] = trace.connect_ptr();
+      break;
+
+    case 1:
+      TESTPOINT(TrieBaseAdd1);
+      add_node(rnode, key[0], leaf, trace);
+      break;
+
+    default: {
+      TESTPOINT(TrieBaseAdd2);
+      Slice data(key.advance(1));
+      TempCompressed compressed(Slice(
+          data.data(), std::min(data.size(), (size_t)MAX_COMPRESSED_LEN)));
+      add_node(rnode, key[0], compressed, trace);
+      add_compressed(data.advance(compressed.node()->len()), trace);
+      trace.add(leaf);
+    }
+    }
   }
-    
-  if (size >= bf.min_size && size + bf.min_size <= MAX_PAGE_FREE_SIZE) {
-    size_t delta;
-    if (size > PAGE_SPLIT_SIZE) {
-      delta = size - PAGE_SPLIT_SIZE;
-      delta += delta / 2;
-    }
-    else {
-      delta = PAGE_SPLIT_SIZE - size;
-    }
-    if (delta < bf.best) {
-      memcpy(bf.best_stack, bf.stack, sizeof(nodeid_t)*index);
-      bf.best = delta;
-      bf.best_id = node.id;
-      if (bf.best < 512)
-        bf.found = true;
+};
+
+struct CompressedHandler : public NodeHandler {
+  inline char *raw_data(const Node *node) {
+    return ((char *)node) + sizeof(Node::header_t) + sizeof(Page::ptr);
+  }
+
+  inline char *raw_data(const NodeRef &rnode) { return raw_data(rnode.node); }
+
+  inline size_t raw_size(const Node *node) {
+    return node->size - sizeof(Node::header_t) - sizeof(Page::ptr);
+  }
+
+  inline size_t raw_size(const NodeRef &rnode) { return raw_size(rnode.node); }
+
+  //   < 0 if key <  data
+  // returns
+  //  == 0 if key == data
+  //   > 0 if key > data
+  int keycmp(Trace &trace) {
+    Slice key(trace.current_key());
+    NodeRef &rnode(trace.current());
+    char *data = raw_data(rnode);
+    size_t len = raw_size(rnode);
+
+    int cmp = memcmp(key.data(), data, std::min(len, key.size()));
+    if (cmp != 0)
+      return cmp;
+
+    return key.size() >= len ? 0 : -1;
+  }
+
+  void keyappend(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    trace.cut_key();
+    char *data = raw_data(rnode);
+    size_t len = raw_size(rnode);
+    trace.key.append(data, len);
+  }
+
+  size_t count(const Node *node) { return 1; }
+
+  size_t len(const Node *node) { return raw_size(node); }
+
+  void data(Node *node, const void *data) {
+    memcpy(raw_data(node), data, raw_size(node));
+  }
+
+  Slice data(const Node *node) { return Slice(raw_data(node), raw_size(node)); }
+
+  void find(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    if (keycmp(trace) == 0 && rnode.node->children_[0])
+      rnode.child_find(rnode.node->children_[0], trace);
+  }
+
+  void first(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    keyappend(trace);
+    rnode.child_first(rnode.node->children_[0], trace);
+  }
+
+  void last(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    keyappend(trace);
+    rnode.child_last(rnode.node->children_[0], trace);
+  }
+
+  void next(Trace &trace) {
+    if (keycmp(trace) < 0) {
+      NodeRef &rnode(trace.current());
+      keyappend(trace);
+      rnode.child_first(rnode.node->children_[0], trace);
+    } else {
+      trace.parent_next();
     }
   }
 
-  return size;
-}
-
-void Trace::reserve_space(size_t size_) {
-  // during this loop current() can change its page!
-  while (current().page.free_size() < size_) {
-    NodeRef root(current().page, 0);    
-    BestFitting bf(root.page.page, size_);
-    calc_sizes(root, bf, 0);
-    
-    PageRef newpage = storage.new_page();
-
-    if (new_page_in_hash()) {
-      PageRef &pr(current().page);
-      bool show = false;
-      if (show) {
-        std::cerr << "hash page: " << pr.id << " - " << newpage.id 
-                  << " key_len: " << key.size() 
-                  << "| bestid: " << bf.best_id << std::endl;
-                  
-        stack_t::iterator i;
-        for(i = stack.begin(); i != stack.end(); i++) {
-          std::cerr << "org: " 
-                    <<  i->start <<  ", " << i->end << " = " << (int)key[i->start]
-                    << "|" << i->node.page.id 
-                    << ", " << i->node.id 
-                    << ", " << (int)i->node.type() << std::endl;
-        }
-      }
-      
-      std::vector<Transition>::reverse_iterator i;
-      for(i = stack.rbegin(); i != stack.rend(); i++) {
-        if (i->node.id == 0) {
-          char key_buffer[MAX_KEY_SIZE_64];
-          Slice key_(key_buffer, i->start);
-          memcpy(key_buffer, key.data(), key_.size());
-          if (show) {
-            std::cerr << "  found root: " << i->node.page.id << ", " << i->start 
-                      << ", " << (int)key[i->start-1] << std::endl;
-          }
-          for(nodeid_t *id = bf.best_stack; *id != bf.best_id; id++) {
-            NodeRef n(pr, *id);
-            key_ = n.append(*(id+1), key_);
-            if (show) {
-              std::cerr << "   add stack: " << *id << ", " 
-                        << n.get_len() << ", " << key_.size() << std::endl;
-            }
-          }
-          if (show) {
-            std::cerr << "  prefix:";
-            for(size_t j = 0; j < key_.size(); j++) {
-              std::cerr << " " << std::hex << (int)key_[j];
-            }
-            std::cerr << std::dec << std::endl;
-            //assert(0);
-          }
-            
-          add_page_to_hash(key_, newpage);
-          break;
-        }
-      }
+  void prev(Trace &trace) {
+    if (keycmp(trace) > 0) {
+      NodeRef &rnode(trace.current());
+      keyappend(trace);
+      rnode.child_last(rnode.node->children_[0], trace);
+    } else {
+      trace.parent_prev();
     }
-      
-    NodeRef to_move(root.page, bf.best_id);
-    move_node(newpage, to_move);
-      
-    root.page.change_to_link(bf.best_id, newpage.id);
-    if (!root.page.defragment(*this))
-      refresh_trace();
   }
-}
-nodeid_t Trace::move_node(const PageRef& new_page, const NodeRef& node) {
-  if (new_page.id == node.page.id)
-    return node.id;
-    
-  nodeid_t children[65];
-  size_t count = node.get_children(children);
-  
-  NodeRef new_node(new_page, new_page.new_node(node.size()));
-  copy_node(new_node, node);
-      
-  for(size_t i = 0; i < count; i++) {
-    NodeRef child(node.page, children[i]);
-    children[i] = move_node(new_page, child);
+
+  void reinsert(TempCompressed &rest_me, trieindex_t index, Trace &trace) {
+    BitTrie *bn;
+    Page::ptr child;
+
+    if (raw_size(rest_me.node()) == 0) {
+      TESTPOINT(CompressReinsert0);
+      child = trace.current().node->children_[0];
+      trace.current().node->children_[0] = 0;
+      bn = BitTrie::cast(trace.current().node);
+      bn->add(index, child, trace.current().node->children_);
+    } else {
+      TESTPOINT(CompressReinsert1);
+      rest_me.add_to(trace);
+      child = trace.parent().node->children_[0];
+      trace.parent().node->children_[0] = 0;
+
+      Node *node = trace.parent().node;
+      bn = BitTrie::cast(node);
+      bn->add(index, trace.connect_ptr(), node->children_);
+      trace.current().node->children_[0] = child;
+      trace.pop();
+    }
   }
-  
-  new_node.replace_children(children);
-  node.page.free_node(node.id);
-  return new_node.id;
-}
-void Trace::merge_pages() {
-  PageRef page(current().page);
-  
-  // this is never called by the trace root
-  // => stack.size() >= 2
-  
-  for(int i = (int)stack.size()-2; i >= 0; i--) {
-    NodeRef& link(stack[i].node);
-    
-    if (link.page.id != page.id) {
-      assert(link.type() == kLink);
-      
-      if (link.page.free_size() >= page.size()) {
-        TESTPOINT(MergePages);
-        
-        NodeRef& parent(stack[i-1].node); // the child's parent
-        NodeRef page_root(page, 0);
-        
-        nodeid_t child_id = move_node(parent.page, page_root);
-                  
-        // replace the link with the child
-        nodeid_t children[65];
-        size_t count = parent.get_children(children);
-        for(size_t i = 0; i < count; i++) {
-          if (children[i] == link.id) {
-            children[i] = child_id;
-            break;
-          }
-        }
-        parent.replace_children(children);
-                  
-        link.page.free_node(link.id);
-        if (!link.page.defragment(*this))
-          refresh_trace();
-          
-        map.free_page(page);
-      }
+
+  void add(const TempNode &leaf, Trace &trace) {
+    NodeRef &rnode(trace.current());
+    Slice key(trace.current_key());
+    size_t len = raw_size(rnode);
+    char *data = raw_data(rnode);
+
+    if (!rnode.node->children_[0]) {
+      // A new leaf with some rest key is inserted
+      TESTPOINT(CompressAddNew);
+      assert(len == key.size());
+      leaf.add_to(trace);
+      trace.parent().node->children_[0] = trace.connect_ptr();
       return;
     }
-  }
-}
-// NodeStorageInHeap implementation
-// --------------------------------
 
-PageRef NodeStorageInHeap::new_page() {
-  if (_free_pages) {
-    std::vector<_page_ptr>::iterator i;
-    for(i = _pages.begin(); i != _pages.end(); i++) {
-      if (!i->get()) {
-        pageid_t id = (pageid_t)(i - _pages.begin());
-        Page* page = new Page;
-        i->reset(page);
-        _free_pages--;
-        return PageRef(page, id, (pageoffset_t)id);
+    size_t prefix_size =
+        common_prefix(key.data(), data, std::min(len, key.size()));
+    TempCompressed rest_me(
+        Slice(data + prefix_size + 1, len - prefix_size - 1));
+    TempTrie trie(1);
+
+    trace.reserve_space(trie.pad_size());
+    
+    // rnode may have changed
+    NodeRef& nrnode = trace.current();
+    len = raw_size(nrnode);
+    data = raw_data(nrnode);
+    Page::ptr child = nrnode.node->children_[0];
+    int delta;
+    trieindex_t first = data[0];
+
+    // the next lines will not change child, because we allready reserved
+    // the space above
+
+    if (prefix_size == 0) {
+      // insert one trie node
+      TESTPOINT(CompressAdd0);
+      delta = trace.change_node(trie);
+    } else {
+      // another compressed
+      TESTPOINT(CompressAdd1);
+      first = data[prefix_size];
+
+      Slice next_key(key.data(), prefix_size);
+      delta = trace.change_node(TempCompressed(next_key));
+      trie.add_to(trace);
+      trace.parent().node->children_[0] = trace.connect_ptr();
+    }
+
+    if (child > nrnode.ptr())
+      child += delta;
+
+    // temporary put the child id on the current() trie
+    // (ensures if current is moved also the child is moved)
+    trace.current().node->children_[0] = child;
+    reinsert(rest_me, first, trace);
+    trace.current().add(leaf, trace);
+  }
+
+#ifdef DEBUG
+  void dump(Page *page, Node *node, std::ostream &out) {
+    const char *t3 = "            ";
+    size_t len_ = raw_size(node);
+    char *data_ = raw_data(node);
+
+    out << t3 << "type:  compressed" << std::endl;
+    out << t3 << "data:  " << std::setw(2) << std::setfill('0')
+        << (int)data_[0];
+    for (size_t i = 1; i < len_; i++)
+      out << "|" << std::setw(2) << std::setfill('0') << (int)data_[i];
+    out << std::endl;
+    out << t3 << "size:  " << (int)len_ << std::endl
+        << t3 << "child: " << (int)node->children_[0] << std::endl;
+  }
+#endif
+};
+
+static CompressedHandler compressed;
+
+// links to another page
+
+struct LinkHandler : public LeafBase {
+  inline PageLink *raw_data(const Node *node) {
+    return (PageLink *)(((char *)node) + sizeof(Node::header_t));
+  }
+
+  void data(Node *node, const void *data) {
+    memcpy(raw_data(node), data, sizeof(PageLink));
+  }
+
+  Slice data(const Node *node) {
+    return Slice((char*)raw_data(node), sizeof(PageLink));
+  }
+
+  NodeRef &link_node(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    PageLink *link = raw_data(rnode.node);
+    PageRef next_page(trace.map.get_page(link->page_id));
+    return trace.push(
+        NodeRef(next_page, next_page.page->entry_points[link->entry] - 1));
+  }
+
+  void find(Trace &trace) { link_node(trace).find(trace); }
+
+  void first(Trace &trace) { link_node(trace).first(trace); }
+
+  void last(Trace &trace) { link_node(trace).last(trace); }
+
+  void add(const TempNode &leaf, Trace &trace) {
+    assert(0); // may never be called
+  }
+
+  bool eat_child(NodeRef &rnode, Node *data) { return false; }
+
+#ifdef DEBUG
+  void dump(Page *page, Node *node, std::ostream &out) {
+    const char *t3 = "            ";
+    PageLink *link = raw_data(node);
+    out << t3 << "type:  link" << std::endl
+        << t3 << "page:  " << link->page_id << std::endl
+        << t3 << "entry: " << (int)link->entry << std::endl;
+  }
+#endif
+};
+
+static LinkHandler link;
+
+struct TrieHandler : public TrieBase {
+  size_t count(const Node *node) { return 65; }
+
+  void find(Trace &trace) {
+    Slice key(trace.current_key());
+    NodeRef &rnode(trace.current());
+    int index = key.empty() ? 0 : key[0] + 1;
+    Page::ptr child = rnode.node->children_[index];
+    if (child)
+      rnode.child_find(child, trace);
+  }
+
+  void first(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    for (int index = 0; index < 65; index++) {
+      Page::ptr child = rnode.node->children_[index];
+      if (child) {
+        if (index)
+          trace.key.push_back((char)index - 1);
+        rnode.child_first(child, trace);
+        return;
       }
     }
-    _free_pages = 0;
+    assert(0);
   }
 
-  pageid_t id((pageid_t)_pages.size());
-  Page* page = new Page;
-  _pages.push_back(_page_ptr(page));
-  return PageRef(page, id, (pageoffset_t)id);
-}
+  void last(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    for (int index = 64; index >= 0; index--) {
+      Page::ptr child = rnode.node->children_[index];
+      if (child) {
+        if (index)
+          trace.key.push_back((char)index - 1);
+        rnode.child_last(child, trace);
+        return;
+      }
+    }
+    assert(0);
+  }
 
-void NodeStorageInHeap::free_page(const PageRef& page) {
-  if (page.id == _pages.size()-1) {
-    _pages.pop_back(); // remove last page
+  void next(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    Slice key(trace.current_key());
+    int index = key.empty() ? 1 : key[0] + 2;
+    for (; index < 65; index++) {
+      Page::ptr child = rnode.node->children_[index];
+      if (child) {
+        trace.cut_key();
+        trace.key.push_back((char)index - 1);
+        rnode.child_first(child, trace);
+        return;
+      }
+    }
 
-    // remove all pages at the end
-    while(!_pages.empty() && !_pages.back().get()) {
-      _pages.pop_back(); 
-      _free_pages--;
+    trace.parent_next();
+  }
+
+  void prev(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    Slice key(trace.current_key());
+    
+    if (key.empty()) {
+      trace.parent_prev();
+      return;
+    }
+
+    int index = ((int)key[0]);
+    for (; index >= 0; index--) {
+      Page::ptr child = rnode.node->children_[index];
+      if (child) {
+        trace.cut_key();
+        if (index)
+          trace.key.push_back((char)index - 1);
+        rnode.child_last(child, trace);
+        return;
+      }
+    }
+    trace.parent_prev();
+  }
+
+  void add_node(NodeRef &rnode, trieindex_t index, const TempNode &node,
+                Trace &trace) {
+    node.add_to(trace);
+    rnode.node->children_[index + 1] = trace.connect_ptr();
+  }
+
+  bool remove_child(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    Slice key(trace.current_key());
+    Page::ptr *children = rnode.node->children_;
+
+    int index = key.empty() ? 0 : key[0] + 1;
+    children[index] = 0;
+
+    size_t count = 0;
+
+    for (int i = 1; i < 65; i++) {
+      if (children[i])
+        count++;
+    }
+
+    if (count == 60) {
+      TESTPOINT(TrieRemove);
+      TempTrie trie(count);
+      Node *node = trie.node();
+      node->children_[0] = children[0];
+      BitTrie *bt = BitTrie::cast(node);
+      for (int i = 1; i < 65; i++) {
+        if (children[i])
+          bt->add(i - 1, children[i], node->children_);
+      }
+      trace.change_node(trie);
+    }
+
+    return true;
+  }
+
+#ifdef DEBUG
+  void dump(Page *page, Node *node, std::ostream &out) {
+    const char *t3 = "            ";
+
+    out << t3 << "type: trie" << std::endl;
+    out << t3 << "size: " << node->size << std::endl;
+    out << t3 << "data: ";
+
+    if (node->children_[0]) {
+      out << "E>" << (int)node->children_[0];
+      out << "|";
+    }
+
+    for (size_t i = 1; i < 65; i++) {
+      if (i != 1)
+        out << "|";
+
+      out << std::setw(2) << std::setfill('0') << i - 1 << ">"
+          << (int)node->children_[i];
+    }
+
+    out << std::endl;
+  }
+#endif
+};
+
+static TrieHandler trie;
+
+struct BitTrieHandler : public TrieBase {
+  size_t count(const Node *node) { return BitTrie::cast(node)->count() + 1; }
+
+  boost::uint64_t start_grow(const Node *node) {
+    return BitTrie::cast(node)->bits;
+  }
+
+  void end_grow(Node *node, boost::uint64_t value) {
+    BitTrie::cast(node)->bits = value;
+  }
+
+  void find(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    BitTrie *trie = BitTrie::cast(rnode.node);
+    Slice key(trace.current_key());
+
+    if (key.empty()) {
+      if (rnode.node->children_[0])
+        rnode.child_find(rnode.node->children_[0], trace);
+      return;
+    }
+
+    trieindex_t index = key[0];
+    int child_index = trie->get_child_index(index);
+    if (child_index >= 1)
+      rnode.child_find(rnode.node->children_[child_index], trace);
+  }
+
+  void first(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    BitTrie *trie = BitTrie::cast(rnode.node);
+
+    if (rnode.node->children_[0]) {
+      rnode.child_first(rnode.node->children_[0], trace);
+    } else {
+      int index = trie->first_bit();
+      assert(index >= 0);
+      trace.key.push_back((char)index);
+      int child_index = trie->get_child_index(index);
+      rnode.child_first(rnode.node->children_[child_index], trace);
     }
   }
-  else {
-    _pages[page.id].reset();
-    _free_pages++;
+
+  void last(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    BitTrie *trie = BitTrie::cast(rnode.node);
+    int child_index = 0;
+    int index = trie->last_bit();
+    if (index >= 0) {
+      trace.key.push_back((char)index);
+      child_index = trie->get_child_index(index);
+    }
+    assert(rnode.node->children_[child_index]);
+    rnode.child_last(rnode.node->children_[child_index], trace);
+  }
+
+  void next(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    BitTrie *trie = BitTrie::cast(rnode.node);
+    Slice key(trace.current_key());
+    int index = key.empty() ? trie->first_bit() : trie->next_bit(key[0]);
+
+    if (index >= 0) {
+      trace.cut_key();
+      trace.key.push_back((char)index);
+      int child_index = trie->get_child_index(index);
+      assert(rnode.node->children_[child_index]);
+      rnode.child_first(rnode.node->children_[child_index], trace);
+      return;
+    }
+
+    trace.parent_next();
+  }
+
+  void prev(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    BitTrie *trie = BitTrie::cast(rnode.node);
+    Slice key(trace.current_key());
+
+    if (key.empty()) {
+      trace.parent_prev();
+      return;
+    }
+    
+    int child_index = 0;
+    int index = trie->prev_bit(key[0]);
+
+    trace.cut_key();
+    if (index >= 0) {
+      trace.key.push_back((char)index);
+      child_index = trie->get_child_index(index);
+      assert(rnode.node->children_[child_index]);
+    }
+
+    if (rnode.node->children_[child_index])
+      rnode.child_last(rnode.node->children_[child_index], trace);
+    else
+      trace.parent_prev();
+  }
+
+  void add_node(NodeRef &rnode, trieindex_t index, const TempNode &node,
+                Trace &trace) {
+    BitTrie *bittrie = BitTrie::cast(rnode.node);
+    size_t count = bittrie->count();
+
+    if (count == 60) {
+      // change to Trie the space is the same as BitTrie
+      TESTPOINT(BitTrieAdd0);
+      TempTrie trie(count + 1);
+
+      Node *parent = trie.node();
+      parent->children_[0] = rnode.node->children_[0];
+
+      int bit = bittrie->first_bit(), i = 1;
+      while (bit >= 0) {
+        parent->children_[bit + 1] = rnode.node->children_[i];
+        bit = bittrie->next_bit(bit);
+        i++;
+      }
+      trace.change_node(trie);
+      trace.add(node);
+
+      parent = trace.parent().node;
+      parent->children_[index + 1] = trace.connect_ptr();
+      return;
+    }
+
+    trace.grow_node_by(sizeof(Page::ptr));
+      
+    TESTPOINT(BitTrieAdd1);
+    node.add_to(trace);
+    Node *parent = trace.parent().node;
+    bittrie = BitTrie::cast(parent);
+    bittrie->add(index, trace.connect_ptr(), parent->children_);
+  }
+
+  bool remove_child(Trace &trace) {
+    NodeRef &rnode(trace.current());
+    Slice key(trace.current_key());
+    BitTrie *bittrie = BitTrie::cast(rnode.node);
+    int index = key.empty() ? -1 : key[0];
+
+    if (index < 0) {
+      TESTPOINT(BitTrieRemove0);
+      rnode.node->children_[0] = 0;
+    } else {
+      TESTPOINT(BitTrieRemove1);
+      bittrie->remove(index, rnode.node->children_);
+      trace.grow_node_by(-(int)sizeof(Page::ptr));
+    }
+
+    return bittrie->count() > 0 || rnode.node->children_[0];
+  }
+
+#ifdef DEBUG
+  void dump(Page *page, Node *node, std::ostream &out) {
+    const char *t3 = "            ";
+
+    BitTrie *bittrie = BitTrie::cast(node);
+
+    out << t3 << "type: bittrie" << std::endl;
+    out << t3 << "size: " << node->size << std::endl;
+    out << t3 << "data: ";
+
+    if (node->children_[0]) {
+      out << "E>" << (int)node->children_[0];
+
+      if (bittrie->count())
+        out << "|";
+    }
+
+    int bit = bittrie->first_bit(), i = 1;
+    while (bit >= 0) {
+      if (i != 1)
+        out << "|";
+      out << std::setw(2) << std::setfill('0') << bit << ">"
+          << (int)node->children_[i];
+      bit = bittrie->next_bit(bit);
+      i++;
+    }
+
+    out << std::endl;
+  }
+#endif
+};
+
+static BitTrieHandler bittrie;
+
+// a leaf node
+struct LeafHandler : public LeafBase {
+  inline char *raw_data(const Node *node) {
+    return ((char *)node) + sizeof(Node::header_t);
+  }
+
+  inline size_t raw_size(const Node *node) {
+    return node->size - sizeof(Node::header_t);
+  }
+
+  void data(Node *node, const void *data) {
+    memcpy(raw_data(node), data, raw_size(node));
+  }
+
+  Slice data(const Node *node) { return Slice(raw_data(node), raw_size(node)); }
+
+  void find(Trace &trace) {}
+
+  void prev(Trace &trace) {
+    Slice key(trace.current_key());
+    if (key.empty())
+      trace.parent_prev();
+    else
+      trace.cut_key();
+  }
+
+  void add(const TempNode &leaf, Trace &trace) {
+    TESTPOINT(LeafAdd0);
+    Slice key(trace.current_key());
+    assert(key.size() != 0);
+    TempLeaf me(trace.current().data());
+    trace.change_node(TempTrie());
+    // reinsert me to trie
+    me.add_to(trace);
+    trace.parent().node->children_[0] = trace.connect_ptr();
+    trace.pop(); // back to parent
+    trace.add(leaf);
+  }
+
+#ifdef DEBUG
+  void dump(Page *page, Node *node, std::ostream &out) {
+    const char *t3 = "            ";
+
+    std::string data(node->data().string());
+    if (node->type == kLeaf) {
+      out << t3 << "type:  leaf" << std::endl
+          << t3 << "data:  " << data << std::endl
+          << t3 << "size:  " << data.size() << std::endl;
+    } else {
+      out << t3 << "type:  bigleaf" << std::endl;
+    }
+  }
+#endif
+};
+
+static LeafHandler leaf;
+
+struct RemovedHandler : public NodeHandler {
+  size_t len(const Node *node) {
+    assert(0);
+    return 0;
+  }
+
+  void data(Node *node, const void *data) { assert(0); }
+
+  Slice data(const Node *node) {
+    assert(0);
+    return Slice();
+  }
+
+  size_t count(const Node *node) { return 0; }
+
+  void find(Trace &trace) { assert(0); }
+  void next(Trace &trace) { assert(0); }
+  void prev(Trace &trace) { assert(0); }
+  void first(Trace &trace) { assert(0); }
+  void last(Trace &trace) { assert(0); }
+  void add(const TempNode &leaf, Trace &trace) { assert(0); }
+
+#ifdef DEBUG
+  void dump(Page *page, Node *node, std::ostream &out) {
+    const char *t3 = "            ";
+    out << t3 << "type:  removed" << std::endl
+        << t3 << "size:  " << node->size << std::endl;
+  }
+#endif
+};
+
+static RemovedHandler removed;
+
+NodeHandler *NodeHandler::handlers[7] = {&leaf, &leaf,    &link,   &compressed,
+                                         &trie, &bittrie, &removed};
+
+void TempNode::to_leaf(const Slice &value) {
+  size_t size = value.size();
+  Page::ptr ptr = page.new_node(sizeof(Node::header_t) + size);
+  Node *node = page.node(ptr);
+  node->type = kLeaf;
+  node->data(value.data());
+}
+
+void TempNode::to_trie(size_t child_count) {
+  if (child_count > 60) {
+    Page::ptr ptr = page.new_node(sizeof(Node::header_t) + sizeof(Page::ptr) * 65);
+    Node *node = page.node(ptr);
+    node->type = kTrie;
+  } else {
+    // +1 bacause of end child
+    size_t size = sizeof(BitTrie) + (child_count + 1) * sizeof(Page::ptr);
+    Page::ptr ptr = page.new_node(sizeof(Node::header_t) + size);
+    Node *node = page.node(ptr);
+    node->type = kBitTrie;
   }
 }
-} // namespace larch_leaves 
+
+void TempNode::to_compressed(const Slice &part) {
+  size_t size(part.size());
+  Page::ptr ptr = page.new_node(sizeof(Node::header_t) + sizeof(Page::ptr) + size); // one child
+  Node *node = page.node(ptr);
+  node->type = kCompressed;
+  node->data(part.data());
+}
+
+void TempNode::to_link(pageid_t page_id, Page::entry_t entry) {
+  PageLink link;
+  link.page_id = page_id;
+  link.entry = entry;
+  Page::ptr ptr = page.new_node(sizeof(Node::header_t) + sizeof(link));
+  Node *node = page.node(ptr);
+  node->type = kLink;
+  node->data(&link);
+}
+
+void TempNode::add_to(Trace &trace) const {
+  if (type() == kLink) {
+    PageLink *link = (PageLink *)node()->data().data();
+    if (link->page_id == trace.current().page.id) {
+      PageRef &page = trace.current().page;
+      NodeRef dst(page, page.page->entry_points[link->entry] - 1);
+      page.page->entry_points[link->entry] = 0;
+      trace.push(dst);
+    }
+  }
+
+  size_t size_ = pad_size();
+  trace.reserve_space(size_);
+  Page::ptr new_ptr = trace.current().page.new_node(size_);
+  NodeRef dst(trace.current().page, new_ptr);
+  memcpy(dst.node, node(), size_);
+  trace.push(dst);
+}
+
+} // namespace larch_leaves

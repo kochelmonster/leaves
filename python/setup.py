@@ -1,9 +1,4 @@
 #! /usr/bin/env python
-#@+leo-ver=5-thin
-#@+node:michael.20150106224503.13: * @file setup.py
-#@@first
-#@@language python
-#@@tabwidth -4
 #!/usr/bin/env python
 import os
 from setuptools import setup, find_packages
@@ -76,4 +71,3 @@ setup(
     ],
     cmdclass={"build_ext": my_build_ext}
 )
-#@-leo

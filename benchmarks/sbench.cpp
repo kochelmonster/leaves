@@ -4,34 +4,30 @@
 #include <assert.h>
 #include <stdio.h>
 #include <time.h>
-#if defined(__APPLE__) || defined(__linux__)
 #include <fcntl.h>
-#include <unistd.h>
 #include <errno.h>
-#include <sys/time.h>
-#else
-#include <windows.h>
-#include <io.h>
-#endif
-#include "larch/leaves.h"
+#include "../include/larch/leaves.hpp"
 #include <memory>
 #include <iostream>
 
-#ifndef PAGE_SIZE 
-#define PAGE_SIZE 8192
+#if defined(_WIN32)
+#include <io.h>
+#include <windows.h>
+#pragma warning(disable : 4996)
 #endif
+
+
+#define PAGE_SIZE 8196
 
 using namespace larch_leaves;
 
 #if !defined(_WIN32)
-#define _fileno  fileno
-#define _read  read
+#include <sys/time.h>
 
 unsigned long long rd_clock ()
 {
-unsigned int low, high;
-
-  __asm__ volatile("rdtsc" : "=a"(low), "=d" (high)); 
+  unsigned int low, high;
+  __asm__ volatile("rdtsc" : "=a"(low), "=d" (high));
   return (unsigned long long)low | (unsigned long long)high << 32;
 }
 #endif
@@ -56,7 +52,7 @@ unsigned long long report_process_size(void)
   unsigned int utime, stime, cutime, cstime, counter, priority, timeout, itrealvalue;
   unsigned int starttime, rss, rlim, startcode, endcode, startstack, kstkesp, ksteip;
   unsigned int signal, blocked, sigignore, sigcatch, wchan, ret, pid;
- 
+
   mypid = getpid();
   snprintf(fname, 1024, "/proc/%u/stat", mypid);
   statf = fopen(fname, "r");
@@ -66,12 +62,12 @@ unsigned long long report_process_size(void)
                &cmajflt, &utime, &stime, &cutime, &cstime, &counter, &priority, &timeout, &itrealvalue,
                &starttime, &vsize, &rss, &rlim, &startcode, &endcode, &startstack, &kstkesp, &ksteip, &signal,
                &blocked, &sigignore, &sigcatch, &wchan);
- 
+
   if (ret != 35)
      fprintf(stderr, "Failed to read all 35 fields, only %lu decoded\n", ret);
- 
+
   fclose(statf);
-  return vsize; 
+  return vsize;
 }
 #endif
 
@@ -114,34 +110,33 @@ unsigned long long startcycles, stopcycles;
   else
     in2 = NULL;
 
-  if( !in )
+  if( !in ) {
     fprintf (stderr, "unable to open input file #1\n");
+    return -1;
+  }
 
 
   std::unique_ptr<MemoryDatabase> db(MemoryDatabase::create());
-  
+
 #if !defined(_WIN32)
   size = lseek (fileno(in), 0L, 2);
   askitis = (char*)malloc(size);
   lseek (fileno(in), 0L, 0);
 #else
-  size = _lseeki64 (_fileno(in), 0L, 2);
+  size = _lseeki64 (fileno(in), 0L, 2);
   askitis = (char*)malloc(size);
-  _lseeki64 (_fileno(in), 0L, 0);
+  _lseeki64 (fileno(in), 0L, 0);
 #endif
   off = 0;
 
   do {
-    prev = _read (_fileno(in), askitis+off,size-off > 65536 ? 65536 : size-off);
+    prev = read (fileno(in), askitis+off,size-off > 65536 ? 65536 : size-off);
     off += prev;
   } while( off < size );
 
-
-  db->reset_statistics();
-
 //  naskitis.com:
-//  Start the timer. 
-  
+//  Start the timer.
+
 #if !defined(_WIN32)
   gettimeofday(&start, NULL);
   startcycles = rd_clock();
@@ -153,20 +148,24 @@ unsigned long long startcycles, stopcycles;
   for( prev = off = 0; off < size; off++ )
     if( askitis[off] == '\n' ) {
       Words++;
-      //printf("insert %i\n", Words);
-      if (Words == 2371 && false) {
-        askitis[off] = 0;
-        printf("break %s\n", askitis+prev);
+      /*if (Words == 1905) {
+        std::cout << "short before error" << std::endl;
+      }*/
+      if (Words % 10000 == 0) {
+        std::cout << "inserted: " << Words << std::endl;
       }
-      
+
       db->find(Slice(askitis+prev, off-prev));
       if (db->is_valid()) {
         Found++;
       } else {
         db->set_value(Slice());
+        //if (Words >= 1890)
+        //  db->check();
+
         Inserts++;
       }
-      prev = off + 1;
+    prev = off + 1;
     }
 
 //  naskitis.com:
@@ -175,7 +174,7 @@ unsigned long long startcycles, stopcycles;
 #if !defined(_WIN32)
   stopcycles = rd_clock();
   gettimeofday(&stop, NULL);
-  
+
   insert_real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001 * (stop.tv_usec - start.tv_usec );
   insert_real_time = insert_real_time/1000.0;
 #else
@@ -185,16 +184,22 @@ unsigned long long startcycles, stopcycles;
 #endif
 
 //  naskitis.com:
-//  Free the input buffer used to store the first file.  We must do this before we get the process size below. 
+//  Free the input buffer used to store the first file.  We must do this before we get the process size below.
   free (askitis);
-  
+
   MaxMem = db->pages()*PAGE_SIZE;
-  
+
+  Statistics statistics;
+  db->get_statistics(&statistics);
+
   fprintf(stderr, "BitTrie\nDASKITIS option enabled\n-------------------------------\n%-20s %.2f MB\n%-20s %.2f sec\n",
-    "Hat Array size:", MaxMem/1000000., "Time to insert:", insert_real_time);
+    "Trie size:", MaxMem/1000000., "Time to insert:", insert_real_time);
 #if !defined(_WIN32)
   fprintf(stderr, "%-20s %.2f MB\n", "Process Size:", report_process_size()/1000000.);
 #endif
+  fprintf(stderr, "%-20s %d\n", "Pages:", db->pages());
+  fprintf(stderr, "%-20s %d\n", "PageFreeSize:", statistics.page_free_size);
+  fprintf(stderr, "%-20s %d\n", "PageSize:", PAGE_SIZE);
   fprintf(stderr, "%-20s %d\n", "Words:", Words);
   fprintf(stderr, "%-20s %d\n", "Inserts:", Inserts);
   fprintf(stderr, "%-20s %d\n", "Found:", Found);
@@ -206,8 +211,6 @@ unsigned long long startcycles, stopcycles;
 
   //for( idx = 4; idx <= HatMax; idx++ )
   //  fprintf(stderr, "HAT_%.4d Nodes:      %d\n", HatSize[idx], hat->counts[idx]);
-  db->print_statistics();
-  
 
   Words = 0;
   Probes = 0;
@@ -217,7 +220,6 @@ unsigned long long startcycles, stopcycles;
   Inserts = 0;
   Missing = 0;
   Found = 0;
-  db->reset_statistics();
 
 //  search hat array
 
@@ -226,14 +228,14 @@ unsigned long long startcycles, stopcycles;
   askitis = (char*)malloc(size);
   lseek (fileno(in2), 0L, 0);
 #else
-  size = _lseeki64 (_fileno(in2), 0L, 2);
+  size = _lseeki64 (fileno(in2), 0L, 2);
   askitis = (char*)malloc(size);
-  _lseeki64 (_fileno(in2), 0L, 0);
+  _lseeki64 (fileno(in2), 0L, 0);
 #endif
   off = 0;
 
   while( off < size ) {
-    prev = _read (_fileno(in2), askitis+off,size-off > 65536 ? 65536 : size-off);
+    prev = read (fileno(in2), askitis+off,size-off > 65536 ? 65536 : size-off);
     off += prev;
   }
 
@@ -247,14 +249,13 @@ unsigned long long startcycles, stopcycles;
   for( prev = off = 0; off < size; off++ )
     if( askitis[off] == '\n' ) {
       Words++;
-      
       db->find(Slice(askitis+prev, off-prev));
       if (db->is_valid())
         Found++;
       else
         Missing++;
-        
-      prev = off + 1;
+
+    prev = off + 1;
     }
 
 //  naskitis.com:
@@ -262,11 +263,11 @@ unsigned long long startcycles, stopcycles;
 
 #if !defined(_WIN32)
   gettimeofday(&stop, NULL);
-  search_real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001  
+  search_real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001
   * (stop.tv_usec - start.tv_usec );
   search_real_time = search_real_time/1000.0;
   stopcycles = rd_clock();
-#else  
+#else
   QueryProcessCycleTime(GetCurrentProcess(), &stopcycles);
   *stop = clock ();
   search_real_time = (*stop - *start) / (float)CLOCKS_PER_SEC;
@@ -284,8 +285,6 @@ unsigned long long startcycles, stopcycles;
   //fprintf(stderr, "%-20s %.2f\n", "Pail/Search:", (double)Pail / Searches);
   //fprintf(stderr, "%-20s %.2f\n", "Bucket/Search:", (double)Bucket / Words);
   //fprintf(stderr, "%-20s %.2f\n", "Radix/Search:", (double)Radix / Words);
-  db->print_statistics();
 
   exit(0);
 }
-

@@ -1,25 +1,21 @@
 state:
-  fname: TrieBaseAdd3-2
-  pages: 
     - id:         0
       offset:     0
       node_count: 3
-      size:       40
-      free_size:  8150
-      sum_size:   8190
+      size:       48
+      free_size:  8128
+      sum_size:   8176
       nodes: 
-          - id:    0
-            ptr:   8176
-            type:  bittrie
-            data:  01>1
-          - id:    1
-            ptr:   8172
+          - ptr:    0
+            type: bittrie
+            size: 14
+            data: 01>1
+          - ptr:    1
             type:  compressed
             data:  02|03
             size:  2
             child: 2
-          - id:    2
-            ptr:   8164
+          - ptr:    2
             type:  leaf
             data:  value-1
             size:  7

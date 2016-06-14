@@ -3,7 +3,8 @@ top = "."
 out = "build"
 APPNAME = "base64bench"
 VERSION = "0.0"
-ALIGN = 4 # 4 is minimum align
+ALIGN = 16  # 4 is minimum align
+PAGE_SIZE = 1024*8
 
 
 def options(opt):
@@ -11,88 +12,75 @@ def options(opt):
     opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
 
 
-
-def configure_test(cfg):
-    import os
-    cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
-        
-    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
-                             "PAGE_SIZE=8192", 
-                             'CMPFILES="{}"'.format(cmpfiles_path)]
-                             
-    cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
-    cfg.env.STLIBPATH_TEST = []
-    if cfg.env.CXX_NAME == "gcc":
-        cfg.env.LINKFLAGS_TEST = ["-pthread"]
-        #, "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
-    
-    if cfg.options.gcov:
-        cfg.env.CXXFLAGS_TEST.extend(["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
-        cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
-   
-
-def configure_bench(cfg):
-    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN), "PAGE_SIZE=8192", "DEBUG"]
-    cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
-    
-    cfg.env.STLIBPATH_BENCH = []
-    if cfg.env.CXX_NAME == "gcc":
-        #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
-        #, "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0", 
-                                  "-march=corei7", "-O0", "-g"]
-
-
 def configure(cfg):
     import os
-    
+
+    cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
+
     load_modules = 'compiler_cxx boost waf_unit_test'
     if os.name == "nt":
         cfg.env['MSVC_VERSIONS'] = ['wsdk 8.0']
         cfg.env['MSVC_TARGETS'] = ['x64']
         load_modules += " msvc"
-        
+
     cfg.check_waf_version(mini='1.8.5')
     cfg.load(load_modules)
-    cfg.check_boost()#lib='system filesystem')
-    
-    cfg.env.INCLUDES = [os.path.abspath("include"), 
-                        os.path.abspath("src")]
+    cfg.check_boost()  # lib='system filesystem')
 
-    configure_test(cfg)
-    configure_bench(cfg)
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
+                             "PAGE_SIZE={}".format(PAGE_SIZE),
+                             'CMPFILES="{}"'.format(cmpfiles_path)]
+
+    cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
+    cfg.env.INCLUDES_TEST = [os.path.abspath("include"),
+                             os.path.abspath("src")]
+    cfg.env.STLIBPATH_TEST = []
+    if cfg.env.CXX_NAME == "gcc":
+        cfg.env.LINKFLAGS_TEST = ["-pthread"]
+        # , "-lboost_filesystem",  "-lboost_system"]
+        cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
+
+    if cfg.options.gcov:
+        cfg.env.CXXFLAGS_TEST.extend(
+            ["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
+        cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
+
+    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN),
+                              "PAGE_SIZE={}".format(PAGE_SIZE),
+                              'DEBUG']  # debug
+    cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
+    cfg.env.INCLUDES_BENCH = [os.path.abspath("include"),
+                              os.path.abspath("src")]
+    cfg.env.STLIBPATH_BENCH = []
+    if cfg.env.CXX_NAME == "gcc":
+        # cfg.env.LINKFLAGS_BENCH = ["-pthread"]
+        # , "-lboost_filesystem",  "-lboost_system"]
+        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0",
+                                  "-march=corei7", "-g", "-O0"]
 
 
 def build(bld):
     from os.path import join, abspath
-    sources = "trie.cpp node.cpp leaves.cpp base64.cpp murmurhash3.cpp"
+    sources = "page.cpp storage.cpp node.cpp leaves.cpp base64.cpp trace.cpp"
     sources = [join("src", s) for s in sources.split()]
-    
+
     bld.program(
-        features="test",
+        # features="test",
         source=[join("tests", "test_trie.cpp")]+sources,
         use="TEST BOOST",
         target="test_trie")
-    
+
     bld.program(
-        features="test",
+        # features="test",
         source=[join("tests", "test_bits.cpp")]+sources,
         use="TEST BOOST",
         target="test_bits")
 
     bld.program(
-        features="test",
+        # features="test",
         source=[join("tests", "test_memorydb.cpp")]+sources,
         use="TEST BOOST",
         target="test_memorydb")
-        
-    bld.program(
-        features="test",
-        source=[join("tests", "test_base64.cpp"), 
-                join("src", "base64.cpp")],
-        use="TEST BOOST",
-        target="test_base64")        
 
     """
     only for generating test_trie tests
@@ -103,12 +91,10 @@ def build(bld):
         task.exec_command(command + "|" + graph)
         task.exec_command("dot -Tsvg -O graph-0.dot")
         return task.exec_command("dot -Tsvg -O graph-1.dot")
-     
+
     bld.add_post_fun(generate_graph)
 
     bld.program(
         source=[join("benchmarks", "sbench.cpp")]+sources,
         use="BENCH BOOST",
         target="sbench")
-
-

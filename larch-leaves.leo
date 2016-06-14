@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Created by Leo: http://leoeditor.com/leo_toc.html -->
-<?xml-stylesheet ekr_test ?>
 <leo_file xmlns:leo="http://leoeditor.com/namespaces/leo-python-editor/1.1" >
 <leo_header file_format="2" tnodes="0" max_tnode_index="0" clone_windows="0"/>
 <globals body_outline_ratio="0.5" body_secondary_ratio="0.5">
@@ -10,138 +9,23 @@
 <preferences/>
 <find_panel_settings/>
 <vnodes>
-<v t="michael.20141215222649.4"><vh>@settings</vh></v>
-<v t="michael.20141215222649.9"><vh>Source</vh>
-<v t="michael.20141215222649.13"><vh>Logical</vh>
-<v t="michael.20141215222649.12"><vh>API</vh>
+<v t="michael.20141215222649.4"><vh>@settings</vh>
+<v t="michael.20141215222649.5"><vh>@bool shadow_in_home_dir = False</vh></v>
+<v t="michael.20141215222649.6"><vh>@string shadow_subdir = .leo_shadow</vh></v>
+</v>
+<v t="michael.20141215222649.9" a="E"><vh>Source</vh>
+<v t="michael.20141215222649.13" a="E"><vh>Logical</vh>
+<v t="michael.20141215222649.12" a="E"><vh>API</vh>
 <v t="michael.20141215222649.38"><vh>struct Options</vh></v>
-<v t="michael.20141217010530.13"><vh>struct NodePtr</vh></v>
 <v t="michael.20141215222649.23"><vh>class Cursor (Declaration)</vh></v>
 <v t="michael.20141215222649.104"><vh>class NoWhereCursor</vh></v>
 <v t="michael.20141215222649.27"><vh>Database (Declaration)</vh></v>
 <v t="michael.20141215222649.44"><vh>Database (Implementation)</vh></v>
 </v>
-<v t="michael.20141215222649.10"><vh>BitTrie</vh></v>
-<v t="michael.20141215222649.63"><vh>Memory Managment</vh>
-<v t="michael.20141215222649.11"><vh>@rst memory_manager.html</vh>
-<v t="michael.20141215222649.149"><vh>Links</vh>
-<v t="michael.20141215222649.135"><vh>NodeStorage (Declaration)</vh></v>
-<v t="michael.20141215222649.155"><vh>class NodeStorage (Implementation)</vh>
-<v t="michael.20141215222649.159"><vh>class PersistentNodeManager</vh></v>
-<v t="michael.20141215222649.156"><vh>class NodeStorageInHeap</vh></v>
-<v t="michael.20141215222649.160"><vh>class MultiProcessNodeMemoryManager</vh></v>
-</v>
-<v t="michael.20141215222649.136"><vh>class LeafStorage</vh></v>
-<v t="michael.20141215222649.72"><vh>Page</vh></v>
-</v>
-</v>
-</v>
-</v>
-<v t="michael.20141215222649.14"><vh>Files</vh>
-<v t="michael.20141230111914.135"><vh>@clean wscript</vh></v>
-<v t="michael.20141215222649.16"><vh>@path include/larch</vh>
-<v t="michael.20141215222649.17"><vh>@clean leaves.h</vh>
-<v t="michael.20141217010530.9"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
-<v t="michael.20141230111914.147"><vh>Exceptions</vh></v>
-<v t="michael.20141215222649.38"></v>
-<v t="michael.20141230111914.5"><vh>class Slice</vh></v>
-<v t="michael.20141215222649.23"></v>
-<v t="michael.20141215222649.27"></v>
-</v>
-</v>
-<v t="michael.20141215222649.15"><vh>@path src</vh>
-<v t="michael.20141219202729.4"><vh>@clean leaf.h</vh></v>
-<v t="michael.20141215222649.65"><vh>@clean node.h</vh>
-<v t="michael.20141217010530.12"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
-<v t="michael.20150106224503.60"><vh>Macros</vh></v>
-<v t="michael.20150101205559.30"><vh>TestCode</vh></v>
-<v t="michael.20141230111914.146"><vh>types</vh></v>
-<v t="michael.20141230111914.74"><vh>Utils</vh></v>
-<v t="michael.20141215222649.99"><vh>NodeHandler</vh></v>
-<v t="michael.20141215222649.67"><vh>Page</vh></v>
-<v t="michael.20141215222649.73"><vh>PageRef</vh>
-<v t="michael.20150112164548.4"><vh>declarations</vh></v>
-<v t="michael.20150112164548.5"><vh>count</vh></v>
-<v t="michael.20141230111914.39"><vh>size</vh></v>
-<v t="michael.20141230111914.38"><vh>free_size</vh></v>
-<v t="michael.20141230111914.37"><vh>get_node_size</vh></v>
-<v t="michael.20141230111914.43"><vh>free_node</vh></v>
-<v t="michael.20150112164548.7"><vh>new_node</vh></v>
-</v>
-<v t="michael.20141219202729.2"><vh>NodeRef</vh>
-<v t="michael.20141230111914.76"><vh>Convenient Delegators</vh></v>
-</v>
-<v t="michael.20141220220750.4"><vh>TempNode</vh></v>
-<v t="michael.20141219202729.3"><vh>PageMap</vh></v>
-<v t="michael.20141215222649.135"></v>
-<v t="michael.20141220220750.15"><vh>Trace</vh>
-<v t="michael.20150111191610.5"><vh>declarations</vh></v>
-<v t="michael.20141230111914.112"><vh>size</vh></v>
-<v t="michael.20150111191610.2"><vh>stack helpers</vh></v>
-<v t="michael.20150303095026.5"><vh>new_page_in_hash</vh></v>
-<v t="michael.20150303095026.6"><vh>add_page_to_hash</vh></v>
-<v t="michael.20150106224503.48"><vh>is_valid</vh></v>
-<v t="michael.20150101205559.11"><vh>check_valid</vh></v>
-<v t="michael.20141230111914.120"><vh>current</vh></v>
-<v t="michael.20150106224503.56"><vh>current_key</vh></v>
-<v t="michael.20150106224503.55"><vh>cut_key</vh></v>
-<v t="michael.20141230111914.119"><vh>parent</vh></v>
-<v t="michael.20150101205559.64"><vh>first</vh></v>
-<v t="michael.20150101205559.65"><vh>last</vh></v>
-<v t="michael.20150101205559.23"><vh>next</vh></v>
-<v t="michael.20150101205559.24"><vh>prev</vh></v>
-<v t="michael.20141230111914.121"><vh>parent_next</vh></v>
-<v t="michael.20141230111914.122"><vh>parent_prev</vh></v>
-<v t="michael.20150118002311.8"><vh>resize</vh></v>
-<v t="michael.20141230111914.116"><vh>reset</vh></v>
-<v t="michael.20141230111914.117"><vh>push</vh></v>
-<v t="michael.20141230111914.118"><vh>pop</vh></v>
-<v t="michael.20141230111914.123"><vh>remove</vh></v>
-<v t="michael.20141230111914.124"><vh>free_node</vh></v>
-<v t="michael.20141230111914.125"><vh>child_of_parent</vh></v>
-<v t="michael.20141230111914.126"><vh>add_node</vh></v>
-<v t="michael.20141230111914.128"><vh>grow_node_by</vh></v>
-<v t="michael.20141230111914.127"><vh>change_node</vh></v>
-<v t="michael.20141230111914.115"><vh>set_leaf</vh></v>
-<v t="michael.20150118002311.14"><vh>get_value</vh></v>
-<v t="michael.20150101205559.69"><vh>refresh_trace</vh></v>
-</v>
-<v t="michael.20150106224503.61"><vh>NodeRef-inlines</vh></v>
-</v>
-<v t="michael.20141215222649.161"><vh>@clean node.cpp</vh>
-<v t="michael.20141217010530.11"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
-<v t="michael.20150112164548.8"><vh>Page</vh>
-<v t="michael.20141230111914.29"><vh>new_node</vh></v>
-</v>
-<v t="michael.20141230111914.26"><vh>PageRef</vh>
-<v t="michael.20141230111914.27"><vh>defragment</vh></v>
-<v t="michael.20141230111914.30"><vh>grow_node_by</vh></v>
-<v t="michael.20141230111914.31"><vh>change_to_link</vh></v>
-</v>
-<v t="michael.20150110130802.6"><vh>Trace</vh>
-<v t="michael.20150110130802.8"><vh>find</vh></v>
-<v t="michael.20150110130802.7"><vh>reserve_space</vh></v>
-<v t="michael.20150111191610.4"><vh>move_node</vh></v>
-<v t="michael.20150110130802.26"><vh>merge_pages</vh></v>
-</v>
-<v t="michael.20141215222649.155"></v>
-</v>
-<v t="michael.20141220220750.5"><vh>@clean port.h</vh>
-<v t="michael.20141230111914.144"><vh>GCC</vh></v>
-<v t="michael.20141230111914.145"><vh>Visual C++</vh></v>
-</v>
-<v t="michael.20141219202729.8"><vh>@clean trie.cpp</vh>
-<v t="michael.20141219202729.11"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
-<v t="michael.20141230111914.148"><vh>Node Structs</vh>
-<v t="michael.20150116155028.17"><vh>Compressed</vh></v>
-<v t="michael.20150116155028.18"><vh>Leaf</vh></v>
-<v t="michael.20150116155028.19"><vh>Trie</vh></v>
-<v t="michael.20150116155028.20"><vh>BitTrie</vh></v>
-<v t="michael.20150116155028.23"><vh>Node</vh></v>
-</v>
-<v t="michael.20141215222649.83"><vh>NodeHandlers</vh>
+<v t="michael.20141215222649.10" a="E"><vh>BitTrie</vh>
+<v t="michael.20141215222649.83" a="E"><vh>NodeHandlers</vh>
 <v t="michael.20150106224503.25"><vh>Eat Tools</vh></v>
-<v t="michael.20141215222649.126"><vh>Compressed</vh>
+<v t="michael.20141215222649.126" a="E"><vh>Compressed</vh>
 <v t="michael.20150106224503.49"><vh>keycmp</vh></v>
 <v t="michael.20150106224503.59"><vh>keyappend</vh></v>
 <v t="michael.20150106224503.50"><vh>get_len</vh></v>
@@ -152,8 +36,7 @@
 <v t="michael.20150106224503.44"><vh>prev</vh></v>
 <v t="michael.20141230111914.79"><vh>get_children</vh></v>
 <v t="michael.20141230111914.80"><vh>replace_children</vh></v>
-<v t="michael.20141230111914.86"><vh>reinsert</vh></v>
-<v t="michael.20141230111914.87"><vh>add</vh></v>
+<v t="michael.20141230111914.87" a="M"><vh>add</vh></v>
 <v t="michael.20150106224503.21"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.5"><vh>dump</vh></v>
 </v>
@@ -171,7 +54,7 @@
 <v t="michael.20150106224503.23"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.6"><vh>dump</vh></v>
 </v>
-<v t="michael.20141215222649.95"><vh>BitTrie</vh>
+<v t="michael.20141215222649.95" a="E"><vh>BitTrie</vh>
 <v t="michael.20141230111914.103"><vh>find</vh></v>
 <v t="michael.20141230111914.106"><vh>first</vh></v>
 <v t="michael.20141230111914.107"><vh>last</vh></v>
@@ -185,22 +68,127 @@
 <v t="michael.20150101205559.7"><vh>dump</vh></v>
 </v>
 <v t="michael.20141215222649.84"><vh>Leaf</vh>
-<v t="kochelmonster-.20150117183203.2"><vh>is_valid</vh></v>
-<v t="michael.20150118002311.12"><vh>get_value</vh></v>
 <v t="michael.20150106224503.51"><vh>find</vh></v>
 <v t="michael.20150110130802.12"><vh>prev</vh></v>
-<v t="michael.20141230111914.78"><vh>reinsert_me</vh></v>
 <v t="michael.20141230111914.77"><vh>add</vh></v>
 <v t="michael.20150106224503.26"><vh>eat_child</vh></v>
 <v t="michael.20150101205559.8"><vh>dump</vh></v>
 </v>
 </v>
+</v>
+<v t="michael.20141215222649.63" a="E"><vh>Memory Managment</vh>
+<v t="michael.20141215222649.11" a="E"><vh>@rst memory_manager.html</vh>
+<v t="michael.20141215222649.149" a="E"><vh>Links</vh>
+<v t="michael.20141215222649.135" a="M"><vh>NodeStorage (Declaration)</vh></v>
+<v t="michael.20141215222649.155" a="E"><vh>class NodeStorage (Implementation)</vh>
+<v t="michael.20141215222649.159"><vh>class PersistentNodeManager</vh></v>
+<v t="michael.20141215222649.156"><vh>class NodeStorageInHeap</vh></v>
+<v t="michael.20141215222649.160"><vh>class MultiProcessNodeMemoryManager</vh></v>
+</v>
+<v t="michael.20141215222649.136"><vh>class LeafStorage</vh></v>
+<v t="michael.20141215222649.72"><vh>Page</vh></v>
+</v>
+</v>
+</v>
+</v>
+<v t="michael.20141215222649.14" a="E"><vh>Files</vh>
+<v t="michael.20141230111914.135"><vh>@clean wscript</vh></v>
+<v t="michael.20141215222649.16" a="E"><vh>@path include/larch</vh>
+<v t="michael.20141215222649.17" a="E"><vh>@clean leaves.h</vh>
+<v t="michael.20141217010530.9"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
+<v t="michael.20141230111914.147"><vh>Exceptions</vh></v>
+<v t="michael.20141215222649.38"></v>
+<v t="michael.20160601233835.1"><vh>struct Statistics</vh></v>
+<v t="michael.20141230111914.5"><vh>class Slice</vh></v>
+<v t="michael.20141215222649.23"></v>
+<v t="michael.20141215222649.27"></v>
+</v>
+</v>
+<v t="michael.20141215222649.15" a="E"><vh>@path src</vh>
+<v t="michael.20141219202729.4"><vh>@clean leaf.h</vh></v>
+<v t="michael.20141215222649.65" a="E"><vh>@clean node.h</vh>
+<v t="michael.20141217010530.12"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
+<v t="michael.20150106224503.60"><vh>Macros</vh></v>
+<v t="michael.20150101205559.30"><vh>TestCode</vh></v>
+<v t="michael.20141230111914.146"><vh>types</vh></v>
+<v t="michael.20141230111914.74"><vh>Utils</vh></v>
+<v t="michael.20141215222649.99"><vh>NodeHandler</vh></v>
+<v t="michael.20141215222649.67"><vh>Page</vh></v>
+<v t="michael.20141215222649.73" a="E"><vh>PageRef</vh>
+<v t="michael.20150112164548.4" a="M"><vh>declarations</vh></v>
+<v t="michael.20150112164548.5"><vh>count</vh></v>
+<v t="michael.20141230111914.39"><vh>size</vh></v>
+<v t="michael.20141230111914.38"><vh>free_size</vh></v>
+<v t="michael.20141230111914.37"><vh>get_node_size</vh></v>
+<v t="michael.20141230111914.43"><vh>free_node</vh></v>
+<v t="michael.20150112164548.7"><vh>new_node</vh></v>
+</v>
+<v t="michael.20141219202729.2" a="E"><vh>NodeRef</vh>
+<v t="michael.20141230111914.76"><vh>Convenient Delegators</vh></v>
+</v>
+<v t="michael.20141220220750.4"><vh>TempNode</vh></v>
+<v t="michael.20141219202729.3"><vh>PageMap</vh></v>
+<v t="michael.20141215222649.135" a="M"></v>
+<v t="michael.20141220220750.15" a="EM"><vh>Trace</vh>
+<v t="michael.20150111191610.5"><vh>declarations</vh></v>
+<v t="michael.20141230111914.112"><vh>size</vh></v>
+<v t="michael.20150111191610.2"><vh>stack helpers</vh></v>
+<v t="michael.20150106224503.48"><vh>is_valid</vh></v>
+<v t="michael.20150101205559.11"><vh>check_valid</vh></v>
+<v t="michael.20141230111914.120"><vh>current</vh></v>
+<v t="michael.20150106224503.56"><vh>current_key</vh></v>
+<v t="michael.20150106224503.55"><vh>cut_key</vh></v>
+<v t="michael.20141230111914.119"><vh>parent</vh></v>
+<v t="michael.20150101205559.64"><vh>first</vh></v>
+<v t="michael.20150101205559.65"><vh>last</vh></v>
+<v t="michael.20150101205559.23"><vh>next</vh></v>
+<v t="michael.20150101205559.24"><vh>prev</vh></v>
+<v t="michael.20141230111914.121"><vh>parent_next</vh></v>
+<v t="michael.20141230111914.122"><vh>parent_prev</vh></v>
+<v t="michael.20141230111914.116"><vh>reset</vh></v>
+<v t="michael.20141230111914.117"><vh>push</vh></v>
+<v t="michael.20141230111914.118"><vh>pop</vh></v>
+<v t="michael.20141230111914.123"><vh>remove</vh></v>
+<v t="michael.20141230111914.124"><vh>free_node</vh></v>
+<v t="michael.20141230111914.125"><vh>child_of_parent</vh></v>
+<v t="michael.20141230111914.126"><vh>add_node</vh></v>
+<v t="michael.20141230111914.128"><vh>grow_node_by</vh></v>
+<v t="michael.20141230111914.127"><vh>change_node</vh></v>
+<v t="michael.20141230111914.115"><vh>set_leaf</vh></v>
+<v t="michael.20150101205559.69"><vh>refresh_trace</vh></v>
+</v>
+<v t="michael.20150106224503.61"><vh>NodeRef-inlines</vh></v>
+</v>
+<v t="michael.20141215222649.161" a="E"><vh>@clean node.cpp</vh>
+<v t="michael.20141217010530.11" a="M"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
+<v t="michael.20150112164548.8" a="E"><vh>Page</vh>
+<v t="michael.20141230111914.29"><vh>new_node</vh></v>
+</v>
+<v t="michael.20141230111914.26" a="E"><vh>PageRef</vh>
+<v t="michael.20141230111914.27"><vh>defragment</vh></v>
+<v t="michael.20141230111914.30"><vh>grow_node_by</vh></v>
+<v t="michael.20141230111914.31"><vh>change_to_link</vh></v>
+<v t="michael.20150101205559.4"><vh>dump</vh></v>
+</v>
+<v t="michael.20150110130802.6" a="E"><vh>Trace</vh>
+<v t="michael.20150110130802.8"><vh>find</vh></v>
+<v t="michael.20150110130802.7" a="M"><vh>reserve_space</vh></v>
+<v t="michael.20150111191610.4"><vh>move_node</vh></v>
+<v t="michael.20150110130802.26"><vh>merge_pages</vh></v>
+</v>
+<v t="michael.20141215222649.155" a="E"></v>
+</v>
+<v t="michael.20141220220750.5"><vh>@clean port.h</vh>
+<v t="michael.20141230111914.144"><vh>GCC</vh></v>
+<v t="michael.20141230111914.145"><vh>Visual C++</vh></v>
+</v>
+<v t="michael.20141219202729.8" a="E"><vh>@clean trie.cpp</vh>
+<v t="michael.20141219202729.11"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
+<v t="michael.20141230111914.148"><vh>Node Structs</vh></v>
+<v t="michael.20141215222649.83" a="E"></v>
 <v t="michael.20141230111914.75"><vh>TempNode</vh></v>
-<v t="michael.20150118002311.21"><vh>PageRef</vh>
-<v t="michael.20150118002311.20"><vh>dump</vh></v>
 </v>
-</v>
-<v t="michael.20141215222649.45"><vh>@clean leaves.cpp</vh>
+<v t="michael.20141215222649.45" a="E"><vh>@clean leaves.cpp</vh>
 <v t="michael.20141217010530.10"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
 <v t="michael.20141215222649.104"></v>
 <v t="michael.20141230111914.24"><vh>MemoryDatabase</vh></v>
@@ -214,11 +202,10 @@
 </v>
 </v>
 </v>
-<v t="michael.20141215222649.8"><vh>Tests</vh>
-<v t="michael.20141230111914.140"><vh>@path tests</vh>
+<v t="michael.20141215222649.8" a="E"><vh>Tests</vh>
+<v t="michael.20141230111914.140" a="E"><vh>@path tests</vh>
 <v t="michael.20141230111914.141"><vh>@clean simple.cpp</vh></v>
-<v t="michael.20150116155028.13"><vh>@clean test_base64.cpp</vh></v>
-<v t="michael.20150101205559.18"><vh>@clean test_trie.cpp</vh>
+<v t="michael.20150101205559.18" a="E"><vh>@clean test_trie.cpp</vh>
 <v t="michael.20150101205559.22"><vh>&lt;&lt; includes &gt;&gt;</vh></v>
 <v t="michael.20150101205559.21"><vh>TestDatabase</vh></v>
 <v t="michael.20150101205559.31"><vh>Test Utils</vh></v>
@@ -253,6 +240,7 @@
 <v t="michael.20150106224503.17"><vh>test_TrieMisc</vh></v>
 </v>
 <v t="michael.20150101205559.62"><vh>TestPageManagement</vh></v>
+<v t="michael.20150106224503.35"><vh>old</vh></v>
 <v t="michael.20150106125629.4"><vh>TestNavigation</vh>
 <v t="michael.20150106224503.2"><vh>test_RandomFind</vh></v>
 <v t="michael.20150106224503.4"><vh>create_trie</vh></v>
@@ -283,14 +271,14 @@
 <v t="michael.20150106224503.18"><vh>TestSuite</vh></v>
 </v>
 </v>
-<v t="michael.20150106224503.10"><vh>@path benchmarks</vh>
-<v t="michael.20150106224503.11"><vh>trie</vh>
+<v t="michael.20150106224503.10" a="E"><vh>@path benchmarks</vh>
+<v t="michael.20150106224503.11" a="E"><vh>trie</vh>
 <v t="michael.20150111145018.91"><vh>@clean sbench.cpp</vh></v>
 </v>
 </v>
 </v>
-<v t="michael.20150106224503.12" a="E"><vh>@path python</vh>
-<v t="michael.20150106224503.13"><vh>@file setup.py</vh></v>
+<v t="michael.20150106224503.12"><vh>@path python</vh>
+<v t="michael.20150106224503.13"><vh>@clean setup.py</vh></v>
 <v t="michael.20150106224503.14"><vh>@path larch</vh>
 <v t="michael.20150110130802.30"><vh>@clean __init__.py</vh></v>
 <v t="michael.20150106224503.15"><vh>@clean leaves.pyx</vh></v>
@@ -298,20 +286,16 @@
 <v t="michael.20150110130802.31"><vh>@path tests</vh>
 <v t="michael.20150110130802.32"><vh>@clean test_trie.py</vh></v>
 </v>
-<v t="michael.20150110130802.34" a="E"><vh>@path bench</vh>
+<v t="michael.20150110130802.34"><vh>@path bench</vh>
 <v t="michael.20150110130802.35"><vh>@clean bench.py</vh></v>
 </v>
 </v>
 <v t="michael.20141219202729.5"><vh>edit</vh>
-<v t="michael.20141215222649.84"></v>
 <v t="michael.20150106224503.38"></v>
+<v t="michael.20150101205559.62"></v>
 </v>
 </vnodes>
 <tnodes>
-<t tx="kochelmonster-.20150117183203.2">bool is_valid(const NodeRef&amp; rnode, const Trace&amp; trace) const {
-    return trace.back-&gt;end &gt;= trace.key.size();
-  }
-</t>
 <t tx="michael.20141215222649.10"></t>
 <t tx="michael.20141215222649.104">// A Cursor to a non exising namespace
 class NoWhereCursor : public Cursor {
@@ -322,10 +306,10 @@ class NoWhereCursor : public Cursor {
   void last(int read_forward=-100) { }
   void next(int read_forward=100) { }
   void prev(int read_forward=-100) { }
-  
+
   Slice key() { throw NoValidPosition(); }
   Slice value() { throw NoValidPosition(); }
-  
+
   void set_value(const Slice&amp; value) { throw NotImplemented(); }
   void remove() { throw NotImplemented(); }
 };
@@ -350,50 +334,56 @@ Memory Managers
 </t>
 <t tx="michael.20141215222649.126">struct CompressedHandler : public NodeHandler {
   @others
-  
-  Slice append(NodeRef&amp; rnode, Node* data, nodeid_t child, Slice&amp; key) {
-      assert(data-&gt;c.child == child);
-      memcpy((char*)key.data()+key.size(), data-&gt;c.data, rnode.len());
-      return Slice(key.data(), key.size()+rnode.len());
-    }
 };
 
 static CompressedHandler compressed;
-
 
 </t>
 <t tx="michael.20141215222649.13"></t>
 <t tx="michael.20141215222649.135">class NodeStorage {
  public:
   virtual PageRef new_page() = 0;
-  virtual void check(const char *msg, Trace&amp; trace) { }
+#ifdef DEBUG
+  virtual void check() = 0;
+#endif
 };
 
 
 struct NodeStorageInHeap : public NodeStorage, public PageMap {
   typedef std::unique_ptr&lt;Page&gt; _page_ptr;
-  std::vector&lt;_page_ptr&gt; _pages;
+  typedef std::vector&lt;_page_ptr&gt; _page_container_t;
+  _page_container_t _pages;
   size_t _free_pages;  // count of _free_pages inside the vector
-  
+
   NodeStorageInHeap() : _free_pages(0) { }
 
   PageRef get_page(pageid_t id) {
       return PageRef(_pages[id].get(), id, id);
    }
-  
+
   void free_page(const PageRef&amp; page);
   PageRef new_page();
+
+#ifdef DEBUG
+  void check() {
+    size_t count = _pages.size();
+    for(size_t i = 0; i &lt; count; i++) {
+      get_page(i).check_doubles();
+    }
+  }
+#endif
+
 };
 
 
 struct PersistentNodeStorage : public NodeStorage {
   /*PagePositionMap Page;
   boost::interprocess::file_mapping _file_mapping;
-  
+
   PersistentNodeStorage(const char* path);
   std::shared_ptr&lt;PageMap&gt; get_pagemap(version_t version) = 0;
   virtual PageRef new_page();
- 
+
   void grow_file(size_t size);
   void shrink_file(size_t size);*/
 };
@@ -437,41 +427,37 @@ class PersistentLeafStorage : public LeafStorage {
 <t tx="michael.20141215222649.137">// links to another page
 
 struct LinkHandler : public LeafBase {
-  NodeRef&amp; link_node(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      PageRef next_page(trace.map.get_page(data-&gt;p));
-      return trace.push(NodeRef(next_page, 0));
-    }
-    
-  void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      link_node(rnode, data, trace).find(trace);
-    }
-    
-  void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      link_node(rnode, data, trace).first(trace);
-    }
-    
-  void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      link_node(rnode, data, trace).last(trace);
-    }
-    
-  bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      assert(0); // may never be called
-      return true;
-    }
-    
-  bool eat_child(NodeRef&amp; rnode, Node* data) {
-      return false;
-    }
-  
-    
+  NodeRef &amp;link_node(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+    PageRef next_page(trace.map.get_page(data-&gt;p));
+    return trace.push(NodeRef(next_page, 0));
+  }
+
+  void find(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+    link_node(rnode, data, trace).find(trace);
+  }
+
+  void first(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+    link_node(rnode, data, trace).first(trace);
+  }
+
+  void last(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+    link_node(rnode, data, trace).last(trace);
+  }
+
+  void add(const TempNode &amp;leaf, NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+    assert(0); // may never be called
+  }
+
+  bool eat_child(NodeRef &amp;rnode, Node *data) { return false; }
+
 #ifdef DEBUG
-  void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
-      const char* t3 = "            ";
-      pageid_t page_id = page-&gt;get_node(nodeid)-&gt;p;
-      out &lt;&lt; t3 &lt;&lt; "type:  link" &lt;&lt; std::endl
-          &lt;&lt; t3 &lt;&lt; "page:  " &lt;&lt; page_id &lt;&lt; std::endl;
-    }
-#endif    
+  void dump(Page *page, nodeid_t nodeid, std::ostream &amp;out) {
+    const char *t3 = "            ";
+    pageid_t page_id = page-&gt;get_node(nodeid)-&gt;p;
+    out &lt;&lt; t3 &lt;&lt; "type:  link" &lt;&lt; std::endl
+        &lt;&lt; t3 &lt;&lt; "page:  " &lt;&lt; page_id &lt;&lt; std::endl;
+  }
+#endif
 };
 
 static LinkHandler link;
@@ -488,10 +474,10 @@ static LinkHandler link;
 
 PageRef NodeStorageInHeap::new_page() {
   if (_free_pages) {
-    std::vector&lt;_page_ptr&gt;::iterator i;
+    _page_container_t::iterator i;
     for(i = _pages.begin(); i != _pages.end(); i++) {
       if (!i-&gt;get()) {
-        pageid_t id = (pageid_t)(i - _pages.begin());
+        pageid_t id = i - _pages.begin();
         Page* page = new Page;
         i-&gt;reset(page);
         _free_pages--;
@@ -501,7 +487,7 @@ PageRef NodeStorageInHeap::new_page() {
     _free_pages = 0;
   }
 
-  pageid_t id((pageid_t)_pages.size());
+  pageid_t id(_pages.size());
   Page* page = new Page;
   _pages.push_back(_page_ptr(page));
   return PageRef(page, id, (pageoffset_t)id);
@@ -513,7 +499,7 @@ void NodeStorageInHeap::free_page(const PageRef&amp; page) {
 
     // remove all pages at the end
     while(!_pages.empty() &amp;&amp; !_pages.back().get()) {
-      _pages.pop_back(); 
+      _pages.pop_back();
       _free_pages--;
     }
   }
@@ -522,6 +508,8 @@ void NodeStorageInHeap::free_page(const PageRef&amp; page) {
     _free_pages++;
   }
 }
+
+
 </t>
 <t tx="michael.20141215222649.159">@others
 </t>
@@ -534,7 +522,7 @@ void NodeStorageInHeap::free_page(const PageRef&amp; page) {
 namespace larch_leaves {
 
 @others
-} // namespace larch_leaves 
+} // namespace larch_leaves
 </t>
 <t tx="michael.20141215222649.17">@language cplusplus
 @tabwidth -2
@@ -602,12 +590,12 @@ public:
   virtual void set_value(const Slice&amp; value) = 0;
   virtual void remove() = 0;
 
+  // get database statistics
+  virtual void get_statistics(Statistics* output) = 0;
+
 #ifdef DEBUG
   virtual void dump(std::ostream&amp; out) = 0;
 #endif
-
-  virtual void reset_statistics() = 0;
-  virtual void print_statistics() = 0;
 
   static MemoryDatabase* create();
 };
@@ -670,12 +658,14 @@ class CopyOnWriteDatabase : public PersistentDatabase {
 namespace larch_leaves {
 void encode(const Slice&amp; input, std::string&amp; output);
 void decode(const std::string&amp; input, std::string&amp; output);
-  
+
 Slice main_name_space("::main", 6);
 
 @others
-} // namespace larch_leaves 
+} // namespace larch_leaves
 </t>
+<t tx="michael.20141215222649.5"></t>
+<t tx="michael.20141215222649.6"></t>
 <t tx="michael.20141215222649.63"></t>
 <t tx="michael.20141215222649.65">@language cplusplus
 @tabwidth -2
@@ -688,16 +678,11 @@ Slice main_name_space("::main", 6);
 namespace larch_leaves {
 
 @others
-} // namespace larch_leaves 
+} // namespace larch_leaves
 #endif // _LARCH_LEAVES_MEMORY_H
 </t>
-<t tx="michael.20141215222649.67">enum PageTypes {
-  kTriePage = 0
-};
-
-// A pointer inside a page
+<t tx="michael.20141215222649.67">// A pointer inside a page
 typedef boost::uint16_t inpage_ptr;
-typedef boost::uint16_t psize_t; // size of an object within a page
 
 struct NodePtr {
   inpage_ptr offset;   // position inside page
@@ -710,7 +695,7 @@ struct NodePtr {
 
 /*
   A Page has the following layout:
-  
+
   +----------------------+
   | header (4 byte)      |
   +----------------------+
@@ -721,15 +706,15 @@ struct NodePtr {
   | ...                  |
   +----------------------+
   | link[l] (4byte)      | l = link_count -1
-  +----------------------+  
-  | node_ptr[0] (3 byte) |
   +----------------------+
-  | node_ptr[1] (3 byte) |
+  | node_ptr[0] (4 byte) |
+  +----------------------+
+  | node_ptr[1] (4 byte) |
   +----------------------+
   | ...                  |
-  +----------------------+ 
-  | node_ptr[n] (3 byte) | n = node_count -1
-  +----------------------+ 
+  +----------------------+
+  | node_ptr[n] (4 byte) | n = node_count -1
+  +----------------------+
   |                      |
   |                      |
   +----------------------+ &lt;-- free_start points to the end all nodes
@@ -742,65 +727,55 @@ struct NodePtr {
   | node[0] (&gt;= 16 byte) |
   +----------------------+
 
-  node_ptrs grow downwards 
+  node_ptrs grow downwards
   nodes grow uppwards
 
   node 0 is always an ancestor of all other nodes
   and is called the page root.
-  
+
   Annotations:
-  because of the nature of inpage_ptr there, free_space underflows
+  because of the nature of inpage_ptr, free_space underflows
   before nodeid_t space overflows. ==&gt; we never run out of nodeids
-  
+
 */
 
-#define PAGE_HEADER_SIZE (2*sizeof(boost::uint16_t))
+typedef boost::uint16_t nodecount_t;
+#define PAGE_HEADER_SIZE sizeof(nodecount_t)
 
 struct Page {
   union {
     char data[PAGE_SIZE];
     struct {
-      boost::uint16_t type;
-      boost::uint16_t count; // node count
+      nodecount_t count; // node count
       NodePtr node_ptr[1];
     };
-  };      
-      
-  Page() : type(kTriePage), count(0) { }
-  
+  };
+
+  Page() : count(0) { }
+
   nodeid_t new_node(size_t size_);
-  
+
   size_t get_node_size(nodeid_t id) const {
     const NodePtr* ptr = node_ptr + id;
     return (id ? (ptr-1)-&gt;offset : sizeof(Page)) - ptr-&gt;offset;
   }
-  
+
   size_t free_size() const {
       size_t nc = count;
       if (nc)
         return node_ptr[nc-1].offset - nc*sizeof(NodePtr) - PAGE_HEADER_SIZE;
-      
+
       return sizeof(Page) - PAGE_HEADER_SIZE;
     }
-  
+
   // returns only the node occupied size (without pageheader)
   size_t size() const {
-      return sizeof(Page) - free_size() - PAGE_HEADER_SIZE;
-    }
-    
+    return sizeof(Page) - free_size() - PAGE_HEADER_SIZE;
+  }
+
   Node* get_node(nodeid_t id) const {
-      return (Node*)&amp;data[node_ptr[id].offset];
-    }
-    
-  void init_sizes(size_t sizes[MAX_NODE_COUNT]) {
-      size_t offset = sizeof(Page), count_ = count, *s = sizes;
-      NodePtr *ptr = node_ptr;
-      
-      for(size_t i = 0; i &lt; count_; i++, ptr++, s++) {
-        *s = offset - ptr-&gt;offset + sizeof(NodePtr);
-        offset = ptr-&gt;offset;
-      }
-    }
+    return (Node*)&amp;data[node_ptr[id].offset];
+  }
 };
 
 </t>
@@ -815,92 +790,67 @@ struct PageRef {
     page(page_), id(id_), offset(offset_) { }
 
   PageRef() : PageRef(NULL, 0, 0) { }
- 
+
   @others
 };
 </t>
 <t tx="michael.20141215222649.8"></t>
 <t tx="michael.20141215222649.83">struct LeafBase : public NodeHandler {
-  size_t get_len(const NodeRef&amp; rnode) {
-      return 0;
-    }
+  size_t get_len(const NodeRef &amp;rnode) { return 0; }
 
-  size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-      return 0;
-    }
-    
-  void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    }
-  
-  void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      trace.parent_next();
-    }
-    
-  void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      trace.parent_prev();
-    }
-    
-  void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    }
-    
-  void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    }
+  size_t get_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+    return 0;
+  }
+
+  void replace_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {}
+
+  void next(NodeRef &amp;rnode, Node *data, Trace &amp;trace) { trace.parent_next(); }
+
+  void prev(NodeRef &amp;rnode, Node *data, Trace &amp;trace) { trace.parent_prev(); }
+
+  void first(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {}
+
+  void last(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {}
 };
-
 
 struct TrieBase : public NodeHandler {
-  size_t get_len(const NodeRef&amp; rnode) {
-      return 1;
-    }
+  size_t get_len(const NodeRef &amp;rnode) { return 1; }
 
-  virtual void add_node(Node* data, trieindex_t index, const TempNode&amp; node, 
-                        Trace&amp; trace) = 0;
+  virtual void add_node(Node *data, trieindex_t index, const TempNode &amp;node,
+                        Trace &amp;trace) = 0;
 
-  bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      Slice key(trace.current_key());
-  
-      switch(key.size()) {
-        case 0:
-          TESTPOINT(TrieBaseAdd0);
-          trace.add_node(leaf);
-          trace.parent().set_extra(trace.child_of_parent());
-          break;
-          
-        case 1: 
-          TESTPOINT(TrieBaseAdd1);
-          add_node(data, key[0], leaf, trace);
-          break;
-          
-        default: {
-          TESTPOINT(TrieBaseAdd2);
-          TempCompressed compressed(key.advance(1));
-          add_node(data, key[0], compressed, trace);
-          trace.current().add(leaf, trace);
-          break;
-          }
-      }
-      return true;
+  void add(const TempNode &amp;leaf, NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+    Slice key(trace.current_key());
+
+    switch (key.size()) {
+    case 0:
+      TESTPOINT(TrieBaseAdd0);
+      trace.add_node(leaf);
+      trace.parent().set_extra(trace.child_of_parent());
+      break;
+
+    case 1:
+      TESTPOINT(TrieBaseAdd1);
+      add_node(data, key[0], leaf, trace);
+      break;
+
+    default: {
+      TESTPOINT(TrieBaseAdd2);
+      TempCompressed compressed(key.advance(1));
+      add_node(data, key[0], compressed, trace);
+      trace.current().add(leaf, trace);
+      break;
     }
+    }
+  }
 };
 
- 
-#ifdef DEBUG
-void dump_key(const char* data, size_t size, std::ostream&amp; out) {
-  out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)data[0];
-  for(size_t i = 1; i &lt; size; i++)
-      out &lt;&lt; "|" &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)data[i];
-}
-#endif
- 
 @others
 
-NodeHandler* NodeHandler::handlers[7] = {
-  &amp;leaf,
-  &amp;link,
-  &amp;compressed,
-  &amp;trie,
-  &amp;bittrie,
+NodeHandler *NodeHandler::handlers[6] = {
+    &amp;leaf, &amp;leaf, &amp;link, &amp;compressed, &amp;trie, &amp;bittrie,
 };
+
 </t>
 <t tx="michael.20141215222649.84">// a leaf node
 struct LeafHandler : public LeafBase {
@@ -912,43 +862,13 @@ static LeafHandler leaf;
 <t tx="michael.20141215222649.9"></t>
 <t tx="michael.20141215222649.93">struct TrieHandler : public TrieBase {
   @others
-  
-  Slice append(NodeRef&amp; rnode, Node* data, nodeid_t child, Slice&amp; key) {
-      if (child == rnode.extra())
-        return key;
-        
-      Trie *n = &amp;data-&gt;t;
-      for(size_t i = 0; i &lt; 64; i++) {
-        if (n-&gt;children[i] == child) {
-          ((char*)key.data())[key.size()] = (char)i;
-          return Slice(key.data(), key.size()+1);
-        }
-      }
-      assert(0);
-    }
 };
 
 static TrieHandler trie;
 
-
 </t>
 <t tx="michael.20141215222649.95">struct BitTrieHandler : public TrieBase {
   @others
-  
-  Slice append(NodeRef&amp; rnode, Node* data, nodeid_t child, Slice&amp; key) {
-      if (child == rnode.extra())
-        return key;
-        
-      BitTrie *n = &amp;data-&gt;b;
-      for(int b = n-&gt;first_bit(); b &gt;= 0; b = n-&gt;next_bit(b)) {
-        int ci = n-&gt;get_child_index(b);
-        if (n-&gt;children[ci] == child) {
-          ((char*)key.data())[key.size()] = (char)b;
-          return Slice(key.data(), key.size()+1);
-        }
-      }
-      assert(0);
-    }
 };
 
 static BitTrieHandler bittrie;
@@ -966,23 +886,13 @@ struct NodeHandler {
   // tries==1, compressed&gt;1, leaves==0
   virtual size_t get_len(const NodeRef&amp; rnode) = 0;
 
-  // returns true if the last rnode points to a valid key position
-  virtual bool is_valid(const NodeRef&amp; rnode, const Trace&amp; trace) const {
-      return false;
-    }
-
-  virtual Slice get_value(const NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-      assert(0); // only leafs, bucket or hash nodes;
-      return Slice();
-    }
-  
   // returns the nodes children
-  virtual size_t get_children(NodePtr* ptr, Node* data, 
+  virtual size_t get_children(NodePtr* ptr, Node* data,
                               nodeid_t children[65]) = 0;
   // replace the nodes children with the nodeids of children
-  virtual void replace_children(NodePtr* ptr, Node* data, 
+  virtual void replace_children(NodePtr* ptr, Node* data,
                                 nodeid_t children[65]) = 0;
-  
+
   // finds key in trie, walks until the leaf was found or to the
   // last fitting note. context.trace will be filled on the way
   virtual void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) = 0;
@@ -990,32 +900,26 @@ struct NodeHandler {
   virtual void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) = 0;
   virtual void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) = 0;
   virtual void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) = 0;
-  
-  // appends the key for the transition to child
-  virtual Slice append(NodeRef&amp; rnode, Node* data, nodeid_t child, Slice&amp; key) {
-      return key;
-    }
-  
-  // returns true if a node is inserted, false if just the value was changed
-  virtual bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, 
-                   Node* data, Trace&amp; trace) = 0;
+  virtual void add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data,
+                   Trace&amp; trace) = 0;
   // remove the node
   virtual bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
       return false;
     }
-    
+
   // rnode tries to merge the child with itself or to a compressed
   virtual bool eat_child(NodeRef&amp; rnode, Node* data) = 0;
-    
+
+
 #ifdef DEBUG
   virtual void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) = 0;
 #endif
 
-  static NodeHandler* handlers[7];
+  static NodeHandler* handlers[6];
 };
 
 enum NodeTypes {
-  kLeaf = 0, kLink, kCompressed, kTrie, kBitTrie, kRemoved
+  kLeaf = 0, kBigLeaf, kLink, kCompressed, kTrie, kBitTrie, kRemoved
 };
 </t>
 <t tx="michael.20141217010530.10">#include "larch/leaves.h"
@@ -1025,12 +929,10 @@ enum NodeTypes {
 </t>
 <t tx="michael.20141217010530.11">#include &lt;memory.h&gt;
 #include "node.h"
+#include &lt;iostream&gt; //debug
 </t>
 <t tx="michael.20141217010530.12">#include &lt;cassert&gt;
 #include &lt;algorithm&gt;
-#include &lt;vector&gt;
-#include &lt;unordered_map&gt;
-#include &lt;list&gt;
 #include &lt;boost/cstdint.hpp&gt;
 #include "larch/leaves.h"
 #ifdef DEBUG
@@ -1038,10 +940,6 @@ enum NodeTypes {
 #include &lt;iomanip&gt;
 #endif
 </t>
-<t tx="michael.20141217010530.13">struct NodePtr {
-  PagePtr page;
-  nodeid_t node;
-};</t>
 <t tx="michael.20141217010530.9">#include &lt;string.h&gt;
 #include &lt;string&gt;
 #include &lt;memory&gt;
@@ -1050,11 +948,10 @@ enum NodeTypes {
 #include &lt;ostream&gt;
 #endif
 </t>
-<t tx="michael.20141219202729.11">#include &lt;string.h&gt;
-#include "larch/leaves.h"
+<t tx="michael.20141219202729.11">#include "larch/leaves.h"
 #include "node.h"
 #include "port.h"
-#include "murmurhash3.h"
+#include &lt;string.h&gt;
 </t>
 <t tx="michael.20141219202729.2">// The Access class to Node
 struct NodeRef {
@@ -1062,7 +959,7 @@ struct NodeRef {
   nodeid_t id;
   NodePtr* ptr;
   NodeHandler* handler;
-    
+
   NodeRef(PageRef page_, nodeid_t id_)
     : page(page_), id(id_), ptr(NULL), handler(NULL) {
       if (page_.page) {
@@ -1074,20 +971,20 @@ struct NodeRef {
   nodetype_t type() const {
       return ptr-&gt;type;
     }
-  
+
   void set_type(nodetype_t type) const {
       ptr-&gt;type = type;
       ((NodeRef*)this)-&gt;handler = NodeHandler::handlers[type];
     }
-  
+
   Node* node() const {
       return (Node*)&amp;page.page-&gt;data[ptr-&gt;offset];
     }
-    
+
   nodeid_t extra() const {
       return ptr-&gt;extra;
     }
-    
+
   void set_extra(nodeid_t extra) const {
       ptr-&gt;extra = extra;
     }
@@ -1099,20 +996,20 @@ struct NodeRef {
   bool operator==(const NodeRef&amp; other) const {
       return id == other.id &amp;&amp; page.id == other.page.id;
     }
-  
+
   bool is_leaf() const {
-      return type() == kLeaf;
+      return type() &lt;= kBigLeaf;
     }
-      
+
   // for leaf and compress nodes
   size_t len() const {
       return extra();
     }
-    
+
   void set_len(size_t len) const {
-      set_extra((nodeid_t)len);
+      set_extra(len);
     }
-    
+
   @others
 };
 
@@ -1130,7 +1027,9 @@ struct PageMap {
 };
 
 </t>
-<t tx="michael.20141219202729.4"></t>
+<t tx="michael.20141219202729.4">@language cplusplus
+@tabwidth -2
+</t>
 <t tx="michael.20141219202729.5">@language cplusplus
 @tabwidth -2
 </t>
@@ -1145,7 +1044,7 @@ struct PageMap {
 namespace larch_leaves {
 
 @others
-} // namespace larch_leaves 
+} // namespace larch_leaves
 </t>
 <t tx="michael.20141220220750.15">// A stack trace inside a trie
 // nodes[0] is the root
@@ -1154,7 +1053,7 @@ namespace larch_leaves {
 struct Trace {
   struct Transition {
     NodeRef node;
-    size_t start; // the start index of key 
+    size_t start; // the start index of key
     size_t end;   // the end index of the key
     Transition(const NodeRef&amp; node_, size_t start_, size_t end_)
         : node(node_), start(start_), end(end_) { }
@@ -1162,105 +1061,71 @@ struct Trace {
         : node(PageRef(), 0), start(0), end(0) { }
   };
 
-  typedef std::vector&lt;Transition&gt; stack_t;
-
-  stack_t stack;
+  std::vector&lt;Transition&gt; stack;
   std::string key;       // the key the trace points to
   PageMap&amp; map;          // needed for some operations
   NodeStorage&amp; storage;  // needed for some operations
   Transition *back;
-    
-  size_t stat_find_trace;
-  size_t stat_reuse_trace;
-  size_t stat_find_count;
-  size_t stat_compressed;
-  size_t stat_tries;
-  size_t stat_link;
-  size_t stat_short_find;
-  size_t stat_wrong_prefix;
-  size_t min_page_key;
-  size_t max_page_key;
-    
-  void reset_statistics() {
-      stat_find_count = 0;
-      stat_reuse_trace = 0;
-      stat_find_trace = 0;
-      stat_tries = 0;
-      stat_compressed = 0;
-      stat_link = 0;
-      stat_short_find = 0;
-      stat_wrong_prefix = 0;
-    }
-  
+
   Trace(PageMap&amp; map_, NodeStorage&amp; storage_) :
-      map(map_), storage(storage_) { 
+      map(map_), storage(storage_) {
         key.reserve(MAX_KEY_SIZE_64);
-        reset_statistics();
-        min_page_key = MAX_KEY_SIZE_64;
-        max_page_key = 0;
       }
 
-  void check(const char *msg) { 
-      storage.check(msg, *this);
-    }
-  
+  void check_doubles() {
+    storage.check();
+  }
+
   @others
 };
 
 </t>
 <t tx="michael.20141220220750.4">struct TempNode {
-  size_t _size;
-  struct {
-    boost::uint16_t _type:4;
-    boost::uint16_t _extra:12;
-  };
-  Node* _node;
-     
+  Page page;
+
+  TempNode() { assert(page.count == 0); }
+
   size_t size() const {
-      return page_pad(_size);
+      return page.get_node_size(0);
     }
-    
+
   Node* node() const {
-      return _node;
+      return page.get_node(0);
     }
-    
+
   nodeid_t extra() const {
-      return _extra;
+      return page.node_ptr[0].extra;
     }
-    
+
   void set_extra(nodeid_t extra) {
-      _extra = extra;
-    }    
+      page.node_ptr[0].extra = extra;
+    }
 
   nodetype_t type() const {
-      return _type;
+      return page.node_ptr[0].type;
     }
 
   size_t len() const {
       return extra();
     }
-    
+
   void set_len(size_t len) {
-      set_extra((nodeid_t)len);
-    }    
+      set_extra(len);
+    }
 };
 
 
 struct TempLeaf : public TempNode {
   TempLeaf(const Slice&amp; value);
-  TempLeaf(leaf_ptr* ptr);
 };
 
 struct TempTrie : public TempNode {
-  nodeid_t _children[64];
   TempTrie(size_t child_count=1);
 };
 
 struct TempCompressed : public TempNode {
-  char _data[MAX_KEY_SIZE_64 + sizeof(nodeid_t)];
   TempCompressed(const Slice&amp; part);
 };
-
 </t>
 <t tx="michael.20141220220750.5">@language cplusplus
 @tabwidth -2
@@ -1289,368 +1154,417 @@ inline int ffs(boost::uint64_t v) {
       
     return clz32(v32[0])
   }
- 
+  
+inline bool test_bit(boost::uint64_t v, int bit) {
+    boost::uint32_t *v32 = (boost::uint32_t*)&amp;v;
+    return v32[bit/32] &amp; (1 &lt;&lt; (bit&amp;31));
+  }
+
+inline bool add_bit(boost::uint64_t v, int bit) {
+    boost::uint32_t *v32 = (boost::uint32_t*)&amp;v;
+    return v32[bit/32] | (1 &lt;&lt; (bit&amp;31));
+  }
+
+inline bool remove_bit(boost::uint64_t v, int bit) {
+    boost::uint32_t *v32 = (boost::uint32_t*)&amp;v;
+    return v32[bit/32] | (1 &lt;&lt; bit&amp;31);
+  }
+  
+  
+#else
+
+inline bool test_bit(boost::uint64_t v, int bit) {
+    return v &amp; (1 &lt;&lt; bit);
+  }
+
+inline bool add_bit(boost::uint64_t v, int bit) {
+    return v | (1 &lt;&lt; bit);
+  }
+
+inline bool remove_bit(boost::uint64_t v, int bit) {
+    return v | (1 &lt;&lt; bit);
+  }
+
 #endif
 </t>
-<t tx="michael.20141230111914.100">size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    BitTrie *n = &amp;data-&gt;b;
-    size_t count = n-&gt;count();
-    for(size_t i = 0; i &lt; count; i++) 
-        children[i] = n-&gt;children[i];
+<t tx="michael.20141230111914.100">size_t get_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+  BitTrie *n = &amp;data-&gt;b;
+  size_t count = n-&gt;count();
+  for (size_t i = 0; i &lt; count; i++)
+    children[i] = n-&gt;children[i];
 
-    nodeid_t end_child = ptr-&gt;extra;
+  nodeid_t end_child = ptr-&gt;extra;
+  if (end_child)
+    children[count++] = end_child;
+
+  return count;
+}
+
+</t>
+<t tx="michael.20141230111914.101">void replace_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+  BitTrie *n = &amp;data-&gt;b;
+  size_t count = n-&gt;count();
+  for (size_t i = 0; i &lt; count; i++)
+    n-&gt;children[i] = children[i];
+
+  if (ptr-&gt;extra)
+    ptr-&gt;extra = children[count];
+}
+
+</t>
+<t tx="michael.20141230111914.103">void find(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  BitTrie *n = &amp;data-&gt;b;
+  Slice key(trace.current_key());
+
+  if (key.empty()) {
+    nodeid_t end_child = rnode.extra();
     if (end_child)
-      children[count++] = end_child;
-
-    return count;
+      rnode.child_find(end_child, trace);
+    return;
   }
-</t>
-<t tx="michael.20141230111914.101">void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    BitTrie *n = &amp;data-&gt;b;
-    size_t count = n-&gt;count();
-    for(size_t i = 0; i &lt; count; i++) 
-        n-&gt;children[i] = children[i];
 
-    if (ptr-&gt;extra)
-      ptr-&gt;extra = children[count];
+  trieindex_t index = key[0];
+  int child_index = n-&gt;get_child_index(index);
+  if (child_index &gt;= 0) {
+    nodeid_t child_id = n-&gt;children[child_index];
+    rnode.child_find(child_id, trace);
   }
+}
+
 </t>
-<t tx="michael.20141230111914.103">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    BitTrie *n = &amp;data-&gt;b;
-    Slice key(trace.current_key());
-    
-    if (key.empty()) {
-      nodeid_t end_child = rnode.extra();
-      if (end_child)
-        rnode.child_find(end_child, trace);
+<t tx="michael.20141230111914.104">void next(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  int index = key.empty() ? -1 : key[0];
+  BitTrie *n = &amp;data-&gt;b;
+
+  if (index &lt; 0) {
+    int first_bit = n-&gt;first_bit();
+    if (first_bit &lt; 0)
       return;
-    }
-      
-    trieindex_t index = key[0];
+
+    trace.cut_key();
+    trace.key.push_back((char)first_bit);
+    rnode.child_first(n-&gt;children[0], trace);
+    return;
+  }
+
+  index = n-&gt;next_bit(index);
+  if (index &gt;= 0) {
+    trace.cut_key();
+    trace.key.push_back((char)index);
     int child_index = n-&gt;get_child_index(index);
-    if (child_index &gt;= 0) {
-      nodeid_t child_id = n-&gt;children[child_index];
-      rnode.child_find(child_id, trace);
-    }
+    rnode.child_first(n-&gt;children[child_index], trace);
+    return;
   }
-</t>
-<t tx="michael.20141230111914.104">void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key[0];
-    BitTrie *n = &amp;data-&gt;b;
-    
-    if (index &lt; 0) {
-      int first_bit = n-&gt;first_bit();
-      if (first_bit &lt; 0)
-        return;
 
-      trace.cut_key();
-      trace.key.push_back((char)first_bit);
-      rnode.child_first(n-&gt;children[0], trace);
-      return;
-    }
-   
-    index = n-&gt;next_bit(index);
-    if (index &gt;= 0) {
-      trace.cut_key();
-      trace.key.push_back((char)index);
-      int child_index = n-&gt;get_child_index(index);
-      rnode.child_first(n-&gt;children[child_index], trace);
-      return;
-    }
-    
-    trace.parent_next();
-  }
-</t>
-<t tx="michael.20141230111914.105">void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key[0];
-    
-    if (index &lt; 0) {
-      trace.parent_prev();
-      return;
-    }
-        
-    BitTrie *n = &amp;data-&gt;b;
-    index = n-&gt;prev_bit(index);
-    if (index &gt;= 0) {
-      trace.cut_key();
-      trace.key.push_back((char)index);
-      int child_index = n-&gt;get_child_index(index);
-      rnode.child_last(n-&gt;children[child_index], trace);
-      return;
-    }
-  
-    nodeid_t end_child = rnode.extra();
-    if (end_child) {
-      trace.cut_key();
-      rnode.child_last(end_child, trace);
-      return;
-    }
+  trace.parent_next();
+}
 
+</t>
+<t tx="michael.20141230111914.105">void prev(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  int index = key.empty() ? -1 : key[0];
+
+  if (index &lt; 0) {
     trace.parent_prev();
+    return;
   }
-</t>
-<t tx="michael.20141230111914.106">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    BitTrie *n = &amp;data-&gt;b;
-    nodeid_t end_child = rnode.extra();
-    if (end_child) {
-      rnode.child_first(end_child, trace);
-    }
-    else {
-      int index = n-&gt;first_bit();
-      if (index &lt; 0)
-        return;
-      
-      trace.key.push_back((char)index);
-      rnode.child_first(n-&gt;children[0], trace);
-    }
+
+  BitTrie *n = &amp;data-&gt;b;
+  index = n-&gt;prev_bit(index);
+  if (index &gt;= 0) {
+    trace.cut_key();
+    trace.key.push_back((char)index);
+    int child_index = n-&gt;get_child_index(index);
+    rnode.child_last(n-&gt;children[child_index], trace);
+    return;
   }
+
+  nodeid_t end_child = rnode.extra();
+  if (end_child) {
+    trace.cut_key();
+    rnode.child_last(end_child, trace);
+    return;
+  }
+
+  trace.parent_prev();
+}
+
 </t>
-<t tx="michael.20141230111914.107">void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    BitTrie *n = &amp;data-&gt;b;
-    int index = n-&gt;last_bit();
+<t tx="michael.20141230111914.106">void first(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  BitTrie *n = &amp;data-&gt;b;
+  nodeid_t end_child = rnode.extra();
+  if (end_child) {
+    rnode.child_first(end_child, trace);
+  } else {
+    int index = n-&gt;first_bit();
     if (index &lt; 0)
       return;
 
     trace.key.push_back((char)index);
-    int child_index = n-&gt;get_child_index(index);
-    rnode.child_last(n-&gt;children[child_index], trace);
+    rnode.child_first(n-&gt;children[0], trace);
   }
-</t>
-<t tx="michael.20141230111914.108">void add_node(Node* data, trieindex_t index, const TempNode&amp; node, Trace&amp; trace) {
-    BitTrie *n = &amp;data-&gt;b;
-    size_t count = n-&gt;count();
-    if (count == 56) {
-      TESTPOINT(BitTrieAdd0);
-      TempTrie trie(count+1);
-      trie.set_extra(trace.current().extra());
-      Trie *np = (Trie*)trie.node();
-      int bit = n-&gt;first_bit(), i = 0;
-      while(bit &gt;= 0) {
-        np-&gt;children[bit] = n-&gt;children[i++];
-        bit = n-&gt;next_bit(bit);
-      }
-      trace.change_node(trie);
-      trace.add_node(node);
-      np = (Trie*)trace.parent().node();
-      np-&gt;children[index] = trace.child_of_parent();
-      return;
-    }
+}
 
-    if (count &amp;&amp; count % 4 == 0) {
-      TESTPOINT(BitTrieAdd1);
-      trace.grow_node_by(4*sizeof(nodeid_t));
+</t>
+<t tx="michael.20141230111914.107">void last(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  BitTrie *n = &amp;data-&gt;b;
+  int index = n-&gt;last_bit();
+  if (index &lt; 0)
+    return;
+
+  trace.key.push_back((char)index);
+  int child_index = n-&gt;get_child_index(index);
+  rnode.child_last(n-&gt;children[child_index], trace);
+}
+
+</t>
+<t tx="michael.20141230111914.108">void add_node(Node *data, trieindex_t index, const TempNode &amp;node,
+              Trace &amp;trace) {
+  BitTrie *n = &amp;data-&gt;b;
+  size_t count = n-&gt;count();
+  if (count == 56) {
+    TESTPOINT(BitTrieAdd0);
+    TempTrie trie(count + 1);
+    trie.set_extra(trace.current().extra());
+    Trie *np = (Trie *)trie.node();
+    int bit = n-&gt;first_bit(), i = 0;
+    while (bit &gt;= 0) {
+      np-&gt;children[bit] = n-&gt;children[i++];
+      bit = n-&gt;next_bit(bit);
     }
-    
-    TESTPOINT(BitTrieAdd2);
+    trace.change_node(trie);
     trace.add_node(node);
-    n = (BitTrie*)trace.parent().node();
-    n-&gt;add(index, trace.child_of_parent());
+    np = (Trie *)trace.parent().node();
+    np-&gt;children[index] = trace.child_of_parent();
+    return;
   }
+
+  if (count % 4 == 0) {
+    TESTPOINT(BitTrieAdd1);
+    trace.grow_node_by(4 * sizeof(nodeid_t));
+  }
+
+  TESTPOINT(BitTrieAdd2);
+  trace.add_node(node);
+  n = (BitTrie *)trace.parent().node();
+  n-&gt;add(index, trace.child_of_parent());
+}
+
 </t>
-<t tx="michael.20141230111914.109">void change_to_compressed(NodeRef&amp; rnode, const CompressBuffer&amp; buffer) {
-    int nsize = (int)page_pad(buffer.size+sizeof(nodeid_t));
-    rnode.page.grow_node_by(rnode.id, nsize -(int)rnode.size());
-    
-    Compressed *c = (Compressed*)rnode.node();
-    c-&gt;child = buffer.child;
-    memcpy(c-&gt;data, buffer.data, buffer.size);
-    rnode.set_len(buffer.size);
-    rnode.set_type(kCompressed);
-  }
+<t tx="michael.20141230111914.109">void change_to_compressed(NodeRef &amp;rnode, const CompressBuffer &amp;buffer) {
+  int nsize = (int)page_pad(buffer.size + sizeof(nodeid_t));
+  rnode.page.grow_node_by(rnode.id, nsize - (int)rnode.size());
 
-bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key[0];
+  Compressed *c = (Compressed *)rnode.node();
+  c-&gt;child = buffer.child;
+  memcpy(c-&gt;data, buffer.data, buffer.size);
+  rnode.set_len(buffer.size);
+  rnode.set_type(kCompressed);
+}
 
-    BitTrie *n = &amp;data-&gt;b;
-    if (index &lt; 0) {
-      TESTPOINT(BitTrieRemove0);
-      rnode.set_extra(0);
+bool remove_child(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  int index = key.empty() ? -1 : key[0];
+
+  BitTrie *n = &amp;data-&gt;b;
+  if (index &lt; 0) {
+    TESTPOINT(BitTrieRemove0);
+    rnode.set_extra(0);
+  } else
+    n-&gt;remove(index);
+
+  size_t count = n-&gt;count();
+  switch (count) {
+  case 0:
+    return rnode.extra() != 0;
+
+  case 1:
+    if (!rnode.extra()) {
+      // change to compressed
+      TESTPOINT(BitTrieRemove2);
+      CompressBuffer buffer;
+      buffer.data[0] = (char)n-&gt;first_bit();
+      buffer.size = 1;
+      buffer.child = n-&gt;children[0];
+      change_to_compressed(rnode, buffer);
     }
-    else
-      n-&gt;remove(index);
-      
-    size_t count = n-&gt;count();
-    switch(count) {
-      case 0: 
-        return rnode.extra() != 0;
-        
-      case 1: 
-        if (!rnode.extra()) {
-          // change to compressed
-          TESTPOINT(BitTrieRemove2);
-          CompressBuffer buffer;
-          buffer.data[0] = (char)n-&gt;first_bit();
-          buffer.size = 1;
-          buffer.child = n-&gt;children[0];
-          change_to_compressed(rnode, buffer);
-        }
-        return true;
-      
-      default:
-        if (count &gt; 4 &amp;&amp; count % 4 == 0) {
-          TESTPOINT(BitTrieRemove1);
-          trace.grow_node_by(-4*(int)sizeof(nodeid_t));
-        }
-    }
-     
     return true;
+
+  default:
+    if (count % 4 == 0) {
+      TESTPOINT(BitTrieRemove1);
+      trace.grow_node_by((int)(-4 * sizeof(nodeid_t)));
+    }
   }
+
+  return true;
+}
+
 </t>
 <t tx="michael.20141230111914.112">size_t size() const {
-    return stack.size();
-  }
+  return stack.size();
+}
+
 </t>
-<t tx="michael.20141230111914.115">// sets a new leaf, 
+<t tx="michael.20141230111914.115">// sets a new leaf,
 bool set_leaf(const TempLeaf&amp; leaf) {
-    return current().add(leaf, *this);
+  if (is_valid()) {
+    change_node(leaf);
+    return false;
   }
+  else {
+    current().add(leaf, *this);
+    return true;
+  }
+}
 
 </t>
 <t tx="michael.20141230111914.116">void reset() {
-    resize(1); // keep the root
-    key.clear();
-  }
+  stack.resize(1); // keep the root
+  back = &amp;stack.back();
+  key.clear();
+}
+
 </t>
 <t tx="michael.20141230111914.117">NodeRef&amp; push(const NodeRef&amp; node) {
-    size_t start = back-&gt;end;
-    _push(Transition(node, start, start+node.get_len()));
-    return current();
-  }
-    
+  size_t start = back-&gt;end;
+  _push(Transition(node, start, start+node.get_len()));
+  return current();
+}
+
 void push_root(const NodeRef&amp; node) {
-    _push(Transition(node, 0, node.get_len()));
-  }
+  _push(Transition(node, 0, node.get_len()));
+}
+
 </t>
 <t tx="michael.20141230111914.118">// returns the node id of the skipped link  or 0
 nodeid_t pop() {
+  _pop();
+  if (size() &amp;&amp; current().type() == kLink) {
+    nodeid_t skipped_id = current().id;
     _pop();
-    if (size() &amp;&amp; current().type() == kLink) {
-      nodeid_t skipped_id = current().id;
-      _pop();
-      return skipped_id;
-    }
-    return 0;
+    return skipped_id;
   }
+  return 0;
+}
+
 </t>
 <t tx="michael.20141230111914.119">NodeRef&amp; parent() {
-    NodeRef&amp; parent = stack[stack.size()-2].node;
-    return parent.type() == kLink ? stack[stack.size()-3].node : parent;
-  }
+  NodeRef&amp; parent = stack[stack.size()-2].node;
+  return parent.type() == kLink ? stack[stack.size()-3].node : parent;
+}
+
 </t>
 <t tx="michael.20141230111914.120">NodeRef&amp; current() {
-    return back-&gt;node;
-  }
+  return back-&gt;node;
+}
 
-const NodeRef&amp; current() const {
-    return back-&gt;node;
-  }
 </t>
 <t tx="michael.20141230111914.121">void parent_next() {
-    if (size() &gt; 1) {
-      pop();
-      current().next(*this);
-    }
+  if (size() &gt; 1) {
+    pop();
+    current().next(*this);
   }
+}
+
 </t>
 <t tx="michael.20141230111914.122">void parent_prev() {
-    if (size() &gt; 1) {
-      pop();
-      current().prev(*this);
-    }
+  if (size() &gt; 1) {
+    pop();
+    current().prev(*this);
   }
+}
+
 </t>
 <t tx="michael.20141230111914.123">bool _eat_child(size_t ancestor) {
-  int index = (int)(size()-1-ancestor);
+  int index = size()-1-ancestor;
   return index&gt;0 ? stack[index].node.eat_child() : false;
 }
 
-
 // returns true if the complete trie is removed
 bool remove() {
-    if (!is_valid())
-      throw NoValidPosition();
+  if (!is_valid())
+    throw NoValidPosition();
 
-    while(size()) {
-      NodeRef&amp; me(current()); 
-      if (me.remove_child(*this)) {
-        me.page.defragment(*this);
-        merge_pages();
+  while(size()) {
+    NodeRef&amp; me(current());
+    if (me.remove_child(*this)) {
+      me.page.defragment(*this);
+      merge_pages();
 
-        if (_eat_child(0)+_eat_child(1)+_eat_child(2))
-          if (!current().page.defragment(*this))
-            refresh_trace();
-       
-        return false;
-      }
+      if (_eat_child(0)+_eat_child(1)+_eat_child(2))
+        if (!current().page.defragment(*this))
+          refresh_trace();
 
-      if (size() == 1) {
-        stack.clear();
-        free_node(me.page, me.id);
-        break;
-      }
-
-      nodeid_t skipped_id = pop();
-      if (skipped_id)
-        free_node(current().page, skipped_id);
-        
-      free_node(me.page, me.id);
-    }
-     
-    return true;
-  }
-</t>
-<t tx="michael.20141230111914.124">bool free_node(const PageRef&amp; page, nodeid_t id) {
-    if (id == 0) {
-      map.free_page(page);
       return false;
     }
-    else {
-      page.free_node(id);
-      // no defragment needed (it is done in remove())
-      return true;
-    }
+    nodeid_t skipped_id = pop();
+    if (skipped_id)
+      free_node(current().page, skipped_id);
+
+    free_node(me.page, me.id);
   }
+
+  return true;
+}
+
+</t>
+<t tx="michael.20141230111914.124">bool free_node(const PageRef&amp; page, nodeid_t id) {
+  if (id == 0) {
+    map.free_page(page);
+    return false;
+  }
+  else {
+    page.free_node(id);
+    // no defragment needed (it is done in remove())
+    return true;
+  }
+}
+
 </t>
 <t tx="michael.20141230111914.125">// returns the nodeid that connects parent with current
 // if current is on another page it conntects the link
-// with current's page and retuns the nodeid of the link
+// with current's page and returns the nodeid of the link
 nodeid_t child_of_parent() {
-    NodeRef&amp; link_or_parent(stack[stack.size()-2].node);
-    if (link_or_parent.type() == kLink) {
-      *(pageid_t*)link_or_parent.node() = current().page.id;
-      return link_or_parent.id;
-    }
-    return current().id;
+  NodeRef&amp; link_or_parent(stack[stack.size()-2].node);
+  if (link_or_parent.type() == kLink) {
+    *(pageid_t*)link_or_parent.node() = current().page.id;
+    return link_or_parent.id;
   }
+  return current().id;
+}
+
 </t>
 <t tx="michael.20141230111914.126">void add_node(const TempNode&amp; src) {
-    // transistion_key causes transitions from parent to node
-    size_t size_ = src.size();
-    reserve_space(size_+sizeof(NodePtr));
-    nodeid_t newid = current().page.new_node(size_);
-    NodeRef dst(current().page, newid);
-    copy_node(dst, src);
-    push(dst);
- }
+  // transistion_key causes transitions from parent to node
+  size_t size_ = src.size();
+  reserve_space(size_+sizeof(NodePtr));
+
+  nodeid_t newid = current().page.new_node(size_);
+  NodeRef dst(current().page, newid);
+  copy_node(dst, src);
+  push(dst);
+}
+
 </t>
 <t tx="michael.20141230111914.127">// change current node to type
 void change_node(const TempNode&amp; new_node) {
-    size_t size_ = current().size(), new_size = new_node.size();
-    grow_node_by((int)new_size-(int)size_);
-    copy_node(current(), new_node);
-    back-&gt;end = back-&gt;start + current().get_len();
-  }
+  size_t size_ = current().size(), new_size = new_node.size();
+  grow_node_by((int)new_size-(int)size_);
+  copy_node(current(), new_node);
+  back-&gt;end = back-&gt;start + current().get_len();
+}
+
 </t>
 <t tx="michael.20141230111914.128">// grows or shrink the current node
 void grow_node_by(int delta) {
-    if (delta &gt; 0)
-      reserve_space(delta);
-    
-    current().page.grow_node_by(current().id, delta);  
-  }
+  if (delta &gt; 0)
+    reserve_space(delta);
+
+  current().page.grow_node_by(current().id, delta);
+}
+
 </t>
 <t tx="michael.20141230111914.135">@first #! /usr/bin/env python
 @language python
@@ -1659,7 +1573,9 @@ top = "."
 out = "build"
 APPNAME = "base64bench"
 VERSION = "0.0"
-ALIGN = 4 # 4 is minimum align
+ALIGN = 4  # 4 is minimum align
+PAGE_SIZE = 1024*8
+PAGE_SPLIT_SIZE = 1024*4
 
 
 def options(opt):
@@ -1667,107 +1583,95 @@ def options(opt):
     opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
 
 
-
-def configure_test(cfg):
-    import os
-    cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
-        
-    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
-                             "PAGE_SIZE=8192", 
-                             'CMPFILES="{}"'.format(cmpfiles_path)]
-                             
-    cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
-    cfg.env.STLIBPATH_TEST = []
-    if cfg.env.CXX_NAME == "gcc":
-        cfg.env.LINKFLAGS_TEST = ["-pthread"]
-        #, "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
-    
-    if cfg.options.gcov:
-        cfg.env.CXXFLAGS_TEST.extend(["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
-        cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
-   
-
-def configure_bench(cfg):
-    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN), "PAGE_SIZE=8192", "DEBUG"]
-    cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
-    
-    cfg.env.STLIBPATH_BENCH = []
-    if cfg.env.CXX_NAME == "gcc":
-        #cfg.env.LINKFLAGS_BENCH = ["-pthread"]
-        #, "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0", 
-                                  "-march=corei7", "-O0", "-g"]
-
-
 def configure(cfg):
     import os
-    
+
+    cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
+
     load_modules = 'compiler_cxx boost waf_unit_test'
     if os.name == "nt":
         cfg.env['MSVC_VERSIONS'] = ['wsdk 8.0']
         cfg.env['MSVC_TARGETS'] = ['x64']
         load_modules += " msvc"
-        
+
     cfg.check_waf_version(mini='1.8.5')
     cfg.load(load_modules)
-    cfg.check_boost()#lib='system filesystem')
-    
-    cfg.env.INCLUDES = [os.path.abspath("include"), 
-                        os.path.abspath("src")]
+    cfg.check_boost()  # lib='system filesystem')
 
-    configure_test(cfg)
-    configure_bench(cfg)
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
+                             "PAGE_SIZE={}".format(PAGE_SIZE),
+                             "PAGE_SPLIT_SIZE={}".format(PAGE_SPLIT_SIZE),
+                             'CMPFILES="{}"'.format(cmpfiles_path)]
+
+    cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
+    cfg.env.INCLUDES_TEST = [os.path.abspath("include"),
+                             os.path.abspath("src")]
+    cfg.env.STLIBPATH_TEST = []
+    if cfg.env.CXX_NAME == "gcc":
+        cfg.env.LINKFLAGS_TEST = ["-pthread"]
+        # , "-lboost_filesystem",  "-lboost_system"]
+        cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
+
+    if cfg.options.gcov:
+        cfg.env.CXXFLAGS_TEST.extend(
+            ["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
+        cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
+
+    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN),
+                              "PAGE_SIZE={}".format(PAGE_SIZE),
+                              "PAGE_SPLIT_SIZE={}".format(PAGE_SPLIT_SIZE),
+                              'DEBUG']  # debug
+    cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
+    cfg.env.INCLUDES_BENCH = [os.path.abspath("include"),
+                              os.path.abspath("src")]
+    cfg.env.STLIBPATH_BENCH = []
+    if cfg.env.CXX_NAME == "gcc":
+        # cfg.env.LINKFLAGS_BENCH = ["-pthread"]
+        # , "-lboost_filesystem",  "-lboost_system"]
+        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0",
+                                  "-march=corei7", "-g", "-O0"]
 
 
 def build(bld):
     from os.path import join, abspath
-    sources = "trie.cpp node.cpp leaves.cpp base64.cpp murmurhash3.cpp"
+    sources = "trie.cpp node.cpp leaves.cpp base64.cpp"
     sources = [join("src", s) for s in sources.split()]
-    
+
     bld.program(
-        features="test",
+        # features="test",
         source=[join("tests", "test_trie.cpp")]+sources,
         use="TEST BOOST",
         target="test_trie")
-    
+
     bld.program(
-        features="test",
+        # features="test",
         source=[join("tests", "test_bits.cpp")]+sources,
         use="TEST BOOST",
         target="test_bits")
 
     bld.program(
-        features="test",
+        # features="test",
         source=[join("tests", "test_memorydb.cpp")]+sources,
         use="TEST BOOST",
         target="test_memorydb")
-        
-    bld.program(
-        features="test",
-        source=[join("tests", "test_base64.cpp"), 
-                join("src", "base64.cpp")],
-        use="TEST BOOST",
-        target="test_base64")        
 
     """
     only for generating test_trie tests
-    """
+
     def generate_graph(task):
         command = abspath(join("build", "test_trie"))
         graph = abspath(join("tests", "graph.py"))
         task.exec_command(command + "|" + graph)
         task.exec_command("dot -Tsvg -O graph-0.dot")
         return task.exec_command("dot -Tsvg -O graph-1.dot")
-     
+
     bld.add_post_fun(generate_graph)
+    """
 
     bld.program(
         source=[join("benchmarks", "sbench.cpp")]+sources,
         use="BENCH BOOST",
         target="sbench")
-
-
 </t>
 <t tx="michael.20141230111914.136">@language cplusplus
 @tabwidth -2
@@ -1802,42 +1706,30 @@ namespace larch_leaves {
 }
 
 void encode(const Slice&amp; input, std::string&amp; output) {
-  size_t size = input.size();
-  size_t output_size = 8*(size/6);
-  size_t div_size = size % 6;
+  size_t main_size, pad_size = 0;
   
-  switch(div_size) {
-    case 1: output_size += 2; break;
-    case 2: output_size += 3; break;
-    case 3: output_size += 4; break;
-    case 4: output_size += 6; break;
-    case 5: output_size += 7; break;
+  main_size = 8*(input.size()/6);
+  switch(input.size()%6) {
+  case 1: pad_size = 2; break;
+  case 2: pad_size = 3; break;
+  case 3: pad_size = 4; break;
+  case 4: pad_size = 6; break;
+  case 5: pad_size = 7; break;
   }
 
-  output.resize(output_size);
-
-  const char* s = input.data();
-  boost::uint64_t* d = (boost::uint64_t*)&amp;output[0];
-  int max_i = (int)(size-8), i = 0, j = 0;
-  for(; i &lt;= max_i; i += 6, j += 8, s += 6, d++)
-    *d = encode_block(*(boost::uint64_t*)s);
-
-  max_i = (int)(size - i);
-  boost::uint64_t block = 0;
-  if (max_i &gt;= 6) {
-    memcpy(&amp;block, s, 6);
-    *d = encode_block(block);
-    max_i -= 6;
-    j += 8;
-    s += 6;
-    d++;
+  output.resize(main_size+pad_size);
+  size_t i, j;
+  for(i = j = 0; i &lt; input.size(); i += 6, j+= 8) {
+    *(boost::uint64_t*)&amp;output[j] = encode_block(*(boost::uint64_t*)
+						 (input.data()+i));
   }
-  
-  if (max_i &gt; 0) {
-    block = 0;
-    memcpy(&amp;block, s, max_i);
+  if (pad_size) {
+    i -= 6;
+    j -= 8;
+    boost::uint64_t block = 0;
+    memcpy(&amp;block, input.data()+i, input.size()-i);
     block = encode_block(block);
-    memcpy(d, &amp;block, output_size-j);
+    memcpy((void*)&amp;output[j], &amp;block, pad_size);
   }
 }
 </t>
@@ -1856,46 +1748,31 @@ void encode(const Slice&amp; input, std::string&amp; output) {
 }
 
   void decode(const std::string&amp; input, std::string&amp; output) {
-  size_t size = input.size();
-  size_t output_size = 6*(size/8);
-  size_t div_size = size % 8;
-
-  switch(div_size) {
-    case 1: assert(0);
-    case 2: output_size += 1; break;
-    case 3: output_size += 2; break;
-    case 4: output_size += 3; break;
-    case 5: assert(0);
-    case 6: output_size += 4; break;
-    case 7: output_size += 5; break;
+  size_t main_size, pad_size = 0;
+  
+  main_size = 6*(input.size()/8);
+  switch(input.size()%8) {
+  case 2: pad_size = 1; break;
+  case 3: pad_size = 2; break;
+  case 4: pad_size = 3; break;
+  case 6: pad_size = 4; break;
+  case 7: pad_size = 5; break;
   }
 
-  output.resize(output_size);
-
-  boost::uint64_t* s = (boost::uint64_t*)&amp;input[0];
-  char* d = &amp;output[0];
-  int max_j = (int)(output_size - 8), i = 0, j = 0;
-  
-  for(; j &lt; max_j; i += 8, j += 6, s++, d += 6)
-    *(boost::uint64_t*)d = decode_block(*s);
-  
-  max_j = (int)(output_size - j);
-  boost::uint64_t block = 0;
-  if (max_j &gt;= 6) {
-    block = *s;
-    block = decode_block(block);
-    memcpy(d, &amp;block, 6);
-    max_j -= 6;
-    i += 8;
-    s++;
-    d += 6;
+  output.resize(main_size+pad_size);
+  size_t i, j;
+  boost::uint64_t block;
+  for(i = j = 0; i &lt; input.size(); i += 8, j+= 6) {
+    block = decode_block(*(boost::uint64_t*)(input.data()+i));
+    memcpy((void*)&amp;output[j], &amp;block, 6);
   }
-  
-  if (max_j &gt; 0) {
+  if (pad_size) {
+    i -= 8;
+    j -= 6;
     block = 0;
-    memcpy(&amp;block, s, size-i);
+    memcpy(&amp;block, input.data()+i, input.size()-i);
     block = decode_block(block);
-    memcpy(d, &amp;block, max_j);
+    memcpy((void*)&amp;output[j], &amp;block, pad_size);
   }
 }
 </t>
@@ -1979,19 +1856,21 @@ inline int ffs(boost::uint64_t v) {
 inline int clz(boost::uint64_t v) {
     unsigned long index;
     if (_BitScanReverse64(&amp;index, v)) 
-      return 63-index;
+      return 64 - index;
     else
-      return 64;
+      return 65;
  }
 
-#else 
+#endif //_M_X64
 
+
+#pragma intrinsic(_BitScanForward)
 #pragma intrinsic(__popcnt, _BitScanForward, _BitScanReverse)
 #define popcount32 __popcnt
 
 inline int ffs32(boost::uint32_t v) {
     unsigned long index;
-    if (_BitScanForward(&amp;index, v)) 
+    if (_BitScanForward64(&amp;index, v)) 
       return index+1;
     else
       return 0;
@@ -1999,40 +1878,38 @@ inline int ffs32(boost::uint32_t v) {
 
 inline int clz32(boost::uint32_t v) {
     unsigned long index;
-    if (_BitScanReverse(&amp;index, v)) 
+    if (_BitScanReverse32(&amp;index, v)) 
       return 31 - index;
     else
       return 32;
  }
 
 #define _32BIT
-#endif //_M_X64
+
 #endif // _MSC_VER
 </t>
 <t tx="michael.20141230111914.146">// a page is identified by a page id
 // because of "copy on write" for concurrent storages
 // there can be multiple pages with the same id
 // but each page has a unique pageoffset_t
-typedef boost::uint32_t pageid_t;     // page id 
+typedef boost::uint32_t pageid_t;     // page id
 typedef boost::uint32_t pageoffset_t; // points to page inside file
+
 
 // Nodes are identfied by a node id.
 // the node id is the index of the node pointer table.
 typedef boost::uint16_t nodeid_t;
 typedef boost::uint8_t nodetype_t;
 
-// a value size: either a value below 127
-// or 0x88 which is a (8byte) pointer to leaf storage
-// (the byte size can be determined with v &amp; 7f)
-typedef boost::uint8_t vsize_t; 
-
-
-typedef size_t leaf_ptr;
 </t>
 <t tx="michael.20141230111914.147">#ifndef _MSC_VER
   #define NOEXCEPT noexcept
 #else
-  #define NOEXCEPT
+  #if _MSC_VER &gt;= 1600
+    #define NOEXCEPT noexcept
+  #else
+    #define NOEXCEPT
+  #endif
 #endif
 
 
@@ -2059,7 +1936,91 @@ class WrongValue : public LeavesException {
 </t>
 <t tx="michael.20141230111914.148">typedef unsigned char trieindex_t;
 
-@others
+// A Node containing a string part equal to all descendants
+// the equal part fit into a page; the data size in NodeRef::len()
+struct Compressed {
+  nodeid_t child;
+  char data[];
+};
+
+// A leaf
+// the data is interpreted by the type (kLeaf od kBitLeaf)
+// the size of data is saved in NodeRef::len()
+struct Leaf {
+  char data[];
+};
+
+// Node with the complete alphabet
+// children count is &gt; 56
+struct Trie {
+  nodeid_t children[64];
+};
+
+// Node with a range
+struct BitTrie {
+  boost::uint64_t bits;
+  nodeid_t children[];
+
+  size_t count() const { return popcount(bits); }
+
+  int get_child_index(trieindex_t index) const {
+    if (bits &amp; (((boost::uint64_t)1) &lt;&lt; index)) {
+      boost::uint64_t mask = ~0;
+      mask &lt;&lt;= index;
+      return popcount(bits &amp; ~mask);
+    }
+    return -1;
+  }
+
+  int first_bit() const { return ffs(bits) - 1; }
+
+  int last_bit() const {
+    if (!bits)
+      return -1;
+    return 63 - clz(bits);
+  }
+
+  int next_bit(int index) const {
+    boost::uint64_t mask = ~0;
+    mask &lt;&lt;= (index + 1);
+    return ffs(bits &amp; mask) - 1;
+  }
+
+  int prev_bit(int index) const {
+    boost::uint64_t mask = ~0;
+    mask &lt;&lt;= index;
+    mask = bits &amp; ~mask;
+    if (!mask)
+      return -1;
+    return 63 - clz(mask);
+  }
+
+  void add(int index, nodeid_t node) {
+    bits |= ((boost::uint64_t)1) &lt;&lt; index;
+    int child_index = get_child_index(index);
+    memmove(children + child_index + 1, children + child_index,
+            sizeof(nodeid_t) * (count() - child_index - 1));
+    children[child_index] = node;
+  }
+
+  void remove(int index) {
+    int child_index = get_child_index(index);
+    assert(child_index &gt;= 0);
+    bits &amp;= ~(((boost::uint64_t)1) &lt;&lt; index);
+    memmove(children + child_index, children + child_index + 1,
+            sizeof(nodeid_t) * (count() - child_index));
+  }
+};
+
+struct Node {
+  union {
+    Compressed c;
+    Leaf l;
+    Trie t;
+    BitTrie b;
+    pageid_t p;
+  };
+};
 </t>
 <t tx="michael.20141230111914.24">struct PrivateMemoryDatabase : public MemoryDatabase {
   NodeStorageInHeap nodes;
@@ -2068,122 +2029,111 @@ class WrongValue : public LeavesException {
   size_t _count;
 
   PrivateMemoryDatabase() : trace(nodes, nodes), _count(0) {
-      reinit();
-      coding_buffer.reserve(MAX_KEY_SIZE_64);
-    }
+    reinit();
+    coding_buffer.reserve(MAX_KEY_SIZE_64);
+  }
 
   PrivateMemoryDatabase(const std::string&amp; data) : trace(nodes, nodes), _count(0) {
-      //_nodes.load(data);
-    }
+    //_nodes.load(data);
+  }
 
   void reinit() {
-      assert(nodes._free_pages == 0);
-      assert(nodes._pages.empty());
-      assert(trace.size() == 0);
-      
-      PageRef page(nodes.new_page());
-      TempTrie root;
-      copy_node(NodeRef(page, page.new_node(root.size())), root);
-      trace.push_root(NodeRef(page, 0));
-    }
-     
+    assert(nodes._free_pages == 0);
+    assert(nodes._pages.empty());
+    assert(trace.size() == 0);
+
+    PageRef page(nodes.new_page());
+    TempTrie root;
+    copy_node(NodeRef(page, page.new_node(root.size())), root);
+    trace.push_root(NodeRef(page, 0));
+  }
+
   bool is_valid() const {
-      return trace.is_valid();
-    }
-    
+    return trace.is_valid();
+  }
+
   size_t count() const {
-      return _count;
-    }
-    
+    return _count;
+  }
+
   size_t pages() const {
-      return nodes._pages.size() - nodes._free_pages;
-    }
-  
+    return nodes._pages.size() - nodes._free_pages;
+  }
+
   void find(const Slice&amp; key) {
-      if (key.size() &gt; MAX_KEY_SIZE)
-        throw WrongValue(KEY_EXEEDS);
-      
-      encode(key, coding_buffer);
-      trace.find(coding_buffer);
-    }
-    
-  void first() { 
-      trace.first();
-    }
-    
-  void last() { 
-      trace.last();
-    }
-    
-  void next() { 
-      trace.next();
-    }
-    
+    if (key.size() &gt; MAX_KEY_SIZE)
+      throw WrongValue(KEY_EXEEDS);
+
+    encode(key, coding_buffer);
+    trace.find(coding_buffer);
+  }
+
+  void first() {
+    trace.first();
+  }
+
+  void last() {
+    trace.last();
+  }
+
+  void next() {
+    trace.next();
+  }
+
   void prev() {
-      trace.prev();
-    }
-  
-  Slice key() { 
-      decode(trace.key, coding_buffer);
-      return coding_buffer;
-    }
-  
-  Slice value() { 
-      return trace.get_value();
-    }
+    trace.prev();
+  }
+
+  Slice key() {
+    decode(trace.key, coding_buffer);
+    return coding_buffer;
+  }
+
+  Slice value() {
+    trace.check_valid();
+    return Slice((char*)trace.current().node(), trace.current().len());
+  }
 
   void set_value(const Slice&amp; value) {
-      if (value.size() &gt; MAX_PAGE_VALUE_SIZE)
-        throw WrongValue(VALUE_EXEEDS);
+    if (value.size() &gt; 2048)
+      throw WrongValue("value may not exceed 2048 bytes");
 
-      if (trace.set_leaf(TempLeaf(value)))
-        _count++;
+    if (trace.set_leaf(TempLeaf(value)))
+      _count++;
+  }
+
+  void remove() {
+    if (trace.remove())
+      reinit();
+    _count--;
+  }
+
+  void get_statistics(Statistics* output) {
+    typedef NodeStorageInHeap::_page_container_t::iterator iter_t;
+    iter_t i = nodes._pages.begin();
+    size_t free_size = 0;
+    for(int j = 0; i != nodes._pages.end(); i++, j++) {
+      if (*i)
+        free_size += PageRef(i-&gt;get(), j, j).free_size();
     }
-  
-  void remove() { 
-      if (trace.remove())
-        reinit();
-      _count--;
-    }
-    
-  void reset_statistics() {
-      trace.reset_statistics();
-    }
-    
-  void print_statistics() {
-      double avg_trace = (double)trace.stat_find_trace/(double)trace.stat_find_count;
-      double avg_reuse = (double)trace.stat_reuse_trace/(double)trace.stat_find_count;
-      double avg_tries = (double)trace.stat_tries/(double)trace.stat_find_count;
-      double avg_compressed = (double)trace.stat_compressed/(double)trace.stat_find_count;
-      double avg_link = (double)trace.stat_link/(double)trace.stat_find_count;
-      std::cerr &lt;&lt; "avg trace: " &lt;&lt; avg_trace &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "avg reuse: " &lt;&lt; avg_reuse &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "avg tries: " &lt;&lt; avg_tries &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "avg compressed: " &lt;&lt; avg_compressed &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "avg links: " &lt;&lt; avg_link &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "stat_short_find: " &lt;&lt; trace.stat_short_find &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "stat_wrong_prefix: " &lt;&lt; trace.stat_wrong_prefix &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "pages: " &lt;&lt; pages() &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "free pages: " &lt;&lt; nodes._free_pages &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "max_page_key: " &lt;&lt; trace.max_page_key &lt;&lt; std::endl;
-      std::cerr &lt;&lt; "min_page_key: " &lt;&lt; trace.min_page_key &lt;&lt; std::endl;
-    }
-    
+    output-&gt;page_free_size = free_size;
+  }
+
 #ifdef DEBUG
   void dump(std::ostream&amp; out) {
-      out &lt;&lt; "state:" &lt;&lt; std::endl;
-      typedef std::vector&lt;NodeStorageInHeap::_page_ptr&gt;::iterator iter_t;
-      iter_t i = nodes._pages.begin();
-      for(int j = 0; i != nodes._pages.end(); i++, j++) {
-        if (*i) {
-          PageRef(i-&gt;get(), j, j).dump(out);
-        }
+    out &lt;&lt; "state:" &lt;&lt; std::endl;
+    typedef NodeStorageInHeap::_page_container_t::iterator iter_t;
+    iter_t i = nodes._pages.begin();
+    for(int j = 0; i != nodes._pages.end(); i++, j++) {
+      if (*i) {
+        PageRef(i-&gt;get(), j, j).dump(out);
       }
-      out &lt;&lt; "---" &lt;&lt; std::endl;
     }
-#endif    
+    out &lt;&lt; "---" &lt;&lt; std::endl;
+  }
+#endif
 };
-    
+
 MemoryDatabase* MemoryDatabase::create() {
   return new PrivateMemoryDatabase();
 }
@@ -2191,6 +2141,7 @@ MemoryDatabase* MemoryDatabase::create() {
 <t tx="michael.20141230111914.26">// PageRef Methods
 // ---------------
 @others
+
 </t>
 <t tx="michael.20141230111914.27">bool PageRef::defragment(Trace&amp; trace) const {
   // keep in mind: root is never removed, instead thethe page will be removed
@@ -2204,24 +2155,24 @@ MemoryDatabase* MemoryDatabase::create() {
   bool nodes_moved = false;
   size_t hole_size = 0;
   bool moved = false;
-   
-  // closes the holes in the page 
+
+  // closes the holes in the page
   for(size_t i = 1; i &lt; old_count; i++) {
-    size_t node_size = get_node_size((nodeid_t)i);
-    map[i] = (nodeid_t)node_count;
-    
+    size_t node_size = get_node_size(i);
+    map[i] = node_count;
+
     if (ptrs[i].type == kRemoved) {
       // a hole
 
       // holes are often continuous to avoid many costly
-      // memmove operations we will do it at the next item
+      // memmove operations we will do it at thee next item
       hole_size += node_size;
       node_start -= node_size;
       moved = true; // hole_size can be 0 if node_size is 0
                     // ==&gt; hole_size&gt;0 cannot be used as moved indicator
       continue;
     }
-    
+
     if (moved) {
       TESTPOINT(DefragmentNodeMove);
       // node_start points still to the last hole!
@@ -2232,21 +2183,21 @@ MemoryDatabase* MemoryDatabase::create() {
       moved = false;
       nodes_moved = true;
     }
-    
-    node_start -= node_size;     
+
+    node_start -= node_size;
     memcpy(&amp;new_ptrs[node_count], &amp;ptrs[i], sizeof(NodePtr));
     new_ptrs[node_count].offset = (inpage_ptr)(node_start-page_start);
-      
+
     node_count++;
   }
 
   // if (do_move)
   //    the hole is at the end, we need not do anything just cut
   //    which is done at the next line
-  page-&gt;count = (boost::uint16_t)node_count;
-    
+  page-&gt;count = node_count;
+
   if (!nodes_moved)
-    return false;  // not defragmented 
+    return false;  // not defragmented
 
   // ptrs[0] ist still the same
   memcpy(&amp;ptrs[1], &amp;new_ptrs[1], sizeof(NodePtr)*(node_count-1));
@@ -2262,19 +2213,21 @@ MemoryDatabase* MemoryDatabase::create() {
       children[j] = map[children[j]];
     handler-&gt;replace_children(ptrs, node, children);
   }
-  
+
   trace.refresh_trace();
   return true;
 }
+
 </t>
 <t tx="michael.20141230111914.29">nodeid_t Page::new_node(size_t size_) {
   NodePtr *ptrs = node_ptr;
   size_t free_start = count ? ptrs[count-1].offset : sizeof(Page);
   free_start -= size_;
   nodeid_t new_id = count++;
-  ptrs[new_id].offset = (inpage_ptr)free_start;
+  ptrs[new_id].offset = free_start;
   return new_id;
 }
+
 </t>
 <t tx="michael.20141230111914.30">void PageRef::grow_node_by(nodeid_t node_id, int size) const {
   if (size == 0)
@@ -2285,47 +2238,56 @@ MemoryDatabase* MemoryDatabase::create() {
   size_t free_start = ptrs[count_-1].offset;
   size_t node_start = ptrs[node_id].offset;
   size_t node_size = get_node_size(node_id);
-  
+
   if (size &lt; 0)
     node_size += size;
-    
+
   memmove(&amp;page-&gt;data[free_start-size], &amp;page-&gt;data[free_start],
           node_start-free_start+node_size);
-  
+
   for(size_t i = node_id; i &lt; count_; i++)
     ptrs[i].offset -= size;
 }
+
 </t>
 <t tx="michael.20141230111914.31">void PageRef::change_to_link(nodeid_t node_id, pageid_t page_id) const {
   // first remove the old nodes space
-  int delta = (int)(page_pad(sizeof(pageid_t)) - get_node_size(node_id));
+  int delta = (int)page_pad(sizeof(pageid_t)) - (int)get_node_size(node_id);
   assert(delta &lt;= 0);
   grow_node_by(node_id, delta);
-  
+
   NodePtr *ptr = page-&gt;node_ptr + node_id;
   ptr-&gt;extra = 0;
   ptr-&gt;type = kLink;
-  *((pageid_t*)&amp;page-&gt;data[ptr-&gt;offset]) = page_id;
+
+  // avoids strict alias warning
+  pageid_t *p = (pageid_t*)(page-&gt;data + ptr-&gt;offset);
+  *p = page_id;
 }
+
 </t>
 <t tx="michael.20141230111914.37">size_t get_node_size(nodeid_t id) const {
-    return page-&gt;get_node_size(id);
-  }
+  return page-&gt;get_node_size(id);
+}
+
 </t>
 <t tx="michael.20141230111914.38">size_t free_size() const {
-    return page-&gt;free_size();
-  }
+  return page-&gt;free_size();
+}
+
 </t>
 <t tx="michael.20141230111914.39">size_t size() const {
-    return page-&gt;size();
-  }
+  return page-&gt;size();
+}
+
 </t>
-<t tx="michael.20141230111914.43">void free_node(nodeid_t id_) const {
-    page-&gt;node_ptr[id_].type = kRemoved;
-  }
+<t tx="michael.20141230111914.43">void free_node(nodeid_t nid) const {
+  page-&gt;node_ptr[nid].type = kRemoved;
+}
+
 </t>
 <t tx="michael.20141230111914.5">class Slice {
- protected:
+ private:
   size_t _size;
   const char* _data;
   
@@ -2392,416 +2354,404 @@ inline size_t page_pad(size_t size) {
 
 
 </t>
-<t tx="michael.20141230111914.75">TempLeaf::TempLeaf(const Slice&amp; value) {
-  _type = kLeaf;
-  _size = value.size();
-  assert(_size &lt;= MAX_PAGE_VALUE_SIZE);
-  set_len(_size);
-  _node = (Node*)value.data();
+<t tx="michael.20141230111914.75">TempLeaf::TempLeaf(const Slice &amp;value) {
+  size_t size = value.size();
+  page.new_node(page_pad(size));
+  set_len(value.size());
+  Leaf *n = &amp;node()-&gt;l;
+  memcpy(n-&gt;data, value.data(), value.size());
+  page.node_ptr[0].type = kLeaf;
 }
-
-TempLeaf::TempLeaf(leaf_ptr* ptr) {
-  _type = kLeaf;
-  _size = sizeof(leaf_ptr); 
-  set_len(_size | 0x40);
-  _node = (Node*)ptr;
-}
-
 
 TempTrie::TempTrie(size_t child_count) {
-  _node = (Node*)_children;
-
   if (child_count &gt; 56) {
-    _size = sizeof(_children);
-    _type = kTrie;
-    memset(_children, 0, sizeof(_children));
-  }
-  else {
-    _size = page_pad(
-      pad&lt;8*sizeof(nodeid_t)&gt;(sizeof(BitTrie)+child_count*sizeof(nodeid_t)));
-
-    _type = kBitTrie;
+    page.new_node(page_pad(sizeof(Trie)));
+    page.node_ptr[0].type = kTrie;
+    memset(node(), 0, sizeof(Trie));
+  } else {
+    size_t size = page_pad(sizeof(BitTrie)
+                           + pad&lt;4&gt;(child_count) * sizeof(nodeid_t));
+    page.new_node(size);
+    page.node_ptr[0].type = kBitTrie;
     node()-&gt;b.bits = 0;
   }
-  set_extra(0);
+  page.node_ptr[0].extra = 0;
 }
 
-TempCompressed::TempCompressed(const Slice&amp; part) {
-  _type = kCompressed;
-  _node = (Node*)_data;
-  _size = part.size() + sizeof(nodeid_t);
-  set_len(part.size());
-  Compressed* n = &amp;node()-&gt;c;
-  memcpy(n-&gt;data, part.data(), part.size());
+TempCompressed::TempCompressed(const Slice &amp;part) {
+  size_t size(part.size());
+  page.new_node(page_pad(sizeof(nodeid_t) + size));
+  set_len(size);
+  Compressed *n = &amp;node()-&gt;c;
+  memcpy(n-&gt;data, part.data(), size);
   n-&gt;child = 0;
+  page.node_ptr[0].type = kCompressed;
 }
+
 </t>
 <t tx="michael.20141230111914.76">size_t get_len() const {
-    return handler-&gt;get_len(*this);
-  }
-
-bool is_valid(const Trace&amp; trace) const {
-    return handler-&gt;is_valid(*this, trace);
-  }
-
-Slice get_value(Trace&amp; trace) {
-    return handler-&gt;get_value(*this, node(), trace);
-  }
+  return handler-&gt;get_len(*this);
+}
 
 void find(Trace&amp; trace) {
-    handler-&gt;find(*this, node(), trace);
-  }
-  
-void next(Trace&amp; trace) {
-    handler-&gt;next(*this, node(), trace);
-  }
-  
-void prev(Trace&amp; trace) {
-    handler-&gt;prev(*this, node(), trace);
-  }
-  
-void first(Trace&amp; trace) {
-    handler-&gt;first(*this, node(), trace);
-  }
-  
-void last(Trace&amp; trace) {
-    handler-&gt;last(*this, node(), trace);
-  }
- 
-Slice append(nodeid_t child, Slice&amp; key) {
-    return handler-&gt;append(*this, node(), child, key);
-  }
+  handler-&gt;find(*this, node(), trace);
+}
 
-bool add(const TempNode&amp; leaf, Trace&amp; trace) {
-    return handler-&gt;add(leaf, *this, node(), trace);
-  }
+void next(Trace&amp; trace) {
+  handler-&gt;next(*this, node(), trace);
+}
+
+void prev(Trace&amp; trace) {
+  handler-&gt;prev(*this, node(), trace);
+}
+
+void first(Trace&amp; trace) {
+  handler-&gt;first(*this, node(), trace);
+}
+
+void last(Trace&amp; trace) {
+  handler-&gt;last(*this, node(), trace);
+}
+
+void add(const TempNode&amp; leaf, Trace&amp; trace) {
+  handler-&gt;add(leaf, *this, node(), trace);
+}
 
 bool remove_child(Trace&amp; trace) {
-    return handler-&gt;remove_child(*this, node(), trace);
-  }
- 
+  return handler-&gt;remove_child(*this, node(), trace);
+}
+
 size_t get_children(nodeid_t children[65]) const {
-    return handler-&gt;get_children(ptr, node(), children);
-  }
+  return handler-&gt;get_children(ptr, node(), children);
+}
 
 void replace_children(nodeid_t children[65]) {
-    handler-&gt;replace_children(ptr, node(), children);
-  }
-  
+  handler-&gt;replace_children(ptr, node(), children);
+}
+
 bool eat_child() {
-    return handler-&gt;eat_child(*this, node());
-  }
-  
+  return handler-&gt;eat_child(*this, node());
+}
+
 void child_find(nodeid_t child_id, Trace&amp; trace);
+
 void child_first(nodeid_t child_id, Trace&amp; trace);
+
 void child_last(nodeid_t child_id, Trace&amp; trace);
 
+</t>
+<t tx="michael.20141230111914.77">void reinsert_me(TempLeaf &amp;me, Trace &amp;trace) {
+  trace.add_node(me);
+  // extra() is the end node
+  trace.parent().set_extra(trace.child_of_parent());
+  trace.pop(); // back to parent
+}
+
+void add(const TempNode &amp;end, NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  assert(key.size() != 0);
+  TempLeaf me(Slice(data-&gt;l.data, rnode.len()));
+
+  trace.change_node(TempTrie());
+  reinsert_me(me, trace);
+  if (key.size() &gt; 1) {
+    TESTPOINT(LeafAdd0);
+    TempCompressed compressed(key.advance(1));
+    trace.add_node(compressed);
+    BitTrie *pn = &amp;trace.parent().node()-&gt;b;
+    pn-&gt;add(key[0], trace.child_of_parent());
+  } else {
+    TESTPOINT(LeafAdd2);
+  }
+
+  trace.current().add(end, trace);
+}
 
 </t>
-<t tx="michael.20141230111914.77">bool add(const TempNode&amp; end, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    
-    if (key.size() == 0) {
-      trace.change_node(end);
-      return false;
-    }
-    
-    char buffer[MAX_PAGE_VALUE_SIZE];
-    size_t size = rnode.len();
-    memcpy(buffer, data-&gt;l.data, size);
-    TempLeaf me(Slice(buffer, size));
-    trace.change_node(TempTrie());
-    reinsert_me(me, trace);
-    if (key.size() &gt; 1) {
-      TESTPOINT(LeafAdd0);
-      TempCompressed compressed(key.advance(1));
-      trace.add_node(compressed);
-      BitTrie* pn = &amp;trace.parent().node()-&gt;b;
-      pn-&gt;add(key[0], trace.child_of_parent());
-    }
-    else {
-      TESTPOINT(LeafAdd2);
-    }
+<t tx="michael.20141230111914.79">size_t get_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+  if (data-&gt;c.child) {
+    children[0] = data-&gt;c.child;
+    return 1;
+  }
+  return 0;
+}
 
-    trace.current().add(end, trace);
+</t>
+<t tx="michael.20141230111914.80">void replace_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+  if (data-&gt;c.child)
+    data-&gt;c.child = children[0];
+}
+
+</t>
+<t tx="michael.20141230111914.82">  if (keycmp(rnode, data, trace) == 0 &amp;&amp; data-&gt;c.child)
+    rnode.child_find(data-&gt;c.child, trace);
+}
+
+</t>
+<t tx="michael.20141230111914.83">void first(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  keyappend(rnode, data, trace);
+  rnode.child_first(data-&gt;c.child, trace);
+}
+
+</t>
+<t tx="michael.20141230111914.84">void last(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  keyappend(rnode, data, trace);
+  rnode.child_last(data-&gt;c.child, trace);
+}
+
+</t>
+<t tx="michael.20141230111914.87">void reinsert(TempCompressed &amp;rest_me, trieindex_t index,
+              Trace &amp;trace) {
+  BitTrie *bn;
+  nodeid_t child_id;
+
+  if (rest_me.len() == 0) {
+    TESTPOINT(CompressReinsert0);
+    child_id = trace.current().extra();
+    trace.current().set_extra(0);
+    bn = (BitTrie *)trace.current().node();
+    bn-&gt;add(index, child_id);
+  } else {
+    TESTPOINT(CompressReinsert1);
+    trace.add_node(rest_me);
+    child_id = trace.parent().extra();
+    trace.parent().set_extra(0);
+    bn = (BitTrie *)trace.parent().node();
+    bn-&gt;add(index, trace.child_of_parent());
+    trace.current().node()-&gt;c.child = child_id;
+    trace.pop();
+  }
+}
+
+void add(const TempNode &amp;leaf, NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  size_t size = rnode.len();
+
+  if (!data-&gt;c.child) {
+    // A new leaf with some rest key is inserted
+    TESTPOINT(CompressAddNew);
+    assert(size == key.size());
+    trace.add_node(leaf);
+    trace.parent().node()-&gt;c.child = trace.child_of_parent();
+    return;
+  }
+
+  size_t prefix_size =
+      common_prefix(key.data(), data-&gt;c.data, std::min(size, key.size()));
+  TempCompressed rest_me(Slice(data-&gt;c.data + prefix_size + 1,
+                               size - prefix_size - 1));
+  TempTrie trie;
+
+  trace.reserve_space(trie.size()+sizeof(NodePtr));
+  // pereserve the space for an extra trie
+  // this ensures the child_id will not change until reinsert
+  // (otherwise it could change with add_node)
+
+  data = trace.current().node();
+  nodeid_t child_id = data-&gt;c.child;
+  trieindex_t first = data-&gt;c.data[0];
+
+  if (prefix_size == 0) {
+    // insert one trie node
+    TESTPOINT(CompressAdd0);
+    trace.change_node(trie);
+  } else {
+    // another compressed
+    TESTPOINT(CompressAdd1);
+    first = data-&gt;c.data[prefix_size];
+
+    Slice next_key(key.data(), prefix_size);
+    trace.change_node(TempCompressed(next_key));
+    trace.add_node(trie);
+    trace.parent().node()-&gt;c.child = trace.child_of_parent();
+  }
+
+  // temporary put the child id on the current() trie
+  // (ensures if current is moved also the child is moved)
+  trace.current().set_extra(child_id);
+  reinsert(rest_me, first, trace);
+  trace.current().add(leaf, trace);
+}
+
+</t>
+<t tx="michael.20141230111914.89">size_t get_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+  size_t count = 0;
+  Trie *n = &amp;data-&gt;t;
+  for (int i = 0; i &lt; 64; i++) {
+    if (n-&gt;children[i])
+      children[count++] = n-&gt;children[i];
+  }
+  nodeid_t end_child = ptr-&gt;extra;
+  if (end_child)
+    children[count++] = end_child;
+
+  return count;
+}
+
+</t>
+<t tx="michael.20141230111914.90">void replace_children(NodePtr *ptr, Node *data, nodeid_t children[65]) {
+  size_t count = 0;
+  Trie *n = &amp;data-&gt;t;
+  for (int i = 0; i &lt; 64; i++) {
+    if (n-&gt;children[i])
+      n-&gt;children[i] = children[count++];
+  }
+
+  if (ptr-&gt;extra)
+    ptr-&gt;extra = children[count];
+}
+
+</t>
+<t tx="michael.20141230111914.92">void add_node(Node *data, trieindex_t index, const TempNode &amp;node,
+              Trace &amp;trace) {
+  trace.add_node(node);
+  data-&gt;t.children[index] = trace.child_of_parent();
+}
+
+</t>
+<t tx="michael.20141230111914.93">bool remove_child(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  int index = key.empty() ? -1 : key[0];
+
+  if (index &lt; 0) {
+    rnode.set_extra(0);
     return true;
   }
-</t>
-<t tx="michael.20141230111914.78">void reinsert_me(TempLeaf&amp; me, Trace&amp; trace) {
-    trace.add_node(me);
-    // extra() is the end node
-    trace.parent().set_extra(trace.child_of_parent());
-    trace.pop(); // back to parent
-  }
-</t>
-<t tx="michael.20141230111914.79">size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    if (data-&gt;c.child) {
-      children[0] = data-&gt;c.child;
-      return 1;
-    }
-    return 0;
-  }
-</t>
-<t tx="michael.20141230111914.80">void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    if (data-&gt;c.child)
-      data-&gt;c.child = children[0];
-  }
-</t>
-<t tx="michael.20141230111914.82">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    if (keycmp(rnode, data, trace) == 0 &amp;&amp; data-&gt;c.child)
-      rnode.child_find(data-&gt;c.child, trace);
-  }
-</t>
-<t tx="michael.20141230111914.83">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    keyappend(rnode, data, trace);
-    rnode.child_first(data-&gt;c.child, trace);
-  }
-</t>
-<t tx="michael.20141230111914.84">void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    keyappend(rnode, data, trace);
-    rnode.child_last(data-&gt;c.child, trace);
-  }
-</t>
-<t tx="michael.20141230111914.86">void reinsert(TempCompressed&amp; rest_me, nodeid_t child_id, 
-              trieindex_t index, Trace&amp; trace) {
-    BitTrie* bn;
 
-    if (rest_me.len() == 0) {
-      TESTPOINT(CompressReinsert0);
-      bn = (BitTrie*)trace.current().node();
-      bn-&gt;add(index, child_id);
-    }
-    else {
-      TESTPOINT(CompressReinsert1);
-      trace.add_node(rest_me);
-      bn = (BitTrie*)trace.parent().node();
-      bn-&gt;add(index, trace.child_of_parent());
-      trace.current().node()-&gt;c.child = child_id;
-      trace.pop();
-    }
-  }
-</t>
-<t tx="michael.20141230111914.87">bool add(const TempNode&amp; leaf, NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    size_t size = rnode.len();
-    
-    if (!data-&gt;c.child) {
-      // A new leaf with some rest key is inserted
-      TESTPOINT(CompressAddNew);
-      if (size != key.size()) {
-        std::cerr &lt;&lt; "wrong size: " &lt;&lt; size &lt;&lt; "!=" &lt;&lt; key.size() &lt;&lt; std::endl;
-      }
-      assert(size == key.size());
-      trace.add_node(leaf);
-      trace.parent().node()-&gt;c.child = trace.child_of_parent();
-      return true;
-    }
-    
-    size_t prefix_size = common_prefix(key.data(), data-&gt;c.data,
-                                       std::min(size, key.size()));
-    TempCompressed rest_me(Slice(data-&gt;c.data+prefix_size+1, 
-                                 size-prefix_size-1));
-          
-    trace.reserve_space(48+3*sizeof(NodePtr)); 
-      // the maximum of additional space we need
-      // if current() and its child has been moved to 
-      // another page with enough space      
-          
-    data = trace.current().node();
-    nodeid_t child_id = data-&gt;c.child;
+  Trie *n = &amp;data-&gt;t;
+  n-&gt;children[index] = 0;
 
-    trieindex_t first = data-&gt;c.data[0];
-    if (prefix_size == 0) {
-      // insert one trie node
-      TESTPOINT(CompressAdd0);
-      trace.change_node(TempTrie());
-      reinsert(rest_me, child_id, first, trace);
-    }
-    else {
-      // another compressed
-      TESTPOINT(CompressAdd1);
-      first = data-&gt;c.data[prefix_size];
-
-      Slice next_key(key.data(), prefix_size);
-      trace.change_node(TempCompressed(next_key));
-      
-      trace.add_node(TempTrie());
-      trace.parent().node()-&gt;c.child = trace.child_of_parent();
-      reinsert(rest_me, child_id, first, trace);
-    }
-
-    trace.current().add(leaf, trace);
-    return true;
+  size_t count = 0;
+  for (int i = 0; i &lt; 64; i++) {
+    if (n-&gt;children[i])
+      count++;
   }
-</t>
-<t tx="michael.20141230111914.89">size_t get_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    size_t count = 0;
-    Trie *n = &amp;data-&gt;t;
-    for(int i = 0; i &lt; 64; i++) {
-      if (n-&gt;children[i]) 
-        children[count++] = n-&gt;children[i];
-    }
-    nodeid_t end_child = ptr-&gt;extra;
-    if (end_child)
-      children[count++] = end_child;
-      
-    return count;
-  }
-</t>
-<t tx="michael.20141230111914.90">void replace_children(NodePtr* ptr, Node* data, nodeid_t children[65]) {
-    size_t count = 0;
-    Trie *n = &amp;data-&gt;t;
-    for(int i = 0; i &lt; 64; i++) {
-      if (n-&gt;children[i]) 
-        n-&gt;children[i] = children[count++];
-    }
-    
-    if (ptr-&gt;extra)
-      ptr-&gt;extra = children[count];
-  }
-</t>
-<t tx="michael.20141230111914.92">void add_node(Node* data, trieindex_t index, const TempNode&amp; node, Trace&amp; trace) {
-    trace.add_node(node);
-    data-&gt;t.children[index] = trace.child_of_parent();
-  }
-</t>
-<t tx="michael.20141230111914.93">bool remove_child(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    int index = key.empty() ? -1 : key[0];
 
-    if (index &lt; 0) {
-      rnode.set_extra(0);
-      return true;
-    }
-
-    Trie *n = &amp;data-&gt;t;
-    n-&gt;children[index] = 0;
-    
-    size_t count = 0;
-    for(int i = 0; i &lt; 64; i++) {
+  if (count &lt;= 56) {
+    TESTPOINT(TrieRemove);
+    TempTrie trie(count);
+    trie.set_extra(rnode.extra());
+    BitTrie *bt = (BitTrie *)trie.node();
+    for (int i = 0; i &lt; 64; i++) {
       if (n-&gt;children[i])
-        count++;
+        bt-&gt;add(i, n-&gt;children[i]);
     }
-    
-    if (count &lt;= 56) {
-      TESTPOINT(TrieRemove);
-      TempTrie trie(count);
-      trie.set_extra(rnode.extra());
-      BitTrie* bt = (BitTrie*)trie.node();
-      for(int i = 0; i &lt; 64; i++) {
-        if (n-&gt;children[i])
-          bt-&gt;add(i, n-&gt;children[i]);
-      }
-      trace.change_node(trie);
-    }
-
-    return true;
+    trace.change_node(trie);
   }
+
+  return true;
+}
+
 </t>
-<t tx="michael.20141230111914.94">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    
-    if (key.empty()) {
-      nodeid_t end_child = rnode.extra();
-      if (end_child)
-        rnode.child_find(end_child, trace);
-      return;
-    }
+<t tx="michael.20141230111914.94">void find(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
 
-    trieindex_t index = key[0];
-    nodeid_t child_id= data-&gt;t.children[index];
-    if (child_id) 
-      rnode.child_find(child_id, trace);
-  }
-</t>
-<t tx="michael.20141230111914.95">void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    int index = key.empty() ? 0 : key[0]+1;
-    
-    Trie *n = &amp;data-&gt;t;
-    for(; index &lt; 64; index++) {
-      nodeid_t child_id = n-&gt;children[index];
-      if (child_id) {
-        trace.cut_key();
-        trace.key.push_back((char)index);
-        rnode.child_first(child_id, trace);
-        return;
-      }
-    }
-
-    trace.parent_next();
-  }
-</t>
-<t tx="michael.20141230111914.96">void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-
-    if (key.empty()) {
-      trace.parent_prev();
-      return;
-    }
-
-    int index = ((int)key[0])-1;
-    Trie *n = &amp;data-&gt;t;
-    for(; index &gt;= 0; index--) {
-      nodeid_t child_id = n-&gt;children[index];
-      if (child_id) {
-        trace.cut_key();
-        trace.key.push_back((char)index);
-        rnode.child_last(child_id, trace);
-        return;
-      }
-    }
-    
+  if (key.empty()) {
     nodeid_t end_child = rnode.extra();
-    if (end_child) {
+    if (end_child)
+      rnode.child_find(end_child, trace);
+    return;
+  }
+
+  trieindex_t index = key[0];
+  nodeid_t child_id = data-&gt;t.children[index];
+  if (child_id)
+    rnode.child_find(child_id, trace);
+}
+
+</t>
+<t tx="michael.20141230111914.95">void next(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  int index = key.empty() ? 0 : key[0] + 1;
+
+  Trie *n = &amp;data-&gt;t;
+  for (; index &lt; 64; index++) {
+    nodeid_t child_id = n-&gt;children[index];
+    if (child_id) {
       trace.cut_key();
-      rnode.child_last(end_child, trace);
-    }
-    else 
-      trace.parent_prev();
-  }
-</t>
-<t tx="michael.20141230111914.97">void first(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    nodeid_t end_child = rnode.extra();
-    if (end_child) {
-      rnode.child_first(end_child, trace);
+      trace.key.push_back((char)index);
+      rnode.child_first(child_id, trace);
       return;
     }
+  }
 
-    Trie* n = &amp;data-&gt;t;
-    for(int index = 0; index &lt; 64; index++) {
-      nodeid_t child_id = n-&gt;children[index];
-      if (child_id) {
-        trace.key.push_back((char)index);
-        rnode.child_first(child_id, trace);
-        return;
-      }
-    }
-    assert(0);
-  }
+  trace.parent_next();
+}
+
 </t>
-<t tx="michael.20141230111914.98">void last(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Trie* n = &amp;data-&gt;t;
-    for(int index = 63; index &gt;= 0; index--) {
-      nodeid_t child_id = n-&gt;children[index];
-      if (child_id) {
-        trace.key.push_back((char)index);
-        rnode.child_last(child_id, trace);
-        return;
-      }
-    }
-    assert(0);
+<t tx="michael.20141230111914.96">void prev(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+
+  if (key.empty()) {
+    trace.parent_prev();
+    return;
   }
+
+  int index = ((int)key[0]) - 1;
+  Trie *n = &amp;data-&gt;t;
+  for (; index &gt;= 0; index--) {
+    nodeid_t child_id = n-&gt;children[index];
+    if (child_id) {
+      trace.cut_key();
+      trace.key.push_back((char)index);
+      rnode.child_last(child_id, trace);
+      return;
+    }
+  }
+
+  nodeid_t end_child = rnode.extra();
+  if (end_child) {
+    trace.cut_key();
+    rnode.child_last(end_child, trace);
+  } else
+    trace.parent_prev();
+}
+
+</t>
+<t tx="michael.20141230111914.97">void first(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  nodeid_t end_child = rnode.extra();
+  if (end_child) {
+    rnode.child_first(end_child, trace);
+    return;
+  }
+
+  Trie *n = &amp;data-&gt;t;
+  for (int index = 0; index &lt; 64; index++) {
+    nodeid_t child_id = n-&gt;children[index];
+    if (child_id) {
+      trace.key.push_back((char)index);
+      rnode.child_first(child_id, trace);
+      return;
+    }
+  }
+  assert(0);
+}
+
+</t>
+<t tx="michael.20141230111914.98">void last(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Trie *n = &amp;data-&gt;t;
+  for (int index = 63; index &gt;= 0; index--) {
+    nodeid_t child_id = n-&gt;children[index];
+    if (child_id) {
+      trace.key.push_back((char)index);
+      rnode.child_last(child_id, trace);
+      return;
+    }
+  }
+  assert(0);
+}
+
 </t>
 <t tx="michael.20150101205559.11">void check_valid() const {
-    if (!is_valid())
-      throw NoValidPosition();
-  }
+  if (!is_valid())
+    throw NoValidPosition();
+}
+
 </t>
 <t tx="michael.20150101205559.18">@language cplusplus
 @tabwidth -2
-#define BOOST_TEST_NO_MAIN
-#define GENERATE
+//#define BOOST_TEST_NO_MAIN
+//#define GENERATE
 &lt;&lt; includes &gt;&gt;
 
 using namespace larch_leaves;
@@ -2855,9 +2805,10 @@ using namespace larch_leaves;
       return Slice(trace.key);
     }
   
-  Slice value() {
-    return trace.get_value();
-  }
+  Slice value() { 
+      trace.check_valid();
+      return Slice((char*)trace.current().node(), trace.current().len());
+    }
 
   void set_value(const Slice&amp; value) {
       trace.set_leaf(TempLeaf(value));
@@ -2868,11 +2819,9 @@ using namespace larch_leaves;
         reinit();
     }
     
-  void dump(const char* fname, std::ostream&amp; out) {
+  void dump(std::ostream&amp; out) {
 #ifdef DEBUG  
       out &lt;&lt; "state:" &lt;&lt; std::endl;
-      out &lt;&lt; "  fname: " &lt;&lt; fname &lt;&lt; std::endl;
-      out &lt;&lt; "  pages: " &lt;&lt; std::endl;
       typedef std::vector&lt;NodeStorageInHeap::_page_ptr&gt;::iterator iter_t;
       iter_t i = nodes._pages.begin();
       for(int j = 0; i != nodes._pages.end(); i++, j++) {
@@ -2900,12 +2849,14 @@ typedef std::unique_ptr&lt;TestDatabase&gt; db_t;
 
 </t>
 <t tx="michael.20150101205559.23">void next() {
-    current().next(*this);
-  }
+  current().next(*this);
+}
+
 </t>
 <t tx="michael.20150101205559.24">void prev() {
-    current().prev(*this);
-  }
+  current().prev(*this);
+}
+
 </t>
 <t tx="michael.20150101205559.30">#ifdef TESTING
 void testpoint(const char* str);
@@ -2938,14 +2889,14 @@ std::ostream&amp; out(std::cout);
 
 void check_dump(const char* fname, db_t&amp; db) {
   std::stringstream cstr;
-  db-&gt;dump(fname, cstr);
+  db-&gt;dump(cstr);
   std::cout &lt;&lt; cstr.str();
   
-  //return; // do not output page dump
-/*  std::string path(CMPFILES);
+  return; // do not output page dump
+  std::string path(CMPFILES);
   path.append(fname);
   std::ofstream out(path.c_str());
-  out &lt;&lt; cstr.str();*/
+  out &lt;&lt; cstr.str();
 }
 
 void check_testpoints(size_t case_count, const char* testpoints[]) {
@@ -2960,7 +2911,7 @@ std::ostream&amp; out(dumy);
   
 void check_dump(const char* fname, db_t&amp; db) {
   std::stringstream cstr;
-  db-&gt;dump(fname, cstr);
+  db-&gt;dump(cstr);
 
   std::string path(CMPFILES);
   path.append(fname);
@@ -3085,6 +3036,57 @@ TestLeaf test_leaf;
 </t>
 <t tx="michael.20150101205559.38">@others
 </t>
+<t tx="michael.20150101205559.4">#ifdef DEBUG
+void PageRef::dump(std::ostream&amp; out) {
+  const char* t1 = "    ";
+  const char* t2 = "      ";
+  const char* t3 = "          ";
+  out &lt;&lt; t1 &lt;&lt; "- id:         " &lt;&lt; id &lt;&lt; std::endl
+      &lt;&lt; t2 &lt;&lt; "offset:     " &lt;&lt; offset &lt;&lt; std::endl
+      &lt;&lt; t2 &lt;&lt; "node_count: " &lt;&lt; count() &lt;&lt; std::endl
+      &lt;&lt; t2 &lt;&lt; "size:       " &lt;&lt; size() &lt;&lt; std::endl
+      &lt;&lt; t2 &lt;&lt; "free_size:  " &lt;&lt; free_size() &lt;&lt; std::endl
+      &lt;&lt; t2 &lt;&lt; "sum_size:   " &lt;&lt; size() + free_size() &lt;&lt; std::endl
+      &lt;&lt; t2 &lt;&lt; "nodes: " &lt;&lt; std::endl;
+
+  for(size_t id = 0; id &lt; count(); id++) {
+    NodePtr *ptr = page-&gt;node_ptr + id;
+    out &lt;&lt; t3 &lt;&lt; "- id:    " &lt;&lt; (int)id &lt;&lt; std::endl
+        &lt;&lt; t3 &lt;&lt; "  ptr:   " &lt;&lt; (int)ptr-&gt;offset &lt;&lt; std::endl;
+
+    NodeHandler::handlers[ptr-&gt;type]-&gt;dump(page, id, out);
+  }
+}
+
+
+void PageRef::check_doubles() {
+  nodeid_t nodes[MAX_NODE_COUNT];
+  size_t ncount = count();
+  memset(nodes, 0, sizeof(nodes));
+  for(size_t i = 0; i &lt; ncount; i++) {
+    nodeid_t children[65];
+    NodeRef node(*this, i);
+    size_t ccount = node.get_children(children);
+    for(size_t j = 0; j &lt; ccount; j++) {
+      if (nodes[children[j]]) {
+        std::cout &lt;&lt; "---error double " &lt;&lt; id &lt;&lt; ": " &lt;&lt; i
+                  &lt;&lt; " and " &lt;&lt; nodes[children[j]]-1
+                  &lt;&lt; " -&gt; " &lt;&lt; children[j] &lt;&lt; std::endl;
+        assert(0);
+      }
+      else if (children[j] &gt;= ncount) {
+        std::cout &lt;&lt; "---wrong child " &lt;&lt; id &lt;&lt; ": " &lt;&lt; i
+                  &lt;&lt; " -&gt; " &lt;&lt; children[j] &lt;&lt; " &gt;= " &lt;&lt; ncount &lt;&lt; std::endl;
+        assert(0);
+      }
+      else
+        nodes[children[j]] = i+1;
+    }
+  }
+}
+#endif
+
+</t>
 <t tx="michael.20150101205559.40">struct TestTrie {
   @others
 };
@@ -3108,7 +3110,7 @@ using namespace larch_leaves;
 </t>
 <t tx="michael.20150101205559.44">BOOST_AUTO_TEST_CASE(add_bits) {
   union {
-    boost::uint64_t data[8];
+    boost::uint64_t data[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
     BitTrie bits;
   };
   int settings[8] = { 3, 15, 20, 26, 32, 45, 50, 60 };
@@ -3186,7 +3188,7 @@ void testpoint(const char* str) {
 
     std::string key = sequence(1);
     for(size_t i = 0; i &lt; 56; i++) {
-      key[0] = (char)i;
+      key[0] = i;
       db-&gt;find(key);
       db-&gt;set_value(value(i));
     }
@@ -3210,7 +3212,7 @@ void testpoint(const char* str) {
 
     std::string key = sequence(1);
     for(size_t i = 0; i &lt; border; i++) {
-      key[0] = (char)i;
+      key[0] = i;
       db-&gt;find(key);
       db-&gt;set_value(value(i));
     }
@@ -3219,7 +3221,7 @@ void testpoint(const char* str) {
     check_dump(cstr.str().c_str(), db);
     prepare_testpoint_output();
 
-    key[0] = (char)border;
+    key[0] = border;
     db-&gt;find(key);
     db-&gt;set_value(value(1));
         
@@ -3230,9 +3232,6 @@ void testpoint(const char* str) {
     // 12 bytes for additional leaf node and 8 bytes for 
     // growing bitrie.
     
-    if (border == 4)
-      return;
-      
     const char* testpoints[] = {"BitTrieAdd1"};
     check_testpoints(1, testpoints);
   }
@@ -3242,7 +3241,7 @@ void testpoint(const char* str) {
 
     std::string key = sequence(1);
     for(size_t i = 0; i &lt; 3; i++) {
-      key[0] = (char)i;
+      key[0] = i;
       db-&gt;find(key);
       db-&gt;set_value(value(i));
     }
@@ -3260,22 +3259,24 @@ void testpoint(const char* str) {
     check_testpoints(1, testpoints);
   }
 </t>
-<t tx="michael.20150101205559.5">#ifdef DEBUG
-void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
-    const char* t3 = "            ";
-    
-    NodePtr *ptr = page-&gt;node_ptr + nodeid;
-    Compressed *n = &amp;page-&gt;get_node(nodeid)-&gt;c;
-    size_t len = ptr-&gt;extra;
-    
-    out &lt;&lt; t3 &lt;&lt; "type:  compressed" &lt;&lt; std::endl;
-    out &lt;&lt; t3 &lt;&lt; "data:  ";
-    dump_key(n-&gt;data, len, out);
-    out &lt;&lt; std::endl;
-    out &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; (int)len &lt;&lt; std::endl
-        &lt;&lt; t3 &lt;&lt; "child: " &lt;&lt; (int)n-&gt;child &lt;&lt; std::endl;
-  }
-#endif
+<t tx="michael.20150101205559.5">\\-2.#ifdef DEBUG
+void dump(Page *page, nodeid_t nodeid, std::ostream &amp;out) {
+  const char *t3 = "            ";
+
+  NodePtr *ptr = page-&gt;node_ptr + nodeid;
+  Compressed *n = &amp;page-&gt;get_node(nodeid)-&gt;c;
+  size_t len = ptr-&gt;extra;
+
+  out &lt;&lt; t3 &lt;&lt; "type:  compressed" &lt;&lt; std::endl;
+  out &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0')
+      &lt;&lt; (int)n-&gt;data[0];
+  for (size_t i = 1; i &lt; len; i++)
+    out &lt;&lt; "|" &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; (int)n-&gt;data[i];
+  out &lt;&lt; std::endl;
+  out &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; (int)len &lt;&lt; std::endl
+      &lt;&lt; t3 &lt;&lt; "child: " &lt;&lt; (int)n-&gt;child &lt;&lt; std::endl;
+}
+\\-2.#endif
 </t>
 <t tx="michael.20150101205559.50">void test_TrieBaseAdd2() {
     db_t db(new TestDatabase);
@@ -3312,7 +3313,7 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
 
     std::string key = sequence(1);
     for(size_t i = 0; i &lt; 57; i++) {
-      key[0] = (char)i;
+      key[0] = i;
       db-&gt;find(key);
       db-&gt;set_value(value(i));
     }
@@ -3351,34 +3352,33 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
     check_testpoints(1, testpoints);
   }
 </t>
-<t tx="michael.20150101205559.6">#ifdef DEBUG
-void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
-    const char* t3 = "            ";
-    
-    NodePtr *ptr = page-&gt;node_ptr + nodeid;
-    Trie *n = &amp;page-&gt;get_node(nodeid)-&gt;t;
-    
-    out &lt;&lt; t3 &lt;&lt; "type:  trie" &lt;&lt; std::endl;
-    out &lt;&lt; t3 &lt;&lt; "data:  ";
-    
-    nodeid_t end = ptr-&gt;extra;
-    if (end) {
-      out &lt;&lt; "E&gt;" &lt;&lt; (int)end;
-      out &lt;&lt; "|";
-    }
-          
-    for(size_t i = 0; i &lt; 64; i++) {
-      if (i != 0)
-        out &lt;&lt; "|";
-        
-      out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
-          &lt;&lt; i &lt;&lt; "&gt;" 
-          &lt;&lt; (int)n-&gt;children[i];
-    }
-    
-    out &lt;&lt; std::endl;
+<t tx="michael.20150101205559.6">\\-2.#ifdef DEBUG
+void dump(Page *page, nodeid_t nodeid, std::ostream &amp;out) {
+  const char *t3 = "            ";
+
+  NodePtr *ptr = page-&gt;node_ptr + nodeid;
+  Trie *n = &amp;page-&gt;get_node(nodeid)-&gt;t;
+
+  out &lt;&lt; t3 &lt;&lt; "type:  trie" &lt;&lt; std::endl;
+  out &lt;&lt; t3 &lt;&lt; "data:  ";
+
+  nodeid_t end = ptr-&gt;extra;
+  if (end) {
+    out &lt;&lt; "E&gt;" &lt;&lt; (int)end;
+    out &lt;&lt; "|";
   }
-#endif
+
+  for (size_t i = 0; i &lt; 64; i++) {
+    if (i != 0)
+      out &lt;&lt; "|";
+
+    out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; i &lt;&lt; "&gt;"
+        &lt;&lt; (int)n-&gt;children[i];
+  }
+
+  out &lt;&lt; std::endl;
+}
+\\-2.#endif
 </t>
 <t tx="michael.20150101205559.60">void test_NodeEatSingle() {
     db_t db(new TestDatabase);
@@ -3405,11 +3405,12 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
   }
 </t>
 <t tx="michael.20150101205559.62">struct TestPageManagement {
-  #define VALUE_PAD 32
-  #define TWO_PAGE_COUNT 203
+  #define VALUE_PAD 300
+  #define TWO_PAGE_COUNT 26
   void test_TwoPages() {
       db_t db(new TestDatabase);
-            
+      
+      
       for(size_t i = 0; i &lt; TWO_PAGE_COUNT; i++) {
         db-&gt;find(number(i, 5));
         db-&gt;set_value(value(i, VALUE_PAD));
@@ -3435,14 +3436,14 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
       db_t db(new TestDatabase);
       
       for(size_t i = 0; i &lt;= TWO_PAGE_COUNT; i++) {
-        db-&gt;find(number(i, 5));
+        db-&gt;find(number(i));
         db-&gt;set_value(value(i, VALUE_PAD));
       }
       
       check_dump("MergePages-1", db);
       prepare_testpoint_output();
   
-      db-&gt;find(number(20, 5));
+      db-&gt;find(number(20));
       db-&gt;remove();
                 
       check_dump("MergePages-2", db);
@@ -3454,9 +3455,9 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
   void test_RemoveAll() {
       db_t db(new TestDatabase);
       
-      for(size_t i = 0; i &lt; 2000; i++) {
+      for(size_t i = 0; i &lt; 200; i++) {
         db-&gt;find(number(i));
-        db-&gt;set_value(value(i, 20));
+        db-&gt;set_value(value(i, 200));
       }
       
       for(db-&gt;first(); db-&gt;is_valid(); db-&gt;next())
@@ -3509,70 +3510,76 @@ void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
 
 TestPageManagement test_pm;
 </t>
-<t tx="michael.20150101205559.64">void first() { 
-    reset();
-    current().first(*this);
-  }
+<t tx="michael.20150101205559.64">void first() {
+  reset();
+  current().first(*this);
+}
+
 </t>
-<t tx="michael.20150101205559.65">void last() { 
-    reset();
-    current().last(*this);
-  }
+<t tx="michael.20150101205559.65">void last() {
+  reset();
+  current().last(*this);
+}
+
 </t>
 <t tx="michael.20150101205559.69">// refresh the trace remapping the nodeids
 void refresh_trace() {
-    stack.resize(1);
-    back = &amp;stack.back();
-    current().find(*this);
-  }
-</t>
-<t tx="michael.20150101205559.7">#ifdef DEBUG
-void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
-    const char* t3 = "            ";
-    
-    NodePtr *ptr = page-&gt;node_ptr + nodeid;
-    BitTrie *n = &amp;page-&gt;get_node(nodeid)-&gt;b;
+  stack.resize(1);
+  back = &amp;stack.back();
+  current().find(*this);
+}
 
-    out &lt;&lt; t3 &lt;&lt; "type:  bittrie" &lt;&lt; std::endl;
-    out &lt;&lt; t3 &lt;&lt; "data:  ";
-    
-    nodeid_t end = ptr-&gt;extra;
-    if (end) {
-      out &lt;&lt; "E&gt;" &lt;&lt; (int)end;
-          
-      if (n-&gt;count())
-        out &lt;&lt; "|";
-    }
-          
-    int bit = n-&gt;first_bit(), i = 0;
-    while(bit &gt;= 0) {
-      if (i != 0)
-        out &lt;&lt; "|";
-      out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') 
-          &lt;&lt; bit &lt;&lt; "&gt;" 
-          &lt;&lt; (int)n-&gt;children[i];
-      bit = n-&gt;next_bit(bit);
-      i++;
-    }
-    
-    out &lt;&lt; std::endl;
-  }
-#endif
 </t>
-<t tx="michael.20150101205559.8">#ifdef DEBUG
-void dump(Page* page, nodeid_t nodeid, std::ostream&amp; out) {
-    const char* t3 = "            ";
-    
-    NodePtr *ptr = page-&gt;node_ptr + nodeid;
-    Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
-    size_t len = ptr-&gt;extra &amp; 0x3f;
-    
-    std::string data(n-&gt;data, len);
+<t tx="michael.20150101205559.7">\\-2.#ifdef DEBUG
+void dump(Page *page, nodeid_t nodeid, std::ostream &amp;out) {
+  const char *t3 = "            ";
+
+  NodePtr *ptr = page-&gt;node_ptr + nodeid;
+  BitTrie *n = &amp;page-&gt;get_node(nodeid)-&gt;b;
+
+  out &lt;&lt; t3 &lt;&lt; "type:  bittrie" &lt;&lt; std::endl;
+  out &lt;&lt; t3 &lt;&lt; "data:  ";
+
+  nodeid_t end = ptr-&gt;extra;
+  if (end) {
+    out &lt;&lt; "E&gt;" &lt;&lt; (int)end;
+
+    if (n-&gt;count())
+      out &lt;&lt; "|";
+  }
+
+  int bit = n-&gt;first_bit(), i = 0;
+  while (bit &gt;= 0) {
+    if (i != 0)
+      out &lt;&lt; "|";
+    out &lt;&lt; std::setw(2) &lt;&lt; std::setfill('0') &lt;&lt; bit &lt;&lt; "&gt;"
+        &lt;&lt; (int)n-&gt;children[i];
+    bit = n-&gt;next_bit(bit);
+    i++;
+  }
+
+  out &lt;&lt; std::endl;
+}
+\\-2.#endif
+</t>
+<t tx="michael.20150101205559.8">\\-2.#ifdef DEBUG
+void dump(Page *page, nodeid_t nodeid, std::ostream &amp;out) {
+  const char *t3 = "            ";
+
+  NodePtr *ptr = page-&gt;node_ptr + nodeid;
+  Leaf *n = &amp;page-&gt;get_node(nodeid)-&gt;l;
+  size_t len = ptr-&gt;extra;
+
+  std::string data(n-&gt;data, len);
+  if (ptr-&gt;type == kLeaf) {
     out &lt;&lt; t3 &lt;&lt; "type:  leaf" &lt;&lt; std::endl
         &lt;&lt; t3 &lt;&lt; "data:  " &lt;&lt; data &lt;&lt; std::endl
         &lt;&lt; t3 &lt;&lt; "size:  " &lt;&lt; data.size() &lt;&lt; std::endl;
+  } else {
+    out &lt;&lt; t3 &lt;&lt; "type:  bigleaf" &lt;&lt; std::endl;
   }
-#endif
+}
+\\-2.#endif
 </t>
 <t tx="michael.20150101205559.9">#ifdef DEBUG
 void dumpb64(const Slice&amp; key, std::ostream&amp; out) {
@@ -3596,11 +3603,88 @@ void dumpb64(const Slice&amp; key, std::ostream&amp; out) {
   @others
 };
 
+
 TestNavigation test_nav;
 </t>
 <t tx="michael.20150106224503.10"></t>
 <t tx="michael.20150106224503.11"></t>
 <t tx="michael.20150106224503.12"></t>
+<t tx="michael.20150106224503.13">@first #! /usr/bin/env python
+@language python
+@tabwidth -4
+#!/usr/bin/env python
+import os
+from setuptools import setup, find_packages
+from Cython.Distutils import build_ext, Extension
+
+"""
+with open('README.rst') as file_readme:
+    readme = file_readme.read()
+
+with open('CHANGES.rst') as file_changes:
+    changes = file_changes.read()
+"""
+
+join = os.path.join
+LEAVES_FILES = ["node.cpp", "trie.cpp", "leaves.cpp", "base64.cpp"]
+LEAVES_FILES = [join("..", "src", f) for f in LEAVES_FILES]
+
+class LarchExtension(Extension):
+    def __init__(self):
+        Extension.__init__(self, "larch.leaves", [])
+        self.language="c++"
+        self.include_dirs=[join("..", "include")]
+        self.define_macros=[("ALIGN", 4), ("DEBUG", None)]
+        self.sources=[join("larch", "leaves.pyx")] + LEAVES_FILES
+    
+    def make_flags(self, compiler):
+        if compiler == "unix":
+            self.extra_compile_args=["-std=c++11", "-O3", "-mssse3"]
+            
+
+extension = LarchExtension()
+
+class my_build_ext(build_ext):
+    def build_extensions(self):
+        c = self.compiler.compiler_type
+        for e in self.extensions:
+            e.make_flags(c)
+        build_ext.build_extensions(self)
+
+setup(
+    name="larch-leaves",
+    version="1.0",
+    description="larch-leaves for Python",
+    #long_description = readme + "\n\n" + changes,
+    author='kochelmonster',
+        
+    #author_email='kmike84@gmail.com',
+    #url='https://github.com/kmike/hat-trie/',
+
+    packages=find_packages(),
+    namespace_packages=['larch'],
+    zip_safe=False,
+    ext_modules = [ extension ],
+
+    classifiers=[
+        'Development Status :: 5 - Production/Stable',
+        'Intended Audience :: Developers',
+        'License :: Other/Proprietary License',
+        'Programming Language :: Cython',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 2',
+        'Programming Language :: Python :: 2.6',
+        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.2',
+        'Programming Language :: Python :: 3.3',
+        'Programming Language :: Python :: 3.4',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Topic :: Software Development :: Libraries :: Python Modules',
+    ],
+    cmdclass={"build_ext": my_build_ext}
+)
+</t>
 <t tx="michael.20150106224503.14"></t>
 <t tx="michael.20150106224503.15">@first #cython: boundscheck=False, profile=False
 @language cython
@@ -3763,23 +3847,18 @@ cdef class MemoryDatabaseBytes(_MemoryDatabase):
 </t>
 <t tx="michael.20150106224503.17">// some test to complete the test cover
 void test_TrieMisc() {
-  Page page;
   TempTrie trie(60);
     
-  trie.set_extra(101);
-  
-  NodeHandler* handler = NodeHandler::handlers[kTrie];
-  page.new_node(trie.size());
-  NodePtr *ptr = page.node_ptr;
-  Node *node = (Node*)&amp;page.data[ptr-&gt;offset]; 
-  memcpy(node, trie.node(), trie.size());
-  ptr-&gt;type = trie.type();
-  ptr-&gt;extra = trie.extra();
-  
-  nodeid_t* children = (nodeid_t*)node;
+  nodeid_t* children = (nodeid_t*)trie.node();
   memset(children, 0, sizeof(nodeid_t)*64);
   for(int i = 1; i &lt; 64; i += 2)
     children[i] = i;
+  
+  trie.set_extra(101);
+  
+  NodeHandler* handler = NodeHandler::handlers[kTrie];
+  NodePtr *ptr = trie.page.node_ptr;
+  Node *node = (Node*)&amp;trie.page.data[ptr-&gt;offset]; 
   
   nodeid_t cmps[65];
   size_t count = handler-&gt;get_children(ptr, node, cmps);
@@ -3803,7 +3882,7 @@ void test_TrieMisc() {
     BOOST_REQUIRE(children[i] == i+1);
   }
   
-  BOOST_REQUIRE(ptr-&gt;extra == 102);
+  BOOST_REQUIRE(trie.extra() == 102);
 }
 </t>
 <t tx="michael.20150106224503.18">
@@ -4095,96 +4174,98 @@ std::ostream&amp; out(dumy);
   
 #endif
 </t>
-<t tx="michael.20150106224503.21">void append_data(NodeRef&amp; rnode, const CompressBuffer&amp; buffer) {
-    size_t size = rnode.len();
-    size_t nsize = page_pad(size+buffer.size+sizeof(nodeid_t));
-    // it is guaranteed that enough space is on page (see eat_child)
-    rnode.page.grow_node_by(rnode.id, (int)nsize-(int)rnode.size());
-    Compressed&amp; c(rnode.node()-&gt;c);
-    memcpy(c.data+size, buffer.data, buffer.size);
-    rnode.set_len(size+buffer.size);
-    c.child = buffer.child;
+<t tx="michael.20150106224503.21">void append_data(NodeRef &amp;rnode, const CompressBuffer &amp;buffer) {
+  size_t size = rnode.len();
+  size_t nsize = page_pad(size + buffer.size + sizeof(nodeid_t));
+  // it is guaranteed that enough space is on page (see eat_child)
+  rnode.page.grow_node_by(rnode.id, nsize - rnode.size());
+  Compressed &amp;c(rnode.node()-&gt;c);
+  memcpy(c.data + size, buffer.data, buffer.size);
+  rnode.set_len(size + buffer.size);
+  c.child = buffer.child;
+}
+
+bool eat_child(NodeRef &amp;rnode, Node *data) {
+  if (eat_null_children(rnode))
+    return true;
+
+  CompressBuffer buffer;
+  NodeRef child(rnode.page, data-&gt;c.child);
+
+  if (child.type() == kCompressed) {
+    TESTPOINT(CompressedEatCompressed);
+    save_compressed(child, &amp;buffer);
+    // make space on page
+    if (rnode.page.free_size() &lt; child.size())
+      rnode.page.grow_node_by(child.id, -(int)child.size());
+
+    append_data(rnode, buffer);
+    rnode.page.free_node(child.id);
+    return true;
   }
 
-bool eat_child(NodeRef&amp; rnode, Node* data) {
-    if (eat_null_children(rnode))
-      return true;
+  return false;
+}
 
-    CompressBuffer buffer;
-    NodeRef child(rnode.page, data-&gt;c.child);
-
-    if (child.type() == kCompressed) {
-      TESTPOINT(CompressedEatCompressed);
-      save_compressed(child, &amp;buffer);
-      // make space on page
-      if (rnode.page.free_size() &lt; child.size())
-        rnode.page.grow_node_by(child.id, -(int)child.size());
-        
-      append_data(rnode, buffer);
-      rnode.page.free_node(child.id);
-      return true;
-    }
-    
-    return false;
-  }
 </t>
-<t tx="michael.20150106224503.23">bool eat_child(NodeRef&amp; rnode, Node* data) {
-    return eat_null_children(rnode);
-  }
+<t tx="michael.20150106224503.23">bool eat_child(NodeRef &amp;rnode, Node *data) {
+  return eat_null_children(rnode);
+}
+
 </t>
-<t tx="michael.20150106224503.24">bool eat_child(NodeRef&amp; rnode, Node* data) {
-    if (eat_null_children(rnode))
-      return true;
-    
-    return false;
-  }
+<t tx="michael.20150106224503.24">bool eat_child(NodeRef &amp;rnode, Node *data) {
+  if (eat_null_children(rnode))
+    return true;
+
+  return false;
+}
+
 </t>
 <t tx="michael.20150106224503.25">// if bitrie has only one child it fills its index
 // and child_id and returns true or false otherwise
 
+inline bool get_single_child(const NodeRef &amp;bittrie, nodeid_t *child) {
+  assert(bittrie.type() == kBitTrie);
+  BitTrie *bt = (BitTrie *)bittrie.node();
+  nodeid_t end = bittrie.extra();
 
-inline bool get_single_child(const NodeRef&amp; bittrie, nodeid_t* child) {
-    assert(bittrie.type() == kBitTrie);
-    BitTrie *bt = (BitTrie*)bittrie.node();
-    nodeid_t end = bittrie.extra();
-    
-    if (end &amp;&amp; bt-&gt;count() == 0) {
-      *child = end;
-      return true;
-    }
-    
-    return false;
+  if (end &amp;&amp; bt-&gt;count() == 0) {
+    *child = end;
+    return true;
+  }
+
+  return false;
 }
 
 // eat all childrens with only end nodes left
-inline bool eat_null_children(NodeRef&amp; rnode) {
-    bool eaten = false;
-    nodeid_t children[65];
-    size_t count = rnode.get_children(children);
-    
-    for(size_t i = 0; i &lt; count; i++) {
-      nodeid_t child_id = children[i];
-      if (!child_id)
-        continue;
-        
-      NodeRef child(rnode.page, child_id);
-      if (child.type() != kBitTrie) 
-        continue;
-      
-      nodeid_t new_child;
-      if (get_single_child(child, &amp;new_child)) {
-        children[i] = new_child;
-        rnode.page.free_node(child_id);
-        eaten = true;
-      }
+inline bool eat_null_children(NodeRef &amp;rnode) {
+  bool eaten = false;
+  nodeid_t children[65];
+  size_t count = rnode.get_children(children);
+
+  for (size_t i = 0; i &lt; count; i++) {
+    nodeid_t child_id = children[i];
+    if (!child_id)
+      continue;
+
+    NodeRef child(rnode.page, child_id);
+    if (child.type() != kBitTrie)
+      continue;
+
+    nodeid_t new_child;
+    if (get_single_child(child, &amp;new_child)) {
+      children[i] = new_child;
+      rnode.page.free_node(child_id);
+      eaten = true;
     }
-    
-    if (eaten) {
-      TESTPOINT(NodeEatSingle);
-      rnode.replace_children(children);
-    }
-      
-    return eaten;
+  }
+
+  if (eaten) {
+    TESTPOINT(NodeEatSingle);
+    rnode.replace_children(children);
+  }
+
+  return eaten;
 }
 
 struct CompressBuffer {
@@ -4194,19 +4275,20 @@ struct CompressBuffer {
 };
 
 // saves the compressed data
-inline void save_compressed(const NodeRef&amp; node, CompressBuffer* buffer) {
+inline void save_compressed(const NodeRef &amp;node, CompressBuffer *buffer) {
   assert(node.type() == kCompressed);
-  Compressed *c = (Compressed*)node.node();
+  Compressed *c = (Compressed *)node.node();
   buffer-&gt;size = node.len();
   buffer-&gt;child = c-&gt;child;
   memcpy(buffer-&gt;data, c-&gt;data, buffer-&gt;size);
 }
 
 </t>
-<t tx="michael.20150106224503.26">bool eat_child(NodeRef&amp; rnode, Node* data) {
-    assert(0);
-    return false;
-  }
+<t tx="michael.20150106224503.26">bool eat_child(NodeRef &amp;rnode, Node *data) {
+  assert(0);
+  return false;
+}
+
 </t>
 <t tx="michael.20150106224503.3">void test_IterTrie() {
     db_t db(new TestDatabase);
@@ -4274,7 +4356,7 @@ std::string sequence(size_t size, size_t start=0) {
 }
 
 
-std::string number(size_t number, size_t size=0) {
+std::string number(int number, size_t size=0) {
   std::string result;
   std::stringstream f;
   f &lt;&lt; std::setw(size) &lt;&lt; std::setfill('0') &lt;&lt; number;
@@ -4297,6 +4379,10 @@ value(content_t content, size_t size=0) {
   return result;
 }
 </t>
+<t tx="michael.20150106224503.35">#if 0
+  @others
+#endif
+</t>
 <t tx="michael.20150106224503.38">#ifdef BOOST_TEST_NO_MAIN
 int main(int argc, const char* argv[]) {
   //test_compress.test_CompressAddNew();
@@ -4317,7 +4403,6 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_TrieBaseAdd2();
   //test_trie.test_TrieBaseAdd3();
   //test_trie.test_BitTrieAdd0();
-  //test_trie.test_BitTrieAdd1(4);
   //test_trie.test_BitTrieAdd1(8);
   //test_trie.test_BitTrieAdd1(16);
   //test_trie.test_BitTrieAdd1(24);
@@ -4327,7 +4412,6 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_BitTrieAdd2();
   //test_trie.test_TrieRemove();
   //test_trie.test_BitTrieRemove0();
-  //test_trie.test_BitTrieRemove1(4);
   //test_trie.test_BitTrieRemove1(8);
   //test_trie.test_BitTrieRemove1(16);
   //test_trie.test_BitTrieRemove1(24);
@@ -4337,7 +4421,7 @@ int main(int argc, const char* argv[]) {
   //test_trie.test_BitTrieRemove2();
   //test_trie.test_NodeEatSingle();
   //test_trie.test_TrieMisc();
-  //test_pm.test_TwoPages();
+  test_pm.test_TwoPages();
   //test_pm.test_MergePages();
   //test_pm.test_RemoveAll();
   //test_pm.test_NodesInHeap();
@@ -4352,15 +4436,9 @@ int main(int argc, const char* argv[]) {
   //test_nav.test_removeFromBottom(10);
   //test_nav.test_compress();
   //test_nav.test_ChangeValue();
-  //test_bucket.test_Create1();
-  //test_bucket.test_Navigate1();
-  //test_bucket.test_Remove1();
-  //test_bucket.test_ChangeToHash1();
-  //test_hash.test_Burst();
-  //test_hash.test_Iterate();
-  //test_hash.test_Remove();
   return 0;
 }
+
 #endif
 </t>
 <t tx="michael.20150106224503.39">BOOST_AUTO_TEST_SUITE(trie_manipulations)
@@ -4459,7 +4537,6 @@ BOOST_AUTO_TEST_CASE(BitTrieRemove0) {
 }
 
 BOOST_AUTO_TEST_CASE(BitTrieRemove1) {
-  test_trie.test_BitTrieRemove1(4);
   test_trie.test_BitTrieRemove1(8);
   test_trie.test_BitTrieRemove1(16);
   test_trie.test_BitTrieRemove1(24);
@@ -4584,7 +4661,7 @@ BOOST_AUTO_TEST_SUITE_END()
 
     std::string key = sequence(1);
     for(size_t i = 0; i &lt; border+1; i++) {
-      key[0] = (char)i;
+      key[0] = i;
       db-&gt;find(key);
       db-&gt;set_value(value(i));
     }
@@ -4604,32 +4681,29 @@ BOOST_AUTO_TEST_SUITE_END()
     // 12 bytes for removed leaf node and 8 bytes for 
     // shrinking bitrie.
     
-    if (border == 4)
-      return;
-    
     const char* testpoints[] = {"BitTrieRemove1"};
     check_testpoints(1, testpoints);
   }
 </t>
-<t tx="michael.20150106224503.43">void next(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    if (keycmp(rnode, data, trace) &lt; 0) {
-      keyappend(rnode, data, trace);
-      rnode.child_first(data-&gt;c.child, trace);
-    }
-    else {
-      trace.parent_next();
-    }
+<t tx="michael.20150106224503.43">void next(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  if (keycmp(rnode, data, trace) &lt; 0) {
+    keyappend(rnode, data, trace);
+    rnode.child_first(data-&gt;c.child, trace);
+  } else {
+    trace.parent_next();
   }
+}
+
 </t>
-<t tx="michael.20150106224503.44">void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    if (keycmp(rnode, data, trace) &gt; 0) {
-      keyappend(rnode, data, trace);
-      rnode.child_last(data-&gt;c.child, trace);
-    } 
-    else {
-      trace.parent_prev();
-    }
+<t tx="michael.20150106224503.44">void prev(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  if (keycmp(rnode, data, trace) &gt; 0) {
+    keyappend(rnode, data, trace);
+    rnode.child_last(data-&gt;c.child, trace);
+  } else {
+    trace.parent_prev();
   }
+}
+
 </t>
 <t tx="michael.20150106224503.46">void test_removeFromTop(size_t key_size) {
     db_t db(new TestDatabase);
@@ -4691,23 +4765,25 @@ BOOST_AUTO_TEST_SUITE_END()
 </t>
 <t tx="michael.20150106224503.48">// returns true if it points to a valid position
 bool is_valid() const {
-    return current().is_valid(*this);
-  }
+  return back-&gt;end &gt;= key.size() &amp;&amp; back-&gt;node.is_leaf();
+}
+
 </t>
-<t tx="michael.20150106224503.49">// returns 
-//   &lt; 0 if key &lt;  data
+<t tx="michael.20150106224503.49">//   &lt; 0 if key &lt;  data
+// returns
 //  == 0 if key == data
 //   &gt; 0 if key &gt; data
-int keycmp(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    size_t len = rnode.len();
-   
-    int cmp = memcmp(key.data(), data-&gt;c.data, std::min(len, key.size()));
-    if (cmp != 0)
-      return cmp;
-      
-    return key.size() &gt;= len ? 0 : -1;
-  }
+int keycmp(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  Slice key(trace.current_key());
+  size_t len = rnode.len();
+
+  int cmp = memcmp(key.data(), data-&gt;c.data, std::min(len, key.size()));
+  if (cmp != 0)
+    return cmp;
+
+  return key.size() &gt;= len ? 0 : -1;
+}
+
 </t>
 <t tx="michael.20150106224503.5">// iteration with end node
 void test_IterTrieEnd() {
@@ -4766,27 +4842,31 @@ void test_IterTrieEnd() {
     BOOST_REQUIRE(db-&gt;is_valid());
   }
 </t>
-<t tx="michael.20150106224503.50">size_t get_len(const NodeRef&amp; rnode) {
-    return rnode.len();
-  }
+<t tx="michael.20150106224503.50">size_t get_len(const NodeRef &amp;rnode) { return rnode.len(); }
+
+void find(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
 </t>
-<t tx="michael.20150106224503.51">void find(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-  }
+<t tx="michael.20150106224503.51">void find(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {}
+
+void prev(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
 </t>
 <t tx="michael.20150106224503.55">// cuts the key to the current end
 void cut_key() {
-    key.resize(back-&gt;start);
-  }
+  key.resize(back-&gt;start);
+}
+
 </t>
 <t tx="michael.20150106224503.56">Slice current_key() const {
-    int size = std::max((int)key.size()-(int)back-&gt;start, (int)0);
-    return Slice(key.data()+back-&gt;start, size);
-  }
+  size_t size = key.size() &gt; back-&gt;start ? key.size() - back-&gt;start : 0;
+  return Slice(key.data()+back-&gt;start, size);
+}
+
 </t>
-<t tx="michael.20150106224503.59">void keyappend(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    trace.cut_key();
-    trace.key.append(data-&gt;c.data, rnode.len());
-  }
+<t tx="michael.20150106224503.59">void keyappend(NodeRef &amp;rnode, Node *data, Trace &amp;trace) {
+  trace.cut_key();
+  trace.key.append(data-&gt;c.data, rnode.len());
+}
+
 </t>
 <t tx="michael.20150106224503.6">void do_iter(size_t key_size) {
     db_t db(new TestDatabase);
@@ -4835,41 +4915,28 @@ void test_IterCompressed() {
     do_iter(10);
   }
 </t>
-<t tx="michael.20150106224503.60">/* 
-  the maximum key key size
-  
-  it is choosen arcording to MAX_BUCKET_SIZE (see below)
-  
+<t tx="michael.20150106224503.60">/* the maximum key key size
+   could be increased but compressed node
+   may not exceed a page:
+     MAX_KEY_SIZE_64 + overhead &lt; PAGE_SIZE
+
   MAX_KEY_SIZE = 3/4 * MAX_KEY_SIZE_64
-  
-  
-  360 byte is not very much, but for a key usually quite enought.
-  
-  Here is a method to store bigger keys:
-     cut the key and add a hash of the key so it 
-     does not exceed 360 bytes, eg:
-       key[:296] + sha-512
-       
-     and store the complete key in the value (if it is needed)
-     so the key are sorted and distinct.
-    
-  if this method is not sufficient use another db.  
 */
-#define MAX_KEY_SIZE 360
-#define MAX_KEY_SIZE_64 480
-#define KEY_EXEEDS "key may not exceed 360 bytes"
+#define MAX_KEY_SIZE_64 PAGE_SIZE/2
+#define MAX_KEY_SIZE (3*(MAX_KEY_SIZE_64/4))
+#define KEY_EXEEDS "key size exceeded"
 
-#define MAX_PAGE_VALUE_SIZE 32
-#define VALUE_EXEEDS "value may not exceed 32 bytes"
-
-#ifndef PAGE_SIZE 
+#ifndef PAGE_SIZE
 #define PAGE_SIZE 8192
 #endif
+
 #ifndef ALIGN
 #define ALIGN 4
-#endif 
-//#define PAGE_SPLIT_SIZE (3*PAGE_SIZE/4)
-#define PAGE_SPLIT_SIZE (PAGE_SIZE/2)
+#endif
+
+#ifndef PAGE_SPLIT_SIZE
+#define PAGE_SPLIT_SIZE  (PAGE_SIZE/4)
+#endif
 
 #define MAX_NODE_COUNT (PAGE_SIZE/ALIGN)
 </t>
@@ -4934,13 +5001,13 @@ using namespace larch_leaves;
 #include "larch/leaves.h"
 #include "node.h"
 </t>
-<t tx="michael.20150110130802.12">void prev(NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    Slice key(trace.current_key());
-    if (key.empty())
-        trace.parent_prev();
-    else
-      trace.cut_key();
-  }
+<t tx="michael.20150110130802.12">  Slice key(trace.current_key());
+  if (key.empty())
+    trace.parent_prev();
+  else
+    trace.cut_key();
+}
+
 </t>
 <t tx="michael.20150110130802.14">void test_CompressAddNew() {
     db_t db(new TestDatabase);
@@ -5103,6 +5170,7 @@ using namespace larch_leaves;
     const char* testpoints[] = {"CompressAdd1", "CompressReinsert1"};
     check_testpoints(2, testpoints);
   }
+
 </t>
 <t tx="michael.20150110130802.24">std::string sep_number(size_t i) {
     std::string sep(5, 60);
@@ -5124,11 +5192,12 @@ void test_CompressedEatCompressed() {
     db-&gt;find(sep_number(10));
     db-&gt;set_value(value(10));
 
-    prepare_testpoint_output();
     check_dump("CompressedEatCompressed-1", db);
+    prepare_testpoint_output();
+    check_dump("CompressedEatCompressed-2", db);
+    
     db-&gt;find(sep_number(1));
     db-&gt;remove();
-    check_dump("CompressedEatCompressed-2", db);
     
     const char* testpoints[] = {"CompressedEatCompressed"};
     check_testpoints(1, testpoints);
@@ -5156,24 +5225,25 @@ void test_CompressedEatCompressed() {
 </t>
 <t tx="michael.20150110130802.26">void Trace::merge_pages() {
   PageRef page(current().page);
-  
+
   // this is never called by the trace root
   // =&gt; stack.size() &gt;= 2
-  
-  for(int i = (int)stack.size()-2; i &gt;= 0; i--) {
+
+  for(int i = stack.size()-2; i &gt;= 0; i--) {
     NodeRef&amp; link(stack[i].node);
-    
+
     if (link.page.id != page.id) {
       assert(link.type() == kLink);
-      
-      if (link.page.free_size() &gt;= page.size()) {
+
+      if (link.page.free_size() &gt;= page.size()
+          &amp;&amp; link.page.count() + page.count() &lt;= 230) {
         TESTPOINT(MergePages);
-        
+
         NodeRef&amp; parent(stack[i-1].node); // the child's parent
         NodeRef page_root(page, 0);
-        
+
         nodeid_t child_id = move_node(parent.page, page_root);
-                  
+
         // replace the link with the child
         nodeid_t children[65];
         size_t count = parent.get_children(children);
@@ -5184,11 +5254,11 @@ void test_CompressedEatCompressed() {
           }
         }
         parent.replace_children(children);
-                  
+
         link.page.free_node(link.id);
         if (!link.page.defragment(*this))
           refresh_trace();
-          
+
         map.free_page(page);
       }
       return;
@@ -5286,14 +5356,17 @@ def random_words(num):
         for y in range(num))
     return [t.encode("utf-8", "ignore") for t in result]
 
+
 def truncated_words(words):
     return [word[:3] for word in words]
+
 
 def prefixes1k(words, prefix_len):
     words = [w for w in words if len(w) &gt;= prefix_len]
     every_nth = int(len(words)/1000)
     _words = [w[:prefix_len] for w in words[::every_nth]]
     return _words[:1000]
+
 
 WORDS100k = words100k()
 MIXED_WORDS100k = truncated_words(WORDS100k)
@@ -5539,216 +5612,107 @@ if __name__ == '__main__':
 // -------------
 @others
 </t>
-<t tx="michael.20150110130802.7">#define MAX_PAGE_FREE_SIZE (sizeof(Page)-PAGE_HEADER_SIZE)
-
-struct BestFitting {
-  size_t best;
-  size_t sizes[MAX_NODE_COUNT];
-  size_t min_size;
-  nodeid_t best_id;
-  bool found;
-  nodeid_t stack[MAX_NODE_COUNT];
-  nodeid_t best_stack[MAX_NODE_COUNT];
-    
-  BestFitting(Page* page, size_t min_size_) 
-    : best(PAGE_SIZE), min_size(min_size_), best_id(1), found(false) {
-      page-&gt;init_sizes(sizes);
-    }
-};
-
-size_t calc_sizes(const NodeRef&amp; node, BestFitting&amp; bf, size_t index) {
+<t tx="michael.20150110130802.7">size_t calc_recursive_size(const NodeRef&amp; node, size_t sizes[MAX_NODE_COUNT]) {
   nodeid_t children[65];
-  size_t size = bf.sizes[node.id];
+  size_t size_ = node.size();
   size_t count = node.get_children(children);
-  bf.stack[index++] = node.id;
-  
+
+  if (sizes[node.id])
+    return sizes[node.id];
+
   for(size_t i = 0; i &lt; count; i++) {
-    size += calc_sizes(NodeRef(node.page, children[i]), bf, index);
-    if (bf.found)
-      return 0;
-  }
-    
-  if (size &gt;= bf.min_size &amp;&amp; size + bf.min_size &lt;= MAX_PAGE_FREE_SIZE) {
-    size_t delta;
-    if (size &gt; PAGE_SPLIT_SIZE) {
-      delta = size - PAGE_SPLIT_SIZE;
-      delta += delta / 2;
-    }
-    else {
-      delta = PAGE_SPLIT_SIZE - size;
-    }
-    if (delta &lt; bf.best) {
-      memcpy(bf.best_stack, bf.stack, sizeof(nodeid_t)*index);
-      bf.best = delta;
-      bf.best_id = node.id;
-      if (bf.best &lt; 512)
-        bf.found = true;
-    }
+    size_ += calc_recursive_size(NodeRef(node.page, children[i]), sizes);
   }
 
-  return size;
+  size_ += sizeof(NodePtr);
+
+  sizes[node.id] = size_;
+  return size_;
 }
+
+static size_t split_count = 0;
 
 void Trace::reserve_space(size_t size_) {
   // during this loop current() can change its page!
-  while (current().page.free_size() &lt; size_) {
-    NodeRef root(current().page, 0);    
-    BestFitting bf(root.page.page, size_);
-    calc_sizes(root, bf, 0);
-    
-    PageRef newpage = storage.new_page();
+  size_t free_size = current().page.free_size();
 
-    if (new_page_in_hash()) {
-      PageRef &amp;pr(current().page);
-      bool show = false;
-      if (show) {
-        std::cerr &lt;&lt; "hash page: " &lt;&lt; pr.id &lt;&lt; " - " &lt;&lt; newpage.id 
-                  &lt;&lt; " key_len: " &lt;&lt; key.size() 
-                  &lt;&lt; "| bestid: " &lt;&lt; bf.best_id &lt;&lt; std::endl;
-                  
-        stack_t::iterator i;
-        for(i = stack.begin(); i != stack.end(); i++) {
-          std::cerr &lt;&lt; "org: " 
-                    &lt;&lt;  i-&gt;start &lt;&lt;  ", " &lt;&lt; i-&gt;end &lt;&lt; " = " &lt;&lt; (int)key[i-&gt;start]
-                    &lt;&lt; "|" &lt;&lt; i-&gt;node.page.id 
-                    &lt;&lt; ", " &lt;&lt; i-&gt;node.id 
-                    &lt;&lt; ", " &lt;&lt; (int)i-&gt;node.type() &lt;&lt; std::endl;
-        }
-      }
-      
-      std::vector&lt;Transition&gt;::reverse_iterator i;
-      for(i = stack.rbegin(); i != stack.rend(); i++) {
-        if (i-&gt;node.id == 0) {
-          char key_buffer[MAX_KEY_SIZE_64];
-          Slice key_(key_buffer, i-&gt;start);
-          memcpy(key_buffer, key.data(), key_.size());
-          if (show) {
-            std::cerr &lt;&lt; "  found root: " &lt;&lt; i-&gt;node.page.id &lt;&lt; ", " &lt;&lt; i-&gt;start 
-                      &lt;&lt; ", " &lt;&lt; (int)key[i-&gt;start-1] &lt;&lt; std::endl;
-          }
-          for(nodeid_t *id = bf.best_stack; *id != bf.best_id; id++) {
-            NodeRef n(pr, *id);
-            key_ = n.append(*(id+1), key_);
-            if (show) {
-              std::cerr &lt;&lt; "   add stack: " &lt;&lt; *id &lt;&lt; ", " 
-                        &lt;&lt; n.get_len() &lt;&lt; ", " &lt;&lt; key_.size() &lt;&lt; std::endl;
-            }
-          }
-          if (show) {
-            std::cerr &lt;&lt; "  prefix:";
-            for(size_t j = 0; j &lt; key_.size(); j++) {
-              std::cerr &lt;&lt; " " &lt;&lt; std::hex &lt;&lt; (int)key_[j];
-            }
-            std::cerr &lt;&lt; std::dec &lt;&lt; std::endl;
-            //assert(0);
-          }
-            
-          add_page_to_hash(key_, newpage);
+  // the moved node will be changed to a link
+  // so the NodePtr and a pageid will remain on the page
+  size_t changed_size = size_ + sizeof(pageid_t) + sizeof(NodePtr);
+
+  if (free_size &lt; size_) { // debug
+    PageRef&amp; page = current().page;
+    size_t count = page.count();
+    size_t link_count = 0;
+    size_t trie_count = 0;
+    size_t compressed_count = 0;
+    split_count++;
+
+    for(nodeid_t i = 0; i &lt; count; i++) {
+      NodePtr* node = page.page-&gt;node_ptr + i;
+      switch(node-&gt;type) {
+        case kLink:
+          link_count++;
           break;
-        }
+
+        case kTrie:
+        case kBitTrie:
+          trie_count++;
+          break;
+
+        case kCompressed:
+          compressed_count++;
+          break;
       }
     }
-      
-    NodeRef to_move(root.page, bf.best_id);
+    std::cout &lt;&lt; "----split: "
+              &lt;&lt; split_count &lt;&lt; ","
+              &lt;&lt; page.id &lt;&lt; ","
+              &lt;&lt; link_count &lt;&lt; ","
+              &lt;&lt; trie_count &lt;&lt; ","
+              &lt;&lt; compressed_count &lt;&lt; ","
+              &lt;&lt; count &lt;&lt; ","
+              &lt;&lt; free_size &lt;&lt; ","
+              &lt;&lt; size_ &lt;&lt; std::endl;
+  }
+
+  while(free_size &lt; size_) {
+    size_t sizes[MAX_NODE_COUNT];
+    memset(sizes, 0, sizeof(sizes));
+    size_t best = 0;
+    nodeid_t best_id = 1;
+
+    NodeRef root(current().page, 0);
+    size_t count = root.page.count();
+
+    // i &gt;= 1: it makes no sense to move the root node
+    for(size_t i = count-1; i &gt;= 1; i--) {
+      size_t node_size = calc_recursive_size(NodeRef(root.page, i), sizes);
+      if (free_size + node_size &gt;= changed_size &amp;&amp; node_size &gt; PAGE_SPLIT_SIZE) {
+        best_id = i;
+        break;
+      }
+
+      if (best &lt; node_size) {
+        best = node_size;
+        best_id = i;
+      }
+    }
+
+    PageRef newpage = storage.new_page();
+    NodeRef to_move(root.page, best_id);
     move_node(newpage, to_move);
-      
-    root.page.change_to_link(bf.best_id, newpage.id);
+    root.page.change_to_link(best_id, newpage.id);
     if (!root.page.defragment(*this))
       refresh_trace();
+
+    free_size = current().page.free_size();
   }
 }
+
 </t>
 <t tx="michael.20150110130802.8">void Trace::find(const Slice&amp; key_) {
-  resize(1);
-  key.assign(key_.data(), key_.size());
-
-#if 1
-
-  size_t trace_len = key_.size();
-  max_page_key = 12;
-  trace_len = std::min(trace_len, max_page_key);
-  std::string k = key_.string();
-  bool f = false;
-  for(size_t i = 0; i &lt; 4 &amp;&amp; trace_len&gt;=min_page_key; i++, trace_len--) {
-    std::unordered_map&lt;std::string, PageHashVal&gt;::iterator found;
-    found = page_hash.find(k.substr(0, trace_len));
-    if (found != page_hash.end()) {
-      /*if (found-&gt;second.prefix != k.substr(0, found-&gt;second.prefix.size())) {
-        //std::cerr &lt;&lt; "wrong prefix" &lt;&lt; std::endl;
-        stat_wrong_prefix++;
-        continue;
-      }*/
-      /*std::cerr &lt;&lt; "found page: " &lt;&lt; found-&gt;second.pageid 
-                &lt;&lt; " ," &lt;&lt; found-&gt;second.prefix.size() &lt;&lt; ", " &lt;&lt; trace_len 
-                &lt;&lt; ", " &lt;&lt; found-&gt;second.root_start
-                &lt;&lt; std::endl;*/
-      f = true;
-      
-      /*std::string &amp;key_(found-&gt;second.prefix);
-      std::cerr &lt;&lt; "  prefix:";
-      for(size_t j = 0; j &lt; key_.size(); j++) {
-        std::cerr &lt;&lt; " " &lt;&lt; std::hex &lt;&lt; (int)key_[j];
-      }
-      std::cerr &lt;&lt; std::dec &lt;&lt; std::endl;*/
-      
-      stat_short_find += 1;
-      NodeRef node(map.get_page(found-&gt;second.pageid), 0);
-      size_t start = found-&gt;second.root_start;
-      _push(Transition(node, start, start+node.get_len()));
-      break;
-    }
-  }
-  
-  if (!f) {
-    //std::cerr &lt;&lt; "not found: " &lt;&lt; trace_len &lt;&lt; ", " &lt;&lt; key_.size() &lt;&lt; std::endl;
-  }
-  else if (0) {
-    // muss übereinstimmen
-    current().find(*this); // not back.node (pop_back!)
-    
-    stack_t cmp(stack);
-
-    resize(1);
-    
-    current().find(*this); // not back.node (pop_back!)
-    
-    stack_t::reverse_iterator j, k;
-    j = stack.rbegin();
-    k = cmp.rbegin();
-    
-    std::cerr &lt;&lt; "cmp: " &lt;&lt; cmp.size() &lt;&lt; "==" &lt;&lt; stack.size() &lt;&lt; std::endl;
-    if (j-&gt;node.page.id != k-&gt;node.page.id) {
-      std::cerr &lt;&lt; "cmp: " &lt;&lt; cmp.size() &lt;&lt; "==" &lt;&lt; stack.size() &lt;&lt; std::endl;
-      
-      stack_t::iterator i;
-      for(i = stack.begin(); i != stack.end(); i++) {
-        std::cerr &lt;&lt; "org: " &lt;&lt;  i-&gt;start &lt;&lt;  ", " &lt;&lt; i-&gt;end 
-                  &lt;&lt; "  " &lt;&lt; i-&gt;node.page.id 
-                  &lt;&lt; ", " &lt;&lt; i-&gt;node.id 
-                  &lt;&lt; ", " &lt;&lt; (int)i-&gt;node.type() &lt;&lt; std::endl;
-      }
-  
-      for(i = cmp.begin(); i != cmp.end(); i++) {
-        std::cerr &lt;&lt; "sht: " &lt;&lt;  i-&gt;start &lt;&lt;  ", " &lt;&lt; i-&gt;end 
-                  &lt;&lt; "  " &lt;&lt; i-&gt;node.page.id &lt;&lt; ", " &lt;&lt; i-&gt;node.id &lt;&lt; std::endl;
-      }
-      
-      
-      std::cerr &lt;&lt; "  key:";
-      for(size_t j = 0; j &lt; key.size(); j++) {
-        std::cerr &lt;&lt; " " &lt;&lt; std::hex &lt;&lt; (int)key[j];
-      }
-      std::cerr &lt;&lt; std::dec &lt;&lt; std::endl;
-    }
-    assert(j-&gt;node.page.id == k-&gt;node.page.id);
-    assert(j-&gt;node.id == k-&gt;node.id);
-  }
-
-
-#endif  
-  
-#if 0
-  size_t pl = common_prefix(key_.data(), key.data(), 
+  size_t pl = common_prefix(key_.data(), key.data(),
                             std::min(key_.size(), key.size()));
   std::vector&lt;Transition&gt;::iterator i;
   for(i = stack.begin(); i != stack.end(); i++) {
@@ -5758,7 +5722,7 @@ void Trace::reserve_space(size_t size_) {
       break;
     }
   }
-  
+
   key.assign(key_.data(), key_.size());
   if (back-&gt;node.is_leaf()) {
     if (back-&gt;end &lt; key.size()) {
@@ -5768,34 +5732,10 @@ void Trace::reserve_space(size_t size_) {
       return; // we are already here
     }
   }
-#endif  
-  
-  size_t trace_size = size();
+
   current().find(*this); // not back.node (pop_back!)
-  
-  stat_find_count++;
-  stat_reuse_trace += trace_size;
-  stat_find_trace += size() - trace_size;
-  {
-    std::vector&lt;Transition&gt;::iterator i;
-    for(i = stack.begin()+trace_size; i != stack.end(); i++) {
-      switch(i-&gt;node.type()) {
-        case kBitTrie:
-        case kTrie:
-          stat_tries++;
-          break;
-          
-        case kCompressed:
-          stat_compressed++;
-          break;
-          
-        case kLink:
-          stat_link++;
-          break;
-      }
-    }
-  }
 }
+
 </t>
 <t tx="michael.20150110130802.9">// test prev / next of compress nodes
 void test_compress() {
@@ -5838,42 +5778,28 @@ void test_compress() {
     BOOST_REQUIRE(db-&gt;key() == number(10, 5));
   }
 </t>
-<t tx="michael.20150111145018.91">@language cplusplus
-@tabwidth -2
-#include &lt;stdlib.h&gt;
+<t tx="michael.20150111145018.91">#include &lt;stdlib.h&gt;
 #include &lt;memory.h&gt;
 #include &lt;string.h&gt;
 #include &lt;assert.h&gt;
 #include &lt;stdio.h&gt;
 #include &lt;time.h&gt;
-#if defined(__APPLE__) || defined(__linux__)
 #include &lt;fcntl.h&gt;
 #include &lt;unistd.h&gt;
 #include &lt;errno.h&gt;
 #include &lt;sys/time.h&gt;
-#else
-#include &lt;windows.h&gt;
-#include &lt;io.h&gt;
-#endif
 #include "larch/leaves.h"
 #include &lt;memory&gt;
 #include &lt;iostream&gt;
 
-#ifndef PAGE_SIZE 
-#define PAGE_SIZE 8192
-#endif
-
 using namespace larch_leaves;
 
 #if !defined(_WIN32)
-#define _fileno  fileno
-#define _read  read
-
 unsigned long long rd_clock ()
 {
 unsigned int low, high;
 
-  __asm__ volatile("rdtsc" : "=a"(low), "=d" (high)); 
+  __asm__ volatile("rdtsc" : "=a"(low), "=d" (high));
   return (unsigned long long)low | (unsigned long long)high &lt;&lt; 32;
 }
 #endif
@@ -5898,7 +5824,7 @@ unsigned long long report_process_size(void)
   unsigned int utime, stime, cutime, cstime, counter, priority, timeout, itrealvalue;
   unsigned int starttime, rss, rlim, startcode, endcode, startstack, kstkesp, ksteip;
   unsigned int signal, blocked, sigignore, sigcatch, wchan, ret, pid;
- 
+
   mypid = getpid();
   snprintf(fname, 1024, "/proc/%u/stat", mypid);
   statf = fopen(fname, "r");
@@ -5908,12 +5834,12 @@ unsigned long long report_process_size(void)
                &amp;cmajflt, &amp;utime, &amp;stime, &amp;cutime, &amp;cstime, &amp;counter, &amp;priority, &amp;timeout, &amp;itrealvalue,
                &amp;starttime, &amp;vsize, &amp;rss, &amp;rlim, &amp;startcode, &amp;endcode, &amp;startstack, &amp;kstkesp, &amp;ksteip, &amp;signal,
                &amp;blocked, &amp;sigignore, &amp;sigcatch, &amp;wchan);
- 
+
   if (ret != 35)
      fprintf(stderr, "Failed to read all 35 fields, only %lu decoded\n", ret);
- 
+
   fclose(statf);
-  return vsize; 
+  return vsize;
 }
 #endif
 
@@ -5956,34 +5882,33 @@ unsigned long long startcycles, stopcycles;
   else
     in2 = NULL;
 
-  if( !in )
+  if( !in ) {
     fprintf (stderr, "unable to open input file #1\n");
+    return -1;
+  }
 
 
   std::unique_ptr&lt;MemoryDatabase&gt; db(MemoryDatabase::create());
-  
+
 #if !defined(_WIN32)
   size = lseek (fileno(in), 0L, 2);
   askitis = (char*)malloc(size);
   lseek (fileno(in), 0L, 0);
 #else
-  size = _lseeki64 (_fileno(in), 0L, 2);
-  askitis = (char*)malloc(size);
-  _lseeki64 (_fileno(in), 0L, 0);
+  size = _lseeki64 (fileno(in), 0L, 2);
+  askitis = malloc(size);
+  _lseeki64 (fileno(in), 0L, 0);
 #endif
   off = 0;
 
   do {
-    prev = _read (_fileno(in), askitis+off,size-off &gt; 65536 ? 65536 : size-off);
+    prev = read (fileno(in), askitis+off,size-off &gt; 65536 ? 65536 : size-off);
     off += prev;
   } while( off &lt; size );
 
-
-  db-&gt;reset_statistics();
-
 //  naskitis.com:
-//  Start the timer. 
-  
+//  Start the timer.
+
 #if !defined(_WIN32)
   gettimeofday(&amp;start, NULL);
   startcycles = rd_clock();
@@ -5995,12 +5920,6 @@ unsigned long long startcycles, stopcycles;
   for( prev = off = 0; off &lt; size; off++ )
     if( askitis[off] == '\n' ) {
       Words++;
-      //printf("insert %i\n", Words);
-      if (Words == 2371 &amp;&amp; false) {
-        askitis[off] = 0;
-        printf("break %s\n", askitis+prev);
-      }
-      
       db-&gt;find(Slice(askitis+prev, off-prev));
       if (db-&gt;is_valid()) {
         Found++;
@@ -6008,7 +5927,7 @@ unsigned long long startcycles, stopcycles;
         db-&gt;set_value(Slice());
         Inserts++;
       }
-      prev = off + 1;
+    prev = off + 1;
     }
 
 //  naskitis.com:
@@ -6017,7 +5936,7 @@ unsigned long long startcycles, stopcycles;
 #if !defined(_WIN32)
   stopcycles = rd_clock();
   gettimeofday(&amp;stop, NULL);
-  
+
   insert_real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001 * (stop.tv_usec - start.tv_usec );
   insert_real_time = insert_real_time/1000.0;
 #else
@@ -6027,16 +5946,23 @@ unsigned long long startcycles, stopcycles;
 #endif
 
 //  naskitis.com:
-//  Free the input buffer used to store the first file.  We must do this before we get the process size below. 
+//  Free the input buffer used to store the first file.  We must do this before we get the process size below.
   free (askitis);
-  
+
   MaxMem = db-&gt;pages()*PAGE_SIZE;
-  
+
+  Statistics statistics;
+  db-&gt;get_statistics(&amp;statistics);
+
   fprintf(stderr, "BitTrie\nDASKITIS option enabled\n-------------------------------\n%-20s %.2f MB\n%-20s %.2f sec\n",
-    "Hat Array size:", MaxMem/1000000., "Time to insert:", insert_real_time);
+    "Trie size:", MaxMem/1000000., "Time to insert:", insert_real_time);
 #if !defined(_WIN32)
   fprintf(stderr, "%-20s %.2f MB\n", "Process Size:", report_process_size()/1000000.);
 #endif
+  fprintf(stderr, "%-20s %d\n", "Pages:", db-&gt;pages());
+  fprintf(stderr, "%-20s %d\n", "PageFreeSize:", statistics.page_free_size);
+  fprintf(stderr, "%-20s %d\n", "PageSize:", PAGE_SIZE);
+  fprintf(stderr, "%-20s %d\n", "PageSplitSize:", PAGE_SPLIT_SIZE);
   fprintf(stderr, "%-20s %d\n", "Words:", Words);
   fprintf(stderr, "%-20s %d\n", "Inserts:", Inserts);
   fprintf(stderr, "%-20s %d\n", "Found:", Found);
@@ -6048,8 +5974,6 @@ unsigned long long startcycles, stopcycles;
 
   //for( idx = 4; idx &lt;= HatMax; idx++ )
   //  fprintf(stderr, "HAT_%.4d Nodes:      %d\n", HatSize[idx], hat-&gt;counts[idx]);
-  db-&gt;print_statistics();
-  
 
   Words = 0;
   Probes = 0;
@@ -6059,7 +5983,6 @@ unsigned long long startcycles, stopcycles;
   Inserts = 0;
   Missing = 0;
   Found = 0;
-  db-&gt;reset_statistics();
 
 //  search hat array
 
@@ -6068,14 +5991,14 @@ unsigned long long startcycles, stopcycles;
   askitis = (char*)malloc(size);
   lseek (fileno(in2), 0L, 0);
 #else
-  size = _lseeki64 (_fileno(in2), 0L, 2);
-  askitis = (char*)malloc(size);
-  _lseeki64 (_fileno(in2), 0L, 0);
+  size = _lseeki64 (fileno(in2), 0L, 2);
+  askitis = malloc(size);
+  _lseeki64 (fileno(in2), 0L, 0);
 #endif
   off = 0;
 
   while( off &lt; size ) {
-    prev = _read (_fileno(in2), askitis+off,size-off &gt; 65536 ? 65536 : size-off);
+    prev = read (fileno(in2), askitis+off,size-off &gt; 65536 ? 65536 : size-off);
     off += prev;
   }
 
@@ -6089,14 +6012,13 @@ unsigned long long startcycles, stopcycles;
   for( prev = off = 0; off &lt; size; off++ )
     if( askitis[off] == '\n' ) {
       Words++;
-      
       db-&gt;find(Slice(askitis+prev, off-prev));
       if (db-&gt;is_valid())
         Found++;
       else
         Missing++;
-        
-      prev = off + 1;
+
+    prev = off + 1;
     }
 
 //  naskitis.com:
@@ -6104,11 +6026,11 @@ unsigned long long startcycles, stopcycles;
 
 #if !defined(_WIN32)
   gettimeofday(&amp;stop, NULL);
-  search_real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001  
+  search_real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001
   * (stop.tv_usec - start.tv_usec );
   search_real_time = search_real_time/1000.0;
   stopcycles = rd_clock();
-#else  
+#else
   QueryProcessCycleTime(GetCurrentProcess(), &amp;stopcycles);
   *stop = clock ();
   search_real_time = (*stop - *start) / (float)CLOCKS_PER_SEC;
@@ -6126,11 +6048,9 @@ unsigned long long startcycles, stopcycles;
   //fprintf(stderr, "%-20s %.2f\n", "Pail/Search:", (double)Pail / Searches);
   //fprintf(stderr, "%-20s %.2f\n", "Bucket/Search:", (double)Bucket / Words);
   //fprintf(stderr, "%-20s %.2f\n", "Radix/Search:", (double)Radix / Words);
-  db-&gt;print_statistics();
 
   exit(0);
 }
-
 </t>
 <t tx="michael.20150111191610.2">void _push(const Transition&amp; t) {
   stack.push_back(t);
@@ -6141,269 +6061,73 @@ void _pop() {
   stack.pop_back();
   back = &amp;stack.back();
 }
+
 </t>
 <t tx="michael.20150111191610.4">nodeid_t Trace::move_node(const PageRef&amp; new_page, const NodeRef&amp; node) {
   if (new_page.id == node.page.id)
     return node.id;
-    
+
   nodeid_t children[65];
   size_t count = node.get_children(children);
-  
+
   NodeRef new_node(new_page, new_page.new_node(node.size()));
   copy_node(new_node, node);
-      
+
   for(size_t i = 0; i &lt; count; i++) {
     NodeRef child(node.page, children[i]);
     children[i] = move_node(new_page, child);
   }
-  
+
   new_node.replace_children(children);
   node.page.free_node(node.id);
   return new_node.id;
 }
 </t>
 <t tx="michael.20150111191610.5">void find(const Slice&amp; key_);
+
 // moves the node to new page returning the id on the new_page
-// precondition: there must be enough space in new_page  
+// precondition: there must be enough space in new_page
 nodeid_t move_node(const PageRef&amp; new_page, const NodeRef&amp; node);
-// merges the current page with the parent page if possible 
+
+// merges the current page with the parent page if possible
 void merge_pages();
+
 // ensures that the page of current node has a free_space &gt;  size
 // place current node to a new page if nessary
 // if exclude is set this node will not move from page
 void reserve_space(size_t size_);
+
 </t>
 <t tx="michael.20150112164548.4">// returns true f the trace was refresh
 bool defragment(Trace&amp; trace) const;
+
 // grows or shrinks a node by size. size must be a multiple of 16
 void grow_node_by(nodeid_t node_id, int size) const;
+
 void change_to_link(nodeid_t node_id, pageid_t page_id) const;
 
 #ifdef DEBUG
   void dump(std::ostream&amp; out);
+  void check_doubles();
 #endif
 
-void check(const char *msg, Trace&amp; trace);
 </t>
 <t tx="michael.20150112164548.5">size_t count() const {
-    return page-&gt;count;
-  }
+  return page-&gt;count;
+}
+
 </t>
 <t tx="michael.20150112164548.7">nodeid_t new_node(size_t size_) const {
   return page-&gt;new_node(size_);
 }
+
 </t>
 <t tx="michael.20150112164548.8">// Page Methods
 // ------------
 @others
 </t>
-<t tx="michael.20150116155028.13">#define BOOST_TEST_MODULE Base64
-#include &lt;boost/test/included/unit_test.hpp&gt;
-#include &lt;string&gt;
-#include &lt;iostream&gt;
-#include "larch/leaves.h"
-
-
-namespace larch_leaves {
-void encode(const Slice&amp; input, std::string&amp; output);
-void decode(const std::string&amp; input, std::string&amp; output);
-}
-
-using namespace larch_leaves;
-
-BOOST_AUTO_TEST_SUITE(encode_decode_suite)
-
-inline void do_test(const char* in) {
-  std::string input(in);
-  std::string tmp;
-  std::string output;
-  encode(input, tmp);
-  decode(tmp, output);
-  std::cout &lt;&lt; input &lt;&lt; "==" &lt;&lt; output &lt;&lt; std::endl;
-  BOOST_CHECK(input == output);
-}
-
-BOOST_AUTO_TEST_CASE(encode_decode)
-{
-  do_test("A");
-  do_test("AB");
-  do_test("ABC");
-  do_test("ABCD");
-  do_test("ABCDE");
-  do_test("ABCDEF");
-  do_test("ABCDEFG");
-  do_test("ABCDEFGH");
-  do_test("ABCDEFHIJKLMOPQRSTUVWXYZabcdefghiklmnopqrstuvwxyzÄ");
-}
-
-BOOST_AUTO_TEST_SUITE_END()
-
-</t>
-<t tx="michael.20150116155028.17">// A Node containing a string part equal to all descendants
-// the equal part fit into a page; the data size in NodeRef::len()
-struct Compressed {
-  nodeid_t child;
-  char data[1];
-};
-</t>
-<t tx="michael.20150116155028.18">// A leaf 
-// the data is interpreted by the type (kLeaf od kBitLeaf)
-// the size of data is saved in NodeRef::len()
-struct Leaf {
-  char data[1];
-};
-</t>
-<t tx="michael.20150116155028.19">// Node with the complete alphabet 
-// children count is &gt; 56
-struct Trie {
-  nodeid_t children[64];
-};
-</t>
-<t tx="michael.20150116155028.20">// Node with a range
-struct BitTrie {
-  boost::uint64_t bits;
-  nodeid_t children[1];
-
-  size_t count() const {
-      return popcount(bits);    
-    }
-  
-  int get_child_index(trieindex_t index) const {
-      if (bits &amp; (((boost::uint64_t)1)&lt;&lt;index)) {
-        boost::uint64_t mask = ~0;
-        mask &lt;&lt;= index;
-        return (int)popcount(bits &amp; ~mask);
-      }
-      return -1;
-    }
-    
-  int first_bit() const {
-      return ffs(bits) - 1;
-    }
-  
-  int last_bit() const {
-      if (!bits)
-        return -1;
-      return 63 - clz(bits);
-    }
-  
-  int next_bit(int index) const {
-      boost::uint64_t mask = ~0;
-      mask &lt;&lt;= (index + 1);
-      return ffs(bits &amp; mask) - 1;
-    }
-    
-  int prev_bit(int index) const {
-      boost::uint64_t mask = ~0;
-      mask &lt;&lt;= index;
-      mask = bits &amp; ~mask;
-      if (!mask)
-        return -1;
-      return 63 - clz(mask);
-    }
-    
-  void add(int index, nodeid_t node) {
-      bits |= ((boost::uint64_t)1)&lt;&lt;index;
-      int child_index = get_child_index(index); 
-      memmove(children+child_index+1, children+child_index,
-              sizeof(nodeid_t)*(count()-child_index-1));
-      children[child_index] = node;
-    }
-    
-  void remove(int index) {
-      int child_index = get_child_index(index);
-      assert(child_index &gt;= 0);
-      bits &amp;= ~(((boost::uint64_t)1)&lt;&lt;index);
-      memmove(children+child_index, children+child_index+1,
-              sizeof(nodeid_t)*(count()-child_index));
-    }
-};
-</t>
-<t tx="michael.20150116155028.23">struct Node {
-  union {
-    Compressed c;
-    Leaf l;
-    Trie t;
-    BitTrie b;
-    pageid_t p;
-  };
-};
-</t>
-<t tx="michael.20150118002311.12">Slice get_value(const NodeRef&amp; rnode, Node* data, Trace&amp; trace) {
-    return Slice(data-&gt;l.data, rnode.len());
-  }
-</t>
-<t tx="michael.20150118002311.14">Slice get_value() {
-    check_valid();
-    return current().get_value(*this);
-  }
-</t>
-<t tx="michael.20150118002311.20">#ifdef DEBUG
-void PageRef::dump(std::ostream&amp; out) {
-  const char* t1 = "    ";
-  const char* t2 = "      ";
-  const char* t3 = "          ";
-  out &lt;&lt; t1 &lt;&lt; "- id:         " &lt;&lt; id &lt;&lt; std::endl
-      &lt;&lt; t2 &lt;&lt; "offset:     " &lt;&lt; offset &lt;&lt; std::endl;
-      
-  if (page-&gt;type == kTriePage) {
-    out &lt;&lt; t2 &lt;&lt; "type:       TriePage" &lt;&lt; std::endl
-        &lt;&lt; t2 &lt;&lt; "node_count: " &lt;&lt; count() &lt;&lt; std::endl
-        &lt;&lt; t2 &lt;&lt; "size:       " &lt;&lt; size() &lt;&lt; std::endl
-        &lt;&lt; t2 &lt;&lt; "free_size:  " &lt;&lt; free_size() &lt;&lt; std::endl
-        &lt;&lt; t2 &lt;&lt; "sum_size:   " &lt;&lt; size() + free_size() &lt;&lt; std::endl
-        &lt;&lt; t2 &lt;&lt; "nodes: " &lt;&lt; std::endl;
-  
-    for(size_t id = 0; id &lt; count(); id++) {
-      NodePtr *ptr = page-&gt;node_ptr + id;
-      out &lt;&lt; t3 &lt;&lt; "- id:    " &lt;&lt; (int)id &lt;&lt; std::endl
-          &lt;&lt; t3 &lt;&lt; "  ptr:   " &lt;&lt; (int)ptr-&gt;offset &lt;&lt; std::endl;
-          
-      NodeHandler::handlers[ptr-&gt;type]-&gt;dump(page, (nodeid_t)id, out);
-    }
-  }
-}
-#endif
-</t>
-<t tx="michael.20150118002311.21">@others
-</t>
-<t tx="michael.20150118002311.8">void resize(size_t size) {
-    stack.resize(size); 
-    back = &amp;stack.back();
-  }
-</t>
-<t tx="michael.20150303095026.5">// returns true if a new page should be hashed
-bool new_page_in_hash() const {
-    size_t link_count = 0;
-    stack_t::const_iterator i;
-    for(i = stack.cbegin(); i != stack.cend(); i++) {
-      if (i-&gt;node.type() == kLink &amp;&amp; ++link_count &gt; 2)
-        return true;
-    }
-    return false;
- }
-</t>
-<t tx="michael.20150303095026.6">struct PageHashVal {
-  pageid_t pageid;
-  size_t root_start;
-
-  PageHashVal(pageid_t id=0, size_t start=0)
-    : pageid(id), root_start(start) { 
-    }
-};
-
-std::unordered_map&lt;std::string, PageHashVal&gt; page_hash;
-
-  
-void add_page_to_hash(Slice&amp; key, const PageRef&amp; page) {
-  size_t reduced_len = key.size(); // / 4;
-  std::string ks = key.string();
-  page_hash[ks] = PageHashVal(page.id, ks.size());
-  min_page_key = std::min(min_page_key, reduced_len);
-  max_page_key = std::max(max_page_key, reduced_len);
-  //std::cerr &lt;&lt; "--add page: " &lt;&lt; page.id &lt;&lt; ", " &lt;&lt; trace_len &lt;&lt; ", " 
-  //          &lt;&lt; reduced_len &lt;&lt; ", " &lt;&lt; key.size() &lt;&lt; std::endl;
-}
-</t>
+<t tx="michael.20160601233835.1">struct Statistics {
+  size_t page_free_size; // = sum(page-&gt;free_size() for page in all_pages)
+};</t>
 </tnodes>
 </leo_file>

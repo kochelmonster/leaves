@@ -26,14 +26,17 @@ def random_words(num):
         for y in range(num))
     return [t.encode("utf-8", "ignore") for t in result]
 
+
 def truncated_words(words):
     return [word[:3] for word in words]
+
 
 def prefixes1k(words, prefix_len):
     words = [w for w in words if len(w) >= prefix_len]
     every_nth = int(len(words)/1000)
     _words = [w[:prefix_len] for w in words[::every_nth]]
     return _words[:1000]
+
 
 WORDS100k = words100k()
 MIXED_WORDS100k = truncated_words(WORDS100k)
