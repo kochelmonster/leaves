@@ -142,7 +142,7 @@ def main(instream):
             break
         all_data.append(data)
 
-    obj = yaml.load_all("".join(all_data))
+    obj = yaml.load_all("".join(all_data), Loader=yaml.FullLoader)
     i = 0
     for state in obj:
         if state is None:
@@ -154,6 +154,7 @@ def main(instream):
             f.write(GraphCreator()(state, i))
 
         i += 1
+
 
 if __name__ == "__main__":
     main(sys.stdin)

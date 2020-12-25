@@ -8,7 +8,7 @@ PAGE_SIZE = 1024*8
 
 
 def options(opt):
-    opt.load('compiler_cxx boost waf_unit_test')
+    opt.load('compiler_cxx cxx waf_unit_test')
     opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
 
 
@@ -17,15 +17,11 @@ def configure(cfg):
 
     cmpfiles_path = os.path.abspath(os.path.join("tests", "cmpfiles")) + os.sep
 
-    load_modules = 'compiler_cxx boost waf_unit_test'
-    if os.name == "nt":
-        cfg.env['MSVC_VERSIONS'] = ['wsdk 8.0']
-        cfg.env['MSVC_TARGETS'] = ['x64']
-        load_modules += " msvc"
-
     cfg.check_waf_version(mini='1.8.5')
-    cfg.load(load_modules)
-    cfg.check_boost()  # lib='system filesystem')
+    cfg.load("compiler_cxx waf_unit_test")
+
+    cfg.env.CXXFLAGS = []
+    cfg.env.LINKFLAGS = []
 
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
                              "PAGE_SIZE={}".format(PAGE_SIZE),
@@ -36,14 +32,15 @@ def configure(cfg):
                              os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []
     if cfg.env.CXX_NAME == "gcc":
-        cfg.env.LINKFLAGS_TEST = ["-pthread"]
+        # cfg.env.LINKFLAGS_TEST = ["-pthread"]
         # , "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_TEST = ["-std=c++11", "-Wall", "-g", "-march=corei7"]
+        cfg.env.CXXFLAGS_TEST = ["-std=c++17", "-Wall", "-g", "-march=corei7"]
 
     if cfg.options.gcov:
-        cfg.env.CXXFLAGS_TEST.extend(
-            ["-fprofile-arcs", "-ftest-coverage", "-fPIC"])
-        cfg.env.LINKFLAGS_TEST.extend(["-fprofile-arcs"])
+        cfg.env.CXXFLAGS.extend(["-fprofile-arcs", "-ftest-coverage"])
+        print("++gcov", cfg.env.LINKFLAGS)
+        cfg.env.LINKFLAGS.extend(["-lgcov", "--coverage"])
+        print("--gcov", cfg.env.LINKFLAGS, cfg.env.CXXFLAGS)
 
     cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN),
                               "PAGE_SIZE={}".format(PAGE_SIZE),
@@ -55,17 +52,17 @@ def configure(cfg):
     if cfg.env.CXX_NAME == "gcc":
         # cfg.env.LINKFLAGS_BENCH = ["-pthread"]
         # , "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_BENCH = ["-std=c++11", "-Wall", "-Wformat=0",
+        cfg.env.CXXFLAGS_BENCH = ["-std=c++17", "-Wall", "-Wformat=0",
                                   "-march=corei7", "-g", "-O0"]
 
 
-def build(bld):
+def _build(bld):
     from os.path import join, abspath
     sources = "page.cpp storage.cpp node.cpp leaves.cpp base64.cpp trace.cpp"
     sources = [join("src", s) for s in sources.split()]
 
     bld.program(
-        # features="test",
+        features="test",
         source=[join("tests", "test_trie.cpp")]+sources,
         use="TEST BOOST",
         target="test_trie")
@@ -98,3 +95,15 @@ def build(bld):
         source=[join("benchmarks", "sbench.cpp")]+sources,
         use="BENCH BOOST",
         target="sbench")
+
+
+def build(bld):
+    from os.path import join, abspath
+    sources = "storage.cpp"
+    sources = [join("src", s) for s in sources.split()]
+
+    bld.program(
+        features="test",
+        source=[join("tests", "test_storage.cpp")]+sources,
+        use="TEST BOOST",
+        target="test_storage")

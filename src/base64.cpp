@@ -1,6 +1,6 @@
 #include <vector>
 #include <boost/cstdint.hpp>
-#include "conversion.hpp"
+#include <boost/endian/conversion.hpp>
 #include "../include/larch/leaves.hpp"
 #ifdef DEBUG
 #include <iomanip>

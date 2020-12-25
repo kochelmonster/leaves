@@ -34,12 +34,84 @@ inline size_t common_prefix(const char *s1, const char *s2, size_t size) {
 enum NodeTypes {
   kLeaf = 0,
   kBigLeaf,
-  kLink,
-  kCompressed,
-  kTrie,
-  kBitTrie,
+  kLink,       //
+  kCompressed, // header + byte*size
+  kTrie,     // 8*64(trie) + 8(end) + 8 header
+  kBitTrie,  // 8+[16..62*8 ]
   kRemoved
 };
+
+
+template<size_t count>
+struct BitTrie {
+  static char* name = "BitTrie" ## #count;
+  static handler*;
+  uint64_t bits[4];
+  segment_ptr value;
+  segment_ptr next[count];
+
+};
+
+4 8 16 32 64 128 196
+
+template<size_t count>
+struct Compressed {
+  uint8_t size;
+  char part[count];
+  segment_ptr next;
+};
+
+
+struct Trie {
+  segment_ptr next[256];
+  segment_ptr value;
+};
+
+
+struct GlobalPtr {
+  segment_id segment;
+  segment_ptr dest;
+};
+
+struct Value {
+
+};
+
+
+template<typename PointedType>
+struct segment_ptr {
+  uint32_t segment;  // segment 0 means same segment
+  int32_t delta;
+
+
+  void* operator->();
+};
+
+
+
+compress12
+compress20
+bittrie16
+bittrie24
+bittrie
+
+
+8
+
+
+
+
+stuct paged_ptr {
+
+  int32_t page_ptr;
+  uint16_t index;
+
+}
+
+
+
+
+
 
 struct Node;
 struct NodeRef;
@@ -79,7 +151,9 @@ struct NodeHandler {
   static NodeHandler *handlers[7];
 };
 
+#ifdef _MSC_VER
 #pragma warning(disable : 4200)
+#endif
 
 struct Node {
   typedef boost::uint16_t header_t;

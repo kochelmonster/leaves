@@ -1,5 +1,5 @@
 #define BOOST_TEST_NO_MAIN
-#define GENERATE
+//#define GENERATE
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -59,7 +59,7 @@ struct TestDatabase {
     if (trace.remove())
       reinit();
   }
-    
+
   void dump(std::ostream &out) {
 #ifdef DEBUG
     out << "state:" << std::endl;
@@ -537,7 +537,7 @@ struct TestTrie {
     const char *testpoints[] = {"BitTrieAdd0", "grow0"};
     check_testpoints(1, testpoints);
   }
-  void test_BitTrieAdd1(size_t border) {
+  void test_BitTrieAdd1(char border) {
     db_t db(new TestDatabase);
     std::stringstream cstr;
 
@@ -615,7 +615,7 @@ struct TestTrie {
     const char *testpoints[] = {"BitTrieRemove0"};
     check_testpoints(1, testpoints);
   }
-  void test_BitTrieRemove1(size_t border) {
+  void test_BitTrieRemove1(char border) {
     db_t db(new TestDatabase);
     std::stringstream cstr;
 
@@ -1312,7 +1312,8 @@ BOOST_AUTO_TEST_SUITE_END()
 
 #ifdef BOOST_TEST_NO_MAIN
 int main(int argc, const char *argv[]) {
-  // test_compress.test_CompressAddNew();
+  std::cerr << "start test" << std::endl;
+  test_compress.test_CompressAddNew();
   // test_compress.test_CompressAdd0_CompressReinsert1();
   // test_compress.test_CompressAdd0_CompressReinsert2();
   // test_compress.test_CompressAdd1_CompressReinsert0();
@@ -1355,12 +1356,13 @@ int main(int argc, const char *argv[]) {
   // test_nav.test_IterTrieEnd();
   // test_nav.test_Iter();
   // test_nav.test_IterCompressed();
-  test_nav.test_removeFromTop(0);
+  // test_nav.test_removeFromTop(0);
   // test_nav.test_removeFromTop(10);
   // test_nav.test_removeFromBottom(0);
   // test_nav.test_removeFromBottom(10);
   // test_nav.test_compress();
   // test_nav.test_ChangeValue();
+  std::cerr << "done test" << std::endl;
   return 0;
 }
 

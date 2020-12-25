@@ -10,14 +10,15 @@
 #include <memory>
 #include <iostream>
 
+
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
 #pragma warning(disable : 4996)
+#else
+#include <unistd.h>
 #endif
 
-
-#define PAGE_SIZE 8196
 
 using namespace larch_leaves;
 
