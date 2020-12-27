@@ -4,8 +4,6 @@
 #include <iostream>
 
 
-#define NODE_INCREMENT  24
-#define PCOUNT(pools)  (sizeof(pools)/sizeof(Pool))
 #define SIGNATURE "LarchLeaves"
 
 
@@ -21,6 +19,8 @@ struct StorageHeader {
   uint32_t version; // pointer to database version
   segment_ptr start;
 };
+
+#define OFFSET sizeof(StorageHeader)
 
 
 void Pool::create(
@@ -54,7 +54,7 @@ segment_ptr Pool::allocate() {
 Storage::Storage(const char* path, size_t segment_size) :
     segment_size(segment_size) {
   StorageHeader header;
-  size_t offset = sizeof(StorageHeader);
+  size_t offset = OFFSET;
 
   std::ifstream fhead(path, std::ios::in|std::ios::binary);
   if (fhead.is_open()) {
@@ -74,7 +74,7 @@ Storage::Storage(const char* path, size_t segment_size) :
 
     size_t address = (size_t)segments[0].region.get_address();
     PPool* p = (PPool*)(address+header.pools);
-    for(size_t i = 0; i < PCOUNT(pools); i++) {
+    for(size_t i = 0; i < POOL_COUNT; i++) {
       pools[i].open(this, p++);
     }
 
@@ -91,9 +91,8 @@ Storage::Storage(const char* path, size_t segment_size) :
 
     // create a new one
     segments.push_back(Segment(create_only, file, offset, segment_size));
-    PPool* p = (PPool*)segments[0].memory.allocate(
-      sizeof(PPool)*PCOUNT(pools));
-    for(size_t i = 0; i < PCOUNT(pools); i++) {
+    PPool* p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*POOL_COUNT);
+    for(size_t i = 0; i < POOL_COUNT; i++) {
       size_t node_size = 8 + i*NODE_INCREMENT;
       pools[i].create(this, p++, node_size, node_size*AREA_COUNT);
     }
@@ -130,20 +129,23 @@ void Storage::flush() {
     i->region.flush();
 }
 
+void Storage::free(segment_ptr ptr) {
+  segments[ptr.segment_id].memory.deallocate(ptr.resolve(this));
+};
 
 segment_ptr Storage::allocate(size_t size) {
-  Segment& back(segments.back());
-  size_t address = (size_t)back.memory.allocate(size, std::nothrow);
-
-  if (address) {
-    return segment_ptr(
-      segments.size()-1, address-(size_t)back.region.get_address());
+  size_t index = 0;
+  for(segment_v::iterator i = segments.begin(); i != segments.end(); i++, index++) {
+    size_t address = (size_t)i->memory.allocate(size, std::nothrow);
+    if (address)
+      return segment_ptr(index, address-(size_t)i->region.get_address());
   }
 
-  std::filesystem::resize_file(
-    file.get_name(), sizeof(StorageHeader)+segment_size*(segments.size()+1));
-  segments.push_back(Segment(create_only, file,
-    sizeof(StorageHeader) + segments.size()*segment_size, segment_size));
-  return allocate(size);
+  size_t new_offset = OFFSET + segments.size()*segment_size;
+  std::filesystem::resize_file(file.get_name(), new_offset + segment_size);
+  segments.push_back(Segment(create_only, file, new_offset, segment_size));
+  Segment& back(segments.back());
+  size_t address = (size_t)back.memory.allocate(size, std::nothrow);
+  return segment_ptr(segments.size()-1, address-(size_t)back.region.get_address());
 }
 }

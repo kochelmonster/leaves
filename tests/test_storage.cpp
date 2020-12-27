@@ -1,5 +1,5 @@
 #define BOOST_TEST_MODULE StorageTest
-//#define BOOST_TEST_NO_MAIN
+
 #include <cstdio>
 #include <boost/test/included/unit_test.hpp>
 
@@ -10,8 +10,6 @@
 #define TEST_FILE "test.lvs"
 
 using namespace larch_leaves;
-
-typedef unsigned char trieindex_t;
 
 
 #define SEGMENT_SIZE 1024*16
@@ -51,21 +49,30 @@ BOOST_AUTO_TEST_CASE(start_storage) {
     BOOST_REQUIRE_EQUAL(ptr2.segment_id, 2);
     BOOST_REQUIRE_EQUAL(ptr2.delta, 144);
 
-    ptr1 = storage.pools[0].allocate();
-    for(int i = 0; i < 100; i++) {
-      ptr2 = storage.pools[0].allocate();
+    ptr1 = storage.pools[2].allocate();
+    for(int i = 0; i < 500; i++) {
+      ptr2 = storage.pools[2].allocate();
     }
-    BOOST_REQUIRE_EQUAL(ptr2.segment_id, 2);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 10560);
+    //std::cout << "allocated1 " << ptr1.delta << ", " << ptr1.segment_id << std::endl;
+    //std::cout << "allocated2 " << ptr2.delta << ", " << ptr2.segment_id << std::endl;
+    BOOST_REQUIRE_EQUAL(ptr2.segment_id, 3);
+    BOOST_REQUIRE_EQUAL(ptr2.delta, 5520);
 
-    storage.pools[0].free(ptr1);
-    ptr2 = storage.pools[0].allocate();
+    storage.pools[2].free(ptr1);
+    ptr2 = storage.pools[2].allocate();
     BOOST_REQUIRE_EQUAL(ptr2.segment_id, 0);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 360);
-        
-    std::cout << "allocated " << ptr2.delta << ", " << ptr2.segment_id << std::endl;
+    BOOST_REQUIRE_EQUAL(ptr2.delta, 4384);
 
+    ptr2 = storage.allocate(2000);
+    storage.free(ptr2);
 
+    ptr1 = storage.allocate(2000);
+    BOOST_REQUIRE_EQUAL(ptr2.segment_id, ptr1.segment_id);
+    BOOST_REQUIRE_EQUAL(ptr2.delta, ptr1.delta);
+
+    // std::cout << "allocated " << ptr2.delta << ", " << ptr2.segment_id << std::endl;
+
+    std::remove(TEST_FILE);
   }
 
 }

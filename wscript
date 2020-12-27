@@ -24,7 +24,6 @@ def configure(cfg):
     cfg.env.LINKFLAGS = []
 
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
-                             "PAGE_SIZE={}".format(PAGE_SIZE),
                              'CMPFILES="{}"'.format(cmpfiles_path)]
 
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
@@ -98,7 +97,7 @@ def _build(bld):
 
 
 def build(bld):
-    from os.path import join, abspath
+    from os.path import join
     sources = "storage.cpp"
     sources = [join("src", s) for s in sources.split()]
 
@@ -107,3 +106,9 @@ def build(bld):
         source=[join("tests", "test_storage.cpp")]+sources,
         use="TEST BOOST",
         target="test_storage")
+
+    bld.program(
+        features="test",
+        source=[join("tests", "test_node.cpp")]+sources,
+        use="TEST BOOST",
+        target="test_node")

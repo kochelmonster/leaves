@@ -42,31 +42,8 @@ class WrongValue : public LeavesException {
     return _msg;
   }
 };
-struct Options {
-  // if true Storage starts with multiprocess support
-  bool multiprocess;
-
-  // size of a map window for node storage must be a multiple of 4096
-  size_t node_window_size;
-
-  // size of a map window for leaf storage
-  // value cannot be bigger than leaf_window_size
-  size_t leaf_window_size;
-
-  size_t max_leaf_size_in_node_storage;
-                  // if size of leaf is greater the leaf
-                  // will be stored in leaf storage
-
-  Options()
-    : multiprocess(true), node_window_size(4096*4096*8),
-    leaf_window_size(4096*4096*8),
-    max_leaf_size_in_node_storage(32) {}
-};
 
 
-struct Statistics {
-  size_t page_free_size; // = sum(page->free_size() for page in all_pages)
-};
 class Slice {
  private:
   size_t _size;
@@ -145,61 +122,6 @@ class Cursor {
         ".quad 0b;"                       \
         ".popsection;")
 
-class MemoryDatabase {
-public:
-  virtual bool is_valid() const = 0;
-  virtual size_t count() const = 0;
-  virtual size_t pages() const = 0;
-
-  // sets the cursor to key
-  virtual void find(const Slice& key) = 0;
-
-  // sets the cursor to first
-  virtual void first() = 0;
-  virtual void last() = 0;
-  virtual void next() = 0;
-  virtual void prev() = 0;
-
-  virtual Slice key() = 0;
-  virtual Slice value() = 0;
-
-  // sets the value raise an exception if a read curor
-  virtual void set_value(const Slice& value) = 0;
-  virtual void remove() = 0;
-
-  // get database statistics
-  virtual void get_statistics(Statistics* output) = 0;
-
-#ifdef DEBUG
-  virtual void check() = 0;
-  virtual void dump(std::ostream& out) = 0;
-#endif
-
-  static MemoryDatabase* create();
-};
-
-
-/*
-
-extern Slice main_name_space;
-
-class PersistentDatabase : public Database {
- public:
-  // opens a storage in directory "path"
-  // path must exists and end with a separator ("/" or "\")
-  // is path is NULL a in memory database is build
-  void open(const char* path, const Options& options);
-};
-
-
-class CopyOnWriteDatabase : public PersistentDatabase {
-  // returns true if changes have to be commited
-  virtual bool is_dirty() const = 0;
-
-};
-
-
-*/
 
 } // namespace larch_leaves
 

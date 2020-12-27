@@ -1,0 +1,41 @@
+id: kCompressed-0-1392
+size: 2
+keys: "[a][b]"
+children: 
+  - kTrie-0-510
+---
+id: kTrie-0-510
+bits: 20
+children: 
+  - kNull-0-0
+  - kTrie-0-4f0
+---
+id: kTrie-0-4f0
+bits: 84
+children: 
+  - kNull-0-0
+  - kCompressed-0-4d0
+  - kCompressed-0-550
+---
+id: kCompressed-0-4d0
+size: 4
+keys: "[d][e][f][g]"
+children: 
+  - kValue-0-490
+---
+id: kValue-0-490
+size: 7
+children: 
+  - kNull-0-0
+---
+id: kCompressed-0-550
+size: 2
+keys: "[i][j]"
+children: 
+  - kValue-0-530
+---
+id: kValue-0-530
+size: 5
+children: 
+  - kNull-0-0
+---

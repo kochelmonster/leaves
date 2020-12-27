@@ -13,6 +13,8 @@
 #define AREA_COUNT 100
 #endif
 
+#define NODE_INCREMENT  24
+#define POOL_COUNT  5
 
 namespace larch_leaves {
 
@@ -36,6 +38,9 @@ struct segment_ptr {
   segment_ptr(segment_index_t segment_id=0, uint32_t delta=1)
     : delta(delta), segment_id(segment_id) {}
 
+  segment_ptr(const segment_ptr& other)
+    : delta(other.delta), segment_id(other. segment_id) {}
+
   segment_ptr operator=(segment_ptr* other) {
     (*this) = *other;
     return *this;
@@ -56,7 +61,7 @@ struct segment_ptr {
 
   int64_t operator-(segment_ptr& other) {
     assert(segment_id == other.segment_id);
-    return (int64_t)delta - (int64_t)other.delta;
+    return (int64_t)(delta & 0xFFFFFFF0) - (int64_t)(other.delta & 0xFFFFFFF0);
   }
 
   operator bool() const { return delta != 1; }
@@ -90,9 +95,7 @@ struct Pool {
     this->storage = storage;
     this->pool = pool;
   }
-
-  void create(
-    Storage* storage, PPool* pool, size_t node_size, size_t area_size);
+  void create(Storage* storage, PPool* pool, size_t node_size, size_t area_size);
 
   segment_ptr allocate();
 
@@ -136,16 +139,17 @@ struct Storage {
   ~Storage();
 
   segment_ptr allocate(size_t size);
+  void free(segment_ptr ptr);
+  void flush();
+  void flush_header();
+
   size_t get_segment_address(segment_index_t index) {
     return (size_t)segments[index].region.get_address();
   }
 
-  void flush();
-  void flush_header();
-
   file_mapping file;
   size_t segment_size;
-  Pool pools[5];
+  Pool pools[POOL_COUNT];
   uint64_t* version;
   segment_ptr start;
   segment_v segments;
@@ -153,7 +157,7 @@ struct Storage {
 
 
 inline void* segment_ptr::resolve(Storage* storage) {
-  return (void*)(storage->get_segment_address(segment_id) + delta);
+  return (void*)(storage->get_segment_address(segment_id) + (delta & 0xFFFFFFF0));
 }
 
 }
