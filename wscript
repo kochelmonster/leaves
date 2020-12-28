@@ -37,9 +37,7 @@ def configure(cfg):
 
     if cfg.options.gcov:
         cfg.env.CXXFLAGS.extend(["-fprofile-arcs", "-ftest-coverage"])
-        print("++gcov", cfg.env.LINKFLAGS)
         cfg.env.LINKFLAGS.extend(["-lgcov", "--coverage"])
-        print("--gcov", cfg.env.LINKFLAGS, cfg.env.CXXFLAGS)
 
     cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN),
                               "PAGE_SIZE={}".format(PAGE_SIZE),
@@ -96,19 +94,25 @@ def _build(bld):
         target="sbench")
 
 
-def build(bld):
+def source(names):
     from os.path import join
-    sources = "storage.cpp"
-    sources = [join("src", s) for s in sources.split()]
+    return [join("src", s) for s in names.split()]
 
+
+def test(name):
+    from os.path import join
+    return [join("tests", name)]
+
+
+def build(bld):
     bld.program(
         features="test",
-        source=[join("tests", "test_storage.cpp")]+sources,
+        source=test("test_storage.cpp")+source("storage.cpp"),
         use="TEST BOOST",
         target="test_storage")
 
     bld.program(
         features="test",
-        source=[join("tests", "test_node.cpp")]+sources,
+        source=test("test_node.cpp")+source("storage.cpp trace.cpp"),
         use="TEST BOOST",
         target="test_node")

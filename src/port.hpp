@@ -3,6 +3,7 @@
 #define popcount __builtin_popcount
 #define ffs __builtin_ffs
 #define clz __builtin_clz
+#define ctz __builtin_ctz
 
 #endif
 

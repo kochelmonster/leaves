@@ -13,6 +13,7 @@
 #define AREA_COUNT 100
 #endif
 
+
 #define NODE_INCREMENT  24
 #define POOL_COUNT  5
 
@@ -30,16 +31,13 @@ struct segment_ptr {
 
   union {
     uint32_t delta;
-    uint32_t upper:29;
-    uint32_t type:3;
+    uint32_t upper:30;
+    uint32_t type:2;
   };
   segment_index_t segment_id;
 
   segment_ptr(segment_index_t segment_id=0, uint32_t delta=1)
     : delta(delta), segment_id(segment_id) {}
-
-  segment_ptr(const segment_ptr& other)
-    : delta(other.delta), segment_id(other. segment_id) {}
 
   segment_ptr operator=(segment_ptr* other) {
     (*this) = *other;
@@ -52,22 +50,22 @@ struct segment_ptr {
   }
 
   segment_ptr operator+(uint32_t diff) {
-    return segment_ptr(segment_id, delta + diff);
+    return segment_ptr(segment_id, (delta + diff) & 0xFFFFFFFC);
   }
 
   segment_ptr operator-(uint32_t diff) {
-    return segment_ptr(segment_id, delta - diff);
+    return segment_ptr(segment_id, (delta - diff) & 0xFFFFFFFC);
   }
 
   int64_t operator-(segment_ptr& other) {
     assert(segment_id == other.segment_id);
-    return (int64_t)(delta & 0xFFFFFFF0) - (int64_t)(other.delta & 0xFFFFFFF0);
+    return (int64_t)(delta & 0xFFFFFFFC) - (int64_t)(other.delta & 0xFFFFFFFC);
   }
 
   operator bool() const { return delta != 1; }
   bool operator!() const { return delta == 1; }
 
-  void* resolve(Storage*);
+  void* resolve(const Storage* storage) const;
 };
 #pragma pack(0)
 
@@ -99,7 +97,7 @@ struct Pool {
 
   segment_ptr allocate();
 
-  void free(segment_ptr& ptr) {
+  void free(const segment_ptr& ptr) {
     ((Free*)ptr.resolve(storage))->next = pool->next_free;
     pool->next_free = ptr;
   }
@@ -143,7 +141,7 @@ struct Storage {
   void flush();
   void flush_header();
 
-  size_t get_segment_address(segment_index_t index) {
+  size_t get_segment_address(segment_index_t index) const {
     return (size_t)segments[index].region.get_address();
   }
 
@@ -156,8 +154,8 @@ struct Storage {
 };
 
 
-inline void* segment_ptr::resolve(Storage* storage) {
-  return (void*)(storage->get_segment_address(segment_id) + (delta & 0xFFFFFFF0));
+inline void* segment_ptr::resolve(const Storage* storage) const {
+  return (void*)(storage->get_segment_address(segment_id) + (delta & 0xFFFFFFFC));
 }
 
 }

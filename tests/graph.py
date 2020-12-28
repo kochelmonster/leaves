@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size: {size}}}|{keys}}}"]"""
-NNODE = """"{id}" [label="{id}|size: {size}"]"""
-TNODE = """"{id}" [fillcolor=azure label="{id}|bits: {bits}"]"""
+VNODE = """"{id}" [label="{{{{{id}|size: {size}}}|{value}}}"]"""
+TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
 
 
 class Graph:
@@ -20,9 +20,14 @@ class Graph:
             add(getattr(self, "handle_" + type_)(n))
 
         for n in nodes:
-            for c in n.get("children", ()):
-                if c != "kNull-0-0":
-                    add(f'"{n["id"]}" -> "{c}"')
+            type_ = n["id"].split("-", 1)[0]
+            if type_ != "kTrie":
+                for c in n.get("children", ()):
+                    if c != "kNull-0-0":
+                        add(f'"{n["id"]}" -> "{c}"')
+            else:
+                for i, c in enumerate(n.get("children", ())):
+                    add(f'"{n["id"]}":f{i} -> "{c}"')
 
         add("}")
         add("")
@@ -33,13 +38,19 @@ class Graph:
         return CNODE.format(**node)
 
     def handle_kValue(self, node):
-        return NNODE.format(**node)
+        return VNODE.format(**node)
 
     def handle_kTrie(self, node):
-        return TNODE.format(**node)
+        byteindex = node.get("byteindex")
+        if byteindex:
+            slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(byteindex))
+        else:
+            slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(node["bitindex"]))
+
+        return TNODE.format(slots=slots, **node)
 
     def handle_kNull(self, node):
-        return "{id}".format(**node)
+        return "\"{id}\"".format(**node)
 
 
 def main(paths):
@@ -47,6 +58,7 @@ def main(paths):
         src = Path(p)
         dest = Path("graphs")/(src.stem + ".svg")
         print("dest", dest)
+
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
             sarge.run(f"dot -Tsvg > {dest}", input=Graph().make_graph(list(filter(bool, nodes))))

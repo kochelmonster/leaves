@@ -3,70 +3,34 @@
 
 namespace larch_leaves {
 
-
 struct Trace {
-  Trace(Storage* storage) : storage(storage) {
-    key.reserve(1024);
+  Trace(Storage& storage) : storage(storage), version(*storage.version) {
+    current_key.reserve(1024);
   }
 
-  void find(Slice& key);
+  bool valid() const { return rest_key.empty() && stack.back().valid(); }
+  void find(const Slice& key);
   void first();
   void last();
   void next();
   void prev();
-  void insert(Slice& key, Slice& value);
+  void set_value(const Slice& value);
+  Slice get_value() const { return stack.back().get_value(); }
   void remove();
 
+
+  void ifind(Transition transition);
+  void sanitize() {
+    while(version != *storage.version) {
+      // restore trace after another cursor changed the trie.
+      find(current_key);
+    }
+  }
+
   std::vector<Transition> stack;
-  Storage* storage;
+  Storage& storage;
+  Slice rest_key;
+  std::string current_key;
   uint64_t version;
 };
-
-
-void Trace::find(Slice& key) {
-  this->key = key;
-  Slice _key(key);
-
-  Transition transition;
-  segment_ptr *next = &storage->start;
-
-  stack.clear();
-  while(next) {
-    transition = Transition(next, storage);
-    stack.push_back(transition);
-    next = transition.find(_key);
-  }
-
-  next = transition.first();
-  while(next) {
-    transition = Transition(next, storage);
-    stack.push_back(transition);
-    next = transition.first();
-  }
-  // stack.back points to a leave
-}
-
-void insert(Slice key, Slice& value) {
-  size_t i = 0;
-  Transition transition;
-  segment_ptr *next = &storage->start;
-
-  stack.clear();
-  while(next) {
-    transition = Transition(next, storage);
-    stack.push_back(transition);
-    next = transition.find(key);
-  }
-  next = transition.insert(key, value);
-  stack.pop_back(transition);
-  transition = Transition(next, storage);
-  stack.push_back(transition);
-
-  next = transition.find(key);
-  while(next) {
-    transition = Transition(next, storage);
-    stack.push_back(transition);
-    next = transition.find(key);
-  }
-}
 }

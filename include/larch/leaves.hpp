@@ -95,24 +95,23 @@ class Slice {
     }
 };
 class Cursor {
- public:
+public:
   // returns true if cursor is on a valid position
-  virtual bool is_valid() const = 0;
+  virtual bool valid() const = 0;
 
   // sets the cursor to key
-  virtual void set(const Slice& key, int read_forward=100) = 0;
+  virtual void find(const Slice& key) = 0;
 
-  // sets the cursor to first
-  virtual void first(int read_forward=100) = 0;
-  virtual void last(int read_forward=-100) = 0;
-  virtual void next(int read_forward=100) = 0;
-  virtual void prev(int read_forward=-100) = 0;
+  virtual void first() = 0;
+  virtual void last() = 0;
+  virtual void next() = 0;
+  virtual void prev() = 0;
 
   virtual Slice key() = 0;
   virtual Slice value() = 0;
 
   // sets the value raise an exception if a read curor
-  virtual void set_value(const Slice& value) = 0;
+  virtual void insert(const Slice& value) = 0;
   virtual void remove() = 0;
 };
 
@@ -124,5 +123,15 @@ class Cursor {
 
 
 } // namespace larch_leaves
+
+
+class Database {
+public:
+  Database(const char* path, size_t segment_size);
+  ~Database();
+
+  // std::shared_ptr<Cursor> create_cursor();
+  void flush();
+};
 
 #endif // _LARCH_LEAVES_H

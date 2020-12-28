@@ -12,12 +12,13 @@ children:
   - kTrie-0-2052
 ---
 id: kTrie-0-2052
-size: 2
-bits: 108
-bitindex: [3, 8]
-byteindex: ["c", "h"]
+size: 3
+bits: 118
+bitindex: [3, 4, 8]
+byteindex: ["c", "d", "h"]
 children: 
   - kCompressed-0-2024
+  - kValue-0-384
   - kCompressed-0-2108
 ---
 id: kCompressed-0-2024
@@ -29,6 +30,12 @@ children:
 id: kValue-0-1968
 size: 7
 value: "[a][b][c][d][e][f][g]"
+children: 
+  - kNull-0-0
+---
+id: kValue-0-384
+size: 3
+value: "[a][b][d]"
 children: 
   - kNull-0-0
 ---

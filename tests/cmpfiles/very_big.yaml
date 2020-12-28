@@ -1,0 +1,30 @@
+id: kCompressed-0-1996
+size: 7
+keys: "[a][b][c][d][e][f][g]"
+children: 
+  - kCompressed-2-344
+---
+id: kCompressed-2-344
+size: 93
+keys: "[h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b]"
+children: 
+  - kCompressed-2-244
+---
+id: kCompressed-2-244
+size: 93
+keys: "[c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k]"
+children: 
+  - kCompressed-2-144
+---
+id: kCompressed-2-144
+size: 87
+keys: "[l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n]"
+children: 
+  - kValue-0-10000
+---
+id: kValue-0-10000
+size: 280
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n][a][b][c][d][e][f][g][h][i][j][k][l][m][n]"
+children: 
+  - kNull-0-0
+---

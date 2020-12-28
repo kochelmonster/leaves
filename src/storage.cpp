@@ -1,7 +1,6 @@
 #include <fstream>
 #include <filesystem>
 #include "storage.hpp"
-#include <iostream>
 
 
 #define SIGNATURE "LarchLeaves"
@@ -23,8 +22,7 @@ struct StorageHeader {
 #define OFFSET sizeof(StorageHeader)
 
 
-void Pool::create(
-    Storage* storage, PPool* pool, size_t node_size, size_t area_size) {
+void Pool::create(Storage* storage, PPool* pool, size_t node_size, size_t area_size) {
   this->storage = storage;
   this->pool = pool;
   pool->node_size = node_size;
@@ -92,8 +90,11 @@ Storage::Storage(const char* path, size_t segment_size) :
     // create a new one
     segments.push_back(Segment(create_only, file, offset, segment_size));
     PPool* p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*POOL_COUNT);
-    for(size_t i = 0; i < POOL_COUNT; i++) {
-      size_t node_size = 8 + i*NODE_INCREMENT;
+
+    pools[0].create(this, p++, 16, 16*AREA_COUNT);
+    size_t node_size = 4;
+    for(size_t i = 1; i < POOL_COUNT; i++) {
+      node_size += NODE_INCREMENT;
       pools[i].create(this, p++, node_size, node_size*AREA_COUNT);
     }
 

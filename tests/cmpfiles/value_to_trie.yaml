@@ -2,6 +2,12 @@ id: kCompressed-0-2136
 size: 2
 keys: "[a][b]"
 children: 
+  - kValue-0-384
+---
+id: kValue-0-384
+size: 2
+value: "[a][b]"
+children: 
   - kTrie-0-2080
 ---
 id: kTrie-0-2080
