@@ -4,7 +4,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 
-#define GENERATE
+//#define GENERATE
 
 #ifndef CMPFILES
 #define CMPFILES "."
@@ -50,20 +50,20 @@ std::ostream& operator<<(std::ostream& out, segment_ptr ptr) {
 }
 
 struct DumpBase {
-  virtual void dump(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper=-1) = 0;
+  virtual void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) = 0;
 };
 
 
 struct NullDumper : public DumpBase {
-  void dump(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
     out << "id: " << ptr << std::endl;
   }
 };
 
-void dump_node(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper=-1);
+void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1);
 
 struct ValueDumper : public DumpBase {
-  void dump(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
     ValueData *data = (ValueData*)ptr.resolve(storage);
     out << "id: " << ptr << std::endl;
     out << "size: " << (int)data->size << std::endl;
@@ -81,7 +81,7 @@ struct ValueDumper : public DumpBase {
 };
 
 struct CompressDumper : public DumpBase {
-  void dump(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
     CompressedData *data = (CompressedData*)ptr.resolve(storage);
     out << "id: " << ptr << std::endl;
     out << "size: " << (int)data->size << std::endl;
@@ -99,7 +99,7 @@ struct CompressDumper : public DumpBase {
 };
 
 struct TrieDumper : public DumpBase {
-  void dump(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
     TrieData *data = (TrieData*)ptr.resolve(storage);
     int size = popcount(data->bits);
     out << "id: " << ptr << std::endl;
@@ -161,7 +161,7 @@ DumpBase* dumpers[] = {
 };
 
 
-void dump_node(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper) {
+void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage, int upper) {
   dumpers[ptr.type]->dump(out, ptr, storage, upper);
 }
 
@@ -169,6 +169,24 @@ void dump_node(std::ofstream& out, segment_ptr ptr, Storage* storage, int upper)
 void dump_graph(const char* output, Storage& storage) {
   std::ofstream out(output);
   dump_node(out, storage.start, &storage);
+}
+
+void compare_graph(const char* input, Storage& storage) {
+  std::stringstream cstr;
+  dump_node(cstr, storage.start, &storage);
+
+  std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
+  std::string cmp((std::istreambuf_iterator<char>(in)), (std::istreambuf_iterator<char>()));
+
+  if (cmp != cstr.str()) {
+    std::cout << "===========================" << std::endl;
+    std::cout << cmp << std::endl;
+    std::cout << "---------------------------" << std::endl;
+    std::cout << cstr.str() << std::endl;
+    std::cout << "===========================" << std::endl;
+  }
+
+  BOOST_REQUIRE_EQUAL(cstr.str(), cmp);
 }
 
 
@@ -180,7 +198,7 @@ void check_graph(const char* name, Storage& storage) {
 #ifdef GENERATE
   dump_graph(path.c_str(), storage);
 #else
-
+  compare_graph(path.c_str(), storage);
 #endif
 }
 
