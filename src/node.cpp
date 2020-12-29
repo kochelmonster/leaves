@@ -59,6 +59,18 @@ struct Value : public NodeHandler {
 
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value);
 
+  bool remove(Transition& self, std::string& key, bool last) {
+    if (last) {
+      ValueData* node(ptr(self));
+      segment_ptr next = node->next;
+      node->free(self);
+      *self.node_ptr = next;
+      return true;
+    }
+    // intermediate value
+    return false;
+  };
+
   static segment_ptr build(Storage* storage, segment_ptr next, const Slice& value) {
     segment_ptr result;
     size_t size = value.size();
@@ -128,12 +140,47 @@ struct TrieData {
       self.storage->pools[index].free(*to_me);
       *to_me = new_ptr;
       new_node->add(bit, next);
-      return *to_me;
+      return new_ptr;
     }
 
     add(bit, next);
     return *to_me;
   }
+
+  bool remove(Transition& self, segment_ptr* to_me, int bit) {
+    assert(bits & (1<<bit));
+    size_t pool_index = get_pool_index();
+    int index = index_of(bit);
+
+    if (children[index]) {
+      // the node is still active => remove of intermediate value
+      return false;
+    }
+
+    bits &= ~(1<<bit);
+
+    if (!bits) {
+      self.storage->pools[pool_index].free(*to_me);
+      *to_me = segment_ptr();
+      return true;
+    }
+
+    int size = popcount(bits);
+    for(int i = index; i < size; i++) {
+      children[i] = children[i+1];
+    }
+    if (full()) {
+      // we are the upper edge of the next smaller pool
+      segment_ptr new_ptr = self.storage->pools[pool_index-1].allocate();
+      new_ptr.type = kTrie;
+      TrieData *new_node((TrieData*)self.resolve(new_ptr));
+      memcpy((void*)new_node, this, sizeof(TrieData)+size*sizeof(segment_ptr));
+      self.storage->pools[pool_index].free(*to_me);
+      *to_me = new_ptr;
+    }
+    return false;
+  }
+
 };
 #pragma pack(0)
 
@@ -176,6 +223,8 @@ struct Trie : public NodeHandler {
   }
 
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value);
+  bool remove(Transition& self, std::string& key, bool last);
+
 
   static segment_ptr create(Storage* storage, segment_ptr next, int bit) {
     segment_ptr result = storage->pools[1].allocate();
@@ -208,7 +257,7 @@ struct CompressedData {
   }
 
   void free(Transition& self) {
-    self.storage->pools[(size+CDELTA)/NODE_INCREMENT].free(*self.node_ptr);
+    self.storage->pools[get_pool_index(size)].free(*self.node_ptr);
   }
 };
 #pragma pack(0)
@@ -279,22 +328,55 @@ struct Compressed : public NodeHandler {
     return self.node_ptr;
   }
 
+  bool remove(Transition& self, std::string& key, bool last) {
+    CompressedData *node(ptr(self));
+    if (!node->next) {
+      key.resize(key.size()-node->size);
+      node->free(self);
+      *self.node_ptr = segment_ptr();
+      return true;
+    }
+
+    if (node->next.type == kCompressed) {
+      Transition next(&node->next, self.storage);
+      CompressedData *next_node(ptr(next));
+      size_t size = (size_t)node->size + (size_t)next_node->size;
+
+      if (size < MAX_COMPRESSED_LEN) {
+        int index = CompressedData::get_pool_index(size);
+        segment_ptr new_ptr(self.storage->pools[index].allocate());
+        new_ptr = fill(self.storage, new_ptr, next_node->next, Slice(node->keys, node->size));
+
+        CompressedData *new_node((CompressedData*)self.resolve(new_ptr));
+        memcpy(new_node->keys+node->size, next_node->keys, next_node->size);
+        new_node->size += next_node->size;
+
+        next_node->free(next);
+        node->free(self);
+
+        *self.node_ptr = new_ptr;
+      }
+    }
+
+    return true;
+  }
+
   segment_ptr* first(Transition& self) { return &ptr(self)->next; }
   segment_ptr* last(Transition& self) { return &ptr(self)->next; }
   segment_ptr* next(Transition& self) { return NULL; }
 
-  static segment_ptr fill(Storage* storage, segment_ptr node_ptr, segment_ptr next, Slice& key) {
+  static segment_ptr fill(Storage* storage, segment_ptr node_ptr, segment_ptr next,
+                          const Slice& key) {
     node_ptr.type = kCompressed;
     CompressedData *node = (CompressedData*)node_ptr.resolve(storage);
     node->next = next;
     node->size = (unsigned char)key.size();
     memcpy(node->keys, key.data(), node->size);
-    assert(!memcmp(node->keys, key.data(), node->size));
     return node_ptr;
   }
 
-  static segment_ptr build(Storage* storage, segment_ptr next, Slice& key) {
-    int index = (key.size() + CDELTA)/NODE_INCREMENT;
+  static segment_ptr build(Storage* storage, segment_ptr next, const Slice& key) {
+    int index = CompressedData::get_pool_index(key.size());
     if (index > POOL_COUNT) {
       // divide key in multiple compressed
       Slice first(key.data(), MAX_COMPRESSED_LEN);
@@ -315,6 +397,8 @@ struct Null : public NodeHandler {
     *self.node_ptr = Compressed::build(self.storage, value_ptr, key);
     return self.node_ptr;
   }
+
+  bool remove(Transition& self, std::string& key, bool last) { return false; } // never
 };
 
 
@@ -356,20 +440,45 @@ segment_ptr* Trie::insert(Transition& self, Slice& key, const Slice& value) {
 }
 
 
+bool Trie::remove(Transition& self, std::string& key, bool last) {
+  bool result(false);
+  TrieData *lower(ptr2(self)), *upper;
+  key.pop_back();
+
+  if (lower->remove(self, self.second_ptr, bit::lower(self.value))) {
+    upper = ptr1(self);
+    result = upper->remove(self, self.node_ptr, bit::upper(self.value));
+  }
+
+  lower = ptr2(self);
+  upper = ptr1(self);
+
+  if (popcount(upper->bits) == 1 && popcount(lower->bits) == 1) {
+    segment_ptr next = lower->children[0];
+    char value = (ctz(upper->bits) << 4) | ctz(lower->bits);
+    self.storage->pools[lower->get_pool_index()].free(*self.second_ptr);
+    self.storage->pools[upper->get_pool_index()].free(*self.node_ptr);
+    *self.node_ptr = Compressed::build(self.storage, next, Slice(&value, 1));
+    self.remove(key, last);  // combines compressed if possible
+    return true;
+  }
+
+  return result;
+}
+
 segment_ptr* Value::insert(Transition& self, Slice& key, const Slice& value) {
+  ValueData* node(ptr(self));
   if (key.empty()) {
-    ValueData* old(ptr(self));
-    segment_ptr new_ptr(build(self.storage, old->next, value));
-    old->free(self);
+    segment_ptr new_ptr(build(self.storage, node->next, value));
+    node->free(self);
     *self.node_ptr = new_ptr;
     return self.node_ptr;
   }
 
+  assert(!node->next);
   segment_ptr next(build(self.storage, segment_ptr(), value));
-  *self.node_ptr = Compressed::build(self.storage, next, key);
+  node->next = Compressed::build(self.storage, next, key);
   return self.node_ptr;
 }
-
-
 
 } // namespace larch_leaves

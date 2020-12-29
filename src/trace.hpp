@@ -8,7 +8,7 @@ struct Trace {
     current_key.reserve(1024);
   }
 
-  bool valid() const { return rest_key.empty() && stack.back().valid(); }
+  bool valid() const { return rest_key.empty() && stack.size() && stack.back().valid(); }
   void find(const Slice& key);
   void first();
   void last();

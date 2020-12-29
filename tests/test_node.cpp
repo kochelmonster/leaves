@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <boost/test/included/unit_test.hpp>
 
-
 //#define GENERATE
 
 #ifndef CMPFILES
@@ -224,6 +223,10 @@ void test_divide_compressed(Storage& storage) {
   insert(storage, Slice("abhij"), "divide_compressed");
 }
 
+void test_divide_compressed_value(Storage& storage) {
+  insert(storage, Slice("ab"), "divide_compressed_value");
+}
+
 void test_add_value_node(Storage& storage) {
   insert(storage, Slice("ab"), "value_to_trie");
 }
@@ -272,7 +275,7 @@ BOOST_AUTO_TEST_CASE(value_divide) {
   Preparation p;
   Storage storage(TEST_FILE, SEGMENT_SIZE);
   test_insert_first(storage);
-  insert(storage, Slice("ab"), "divide_compressed_value");
+  test_divide_compressed_value(storage);
 }
 
 BOOST_AUTO_TEST_CASE(very_big) {
@@ -314,6 +317,41 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   trace.set_value(key);
 }
 
+BOOST_AUTO_TEST_CASE(remove_intermediate) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  test_insert_first(storage);
+  test_divide_compressed_value(storage);
+
+  Trace trace(storage);
+  Slice key("ab");
+  trace.find(key);
+  BOOST_REQUIRE(trace.valid());
+  trace.remove();
+  check_graph("remove_intermediate", storage);
+
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
+}
+
+BOOST_AUTO_TEST_CASE(remove_until_intermediate) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  test_insert_first(storage);
+  test_divide_compressed_value(storage);
+
+  Trace trace(storage);
+  Slice key("abcdefg");
+  trace.find(key);
+  BOOST_REQUIRE(trace.valid());
+  trace.remove();
+  check_graph("remove_until_intermediate", storage);
+
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, std::string("ab"));
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(TriedNode)
@@ -350,7 +388,6 @@ BOOST_AUTO_TEST_CASE(insert_grow_lower) {
   test_insert_grow(storage);
 }
 
-
 BOOST_AUTO_TEST_CASE(insert_grow_upper) {
   Preparation p;
   Storage storage(TEST_FILE, SEGMENT_SIZE);
@@ -360,9 +397,81 @@ BOOST_AUTO_TEST_CASE(insert_grow_upper) {
   insert(storage, Slice("ab0"), "insert_index_0");
 }
 
+BOOST_AUTO_TEST_CASE(shrink_lower) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  test_insert_first(storage);
+  test_divide_compressed(storage);
+  test_insert_index(storage);
+  insert(storage, "aba", "insert_index_a");
+  insert(storage, "abb", "insert_index_b");
+
+  Trace trace(storage);
+  Slice key("abcdefg");
+  trace.find(key);
+  BOOST_REQUIRE(trace.valid());
+  trace.remove();
+  check_graph("removed_abcdefg", storage);
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, std::string("ab"));
+}
+
+BOOST_AUTO_TEST_CASE(remove_trie) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  test_insert_first(storage);
+  test_divide_compressed(storage);
+
+  Trace trace(storage);
+  Slice key("abcdefg");
+  trace.find(key);
+  BOOST_REQUIRE(trace.valid());
+  trace.remove();
+  check_graph("removed_trie", storage);
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, std::string("ab"));
+}
+
+BOOST_AUTO_TEST_CASE(remove_lower) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  test_insert_first(storage);
+  test_divide_compressed(storage);
+  insert(storage, Slice("abp"), "insert_index_p");
+  insert(storage, Slice("ab0"), "insert_index_0");
+
+  Trace trace(storage);
+  Slice key("abp");
+  trace.find(key);
+  BOOST_REQUIRE(trace.valid());
+  trace.remove();
+  check_graph("removed_abp", storage);
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, std::string("ab"));
+}
+
+BOOST_AUTO_TEST_CASE(keep_lower) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  test_insert_first(storage);
+  test_divide_compressed(storage);
+  insert(storage, Slice("abp"), "insert_index_p");
+  insert(storage, Slice("ab0"), "insert_index_0");
+  insert(storage, Slice("abpqrs"), "insert_index_abpqrs");
+
+  Trace trace(storage);
+  Slice key("abp");
+  trace.find(key);
+  BOOST_REQUIRE(trace.valid());
+  trace.remove();
+  check_graph("removed_abp_intermediate", storage);
+  std::cout << "current_key: " << trace.current_key << std::endl;
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, std::string("ab"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 
 BOOST_AUTO_TEST_SUITE(Error)
-
 BOOST_AUTO_TEST_SUITE_END()

@@ -24,14 +24,30 @@ void Trace::set_value(const Slice& value) {
   ifind(Transition(next, &storage));
 }
 
+void Trace::remove() {
+  if (!valid())
+    throw NoValidPosition();
+
+  sanitize();
+  bool last = true;
+  while(stack.size() && stack.back().remove(current_key, last)) {
+    stack.pop_back();
+    last = false;
+  }
+
+  (*storage.version)++;
+}
+
+
 void Trace::ifind(Transition transition) {
   segment_ptr *next(transition.node_ptr);
   while(true) {
     stack.push_back(transition);
-    next = transition.find(rest_key);
+    Transition& active(stack.back());
+    next = active.find(rest_key);
     if (!next)
       break;
-    transition.append_to(current_key);
+    active.append_to(current_key);
     transition = Transition(next, &storage);
   }
   version = *storage.version;
