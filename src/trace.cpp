@@ -43,6 +43,7 @@ void Trace::next() {
   if (stack.empty())
     throw NoValidPosition();
 
+  rest_key = Slice();
   segment_ptr *next;
   while(stack.size()) {
     next = stack.back().next(current_key);
@@ -56,7 +57,6 @@ void Trace::next() {
     next = stack.back().first(current_key);
   }
 }
-
 
 void Trace::ifind(Transition transition) {
   segment_ptr *next(transition.node_ptr);

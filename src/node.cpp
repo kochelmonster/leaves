@@ -45,17 +45,24 @@ struct Value : public NodeHandler {
 
   segment_ptr* find(Transition& self, Slice& key, string& current_key) {
     ValueData *node(ptr(self));
-    if (key.size() && node->next)
+    if (key.size() && node->next) {
+      self.cmp = 1;
       return &node->next;
+    }
     return NULL;
   }
 
   segment_ptr* next(Transition& self, string& current_key) {
     ValueData *node(ptr(self));
-    return node->next ? &node->next : NULL;
+    if (self.cmp == 0) {
+      self.cmp = 1;
+      return node->next ? &node->next : NULL;
+    }
+    return NULL;
   }
 
   segment_ptr* first(Transition& self, string& key) {
+    self.cmp = 0;
     return NULL;
   }
 
@@ -131,7 +138,7 @@ struct TrieData {
   }
 
   segment_ptr* next(char& bit) {
-    uint16_t nbits = bits & ((1<<(bit+1)) - 1);
+    uint16_t nbits = bits & ~((1<<(bit+1)) - 1);
     if (nbits) {
       bit = ctz(nbits);
       return &children[index_of(bit)];
@@ -318,6 +325,11 @@ struct CompressedData {
 };
 #pragma pack(0)
 
+inline char sign(int x) {
+  return (x>0)-(x<0);
+}
+
+
 struct Compressed : public NodeHandler {
   static CompressedData* ptr(Transition& self) {
     return (CompressedData*)self.resolve(*self.node_ptr);
@@ -325,8 +337,8 @@ struct Compressed : public NodeHandler {
 
   segment_ptr* find(Transition& self, Slice& key, string& current_key) {
     CompressedData* node = ptr(self);
-    self.cmp = 1;
-    if (key.size() >= node->size && ! (self.cmp=memcmp(node->keys, key.data(), node->size))) {
+    size_t size = std::min(key.size(), (size_t)node->size);
+    if (!(self.cmp=sign(memcmp(key.data(), node->keys, size))) && size == node->size) {
       key = key.advance(node->size);
       current_key.append(node->keys, node->size);
       return &node->next;
@@ -340,6 +352,11 @@ struct Compressed : public NodeHandler {
       CompressedData* node = ptr(self);
       current_key.append(node->keys, node->size);
       return &node->next;
+    }
+    if (self.cmp == 0) {
+      self.cmp = 1;
+      CompressedData* node = ptr(self);
+      current_key.resize(current_key.size()-node->size);
     }
     return NULL;
   }
@@ -373,8 +390,8 @@ struct Compressed : public NodeHandler {
         Slice rest_key(key.advance(i));
         current_key.push_back(trie.value); // will be popped in trie.insert
         trie_ptr = *trie.insert(rest_key, value, current_key);
-        segment_ptr first_ptr = build(self.storage, trie_ptr, first);
 
+        segment_ptr first_ptr(build(self.storage, trie_ptr, first));
         node->free(self);
         *self.node_ptr = first_ptr;
         return self.node_ptr;
@@ -445,6 +462,9 @@ struct Compressed : public NodeHandler {
   }
 
   static segment_ptr build(Storage* storage, segment_ptr next, const Slice& key) {
+    if (key.empty())
+      return next;
+
     int index = CompressedData::get_pool_index(key.size());
     if (index > POOL_COUNT) {
       // divide key in multiple compressed

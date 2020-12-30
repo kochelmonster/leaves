@@ -43,7 +43,7 @@ void test_insert_grow(Storage& storage) {
   insert(storage, "ab`", "insert_index_60");
 }
 
-BOOST_AUTO_TEST_SUITE(NullNode)
+BOOST_AUTO_TEST_SUITE(ModifyNullNode)
 
 BOOST_AUTO_TEST_CASE(insert) {
   Preparation p;
@@ -54,7 +54,7 @@ BOOST_AUTO_TEST_CASE(insert) {
 BOOST_AUTO_TEST_SUITE_END()
 
 
-BOOST_AUTO_TEST_SUITE(CompressedNode)
+BOOST_AUTO_TEST_SUITE(ModifyCompressedNode)
 
 BOOST_AUTO_TEST_CASE(trie_divide) {
   Preparation p;
@@ -84,7 +84,7 @@ BOOST_AUTO_TEST_CASE(very_big) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-BOOST_AUTO_TEST_SUITE(ValueNode)
+BOOST_AUTO_TEST_SUITE(ModifyValueNode)
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
@@ -140,7 +140,7 @@ BOOST_AUTO_TEST_CASE(remove_until_intermediate) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-BOOST_AUTO_TEST_SUITE(TrieNode)
+BOOST_AUTO_TEST_SUITE(ModifyTrieNode)
 
 BOOST_AUTO_TEST_CASE(add_value_node) {
   // add a value to trie
@@ -245,6 +245,130 @@ BOOST_AUTO_TEST_CASE(keep_lower) {
   BOOST_REQUIRE(trace.valid());
   trace.remove();
   check_graph("removed_abp_intermediate", storage);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+
+void fill_db(Storage& storage) {
+  insert(storage, Slice("abc"), "fill_abc");
+  insert(storage, Slice("abc123"), "fill_abc123");
+  insert(storage, Slice("abc323"), "fill_abc323");
+  insert(storage, Slice("abc523"), "fill_abc523");
+  insert(storage, Slice("abc723"), "fill_abc723");
+  insert(storage, Slice("abcA23"), "fill_abcA23");
+  insert(storage, Slice("bcd1234"), "fill_bcd1234");
+  insert(storage, Slice("bcd1235"), "fill_bcd1235");
+}
+
+
+BOOST_AUTO_TEST_SUITE(MoveForward)
+
+BOOST_AUTO_TEST_CASE(move_forward) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  fill_db(storage);
+
+  Trace trace(storage);
+  trace.find(Slice("abc123"));
+  BOOST_REQUIRE(trace.valid());
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc323"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc323"));
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc523"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc523"));
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc723"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc723"));
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
+
+  trace.next();
+  BOOST_REQUIRE(!trace.valid());
+
+  // jump into intermediate value
+  trace.find(Slice("abc"));
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
+
+  // jump into unknown trie value
+  trace.find(Slice("abc2"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc2"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc323"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc323"));
+
+  // jump into trievalue with empty key
+  trace.find(Slice("bcd123"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd123"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
+
+  // jump before compressed
+  trace.find(Slice("aba"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
+
+  // jump after compressed
+  trace.find(Slice("abd"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
+
+  // jump before compressed
+  trace.find(Slice("aa"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
+
+  // jump after compressed
+  trace.find(Slice("ac"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,12 @@
+id: kCompressed-0-384
+size: 3
+keys: "[a][b][c]"
+children: 
+  - kValue-0-368
+---
+id: kValue-0-368
+size: 3
+value: "[a][b][c]"
+children: 
+  - kNull-0-0
+---
