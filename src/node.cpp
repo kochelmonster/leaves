@@ -113,7 +113,8 @@ struct TrieData {
   segment_ptr children[];
 
   size_t get_pool_index() {
-    return (popcount(bits)+3) / 4;
+    size_t count(popcount(bits));
+    return count > 2 ? (count+3) / 4 : 0;
   }
 
   int index_of(int bit) {
@@ -121,7 +122,8 @@ struct TrieData {
   }
 
   bool full() {
-    return (popcount(bits) & 3) == 0;
+    size_t count(popcount(bits));
+    return (count & 3) == 0 || count == 2;
   }
 
   segment_ptr* find(int bit) {
@@ -281,7 +283,7 @@ struct Trie : public NodeHandler {
   bool remove(Transition& self, bool last);
 
   static segment_ptr create(Storage* storage, segment_ptr next, int bit) {
-    segment_ptr result = storage->pools[1].allocate();
+    segment_ptr result = storage->pools[0].allocate();
     TrieData* node = (TrieData*)result.resolve(storage);
     node->bits = 1<<bit;
     node->children[0] = next;

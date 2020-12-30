@@ -4,7 +4,9 @@
 #include "test.hpp"
 
 
-void insert()
+void insert(Storage& storage, const Slice& key, const char* test_name) {
+
+  
 
 
 

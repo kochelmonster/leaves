@@ -190,6 +190,7 @@ void check_graph(const char* name, Storage& storage) {
   path.append(".yaml");
 
 #ifdef GENERATE
+  std::cout << "generate graph " << name << std::endl;
   dump_graph(path.c_str(), storage);
 #else
   compare_graph(path.c_str(), storage);
