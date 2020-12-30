@@ -39,10 +39,26 @@ void Trace::remove() {
   (*storage.version)++;
 }
 
+
+void Trace::first() {
+  rest_key = Slice();
+  current_key.clear();
+  stack.clear();
+  stack.push_back(Transition(&storage.start, &storage));
+  while(true) {
+      segment_ptr *next = stack.back().first(current_key);
+      if (!next)
+        break;
+      stack.push_back(Transition(next, &storage));
+  }
+  version = *storage.version;
+}
+
 void Trace::next() {
   if (stack.empty())
     throw NoValidPosition();
 
+  sanitize();
   rest_key = Slice();
   segment_ptr *next;
   while(stack.size()) {
@@ -56,6 +72,7 @@ void Trace::next() {
     stack.push_back(Transition(next, &storage));
     next = stack.back().first(current_key);
   }
+  version = *storage.version;
 }
 
 void Trace::ifind(Transition transition) {

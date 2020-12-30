@@ -264,14 +264,34 @@ void fill_db(Storage& storage) {
 
 BOOST_AUTO_TEST_SUITE(MoveForward)
 
+BOOST_AUTO_TEST_CASE(move_forward_empty) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Trace trace(storage);
+
+  trace.first();
+  BOOST_REQUIRE(!trace.valid());
+
+  trace.next();
+  BOOST_REQUIRE(!trace.valid());
+}
+
 BOOST_AUTO_TEST_CASE(move_forward) {
   Preparation p;
   Storage storage(TEST_FILE, SEGMENT_SIZE);
   fill_db(storage);
 
   Trace trace(storage);
-  trace.find(Slice("abc123"));
+
+  trace.first();
   BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
+
+  trace.next();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
 
   trace.next();
   BOOST_REQUIRE(trace.valid());

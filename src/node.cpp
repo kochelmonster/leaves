@@ -447,10 +447,6 @@ struct Compressed : public NodeHandler {
     return true;
   }
 
-  segment_ptr* first(Transition& self) { return &ptr(self)->next; }
-  segment_ptr* last(Transition& self) { return &ptr(self)->next; }
-  segment_ptr* next(Transition& self) { return NULL; }
-
   static segment_ptr fill(Storage* storage, segment_ptr node_ptr, segment_ptr next,
                           const Slice& key) {
     node_ptr.type = kCompressed;
