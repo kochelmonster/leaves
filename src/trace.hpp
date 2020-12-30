@@ -18,7 +18,6 @@ struct Trace {
   Slice get_value() const { return stack.back().get_value(); }
   void remove();
 
-
   void ifind(Transition transition);
   void sanitize() {
     while(version != *storage.version) {

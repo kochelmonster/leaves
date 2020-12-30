@@ -113,6 +113,6 @@ def build(bld):
 
     bld.program(
         features="test",
-        source=test("test_node.cpp")+source("storage.cpp trace.cpp"),
+        source=test("test_modify.cpp")+source("storage.cpp trace.cpp"),
         use="TEST BOOST",
-        target="test_node")
+        target="test_modify")
