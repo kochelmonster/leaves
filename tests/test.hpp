@@ -163,6 +163,7 @@ void dump_graph(const char* output, Storage& storage) {
   dump_node(out, storage.start, &storage);
 }
 
+
 void compare_graph(const char* input, Storage& storage) {
   std::stringstream cstr;
   dump_node(cstr, storage.start, &storage);
@@ -196,6 +197,7 @@ void check_graph(const char* name, Storage& storage) {
   compare_graph(path.c_str(), storage);
 #endif
 }
+
 
 void insert(Storage& storage, const Slice& key, const char* test_name) {
   Trace trace(storage);

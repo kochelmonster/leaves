@@ -3,6 +3,9 @@
 
 namespace larch_leaves {
 
+typedef segment_ptr* (*move_func_t)(Transition& transition, string& current_key);
+
+
 struct Trace {
   Trace(Storage& storage) : storage(storage), version(*storage.version) {
     current_key.reserve(1024);
@@ -19,6 +22,9 @@ struct Trace {
   void remove();
 
   void ifind(Transition transition);
+  void imove_end(move_func_t move);
+  void imove(move_func_t move, move_func_t move_end);
+
   void sanitize() {
     while(version != *storage.version) {
       // restore trace after another cursor changed the trie.
@@ -29,7 +35,7 @@ struct Trace {
   std::vector<Transition> stack;
   Storage& storage;
   Slice rest_key;
-  std::string current_key;
+  string current_key;
   uint64_t version;
 };
 }

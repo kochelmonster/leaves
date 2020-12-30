@@ -27,7 +27,9 @@ struct Transition {
   bool valid() const;
   segment_ptr* find(Slice& key, string& current_key);
   segment_ptr* next(string& current_key);
+  segment_ptr* prev(string& current_key);
   segment_ptr* first(string& current_key);
+  segment_ptr* last(string& current_key);
 
   segment_ptr* insert(Slice& key, const Slice& value, string& current_key);
   bool remove(bool last);
@@ -47,6 +49,8 @@ struct NodeHandler {
   virtual segment_ptr* find(Transition& self, Slice& key, string& current_key) = 0;
   virtual segment_ptr* next(Transition& self, string& current_key) = 0;
   virtual segment_ptr* first(Transition& self, string& current_key) = 0;
+  virtual segment_ptr* prev(Transition& self, string& current_key) = 0;
+  virtual segment_ptr* last(Transition& self, string& current_key) = 0;
   virtual segment_ptr* insert(
     Transition& self, Slice& key, const Slice& value, string& current_key) = 0;
   virtual bool remove(Transition& self, bool last) = 0;
@@ -66,6 +70,14 @@ inline segment_ptr* Transition::next(string& current_key) {
 
 inline segment_ptr* Transition::first(string& current_key) {
   return handler()->first(*this, current_key);
+}
+
+inline segment_ptr* Transition::prev(string& current_key) {
+  return handler()->prev(*this, current_key);
+}
+
+inline segment_ptr* Transition::last(string& current_key) {
+  return handler()->last(*this, current_key);
 }
 
 inline segment_ptr* Transition::insert(Slice& key, const Slice& value, string& current_key) {

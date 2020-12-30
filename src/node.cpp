@@ -66,11 +66,14 @@ struct Value : public NodeHandler {
     return NULL;
   }
 
-  segment_ptr* last(Transition& self) {
+  segment_ptr* prev(Transition& self, string& current_key) {
+    return NULL;
+  }
+
+  segment_ptr* last(Transition& self, string& current_key) {
     ValueData *node(ptr(self));
-    if (node->next)
-      return &node->next;
-    return self.node_ptr;
+    self.cmp = 1;
+    return node->next ? &node->next : NULL;
   }
 
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
@@ -148,6 +151,20 @@ struct TrieData {
 
   segment_ptr* first(char& bit) {
     bit = ctz(bits);
+    return &children[index_of(bit)];
+  }
+
+  segment_ptr* prev(char& bit) {
+    uint16_t nbits = bits & ~((1<<(bit+1)) - 1);
+    if (nbits) {
+      bit = 16 - (clz(nbits) & 0xf);
+      return &children[index_of(bit)];
+    }
+    return NULL;
+  }
+
+  segment_ptr* last(char& bit) {
+    bit = 16 - (clz(bits) & 0xf);
     return &children[index_of(bit)];
   }
 
@@ -278,10 +295,47 @@ struct Trie : public NodeHandler {
   }
 
   segment_ptr* first(Transition& self, string& current_key) {
-    self.cmp = 0;
     char upper, lower;
+    self.cmp = 0;
     self.second_ptr = ptr1(self)->first(upper);
     segment_ptr *next = ptr2(self)->first(lower);
+    current_key.push_back(self.value = (upper << 4) | lower);
+    return next;
+  }
+
+  segment_ptr* prev(Transition& self, string& current_key) {
+    if (self.cmp == 1)
+      return NULL;
+
+    TrieData* node(ptr1(self));
+    char upper(bit::upper(self.value)), lower;
+    self.second_ptr = node->find(upper);
+    if (self.second_ptr) {
+      assert(self.second_ptr->type == kTrie);
+      lower = bit::lower(self.value);
+      segment_ptr* next = ptr2(self)->prev(lower);
+      if (next) {
+        current_key.back() = self.value = (upper << 4) | lower;
+        return next;
+      }
+    }
+
+    self.second_ptr = node->prev(upper);
+    if (self.second_ptr) {
+      segment_ptr* next = ptr2(self)->last(lower);
+      current_key.back() = self.value = (upper << 4) | lower;
+      return next;
+    }
+
+    current_key.pop_back();
+    return NULL;
+  }
+
+  segment_ptr* last(Transition& self, string& current_key) {
+    char upper, lower;
+    self.cmp = 0;
+    self.second_ptr = ptr1(self)->last(upper);
+    segment_ptr *next = ptr2(self)->last(lower);
     current_key.push_back(self.value = (upper << 4) | lower);
     return next;
   }
@@ -346,8 +400,8 @@ struct Compressed : public NodeHandler {
     return NULL;
   }
 
-  segment_ptr* next(Transition& self, string& current_key) {
-    if (self.cmp < 0) {
+  segment_ptr* move(Transition& self, string& current_key, bool do_it) {
+    if (do_it) {
       self.cmp = 0;
       CompressedData* node = ptr(self);
       current_key.append(node->keys, node->size);
@@ -361,8 +415,21 @@ struct Compressed : public NodeHandler {
     return NULL;
   }
 
+  segment_ptr* next(Transition& self, string& current_key) {
+    return move(self, current_key, self.cmp < 0);
+  }
+
   segment_ptr* first(Transition& self, string& current_key) {
     self.cmp = -1;
+    return self.next(current_key);
+  }
+
+  segment_ptr* prev(Transition& self, string& current_key) {
+    return move(self, current_key, self.cmp > 0);
+  }
+
+  segment_ptr* last(Transition& self, string& current_key) {
+    self.cmp = 1;
     return self.next(current_key);
   }
 
@@ -478,6 +545,8 @@ struct Null : public NodeHandler {
   segment_ptr* find(Transition& self, Slice& key, string& current_key) { return NULL; }
   segment_ptr* next(Transition& self, string& current_key) { return NULL; }
   segment_ptr* first(Transition& self, string& current_key) { return NULL; }
+  segment_ptr* prev(Transition& self, string& current_key) { return NULL; }
+  segment_ptr* last(Transition& self, string& current_key) { return NULL; }
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
     segment_ptr value_ptr(Value::build(self.storage, segment_ptr(), value));
     *self.node_ptr = Compressed::build(self.storage, value_ptr, key);
