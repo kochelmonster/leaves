@@ -37,7 +37,7 @@ const char* handler_names[] = {
 
 
 std::ostream& operator<<(std::ostream& out, segment_ptr ptr) {
-  out << handler_names[ptr.type] << "-" << ptr.segment_id << "-" << (ptr.delta & 0xFFFFFFFC);
+  out << handler_names[ptr.type] << "-" << ptr.segment_id << "-" << ptr.delta;
   return out;
 }
 

@@ -31,7 +31,6 @@ struct ValueData {
 };
 #pragma pack(0)
 
-
 struct Value : public NodeHandler {
   ValueData* ptr(const Transition& self) const {
     return (ValueData*)self.node_ptr->resolve(self.storage);
@@ -53,8 +52,8 @@ struct Value : public NodeHandler {
   }
 
   segment_ptr* next(Transition& self, string& current_key) {
-    ValueData *node(ptr(self));
     if (self.cmp == 0) {
+      ValueData *node(ptr(self));
       self.cmp = 1;
       return node->next ? &node->next : NULL;
     }
@@ -67,6 +66,14 @@ struct Value : public NodeHandler {
   }
 
   segment_ptr* prev(Transition& self, string& current_key) {
+    if (self.cmp == 1) {
+      ValueData *node(ptr(self));
+      self.cmp = 0;
+      /* a hack (see trace.imove)
+        if we come from node->next this value has to be returned
+      */
+      return node->next ? self.node_ptr : NULL;
+    }
     return NULL;
   }
 
@@ -141,7 +148,7 @@ struct TrieData {
   }
 
   segment_ptr* next(char& bit) {
-    uint16_t nbits = bits & ~((1<<(bit+1)) - 1);
+    uint16_t nbits = bits & (0xFFFF << (bit+1));
     if (nbits) {
       bit = ctz(nbits);
       return &children[index_of(bit)];
@@ -155,16 +162,18 @@ struct TrieData {
   }
 
   segment_ptr* prev(char& bit) {
-    uint16_t nbits = bits & ~((1<<(bit+1)) - 1);
-    if (nbits) {
-      bit = 16 - (clz(nbits) & 0xf);
-      return &children[index_of(bit)];
+    if (bit) {
+      uint16_t nbits = bits & (0xFFFF >> (16-bit));
+      if (nbits) {
+        bit = 15 - (clz(nbits) & 0xf);
+        return &children[index_of(bit)];
+      }
     }
     return NULL;
   }
 
   segment_ptr* last(char& bit) {
-    bit = 16 - (clz(bits) & 0xf);
+    bit = 15 - (clz(bits) & 0xf);
     return &children[index_of(bit)];
   }
 
@@ -430,7 +439,7 @@ struct Compressed : public NodeHandler {
 
   segment_ptr* last(Transition& self, string& current_key) {
     self.cmp = 1;
-    return self.next(current_key);
+    return self.prev(current_key);
   }
 
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key) {

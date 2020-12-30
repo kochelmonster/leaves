@@ -391,4 +391,130 @@ BOOST_AUTO_TEST_CASE(move_forward) {
   BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
 }
 
+
+BOOST_AUTO_TEST_CASE(move_backward) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  fill_db(storage);
+
+  Trace trace(storage);
+
+  trace.last();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc723"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc723"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc523"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc523"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc323"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc323"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
+
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
+
+  trace.prev();
+  BOOST_REQUIRE(!trace.valid());
+
+  // jump into intermediate value
+  trace.find(Slice("abc"));
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
+  trace.prev();
+  BOOST_REQUIRE(!trace.valid());
+
+  // jump into unknown trie value
+  trace.find(Slice("abc2"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc2"));
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
+
+  // jump into trievalue with empty key
+  trace.find(Slice("bcd123"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd123"));
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
+
+  // jump before compressed
+  trace.find(Slice("bcd122"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
+
+  // jump after compressed
+  trace.find(Slice("bcd124"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
+
+  // jump before compressed
+  trace.find(Slice("ba"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
+
+  // jump after compressed
+  trace.find(Slice("bd"));
+  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
+  trace.prev();
+  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
+  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
+}
+
+BOOST_AUTO_TEST_CASE(move_backward_empty) {
+  Preparation p;
+  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Trace trace(storage);
+
+  trace.last();
+  BOOST_REQUIRE(!trace.valid());
+
+  trace.prev();
+  BOOST_REQUIRE(!trace.valid());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

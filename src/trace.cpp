@@ -102,10 +102,11 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
     stack.pop_back();
   }
 
-  while(next) {
-    stack.push_back(Transition(next, &storage));
-    next = move_end(stack.back(), current_key);
-  }
+  if (next && next != stack.back().node_ptr)  // see node.cpp Value::prev
+    while(next) {
+      stack.push_back(Transition(next, &storage));
+      next = move_end(stack.back(), current_key);
+    }
   version = *storage.version;
 }
 

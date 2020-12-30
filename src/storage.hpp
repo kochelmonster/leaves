@@ -29,15 +29,12 @@ struct Storage;
 struct segment_ptr {
   // The persistent part of a segment pointer
 
-  union {
-    uint32_t delta;
-    uint32_t upper:30;
-    uint32_t type:2;
-  };
+  uint32_t delta:30;
+  uint32_t type:2;
   segment_index_t segment_id;
 
-  segment_ptr(segment_index_t segment_id=0, uint32_t delta=1)
-    : delta(delta), segment_id(segment_id) {}
+  segment_ptr(segment_index_t segment_id=0, uint32_t delta=0, uint32_t type=1)
+    : delta(delta), type(type), segment_id(segment_id) {}
 
   segment_ptr operator=(segment_ptr* other) {
     (*this) = *other;
@@ -50,20 +47,20 @@ struct segment_ptr {
   }
 
   segment_ptr operator+(uint32_t diff) {
-    return segment_ptr(segment_id, (delta + diff) & 0xFFFFFFFC);
+    return segment_ptr(segment_id, delta + diff);
   }
 
   segment_ptr operator-(uint32_t diff) {
-    return segment_ptr(segment_id, (delta - diff) & 0xFFFFFFFC);
+    return segment_ptr(segment_id, delta - diff);
   }
 
   int64_t operator-(segment_ptr& other) {
     assert(segment_id == other.segment_id);
-    return (int64_t)(delta & 0xFFFFFFFC) - (int64_t)(other.delta & 0xFFFFFFFC);
+    return delta - other.delta;
   }
 
-  operator bool() const { return delta != 1; }
-  bool operator!() const { return delta == 1; }
+  operator bool() const { return type != 1; }
+  bool operator!() const { return type == 1; }
 
   void* resolve(const Storage* storage) const;
 };
@@ -155,7 +152,7 @@ struct Storage {
 
 
 inline void* segment_ptr::resolve(const Storage* storage) const {
-  return (void*)(storage->get_segment_address(segment_id) + (delta & 0xFFFFFFFC));
+  return (void*)(storage->get_segment_address(segment_id) + delta);
 }
 
 }
