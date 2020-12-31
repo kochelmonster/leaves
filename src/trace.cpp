@@ -26,7 +26,7 @@ void Trace::find(const Slice& key) {
   rest_key = key;
   current_key.clear();
   stack.clear();
-  ifind(Transition(&storage.start, &storage));
+  ifind(Transition(storage.start, &storage));
 }
 
 void Trace::set_value(const Slice& value) {
@@ -78,7 +78,7 @@ void Trace::imove_end(move_func_t move) {
   rest_key = Slice();
   current_key.clear();
   stack.clear();
-  stack.push_back(Transition(&storage.start, &storage));
+  stack.push_back(Transition(storage.start, &storage));
   while(true) {
       segment_ptr *next = move(stack.back(), current_key);
       if (!next)

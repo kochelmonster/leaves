@@ -5,9 +5,6 @@
 #include <string>
 #include <memory>
 #include <exception>
-#ifdef DEBUG
-#include <ostream>
-#endif
 
 namespace larch_leaves {
 
@@ -94,6 +91,8 @@ class Slice {
       return _size == 0;
     }
 };
+
+
 class Cursor {
 public:
   // returns true if cursor is on a valid position
@@ -107,31 +106,44 @@ public:
   virtual void next() = 0;
   virtual void prev() = 0;
 
-  virtual Slice key() = 0;
-  virtual Slice value() = 0;
+  virtual Slice key() const = 0;
+  virtual Slice value() const = 0;
 
   // sets the value raise an exception if a read curor
-  virtual void insert(const Slice& value) = 0;
+  virtual void set_value(const Slice& value) = 0;
   virtual void remove() = 0;
 };
 
-#define EMBED_BREAKPOINT \
-    asm("0:"                              \
-        ".pushsection embed-breakpoints;" \
-        ".quad 0b;"                       \
-        ".popsection;")
 
+struct ValuePools {
+  /*
+    Parameters to create segregated memory pools for Values opmizide ValueStorage
+    start_size = 100
+    increment = 32
+    count = 3
+    creates 3 memory pools for size 132, 164, 196 bytes
+  */
+  ValuePools(size_t start_size=100, size_t increment=64, size_t count=0) :
+    start_size(start_size), increment(increment), count(count) { }
+
+  size_t start_size;
+  size_t increment;
+  size_t count;
+};
+
+
+class DB {
+public:
+  typedef std::shared_ptr<Cursor> cursor_ptr;
+  typedef std::shared_ptr<DB> db_ptr;
+
+  virtual ~DB();
+  virtual cursor_ptr create_cursor() = 0;
+  virtual void flush() = 0;
+  static db_ptr open(const char *path, size_t segment_size=1<<27, ValuePools pools=ValuePools());
+};
 
 } // namespace larch_leaves
 
-
-class Database {
-public:
-  Database(const char* path, size_t segment_size);
-  ~Database();
-
-  // std::shared_ptr<Cursor> create_cursor();
-  void flush();
-};
 
 #endif // _LARCH_LEAVES_H

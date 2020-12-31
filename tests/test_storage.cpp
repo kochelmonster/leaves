@@ -56,7 +56,7 @@ BOOST_AUTO_TEST_CASE(start_storage) {
     //std::cout << "allocated1 " << ptr1.delta << ", " << ptr1.segment_id << std::endl;
     //std::cout << "allocated2 " << ptr2.delta << ", " << ptr2.segment_id << std::endl;
     BOOST_REQUIRE_EQUAL(ptr2.segment_id, 3);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 5136);
+    BOOST_REQUIRE_EQUAL(ptr2.delta, 5360);
 
     storage.pools[2].free(ptr1);
     ptr2 = storage.pools[2].allocate();

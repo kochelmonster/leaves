@@ -2,7 +2,7 @@
 #ifndef _LARCH_LEAVES_NODE_HPP
 #define _LARCH_LEAVES_NODE_HPP
 
-#include "../include/larch/leaves.hpp"
+#include "../include/leaves.hpp"
 #include "storage.hpp"
 
 using std::string;

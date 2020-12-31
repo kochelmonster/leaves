@@ -27,8 +27,7 @@ def configure(cfg):
                              'CMPFILES="{}"'.format(cmpfiles_path)]
 
     cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
-    cfg.env.INCLUDES_TEST = [os.path.abspath("include"),
-                             os.path.abspath("src")]
+    cfg.env.INCLUDES_TEST = [os.path.abspath("include"), os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []
     if cfg.env.CXX_NAME == "gcc":
         # cfg.env.LINKFLAGS_TEST = ["-pthread"]
@@ -53,47 +52,6 @@ def configure(cfg):
                                   "-march=corei7", "-g", "-O0"]
 
 
-def _build(bld):
-    from os.path import join, abspath
-    sources = "page.cpp storage.cpp node.cpp leaves.cpp base64.cpp trace.cpp"
-    sources = [join("src", s) for s in sources.split()]
-
-    bld.program(
-        features="test",
-        source=[join("tests", "test_trie.cpp")]+sources,
-        use="TEST BOOST",
-        target="test_trie")
-
-    bld.program(
-        # features="test",
-        source=[join("tests", "test_bits.cpp")]+sources,
-        use="TEST BOOST",
-        target="test_bits")
-
-    bld.program(
-        # features="test",
-        source=[join("tests", "test_memorydb.cpp")]+sources,
-        use="TEST BOOST",
-        target="test_memorydb")
-
-    """
-    only for generating test_trie tests
-    """
-    def generate_graph(task):
-        command = abspath(join("build", "test_trie"))
-        graph = abspath(join("tests", "graph.py"))
-        task.exec_command(command + "|" + graph)
-        task.exec_command("dot -Tsvg -O graph-0.dot")
-        return task.exec_command("dot -Tsvg -O graph-1.dot")
-
-    bld.add_post_fun(generate_graph)
-
-    bld.program(
-        source=[join("benchmarks", "sbench.cpp")]+sources,
-        use="BENCH BOOST",
-        target="sbench")
-
-
 def source(names):
     from os.path import join
     return [join("src", s) for s in names.split()]
@@ -113,6 +71,12 @@ def build(bld):
 
     bld.program(
         features="test",
-        source=test("test_node.cpp")+source("storage.cpp trace.cpp"),
+        source=test("test_node.cpp")+source("storage.cpp trace.cpp node.cpp"),
         use="TEST BOOST",
         target="test_node")
+
+    bld.program(
+        features="test",
+        source=test("test_db.cpp")+source("storage.cpp trace.cpp node.cpp leaves.cpp"),
+        use="TEST BOOST",
+        target="test_db")

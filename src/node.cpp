@@ -2,7 +2,9 @@
 #include "node.hpp"
 #include "port.hpp"
 #include <algorithm>
-
+#ifdef DEBUG
+#include <ctype.h>
+#endif
 
 namespace larch_leaves {
 
@@ -640,5 +642,161 @@ segment_ptr* Value::insert(Transition& self, Slice& key, const Slice& value, str
   node->next = Compressed::build(self.storage, next, key);
   return self.node_ptr;
 }
+
+
+#ifdef DEBUG
+
+const char* handler_names[] = {
+  "kValue",
+  "kNull",
+  "kCompressed",
+  "kTrie",
+};
+
+
+std::ostream& operator<<(std::ostream& out, segment_ptr ptr) {
+  out << handler_names[ptr.type] << "-" << ptr.segment_id << "-" << ptr.delta;
+  return out;
+}
+
+
+void dump_char(std::ostream& out, char bit) {
+  if (isprint(bit)) {
+    out << bit;
+  }
+  else {
+    out << "0x" << std::hex << (unsigned)(unsigned char)bit << std::dec;
+  }
+}
+
+
+struct DumpBase {
+  virtual void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) = 0;
+};
+
+
+struct NullDumper : public DumpBase {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+    out << "id: " << ptr << std::endl;
+  }
+};
+
+void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage, int upper);
+void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
+
+struct ValueDumper : public DumpBase {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+    ValueData *data = (ValueData*)ptr.resolve(storage);
+    out << "id: " << ptr << std::endl;
+    out << "size: " << (int)data->size << std::endl;
+    out << "value: \"";
+    for(size_t i = 0; i < data->size; i++) {
+      out << "[";
+      dump_char(out, data->value[i]);
+      out << "]";
+    }
+    out << "\"" << std::endl;
+    out << "children: " << std::endl;
+    out << "  - " << data->next << std::endl;
+    out << "---" << std::endl;
+    if (data->next)
+      dump_node(out, data->next, storage);
+  }
+};
+
+struct CompressDumper : public DumpBase {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+    CompressedData *data = (CompressedData*)ptr.resolve(storage);
+    out << "id: " << ptr << std::endl;
+    out << "size: " << (int)data->size << std::endl;
+    out << "keys: \"";
+    for(int i = 0; i < data->size; i++) {
+      out << "[";
+      dump_char(out, data->keys[i]);
+      out << "]";
+    }
+    out << "\"" << std::endl;
+    out << "children: " << std::endl;
+    out << "  - " << data->next << std::endl;
+    out << "---" << std::endl;
+    if (data->next)
+      dump_node(out, data->next, storage);
+  }
+};
+
+struct TrieDumper : public DumpBase {
+  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
+    TrieData *data = (TrieData*)ptr.resolve(storage);
+    int size = popcount(data->bits);
+    out << "id: " << ptr << std::endl;
+    out << "size: " << popcount(data->bits) << std::endl;
+    out << "bits: " << std::hex << data->bits << std::dec << std::endl;
+
+    int indizes[17];
+    out << "bitindex: [";
+    unsigned int bits = data->bits;
+    int index = 0, i = 0;
+    while(bits){
+      index = ctz(bits);
+      out << index;
+      indizes[i++] = index;
+      bits &= ~(1 << index);
+      if (bits) {
+        out << ", ";
+      }
+    }
+    out << "]" << std::endl;
+
+    if (upper >= 0) {
+      upper <<= 4;
+      out << "byteindex: [";
+      unsigned int bits = data->bits;
+      int index = 0;
+      while(bits){
+        index = ctz(bits);
+        out << '"';
+        dump_char(out, (char)(upper | index));
+        out << '"';
+        bits &= ~(1 << index);
+        if (bits) {
+          out << ", ";
+        }
+      }
+      out << "]" << std::endl;
+    }
+
+    out << "children: " << std::endl;
+    for(int i = 0; i < size; i++) {
+        out << "  - " << data->children[i] << std::endl;
+    }
+    out << "---" << std::endl;
+    for(int i = 0; i < size; i++) {
+      dump_node(out, data->children[i], storage, indizes[i]);
+    }
+  }
+};
+
+ValueDumper value_dumper;
+NullDumper null_dumper;
+CompressDumper compress_dumper;
+TrieDumper trie_dumper;
+
+DumpBase* dumpers[] = {
+  &value_dumper,
+  &null_dumper,
+  &compress_dumper,
+  &trie_dumper
+};
+
+void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage, int upper) {
+  dumpers[ptr.type]->dump(out, ptr, storage, upper);
+}
+
+void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage) {
+  dump_node(out, ptr, storage, -1);
+}
+
+#endif
+
 
 } // namespace larch_leaves

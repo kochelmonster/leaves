@@ -90,14 +90,10 @@ struct Pool {
     this->storage = storage;
     this->pool = pool;
   }
-  void create(Storage* storage, PPool* pool, size_t node_size, size_t area_size);
+  void create(Storage* storage, PPool* pool, size_t node_size, size_t area_count);
 
   segment_ptr allocate();
-
-  void free(const segment_ptr& ptr) {
-    ((Free*)ptr.resolve(storage))->next = pool->next_free;
-    pool->next_free = ptr;
-  }
+  void free(const segment_ptr& ptr);
 };
 
 
@@ -146,7 +142,7 @@ struct Storage {
   size_t segment_size;
   Pool pools[POOL_COUNT];
   uint64_t* version;
-  segment_ptr start;
+  segment_ptr* start;
   segment_v segments;
 };
 
