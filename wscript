@@ -21,10 +21,9 @@ def configure(cfg):
     cfg.env.CXXFLAGS = []
     cfg.env.LINKFLAGS = []
 
-    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', 'CMPFILES="{}"'.format(cmpfiles_path),
-                             "AREA_COUNT=100"]
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', 'CMPFILES="{}"'.format(cmpfiles_path)]
 
-    cfg.env.INCLUDES_TEST = [os.path.abspath("include"), os.path.abspath("src")]
+    cfg.env.INCLUDES = [os.path.abspath("include"), os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []
     if cfg.env.CXX_NAME == "gcc":
         # cfg.env.LINKFLAGS_TEST = ["-pthread"]

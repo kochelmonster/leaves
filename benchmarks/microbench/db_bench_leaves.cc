@@ -584,3 +584,37 @@ int main(int argc, char** argv) {
   benchmark.Run();
   return 0;
 }
+
+
+/*
+
+Verbesserungen:
+resolve(Transition& self, segment_ptr ptr) {
+  if (self.node_ptr->segment == ptr.segment) {
+    return (void*)((size_t)self.value - self.node_ptr->delta + ptr.delta);
+  }
+  return self.storage.resolve(ptr);
+}
+
+
+struct ValueData {
+  segment_ptr *prev;
+  segment_ptr *next;
+  bei insert wird next, prev gesetzt (viel schnellers next, prev)
+}
+
+find() {
+  kein stack.clear()
+
+  sondern
+  for(iter stack.begin() iter != end; iter++) {
+    if (! iter->same())
+      cut(stack) and find
+  }
+
+  besser für sequential updates
+
+}
+
+
+*/

@@ -17,6 +17,10 @@ enum NodeTypes {
 };
 
 struct NodeHandler;
+struct ValueData;
+struct TrieData;
+struct CompressedData;
+
 
 struct Transition {
   Transition(segment_ptr* pptr, Storage* storage):
@@ -38,8 +42,15 @@ struct Transition {
 
   segment_ptr* node_ptr;
   segment_ptr* second_ptr;
+
+  union {
+    ValueData *value;
+    CompressedData *compressed;
+    TrieData *upper;
+  };
+  TrieData *lower;
   Storage* storage;
-  char value;
+  char key;
   char cmp;
   static NodeHandler* handlers[];
 };

@@ -13,9 +13,6 @@
 using namespace leaves;
 
 
-#define SEGMENT_SIZE 1024*16
-
-
 struct Preparation {
   Preparation() {
     std::remove(TEST_FILE);
@@ -85,3 +82,5 @@ inline void insert(Storage& storage, const Slice& key, const char* test_name) {
   BOOST_REQUIRE(trace.valid());
   BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
 }
+
+Options TEST_OPTIONS(1024*16, 100, 1);

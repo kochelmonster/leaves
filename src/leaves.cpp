@@ -33,8 +33,8 @@ DB::~DB() { }
 
 
 struct SingleDB : public DB {
-    SingleDB(const char *path, size_t segment_size, ValuePools pools)
-      : storage(path, segment_size) { }
+    SingleDB(const char *path, const Options& options)
+      : storage(path, options) { }
 
     cursor_ptr create_cursor() {
       return cursor_ptr(new CursorImpl(storage, me.lock()));
@@ -44,13 +44,30 @@ struct SingleDB : public DB {
         storage.flush();
     }
 
+    void get_stats(Stats& stats) {
+      stats.value_pool_start_size = storage.value_pool_start_size;
+      stats.value_pool_increment = storage.value_pool_increment;
+      stats.value_pool_count = storage.value_pool_count;
+      stats.area_count = storage.pools[0].pool->area_size / storage.pools[0].pool->node_size;
+      stats.segment_size = storage.segment_size;
+      stats.segment_count = storage.segments.size();
+      for(size_t i = 0; i < POOL_COUNT; i++) {
+        stats.used_nodes[i] = storage.pools[i].pool->used_nodes;
+        stats.freed_nodes[i] = storage.pools[i].pool->freed_nodes;
+      }
+      for(size_t i = 0; i < storage.value_pool_count; i++) {
+        stats.value_used_nodes[i] = storage.value_pools[i].pool->used_nodes;
+        stats.value_freed_nodes[i] = storage.value_pools[i].pool->freed_nodes;
+      }
+    }
+
     Storage storage;
     std::weak_ptr<DB> me;
 };
 
 
-DB::ptr DB::open(const char *path, size_t segment_size, ValuePools pools) {
-  ptr result(new SingleDB(path, segment_size, pools));
+DB::ptr DB::open(const char *path, const Options& options) {
+  ptr result(new SingleDB(path, options));
   ((SingleDB*)result.get())->me = result;
   return result;
 }

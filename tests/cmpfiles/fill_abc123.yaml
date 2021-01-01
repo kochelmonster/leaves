@@ -1,22 +1,22 @@
-id: kCompressed-0-384
+id: kCompressed-0-464
 size: 3
 keys: "[a][b][c]"
 children: 
-  - kValue-0-368
+  - kValue-0-448
 ---
-id: kValue-0-368
+id: kValue-0-448
 size: 3
 value: "[a][b][c]"
 children: 
-  - kCompressed-0-416
+  - kCompressed-0-496
 ---
-id: kCompressed-0-416
+id: kCompressed-0-496
 size: 3
 keys: "[1][2][3]"
 children: 
-  - kValue-0-400
+  - kValue-0-480
 ---
-id: kValue-0-400
+id: kValue-0-480
 size: 6
 value: "[a][b][c][1][2][3]"
 children: 

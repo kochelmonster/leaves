@@ -3,12 +3,7 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <boost/test/included/unit_test.hpp>
-
-#define AREA_COUNT 100
 #include "test.hpp"
-
-#undef SEGMENT_SIZE
-#define SEGMENT_SIZE 1024*1024*4
 
 
 const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
@@ -127,7 +122,7 @@ std::string number(int number, size_t size=0) {
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
 
-  DB::ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
+  DB::ptr db(DB::open(TEST_FILE, TEST_OPTIONS));
   DB::cursor_ptr cursor(db->create_cursor());
 
   std::cout << "refcount" << db.use_count() << std::endl;
@@ -135,10 +130,6 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   size_t count;
   for(count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
-
-    if (count == 50) {
-      std::cout << "will fail" << std::endl;
-    }
 
     cursor->find(names[count]);
     BOOST_REQUIRE(!cursor->valid());
@@ -165,7 +156,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
 BOOST_AUTO_TEST_CASE(test_numbers) {
   Preparation p;
   int i;
-  DB::ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
+  DB::ptr db(DB::open(TEST_FILE, TEST_OPTIONS));
   DB::cursor_ptr cursor(db->create_cursor());
 
   for(i = 0; i < 10000; i+=2) {

@@ -9,6 +9,7 @@ typedef segment_ptr* (*move_func_t)(Transition& transition, string& current_key)
 struct Trace {
   Trace(Storage& storage) : storage(storage), version(*storage.version) {
     current_key.reserve(1024);
+    stack.reserve(1024);
   }
 
   bool valid() const { return rest_key.empty() && stack.size() && stack.back().valid(); }

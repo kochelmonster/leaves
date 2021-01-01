@@ -4,14 +4,12 @@
 
 #include <memory>
 #include <vector>
+
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 
-
-#ifndef AREA_COUNT
-#define AREA_COUNT 2000
-#endif
+#include <leaves.hpp>
 
 
 #define NODE_INCREMENT  24
@@ -71,6 +69,8 @@ struct PPool {
   // The persistent part of Pool
   size_t node_size;
   size_t area_size;
+  size_t used_nodes;
+  size_t freed_nodes;
   segment_ptr current_area;
   segment_ptr next_node;
   segment_ptr next_free;
@@ -126,7 +126,7 @@ struct Segment {
 struct Storage {
   typedef std::vector<Segment> segment_v;
 
-  Storage(const char* path, size_t segment_size);
+  Storage(const char* path, const Options& options);
   ~Storage();
 
   segment_ptr allocate(size_t size);
@@ -140,10 +140,14 @@ struct Storage {
 
   file_mapping file;
   size_t segment_size;
-  Pool pools[POOL_COUNT];
+  size_t value_pool_start_size;
+  size_t value_pool_increment;
+  size_t value_pool_count;
   uint64_t* version;
   segment_ptr* start;
   segment_v segments;
+  Pool pools[POOL_COUNT];
+  Pool *value_pools;
 };
 
 
