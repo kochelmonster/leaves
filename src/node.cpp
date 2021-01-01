@@ -6,34 +6,53 @@
 #include <ctype.h>
 #endif
 
-namespace leaves {
-
 #define MAX_POOL_SIZE (4 + (POOL_COUNT-1) * NODE_INCREMENT)
 
-#define MAX_VAL_SIZE  (MAX_POOL_SIZE - sizeof(ValueData))
-#define VDELTA 29
+namespace leaves {
+
+#define VDELTA 19
 
 
-#pragma pack(2)
-struct ValueData {
-  uint32_t size;
-  segment_ptr next;
-  char value[];
+struct Value : public NodeHandler {
+  static segment_ptr build(Storage* storage, segment_ptr next, const Slice& value) {
+    segment_ptr result(allocate(value.size(), storage));
+    ValueData *node = (ValueData*)result.resolve(storage);
+    node->size = value.size();
+    memcpy(node->value, value.data(), node->size);
+    node->next = next;
+    result.type = kValue;
+    return result;
+  }
 
-  static int get_pool_index(size_t size) {
-    return size <= 6 ? 0 : (size+VDELTA)/NODE_INCREMENT;
+  static segment_ptr allocate(size_t size, Storage* storage) {
+    size += sizeof(ValueData);
+    if (size > MAX_POOL_SIZE) {
+      size_t index = size < storage->value_pool_start_size ? 0 :
+        ((size - storage->value_pool_start_size) / storage->value_pool_increment);
+      if (index >= storage->value_pool_count) {
+        return storage->allocate(size);
+      }
+      return storage->value_pools[index].allocate();
+    }
+    return storage->pools[(size+VDELTA)/NODE_INCREMENT].allocate();
   }
 
   void free(Transition& self) {
-    if (size > MAX_VAL_SIZE)
-      self.storage->free(*self.node_ptr);
-    else
-      self.storage->pools[get_pool_index(size)].free(*self.node_ptr);
+    size_t size = self.value->size + sizeof(ValueData);
+    Storage *storage(self.storage);
+    if (size > MAX_POOL_SIZE) {
+      size_t index = size < storage->value_pool_start_size ? 0 :
+        ((size - storage->value_pool_start_size) / storage->value_pool_increment);
+      if (index >= storage->value_pool_count) {
+        storage->free(*self.node_ptr);
+        return;
+      }
+      storage->value_pools[index].free(*self.node_ptr);
+      return;
+    }
+    storage->pools[(size+VDELTA)/NODE_INCREMENT].free(*self.node_ptr);
   }
-};
-#pragma pack(0)
 
-struct Value : public NodeHandler {
   ValueData* ptr(const Transition& self) const {
     return (ValueData*)self.node_ptr->resolve(self.storage);
   }
@@ -88,29 +107,13 @@ struct Value : public NodeHandler {
   bool remove(Transition& self, bool last) {
     if (last) {
       segment_ptr next = self.value->next;
-      self.value->free(self);
+      free(self);
       *self.node_ptr = next;
       return true;
     }
     // intermediate value
     return false;
   };
-
-  static segment_ptr build(Storage* storage, segment_ptr next, const Slice& value) {
-    segment_ptr result;
-    size_t size = value.size();
-    if (size > MAX_VAL_SIZE)
-      result = storage->allocate(size+sizeof(ValueData));
-    else
-      result = storage->pools[ValueData::get_pool_index(size)].allocate();
-
-    ValueData *node = (ValueData*)result.resolve(storage);
-    node->size = value.size();
-    memcpy(node->value, value.data(), node->size);
-    node->next = next;
-    result.type = kValue;
-    return result;
-  }
 };
 
 namespace bit {
@@ -637,7 +640,7 @@ segment_ptr* Compressed::insert(
 segment_ptr* Value::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
   if (key.empty()) {
     segment_ptr new_ptr(build(self.storage, self.value->next, value));
-    self.value->free(self);
+    free(self);
     *self.node_ptr = new_ptr;
     return self.node_ptr;
   }

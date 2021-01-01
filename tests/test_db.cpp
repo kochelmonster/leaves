@@ -133,13 +133,21 @@ BOOST_AUTO_TEST_CASE(test_strings) {
 
     cursor->find(names[count]);
     BOOST_REQUIRE(!cursor->valid());
-    cursor->set_value(value(1));
+    cursor->set_value(value(names[count]));
     /*
     std::stringstream cstr;
     cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
     std::ofstream out(cstr.str().c_str());
     dump_db(out, db);
     */
+  }
+
+  Stats stats;
+  db->get_stats(stats);
+  std::cout << "node statistics" << std::endl;
+  for(int i = 0; i < 5; i++) {
+    std::cout << "used_nodes  ["<<i<<"]:   " << stats.used_nodes[i] << std::endl;
+    std::cout << "freed_nodes ["<<i<<"]:   " << stats.freed_nodes[i] << std::endl;
   }
 
   std::cout << "start test: " << count << std::endl;

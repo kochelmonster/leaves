@@ -106,7 +106,19 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   trace.find(key);
   BOOST_REQUIRE_EQUAL(trace.get_value().string(), value);
 
+  value = "abcdefghijklmn";
+  value.resize(100);
+  trace.set_value(value);  // use value pool
+
+  BOOST_REQUIRE_EQUAL(storage.value_pools[0].pool->used_nodes, 1);
+
+  trace.find(key);
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), value);
+
   trace.set_value(key);
+
+  BOOST_REQUIRE_EQUAL(storage.value_pools[0].pool->used_nodes, 0);
+  BOOST_REQUIRE_EQUAL(storage.value_pools[0].pool->freed_nodes, 1);
 }
 
 BOOST_AUTO_TEST_CASE(remove_intermediate) {

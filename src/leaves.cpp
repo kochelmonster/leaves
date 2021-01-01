@@ -45,7 +45,7 @@ struct SingleDB : public DB {
     }
 
     void get_stats(Stats& stats) {
-      stats.value_pool_start_size = storage.value_pool_start_size;
+      stats.value_pool_start_size = storage.value_pool_start_size - sizeof(ValueData);
       stats.value_pool_increment = storage.value_pool_increment;
       stats.value_pool_count = storage.value_pool_count;
       stats.area_count = storage.pools[0].pool->area_size / storage.pools[0].pool->node_size;

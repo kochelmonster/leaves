@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "storage.hpp"
+#include "node.hpp"
 
 #define SIGNATURE "LarchLeaves"
 
@@ -129,7 +130,7 @@ Storage::Storage(const char* path, const Options& options) {
     fhead.close();
 
     segment_size = options.segment_size;
-    value_pool_start_size = options.value_pool_start_size;
+    value_pool_start_size = std::max(options.value_pool_start_size, (size_t)100)+sizeof(ValueData);
     value_pool_increment = options.value_pool_increment;
     value_pool_count = std::min(options.value_pool_count, (size_t)MAX_VALUE_POOL_COUNT);
 
@@ -147,6 +148,7 @@ Storage::Storage(const char* path, const Options& options) {
       pools[i].create(this, p++, node_size, options.area_count);
     }
 
+    p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*value_pool_count);
     value_pools = new Pool[value_pool_count];
     node_size = value_pool_start_size;
     for(size_t i = 0; i < value_pool_count; i++) {

@@ -57,7 +57,7 @@ static int FLAGS_num = 1000000;
 static int FLAGS_reads = -1;
 
 // Size of each value
-static int FLAGS_value_size = 80; // 100;
+static int FLAGS_value_size = 100;
 
 // Number of key/values to place in database
 static int FLAGS_batch = 1000;
@@ -314,6 +314,18 @@ class Benchmark {
   }
 
   ~Benchmark() {
+    if (db_) {
+      leaves::Stats stats;
+      db_->get_stats(stats);
+      fprintf(stderr, "segment_count :     %d\n", stats.segment_count);
+      fprintf(stderr, "segment_size  :     %ld\n", stats.segment_size);
+      fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
+      for(int i = 0; i < 5; i++) {
+        fprintf(stderr, "used_nodes [%i]:     %ld\n", i, stats.used_nodes[i]);
+        fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.used_nodes[i]);
+      }
+    }
+
   	db_ = NULL;
   }
 
@@ -437,10 +449,12 @@ class Benchmark {
     sprintf(cmd, "mkdir -p %s", file_name);
     int r = system(cmd);
 
-    size_t segment_size = 1<<21;
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
-    db_ = leaves::DB::open(test_fname.c_str(), segment_size);
+    leaves::Options options;
+    options.segment_size = 1<<25;
+    options.area_count = 1000;
+    db_ = leaves::DB::open(test_fname.c_str(), options);
   }
 
   void Write(DBFlags flags, Order order, DBState state,

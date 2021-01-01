@@ -16,8 +16,21 @@ enum NodeTypes {
   kTrie,
 };
 
+struct Transition;
+
+
+#pragma pack(2)
+struct ValueData {
+  segment_ptr prev;
+  segment_ptr next;
+  uint32_t size;
+  char value[];
+};
+#pragma pack(0)
+
+
+
 struct NodeHandler;
-struct ValueData;
 struct TrieData;
 struct CompressedData;
 
@@ -106,7 +119,6 @@ inline Slice Transition::get_value() const {
 inline bool Transition::remove(bool last) {
   return handler()->remove(*this, last);
 }
-
 
 } // namespace leaves
 #endif // _LARCH_LEAVES_MEMORY_HPP
