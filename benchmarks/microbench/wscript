@@ -7,18 +7,25 @@ def options(opt):
     opt.load('compiler_cxx cxx')
     opt.add_option('--leveldb', dest='leveldb_path', default=os.environ.get('LEVELDB', ''),
                    help='Path to leveldb')
-    opt.add_option('--lmdb', dest='lmdb_path', default=os.environ.get('LMDB', ''),
-                   help='Path to lmdb')
 
 
-def configure_leveldb(cfg):
-    leveldb_path = cfg.options.leveldb_path or Path(cfg.srcnode.abspath()).parents[2]/"leveldb/"
-    gmock_path = Path(leveldb_path)/"third_party/googletest/googlemock/include"
-    gtest_path = Path(leveldb_path)/"third_party/googletest/googletest/include"
-    include_path = Path(leveldb_path)/"include"
-    cfg.env.DEFINES_LEVELDB = ["NDEBUG", "LEVELDB_PLATFORM_POSIX"]
-    cfg.env.CXXFLAGS_LEVELDB = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{gtest_path}",
-                                f"-I{include_path}"]
+def configure_leaves(cfg):
+    leveldb_path = Path(cfg.options.leveldb_path
+                        or Path(cfg.srcnode.abspath()).parents[2]/"leveldb")
+    gmock_path = leveldb_path/"third_party/googletest/googlemock/include"
+    gtest_path = leveldb_path/"third_party/googletest/googletest/include"
+    include_path = leveldb_path/"include"
+    leveldb_lib_path = leveldb_path/"build"
+
+    leaves_path = Path(cfg.srcnode.abspath()).parents[1]
+
+    cfg.env.DEFINES_LEAVES = ["NDEBUG", "LEVELDB_PLATFORM_POSIX", "AREA_COUNT"]
+    cfg.env.CXXFLAGS_LEAVES = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
+                               f"-I{gtest_path}", f"-I{leaves_path/'include'}", "-g", #"-O3",
+                               "-std=c++17"]
+    cfg.env.LINKFLAGS_LEAVES = [
+        f"-L{leveldb_lib_path}", "-lleveldb", "-lpthread",]
+        # f"-L{leaves_path/'build'}", "-lleaves"]
 
 
 def configure_mdb(cfg):
@@ -37,11 +44,9 @@ def configure_mdb(cfg):
 
 def configure(cfg):
     cfg.check_waf_version(mini='1.8.5')
-    cfg.load("compiler_cxx waf_unit_test")
-    # configure_leveldb(cfg)
+    cfg.load("compiler_cxx")
     configure_mdb(cfg)
-
-    #cfg.env.LINKFLAGS_LEVELDB.extend(["-lleveldb"])
+    configure_leaves(cfg)
 
 
 def build(bld):
@@ -49,12 +54,21 @@ def build(bld):
                         or Path(bld.srcnode.abspath()).parents[2]/"leveldb/")
 
     rpath = Path(os.path.relpath(leveldb_path, bld.srcnode.abspath()))
-    print("rpath", rpath)
 
     sources = ["testutil.cc", "histogram.cc", "env.cc", "env_posix.cc", "status.cc"]
     sources = [str(rpath/"util"/s) for s in sources]
+
+    leaves_path = Path(bld.srcnode.abspath()).parents[1]
+    rpath = Path(os.path.relpath(leaves_path, bld.srcnode.abspath()))
+    lsources = "storage.cpp trace.cpp node.cpp leaves.cpp".split()
+    lsources = [str(rpath/"src"/s) for s in lsources]
 
     bld.program(
         source=["db_bench_mdb.cc"]+sources,
         use="LMDB",
         target="db_bench_mdb")
+
+    bld.program(
+        source=["db_bench_leaves.cc"]+sources+lsources,
+        use="LEAVES",
+        target="db_bench_leaves")

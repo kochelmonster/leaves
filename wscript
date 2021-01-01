@@ -21,7 +21,8 @@ def configure(cfg):
     cfg.env.CXXFLAGS = []
     cfg.env.LINKFLAGS = []
 
-    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', 'CMPFILES="{}"'.format(cmpfiles_path)]
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', 'CMPFILES="{}"'.format(cmpfiles_path),
+                             "AREA_COUNT=100"]
 
     cfg.env.INCLUDES_TEST = [os.path.abspath("include"), os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []

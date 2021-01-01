@@ -10,7 +10,7 @@
 
 
 #ifndef AREA_COUNT
-#define AREA_COUNT 100
+#define AREA_COUNT 2000
 #endif
 
 
