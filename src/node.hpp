@@ -7,7 +7,7 @@
 
 using std::string;
 
-namespace larch_leaves {
+namespace leaves {
 
 enum NodeTypes {
   kValue = 0,
@@ -97,5 +97,5 @@ inline bool Transition::remove(bool last) {
 }
 
 
-} // namespace larch_leaves
+} // namespace leaves
 #endif // _LARCH_LEAVES_MEMORY_HPP

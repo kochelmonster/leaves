@@ -6,7 +6,7 @@
 
 using namespace boost::interprocess;
 
-namespace larch_leaves {
+namespace leaves {
 
 struct Internal {
   uint64_t version;
@@ -176,4 +176,4 @@ segment_ptr Storage::allocate(size_t size) {
   size_t address = (size_t)back.memory.allocate(size, std::nothrow);
   return segment_ptr(segments.size()-1, address-(size_t)back.region.get_address());
 }
-}
+} // namespace leaves

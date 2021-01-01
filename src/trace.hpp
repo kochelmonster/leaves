@@ -1,7 +1,7 @@
 #include "storage.hpp"
 #include "node.hpp"
 
-namespace larch_leaves {
+namespace leaves {
 
 typedef segment_ptr* (*move_func_t)(Transition& transition, string& current_key);
 
@@ -38,4 +38,4 @@ struct Trace {
   string current_key;
   uint64_t version;
 };
-}
+} // namespace leaves

@@ -9,7 +9,7 @@
 
 #define TEST_FILE "test.lvs"
 
-using namespace larch_leaves;
+using namespace leaves;
 
 
 #define SEGMENT_SIZE 1024*16

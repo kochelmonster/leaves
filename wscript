@@ -1,15 +1,13 @@
 #! /usr/bin/env python
 top = "."
 out = "build"
-APPNAME = "base64bench"
 VERSION = "0.0"
-ALIGN = 16  # 4 is minimum align
-PAGE_SIZE = 1024*8
 
 
 def options(opt):
     opt.load('compiler_cxx cxx waf_unit_test')
-    opt.add_option('--gcov', action="store_true", default=False, dest='gcov')
+    opt.add_option(
+        '--gcov', action="store_true", default=False, dest='gcov', help='Add gconv support')
 
 
 def configure(cfg):
@@ -23,24 +21,20 @@ def configure(cfg):
     cfg.env.CXXFLAGS = []
     cfg.env.LINKFLAGS = []
 
-    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', "ALIGN={}".format(ALIGN),
-                             'CMPFILES="{}"'.format(cmpfiles_path)]
+    cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING', 'CMPFILES="{}"'.format(cmpfiles_path)]
 
-    cfg.env.DEFINES_BOOST_TEST += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_TEST = [os.path.abspath("include"), os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []
     if cfg.env.CXX_NAME == "gcc":
         # cfg.env.LINKFLAGS_TEST = ["-pthread"]
         # , "-lboost_filesystem",  "-lboost_system"]
-        cfg.env.CXXFLAGS_TEST = ["-std=c++17", "-Wall", "-g", "-march=corei7"]
+        cfg.env.CXXFLAGS_TEST = ["-std=c++17", "-Wall", "-g"]
 
     if cfg.options.gcov:
         cfg.env.CXXFLAGS.extend(["-fprofile-arcs", "-ftest-coverage"])
         cfg.env.LINKFLAGS.extend(["-lgcov", "--coverage"])
 
-    cfg.env.DEFINES_BENCH += ["ALIGN={}".format(ALIGN),
-                              "PAGE_SIZE={}".format(PAGE_SIZE),
-                              'DEBUG']  # debug
+    cfg.env.DEFINES_BENCH += ['DEBUG']  # debug
     cfg.env.DEFINES_BOOST_BENCH += ['BOOST_ALL_NO_LIB']
     cfg.env.INCLUDES_BENCH = [os.path.abspath("include"),
                               os.path.abspath("src")]
@@ -49,7 +43,10 @@ def configure(cfg):
         # cfg.env.LINKFLAGS_BENCH = ["-pthread"]
         # , "-lboost_filesystem",  "-lboost_system"]
         cfg.env.CXXFLAGS_BENCH = ["-std=c++17", "-Wall", "-Wformat=0",
-                                  "-march=corei7", "-g", "-O0"]
+                                  "-g", "-O0"]
+
+    cfg.env.DEFINES_LIB = ["NDEBUG"]
+    cfg.env.CXXFLAGS_LIB = ["-std=c++17", "-Wall", "-O3"]
 
 
 def source(names):
@@ -80,3 +77,11 @@ def build(bld):
         source=test("test_db.cpp")+source("storage.cpp trace.cpp node.cpp leaves.cpp"),
         use="TEST BOOST",
         target="test_db")
+
+    bld.stlib(
+        source=source("storage.cpp trace.cpp node.cpp leaves.cpp"),
+        use="LIB",
+        target="leaves")
+
+    from waflib.Tools import waf_unit_test
+    bld.add_post_fun(waf_unit_test.summary)

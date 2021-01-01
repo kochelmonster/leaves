@@ -6,7 +6,7 @@
 #include <ctype.h>
 #endif
 
-namespace larch_leaves {
+namespace leaves {
 
 #define MAX_POOL_SIZE (4 + (POOL_COUNT-1) * NODE_INCREMENT)
 
@@ -799,4 +799,4 @@ void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage) {
 #endif
 
 
-} // namespace larch_leaves
+} // namespace leaves

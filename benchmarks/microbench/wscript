@@ -1,0 +1,60 @@
+#! /usr/bin/env python
+import os
+from pathlib import Path
+
+
+def options(opt):
+    opt.load('compiler_cxx cxx')
+    opt.add_option('--leveldb', dest='leveldb_path', default=os.environ.get('LEVELDB', ''),
+                   help='Path to leveldb')
+    opt.add_option('--lmdb', dest='lmdb_path', default=os.environ.get('LMDB', ''),
+                   help='Path to lmdb')
+
+
+def configure_leveldb(cfg):
+    leveldb_path = cfg.options.leveldb_path or Path(cfg.srcnode.abspath()).parents[2]/"leveldb/"
+    gmock_path = Path(leveldb_path)/"third_party/googletest/googlemock/include"
+    gtest_path = Path(leveldb_path)/"third_party/googletest/googletest/include"
+    include_path = Path(leveldb_path)/"include"
+    cfg.env.DEFINES_LEVELDB = ["NDEBUG", "LEVELDB_PLATFORM_POSIX"]
+    cfg.env.CXXFLAGS_LEVELDB = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{gtest_path}",
+                                f"-I{include_path}"]
+
+
+def configure_mdb(cfg):
+    leveldb_path = Path(cfg.options.leveldb_path
+                        or Path(cfg.srcnode.abspath()).parents[2]/"leveldb/")
+    gmock_path = leveldb_path/"third_party/googletest/googlemock/include"
+    gtest_path = leveldb_path/"third_party/googletest/googletest/include"
+    include_path = leveldb_path/"include"
+    leveldb_lib_path = leveldb_path/"build"
+
+    cfg.env.DEFINES_LMDB = ["NDEBUG", "LEVELDB_PLATFORM_POSIX"]
+    cfg.env.CXXFLAGS_LMDB = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
+                             f"-I{gtest_path}", "-O3"]
+    cfg.env.LINKFLAGS_LMDB = ["-llmdb", f"-L{leveldb_lib_path}", "-lleveldb", "-lpthread"]
+
+
+def configure(cfg):
+    cfg.check_waf_version(mini='1.8.5')
+    cfg.load("compiler_cxx waf_unit_test")
+    # configure_leveldb(cfg)
+    configure_mdb(cfg)
+
+    #cfg.env.LINKFLAGS_LEVELDB.extend(["-lleveldb"])
+
+
+def build(bld):
+    leveldb_path = Path(bld.options.leveldb_path
+                        or Path(bld.srcnode.abspath()).parents[2]/"leveldb/")
+
+    rpath = Path(os.path.relpath(leveldb_path, bld.srcnode.abspath()))
+    print("rpath", rpath)
+
+    sources = ["testutil.cc", "histogram.cc", "env.cc", "env_posix.cc", "status.cc"]
+    sources = [str(rpath/"util"/s) for s in sources]
+
+    bld.program(
+        source=["db_bench_mdb.cc"]+sources,
+        use="LMDB",
+        target="db_bench_mdb")

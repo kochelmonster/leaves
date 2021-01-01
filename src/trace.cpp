@@ -1,7 +1,7 @@
 #include "trace.hpp"
 
 
-namespace larch_leaves {
+namespace leaves {
 
 
 segment_ptr* ifirst(Transition& transition, string& current_key) {
@@ -124,4 +124,4 @@ void Trace::ifind(Transition transition) {
   version = *storage.version;
 }
 
-} // namespace larch_leaves
+} // namespace leaves

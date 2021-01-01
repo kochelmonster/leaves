@@ -17,7 +17,7 @@
 #define NODE_INCREMENT  24
 #define POOL_COUNT  5
 
-namespace larch_leaves {
+namespace leaves {
 
 
 typedef uint16_t segment_index_t;
@@ -151,6 +151,6 @@ inline void* segment_ptr::resolve(const Storage* storage) const {
   return (void*)(storage->get_segment_address(segment_id) + delta);
 }
 
-}
+}  // namespace leaves
 
 #endif // _LARCH_LEAVES_STORAGE_HPP

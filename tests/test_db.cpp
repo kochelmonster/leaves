@@ -101,8 +101,8 @@ const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
   "Consolata's", "Constantinople", "Continent's", NULL };
 
 
-namespace larch_leaves {
-void dump_db(std::ostream& out, DB::db_ptr db);
+namespace leaves {
+void dump_db(std::ostream& out, DB::ptr db);
 }
 
 
@@ -127,7 +127,7 @@ std::string number(int number, size_t size=0) {
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
 
-  DB::db_ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
+  DB::ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
   DB::cursor_ptr cursor(db->create_cursor());
 
   std::cout << "refcount" << db.use_count() << std::endl;
@@ -165,7 +165,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
 BOOST_AUTO_TEST_CASE(test_numbers) {
   Preparation p;
   int i;
-  DB::db_ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
+  DB::ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
   DB::cursor_ptr cursor(db->create_cursor());
 
   for(i = 0; i < 10000; i+=2) {

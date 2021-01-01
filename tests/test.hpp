@@ -10,7 +10,7 @@
 
 #define TEST_FILE "test.lvs"
 
-using namespace larch_leaves;
+using namespace leaves;
 
 
 #define SEGMENT_SIZE 1024*16
@@ -27,7 +27,7 @@ struct Preparation {
   }
 };
 
-namespace larch_leaves {
+namespace leaves {
 // defined in node.cpp
 void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
 }

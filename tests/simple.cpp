@@ -2,11 +2,11 @@
 #include <sstream>
 #include "larch/leaves.h"
 
-namespace larch_leaves {
+namespace leaves {
   void decode(const std::string& input, std::string& output);
 }
 
-using namespace larch_leaves;
+using namespace leaves;
 
 inline Slice inv(const std::string&  src) {
   static std::string buffer;
@@ -17,17 +17,17 @@ inline Slice inv(const std::string&  src) {
 int main(int argc, const char* argv[]) {
   std::shared_ptr<MemoryDatabase> db = MemoryDatabase::create();
   std::shared_ptr<Cursor> cursor = db->writer();
-  
+
   dumpb64(Slice("::main"), std::cout);
 
   std::string input((const char[]){ 0, 1, 2, 0 }, 4);
-  
+
   dumpb64(inv(input), std::cout);
-  
+
   cursor->set(inv(input));
   cursor->set_value(Slice("value-1"));
   db->dump(std::cout);
-  
+
   input.append(2, 0);
   std::cout << "size: " << input.size() << std::endl;
   dumpb64(inv(input), std::cout);

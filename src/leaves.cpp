@@ -1,10 +1,15 @@
 #include "trace.hpp"
 #include <iostream>
 
-namespace larch_leaves {
+namespace leaves {
+
+Slice version() {
+  return Slice("0.0.1");
+}
+
 
 struct CursorImpl : public Cursor {
-  CursorImpl(Storage& storage, DB::db_ptr pdb) : trace(storage), pdb(pdb) {}
+  CursorImpl(Storage& storage, DB::ptr pdb) : trace(storage), pdb(pdb) {}
   bool valid() const { return trace.valid(); }
   void find(const Slice& key) { return trace.find(key); }
   void first() { trace.first(); }
@@ -20,7 +25,7 @@ struct CursorImpl : public Cursor {
   void remove() { trace.remove(); }
 
   Trace trace;
-  DB::db_ptr pdb;
+  DB::ptr pdb;
 };
 
 
@@ -44,8 +49,8 @@ struct SingleDB : public DB {
 };
 
 
-DB::db_ptr DB::open(const char *path, size_t segment_size, ValuePools pools) {
-  db_ptr result(new SingleDB(path, segment_size, pools));
+DB::ptr DB::open(const char *path, size_t segment_size, ValuePools pools) {
+  ptr result(new SingleDB(path, segment_size, pools));
   ((SingleDB*)result.get())->me = result;
   return result;
 }
@@ -54,7 +59,7 @@ DB::db_ptr DB::open(const char *path, size_t segment_size, ValuePools pools) {
 
 void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
 
-void dump_db(std::ostream& out, DB::db_ptr db) {
+void dump_db(std::ostream& out, DB::ptr db) {
   SingleDB *sdb(((SingleDB*)db.get()));
   dump_node(out, *sdb->storage.start, &sdb->storage);
 }
@@ -62,4 +67,4 @@ void dump_db(std::ostream& out, DB::db_ptr db) {
 #endif
 
 
-} // namespace larch_leaves
+} // namespace leaves

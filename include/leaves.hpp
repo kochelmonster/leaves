@@ -6,7 +6,8 @@
 #include <memory>
 #include <exception>
 
-namespace larch_leaves {
+
+namespace leaves {
 
 #ifndef _MSC_VER
   #define NOEXCEPT noexcept
@@ -93,6 +94,9 @@ class Slice {
 };
 
 
+Slice version();
+
+
 class Cursor {
 public:
   // returns true if cursor is on a valid position
@@ -135,15 +139,15 @@ struct ValuePools {
 class DB {
 public:
   typedef std::shared_ptr<Cursor> cursor_ptr;
-  typedef std::shared_ptr<DB> db_ptr;
+  typedef std::shared_ptr<DB> ptr;
 
   virtual ~DB();
   virtual cursor_ptr create_cursor() = 0;
   virtual void flush() = 0;
-  static db_ptr open(const char *path, size_t segment_size=1<<27, ValuePools pools=ValuePools());
+  static ptr open(const char *path, size_t segment_size=1<<27, ValuePools pools=ValuePools());
 };
 
-} // namespace larch_leaves
+} // namespace leaves
 
 
 #endif // _LARCH_LEAVES_H
