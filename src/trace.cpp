@@ -34,27 +34,18 @@ void Trace::find(const Slice& key) {
     }
     same += add;
   }
-  if (stack.empty()) {
-    ifind(Transition(storage.start, &storage));
-  }
-  else {
-    Transition next(stack.back());
-    stack.pop_back();
-    ifind(next);
-  }
+  ifind();
 }
 
 void Trace::set_value(const Slice& value) {
   if (stack.empty())
     throw NoValidPosition();
 
-  // Lock lock(storage.write_lock());
   sanitize();
   Transition transition(stack.back());
   transition.insert(rest_key, value, current_key);
   (*storage.version)++;
-  stack.pop_back();
-  ifind(transition);
+  ifind();
 }
 
 void Trace::remove() {
@@ -125,16 +116,17 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
   version = *storage.version;
 }
 
+void Trace::ifind() {
+  if (stack.empty())
+    stack.push_back(Transition(storage.start, &storage));
 
-void Trace::ifind(Transition transition) {
   segment_ptr *next;
   while(true) {
-    stack.push_back(transition);
     Transition& active(stack.back());
     next = active.find(rest_key, current_key);
     if (!next)
       break;
-    transition = Transition(next, &storage);
+    stack.push_back(Transition(next, &storage));
   }
   version = *storage.version;
 }

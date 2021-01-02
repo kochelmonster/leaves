@@ -24,7 +24,7 @@ struct Trace {
   Slice get_value() const { return stack.back().get_value(); }
   void remove();
 
-  void ifind(Transition transition);
+  void ifind();
   void imove_end(move_func_t move);
   void imove(move_func_t move, move_func_t move_end);
 
