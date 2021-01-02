@@ -349,54 +349,46 @@ class Benchmark {
       Start();
 
       bool known = true, writer = false;
-	  DBFlags flags = NONE;
+      DBFlags flags = NONE;
       if (name == Slice("fillseq")) {
-	writer = true;
+        writer = true;
         Write(flags, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillseqbatch")) {
-	writer = true;
+        writer = true;
         Write(flags, SEQUENTIAL, FRESH, num_, FLAGS_value_size, FLAGS_batch);
       } else if (name == Slice("fillrandom")) {
-	writer = true;
+        writer = true;
         Write(flags, RANDOM, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrandbatch")) {
-	writer = true;
+        writer = true;
         Write(flags, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch);
       } else if (name == Slice("fillrandint")) {
-	writer = true;
-	  	flags = INT;
+        writer = true;
+        flags = INT;
         Write(flags, RANDOM, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrandibatch")) {
-	writer = true;
+        writer = true;
 	  	flags = INT;
         Write(flags, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch);
       } else if (name == Slice("overwrite")) {
-	writer = true;
+        writer = true;
         Write(flags, RANDOM, EXISTING, num_, FLAGS_value_size, 1);
       } else if (name == Slice("overwritebatch")) {
-	writer = true;
+        writer = true;
         Write(flags, RANDOM, EXISTING, num_, FLAGS_value_size, FLAGS_batch);
       } else if (name == Slice("fillrandsync")) {
-	writer = true;
+        writer = true;
         flags = SYNC;
-#if 1
-		num_ /= 1000;
-		if (num_<10) num_=10;
-#endif
         Write(flags, RANDOM, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillseqsync")) {
-	writer = true;
+        writer = true;
         flags = SYNC;
-#if 1
-		num_ /= 1000;
-		if (num_<10) num_=10;
-#endif
         Write(flags, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrand100K")) {
-	writer = true;
+        writer = true;
         Write(flags, RANDOM, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("fillseq100K")) {
-	writer = true;
+        writer = true;
         Write(flags, SEQUENTIAL, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("readseq")) {
         ReadSequential();
@@ -422,13 +414,13 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
-	if (writer) {
-	  char cmd[200];
-	  std::string test_dir;
-	  Env::Default()->GetTestDirectory(&test_dir);
-	  sprintf(cmd, "du %s", test_dir.c_str());
-	  system(cmd);
-	}
+        if (writer) {
+          char cmd[200];
+          std::string test_dir;
+          Env::Default()->GetTestDirectory(&test_dir);
+          sprintf(cmd, "du %s", test_dir.c_str());
+          int r = system(cmd);
+        }
       }
     }
   }

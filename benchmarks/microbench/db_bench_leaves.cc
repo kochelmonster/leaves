@@ -69,8 +69,8 @@ static double FLAGS_compression_ratio = 0.5;
 // Print histogram of operation timings
 static bool FLAGS_histogram = false;
 
-// Page size. Default 1 KB
-static int FLAGS_page_size = 1024;
+// count of items in a segregated area
+static int FLAGS_area_count = 2000;
 
 // If true, do not destroy the existing database.  If you set this
 // flag and also specify a benchmark that wants a fresh database, that
@@ -307,6 +307,8 @@ class Benchmark {
           std::string file_name(test_dir);
           file_name += "/";
           file_name += files[i];
+          file_name += "/bench.lvs";
+          fprintf(stderr, "delete file %s\n", file_name.c_str());
           Env::Default()->DeleteFile(file_name.c_str());
         }
       }
@@ -322,7 +324,11 @@ class Benchmark {
       fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
       for(int i = 0; i < 5; i++) {
         fprintf(stderr, "used_nodes [%i]:     %ld\n", i, stats.used_nodes[i]);
-        fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.used_nodes[i]);
+        fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.freed_nodes[i]);
+      }
+      for(size_t i = 0; i < stats.value_pool_count; i++) {
+        fprintf(stderr, "vused_nodes [%ld]:    %ld\n", i, stats.value_used_nodes[i]);
+        fprintf(stderr, "vfreed_nodes[%ld]:    %ld\n", i, stats.value_freed_nodes[i]);
       }
     }
 
@@ -386,10 +392,6 @@ class Benchmark {
       } else if (name == Slice("fillseqsync")) {
         writer = true;
         flags = SYNC;
-#if 1
-		num_ /= 1000;
-		if (num_<10) num_=10;
-#endif
         Write(flags, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrand100K")) {
         writer = true;
@@ -452,8 +454,8 @@ class Benchmark {
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
     leaves::Options options;
-    options.segment_size = 1<<25;
-    options.area_count = 1000;
+    options.segment_size = 1<<26;
+    options.area_count = FLAGS_area_count;
     db_ = leaves::DB::open(test_fname.c_str(), options);
   }
 
@@ -508,6 +510,9 @@ class Benchmark {
 
         cursor->find(mkey);
         cursor->set_value(mval);
+        if (flags == SYNC)
+          db_->flush();
+
         FinishedSingleOp();
       }
     }
@@ -576,6 +581,8 @@ int main(int argc, char** argv) {
       FLAGS_reads = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {
       FLAGS_value_size = n;
+    } else if (sscanf(argv[i], "--area_count=%d%c", &n, &junk) == 1) {
+      FLAGS_area_count = n;
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {
@@ -603,13 +610,6 @@ int main(int argc, char** argv) {
 /*
 
 Verbesserungen:
-resolve(Transition& self, segment_ptr ptr) {
-  if (self.node_ptr->segment == ptr.segment) {
-    return (void*)((size_t)self.value - self.node_ptr->delta + ptr.delta);
-  }
-  return self.storage.resolve(ptr);
-}
-
 
 struct ValueData {
   segment_ptr *prev;

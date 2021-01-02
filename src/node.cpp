@@ -146,7 +146,11 @@ struct TrieData {
   }
 
   int index_of(int bit) {
-    return popcount(bits & ((1<<bit)-1));
+    return index_of_moved(1<<bit);
+  }
+
+  int index_of_moved(int moved_bit) {
+    return popcount(bits & (moved_bit-1));
   }
 
   bool full() {
@@ -155,7 +159,8 @@ struct TrieData {
   }
 
   segment_ptr* find(int bit) {
-    return (bits & (1<<bit)) ? &children[index_of(bit)] : NULL;
+    int moved_bit = 1 << bit;
+    return (bits & moved_bit) ? &children[index_of_moved(moved_bit)] : NULL;
   }
 
   segment_ptr* next(char& bit) {
@@ -189,9 +194,10 @@ struct TrieData {
   }
 
   void add(int bit, segment_ptr next) {
-    assert(!(bits & 1<<bit));
-    bits |= 1 << bit;
-    int index = index_of(bit);
+    int moved_bit = 1 << bit;
+    assert(!(bits & moved_bit));
+    bits |= moved_bit;
+    int index = index_of_moved(moved_bit);
     for(int i = popcount(bits)-1; i > index; i--) {
       children[i] = children[i-1];
     }
@@ -272,7 +278,7 @@ struct Trie : public NodeHandler {
     segment_ptr *result = ifind(self, key[0]);
     current_key.push_back(self.key);
     if (result)
-      key = key.advance(1);
+      key.iadvance(1);
 
     return result;
   }
@@ -372,7 +378,7 @@ struct Trie : public NodeHandler {
   int advance(Transition& self, Slice& key) {
     if (key.size() && key[0] == self.key) {
       self.cmp = 0;
-      key = key.advance(1);
+      key.iadvance(1);
       return 1;
     }
     return -1;
@@ -431,7 +437,7 @@ struct Compressed : public NodeHandler {
     CompressedData* node = self.compressed = ptr(self);
     size_t size = std::min(key.size(), (size_t)node->size);
     if (!(self.cmp=sign(memcmp(key.data(), node->keys, size))) && size == node->size) {
-      key = key.advance(node->size);
+      key.iadvance(node->size);
       current_key.append(node->keys, node->size);
       return &node->next;
     }
@@ -476,7 +482,7 @@ struct Compressed : public NodeHandler {
     CompressedData* node = self.compressed;
     if (node->size <= key.size() && !memcmp(node->keys, key.data(), node->size)) {
         self.cmp = 0;
-        key = key.advance(node->size);
+        key.iadvance(node->size);
         return node->size;
     }
     return -1;

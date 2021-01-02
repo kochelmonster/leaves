@@ -88,6 +88,12 @@ class Slice {
       return Slice(data()+size, _size-size);
     }
 
+  Slice& iadvance(size_t size) {
+    _data += size;
+    _size -= size;
+    return *this;
+  }
+
   bool empty() const {
       return _size == 0;
     }
