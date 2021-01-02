@@ -22,6 +22,10 @@ namespace leaves {
 typedef uint16_t segment_index_t;
 
 struct Storage;
+struct ValueData;
+struct TrieData;
+struct CompressedData;
+struct resolved_ptr;
 
 
 #pragma pack(2)
@@ -35,9 +39,10 @@ struct segment_ptr {
   segment_ptr(segment_index_t segment_id=0, uint32_t delta=0, uint32_t type=1)
     : delta(delta), type(type), segment_id(segment_id) {}
 
+  segment_ptr operator=(const resolved_ptr& other);
+
   segment_ptr operator=(segment_ptr* other) {
-    (*this) = *other;
-    return *this;
+    return *this = *other;
   }
 
   segment_ptr operator+=(uint32_t diff) {
@@ -65,6 +70,54 @@ struct segment_ptr {
 };
 #pragma pack(0)
 
+enum NodeTypes {
+  kValue = 0,
+  kNull,
+  kCompressed,
+  kTrie,
+};
+
+
+struct resolved_ptr {
+  // A resolved segment_ptr
+
+  Storage *storage;
+  union {
+    ValueData *value;
+    TrieData *trie;
+    CompressedData *compressed;
+    segment_ptr *next;
+    char* resolved;
+  };
+  segment_ptr me;
+
+  resolved_ptr(Storage* storage): storage(storage), resolved(NULL) {}
+
+  resolved_ptr(segment_ptr ptr, void* resolved, Storage* storage, NodeTypes t=kValue)
+    : storage(storage), resolved((char*)resolved), me(ptr) { me.type = t; }
+
+  resolved_ptr(segment_ptr ptr, Storage* storage, NodeTypes t=kValue) :
+    storage(storage), me(ptr) { me.type = t; resolved = (char*)raw_resolve(me); }
+
+  const resolved_ptr& operator=(segment_ptr other) {
+    me = other;
+    me.type = kValue;
+    resolved = (char*)raw_resolve(me);
+    return *this;
+  }
+
+  resolved_ptr resolve(segment_ptr ptr) const {
+    if (ptr.segment_id == me.segment_id) {
+      // we don't need storage
+      return resolved_ptr(ptr, (void*)(resolved - me.delta + ptr.delta), storage);
+    }
+    return resolved_ptr(ptr, raw_resolve(ptr), storage);
+  }
+
+  void* raw_resolve(segment_ptr ptr) const;
+};
+
+
 
 struct PPool {
   // The persistent part of Pool
@@ -80,10 +133,6 @@ struct PPool {
 struct Pool {
   // the interface part of Pool
 
-  struct Free {
-    segment_ptr next;
-  };
-
   Storage* storage;
   PPool* pool;
 
@@ -93,8 +142,8 @@ struct Pool {
   }
   void create(Storage* storage, PPool* pool, size_t node_size, size_t area_count);
 
-  segment_ptr allocate();
-  void free(const segment_ptr& ptr);
+  resolved_ptr allocate();
+  void free(const resolved_ptr& ptr);
 };
 
 
@@ -130,11 +179,11 @@ struct Storage {
   Storage(const char* path, const Options& options);
   ~Storage();
 
-  segment_ptr allocate(size_t size);
-  void free(segment_ptr ptr, size_t size);
+  resolved_ptr allocate(size_t size);
+  void free(const resolved_ptr& ptr, size_t size);
 
-  segment_ptr mem_allocate(size_t size);
-  void mem_free(segment_ptr ptr);
+  resolved_ptr mem_allocate(size_t size);
+  void mem_free(const resolved_ptr& ptr);
 
   void flush();
   void flush_header();
@@ -156,9 +205,18 @@ struct Storage {
 };
 
 
+inline segment_ptr segment_ptr::operator=(const resolved_ptr& other) {
+  return *this = other.me;
+}
+
 inline void* segment_ptr::resolve(const Storage* storage) const {
   return (void*)((char*)storage->get_segment_address(segment_id) + delta);
 }
+
+inline void* resolved_ptr::raw_resolve(segment_ptr ptr) const {
+  return (char*)storage->get_segment_address(ptr.segment_id) + ptr.delta;
+}
+
 
 }  // namespace leaves
 

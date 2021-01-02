@@ -48,12 +48,12 @@ void Pool::create(Storage* storage, PPool* pool, size_t node_size, size_t area_c
   pool->next_free = segment_ptr();
 }
 
-segment_ptr Pool::allocate() {
-  segment_ptr result;
+resolved_ptr Pool::allocate() {
+  resolved_ptr result(storage);
 
   if (pool->next_free) {
     result = pool->next_free;
-    pool->next_free = ((Free*)result.resolve(storage))->next;
+    pool->next_free = *result.next;
     pool->freed_nodes--;
   }
   else if ((size_t)(pool->next_node - pool->current_area) >= pool->area_size) {
@@ -65,31 +65,28 @@ segment_ptr Pool::allocate() {
     result = pool->next_node;
     pool->next_node += pool->node_size;
   }
-  result.type = 0;
+  result.me.type = 0;
 #ifdef CHECK_MEM
-  char* mem = (char*)result.resolve(storage);
+  char* mem = result.resolved;
   *((size_t*)(mem+pool->node_size-sizeof(size_t))) = pool->node_size | 0x80000000;
 #endif
   pool->used_nodes++;
-
   return result;
 }
 
-void Pool::free(const segment_ptr& ptr) {
+void Pool::free(const resolved_ptr& ptr) {
   pool->used_nodes--;
   pool->freed_nodes++;
 
   #ifdef CHECK_MEM
-    char* mem = (char*)ptr.resolve(storage);
-
-
+    char* mem = ptr.resolved;
     assert(*((size_t*)(mem+pool->node_size-sizeof(size_t))) == (pool->node_size | 0x80000000));
     if (*((size_t*)(mem+pool->node_size-sizeof(size_t))) != (pool->node_size | 0x80000000)) {
       std::cout << "error" << std::endl;
     }
     *((size_t*)(mem+pool->node_size-sizeof(size_t))) = pool->node_size;
   #endif
-  ((Free*)ptr.resolve(storage))->next = pool->next_free;
+  *ptr.next = pool->next_free;
   pool->next_free = ptr;
 }
 
@@ -166,7 +163,7 @@ Storage::Storage(const char* path, const Options& options) {
       node_size += value_pool_increment;
     }
 
-    Internal* internal = (Internal*)pools[0].allocate().resolve(this);
+    Internal* internal = (Internal*)pools[0].allocate().resolved;
 
     version = &internal->version;
     *version = 0;
@@ -209,7 +206,7 @@ void Storage::flush() {
     i->region.flush();
 }
 
-void Storage::free(segment_ptr ptr, size_t size) {
+void Storage::free(const resolved_ptr& ptr, size_t size) {
   if (size <= 16) {
     pools[0].free(ptr);
     return;
@@ -234,7 +231,7 @@ void Storage::free(segment_ptr ptr, size_t size) {
   mem_free(ptr);
 };
 
-segment_ptr Storage::allocate(size_t size) {
+resolved_ptr Storage::allocate(size_t size) {
   if (size <= 16)
     return pools[0].allocate();
 
@@ -251,16 +248,17 @@ segment_ptr Storage::allocate(size_t size) {
   return mem_allocate(size);
 }
 
-void Storage::mem_free(segment_ptr ptr) {
-  segments[ptr.segment_id].memory.deallocate(ptr.resolve(this));
+void Storage::mem_free(const resolved_ptr& ptr) {
+  segments[ptr.me.segment_id].memory.deallocate(ptr.resolved);
 }
 
-segment_ptr Storage::mem_allocate(size_t size) {
+resolved_ptr Storage::mem_allocate(size_t size) {
   size_t index = 0;
   for(segment_v::iterator i = segments.begin(); i != segments.end(); i++, index++) {
     size_t address = (size_t)i->memory.allocate(size, std::nothrow);
     if (address)
-      return segment_ptr(index, address-(size_t)i->region.get_address());
+      return resolved_ptr(
+        segment_ptr(index, address-(size_t)i->region.get_address()), (void*)address, this);
   }
 
   size_t new_offset = OFFSET + segments.size()*segment_size;
@@ -270,7 +268,9 @@ segment_ptr Storage::mem_allocate(size_t size) {
   size_t address = (size_t)back.memory.allocate(size, std::nothrow);
   if (!address)
     throw std::bad_alloc();
-  return segment_ptr(segments.size()-1, address-(size_t)back.region.get_address());
+  return resolved_ptr(
+    segment_ptr(segments.size()-1, address-(size_t)back.region.get_address()),
+    (void*)address, this);
 }
 
 } // namespace leaves

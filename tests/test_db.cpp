@@ -7,7 +7,7 @@
 
 
 const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
-  "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
+  "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",  NULL,
   "Acadia", "Acadia's", "Adas", "Adella's", "Adena's", "Adey's",
   "Adham", "Ado's", "Adorne", "Adrianne", "Adriena", "Aeneas",
   "Aeneid's", "Africa", "Ag's", "Agace", "Agana's", "Aggie", "Agnes's",
@@ -52,7 +52,7 @@ const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
   "Bernelle's", "Bert", "Berte's", "Bertie's", "Bertillon", "Berton",
   "Beryl", "Bessemer", "Bethesda's", "Betta", "Bettina", "Bevan's",
   "Beverlie's", "Bevvy's", "Bhutan", "Bilbao's", "Billie's", "Bimini's",
-  "Birk's", "Bismarck", "Bismark", "Bjorn", "Blair's", "Blanca",     NULL,
+  "Birk's", "Bismarck", "Bismark", "Bjorn", "Blair's", "Blanca",
   "Bluebeard's", "Bobbie's", "Bobbye", "Boccaccio's", "Bolshevist",
   "Bonner", "Bonni's", "Booth", "Bordeaux", "Bordeaux's", "Borg's",
   "Borlaug's", "Borneo's", "Bourbons", "Bowie's", "Boy's", "Boyle",
@@ -130,15 +130,15 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   size_t count;
   for(count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
+
     cursor->find(names[count]);
     BOOST_REQUIRE(!cursor->valid());
     cursor->set_value(value(names[count]));
 
-    /*
     std::stringstream cstr;
     cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
     std::ofstream out(cstr.str().c_str());
-    dump_db(out, db);*/
+    dump_db(out, db);
   }
 
   Stats stats;
@@ -169,6 +169,10 @@ BOOST_AUTO_TEST_CASE(test_numbers) {
   for(i = 0; i < 10000; i+=2) {
     std::string n = number(i, 6);
     cursor->find(n);
+    if (i == 200) {
+      std::cout << "fail" << std::endl;
+    }
+
     cursor->set_value(n);
   }
   std::cout << "generated! " << i << std::endl;

@@ -9,13 +9,6 @@ using std::string;
 
 namespace leaves {
 
-enum NodeTypes {
-  kValue = 0,
-  kNull,
-  kCompressed,
-  kTrie,
-};
-
 struct Transition;
 
 
@@ -28,37 +21,6 @@ struct ValueData {
 };
 #pragma pack(0)
 
-
-
-struct resolved_ptr {
-  Storage *storage;
-  union {
-    ValueData *value;
-    TrieData *trie;
-    CompressedData *compressed;
-    segment_ptr *next;
-    char* resolved;
-  };
-  segment_ptr me;
-
-  resolved_ptr(segment_ptr ptr, void* resolved, Storage* storage) :
-    storage(storage), resolved((char*)resolved), me(ptr)  { }
-
-  resolved_ptr(segment_ptr ptr, Storage* storage) :
-    storage(storage), resolved((char*)raw_resolve(ptr)), me(ptr)  { }
-
-  resolved_ptr resolve(segment_ptr ptr) {
-    if (ptr.segment_id == me.segment_id) {
-      // we don't need storage
-      return resolved_ptr(ptr, (void*)(resolved - me.delta + ptr.delta), storage);
-    }
-    return resolved_ptr(ptr, raw_resolve(ptr), storage);
-  }
-
-  void *raw_resolve(segment_ptr ptr) {
-    return (char*)storage->get_segment_address(ptr.segment_id) + ptr.delta;
-  }
-};
 
 
 struct ISlice : public Slice {

@@ -10,13 +10,11 @@ typedef unsigned char uchar_t;
 
 struct Value : public NodeHandler {
   static segment_ptr build(Storage* storage, segment_ptr next, const Slice& value) {
-    segment_ptr result(storage->allocate(value.size()+sizeof(ValueData)));
-    ValueData *node = (ValueData*)result.resolve(storage);
-    node->size = value.size();
-    memcpy(node->value, value.data(), node->size);
-    node->next = next;
-    result.type = kValue;
-    return result;
+    resolved_ptr result(storage->allocate(value.size()+sizeof(ValueData)));
+    result.value->size = value.size();
+    memcpy(result.value->value, value.data(), value.size());
+    result.value->next = next;
+    return result.me;
   }
 
   ValueData* ptr(const Transition& self) const {
@@ -82,7 +80,9 @@ struct Value : public NodeHandler {
   bool remove(Transition& self, bool last) {
     if (last) {
       segment_ptr next = self.value->next;
-      self.storage->free(*self.node_ptr, self.value->size+sizeof(ValueData));
+      self.storage->free(
+        resolved_ptr(*self.node_ptr, self.value, self.storage),
+        self.value->size+sizeof(ValueData));
       *self.node_ptr = next;
       return true;
     }
@@ -169,14 +169,13 @@ struct TrieData {
     if (full(count)) {
       // node must grow
       size_t size = count * sizeof(segment_ptr) + sizeof(TrieData);
-      segment_ptr new_ptr = self.storage->allocate(size+sizeof(segment_ptr));
-      new_ptr.type = kTrie;
-      TrieData *new_node((TrieData*)self.resolve(new_ptr));
-      memcpy((void*)new_node, this, size);
-      self.storage->free(*to_me, size);
+      resolved_ptr new_ptr = self.storage->allocate(size+sizeof(segment_ptr));
+      new_ptr.me.type = kTrie;
+      memcpy((void*)new_ptr.trie, this, size);
+      self.storage->free(resolved_ptr(*to_me, this, self.storage), size);
       *to_me = new_ptr;
-      new_node->add(bit, next);
-      return new_ptr;
+      new_ptr.trie->add(bit, next);
+      return new_ptr.me;
     }
 
     add(bit, next);
@@ -196,7 +195,7 @@ struct TrieData {
 
     if (!bits) {
       // has been shrunken to pool 0 for shure
-      self.storage->pools[0].free(*to_me);
+      self.storage->pools[0].free(resolved_ptr(*to_me, this, self.storage));
       *to_me = segment_ptr();
       return true;
     }
@@ -209,12 +208,11 @@ struct TrieData {
     if (full(count)) {
       // shrink
       size_t size = count * sizeof(segment_ptr) + sizeof(TrieData);
-      segment_ptr new_ptr = self.storage->allocate(size);
-      new_ptr.type = kTrie;
-      TrieData *new_node((TrieData*)self.resolve(new_ptr));
-      memcpy((void*)new_node, this, size);
-      *dest = new_node;
-      self.storage->free(*to_me, size+sizeof(segment_ptr));
+      resolved_ptr new_ptr = self.storage->allocate(size);
+      new_ptr.me.type = kTrie;
+      memcpy((void*)new_ptr.trie, this, size);
+      *dest = new_ptr.trie;
+      self.storage->free(resolved_ptr(*to_me, this, self.storage), size+sizeof(segment_ptr));
       *to_me = new_ptr;
     }
     return false;
@@ -351,12 +349,11 @@ struct Trie : public NodeHandler {
   bool remove(Transition& self, bool last);
 
   static segment_ptr create(Storage* storage, segment_ptr next, int bit) {
-    segment_ptr result = storage->pools[0].allocate();
-    TrieData* node = (TrieData*)result.resolve(storage);
-    node->bits = 1<<bit;
-    node->children[0] = next;
-    result.type = kTrie;
-    return result;
+    resolved_ptr result = storage->pools[0].allocate();
+    result.trie->bits = 1<<bit;
+    result.trie->children[0] = next;
+    result.me.type = kTrie;
+    return result.me;
   }
 
   static segment_ptr build(Storage* storage, segment_ptr next, char key) {
@@ -377,7 +374,8 @@ struct CompressedData {
   char keys[];
 
   void free(Transition& self) {
-    self.storage->free(*self.node_ptr, size+sizeof(CompressedData));
+    self.storage->free(
+      resolved_ptr(*self.node_ptr, this, self.storage), size+sizeof(CompressedData));
   }
 };
 #pragma pack(0)
@@ -463,8 +461,9 @@ struct Compressed : public NodeHandler {
       size_t size = (size_t)node->size + (size_t)next_node->size;
 
       if (size < MAX_COMPRESSED_LEN) {
-        segment_ptr new_ptr(self.storage->allocate(size+sizeof(CompressedData)));
-        new_ptr = fill(self.storage, new_ptr, next_node->next, Slice(node->keys, node->size));
+        resolved_ptr nptr(self.storage->allocate(size+sizeof(CompressedData)));
+        segment_ptr new_ptr = fill(
+          self.storage, nptr, next_node->next, Slice(node->keys, node->size));
 
         CompressedData *new_node((CompressedData*)self.resolve(new_ptr));
         memcpy(new_node->keys+node->size, next_node->keys, next_node->size);
@@ -480,14 +479,13 @@ struct Compressed : public NodeHandler {
     return true;
   }
 
-  static segment_ptr fill(Storage* storage, segment_ptr node_ptr, segment_ptr next,
+  static segment_ptr fill(Storage* storage, resolved_ptr& node_ptr, segment_ptr next,
                           const Slice& key) {
-    node_ptr.type = kCompressed;
-    CompressedData *node = (CompressedData*)node_ptr.resolve(storage);
-    node->next = next;
-    node->size = (unsigned char)key.size();
-    memcpy(node->keys, key.data(), node->size);
-    return node_ptr;
+    node_ptr.me.type = kCompressed;
+    node_ptr.compressed->next = next;
+    node_ptr.compressed->size = (unsigned char)key.size();
+    memcpy(node_ptr.compressed->keys, key.data(), key.size());
+    return node_ptr.me;
   }
 
   static segment_ptr build(Storage* storage, segment_ptr next, const Slice& key) {
@@ -501,7 +499,7 @@ struct Compressed : public NodeHandler {
       return build(storage, build(storage, next, second), first);
     }
 
-    segment_ptr result(storage->allocate(key.size()+sizeof(CompressedData)));
+    resolved_ptr result(storage->allocate(key.size()+sizeof(CompressedData)));
     return fill(storage, result, next, key);
   }
 };
@@ -565,8 +563,8 @@ bool Trie::remove(Transition& self, bool last) {
   if (popcount(self.upper->bits) == 1 && popcount(self.lower->bits) == 1) {
     segment_ptr next = self.lower->children[0];
     char value = (ctz(self.upper->bits) << 4) | ctz(self.lower->bits);
-    self.storage->pools[0].free(*self.second_ptr);
-    self.storage->pools[0].free(*self.node_ptr);
+    self.storage->pools[0].free(resolved_ptr(*self.second_ptr, self.lower, self.storage));
+    self.storage->pools[0].free(resolved_ptr(*self.node_ptr, self.upper, self.storage));
     *self.node_ptr = Compressed::build(self.storage, next, Slice(&value, 1));
     self.remove(last);  // combines compressed if possible
   }
@@ -627,7 +625,8 @@ void Compressed::insert(Transition& self, ISlice& key, const Slice& value, strin
 void Value::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
   if (key.empty()) {
     segment_ptr new_ptr(build(self.storage, self.value->next, value));
-    self.storage->free(*self.node_ptr, self.value->size+sizeof(ValueData));
+    self.storage->free(
+      resolved_ptr(*self.node_ptr, self.value, self.storage), self.value->size+sizeof(ValueData));
     *self.node_ptr = new_ptr;
     return;
   }

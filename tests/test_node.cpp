@@ -5,6 +5,7 @@
 #include <boost/test/included/unit_test.hpp>
 #include "test.hpp"
 
+using std::string;
 
 void test_insert_first(Storage& storage) {
   check_graph("empty", storage);
