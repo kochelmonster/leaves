@@ -37,7 +37,7 @@ struct Trace {
 
   stack_type stack;
   Storage& storage;
-  Slice rest_key;
+  ISlice rest_key;
   string current_key;
   uint64_t version;
 };

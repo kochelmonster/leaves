@@ -29,7 +29,7 @@ struct Value : public NodeHandler {
     return Slice(self.value->value, self.value->size);
   }
 
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) {
+  segment_ptr* find(Transition& self, ISlice& key, string& current_key) {
     self.value = ptr(self);
     if (key.size() && self.value->next) {
       self.cmp = 1;
@@ -69,7 +69,7 @@ struct Value : public NodeHandler {
     return self.value->next ? &self.value->next : NULL;
   }
 
-  int advance(Transition& self, Slice& key) {
+  int advance(Transition& self, ISlice& key) {
     if ((key.size() && self.value->next) || (!key.size() && ! self.value->next)) {
       self.cmp = 0;
       return 0;
@@ -77,7 +77,7 @@ struct Value : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, Slice& key, const Slice& value, string& current_key);
+  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key);
 
   bool remove(Transition& self, bool last) {
     if (last) {
@@ -232,7 +232,7 @@ struct Trie : public NodeHandler {
     return (TrieData*)self.resolve(*self.second_ptr);
   }
 
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) {
+  segment_ptr* find(Transition& self, ISlice& key, string& current_key) {
     if (key.empty()) {
       self.cmp = 1;
       return NULL;
@@ -338,7 +338,7 @@ struct Trie : public NodeHandler {
     return next;
   }
 
-  int advance(Transition& self, Slice& key) {
+  int advance(Transition& self, ISlice& key) {
     if (key.size() && key[0] == self.key) {
       self.cmp = 0;
       key.iadvance(1);
@@ -347,7 +347,7 @@ struct Trie : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, Slice& key, const Slice& value, string& current_key);
+  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key);
   bool remove(Transition& self, bool last);
 
   static segment_ptr create(Storage* storage, segment_ptr next, int bit) {
@@ -392,7 +392,7 @@ struct Compressed : public NodeHandler {
     return (CompressedData*)self.node_ptr->resolve(self.storage);
   }
 
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) {
+  segment_ptr* find(Transition& self, ISlice& key, string& current_key) {
     CompressedData* node = self.compressed = ptr(self);
     size_t size = std::min(key.size(), (size_t)node->size);
     if (!(self.cmp=sign(memcmp(key.data(), node->keys, size))) && size == node->size) {
@@ -437,7 +437,7 @@ struct Compressed : public NodeHandler {
     return self.prev(current_key);
   }
 
-  int advance(Transition& self, Slice& key) {
+  int advance(Transition& self, ISlice& key) {
     CompressedData* node = self.compressed;
     if (node->size <= key.size() && !memcmp(node->keys, key.data(), node->size)) {
         self.cmp = 0;
@@ -447,7 +447,7 @@ struct Compressed : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, Slice& key, const Slice& value, string& current_key);
+  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key);
 
   bool remove(Transition& self, bool last) {
     CompressedData *node = self.compressed;
@@ -507,16 +507,16 @@ struct Compressed : public NodeHandler {
 };
 
 struct Null : public NodeHandler {
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) { return NULL; }
+  segment_ptr* find(Transition& self, ISlice& key, string& current_key) { return NULL; }
   segment_ptr* next(Transition& self, string& current_key) { return NULL; }
   segment_ptr* first(Transition& self, string& current_key) { return NULL; }
   segment_ptr* prev(Transition& self, string& current_key) { return NULL; }
   segment_ptr* last(Transition& self, string& current_key) { return NULL; }
-  void insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
     segment_ptr value_ptr(Value::build(self.storage, segment_ptr(), value));
     *self.node_ptr = Compressed::build(self.storage, value_ptr, key);
   }
-  int advance(Transition& self, Slice& key) { return -1; } // never
+  int advance(Transition& self, ISlice& key) { return -1; } // never
   bool remove(Transition& self, bool last) { return false; } // never
 };
 
@@ -530,7 +530,7 @@ NodeHandler* Transition::handlers[] = {
   &value_handler, &null_handler, &compressed_handler, &trie_handler };
 
 
-void Trie::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
   if (self.cmp == 1) {
     // key was empty at find -> insert value key before
     *self.node_ptr = Value::build(self.storage, *self.node_ptr, value);
@@ -574,7 +574,7 @@ bool Trie::remove(Transition& self, bool last) {
 }
 
 
-void Compressed::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+void Compressed::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
   CompressedData* node = self.compressed;
 
   int size = std::min((size_t)node->size, key.size());
@@ -596,7 +596,7 @@ void Compressed::insert(Transition& self, Slice& key, const Slice& value, string
       Transition trie(&trie_ptr, self.storage);
       trie_handler.ifind(trie, key[i]);
 
-      Slice rest_key(key.advance(i));
+      ISlice rest_key(key.advance(i));
       current_key.push_back(trie.key); // will be popped in trie.insert
       trie.insert(rest_key, value, current_key);
 
@@ -624,7 +624,7 @@ void Compressed::insert(Transition& self, Slice& key, const Slice& value, string
 }
 
 
-void Value::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+void Value::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
   if (key.empty()) {
     segment_ptr new_ptr(build(self.storage, self.value->next, value));
     self.storage->free(*self.node_ptr, self.value->size+sizeof(ValueData));

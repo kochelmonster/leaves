@@ -43,7 +43,7 @@ class WrongValue : public LeavesException {
 
 
 class Slice {
- private:
+ protected:
   size_t _size;
   const char* _data;
 
@@ -87,12 +87,6 @@ class Slice {
   Slice advance(size_t size) const {
       return Slice(data()+size, _size-size);
     }
-
-  Slice& iadvance(size_t size) {
-    _data += size;
-    _size -= size;
-    return *this;
-  }
 
   bool empty() const {
       return _size == 0;

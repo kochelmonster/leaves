@@ -30,6 +30,49 @@ struct ValueData {
 
 
 
+struct resolved_ptr {
+  Storage *storage;
+  union {
+    ValueData *value;
+    TrieData *trie;
+    CompressedData *compressed;
+    segment_ptr *next;
+    char* resolved;
+  };
+  segment_ptr me;
+
+  resolved_ptr(segment_ptr ptr, void* resolved, Storage* storage) :
+    storage(storage), resolved((char*)resolved), me(ptr)  { }
+
+  resolved_ptr(segment_ptr ptr, Storage* storage) :
+    storage(storage), resolved((char*)raw_resolve(ptr)), me(ptr)  { }
+
+  resolved_ptr resolve(segment_ptr ptr) {
+    if (ptr.segment_id == me.segment_id) {
+      // we don't need storage
+      return resolved_ptr(ptr, (void*)(resolved - me.delta + ptr.delta), storage);
+    }
+    return resolved_ptr(ptr, raw_resolve(ptr), storage);
+  }
+
+  void *raw_resolve(segment_ptr ptr) {
+    return (char*)storage->get_segment_address(ptr.segment_id) + ptr.delta;
+  }
+};
+
+
+struct ISlice : public Slice {
+  ISlice(): Slice() {}
+  ISlice(const Slice& src) : Slice(src.data(), src.size()) { }
+
+  Slice& iadvance(size_t size) {
+    _data += size;
+    _size -= size;
+    return *this;
+  }
+};
+
+
 struct NodeHandler;
 struct TrieData;
 struct CompressedData;
@@ -50,14 +93,14 @@ struct Transition {
   }
 
   bool valid() const;
-  segment_ptr* find(Slice& key, string& current_key);
+  segment_ptr* find(ISlice& key, string& current_key);
   segment_ptr* next(string& current_key);
   segment_ptr* prev(string& current_key);
   segment_ptr* first(string& current_key);
   segment_ptr* last(string& current_key);
-  int advance(Slice& key);
+  int advance(ISlice& key);
 
-  void insert(Slice& key, const Slice& value, string& current_key);
+  void insert(ISlice& key, const Slice& value, string& current_key);
   bool remove(bool last);
   Slice get_value() const;
   NodeHandler* handler() const { return handlers[node_ptr->type]; }
@@ -79,20 +122,20 @@ struct Transition {
 
 
 struct NodeHandler {
-  virtual segment_ptr* find(Transition& self, Slice& key, string& current_key) = 0;
+  virtual segment_ptr* find(Transition& self, ISlice& key, string& current_key) = 0;
   virtual segment_ptr* next(Transition& self, string& current_key) = 0;
   virtual segment_ptr* first(Transition& self, string& current_key) = 0;
   virtual segment_ptr* prev(Transition& self, string& current_key) = 0;
   virtual segment_ptr* last(Transition& self, string& current_key) = 0;
-  virtual void insert(Transition& self, Slice& key, const Slice& value, string& current_key) = 0;
+  virtual void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) = 0;
   virtual bool remove(Transition& self, bool last) = 0;
-  virtual int advance(Transition& self, Slice& key) = 0;
+  virtual int advance(Transition& self, ISlice& key) = 0;
   virtual bool valid() const { return false; }
   virtual Slice get_value(const Transition& self) const { return Slice(); }
 };
 
 
-inline segment_ptr* Transition::find(Slice& key, string& current_key) {
+inline segment_ptr* Transition::find(ISlice& key, string& current_key) {
   return handler()->find(*this, key, current_key);
 }
 
@@ -113,11 +156,11 @@ inline segment_ptr* Transition::last(string& current_key) {
 }
 
 
-inline int Transition::advance(Slice& key) {
+inline int Transition::advance(ISlice& key) {
   return handler()->advance(*this, key);
 }
 
-inline void Transition::insert(Slice& key, const Slice& value, string& current_key) {
+inline void Transition::insert(ISlice& key, const Slice& value, string& current_key) {
   handler()->insert(*this, key, value, current_key);
 }
 
