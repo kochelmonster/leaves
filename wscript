@@ -85,3 +85,5 @@ def build(bld):
 
     from waflib.Tools import waf_unit_test
     bld.add_post_fun(waf_unit_test.summary)
+
+    print("missing test!  Value::advance")

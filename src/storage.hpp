@@ -14,6 +14,7 @@
 
 #define NODE_INCREMENT  24
 #define POOL_COUNT  5
+#define MAX_POOL_SIZE (4 + (POOL_COUNT-1) * NODE_INCREMENT)
 
 namespace leaves {
 
@@ -130,7 +131,11 @@ struct Storage {
   ~Storage();
 
   segment_ptr allocate(size_t size);
-  void free(segment_ptr ptr);
+  void free(segment_ptr ptr, size_t size);
+
+  segment_ptr mem_allocate(size_t size);
+  void mem_free(segment_ptr ptr);
+
   void flush();
   void flush_header();
 
@@ -152,7 +157,7 @@ struct Storage {
 
 
 inline void* segment_ptr::resolve(const Storage* storage) const {
-  return (void*)(storage->get_segment_address(segment_id) + delta);
+  return (void*)((char*)storage->get_segment_address(segment_id) + delta);
 }
 
 }  // namespace leaves

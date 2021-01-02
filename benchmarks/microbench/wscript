@@ -27,6 +27,12 @@ def configure_leaves(cfg):
         f"-L{leveldb_lib_path}", "-lleveldb", "-lpthread",]
         # f"-L{leaves_path/'build'}", "-lleaves"]
 
+    if False:
+        cfg.env.DEFINES_LEAVES = ["LEVELDB_PLATFORM_POSIX", "AREA_COUNT"]
+        cfg.env.CXXFLAGS_LEAVES = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
+                                   f"-I{gtest_path}", f"-I{leaves_path/'include'}", "-g",
+                                   "-std=c++17"]
+
 
 def configure_mdb(cfg):
     leveldb_path = Path(cfg.options.leveldb_path

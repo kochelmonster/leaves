@@ -39,15 +39,16 @@ static const char* FLAGS_benchmarks =
 #if 0
     "overwritebatch,"
 #endif
+    //"fillrandint,"
     "readrandom,"
     "readseq,"
     "readreverse,"
-#if 0
+/*
     "fillrand100K,"
     "fillseq100K,"
     "readseq100K,"
     "readrand100K,"
-#endif
+*/
     ;
 
 // Number of key/values to place in database
@@ -298,8 +299,7 @@ class Benchmark {
     bytes_(0),
     rand_(301) {
     std::vector<std::string> files;
-    std::string test_dir;
-    Env::Default()->GetTestDirectory(&test_dir);
+    std::string test_dir(FLAGS_db);
     Env::Default()->GetChildren(test_dir.c_str(), &files);
     if (!FLAGS_use_existing_db) {
       for (int i = 0; i < files.size(); i++) {
@@ -316,23 +316,30 @@ class Benchmark {
   }
 
   ~Benchmark() {
+    print_statistics();
+  	db_ = NULL;
+  }
+
+  void print_statistics() {
     if (db_) {
       leaves::Stats stats;
       db_->get_stats(stats);
+      /*
       fprintf(stderr, "segment_count :     %d\n", stats.segment_count);
       fprintf(stderr, "segment_size  :     %ld\n", stats.segment_size);
       fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
+      */
       for(int i = 0; i < 5; i++) {
         fprintf(stderr, "used_nodes [%i]:     %ld\n", i, stats.used_nodes[i]);
         fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.freed_nodes[i]);
       }
+      /*
       for(size_t i = 0; i < stats.value_pool_count; i++) {
         fprintf(stderr, "vused_nodes [%ld]:    %ld\n", i, stats.value_used_nodes[i]);
         fprintf(stderr, "vfreed_nodes[%ld]:    %ld\n", i, stats.value_freed_nodes[i]);
       }
+      */
     }
-
-  	db_ = NULL;
   }
 
   void Run() {
@@ -384,10 +391,6 @@ class Benchmark {
       } else if (name == Slice("fillrandsync")) {
         writer = true;
         flags = SYNC;
-#if 1
-        num_ /= 1000;
-        if (num_<10) num_=10;
-#endif
         Write(flags, RANDOM, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillseqsync")) {
         writer = true;
@@ -395,10 +398,10 @@ class Benchmark {
         Write(flags, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrand100K")) {
         writer = true;
-        Write(flags, RANDOM, FRESH, num_ / 1000, 100 * 1000, 1);
+        Write(flags, RANDOM, FRESH, num_ / 10, 100 * 1000, 1);
       } else if (name == Slice("fillseq100K")) {
         writer = true;
-        Write(flags, SEQUENTIAL, FRESH, num_ / 1000, 100 * 1000, 1);
+        Write(flags, SEQUENTIAL, FRESH, num_ / 10, 100 * 1000, 1);
       } else if (name == Slice("readseq")) {
         ReadSequential();
       } else if (name == Slice("readreverse")) {
@@ -407,12 +410,12 @@ class Benchmark {
         ReadRandom();
       } else if (name == Slice("readrand100K")) {
         int n = reads_;
-        reads_ /= 1000;
+        reads_ /= 10;
         ReadRandom();
         reads_ = n;
       } else if (name == Slice("readseq100K")) {
         int n = reads_;
-        reads_ /= 1000;
+        reads_ /= 10;
         ReadSequential();
         reads_ = n;
       } else {
@@ -425,8 +428,7 @@ class Benchmark {
         Stop(name);
         if (writer) {
           char cmd[200];
-          std::string test_dir;
-          Env::Default()->GetTestDirectory(&test_dir);
+          std::string test_dir(FLAGS_db);
           sprintf(cmd, "du %s", test_dir.c_str());
           int r = system(cmd);
           if (r) {}
@@ -441,8 +443,8 @@ class Benchmark {
 
     char file_name[100], cmd[200];
     db_num_++;
-    std::string test_dir;
-    Env::Default()->GetTestDirectory(&test_dir);
+    std::string test_dir(FLAGS_db);
+
     snprintf(file_name, sizeof(file_name),
              "%s/dbbench_leaves-%d",
              test_dir.c_str(),
@@ -493,9 +495,9 @@ class Benchmark {
       mkey = leaves::Slice((const char*)&ikey, sizeof(ikey));
     }
 
+    leaves::DB::cursor_ptr cursor = db_->create_cursor();
     // Write to database
     for (int i = 0; i < num_entries; i+= entries_per_batch) {
-      leaves::DB::cursor_ptr cursor = db_->create_cursor();
       for (int j=0; j < entries_per_batch; j++) {
         const int k = (order == SEQUENTIAL) ? i+j : shuff[i+j];
         if (flags == INT)
@@ -509,6 +511,7 @@ class Benchmark {
         mval = gen_.Generate(value_size);
 
         cursor->find(mkey);
+
         cursor->set_value(mval);
         if (flags == SYNC)
           db_->flush();
@@ -617,18 +620,10 @@ struct ValueData {
   bei insert wird next, prev gesetzt (viel schnellers next, prev)
 }
 
-find() {
-  kein stack.clear()
 
-  sondern
-  for(iter stack.begin() iter != end; iter++) {
-    if (! iter->same())
-      cut(stack) and find
-  }
+Bugs:
 
-  besser für sequential updates
-
-}
-
+fillrandom
+fillrandint
 
 */

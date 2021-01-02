@@ -7,10 +7,10 @@
 
 
 const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
-  /*"Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
+  "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
   "Acadia", "Acadia's", "Adas", "Adella's", "Adena's", "Adey's",
   "Adham", "Ado's", "Adorne", "Adrianne", "Adriena", "Aeneas",
-  "Aeneid's", "Africa", "Ag's", "Agace", "Agana's", "Aggie", "Agnes's", */
+  "Aeneid's", "Africa", "Ag's", "Agace", "Agana's", "Aggie", "Agnes's",
   "Aguascalientes's", "Agustin's", "Aida", "Aida's", "Aila's", "Ailina",
   "Ajay's", "Akihito", "Aksel's", "Alabama's", "Alaine", "Alanson's",
   "Alaska", "Alasteir", "Alaster", "Alayne's", "Albany", "Albertine's",
@@ -130,16 +130,15 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   size_t count;
   for(count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
-
     cursor->find(names[count]);
     BOOST_REQUIRE(!cursor->valid());
     cursor->set_value(value(names[count]));
+
     /*
     std::stringstream cstr;
     cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
     std::ofstream out(cstr.str().c_str());
-    dump_db(out, db);
-    */
+    dump_db(out, db);*/
   }
 
   Stats stats;
@@ -217,8 +216,9 @@ BOOST_AUTO_TEST_CASE(test_numbers) {
   BOOST_REQUIRE(cursor->value() == n);
   std::cout << "find passed" << std::endl;
 
-  for(cursor->first(); cursor->valid(); cursor->first())
+  for(cursor->first(); cursor->valid(); cursor->first()) {
     cursor->remove();
+  }
 
   std::cout << "removed passed" << std::endl;
   for(cursor->first(); cursor->valid(); cursor->next())

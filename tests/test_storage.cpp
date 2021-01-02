@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(start_storage) {
     BOOST_REQUIRE_EQUAL(ptr2.delta, 4864);
 
     ptr2 = storage.allocate(2000);
-    storage.free(ptr2);
+    storage.free(ptr2, 2000);
 
     ptr1 = storage.allocate(2000);
     BOOST_REQUIRE_EQUAL(ptr2.segment_id, ptr1.segment_id);
