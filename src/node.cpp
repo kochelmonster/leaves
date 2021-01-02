@@ -247,7 +247,7 @@ struct TrieData {
 
 struct Trie : public NodeHandler {
   TrieData* ptr1(Transition& self) {
-    return (TrieData*)self.resolve(*self.node_ptr);
+    return (TrieData*)self.node_ptr->resolve(self.storage);
   }
 
   TrieData* ptr2(Transition& self) {
@@ -406,7 +406,7 @@ inline char sign(int x) {
 
 struct Compressed : public NodeHandler {
   static CompressedData* ptr(Transition& self) {
-    return (CompressedData*)self.resolve(*self.node_ptr);
+    return (CompressedData*)self.node_ptr->resolve(self.storage);
   }
 
   segment_ptr* find(Transition& self, Slice& key, string& current_key) {

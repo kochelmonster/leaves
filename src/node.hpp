@@ -37,9 +37,17 @@ struct CompressedData;
 
 struct Transition {
   Transition(segment_ptr* pptr, Storage* storage):
-    node_ptr(pptr), storage(storage), cmp(0) {}
+    node_ptr(pptr), value(NULL), storage(storage), cmp(0) {}
 
-  void* resolve(segment_ptr ptr) { return ptr.resolve(storage); }
+  void* resolve(segment_ptr ptr) {
+    // use only if node_ptr has been resolved
+    assert(value != NULL);
+    if (ptr.segment_id == node_ptr->segment_id) {
+      // we don't need storage
+      return (void*)((size_t)value - node_ptr->delta + ptr.delta);
+    }
+    return ptr.resolve(storage);
+  }
 
   bool valid() const;
   segment_ptr* find(Slice& key, string& current_key);
