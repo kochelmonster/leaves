@@ -51,10 +51,10 @@ void Trace::set_value(const Slice& value) {
   // Lock lock(storage.write_lock());
   sanitize();
   Transition transition(stack.back());
-  segment_ptr *next = transition.insert(rest_key, value, current_key);
+  transition.insert(rest_key, value, current_key);
   (*storage.version)++;
   stack.pop_back();
-  ifind(Transition(next, &storage));
+  ifind(transition);
 }
 
 void Trace::remove() {
@@ -127,7 +127,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
 
 
 void Trace::ifind(Transition transition) {
-  segment_ptr *next(transition.node_ptr);
+  segment_ptr *next;
   while(true) {
     stack.push_back(transition);
     Transition& active(stack.back());

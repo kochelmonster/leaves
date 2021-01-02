@@ -111,7 +111,7 @@ struct Value : public NodeHandler {
     return -1;
   }
 
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
+  void insert(Transition& self, Slice& key, const Slice& value, string& current_key);
 
   bool remove(Transition& self, bool last) {
     if (last) {
@@ -384,7 +384,7 @@ struct Trie : public NodeHandler {
     return -1;
   }
 
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
+  void insert(Transition& self, Slice& key, const Slice& value, string& current_key);
   bool remove(Transition& self, bool last);
 
   static segment_ptr create(Storage* storage, segment_ptr next, int bit) {
@@ -488,7 +488,7 @@ struct Compressed : public NodeHandler {
     return -1;
   }
 
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
+  void insert(Transition& self, Slice& key, const Slice& value, string& current_key);
 
   bool remove(Transition& self, bool last) {
     CompressedData *node = self.compressed;
@@ -555,10 +555,9 @@ struct Null : public NodeHandler {
   segment_ptr* first(Transition& self, string& current_key) { return NULL; }
   segment_ptr* prev(Transition& self, string& current_key) { return NULL; }
   segment_ptr* last(Transition& self, string& current_key) { return NULL; }
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+  void insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
     segment_ptr value_ptr(Value::build(self.storage, segment_ptr(), value));
     *self.node_ptr = Compressed::build(self.storage, value_ptr, key);
-    return self.node_ptr;
   }
   int advance(Transition& self, Slice& key) { return -1; } // never
   bool remove(Transition& self, bool last) { return false; } // never
@@ -574,11 +573,11 @@ NodeHandler* Transition::handlers[] = {
   &value_handler, &null_handler, &compressed_handler, &trie_handler };
 
 
-segment_ptr* Trie::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+void Trie::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
   if (self.cmp == 1) {
     // key was empty at find -> insert value key before
     *self.node_ptr = Value::build(self.storage, *self.node_ptr, value);
-    return self.node_ptr;
+    return;
   }
 
   current_key.pop_back();
@@ -594,11 +593,10 @@ segment_ptr* Trie::insert(Transition& self, Slice& key, const Slice& value, stri
   if (!self.lower) {
     segment_ptr lower_ptr = create(self.storage, next, lower);
     *self.node_ptr = self.upper->insert(self, self.node_ptr, lower_ptr, upper);
-    return self.node_ptr;
+    return;
   }
 
   *self.second_ptr = self.lower->insert(self, self.second_ptr, next, lower);
-  return self.node_ptr;
 }
 
 
@@ -619,8 +617,7 @@ bool Trie::remove(Transition& self, bool last) {
 }
 
 
-segment_ptr* Compressed::insert(
-      Transition& self, Slice& key, const Slice& value, string& current_key) {
+void Compressed::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
   CompressedData* node = self.compressed;
 
   int size = std::min((size_t)node->size, key.size());
@@ -644,12 +641,12 @@ segment_ptr* Compressed::insert(
 
       Slice rest_key(key.advance(i));
       current_key.push_back(trie.key); // will be popped in trie.insert
-      trie_ptr = *trie.insert(rest_key, value, current_key);
+      trie.insert(rest_key, value, current_key);
 
       segment_ptr first_ptr(build(self.storage, trie_ptr, first));
       node->free(self);
       *self.node_ptr = first_ptr;
-      return self.node_ptr;
+      return;
     }
   }
 
@@ -667,23 +664,20 @@ segment_ptr* Compressed::insert(
 
   node->free(self);
   *self.node_ptr = first_ptr;
-  return self.node_ptr;
 }
 
 
-
-segment_ptr* Value::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
+void Value::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
   if (key.empty()) {
     segment_ptr new_ptr(build(self.storage, self.value->next, value));
     free(self);
     *self.node_ptr = new_ptr;
-    return self.node_ptr;
+    return;
   }
 
   assert(!self.value->next);
   segment_ptr next(build(self.storage, segment_ptr(), value));
   self.value->next = Compressed::build(self.storage, next, key);
-  return self.node_ptr;
 }
 
 
