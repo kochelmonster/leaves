@@ -22,11 +22,26 @@ segment_ptr* iprev(Transition& transition, string& current_key) {
 
 
 void Trace::find(const Slice& key) {
-  // Lock lock(storage.read_lock());
   rest_key = key;
-  current_key.clear();
-  stack.clear();
-  ifind(Transition(storage.start, &storage));
+
+  int same = 0; // index of same
+  for(stack_type::iterator i = stack.begin(); i != stack.end(); i++) {
+    int add = i->advance(rest_key);
+    if (add < 0) {
+      stack.erase(++i, stack.end());
+      current_key.resize(same);
+      break;
+    }
+    same += add;
+  }
+  if (stack.empty()) {
+    ifind(Transition(storage.start, &storage));
+  }
+  else {
+    Transition next(stack.back());
+    stack.pop_back();
+    ifind(next);
+  }
 }
 
 void Trace::set_value(const Slice& value) {

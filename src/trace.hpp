@@ -7,6 +7,8 @@ typedef segment_ptr* (*move_func_t)(Transition& transition, string& current_key)
 
 
 struct Trace {
+  typedef std::vector<Transition> stack_type;
+
   Trace(Storage& storage) : storage(storage), version(*storage.version) {
     current_key.reserve(1024);
     stack.reserve(1024);
@@ -33,7 +35,7 @@ struct Trace {
     }
   }
 
-  std::vector<Transition> stack;
+  stack_type stack;
   Storage& storage;
   Slice rest_key;
   string current_key;

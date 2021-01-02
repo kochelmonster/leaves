@@ -58,6 +58,7 @@ struct Value : public NodeHandler {
   }
 
   bool valid() const { return true; }
+
   virtual Slice get_value(const Transition& self) const {
     return Slice(self.value->value, self.value->size);
   }
@@ -100,6 +101,14 @@ struct Value : public NodeHandler {
     self.value = ptr(self);
     self.cmp = 1;
     return self.value->next ? &self.value->next : NULL;
+  }
+
+  int advance(Transition& self, Slice& key) {
+    if ((key.size() && self.value->next) || (!key.size() && ! self.value->next)) {
+      self.cmp = 0;
+      return 0;
+    }
+    return -1;
   }
 
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
@@ -360,6 +369,15 @@ struct Trie : public NodeHandler {
     return next;
   }
 
+  int advance(Transition& self, Slice& key) {
+    if (key.size() && key[0] == self.key) {
+      self.cmp = 0;
+      key = key.advance(1);
+      return 1;
+    }
+    return -1;
+  }
+
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
   bool remove(Transition& self, bool last);
 
@@ -454,6 +472,16 @@ struct Compressed : public NodeHandler {
     return self.prev(current_key);
   }
 
+  int advance(Transition& self, Slice& key) {
+    CompressedData* node = self.compressed;
+    if (node->size <= key.size() && !memcmp(node->keys, key.data(), node->size)) {
+        self.cmp = 0;
+        key = key.advance(node->size);
+        return node->size;
+    }
+    return -1;
+  }
+
   segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
 
   bool remove(Transition& self, bool last) {
@@ -526,6 +554,7 @@ struct Null : public NodeHandler {
     *self.node_ptr = Compressed::build(self.storage, value_ptr, key);
     return self.node_ptr;
   }
+  int advance(Transition& self, Slice& key) { return -1; } // never
   bool remove(Transition& self, bool last) { return false; } // never
 };
 
