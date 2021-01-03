@@ -7,7 +7,7 @@
 
 
 const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
-  "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",  NULL,
+  "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
   "Acadia", "Acadia's", "Adas", "Adella's", "Adena's", "Adey's",
   "Adham", "Ado's", "Adorne", "Adrianne", "Adriena", "Aeneas",
   "Aeneid's", "Africa", "Ag's", "Agace", "Agana's", "Aggie", "Agnes's",
@@ -135,10 +135,12 @@ BOOST_AUTO_TEST_CASE(test_strings) {
     BOOST_REQUIRE(!cursor->valid());
     cursor->set_value(value(names[count]));
 
+    /*
     std::stringstream cstr;
     cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
     std::ofstream out(cstr.str().c_str());
     dump_db(out, db);
+    */
   }
 
   Stats stats;
@@ -169,10 +171,7 @@ BOOST_AUTO_TEST_CASE(test_numbers) {
   for(i = 0; i < 10000; i+=2) {
     std::string n = number(i, 6);
     cursor->find(n);
-    if (i == 200) {
-      std::cout << "fail" << std::endl;
-    }
-
+    //std::cout << "insert " << i <<  std::endl;
     cursor->set_value(n);
   }
   std::cout << "generated! " << i << std::endl;

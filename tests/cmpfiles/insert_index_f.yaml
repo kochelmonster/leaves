@@ -1,79 +1,79 @@
-id: kCompressed-0-528
+id: kCompressed-0-496
 size: 2
 keys: "[a][b]"
 children: 
-  - kTrie-0-496
+  - kTrie-0-448
 ---
-id: kTrie-0-496
+id: kTrie-0-448
 size: 1
 bits: 40
 bitindex: [6]
 children: 
-  - kTrie-0-4864
+  - kTrie-0-5216
 ---
-id: kTrie-0-4864
+id: kTrie-0-5216
 size: 7
 bits: 17e
 bitindex: [1, 2, 3, 4, 5, 6, 8]
 byteindex: ["a", "b", "c", "d", "e", "f", "h"]
 children: 
-  - kValue-0-2160
-  - kValue-0-2188
-  - kCompressed-0-464
-  - kValue-0-2104
-  - kValue-0-2132
-  - kValue-0-2216
-  - kCompressed-0-512
+  - kValue-0-432
+  - kValue-0-512
+  - kCompressed-0-416
+  - kValue-0-400
+  - kValue-0-528
+  - kValue-0-544
+  - kCompressed-0-480
 ---
-id: kValue-0-2160
+id: kValue-0-432
 size: 3
 value: "[a][b][a]"
 children: 
   - kNull-0-0
 ---
-id: kValue-0-2188
+id: kValue-0-512
 size: 3
 value: "[a][b][b]"
 children: 
   - kNull-0-0
 ---
-id: kCompressed-0-464
+id: kCompressed-0-416
 size: 4
 keys: "[d][e][f][g]"
 children: 
-  - kValue-0-2048
+  - kValue-0-2000
 ---
-id: kValue-0-2048
+id: kValue-0-2000
 size: 7
 value: "[a][b][c][d][e][f][g]"
 children: 
   - kNull-0-0
 ---
-id: kValue-0-2104
+id: kValue-0-400
 size: 3
 value: "[a][b][d]"
 children: 
   - kNull-0-0
 ---
-id: kValue-0-2132
+id: kValue-0-528
 size: 3
 value: "[a][b][e]"
 children: 
   - kNull-0-0
 ---
-id: kValue-0-2216
+id: kValue-0-544
 size: 3
 value: "[a][b][f]"
 children: 
   - kNull-0-0
 ---
-id: kCompressed-0-512
+id: kCompressed-0-480
 size: 2
 keys: "[i][j]"
 children: 
-  - kValue-0-2076
+  - kValue-0-464
 ---
-id: kValue-0-2076
+id: kValue-0-464
 size: 5
 value: "[a][b][h][i][j]"
 children: 

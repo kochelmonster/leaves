@@ -6,6 +6,12 @@
 #include "node.hpp"
 
 // #define CHECK_MEM
+
+#ifdef CHECK_MEM
+#include <iostream>
+#endif
+
+
 #define SIGNATURE "LarchLeaves"
 
 using namespace boost::interprocess;
@@ -80,10 +86,12 @@ void Pool::free(const resolved_ptr& ptr) {
 
   #ifdef CHECK_MEM
     char* mem = ptr.resolved;
-    assert(*((size_t*)(mem+pool->node_size-sizeof(size_t))) == (pool->node_size | 0x80000000));
     if (*((size_t*)(mem+pool->node_size-sizeof(size_t))) != (pool->node_size | 0x80000000)) {
-      std::cout << "error" << std::endl;
+      std::cout << "error " << pool->node_size << " != "
+                << (*((size_t*)(mem+pool->node_size-sizeof(size_t))) & 0x7FFFFFFF)
+                << std::endl;
     }
+    assert(*((size_t*)(mem+pool->node_size-sizeof(size_t))) == (pool->node_size | 0x80000000));
     *((size_t*)(mem+pool->node_size-sizeof(size_t))) = pool->node_size;
   #endif
   *ptr.next = pool->next_free;
@@ -148,16 +156,14 @@ Storage::Storage(const char* path, const Options& options) {
     segments.push_back(Segment(create_only, file, offset, segment_size));
     PPool* p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*POOL_COUNT);
 
-    pools[0].create(this, p++, 16, options.area_count);
-    size_t node_size = 4;
-    for(size_t i = 1; i < POOL_COUNT; i++) {
-      node_size += NODE_INCREMENT;
-      pools[i].create(this, p++, node_size, options.area_count);
+    size_t pool_sizes[] = {16, 32, 64, MAX_POOL_SIZE}; // << will be 96
+    for(size_t i = 0; i < POOL_COUNT; i++) {
+      pools[i].create(this, p++, pool_sizes[i], options.area_count);
     }
 
     p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*value_pool_count);
     value_pools = new Pool[value_pool_count];
-    node_size = value_pool_start_size;
+    size_t node_size = value_pool_start_size;
     for(size_t i = 0; i < value_pool_count; i++) {
       value_pools[i].create(this, p++, node_size, options.area_count);
       node_size += value_pool_increment;
@@ -206,14 +212,17 @@ void Storage::flush() {
     i->region.flush();
 }
 
-void Storage::free(const resolved_ptr& ptr, size_t size) {
-  if (size <= 16) {
-    pools[0].free(ptr);
-    return;
-  }
 
+inline int pool_index(size_t size) {
+  if (size <= 16) return 0;
+  if (size <= 32) return 1;
+  if (size <= 64) return 2;
+  return 3;
+}
+
+void Storage::free(const resolved_ptr& ptr, size_t size) {
   if (size <= MAX_POOL_SIZE) {
-    pools[(size+19)/NODE_INCREMENT].free(ptr);
+    pools[pool_index(size)].free(ptr);
     return;
   }
 
@@ -232,11 +241,8 @@ void Storage::free(const resolved_ptr& ptr, size_t size) {
 };
 
 resolved_ptr Storage::allocate(size_t size) {
-  if (size <= 16)
-    return pools[0].allocate();
-
   if (size <= MAX_POOL_SIZE)
-    return pools[(size+19)/NODE_INCREMENT].allocate();
+    return pools[pool_index(size)].allocate();
 
   if (size <= value_pool_start_size)
     return value_pools[0].allocate();

@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-# python tests/graph.py tests/cmpfiles/*
+"""
+create a graphiz file from graph.yaml
+
+usage: python tests/graph.py tests/cmpfiles/*
+"""
 import sys
 import yaml
 import sarge

@@ -12,9 +12,8 @@
 #include <leaves.hpp>
 
 
-#define NODE_INCREMENT  24
-#define POOL_COUNT  5
-#define MAX_POOL_SIZE (4 + (POOL_COUNT-1) * NODE_INCREMENT)
+#define POOL_COUNT  4
+#define MAX_POOL_SIZE (96+8)
 
 namespace leaves {
 

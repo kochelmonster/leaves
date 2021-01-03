@@ -11,10 +11,53 @@ namespace leaves {
 
 struct Transition;
 
+#pragma pack(2)
+struct NodeBase {
+  uint8_t flags;
+  uint8_t reserved;
+};
+#pragma pack(0)
+
+#pragma pack(2)
+struct Leaf {
+  segment_ptr value;
+  segment_ptr prev;
+  segment_ptr next;
+  uint16_t size;
+  char key;
+};
+#pragma pack(0)
+
+
+/*
+null?   0
+
+trie    1
+bittrie 2
+
+compress 3
+Leaf     4
+value    5
+
+
+
+4*4*4*4
+
+clz(next_power(size-1))
+
+2   2+2*6   16   8*2     16*1      / 2  0    1..16   0..15   16
+5   2+5*6   32   8*4     16*2      / 2  1    17..32  16..31  32
+10  2+10*6  62   8*8     16*4      / 2  2
+16  16*6    96   8*12    16*6(7)   / 2  3
+
+
+
+clz()
+
+*/
 
 #pragma pack(2)
 struct ValueData {
-  segment_ptr prev;
   segment_ptr next;
   uint32_t size;
   char value[];
@@ -46,7 +89,7 @@ struct CompressedData;
 
 struct Transition {
   Transition(segment_ptr* pptr, Storage* storage):
-    node_ptr(pptr), value(NULL), storage(storage), cmp(0) {}
+    node_ptr(pptr), storage(storage), cmp(0) { value = pptr->resolve(storage).value; }
 
   void* resolve(segment_ptr ptr) {
     // use only if node_ptr has been resolved
@@ -75,6 +118,7 @@ struct Transition {
   segment_ptr* second_ptr;
 
   union {
+    NodeBase *node;
     ValueData *value;
     CompressedData *compressed;
     TrieData *upper;

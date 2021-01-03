@@ -118,7 +118,13 @@ struct TrieData {
   }
 
   bool full(size_t count) {
-    return (count & 3) == 0 || count == 2;
+    switch(count) {
+      case 2:
+      case 5:
+      case 10:
+        return true;
+    }
+    return false;
   }
 
   segment_ptr* find(int bit) {
