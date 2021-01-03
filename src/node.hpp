@@ -18,6 +18,10 @@ struct ValueData {
   segment_ptr next;
   uint32_t size;
   char value[];
+
+  size_t size_of() {
+    return size + sizeof(ValueData);
+  }
 };
 #pragma pack(0)
 
@@ -51,7 +55,7 @@ struct Transition {
       // we don't need storage
       return (void*)((size_t)value - node_ptr->delta + ptr.delta);
     }
-    return ptr.resolve(storage);
+    return ptr.resolve(storage).next;
   }
 
   bool valid() const;

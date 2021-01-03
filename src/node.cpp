@@ -18,7 +18,7 @@ struct Value : public NodeHandler {
   }
 
   ValueData* ptr(const Transition& self) const {
-    return (ValueData*)self.node_ptr->resolve(self.storage);
+    return self.node_ptr->resolve(self.storage).value;
   }
 
   bool valid() const { return true; }
@@ -80,8 +80,7 @@ struct Value : public NodeHandler {
   bool remove(Transition& self, bool last) {
     if (last) {
       segment_ptr next = self.value->next;
-      self.storage->free(
-        resolved_ptr(*self.node_ptr, self.value, self.storage),
+      self.storage->free(resolved_ptr(*self.node_ptr, self.value),
         self.value->size+sizeof(ValueData));
       *self.node_ptr = next;
       return true;
@@ -105,6 +104,10 @@ namespace bit {
 struct TrieData {
   uint16_t bits;
   segment_ptr children[];
+
+  size_t size_of(size_t count) {
+    return count * sizeof(segment_ptr) + sizeof(TrieData);
+  }
 
   int index_of(int bit) {
     return index_of_moved(1<<bit);
@@ -168,11 +171,10 @@ struct TrieData {
     size_t count = popcount(bits);
     if (full(count)) {
       // node must grow
-      size_t size = count * sizeof(segment_ptr) + sizeof(TrieData);
-      resolved_ptr new_ptr = self.storage->allocate(size+sizeof(segment_ptr));
-      new_ptr.me.type = kTrie;
+      size_t size = size_of(count);
+      resolved_ptr new_ptr = self.storage->allocate(size+sizeof(segment_ptr)).type(kTrie);
       memcpy((void*)new_ptr.trie, this, size);
-      self.storage->free(resolved_ptr(*to_me, this, self.storage), size);
+      self.storage->free(resolved_ptr(*to_me, this), size);
       *to_me = new_ptr;
       new_ptr.trie->add(bit, next);
       return new_ptr.me;
@@ -195,7 +197,7 @@ struct TrieData {
 
     if (!bits) {
       // has been shrunken to pool 0 for shure
-      self.storage->pools[0].free(resolved_ptr(*to_me, this, self.storage));
+      self.storage->pools[0].free(resolved_ptr(*to_me, this));
       *to_me = segment_ptr();
       return true;
     }
@@ -207,12 +209,12 @@ struct TrieData {
 
     if (full(count)) {
       // shrink
-      size_t size = count * sizeof(segment_ptr) + sizeof(TrieData);
+      size_t size = size_of(count);
       resolved_ptr new_ptr = self.storage->allocate(size);
       new_ptr.me.type = kTrie;
       memcpy((void*)new_ptr.trie, this, size);
       *dest = new_ptr.trie;
-      self.storage->free(resolved_ptr(*to_me, this, self.storage), size+sizeof(segment_ptr));
+      self.storage->free(resolved_ptr(*to_me, this), size+sizeof(segment_ptr));
       *to_me = new_ptr;
     }
     return false;
@@ -223,7 +225,7 @@ struct TrieData {
 
 struct Trie : public NodeHandler {
   TrieData* ptr1(Transition& self) {
-    return (TrieData*)self.node_ptr->resolve(self.storage);
+    return self.node_ptr->resolve(self.storage).trie;
   }
 
   TrieData* ptr2(Transition& self) {
@@ -373,9 +375,12 @@ struct CompressedData {
   unsigned char size;
   char keys[];
 
+  size_t size_of(size_t size) {
+    return size+sizeof(CompressedData);
+  }
+
   void free(Transition& self) {
-    self.storage->free(
-      resolved_ptr(*self.node_ptr, this, self.storage), size+sizeof(CompressedData));
+    self.storage->free(resolved_ptr(*self.node_ptr, this), size_of(size));
   }
 };
 #pragma pack(0)
@@ -387,7 +392,7 @@ inline char sign(int x) {
 
 struct Compressed : public NodeHandler {
   static CompressedData* ptr(Transition& self) {
-    return (CompressedData*)self.node_ptr->resolve(self.storage);
+    return self.node_ptr->resolve(self.storage).compressed;
   }
 
   segment_ptr* find(Transition& self, ISlice& key, string& current_key) {
@@ -563,8 +568,8 @@ bool Trie::remove(Transition& self, bool last) {
   if (popcount(self.upper->bits) == 1 && popcount(self.lower->bits) == 1) {
     segment_ptr next = self.lower->children[0];
     char value = (ctz(self.upper->bits) << 4) | ctz(self.lower->bits);
-    self.storage->pools[0].free(resolved_ptr(*self.second_ptr, self.lower, self.storage));
-    self.storage->pools[0].free(resolved_ptr(*self.node_ptr, self.upper, self.storage));
+    self.storage->pools[0].free(resolved_ptr(*self.second_ptr, self.lower));
+    self.storage->pools[0].free(resolved_ptr(*self.node_ptr, self.upper));
     *self.node_ptr = Compressed::build(self.storage, next, Slice(&value, 1));
     self.remove(last);  // combines compressed if possible
   }
@@ -625,8 +630,7 @@ void Compressed::insert(Transition& self, ISlice& key, const Slice& value, strin
 void Value::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
   if (key.empty()) {
     segment_ptr new_ptr(build(self.storage, self.value->next, value));
-    self.storage->free(
-      resolved_ptr(*self.node_ptr, self.value, self.storage), self.value->size+sizeof(ValueData));
+    self.storage->free(resolved_ptr(*self.node_ptr, self.value), self.value->size_of());
     *self.node_ptr = new_ptr;
     return;
   }
@@ -679,7 +683,7 @@ void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
 
 struct ValueDumper : public DumpBase {
   void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    ValueData *data = (ValueData*)ptr.resolve(storage);
+    ValueData *data = ptr.resolve(storage).value;
     out << "id: " << ptr << std::endl;
     out << "size: " << (int)data->size << std::endl;
     out << "value: \"";
@@ -699,7 +703,7 @@ struct ValueDumper : public DumpBase {
 
 struct CompressDumper : public DumpBase {
   void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    CompressedData *data = (CompressedData*)ptr.resolve(storage);
+    CompressedData *data = ptr.resolve(storage).compressed;
     out << "id: " << ptr << std::endl;
     out << "size: " << (int)data->size << std::endl;
     out << "keys: \"";
@@ -719,7 +723,7 @@ struct CompressDumper : public DumpBase {
 
 struct TrieDumper : public DumpBase {
   void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    TrieData *data = (TrieData*)ptr.resolve(storage);
+    TrieData *data = ptr.resolve(storage).trie;
     int size = popcount(data->bits);
     out << "id: " << ptr << std::endl;
     out << "size: " << popcount(data->bits) << std::endl;

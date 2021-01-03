@@ -49,29 +49,29 @@ void Pool::create(Storage* storage, PPool* pool, size_t node_size, size_t area_c
 }
 
 resolved_ptr Pool::allocate() {
-  resolved_ptr result(storage);
+  resolved_ptr result;
 
   if (pool->next_free) {
-    result = pool->next_free;
+    result = pool->next_free.resolve(storage);
     pool->next_free = *result.next;
     pool->freed_nodes--;
   }
   else if ((size_t)(pool->next_node - pool->current_area) >= pool->area_size) {
     pool->current_area = storage->mem_allocate(pool->area_size);
     pool->next_node = pool->current_area + (uint32_t)pool->node_size;
-    result = pool->current_area;
+    result = pool->current_area.resolve(storage);
   }
   else {
-    result = pool->next_node;
+    result = pool->next_node.resolve(storage);
     pool->next_node += pool->node_size;
   }
-  result.me.type = 0;
+
 #ifdef CHECK_MEM
   char* mem = result.resolved;
   *((size_t*)(mem+pool->node_size-sizeof(size_t))) = pool->node_size | 0x80000000;
 #endif
   pool->used_nodes++;
-  return result;
+  return result.type(kValue);
 }
 
 void Pool::free(const resolved_ptr& ptr) {
@@ -245,7 +245,7 @@ resolved_ptr Storage::allocate(size_t size) {
   if (index < value_pool_count)
     return value_pools[index].allocate();
 
-  return mem_allocate(size);
+  return mem_allocate(size).type(kValue);
 }
 
 void Storage::mem_free(const resolved_ptr& ptr) {
@@ -254,23 +254,22 @@ void Storage::mem_free(const resolved_ptr& ptr) {
 
 resolved_ptr Storage::mem_allocate(size_t size) {
   size_t index = 0;
+  void* address;
+
   for(segment_v::iterator i = segments.begin(); i != segments.end(); i++, index++) {
-    size_t address = (size_t)i->memory.allocate(size, std::nothrow);
+    address = i->memory.allocate(size, std::nothrow);
     if (address)
-      return resolved_ptr(
-        segment_ptr(index, address-(size_t)i->region.get_address()), (void*)address, this);
+      return resolved_ptr(index, address, i->region.get_address());
   }
 
   size_t new_offset = OFFSET + segments.size()*segment_size;
   std::filesystem::resize_file(file.get_name(), new_offset + segment_size);
   segments.push_back(Segment(create_only, file, new_offset, segment_size));
   Segment& back(segments.back());
-  size_t address = (size_t)back.memory.allocate(size, std::nothrow);
+  address = back.memory.allocate(size, std::nothrow);
   if (!address)
     throw std::bad_alloc();
-  return resolved_ptr(
-    segment_ptr(segments.size()-1, address-(size_t)back.region.get_address()),
-    (void*)address, this);
+  return resolved_ptr(segments.size()-1, address, back.region.get_address());
 }
 
 } // namespace leaves

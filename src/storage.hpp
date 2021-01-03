@@ -66,7 +66,7 @@ struct segment_ptr {
   operator bool() const { return type != 1; }
   bool operator!() const { return type == 1; }
 
-  void* resolve(const Storage* storage) const;
+  resolved_ptr resolve(const Storage* storage) const;
 };
 #pragma pack(0)
 
@@ -80,41 +80,42 @@ enum NodeTypes {
 
 struct resolved_ptr {
   // A resolved segment_ptr
-
-  Storage *storage;
   union {
     ValueData *value;
     TrieData *trie;
     CompressedData *compressed;
     segment_ptr *next;
     char* resolved;
+    void* pointer;
   };
   segment_ptr me;
 
-  resolved_ptr(Storage* storage): storage(storage), resolved(NULL) {}
+  resolved_ptr(): resolved(NULL) {}
 
-  resolved_ptr(segment_ptr ptr, void* resolved, Storage* storage, NodeTypes t=kValue)
-    : storage(storage), resolved((char*)resolved), me(ptr) { me.type = t; }
+  resolved_ptr(segment_ptr ptr, void* resolved)
+    : resolved((char*)resolved), me(ptr) { }
 
-  resolved_ptr(segment_ptr ptr, Storage* storage, NodeTypes t=kValue) :
-    storage(storage), me(ptr) { me.type = t; resolved = (char*)raw_resolve(me); }
+  resolved_ptr(segment_index_t segment_id, void* address, void *base)
+    : pointer(address), me(segment_id, (size_t)address-(size_t)base) {}
 
-  const resolved_ptr& operator=(segment_ptr other) {
-    me = other;
-    me.type = kValue;
-    resolved = (char*)raw_resolve(me);
+  NodeTypes type() const {
+    return (NodeTypes)me.type;
+  }
+
+  const resolved_ptr& type(NodeTypes type) {
+    me.type = type;
     return *this;
   }
 
-  resolved_ptr resolve(segment_ptr ptr) const {
+  resolved_ptr resolve(segment_ptr ptr, const Storage* storage) const {
     if (ptr.segment_id == me.segment_id) {
       // we don't need storage
-      return resolved_ptr(ptr, (void*)(resolved - me.delta + ptr.delta), storage);
+      return resolved_ptr(ptr, (void*)(resolved - me.delta + ptr.delta));
     }
-    return resolved_ptr(ptr, raw_resolve(ptr), storage);
+    return resolved_ptr(ptr, raw_resolve(ptr, storage));
   }
 
-  void* raw_resolve(segment_ptr ptr) const;
+  void* raw_resolve(segment_ptr ptr, const Storage* storage) const;
 };
 
 
@@ -209,11 +210,11 @@ inline segment_ptr segment_ptr::operator=(const resolved_ptr& other) {
   return *this = other.me;
 }
 
-inline void* segment_ptr::resolve(const Storage* storage) const {
-  return (void*)((char*)storage->get_segment_address(segment_id) + delta);
+inline resolved_ptr segment_ptr::resolve(const Storage* storage) const {
+  return resolved_ptr(*this, (void*)((char*)storage->get_segment_address(segment_id) + delta));
 }
 
-inline void* resolved_ptr::raw_resolve(segment_ptr ptr) const {
+inline void* resolved_ptr::raw_resolve(segment_ptr ptr, const Storage* storage) const {
   return (char*)storage->get_segment_address(ptr.segment_id) + ptr.delta;
 }
 
