@@ -29,14 +29,18 @@ struct resolved_ptr;
 
 #pragma pack(2)
 struct segment_ptr {
-  // The persistent part of a segment pointer
+  /* The persistent part of a segment pointer
+     All Objects are align on a 8 byte boundary
+     -> we keep the same address space by multiplying the delta with 8
+        and use the spared 3 bit for specifying the node type.
+  */
 
-  uint32_t delta:30;
-  uint32_t type:2;
+  uint32_t delta:29;
+  uint32_t type:3;
   segment_index_t segment_id;
 
   segment_ptr(segment_index_t segment_id=0, uint32_t delta=0, uint32_t type=1)
-    : delta(delta), type(type), segment_id(segment_id) {}
+    : delta(delta>>3), type(type), segment_id(segment_id) {}
 
   segment_ptr operator=(const resolved_ptr& other);
 
@@ -45,25 +49,25 @@ struct segment_ptr {
   }
 
   segment_ptr operator+=(uint32_t diff) {
-    delta += diff;
+    delta += diff >> 3;
     return *this;
   }
 
   segment_ptr operator+(uint32_t diff) {
-    return segment_ptr(segment_id, delta + diff);
+    return segment_ptr(segment_id, (delta << 3) + diff);
   }
 
   segment_ptr operator-(uint32_t diff) {
-    return segment_ptr(segment_id, delta - diff);
+    return segment_ptr(segment_id, (delta << 3) - diff);
   }
 
   int64_t operator-(segment_ptr& other) {
     assert(segment_id == other.segment_id);
-    return delta - other.delta;
+    return (delta - other.delta) << 3;
   }
 
-  operator bool() const { return type != 1; }
-  bool operator!() const { return type == 1; }
+  operator bool() const { return delta != 0; }
+  bool operator!() const { return delta == 0; }
 
   resolved_ptr resolve(const Storage* storage) const;
 };
@@ -210,11 +214,11 @@ inline segment_ptr segment_ptr::operator=(const resolved_ptr& other) {
 }
 
 inline resolved_ptr segment_ptr::resolve(const Storage* storage) const {
-  return resolved_ptr(*this, (void*)((char*)storage->get_segment_address(segment_id) + delta));
+  return resolved_ptr(*this, ((char*)storage->get_segment_address(segment_id) + (delta<<3)));
 }
 
 inline void* resolved_ptr::raw_resolve(segment_ptr ptr, const Storage* storage) const {
-  return (char*)storage->get_segment_address(ptr.segment_id) + ptr.delta;
+  return (char*)storage->get_segment_address(ptr.segment_id) + (ptr.delta << 3);
 }
 
 

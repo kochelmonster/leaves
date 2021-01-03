@@ -13,7 +13,7 @@ using namespace leaves;
 
 Options TEST_OPTIONS(1024*16, 100, 1);
 
-#define NODE_SIZE  64
+#define NODE_SIZE  (64>>3)  // delta is 8 based
 
 
 BOOST_AUTO_TEST_CASE(start_storage) {
@@ -61,8 +61,8 @@ BOOST_AUTO_TEST_CASE(start_storage) {
     for(int i = 0; i < 200; i++) {
       ptr2 = storage.pools[2].allocate();
     }
-    //std::cout << "allocated4 " << ptr1.me.delta << ", " << ptr1.me.segment_id << std::endl;
-    //std::cout << "allocated5 " << ptr2.me.delta << ", " << ptr2.me.segment_id << std::endl;
+    // std::cout << "allocated4 " << ptr1.me.delta << ", " << ptr1.me.segment_id << std::endl;
+    // std::cout << "allocated5 " << ptr2.me.delta << ", " << ptr2.me.segment_id << std::endl;
     BOOST_REQUIRE_EQUAL(ptr2.me.segment_id, 3);
 
     storage.pools[2].free(ptr1);

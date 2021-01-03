@@ -96,7 +96,7 @@ struct Transition {
     assert(value != NULL);
     if (ptr.segment_id == node_ptr->segment_id) {
       // we don't need storage
-      return (void*)((size_t)value - node_ptr->delta + ptr.delta);
+      return (void*)((size_t)value + ((ptr.delta - node_ptr->delta) << 3));
     }
     return ptr.resolve(storage).next;
   }

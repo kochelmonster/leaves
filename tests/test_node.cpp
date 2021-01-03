@@ -1,5 +1,5 @@
 #define BOOST_TEST_MODULE ModifyTest
-//#define GENERATE
+// #define GENERATE
 
 #include <cstdio>
 #include <boost/test/included/unit_test.hpp>

@@ -63,9 +63,8 @@ resolved_ptr Pool::allocate() {
     pool->freed_nodes--;
   }
   else if ((size_t)(pool->next_node - pool->current_area) >= pool->area_size) {
-    pool->current_area = storage->mem_allocate(pool->area_size);
+    pool->current_area = result = storage->mem_allocate(pool->area_size);
     pool->next_node = pool->current_area + (uint32_t)pool->node_size;
-    result = pool->current_area.resolve(storage);
   }
   else {
     result = pool->next_node.resolve(storage);
