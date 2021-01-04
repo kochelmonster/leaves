@@ -144,7 +144,8 @@ Storage::Storage(const char* path, const Options& options) {
 
     segment_size = options.segment_size;
     value_pool_start_size = std::max(options.value_pool_start_size, (size_t)100)+sizeof(ValueData);
-    value_pool_increment = options.value_pool_increment;
+    value_pool_start_size = ((value_pool_start_size+7)/8)*8;
+    value_pool_increment = ((options.value_pool_increment+7)/8)*8;
     value_pool_count = std::max(
       (size_t)1, std::min(options.value_pool_count, (size_t)MAX_VALUE_POOL_COUNT));
 

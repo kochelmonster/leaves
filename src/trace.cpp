@@ -42,7 +42,7 @@ void Trace::set_value(const Slice& value) {
     throw NoValidPosition();
 
   sanitize();
-  Transition transition(stack.back());
+  Transition& transition(stack.back());
   transition.insert(rest_key, value, current_key);
   (*storage.version)++;
   ifind();

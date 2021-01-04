@@ -68,18 +68,18 @@ def build(bld):
 
     bld.program(
         features="test",
-        source=test("test_node.cpp")+source("storage.cpp trace.cpp node.cpp"),
+        source=test("test_node.cpp")+source("storage.cpp trace.cpp node.cpp trie.cpp"),
         use="TEST BOOST",
         target="test_node")
 
     bld.program(
         features="test",
-        source=test("test_db.cpp")+source("storage.cpp trace.cpp node.cpp leaves.cpp"),
+        source=test("test_db.cpp")+source("storage.cpp trace.cpp node.cpp trie.cpp leaves.cpp"),
         use="TEST BOOST",
         target="test_db")
 
     bld.stlib(
-        source=source("storage.cpp trace.cpp node.cpp leaves.cpp"),
+        source=source("storage.cpp trace.cpp node.cpp trie.cpp leaves.cpp"),
         use="LIB",
         target="leaves")
 

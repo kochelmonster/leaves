@@ -328,7 +328,7 @@ class Benchmark {
       fprintf(stderr, "segment_size  :     %ld\n", stats.segment_size);
       fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
 
-      for(int i = 0; i < 5; i++) {
+      for(int i = 0; i < 4; i++) {
         fprintf(stderr, "used_nodes [%i]:     %ld\n", i, stats.used_nodes[i]);
         fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.freed_nodes[i]);
       }

@@ -29,6 +29,8 @@ struct Leaf {
 #pragma pack(0)
 
 
+
+
 /*
 null?   0
 
@@ -65,6 +67,54 @@ struct ValueData {
   size_t size_of() {
     return size + sizeof(ValueData);
   }
+
+  static resolved_ptr build(Storage* storage, segment_ptr next, const Slice& value) {
+    resolved_ptr result(storage->allocate(value.size()+sizeof(ValueData)));
+    result.value->size = value.size();
+    memcpy(result.value->value, value.data(), value.size());
+    result.value->next = next;
+    return result;
+  }
+};
+#pragma pack(0)
+
+#define MAX_COMPRESSED_LEN (MAX_POOL_SIZE - sizeof(CompressedData))
+
+
+#pragma pack(1)
+struct CompressedData {
+  segment_ptr next;
+  unsigned char size;
+  char keys[];
+
+  size_t size_of(size_t size) {
+    return size+sizeof(CompressedData);
+  }
+
+  void free(Transition& self);
+
+  void fill(segment_ptr next_, const Slice& key) {
+    next = next_;
+    size = (unsigned char)key.size();
+    memcpy(keys, key.data(), key.size());
+  }
+
+  static resolved_ptr build(Storage* storage, const resolved_ptr& next, const Slice& key) {
+    if (key.empty())
+      return next;
+
+    if (key.size() > MAX_COMPRESSED_LEN) {
+      // divide key in multiple compressed
+      Slice first(key.data(), MAX_COMPRESSED_LEN);
+      Slice second(key.advance(MAX_COMPRESSED_LEN));
+      return build(storage, build(storage, next, second), first);
+    }
+
+    resolved_ptr result(storage->allocate(key.size()+sizeof(CompressedData)).type(kCompressed));
+    result.compressed->fill(next.me, key);
+    return result;
+  }
+
 };
 #pragma pack(0)
 
@@ -84,21 +134,31 @@ struct ISlice : public Slice {
 
 struct NodeHandler;
 struct TrieData;
-struct CompressedData;
 
 
 struct Transition {
-  Transition(segment_ptr* pptr, Storage* storage):
-    node_ptr(pptr), storage(storage), cmp(0) { value = pptr->resolve(storage).value; }
+  Transition(segment_ptr* pptr, Storage* storage)
+    : node_ptr(pptr), value(node_ptr->resolve(storage).value), storage(storage), cmp(0) {  }
 
-  void* resolve(segment_ptr ptr) {
-    // use only if node_ptr has been resolved
-    assert(value != NULL);
+  Transition(resolved_ptr* pptr, Storage* storage)
+    : node_ptr(&pptr->me), value(pptr->value), storage(storage), cmp(0) {  }
+
+  void set(segment_ptr ptr) {
+    *node_ptr = ptr;
+    value = ptr.resolve(storage).value;
+  }
+
+  void set(const resolved_ptr& ptr) {
+    *node_ptr = ptr.me;
+    value = ptr.value;
+  }
+
+  resolved_ptr resolve(segment_ptr ptr) {
     if (ptr.segment_id == node_ptr->segment_id) {
       // we don't need storage
-      return (void*)((size_t)value + ((ptr.delta - node_ptr->delta) << 3));
+      return resolved_ptr(ptr, (void*)((size_t)value + ((ptr.delta - node_ptr->delta) << 3)));
     }
-    return ptr.resolve(storage).next;
+    return ptr.resolve(storage);
   }
 
   bool valid() const;
@@ -108,7 +168,6 @@ struct Transition {
   segment_ptr* first(string& current_key);
   segment_ptr* last(string& current_key);
   int advance(ISlice& key);
-
   void insert(ISlice& key, const Slice& value, string& current_key);
   bool remove(bool last);
   Slice get_value() const;
@@ -185,6 +244,12 @@ inline Slice Transition::get_value() const {
 inline bool Transition::remove(bool last) {
   return handler()->remove(*this, last);
 }
+
+
+inline void CompressedData::free(Transition& self) {
+  self.storage->free(resolved_ptr(*self.node_ptr, this), size_of(size));
+}
+
 
 } // namespace leaves
 #endif // _LARCH_LEAVES_MEMORY_HPP

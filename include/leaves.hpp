@@ -158,10 +158,10 @@ struct Stats : public Options {
   uint16_t segment_count;
 
   // count of used nodes in the standard pools
-  size_t used_nodes[5];
+  size_t used_nodes[4];
 
   // count of freed nodes in the standard pools
-  size_t freed_nodes[5];
+  size_t freed_nodes[4];
 
   size_t value_used_nodes[MAX_VALUE_POOL_COUNT];
   size_t value_freed_nodes[MAX_VALUE_POOL_COUNT];
