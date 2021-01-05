@@ -25,7 +25,7 @@ def transform(nodes):
         if n is None:
             continue
         try:
-            n["children"] = [nmap.get(c, c) for c in n["children"]]
+            n["children"] = [nmap.get(c, c) for c in n["children"] if c != "kNull-0-0"]
         except KeyError:
             pass
 

@@ -20,6 +20,12 @@ namespace leaves {
 #endif
 
 
+#define MAIN_POOL_COUNT 4
+#define MAX_VALUE_POOL_COUNT 20
+#define MAX_DB_SIZE (((size_t)1)<<47)
+
+
+
 class LeavesException : public std::exception {
 };
 
@@ -119,25 +125,37 @@ public:
 };
 
 
-#define MAX_VALUE_POOL_COUNT 20
-
 struct Options {
   Options(
-    size_t segment_size=1<<26,
+    size_t grow_size=1<<26,
     size_t area_count=2000,
     size_t value_pool_count=5,
     size_t value_pool_start_size=128,
-    size_t value_pool_increment=128)
-    : segment_size(segment_size),
+    size_t value_pool_increment=128,
+    size_t max_db_size=((size_t)1)<<37) // 128 Giga)
+    : max_db_size(max_db_size),
+      grow_size(grow_size),
       area_count(area_count),
       value_pool_count(value_pool_count),
       value_pool_start_size(value_pool_start_size),
       value_pool_increment(value_pool_increment) {}
 
-  /* size of file segments, a db grows in the segment_size increments */
-  size_t segment_size;
+  /* the maximum size of the database
 
-  /* the count of items in a segregated memory pool chunk */
+    can be changed after creation.
+  */
+  size_t max_db_size;
+
+  /* a database grows on multiples of grow_size
+
+    can be changed after creation.
+  */
+  size_t grow_size;
+
+  /* the count of items in a segregated memory pool chunk
+
+     cannot be changed after creation.
+  */
   size_t area_count;
 
   /*
@@ -146,6 +164,8 @@ struct Options {
     value_pool_increment = 32
     value_pool_count = 3
     creates 3 memory pools for size 132, 164, 196 bytes
+
+    cannot be changed after creation.
   */
   size_t value_pool_count;
   size_t value_pool_start_size;
@@ -154,17 +174,11 @@ struct Options {
 
 
 struct Stats : public Options {
-  // count of segments
-  uint16_t segment_count;
-
   // count of used nodes in the standard pools
-  size_t used_nodes[4];
+  size_t used_nodes[MAIN_POOL_COUNT+MAX_VALUE_POOL_COUNT];
 
   // count of freed nodes in the standard pools
-  size_t freed_nodes[4];
-
-  size_t value_used_nodes[MAX_VALUE_POOL_COUNT];
-  size_t value_freed_nodes[MAX_VALUE_POOL_COUNT];
+  size_t freed_nodes[MAIN_POOL_COUNT+MAX_VALUE_POOL_COUNT];
 };
 
 

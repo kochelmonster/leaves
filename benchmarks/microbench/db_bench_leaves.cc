@@ -324,17 +324,12 @@ class Benchmark {
     if (db_) {
       leaves::Stats stats;
       db_->get_stats(stats);
-      fprintf(stderr, "segment_count :     %d\n", stats.segment_count);
-      fprintf(stderr, "segment_size  :     %ld\n", stats.segment_size);
+      fprintf(stderr, "grow_size     :     %ld\n", stats.grow_size);
       fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
 
-      for(int i = 0; i < 4; i++) {
+      for(int i = 0; i < MAIN_POOL_COUNT+stats.value_pool_count; i++) {
         fprintf(stderr, "used_nodes [%i]:     %ld\n", i, stats.used_nodes[i]);
         fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.freed_nodes[i]);
-      }
-      for(size_t i = 0; i < stats.value_pool_count; i++) {
-        fprintf(stderr, "vused_nodes [%ld]:    %ld\n", i, stats.value_used_nodes[i]);
-        fprintf(stderr, "vfreed_nodes[%ld]:    %ld\n", i, stats.value_freed_nodes[i]);
       }
     }
   }
@@ -453,7 +448,7 @@ class Benchmark {
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
     leaves::Options options;
-    options.segment_size = 1<<26;
+    options.grow_size = 1<<26;
     options.area_count = FLAGS_area_count;
     db_ = leaves::DB::open(test_fname.c_str(), options);
   }

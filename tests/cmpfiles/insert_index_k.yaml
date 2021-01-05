@@ -1,109 +1,98 @@
-id: kCompressed-0-62
+id: kCompressed-512
 size: 2
 keys: "[a][b]"
 children: 
-  - kTrie-0-56
+  - kTrie-480
 ---
-id: kTrie-0-56
+id: kTrie-480
 size: 1
 bits: 40
 bitindex: [6]
 children: 
-  - kTrie-1-18
+  - kTrie-11872
 ---
-id: kTrie-1-18
+id: kTrie-11872
 size: 11
 bits: ffe
 bitindex: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 byteindex: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"]
 children: 
-  - kValue-0-54
-  - kValue-0-64
-  - kCompressed-0-52
-  - kValue-0-50
-  - kValue-0-66
-  - kValue-0-68
-  - kValue-0-70
-  - kCompressed-0-60
-  - kValue-0-72
-  - kValue-0-74
-  - kValue-0-76
+  - kValue-464
+  - kValue-544
+  - kCompressed-448
+  - kValue-528
+  - kValue-560
+  - kValue-576
+  - kValue-592
+  - kCompressed-496
+  - kValue-608
+  - kValue-624
+  - kValue-640
 ---
-id: kValue-0-54
+id: kValue-464
 size: 3
 value: "[a][b][a]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-64
+id: kValue-544
 size: 3
 value: "[a][b][b]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kCompressed-0-52
+id: kCompressed-448
 size: 4
 keys: "[d][e][f][g]"
 children: 
-  - kValue-0-250
+  - kValue-2048
 ---
-id: kValue-0-250
+id: kValue-2048
 size: 7
 value: "[a][b][c][d][e][f][g]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-50
+id: kValue-528
 size: 3
 value: "[a][b][d]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-66
+id: kValue-560
 size: 3
 value: "[a][b][e]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-68
+id: kValue-576
 size: 3
 value: "[a][b][f]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-70
+id: kValue-592
 size: 3
 value: "[a][b][g]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kCompressed-0-60
+id: kCompressed-496
 size: 2
 keys: "[i][j]"
 children: 
-  - kValue-0-58
+  - kValue-2116
 ---
-id: kValue-0-58
+id: kValue-2116
 size: 5
 value: "[a][b][h][i][j]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-72
+id: kValue-608
 size: 3
 value: "[a][b][i]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-74
+id: kValue-624
 size: 3
 value: "[a][b][j]"
-children: 
-  - kNull-0-0
+children: []
 ---
-id: kValue-0-76
+id: kValue-640
 size: 3
 value: "[a][b][k]"
-children: 
-  - kNull-0-0
+children: []
 ---

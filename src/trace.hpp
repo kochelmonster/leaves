@@ -3,7 +3,7 @@
 
 namespace leaves {
 
-typedef segment_ptr* (*move_func_t)(Transition& transition, string& current_key);
+typedef offset_ptr* (*move_func_t)(Transition& transition, string& current_key);
 
 
 struct Trace {

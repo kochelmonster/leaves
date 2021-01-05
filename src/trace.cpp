@@ -4,19 +4,19 @@
 namespace leaves {
 
 
-segment_ptr* ifirst(Transition& transition, string& current_key) {
+offset_ptr* ifirst(Transition& transition, string& current_key) {
   return transition.first(current_key);
 }
 
-segment_ptr* ilast(Transition& transition, string& current_key) {
+offset_ptr* ilast(Transition& transition, string& current_key) {
   return transition.last(current_key);
 }
 
-segment_ptr* inext(Transition& transition, string& current_key) {
+offset_ptr* inext(Transition& transition, string& current_key) {
   return transition.next(current_key);
 }
 
-segment_ptr* iprev(Transition& transition, string& current_key) {
+offset_ptr* iprev(Transition& transition, string& current_key) {
   return transition.prev(current_key);
 }
 
@@ -86,7 +86,7 @@ void Trace::imove_end(move_func_t move) {
   stack.clear();
   stack.push_back(Transition(storage.start, &storage));
   while(true) {
-      segment_ptr *next = move(stack.back(), current_key);
+      offset_ptr *next = move(stack.back(), current_key);
       if (!next)
         break;
       stack.push_back(Transition(next, &storage));
@@ -100,7 +100,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
 
   sanitize();
   rest_key = Slice();
-  segment_ptr *next;
+  offset_ptr *next;
   while(stack.size()) {
     next = move(stack.back(), current_key);
     if (next)
@@ -120,7 +120,7 @@ void Trace::ifind() {
   if (stack.empty())
     stack.push_back(Transition(storage.start, &storage));
 
-  segment_ptr *next;
+  offset_ptr *next;
   while(true) {
     Transition& active(stack.back());
     next = active.find(rest_key, current_key);

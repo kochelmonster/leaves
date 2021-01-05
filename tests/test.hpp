@@ -26,7 +26,7 @@ struct Preparation {
 
 namespace leaves {
 // defined in node.cpp
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
+void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 }
 
 

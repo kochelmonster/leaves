@@ -1,5 +1,5 @@
 #define BOOST_TEST_MODULE ModifyTest
-// #define GENERATE
+//#define GENERATE
 
 #include <cstdio>
 #include <boost/test/included/unit_test.hpp>
@@ -111,15 +111,15 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   value.resize(100);
   trace.set_value(value);  // use value pool
 
-  BOOST_REQUIRE_EQUAL(storage.value_pools[0].pool->used_nodes, 1);
+  BOOST_REQUIRE_EQUAL(storage.pools[MAIN_POOL_COUNT].pool->used_nodes, 1);
 
   trace.find(key);
   BOOST_REQUIRE_EQUAL(trace.get_value().string(), value);
 
   trace.set_value(key);
 
-  BOOST_REQUIRE_EQUAL(storage.value_pools[0].pool->used_nodes, 0);
-  BOOST_REQUIRE_EQUAL(storage.value_pools[0].pool->freed_nodes, 1);
+  BOOST_REQUIRE_EQUAL(storage.pools[MAIN_POOL_COUNT].pool->used_nodes, 0);
+  BOOST_REQUIRE_EQUAL(storage.pools[MAIN_POOL_COUNT].pool->freed_nodes, 1);
 }
 
 BOOST_AUTO_TEST_CASE(remove_intermediate) {

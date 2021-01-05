@@ -151,13 +151,23 @@ BOOST_AUTO_TEST_CASE(test_strings) {
     std::cout << "freed_nodes ["<<i<<"]:   " << stats.freed_nodes[i] << std::endl;
   }
 
-  std::cout << "start test: " << count << std::endl;
+  std::cout << "start find test: " << count << std::endl;
   for(int i = 0; i < 100; i++) {
     const char* name = names[rand() % count];
     std::cout << "test " << name << std::endl;
     cursor->find(name);
     BOOST_REQUIRE(cursor->valid());
     BOOST_REQUIRE_EQUAL(cursor->key().string(), std::string(name));
+  }
+
+  std::cout << "start missing test: " << count << std::endl;
+  for(int i = 0; i < 100; i++) {
+    const char* name = names[rand() % count];
+    std::string src(name);
+    src.append("--no");
+    std::cout << "no test " << src << std::endl;
+    cursor->find(src);
+    BOOST_REQUIRE(!cursor->valid());
   }
 }
 

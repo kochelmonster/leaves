@@ -1,12 +1,11 @@
-id: kCompressed-0-56
+id: kCompressed-480
 size: 2
 keys: "[a][b]"
 children: 
-  - kValue-0-54
+  - kValue-464
 ---
-id: kValue-0-54
+id: kValue-464
 size: 2
 value: "[a][b]"
-children: 
-  - kNull-0-0
+children: []
 ---

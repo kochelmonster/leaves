@@ -5,12 +5,6 @@
 #include "storage.hpp"
 #include "node.hpp"
 
-// #define CHECK_MEM
-
-#ifdef CHECK_MEM
-#include <iostream>
-#endif
-
 
 #define SIGNATURE "LarchLeaves"
 
@@ -18,10 +12,13 @@ using namespace boost::interprocess;
 
 namespace leaves {
 
-struct Internal {
+#pragma pack(2)
+struct NullData : public Node {
+  // we abuse it to save some singletons
   uint64_t version;
-  segment_ptr start;
+  offset_ptr start;
 };
+#pragma pack(0)
 
 struct StorageHeader {
   char signature[sizeof(SIGNATURE)];
@@ -29,77 +26,64 @@ struct StorageHeader {
   size_t value_pool_start_size;
   size_t value_pool_increment;
   size_t value_pool_count;
-  size_t segment_size;
-  uint16_t segment_count;
-  uint32_t pools; // start pointer of the 5 main pools
-  uint32_t value_pools; // start pointer of the value pools
-  uint32_t internal; // pointer to internal structure
+  uint32_t pools; // start pointer of the pools
+  uint32_t null; // pointer to null structure
 };
 
 #define HEAD_ALIGN rbtree_best_fit<null_mutex_family>::Alignment
 #define OFFSET (((sizeof(StorageHeader)+(HEAD_ALIGN-1))/HEAD_ALIGN)*HEAD_ALIGN)
 
 
-void Pool::create(Storage* storage, PPool* pool, size_t node_size, size_t area_count) {
-  this->storage = storage;
-  this->pool = pool;
-#ifdef CHECK_MEM
-  node_size += sizeof(size_t);
-#endif
+void Pool::create(
+      Storage* storage_, PPool* pool_, uint16_t index_, size_t node_size, size_t area_count) {
+  storage = storage_;
+  index = index_;
+  pool = pool_;
   pool->used_nodes = 0;
   pool->freed_nodes = 0;
   pool->node_size = node_size;
   pool->area_size = area_count*node_size;
   pool->current_area = pool->next_node = storage->mem_allocate(pool->area_size);
-  pool->next_free = segment_ptr();
+  pool->next_free.to_null();
 }
 
-resolved_ptr Pool::allocate() {
-  resolved_ptr result;
+any_ptr Pool::allocate() {
+  any_ptr result;
 
   if (pool->next_free) {
-    result = pool->next_free.resolve(storage);
+    result = pool->next_free.resolve();
     pool->next_free = *result.next;
     pool->freed_nodes--;
   }
   else if ((size_t)(pool->next_node - pool->current_area) >= pool->area_size) {
     pool->current_area = result = storage->mem_allocate(pool->area_size);
-    pool->next_node = pool->current_area + (uint32_t)pool->node_size;
+    pool->next_node = pool->current_area + (int64_t)pool->node_size;
   }
   else {
-    result = pool->next_node.resolve(storage);
+    result = pool->next_node.resolve();
     pool->next_node += pool->node_size;
   }
 
-#ifdef CHECK_MEM
-  char* mem = result.resolved;
-  *((size_t*)(mem+pool->node_size-sizeof(size_t))) = pool->node_size | 0x80000000;
-#endif
   pool->used_nodes++;
-  return result.type(kValue);
+  result.node->pool = index;
+  return result;
 }
 
-void Pool::free(const resolved_ptr& ptr) {
+void Pool::free(any_ptr ptr) {
   pool->used_nodes--;
   pool->freed_nodes++;
 
-  #ifdef CHECK_MEM
-    char* mem = ptr.resolved;
-    if (*((size_t*)(mem+pool->node_size-sizeof(size_t))) != (pool->node_size | 0x80000000)) {
-      std::cout << "error " << pool->node_size << " != "
-                << (*((size_t*)(mem+pool->node_size-sizeof(size_t))) & 0x7FFFFFFF)
-                << std::endl;
-    }
-    assert(*((size_t*)(mem+pool->node_size-sizeof(size_t))) == (pool->node_size | 0x80000000));
-    *((size_t*)(mem+pool->node_size-sizeof(size_t))) = pool->node_size;
-  #endif
-  *ptr.next = pool->next_free;
+  assert(ptr.node->pool == index);
+  *(ptr.next) = pool->next_free;
   pool->next_free = ptr;
 }
 
 
 Storage::Storage(const char* path, const Options& options) {
   size_t offset = OFFSET;
+
+  grow_size = options.grow_size;
+  size_t max_db_size = std::min(options.max_db_size, MAX_DB_SIZE);
 
   std::ifstream fhead(path, std::ios::in|std::ios::binary);
   if (fhead.is_open()) {
@@ -111,29 +95,25 @@ Storage::Storage(const char* path, const Options& options) {
     if (strcmp(header.signature, SIGNATURE))
       throw std::runtime_error("wrong filetype");
 
-    segment_size = header.segment_size;
     value_pool_start_size = header.value_pool_start_size;
     value_pool_increment = header.value_pool_increment;
     value_pool_count = header.value_pool_count;
 
+    size_t fsize = std::filesystem::file_size(path);
     file = file_mapping(path, read_write);
-    for(size_t i = 0; i < header.segment_count; i++, offset += segment_size) {
-      segments.push_back(Segment(open_only, file, offset, segment_size));
-    }
+    region = mapped_region(file, read_write, offset, max_db_size);
+    memory = managed_external_buffer(open_only, region.get_address(), fsize-offset);
 
-    size_t address = (size_t)segments[0].region.get_address();
+    size_t address = (size_t)region.get_address();
+    size_t count = value_pool_count+MAIN_POOL_COUNT;
+    pools = new Pool[count];
     PPool* p = (PPool*)(address+header.pools);
-    for(size_t i = 0; i < POOL_COUNT; i++) {
-      pools[i].open(this, p++);
+    for(size_t i = 0; i < count; i++) {
+      pools[i].open(this, p++, i+1);
     }
 
-    p = (PPool*)(address+header.value_pools);
-    value_pools = new Pool[value_pool_count];
-    for(size_t i = 0; i < value_pool_count; i++) {
-      value_pools[i].open(this, p++);
-    }
-
-    Internal *internal((Internal*)(address+header.internal));
+    NullData *internal((NullData*)(address+header.null));
+    null = (void*)internal;
     version = &internal->version;
     start = &internal->start;
   }
@@ -142,40 +122,41 @@ Storage::Storage(const char* path, const Options& options) {
     fhead << std::string(OFFSET, (char)0);
     fhead.close();
 
-    segment_size = options.segment_size;
     value_pool_start_size = std::max(options.value_pool_start_size, (size_t)100)+sizeof(ValueData);
     value_pool_start_size = ((value_pool_start_size+7)/8)*8;
     value_pool_increment = ((options.value_pool_increment+7)/8)*8;
     value_pool_count = std::max(
       (size_t)1, std::min(options.value_pool_count, (size_t)MAX_VALUE_POOL_COUNT));
 
-    std::filesystem::resize_file(path, offset+segment_size);
+    std::filesystem::resize_file(path, offset+grow_size);
     file = file_mapping(path, read_write);
 
-    // create a new one
-    segments.push_back(Segment(create_only, file, offset, segment_size));
-    PPool* p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*POOL_COUNT);
+    region = mapped_region(file, read_write, offset, max_db_size);
+    memory = managed_external_buffer(create_only, region.get_address(), grow_size);
 
-    size_t pool_sizes[] = {16, 32, 64, MAX_POOL_SIZE}; // << will be 96
-    for(size_t i = 0; i < POOL_COUNT; i++) {
-      pools[i].create(this, p++, pool_sizes[i], options.area_count);
+    size_t count = value_pool_count+MAIN_POOL_COUNT;
+    pools = new Pool[count];
+    PPool* p = (PPool*)memory.allocate(sizeof(PPool)*count);
+
+    size_t pool_sizes[] = {16, 34, 64, MAX_POOL_SIZE};
+    size_t i = 0;
+    for(; i < MAIN_POOL_COUNT; i++) {
+      pools[i].create(this, p++, i+1, pool_sizes[i], options.area_count);
     }
 
-    p = (PPool*)segments[0].memory.allocate(sizeof(PPool)*value_pool_count);
-    value_pools = new Pool[value_pool_count];
     size_t node_size = value_pool_start_size;
-    for(size_t i = 0; i < value_pool_count; i++) {
-      value_pools[i].create(this, p++, node_size, options.area_count);
+    for(; i < count; i++) {
+      pools[i].create(this, p++, i+1, node_size, options.area_count);
       node_size += value_pool_increment;
     }
 
-    Internal* internal = (Internal*)pools[0].allocate().resolved;
-
+    NullData* internal = (NullData*)allocate(sizeof(NullData)).as_char;
+    null = (void*)internal;
+    internal->type = kNull;
     version = &internal->version;
     *version = 0;
-
     start = &internal->start;
-    *start = segment_ptr();
+    *start = internal;
 
     flush_header();
   }
@@ -184,12 +165,12 @@ Storage::Storage(const char* path, const Options& options) {
 Storage::~Storage() {
   flush_header();
   flush();
-  delete value_pools;
+  delete pools;
 }
 
 
 void Storage::flush_header() {
-  size_t address = (size_t)segments[0].region.get_address();
+  size_t address = (size_t)region.get_address();
   StorageHeader header;
   std::ofstream fhead(
     file.get_name(), std::ios::in|std::ios::out|std::ios::binary);
@@ -198,84 +179,55 @@ void Storage::flush_header() {
   header.value_pool_start_size = value_pool_start_size;
   header.value_pool_increment = value_pool_increment;
   header.value_pool_count = value_pool_count;
-  header.segment_size = segment_size;
-  header.segment_count = segments.size();
   header.pools = (uint32_t)((size_t)pools[0].pool-address);
-  header.value_pools = (uint32_t)((size_t)value_pools[0].pool-address);
-  header.internal = (uint32_t)((size_t)version-address);
+  header.null = (uint32_t)((size_t)null-address);
   fhead.write((char*)&header, sizeof(header));
   fhead.close();
 }
 
-void Storage::flush() {
-  for(segment_v::iterator i = segments.begin(); i != segments.end(); i++)
-    i->region.flush();
-}
-
-
 inline int pool_index(size_t size) {
   if (size <= 16) return 0;
-  if (size <= 32) return 1;
+  if (size <= 34) return 1;
   if (size <= 64) return 2;
   return 3;
 }
 
-void Storage::free(const resolved_ptr& ptr, size_t size) {
-  if (size <= MAX_POOL_SIZE) {
-    pools[pool_index(size)].free(ptr);
-    return;
-  }
-
-  if (size <= value_pool_start_size) {
-    value_pools[0].free(ptr);
-    return;
-  }
-
-  size_t index = ((size - value_pool_start_size) / value_pool_increment) + 1;
-  if (index < value_pool_count) {
-    value_pools[index].free(ptr);
-    return;
-  }
-
-  mem_free(ptr);
+void Storage::free(any_ptr ptr) {
+  if (ptr.node->pool)
+    pools[ptr.node->pool-1].free(ptr);
+  else
+    memory.deallocate(ptr.as_char);
 };
 
-resolved_ptr Storage::allocate(size_t size) {
+any_ptr Storage::allocate(size_t size) {
   if (size <= MAX_POOL_SIZE)
     return pools[pool_index(size)].allocate();
 
   if (size <= value_pool_start_size)
-    return value_pools[0].allocate();
+    return pools[MAIN_POOL_COUNT].allocate();
 
   size_t index = ((size - value_pool_start_size) / value_pool_increment) + 1;
   if (index < value_pool_count)
-    return value_pools[index].allocate();
+    return pools[MAIN_POOL_COUNT+index].allocate();
 
-  return mem_allocate(size).type(kValue);
+  return mem_allocate(size);
 }
 
-void Storage::mem_free(const resolved_ptr& ptr) {
-  segments[ptr.me.segment_id].memory.deallocate(ptr.resolved);
-}
+any_ptr Storage::mem_allocate(size_t size) {
+  any_ptr result = memory.allocate(size, std::nothrow);
+  if (!result.as_int) {
+    size_t fsize = std::filesystem::file_size(file.get_name());
+    size_t grow = ((size+127+grow_size)/grow_size)*grow_size;
 
-resolved_ptr Storage::mem_allocate(size_t size) {
-  size_t index = 0;
-  void* address;
-
-  for(segment_v::iterator i = segments.begin(); i != segments.end(); i++, index++) {
-    address = i->memory.allocate(size, std::nothrow);
-    if (address)
-      return resolved_ptr(index, address, i->region.get_address());
+    std::filesystem::resize_file(file.get_name(), fsize + grow);
+    memory.grow(grow);
+    result = memory.allocate(size, std::nothrow);
+    if (!result.as_int)
+      throw std::bad_alloc();  // should never come here
   }
-
-  size_t new_offset = OFFSET + segments.size()*segment_size;
-  std::filesystem::resize_file(file.get_name(), new_offset + segment_size);
-  segments.push_back(Segment(create_only, file, new_offset, segment_size));
-  Segment& back(segments.back());
-  address = back.memory.allocate(size, std::nothrow);
-  if (!address)
-    throw std::bad_alloc();
-  return resolved_ptr(segments.size()-1, address, back.region.get_address());
+  result.node->pool = 0;
+  return result;
 }
+
 
 } // namespace leaves

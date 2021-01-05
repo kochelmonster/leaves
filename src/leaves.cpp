@@ -49,15 +49,11 @@ struct SingleDB : public DB {
       stats.value_pool_increment = storage.value_pool_increment;
       stats.value_pool_count = storage.value_pool_count;
       stats.area_count = storage.pools[0].pool->area_size / storage.pools[0].pool->node_size;
-      stats.segment_size = storage.segment_size;
-      stats.segment_count = storage.segments.size();
-      for(size_t i = 0; i < POOL_COUNT; i++) {
+      stats.grow_size = storage.grow_size;
+      //stats.segment_count = storage.segments.size();
+      for(size_t i = 0; i < MAIN_POOL_COUNT + storage.value_pool_count; i++) {
         stats.used_nodes[i] = storage.pools[i].pool->used_nodes;
         stats.freed_nodes[i] = storage.pools[i].pool->freed_nodes;
-      }
-      for(size_t i = 0; i < storage.value_pool_count; i++) {
-        stats.value_used_nodes[i] = storage.value_pools[i].pool->used_nodes;
-        stats.value_freed_nodes[i] = storage.value_pools[i].pool->freed_nodes;
       }
     }
 
@@ -74,7 +70,7 @@ DB::ptr DB::open(const char *path, const Options& options) {
 
 #ifdef DEBUG
 
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
+void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 
 void dump_db(std::ostream& out, DB::ptr db) {
   SingleDB *sdb(((SingleDB*)db.get()));
