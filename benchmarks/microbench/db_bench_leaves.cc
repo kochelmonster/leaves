@@ -448,7 +448,8 @@ class Benchmark {
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
     leaves::Options options;
-    options.grow_size = 1<<26;
+    options.max_db_size = 1<<30;
+    options.grow_size = 1<<25;
     options.area_count = FLAGS_area_count;
     db_ = leaves::DB::open(test_fname.c_str(), options);
   }
@@ -506,7 +507,7 @@ class Benchmark {
 
         cursor->set_value(mval);
         if (flags == SYNC)
-          db_->flush();
+          db_->flush(false);
 
         FinishedSingleOp();
       }

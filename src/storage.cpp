@@ -138,7 +138,11 @@ Storage::Storage(const char* path, const Options& options) {
     pools = new Pool[count];
     PPool* p = (PPool*)memory.allocate(sizeof(PPool)*count);
 
+#ifdef SMALL_PTR
     size_t pool_sizes[] = {16, 34, 64, MAX_POOL_SIZE};
+#else
+    size_t pool_sizes[] = {20, 44, 84, MAX_POOL_SIZE};
+#endif
     size_t i = 0;
     for(; i < MAIN_POOL_COUNT; i++) {
       pools[i].create(this, p++, i+1, pool_sizes[i], options.area_count);
@@ -186,9 +190,15 @@ void Storage::flush_header() {
 }
 
 inline int pool_index(size_t size) {
+#ifdef SMALL_PTR
   if (size <= 16) return 0;
   if (size <= 34) return 1;
   if (size <= 64) return 2;
+#else
+  if (size <= 20) return 0;
+  if (size <= 44) return 1;
+  if (size <= 84) return 2;
+#endif
   return 3;
 }
 

@@ -189,7 +189,7 @@ public:
 
   virtual ~DB();
   virtual cursor_ptr create_cursor() = 0;
-  virtual void flush() = 0;
+  virtual void flush(bool async=true) = 0;
   virtual void get_stats(Stats& stats) = 0;
 
   static ptr open(const char *path,  const Options& options);

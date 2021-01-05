@@ -11,8 +11,11 @@
 
 #include <leaves.hpp>
 
-
+#ifdef SMALL_PTR
 #define MAX_POOL_SIZE 100
+#else
+#define MAX_POOL_SIZE 132
+#endif
 
 namespace leaves {
 
@@ -46,6 +49,7 @@ union any_ptr {
 };
 
 #pragma pack(2)
+#ifdef SMALL_PTR
 struct offset_ptr {
   /* All Objects are align on a 8 byte boundary
      -> we keep the same address space by multiplying the delta with 8
@@ -116,6 +120,59 @@ struct offset_ptr {
     return (any_ptr)(((char*)this) + offset_converter(delta).delta);
   }
 };
+#else
+
+struct offset_ptr {
+  /* All Objects are align on a 8 byte boundary
+     -> we keep the same address space by multiplying the delta with 8
+        and use the spared 3 bit for specifying the node type.
+  */
+  int64_t delta;
+
+  offset_ptr() : delta(0) {}
+
+  offset_ptr(any_ptr p) : delta(p.as_int - (int64_t)this) { }
+
+  void to_null() {
+    delta = 0;
+  }
+
+  const offset_ptr& operator=(const offset_ptr& other) {
+    if (!other.delta)
+      delta = 0;
+    else
+      *this = ((char*)&other) + other.delta;
+    return *this;
+  }
+
+  const offset_ptr& operator=(any_ptr p) {
+    delta = p.as_int - (int64_t)this;
+    return *this;
+  }
+
+  const offset_ptr& operator+=(int64_t diff) {
+    delta += diff;
+    return *this;
+  }
+
+  any_ptr operator+(int64_t diff) {
+    return resolve().as_char + diff;
+  }
+
+  int64_t operator-(offset_ptr& other) {
+    return resolve().as_int - other.resolve().as_int;
+  }
+
+  operator bool() const { return delta != 0; }
+  bool operator!() const { return delta == 0; }
+
+  any_ptr resolve() const {
+    assert(delta != 0);
+    return (any_ptr)(((char*)this) + delta);
+  }
+};
+
+#endif  // SMALL_PTR
 #pragma pack(0)
 
 
@@ -129,7 +186,6 @@ struct PPool {
   offset_ptr next_node;
   offset_ptr next_free;
 };
-
 
 
 struct Pool {

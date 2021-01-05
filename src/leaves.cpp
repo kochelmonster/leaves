@@ -40,8 +40,8 @@ struct SingleDB : public DB {
       return cursor_ptr(new CursorImpl(storage, me.lock()));
     }
 
-    void flush() {
-        storage.flush();
+    void flush(bool async) {
+      storage.flush(async);
     }
 
     void get_stats(Stats& stats) {
