@@ -129,15 +129,21 @@ struct offset_ptr {
 #else
 
 struct offset_ptr {
-  /* All Objects are align on a 8 byte boundary
-     -> we keep the same address space by multiplying the delta with 8
-        and use the spared 3 bit for specifying the node type.
+  /*
+  CAUTION: offset_ptr may not be used in a (? :) statement.
+    i.e.:
+    if node->next is a offset_ptr an expression like
+
+    ptr = node->next ? node->next : offset_ptr();
+
+    leads to a wrong value in ptr. (at least in gcc: it seams that node->next is pushed on the
+    stack (without constructor), and therefore changes its this address).
   */
   int64_t delta;
 
   offset_ptr() : delta(0) {}
 
-  offset_ptr(any_ptr p) : delta(p.as_int - (int64_t)this) { }
+  offset_ptr(any_ptr p) : delta(p.as_int - (uint64_t)this) { }
 
   void to_null() {
     delta = 0;
@@ -147,12 +153,12 @@ struct offset_ptr {
     if (!other.delta)
       delta = 0;
     else
-      *this = ((char*)&other) + other.delta;
+      delta = ((uint64_t)&other) + other.delta - (uint64_t)this;
     return *this;
   }
 
   const offset_ptr& operator=(any_ptr p) {
-    delta = p.as_int - (int64_t)this;
+    delta = (uint64_t)p.as_int - (uint64_t)this;
     return *this;
   }
 
@@ -180,6 +186,20 @@ struct offset_ptr {
 
 #endif  // SMALL_PTR
 #pragma pack(0)
+
+
+inline int pool_index(size_t size) {
+#ifdef SMALL_PTR
+  if (size <= 16) return 0;
+  if (size <= 34) return 1;
+  if (size <= 64) return 2;
+#else
+  if (size <= 20) return 0;
+  if (size <= 44) return 1;
+  if (size <= 84) return 2;
+#endif
+  return 3;
+}
 
 
 struct PPool {

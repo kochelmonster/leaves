@@ -23,7 +23,7 @@ void Trace::set_value(const Slice& value) {
     throw NoValidPosition();
 
   sanitize();
-  stack.back().insert(rest_key, value, ifind_next());
+  stack.back().insert(rest_key, value, valid() ? NULL : ifind_next());
   (*storage.version)++;
   ifind();
 }
@@ -32,9 +32,16 @@ void Trace::remove() {
   if (!valid())
     throw NoValidPosition();
 
+  if (stack.empty() || stack.back().navigation != cursor) {
+    find(current_key);
+  }
+
   sanitize();
-  while(stack.size() && stack.back().remove())
+  bool end_node = true;
+  while(stack.size() && stack.back().remove(end_node)) {
     stack.pop_back();
+    end_node = false;
+  }
 
   if (!root->next)
     root->next = root;

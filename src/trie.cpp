@@ -22,14 +22,17 @@ offset_ptr* Trie::find(Transition& self, ISlice& key) {
   }
 
   offset_ptr *result = ifind(self, key[0]);
-  if (result)
+  if (result) {
+    self.cmp = 0;
     key.iadvance(1);
+  }
+  else
+    self.cmp = -1;
 
   return result;
 }
 
 offset_ptr* Trie::ifind(Transition& self, char key) {
-  self.cmp = 0;
   char value = self.key = key;
   self.second_ptr = self.upper->find(bit::upper(value));
   if (self.second_ptr) {
@@ -62,8 +65,7 @@ TrieNavigation* Trie::first(any_ptr node) {
 }
 
 int Trie::advance(Transition& self, ISlice& key) {
-  if (key.size() && key[0] == self.key) {
-    self.cmp = 0;
+  if (key.size() && key[0] == self.key && self.cmp == 0) {
     key.iadvance(1);
     return 1;
   }
@@ -97,7 +99,7 @@ void Trie::insert(Transition& self, ISlice& key, const Slice& value, TrieNavigat
 }
 
 
-bool Trie::remove(Transition& self) {
+bool Trie::remove(Transition& self, bool end_node) {
   if (self.lower->remove(self, &self.lower, self.second_ptr,  bit::lower(self.key))) {
     self.upper->remove(self, &self.upper, self.node_ptr, bit::upper(self.key));
     return true;
@@ -109,7 +111,7 @@ bool Trie::remove(Transition& self) {
     self.storage->free(self.lower);
     self.storage->free(self.upper);
     self.set(CompressedData::build(self.storage, next, Slice(&value, 1)));
-    self.remove();  // combines compressed if possible
+    self.remove(end_node);  // combines compressed if possible
   }
   return true;
 }

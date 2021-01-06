@@ -1,0 +1,38 @@
+id: kTrie-472
+size: 1
+bits: 10
+bitindex: [4]
+children: 
+  - kTrie-2932
+---
+id: kTrie-2932
+size: 3
+bits: d000
+bitindex: [12, 14, 15]
+byteindex: ["L", "N", "O"]
+children: 
+  - kLeaf-3064
+  - kLeaf-3108
+  - kLeaf-3152
+---
+id: kLeaf-3064
+size: 1
+chars: "[L]"
+children: 
+  - kNull-2458
+  - kLeaf-3108
+---
+id: kLeaf-3108
+size: 1
+chars: "[N]"
+children: 
+  - kLeaf-3064
+  - kLeaf-3152
+---
+id: kLeaf-3152
+size: 1
+chars: "[O]"
+children: 
+  - kLeaf-3108
+  - kNull-2458
+---

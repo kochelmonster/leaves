@@ -135,12 +135,14 @@ BOOST_AUTO_TEST_CASE(test_strings) {
     BOOST_REQUIRE(!cursor->valid());
     cursor->set_value(value(names[count]));
 
+    if (count == 154)
+    std::cout << "dump: " << count << ". " << names[count] << std::endl;
+
     /*
     std::stringstream cstr;
     cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
     std::ofstream out(cstr.str().c_str());
-    dump_db(out, db);
-    */
+    dump_db(out, db);*/
   }
 
   Stats stats;
@@ -177,6 +179,7 @@ BOOST_AUTO_TEST_CASE(test_numbers) {
   int i;
   DB::ptr db(DB::open(TEST_FILE, TEST_OPTIONS));
   DB::cursor_ptr cursor(db->create_cursor());
+
 
   for(i = 0; i < 10000; i+=2) {
     std::string n = number(i, 6);
@@ -224,6 +227,7 @@ BOOST_AUTO_TEST_CASE(test_numbers) {
   BOOST_REQUIRE(!cursor->valid());
   cursor->prev();
   n = number(1000, 6);
+  std::cout << "smaller than 1001: " << cursor->key().string() << std::endl;
   BOOST_REQUIRE(cursor->valid());
   BOOST_REQUIRE(cursor->key() == n);
   BOOST_REQUIRE(cursor->value() == n);

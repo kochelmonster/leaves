@@ -31,14 +31,13 @@ void iinsert(compressed_type* node, Transition& self, ISlice& key, const Slice& 
       // build trie node
       any_ptr rest_ptr = node->transform(self.storage, rest.advance(i+offset+1));
       any_ptr trie_ptr = TrieData::build(self.storage, rest_ptr, chars[i]);
-      offset_ptr otp(trie_ptr);
 
-      Transition trie(&otp, self.storage);
-      trie_handler.ifind(trie, key[i]);
-      trie.insert(key, value, next_leaf);
+      self.set(trie_ptr);
+      self.cmp = -1;
+      trie_handler.ifind(self, key[i]);
+      self.insert(key, value, next_leaf);
 
-      any_ptr first_ptr(CompressedData::build(self.storage, trie_ptr, first));
-      self.set(first_ptr);
+      self.set(CompressedData::build(self.storage, trie_ptr, first));
       return;
     }
   }
@@ -84,6 +83,19 @@ int iadvance(compressed_type* node, Transition& self, ISlice& key, size_t offset
   return -1;
 }
 
+template <typename compressed_type>
+any_ptr combine(compressed_type* parent, CompressedData* child, Storage* storage) {
+  std::string tmp;
+  tmp.reserve(parent->size + child->size);
+  tmp.append(parent->chars, parent->size);
+  tmp.append(child->chars, child->size);
+  any_ptr result = CompressedData::build(storage, child->next, tmp);
+  storage->free(parent);
+  storage->free(child);
+  return result;
+}
+
+
 int compare(char* chars, size_t size, const ISlice& key) {
   /* compare chars with key
     returns 0 if key == chars and key.size() >= size
@@ -126,7 +138,7 @@ struct Compressed : public NodeHandler {
     iinsert(self.compressed, self, key,value, next_leaf);
   }
 
-  bool remove(Transition& self) {
+  bool remove(Transition& self, bool end_node) {
     CompressedData *node = self.compressed;
     if (!node->next) {
       self.storage->free(node);
@@ -136,20 +148,7 @@ struct Compressed : public NodeHandler {
 
     any_ptr node_next = node->next.resolve();
     if (node_next.node->type == kCompressed) {
-      CompressedData *next_node(node_next.compressed);
-      size_t size = (size_t)node->size + (size_t)next_node->size;
-
-      if (size < MAX_COMPRESSED_LEN) {
-        any_ptr nptr(self.storage->allocate(size+sizeof(CompressedData)).type(kCompressed));
-        CompressedData *new_node(nptr.compressed);
-        new_node->fill(next_node->next, Slice(node->chars, node->size));
-        memcpy(new_node->chars+node->size, next_node->chars, next_node->size);
-        new_node->size += next_node->size;
-
-        self.storage->free(next_node);
-        self.storage->free(node);
-        self.set(nptr);
-      }
+      self.set(combine(node, node_next.compressed, self.storage));
     }
     else if (node_next.node->type == kLeaf) {
       self.set(node_next);
@@ -194,18 +193,36 @@ struct Leaf : public NodeHandler {
   }
 
   void insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf) {
-    iinsert(self.leaf, self, key,value, next_leaf, key.offset);
+    if (!next_leaf) {
+      // replace value
+      self.storage->free(self.leaf->value.resolve());
+      self.leaf->value = ValueData::build(self.storage, value);
+    }
+    else
+      iinsert(self.leaf, self, key,value, next_leaf, key.offset);
   }
 
-  bool remove(Transition& self) {
+  bool remove(Transition& self, bool end_node) {
     LeafData *node = self.leaf;
-    if (node->next)
-      *self.node_ptr = node->next;
+    if (!end_node)
+      return false;
 
     TrieNavigation* next = node->next_leaf.resolve().navigation;
     TrieNavigation* prev = node->prev_leaf.resolve().navigation;
     prev->next_leaf = next;
     next->prev_leaf = prev;
+
+    if (node->next) {
+      any_ptr node_next = node->next.resolve();
+      if (node_next.node->type == kCompressed) {
+        self.set(combine(node, node_next.compressed, self.storage));
+        return true;
+      }
+      else
+        *self.node_ptr = node->next;
+    }
+    else
+      *self.node_ptr = offset_ptr();
 
     self.storage->free(node);
     return true;
@@ -221,7 +238,7 @@ struct Null : public NodeHandler {
     self.set(LeafData::build(self.storage, key, value, next_leaf));
   }
   int advance(Transition& self, ISlice& key) { return -1; } // never
-  bool remove(Transition& self) { return false; } // never
+  bool remove(Transition& self, bool end_node) { return false; } // never
 };
 
 

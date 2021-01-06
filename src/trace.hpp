@@ -21,15 +21,15 @@ struct Trace {
   void find(const Slice& key);
   void first() { set_cursor(root->next_leaf.resolve()); }
   void last() { set_cursor(root->prev_leaf.resolve()); }
-  void next() { set_cursor(cursor->next_leaf.resolve()); }
-  void prev() { set_cursor(cursor->prev_leaf.resolve()); }
-
+  void next() { set_cursor(valid() ? cursor->next_leaf.resolve() : ifind_next()); }
+  void prev() { set_cursor((valid() ? cursor : ifind_next())->prev_leaf.resolve()); }
   void set_cursor(any_ptr ptr) {
     cursor = ptr.navigation;
     if (valid())
       current_key.assign(ptr.leaf->chars, ptr.leaf->size);
   }
 
+  bool find_position();
   void set_value(const Slice& value);
   Slice get_value() const { return ((LeafData*)cursor)->get_value(); }
   void remove();

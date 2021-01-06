@@ -1,0 +1,86 @@
+id: kTrie-472
+size: 1
+bits: 10
+bitindex: [4]
+children: 
+  - kTrie-6864
+---
+id: kTrie-6864
+size: 9
+bits: df88
+bitindex: [3, 7, 8, 9, 10, 11, 12, 14, 15]
+byteindex: ["C", "G", "H", "I", "J", "K", "L", "N", "O"]
+children: 
+  - kLeaf-3020
+  - kLeaf-2800
+  - kLeaf-2844
+  - kLeaf-2888
+  - kLeaf-2932
+  - kLeaf-2976
+  - kLeaf-3064
+  - kLeaf-3108
+  - kLeaf-3152
+---
+id: kLeaf-3020
+size: 1
+chars: "[C]"
+children: 
+  - kNull-2458
+  - kLeaf-2800
+---
+id: kLeaf-2800
+size: 1
+chars: "[G]"
+children: 
+  - kLeaf-3020
+  - kLeaf-2844
+---
+id: kLeaf-2844
+size: 1
+chars: "[H]"
+children: 
+  - kLeaf-2800
+  - kLeaf-2888
+---
+id: kLeaf-2888
+size: 1
+chars: "[I]"
+children: 
+  - kLeaf-2844
+  - kLeaf-2932
+---
+id: kLeaf-2932
+size: 1
+chars: "[J]"
+children: 
+  - kLeaf-2888
+  - kLeaf-2976
+---
+id: kLeaf-2976
+size: 1
+chars: "[K]"
+children: 
+  - kLeaf-2932
+  - kLeaf-3064
+---
+id: kLeaf-3064
+size: 1
+chars: "[L]"
+children: 
+  - kLeaf-2976
+  - kLeaf-3108
+---
+id: kLeaf-3108
+size: 1
+chars: "[N]"
+children: 
+  - kLeaf-3064
+  - kLeaf-3152
+---
+id: kLeaf-3152
+size: 1
+chars: "[O]"
+children: 
+  - kLeaf-3108
+  - kNull-2458
+---

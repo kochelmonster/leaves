@@ -38,7 +38,7 @@ struct Trie : public NodeHandler {
   TrieNavigation* first(any_ptr node);
   int advance(Transition& self, ISlice& key);
   void insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf);
-  bool remove(Transition& self);
+  bool remove(Transition& self, bool end_node);
 };
 
 

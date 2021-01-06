@@ -1,0 +1,15 @@
+id: kLeaf-2536
+size: 3
+chars: "[a][b][c]"
+children: 
+  - kNull-2458
+  - kLeaf-2492
+  - kLeaf-2492
+---
+id: kLeaf-2492
+size: 7
+chars: "[a][b][c][d][e][f][g]"
+children: 
+  - kLeaf-2536
+  - kNull-2458
+---

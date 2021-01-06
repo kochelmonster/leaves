@@ -1,0 +1,36 @@
+id: kCompressed-512
+size: 2
+chars: "[a][b]"
+children: 
+  - kTrie-472
+---
+id: kTrie-472
+size: 1
+bits: 40
+bitindex: [6]
+children: 
+  - kTrie-452
+---
+id: kTrie-452
+size: 2
+bits: 18
+bitindex: [3, 4]
+byteindex: ["c", "d"]
+children: 
+  - kLeaf-2492
+  - kLeaf-2536
+---
+id: kLeaf-2492
+size: 3
+chars: "[a][b][c]"
+children: 
+  - kNull-2458
+  - kLeaf-2536
+---
+id: kLeaf-2536
+size: 3
+chars: "[a][b][d]"
+children: 
+  - kLeaf-2492
+  - kNull-2458
+---

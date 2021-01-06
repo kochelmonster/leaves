@@ -97,14 +97,13 @@ struct LeafData : public TrieNavigation {
 
   static any_ptr build(
         Storage* storage, const ISlice& key, const Slice& value, TrieNavigation* next_) {
-    any_ptr result(storage->allocate(key.size()+sizeof(LeafData)).type(kLeaf));
-
     Slice complete(key.complete());
     assert(complete.size() <= 0xFFFF);
-
+    any_ptr result(storage->allocate(complete.size()+sizeof(LeafData)).type(kLeaf));
     result.leaf->fill(ValueData::build(storage, value), complete);
 
     TrieNavigation* prev = next_->prev_leaf.resolve().navigation;
+    result.leaf->next = offset_ptr();
     result.leaf->next_leaf = next_;
     result.leaf->prev_leaf = prev;
     prev->next_leaf = result;
@@ -137,7 +136,7 @@ struct CompressedData : public Node {
     return result;
   }
 
-  static any_ptr build(Storage* storage, any_ptr next, const ISlice& key) {
+  static any_ptr build(Storage* storage, any_ptr next, const Slice& key) {
     if (key.empty())
       return next;
 
@@ -172,7 +171,7 @@ struct Transition {
   TrieNavigation* next();
   int advance(ISlice& key);
   void insert(ISlice& key, const Slice& value, TrieNavigation* next_leaf);
-  bool remove();
+  bool remove(bool end_node);
   NodeHandler* handler() const { return handlers[node->type]; }
 
   offset_ptr* node_ptr;
@@ -184,6 +183,7 @@ struct Transition {
     CompressedData *compressed;
     TrieData *upper;
     LeafData *leaf;
+    TrieNavigation *navigation;
   };
   TrieData *lower;
   Storage* storage;
@@ -199,7 +199,7 @@ struct NodeHandler {
   virtual TrieNavigation* first(any_ptr node) = 0;
   virtual void insert(
     Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf) = 0;
-  virtual bool remove(Transition& self) = 0;
+  virtual bool remove(Transition& self, bool end_node) = 0;
   virtual int advance(Transition& self, ISlice& key) = 0;
   TrieNavigation* rfirst(any_ptr next) {
     assert(next.as_int);
@@ -224,8 +224,8 @@ inline void Transition::insert(ISlice& key, const Slice& value, TrieNavigation* 
   handler()->insert(*this, key, value, next_leaf);
 }
 
-inline bool Transition::remove() {
-  return handler()->remove(*this);
+inline bool Transition::remove(bool end_node) {
+  return handler()->remove(*this, end_node);
 }
 
 } // namespace leaves

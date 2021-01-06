@@ -1,0 +1,30 @@
+id: kTrie-472
+size: 1
+bits: 10
+bitindex: [4]
+children: 
+  - kTrie-452
+---
+id: kTrie-452
+size: 2
+bits: 2001
+bitindex: [0, 13]
+byteindex: ["@", "M"]
+children: 
+  - kLeaf-2492
+  - kLeaf-2536
+---
+id: kLeaf-2492
+size: 1
+chars: "[@]"
+children: 
+  - kNull-2458
+  - kLeaf-2536
+---
+id: kLeaf-2536
+size: 1
+chars: "[M]"
+children: 
+  - kLeaf-2492
+  - kNull-2458
+---
