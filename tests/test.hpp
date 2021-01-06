@@ -32,13 +32,13 @@ void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 
 inline void dump_graph(const char* output, Storage& storage) {
   std::ofstream out(output);
-  dump_node(out, *storage.start, &storage);
+  dump_node(out, storage.master->next.resolve(), &storage);
 }
 
 
 inline void compare_graph(const char* input, Storage& storage) {
   std::stringstream cstr;
-  dump_node(cstr, *storage.start, &storage);
+  dump_node(cstr, storage.master->next.resolve(), &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)), (std::istreambuf_iterator<char>()));
@@ -72,7 +72,7 @@ inline void check_graph(const char* name, Storage& storage) {
 
 
 inline void insert(Storage& storage, const Slice& key, const char* test_name) {
-  Trace trace(storage);
+  Trace trace(storage, storage.master);
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
   BOOST_REQUIRE(!trace.valid());

@@ -10,29 +10,52 @@ import sarge
 from pathlib import Path
 
 
-CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size: {size}}}|{keys}}}"]"""
+CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size: {size}}}|{chars}}}"]"""
 VNODE = """"{id}" [label="{{{{{id}|size: {size}}}|{value}}}"]"""
 TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
+
+LNODE = """"{id}" [shape=plaintext style="" margin="0,0" label=
+    <<TABLE BGCOLOR="blanchedalmond" BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+        <TR><TD COLSPAN="3">{id}</TD><TD>{size}</TD></TR>
+        <TR><TD COLSPAN="4">{chars}</TD></TR>
+    </TABLE>>]"""
+LNODE = "".join(LNODE.splitlines())
 
 
 class Graph:
     def make_graph(self, nodes):
-        lines = ["digraph G {", "node [shape=record style=filled]"]
+        lines = ["digraph G {", "node [shape=record style=filled]", 'newrank="true"']
         add = lines.append
 
-        for n in nodes:
-            type_ = n["id"].split("-", 1)[0]
-            add(getattr(self, "handle_" + type_)(n))
+        leaves = []
 
         for n in nodes:
             type_ = n["id"].split("-", 1)[0]
-            if type_ != "kTrie":
-                for c in n.get("children", ()):
-                    if c != "kNull-0-0":
-                        add(f'"{n["id"]}" -> "{c}"')
+            line = getattr(self, "handle_" + type_)(n)
+            if type_ == "kLeaf" and len(n["children"]) < 3:
+                leaves.append(line)
             else:
+                add(line)
+
+        add("subgraph subs {")
+        add('rank="same"')
+        lines.extend(leaves)
+        add("}")
+
+        for n in nodes:
+            type_ = n["id"].split("-", 1)[0]
+
+            if type_ == "kTrie":
                 for i, c in enumerate(n.get("children", ())):
                     add(f'"{n["id"]}":f{i} -> "{c}"')
+            elif type_ == "kLeaf":
+                for c in n.get("children", ()):
+                    if not c.startswith("kNull"):
+                        add(f'"{n["id"]}" -> "{c}" [weight=0]')
+            else:
+                for c in n.get("children", ()):
+                    if not c.startswith("kNull"):
+                        add(f'"{n["id"]}" -> "{c}"')
 
         add("}")
         add("")
@@ -54,6 +77,14 @@ class Graph:
 
         return TNODE.format(slots=slots, **node)
 
+    def handle_kLeaf(self, node):
+        if len(node["children"]) == 3:
+            slots = "<f0> prev|<f1> trie|<f2> next"
+        else:
+            slots = "<f0> prev|<f1> next"
+
+        return LNODE.format(slots=slots, **node)
+
     def handle_kNull(self, node):
         return "\"{id}\"".format(**node)
 
@@ -66,6 +97,7 @@ def main(paths):
 
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
+            # print(Graph().make_graph(list(filter(bool, nodes))))
             sarge.run(f"dot -Tsvg > {dest}", input=Graph().make_graph(list(filter(bool, nodes))))
 
     return 0

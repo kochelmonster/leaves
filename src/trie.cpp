@@ -15,14 +15,13 @@ namespace bit {
 }
 
 
-offset_ptr* Trie::find(Transition& self, ISlice& key, string& current_key) {
+offset_ptr* Trie::find(Transition& self, ISlice& key) {
   if (key.empty()) {
     self.cmp = 1;
     return NULL;
   }
 
   offset_ptr *result = ifind(self, key[0]);
-  current_key.push_back(self.key);
   if (result)
     key.iadvance(1);
 
@@ -39,83 +38,27 @@ offset_ptr* Trie::ifind(Transition& self, char key) {
     self.lower = self.second_ptr->resolve().trie;
     return self.lower->find(lower);
   }
+  self.lower = NULL;
+  return NULL;
+}
+
+TrieNavigation* Trie::next(Transition& self) {
+  any_ptr next;
+  if (self.cmp == 1) {
+    return rfirst(self.upper);
+  }
+
+  if (self.lower)
+    next = self.lower->next(bit::lower(self.key));
   else
-    self.lower = NULL;
-  return NULL;
+    next = self.upper->next(bit::upper(self.key));
+
+  return next.as_int ? rfirst(next) : NULL;
 }
 
-offset_ptr* Trie::next(Transition& self, string& current_key) {
-  if (self.cmp == 1)
-    return self.first(current_key);
-
-  uint8_t upper(bit::upper(self.key)), lower;
-  if (self.lower) {
-    assert(self.second_ptr->resolve().node->type == kTrie);
-    lower = bit::lower(self.key);
-    offset_ptr* next = self.lower->next(lower);
-    if (next) {
-      current_key.back() = self.key = (upper << 4) | lower;
-      return next;
-    }
-  }
-
-  self.second_ptr = self.upper->next(upper);
-  if (self.second_ptr) {
-    self.lower = self.second_ptr->resolve().trie;
-    offset_ptr* next = self.lower->first(lower);
-    current_key.back() = self.key = (upper << 4) | lower;
-    return next;
-  }
-
-  current_key.pop_back();
-  return NULL;
-}
-
-offset_ptr* Trie::first(Transition& self, string& current_key) {
-  uint8_t upper, lower;
-  self.cmp = 0;
-  self.second_ptr = self.upper->first(upper);
-  self.lower = self.second_ptr->resolve().trie;
-  offset_ptr *next = self.lower->first(lower);
-  current_key.push_back(self.key = (upper << 4) | lower);
-  return next;
-}
-
-offset_ptr* Trie::prev(Transition& self, string& current_key) {
-  if (self.cmp == 1)
-    return NULL;
-
-  uint8_t upper(bit::upper(self.key)), lower;
-  if (self.lower) {
-    assert(self.second_ptr->resolve().node->type == kTrie);
-    lower = bit::lower(self.key);
-    offset_ptr* next = self.lower->prev(lower);
-    if (next) {
-      current_key.back() = self.key = (upper << 4) | lower;
-      return next;
-    }
-  }
-
-  self.second_ptr = self.upper->prev(upper);
-  if (self.second_ptr) {
-    self.lower = self.second_ptr->resolve().trie;
-    offset_ptr* next = self.lower->last(lower);
-    current_key.back() = self.key = (upper << 4) | lower;
-    return next;
-  }
-
-  current_key.pop_back();
-  return NULL;
-}
-
-offset_ptr* Trie::last(Transition& self, string& current_key) {
-  uint8_t upper, lower;
-  self.cmp = 0;
-  self.second_ptr = self.upper->last(upper);
-  self.lower = self.second_ptr->resolve().trie;
-  offset_ptr *next = self.lower->last(lower);
-  current_key.push_back(self.key = (upper << 4) | lower);
-  return next;
+TrieNavigation* Trie::first(any_ptr node) {
+  assert(node.node->type == kTrie);
+  return rfirst(node.trie->first());
 }
 
 int Trie::advance(Transition& self, ISlice& key) {
@@ -127,37 +70,34 @@ int Trie::advance(Transition& self, ISlice& key) {
   return -1;
 }
 
-void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
+void Trie::insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf) {
+  any_ptr leaf = LeafData::build(self.storage, key, value, next_leaf);
+
   if (self.cmp == 1) {
-    // key was empty at find -> insert value key before
-    self.set(ValueData::build(self.storage, *self.node_ptr, value));
+    // insert_trie_short: (key was empty at find -> insert value key before)
+    leaf.leaf->next = *self.node_ptr;
+    self.set(leaf);
     return;
   }
 
-  current_key.pop_back();
+  // insert_trie_split:
   uint8_t upper = bit::upper(self.key);
   uint8_t lower = bit::lower(self.key);
 
-  any_ptr next(ValueData::build(self.storage, offset_ptr(), value));
-  if (key.size() > 1) {
-    Slice restkey(key.advance(1));
-    next = CompressedData::build(self.storage, next, restkey);
-  }
-
   if (!self.lower) {
-    any_ptr lower_ptr = TrieData::create(self.storage, next, lower);
+    any_ptr lower_ptr = TrieData::create(self.storage, leaf, lower);
     self.lower = lower_ptr.trie;
     self.set(self.upper->insert(self, lower_ptr, upper));
     return;
   }
 
-  any_ptr result = self.lower->insert(self, next, lower);
+  any_ptr result = self.lower->insert(self, leaf, lower);
   *self.second_ptr = result;
   self.lower = result.trie;
 }
 
 
-bool Trie::remove(Transition& self, bool last) {
+bool Trie::remove(Transition& self) {
   if (self.lower->remove(self, &self.lower, self.second_ptr,  bit::lower(self.key))) {
     self.upper->remove(self, &self.upper, self.node_ptr, bit::upper(self.key));
     return true;
@@ -169,7 +109,7 @@ bool Trie::remove(Transition& self, bool last) {
     self.storage->free(self.lower);
     self.storage->free(self.upper);
     self.set(CompressedData::build(self.storage, next, Slice(&value, 1)));
-    self.remove(last);  // combines compressed if possible
+    self.remove();  // combines compressed if possible
   }
   return true;
 }

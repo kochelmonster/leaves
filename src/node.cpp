@@ -10,249 +10,237 @@ namespace leaves {
 static Trie trie_handler;
 
 
-struct Value : public NodeHandler {
-  bool valid() const { return true; }
-
-  virtual Slice get_value(const Transition& self) const {
-    return Slice(self.value->value, self.value->size);
-  }
-
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
-    if (key.size() && self.value->next) {
-      self.cmp = 1;
-      return &self.value->next;
-    }
-    return NULL;
-  }
-
-  offset_ptr* next(Transition& self, string& current_key) {
-    if (self.cmp == 0) {
-      self.cmp = 1;
-      return self.value->next ? &self.value->next : NULL;
-    }
-    return NULL;
-  }
-
-  offset_ptr* first(Transition& self, string& key) {
-    self.cmp = 0;
-    return NULL;
-  }
-
-  offset_ptr* prev(Transition& self, string& current_key) {
-    if (self.cmp == 1) {
-      self.cmp = 0;
-      /* a hack (see trace.imove)
-        if we come from node->next this value has to be returned
+template <typename compressed_type>
+void iinsert(compressed_type* node, Transition& self, ISlice& key, const Slice& value,
+             TrieNavigation* next_leaf, size_t offset=0) {
+  assert(node->size >= offset);
+  size_t size = std::min((size_t)node->size-offset, key.size());
+  char* chars = node->chars + offset;
+  for(size_t i = 0; i < size; i++) {
+    if (chars[i] != key[i]) {
+      /* insert_compressed_split/insert_leaf_split:
+         node = [abcdefg]
+         key = [abhij]
+                       first   trie    rest
+         [abcdefg] ==> [ab] -> |c| -> [efg]
+                               |h| -> [ij]
       */
-      return self.value->next ? self.node_ptr : NULL;
-    }
-    return NULL;
-  }
+      Slice first(key.data(), i);
+      Slice rest(node->chars, node->size);
 
-  offset_ptr* last(Transition& self, string& current_key) {
-    self.cmp = 1;
-    return self.value->next ? &self.value->next : NULL;
-  }
+      // build trie node
+      any_ptr rest_ptr = node->transform(self.storage, rest.advance(i+offset+1));
+      any_ptr trie_ptr = TrieData::build(self.storage, rest_ptr, chars[i]);
+      offset_ptr otp(trie_ptr);
 
-  int advance(Transition& self, ISlice& key) {
-    if ((key.size() && self.value->next) || (!key.size() && ! self.value->next)) {
-      self.cmp = 0;
-      return 0;
-    }
-    return -1;
-  }
+      Transition trie(&otp, self.storage);
+      trie_handler.ifind(trie, key[i]);
+      trie.insert(key, value, next_leaf);
 
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
-    if (key.empty()) {
-      any_ptr new_ptr(ValueData::build(self.storage, self.value->next, value));
-      self.storage->free(self.value);
-      self.set(new_ptr);
+      any_ptr first_ptr(CompressedData::build(self.storage, trie_ptr, first));
+      self.set(first_ptr);
       return;
     }
-
-    assert(!self.value->next);
-    any_ptr next(ValueData::build(self.storage, offset_ptr(), value));
-    self.value->next = CompressedData::build(self.storage, next, key);
   }
 
-  bool remove(Transition& self, bool last) {
-    if (last) {
-      *self.node_ptr = self.value->next;
-      self.storage->free(self.value);
-      return true;
-    }
-    // intermediate value
-    return false;
-  };
-};
+  any_ptr new_leaf = LeafData::build(self.storage, key, value, next_leaf);
+
+  if (key.size() > size) {
+    /* insert_leaf_long:
+
+       node = [abc]
+       key = [abcdef]
+
+       Leaf      Leaf     Leaf
+       [abc] ==> [abc] -> [def]
+    */
+    new_leaf.leaf->next = node->next;
+    node->next = new_leaf;
+    return;
+  }
+
+  /* insert_compressed_short/insert_leaf_short: (key is a substring of node)
+
+     node = [abcdefg]
+     key = [abhij]
+                   first  Leaf   rest
+     [abcdefg] ==> [ab] -> [] -> [cefg]
+  */
+  new_leaf.leaf->next = node->transform(self.storage, Slice(node->chars+size, node->size-size));
+  self.set(new_leaf);
+}
+
+
+template <typename compressed_type>
+int iadvance(compressed_type* node, Transition& self, ISlice& key, size_t offset=0) {
+  assert(node->size >= offset);
+
+  size_t size_ = node->size - offset;
+  if (size_ <= key.size() && !memcmp(node->chars+offset, key.data(), size_)) {
+      self.cmp = 0;
+      key.iadvance(size_);
+      return size_;
+  }
+  return -1;
+}
+
+int compare(char* chars, size_t size, const ISlice& key) {
+  /* compare chars with key
+    returns 0 if key == chars and key.size() >= size
+    returns -1 if key < chars or key == chars and key.size() < size
+    return 1 if key > chars
+  */
+
+  size_t size_ = std::min(key.size(), (size_t)size);
+  int cmp = sign(memcmp(key.data(), chars, size_));
+  if (cmp == 0)
+    return size <= size_ ? 0 : -1;
+  return cmp;
+}
 
 struct Compressed : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
-    if (!(self.cmp = self.compressed->find(key, current_key)))
-      return &self.compressed->next;
-    return NULL;
-  }
-
-  offset_ptr* move(Transition& self, string& current_key, bool do_it) {
+  offset_ptr* find(Transition& self, ISlice& key) {
     CompressedData* node = self.compressed;
-    if (do_it) {
-      self.cmp = 0;
-      current_key.append(node->keys, node->size);
-      return &node->next;
-    }
-    if (self.cmp == 0) {
-      self.cmp = 1;
-      current_key.resize(current_key.size()-node->size);
+    self.cmp = compare(node->chars, node->size, key);
+    if (!self.cmp) {
+      key.iadvance(node->size);
+      return &self.compressed->next;
     }
     return NULL;
   }
 
-  offset_ptr* next(Transition& self, string& current_key) {
-    return move(self, current_key, self.cmp < 0);
+  TrieNavigation* next(Transition& self) {
+    return self.cmp >= 0 ? NULL : rfirst(self.compressed->next);
   }
 
-  offset_ptr* first(Transition& self, string& current_key) {
-    self.cmp = -1;
-    return self.next(current_key);
-  }
-
-  offset_ptr* prev(Transition& self, string& current_key) {
-    return move(self, current_key, self.cmp > 0);
-  }
-
-  offset_ptr* last(Transition& self, string& current_key) {
-    self.cmp = 1;
-    return self.prev(current_key);
+  TrieNavigation* first(any_ptr node) {
+    assert(node.node->type == kCompressed);
+    return rfirst(node.compressed->next);
   }
 
   int advance(Transition& self, ISlice& key) {
-    CompressedData* node = self.compressed;
-    if (node->size <= key.size() && !memcmp(node->keys, key.data(), node->size)) {
-        self.cmp = 0;
-        key.iadvance(node->size);
-        return node->size;
-    }
-    return -1;
+    return iadvance(self.compressed, self, key);
   }
 
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
-    CompressedData* node = self.compressed;
-
-    int size = std::min((size_t)node->size, key.size());
-    for(int i = 0; i < size; i++) {
-      if (node->keys[i] != key[i]) {
-        /* divide compressed:
-           node = [abcdefg]
-           key = [abhij]
-                         first   trie    rest
-           [abcdefg] ==> [ab] -> |c| -> [efg]
-                                 |h| -> [ij]
-        */
-        Slice first(key.data(), i);
-        Slice rest(node->keys+i+1, node->size-i-1);
-
-        // build trie node
-        any_ptr rest_ptr = CompressedData::build(self.storage, node->next, rest);
-        any_ptr trie_ptr = TrieData::build(self.storage, rest_ptr, node->keys[i]);
-        offset_ptr otp(trie_ptr);
-        Transition trie(&otp, self.storage);
-        trie_handler.ifind(trie, key[i]);
-
-        ISlice rest_key(key.advance(i));
-        current_key.push_back(trie.key); // will be popped in trie.insert
-        trie.insert(rest_key, value, current_key);
-
-        any_ptr first_ptr(CompressedData::build(self.storage, trie_ptr, first));
-        self.storage->free(node);
-        self.set(first_ptr);
-        return;
-      }
-    }
-
-    /* key is a substring of node
-       node = [abcdefg]
-       key = [abhij]
-                     first  value   rest
-       [abcdefg] ==> [ab] -> [] -> [cefg]
-    */
-    Slice first(key.data(), size);
-    Slice rest(node->keys+size, node->size-size);
-    any_ptr rest_ptr = CompressedData::build(self.storage, node->next.resolve(), rest);
-    any_ptr value_ptr = ValueData::build(self.storage, rest_ptr, value);
-    any_ptr first_ptr = CompressedData::build(self.storage, value_ptr, first);
-
-    self.storage->free(node);
-    self.set(first_ptr);
+  void insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf) {
+    iinsert(self.compressed, self, key,value, next_leaf);
   }
 
-  bool remove(Transition& self, bool last) {
+  bool remove(Transition& self) {
     CompressedData *node = self.compressed;
     if (!node->next) {
       self.storage->free(node);
-      if (self.node_ptr != self.storage->start)
-        *self.node_ptr = offset_ptr();
-      else
-        *self.node_ptr = self.storage->null;
-
+      *self.node_ptr = offset_ptr();
       return true;
     }
 
     any_ptr node_next = node->next.resolve();
     if (node_next.node->type == kCompressed) {
-
       CompressedData *next_node(node_next.compressed);
       size_t size = (size_t)node->size + (size_t)next_node->size;
 
       if (size < MAX_COMPRESSED_LEN) {
         any_ptr nptr(self.storage->allocate(size+sizeof(CompressedData)).type(kCompressed));
-
         CompressedData *new_node(nptr.compressed);
-        new_node->fill(next_node->next, Slice(node->keys, node->size));
-        memcpy(new_node->keys+node->size, next_node->keys, next_node->size);
+        new_node->fill(next_node->next, Slice(node->chars, node->size));
+        memcpy(new_node->chars+node->size, next_node->chars, next_node->size);
         new_node->size += next_node->size;
 
         self.storage->free(next_node);
         self.storage->free(node);
-
         self.set(nptr);
       }
     }
-
+    else if (node_next.node->type == kLeaf) {
+      self.set(node_next);
+      self.storage->free(node);
+    }
     return true;
   }
 };
 
-struct Null : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) { return NULL; }
-  offset_ptr* next(Transition& self, string& current_key) { return NULL; }
-  offset_ptr* first(Transition& self, string& current_key) { return NULL; }
-  offset_ptr* prev(Transition& self, string& current_key) { return NULL; }
-  offset_ptr* last(Transition& self, string& current_key) { return NULL; }
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
-    offset_ptr value_ptr(ValueData::build(self.storage, offset_ptr(), value));
-    self.set(CompressedData::build(self.storage, value_ptr, key));
+struct Leaf : public NodeHandler {
+  offset_ptr* find(Transition& self, ISlice& key) {
+    LeafData* node = self.leaf;
+    assert(node->size >= key.offset);
+    self.cmp = compare(node->chars+key.offset, node->size-key.offset, key);
+    if (!self.cmp) {
+      key.iadvance(node->size-key.offset);
+      if (key.size()) {
+        if (node->next)
+          return &node->next;
+        else
+          self.cmp = 1;
+      }
+    }
+    return NULL;
   }
-  int advance(Transition& self, ISlice& key) { return -1; } // never
-  bool remove(Transition& self, bool last) { return false; } // never
+
+  TrieNavigation* next(Transition& self) {
+    return self.cmp >= 0 ? NULL : self.leaf;
+  }
+
+  TrieNavigation* first(any_ptr node) {
+    assert(node.node->type == kLeaf);
+    return node.navigation;
+  }
+
+  int advance(Transition& self, ISlice& key) {
+    int cmp = iadvance(self.leaf, self, key, key.offset);
+    if (cmp >= 0 && key.empty()) {
+      return -1;  // stop advancing use this node.
+    }
+    return cmp;
+  }
+
+  void insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf) {
+    iinsert(self.leaf, self, key,value, next_leaf, key.offset);
+  }
+
+  bool remove(Transition& self) {
+    LeafData *node = self.leaf;
+    if (node->next)
+      *self.node_ptr = node->next;
+
+    TrieNavigation* next = node->next_leaf.resolve().navigation;
+    TrieNavigation* prev = node->prev_leaf.resolve().navigation;
+    prev->next_leaf = next;
+    next->prev_leaf = prev;
+
+    self.storage->free(node);
+    return true;
+  }
 };
 
 
-static Value value_handler;
+struct Null : public NodeHandler {
+  offset_ptr* find(Transition& self, ISlice& key) { return NULL; }
+  TrieNavigation* next(Transition& self) { return NULL; }
+  TrieNavigation* first(any_ptr node) { return NULL; }
+  void insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf) {
+    self.set(LeafData::build(self.storage, key, value, next_leaf));
+  }
+  int advance(Transition& self, ISlice& key) { return -1; } // never
+  bool remove(Transition& self) { return false; } // never
+};
+
+
+static Leaf leaf_handler;
 static Null null_handler;
 static Compressed compressed_handler;
 
 NodeHandler* Transition::handlers[] = {
-  &value_handler, &null_handler, &compressed_handler, &trie_handler };
-
+  &null_handler, &compressed_handler, &trie_handler, &leaf_handler };
 
 
 #ifdef DEBUG
 
 const char* handler_names[] = {
-  "kValue",
   "kNull",
   "kCompressed",
   "kTrie",
+  "kLeaf",
+  "kValue"
 };
 
 
@@ -305,16 +293,8 @@ struct ValueDumper : public DumpBase {
       out << "]";
     }
     out << "\"" << std::endl;
-    if (data->next) {
-      out << "children: " << std::endl;
-      out << "  - " << dump_id(data->next, storage) << std::endl;
-      out << "---" << std::endl;
-      dump_node(out, data->next, storage);
-    }
-    else {
-      out << "children: []" << std::endl;
-      out << "---" << std::endl;
-    }
+    out << "children: []" << std::endl;
+    out << "---" << std::endl;
   }
 };
 
@@ -323,10 +303,10 @@ struct CompressDumper : public DumpBase {
     CompressedData *data = ptr.compressed;
     out << "id: " << dump_id(ptr, storage) << std::endl;
     out << "size: " << (int)data->size << std::endl;
-    out << "keys: \"";
+    out << "chars: \"";
     for(int i = 0; i < data->size; i++) {
       out << "[";
-      dump_char(out, data->keys[i]);
+      dump_char(out, data->chars[i]);
       out << "]";
     }
     out << "\"" << std::endl;
@@ -390,16 +370,43 @@ struct TrieDumper : public DumpBase {
   }
 };
 
+
+struct LeafDumper : public DumpBase {
+  void dump(std::ostream& out, any_ptr ptr, Storage* storage, int upper=-1) {
+    LeafData *data = ptr.leaf;
+    out << "id: " << dump_id(ptr, storage) << std::endl;
+    out << "size: " << (int)data->size << std::endl;
+    out << "chars: \"";
+    for(int i = 0; i < data->size; i++) {
+      out << "[";
+      dump_char(out, data->chars[i]);
+      out << "]";
+    }
+    out << "\"" << std::endl;
+    out << "children: " << std::endl;
+    out << "  - " << dump_id(data->prev_leaf, storage) << std::endl;
+    if (data->next)
+      out << "  - " << dump_id(data->next, storage) << std::endl;
+    out << "  - " << dump_id(data->next_leaf, storage) << std::endl;
+    out << "---" << std::endl;
+    if (data->next)
+      dump_node(out, data->next, storage);
+  }
+};
+
 ValueDumper value_dumper;
 NullDumper null_dumper;
 CompressDumper compress_dumper;
 TrieDumper trie_dumper;
+LeafDumper leaf_dumper;
+
 
 DumpBase* dumpers[] = {
-  &value_dumper,
   &null_dumper,
   &compress_dumper,
-  &trie_dumper
+  &trie_dumper,
+  &leaf_dumper,
+  &value_dumper,
 };
 
 void dump_node(std::ostream& out, any_ptr ptr, Storage* storage, int upper) {

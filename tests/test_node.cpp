@@ -1,23 +1,35 @@
 #define BOOST_TEST_MODULE ModifyTest
-//#define GENERATE
+#define GENERATE
 
 #include <cstdio>
+#include <vector>
+#include <algorithm>
+#include <random>
+
 #include <boost/test/included/unit_test.hpp>
+
 #include "test.hpp"
 
 using std::string;
 
-void test_insert_first(Storage& storage) {
+typedef std::vector<string> strings_t;
+
+
+void test_insert_null(Storage& storage) {
   check_graph("empty", storage);
-  insert(storage, Slice("abcdefg"), "first");
+  insert(storage, Slice("abcdefg"), "insert_null");
 }
 
-void test_divide_compressed(Storage& storage) {
-  insert(storage, Slice("abhij"), "divide_compressed");
+void test_insert_leaf_split(Storage& storage) {
+  insert(storage, Slice("abhij"), "insert_leaf_split");
 }
 
-void test_divide_compressed_value(Storage& storage) {
-  insert(storage, Slice("ab"), "divide_compressed_value");
+void test_insert_leaf_short(Storage& storage) {
+  insert(storage, Slice("ab"), "insert_leaf_short");
+}
+
+void test_insert_leaf_long(Storage& storage) {
+  insert(storage, Slice("abcdefghi"), "insert_leaf_long");
 }
 
 void test_add_value_node(Storage& storage) {
@@ -44,32 +56,171 @@ void test_insert_grow(Storage& storage) {
   insert(storage, "ab`", "insert_index_60");
 }
 
-BOOST_AUTO_TEST_SUITE(ModifyNullNode)
 
-BOOST_AUTO_TEST_CASE(insert) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  test_insert_first(storage);
+void test_movement(Storage& storage, strings_t& strings) {
+  std::sort(strings.begin(), strings.end());
+
+  Trace trace(storage);
+
+  std::cout << std::endl
+            << "iter forward" << std::endl
+            << "------------" << std::endl;
+  trace.first();
+  for(strings_t::iterator i=strings.begin(); i != strings.end(); i++, trace.next()) {
+    std::cout << "find \"" << *i << "\"";
+    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    std::cout << " ok" << std::endl;
+  }
+  BOOST_REQUIRE(!trace.valid());
+
+  std::cout << std::endl
+            << "iter backward" << std::endl
+            << "-------------" << std::endl;
+  trace.last();
+  for(strings_t::reverse_iterator i=strings.rbegin(); i != strings.rend(); i++, trace.prev()) {
+    std::cout << "find \"" << *i << "\"";
+    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    std::cout << " ok" << std::endl;
+  }
+  BOOST_REQUIRE(!trace.valid());
+
+  std::cout << std::endl
+            << "find" << std::endl
+            << "----" << std::endl;
+  shuffle(strings.begin(), strings.end(), std::default_random_engine(42));
+  for(strings_t::iterator i=strings.begin(); i != strings.end(); i++) {
+    std::cout << "find \"" << *i << "\"";
+    trace.find(*i);
+    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    BOOST_REQUIRE_EQUAL(trace.get_value().string(), *i);
+    std::cout << " ok" << std::endl;
+  }
+
+  std::cout << std::endl
+            << "missing" << std::endl
+            << "-------" << std::endl;
+  for(strings_t::iterator i=strings.begin(); i != strings.end(); i++) {
+    std::string missing(*i);
+    missing.append(".");
+    std::cout << "find \"" << missing << "\"";
+    trace.find(missing);
+    BOOST_REQUIRE(!trace.valid());
+    std::cout << " ok (not found)" << std::endl;
+  }
+  std::cout << std::endl << std::endl;
 }
 
+void test_insertion(Storage& storage, const char* title, const char* keys[]) {
+  strings_t strings;
+
+  std::cout << "==========================================" << std::endl
+            << "Test: " << title << std::endl
+            << "==========================================" << std::endl;
+  std::cout << "insert keys" << std::endl
+            << "-----------" << std::endl;
+  for(int i = 0; keys[i]; i++) {
+    std::stringstream cstr;
+    cstr << title << "_" << i << "_" << keys[i];
+    std::cout << "insert " << keys[i] << std::endl;
+    insert(storage, keys[i], cstr.str().c_str());
+    strings.push_back(keys[i]);
+  }
+  test_movement(storage, strings);
+}
+
+BOOST_AUTO_TEST_SUITE(BasicCases)
+
+BOOST_AUTO_TEST_CASE(insert_null) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", NULL};
+  test_insertion(storage, "insert_null", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_leaf_split) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abhij", NULL};
+  test_insertion(storage, "insert_leaf_split", keys);
+}
+
+BOOST_AUTO_TEST_CASE(inser_leaf_short) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abc", NULL};
+  test_insertion(storage, "insert_leaf_short", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_leaf_long) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", "abcdefg", NULL};
+  test_insertion(storage, "insert_leaf_long", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_compress_split) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abcefgh", "abdefgh", NULL};
+  test_insertion(storage, "insert_compress_split", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_compress_short) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abcefgh", "ab", "b", NULL};
+  test_insertion(storage, "insert_compress_short", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_leaf_extend) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"ab", "abcdefg", "abcefgh", NULL};
+  test_insertion(storage, "insert_leaf_extend", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_trie_split_a) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", "abd", "abe", NULL};
+  test_insertion(storage, "insert_trie_split_a", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_trie_split_b) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", "abe", "abd", NULL};
+  test_insertion(storage, "insert_trie_split_b", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_trie_short) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", "abe", "ab", NULL};
+  test_insertion(storage, "insert_trie_short", keys);
+}
+
+/*
+BOOST_AUTO_TEST_CASE(remove_trie) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", "abe", "abd", NULL};
+  test_insertion(storage, "insert_trie_split_b", keys);
+}
+*/
+
+
+
 BOOST_AUTO_TEST_SUITE_END()
+
+#if 0
 
 
 BOOST_AUTO_TEST_SUITE(ModifyCompressedNode)
 
-BOOST_AUTO_TEST_CASE(trie_divide) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-}
-
-BOOST_AUTO_TEST_CASE(value_divide) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  test_insert_first(storage);
-  test_divide_compressed_value(storage);
-}
 
 BOOST_AUTO_TEST_CASE(very_big) {
   Preparation p;
@@ -93,7 +244,7 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   test_insert_first(storage);
 
   Slice key("abcdefg");
-  Trace trace(storage);
+  Trace trace(storage, storage.master);
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
   BOOST_REQUIRE(trace.valid());
@@ -280,7 +431,7 @@ BOOST_AUTO_TEST_SUITE(MoveForward)
 BOOST_AUTO_TEST_CASE(move_forward_empty) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  Trace trace(storage);
+  Trace trace(storage, storage.master);
 
   trace.first();
   BOOST_REQUIRE(!trace.valid());
@@ -294,7 +445,7 @@ BOOST_AUTO_TEST_CASE(move_forward) {
   Storage storage(TEST_FILE, TEST_OPTIONS);
   fill_db(storage);
 
-  Trace trace(storage);
+  Trace trace(storage, storage.master);
 
   trace.first();
   BOOST_REQUIRE(trace.valid());
@@ -531,3 +682,4 @@ BOOST_AUTO_TEST_CASE(move_backward_empty) {
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+#endif

@@ -21,6 +21,12 @@ namespace leaves {
 
 struct Storage;
 struct offset_ptr;
+struct TrieNavigation;
+struct CompressedData;
+struct ValueData;
+struct TrieData;
+struct LeafData;
+
 
 struct Node {
   struct  {
@@ -29,9 +35,6 @@ struct Node {
   };
 };
 
-struct CompressedData;
-struct ValueData;
-struct TrieData;
 
 union any_ptr {
   int64_t as_int;
@@ -41,12 +44,15 @@ union any_ptr {
   CompressedData* compressed;
   ValueData *value;
   TrieData *trie;
+  LeafData *leaf;
+  TrieNavigation* navigation;
 
   any_ptr(void* ptr=NULL) : as_char((char*)ptr) {}
   any_ptr(const offset_ptr& ptr);
 
   const any_ptr& type(uint8_t type) { node->type = type; return *this; }
 };
+
 
 #pragma pack(2)
 #ifdef SMALL_PTR
@@ -236,7 +242,7 @@ struct Storage {
   size_t value_pool_count;
   void *null;
   uint64_t* version;
-  offset_ptr* start;
+  TrieNavigation* master;
   mapped_region region;
   managed_external_buffer memory;
   Pool *pools;

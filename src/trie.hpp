@@ -18,10 +18,8 @@ struct TrieData : public Node {
   int index_of_moved(int moved_bit);
   bool full(size_t count);
   offset_ptr* find(int bit);
-  offset_ptr* next(uint8_t& bit);
-  offset_ptr* first(uint8_t& bit);
-  offset_ptr* prev(uint8_t& bit);
-  offset_ptr* last(uint8_t& bit);
+  any_ptr next(uint8_t bit);
+  any_ptr first();
   void add(int bit, any_ptr next);
   any_ptr insert(Transition& self, any_ptr next, int bit);
   bool remove(Transition& self, TrieData** dest, offset_ptr *link, int bit);
@@ -34,15 +32,13 @@ struct TrieData : public Node {
 
 
 struct Trie : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key);
+  offset_ptr* find(Transition& self, ISlice& key);
   offset_ptr* ifind(Transition& self, char key);
-  offset_ptr* next(Transition& self, string& current_key);
-  offset_ptr* first(Transition& self, string& current_key);
-  offset_ptr* prev(Transition& self, string& current_key);
-  offset_ptr* last(Transition& self, string& current_key);
+  TrieNavigation* next(Transition& self);
+  TrieNavigation* first(any_ptr node);
   int advance(Transition& self, ISlice& key);
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key);
-  bool remove(Transition& self, bool last);
+  void insert(Transition& self, ISlice& key, const Slice& value, TrieNavigation* next_leaf);
+  bool remove(Transition& self);
 };
 
 
@@ -73,34 +69,17 @@ inline offset_ptr* TrieData::find(int bit) {
   return (bits & moved_bit) ? &children[index_of_moved(moved_bit)] : NULL;
 }
 
-inline offset_ptr* TrieData::next(uint8_t& bit) {
+inline any_ptr TrieData::next(uint8_t bit) {
   uint16_t nbits = bits & (0xFFFF << (bit+1));
   if (nbits) {
     bit = ctz(nbits);
-    return &children[index_of(bit)];
+    return children[index_of(bit)].resolve();
   }
   return NULL;
 }
 
-inline offset_ptr* TrieData::first(uint8_t& bit) {
-  bit = ctz(bits);
-  return &children[index_of(bit)];
-}
-
-inline offset_ptr* TrieData::prev(uint8_t& bit) {
-  if (bit) {
-    uint16_t nbits = bits & (0xFFFF >> (16-bit));
-    if (nbits) {
-      bit = 15 - (clz(nbits) & 0xf);
-      return &children[index_of(bit)];
-    }
-  }
-  return NULL;
-}
-
-inline offset_ptr* TrieData::last(uint8_t& bit) {
-  bit = 15 - (clz(bits) & 0xf);
-  return &children[index_of(bit)];
+inline any_ptr TrieData::first() {
+  return children[0].resolve();
 }
 
 } // namespace leaves

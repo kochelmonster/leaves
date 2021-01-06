@@ -3,40 +3,52 @@
 
 namespace leaves {
 
-typedef offset_ptr* (*move_func_t)(Transition& transition, string& current_key);
-
 
 struct Trace {
   typedef std::vector<Transition> stack_type;
 
-  Trace(Storage& storage) : storage(storage), version(*storage.version) {
+  Trace(Storage& storage, TrieNavigation* root_=NULL)
+      : storage(storage), root(root_), cursor(root_), version(*storage.version) {
+
+    if (!root_)
+      root = cursor = storage.master;
+
     current_key.reserve(1024);
     stack.reserve(1024);
   }
 
-  bool valid() const { return rest_key.empty() && stack.size() && stack.back().valid(); }
+  bool valid() const { return cursor->type == kLeaf; }
   void find(const Slice& key);
-  void first();
-  void last();
-  void next();
-  void prev();
+  void first() { set_cursor(root->next_leaf.resolve()); }
+  void last() { set_cursor(root->prev_leaf.resolve()); }
+  void next() { set_cursor(cursor->next_leaf.resolve()); }
+  void prev() { set_cursor(cursor->prev_leaf.resolve()); }
+
+  void set_cursor(any_ptr ptr) {
+    cursor = ptr.navigation;
+    if (valid())
+      current_key.assign(ptr.leaf->chars, ptr.leaf->size);
+  }
+
   void set_value(const Slice& value);
-  Slice get_value() const { return stack.back().get_value(); }
+  Slice get_value() const { return ((LeafData*)cursor)->get_value(); }
   void remove();
 
   void ifind();
-  void imove_end(move_func_t move);
-  void imove(move_func_t move, move_func_t move_end);
+  TrieNavigation* ifind_next();
 
   void sanitize() {
     while(version != *storage.version) {
       // restore trace after another cursor changed the trie.
+      stack.clear();
       find(current_key);
     }
   }
 
   stack_type stack;
   Storage& storage;
+  TrieNavigation *root;
+  TrieNavigation* cursor;
   ISlice rest_key;
   string current_key;
   uint64_t version;

@@ -3,24 +3,6 @@
 
 namespace leaves {
 
-
-offset_ptr* ifirst(Transition& transition, string& current_key) {
-  return transition.first(current_key);
-}
-
-offset_ptr* ilast(Transition& transition, string& current_key) {
-  return transition.last(current_key);
-}
-
-offset_ptr* inext(Transition& transition, string& current_key) {
-  return transition.next(current_key);
-}
-
-offset_ptr* iprev(Transition& transition, string& current_key) {
-  return transition.prev(current_key);
-}
-
-
 void Trace::find(const Slice& key) {
   rest_key = key;
 
@@ -29,7 +11,6 @@ void Trace::find(const Slice& key) {
     int add = i->advance(rest_key);
     if (add < 0) {
       stack.erase(++i, stack.end());
-      current_key.resize(same);
       break;
     }
     same += add;
@@ -42,8 +23,7 @@ void Trace::set_value(const Slice& value) {
     throw NoValidPosition();
 
   sanitize();
-  Transition& transition(stack.back());
-  transition.insert(rest_key, value, current_key);
+  stack.back().insert(rest_key, value, ifind_next());
   (*storage.version)++;
   ifind();
 }
@@ -53,82 +33,45 @@ void Trace::remove() {
     throw NoValidPosition();
 
   sanitize();
-  bool last = true;
-  while(stack.size() && stack.back().remove(last)) {
+  while(stack.size() && stack.back().remove())
     stack.pop_back();
-    last = false;
-  }
+
+  if (!root->next)
+    root->next = root;
+
   stack.clear();
   current_key.clear();
   (*storage.version)++;
 }
 
-void Trace::first() {
-  imove_end(ifirst);
-}
-
-
-void Trace::last() {
-  imove_end(ilast);
-}
-
-void Trace::next() {
-  imove(inext, ifirst);
-}
-
-void Trace::prev() {
-  imove(iprev, ilast);
-}
-
-void Trace::imove_end(move_func_t move) {
-  rest_key = Slice();
-  current_key.clear();
-  stack.clear();
-  stack.push_back(Transition(storage.start, &storage));
-  while(true) {
-      offset_ptr *next = move(stack.back(), current_key);
-      if (!next)
-        break;
-      stack.push_back(Transition(next, &storage));
-  }
-  version = *storage.version;
-}
-
-void Trace::imove(move_func_t move, move_func_t move_end) {
-  if (stack.empty())
-    throw NoValidPosition();
-
-  sanitize();
-  rest_key = Slice();
-  offset_ptr *next;
-  while(stack.size()) {
-    next = move(stack.back(), current_key);
+TrieNavigation* Trace::ifind_next() {
+  for(stack_type::reverse_iterator i = stack.rbegin(); i != stack.rend(); i++) {
+    TrieNavigation* next = i->next();
     if (next)
-      break;
-    stack.pop_back();
+      return next;
   }
-
-  if (next && next != stack.back().node_ptr)  // see node.cpp Value::prev
-    while(next) {
-      stack.push_back(Transition(next, &storage));
-      next = move_end(stack.back(), current_key);
-    }
-  version = *storage.version;
+  return root;
 }
 
 void Trace::ifind() {
   if (stack.empty())
-    stack.push_back(Transition(storage.start, &storage));
+    stack.push_back(Transition(&root->next, &storage));
+
+  version = *storage.version;
 
   offset_ptr *next;
   while(true) {
-    Transition& active(stack.back());
-    next = active.find(rest_key, current_key);
+    next = stack.back().find(rest_key);
     if (!next)
       break;
     stack.push_back(Transition(next, &storage));
   }
-  version = *storage.version;
+
+  Transition& active(stack.back());
+  if (active.node->type == kLeaf && active.cmp == 0 && rest_key.empty())
+    set_cursor(active.leaf);
+  else
+    set_cursor(root);
 }
 
 } // namespace leaves
