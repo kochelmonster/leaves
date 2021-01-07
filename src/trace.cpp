@@ -60,6 +60,10 @@ void Trace::remove() {
   }
   stack.clear();
   current_key.clear();
+
+  if (!*storage.start)
+    *storage.start = storage.null;
+
   (*storage.version)++;
 }
 
@@ -84,12 +88,12 @@ void Trace::imove_end(move_func_t move) {
   rest_key = Slice();
   current_key.clear();
   stack.clear();
-  stack.push_back(Transition(storage.start, &storage));
+  stack.push_back(Transition(storage.start, this));
   while(true) {
       offset_ptr *next = move(stack.back(), current_key);
       if (!next)
         break;
-      stack.push_back(Transition(next, &storage));
+      stack.push_back(Transition(next, this));
   }
   version = *storage.version;
 }
@@ -110,7 +114,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
 
   if (next && next != stack.back().node_ptr)  // see node.cpp Value::prev
     while(next) {
-      stack.push_back(Transition(next, &storage));
+      stack.push_back(Transition(next, this));
       next = move_end(stack.back(), current_key);
     }
   version = *storage.version;
@@ -118,7 +122,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
 
 void Trace::ifind() {
   if (stack.empty())
-    stack.push_back(Transition(storage.start, &storage));
+    stack.push_back(Transition(storage.start, this));
 
   offset_ptr *next;
   while(true) {
@@ -126,7 +130,7 @@ void Trace::ifind() {
     next = active.find(rest_key, current_key);
     if (!next)
       break;
-    stack.push_back(Transition(next, &storage));
+    stack.push_back(Transition(next, this));
   }
   version = *storage.version;
 }

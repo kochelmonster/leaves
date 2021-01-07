@@ -3,6 +3,7 @@
 
 #include "node.hpp"
 #include "trie.hpp"
+#include "trace.hpp"
 
 
 namespace leaves {
@@ -64,21 +65,21 @@ struct Value : public NodeHandler {
 
   void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
     if (key.empty()) {
-      any_ptr new_ptr(ValueData::build(self.storage, self.value->next, value));
-      self.storage->free(self.value);
+      any_ptr new_ptr(ValueData::build(self.trace, self.value->next, value));
+      self.trace->free(self.value);
       self.set(new_ptr);
       return;
     }
 
     assert(!self.value->next);
-    any_ptr next(ValueData::build(self.storage, offset_ptr(), value));
-    self.value->next = CompressedData::build(self.storage, next, key);
+    any_ptr next(ValueData::build(self.trace, offset_ptr(), value));
+    self.value->next = CompressedData::build(self.trace, next, key);
   }
 
   bool remove(Transition& self, bool last) {
     if (last) {
       *self.node_ptr = self.value->next;
-      self.storage->free(self.value);
+      self.trace->free(self.value);
       return true;
     }
     // intermediate value
@@ -152,19 +153,17 @@ struct Compressed : public NodeHandler {
         Slice rest(node->keys+i+1, node->size-i-1);
 
         // build trie node
-        any_ptr rest_ptr = CompressedData::build(self.storage, node->next, rest);
-        any_ptr trie_ptr = TrieData::build(self.storage, rest_ptr, node->keys[i]);
-        offset_ptr otp(trie_ptr);
-        Transition trie(&otp, self.storage);
-        trie_handler.ifind(trie, key[i]);
+        any_ptr rest_ptr = CompressedData::build(self.trace, node->next, rest);
+        any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, node->keys[i]);
+        self.trace->free(node);
 
+        self.set(trie_ptr);
+        trie_handler.ifind(self, key[i]);
         ISlice rest_key(key.advance(i));
-        current_key.push_back(trie.key); // will be popped in trie.insert
-        trie.insert(rest_key, value, current_key);
+        current_key.push_back(self.key); // will be popped in trie.insert
+        self.insert(rest_key, value, current_key);
 
-        any_ptr first_ptr(CompressedData::build(self.storage, trie_ptr, first));
-        self.storage->free(node);
-        self.set(first_ptr);
+        self.set(CompressedData::build(self.trace, trie_ptr, first));
         return;
       }
     }
@@ -177,45 +176,32 @@ struct Compressed : public NodeHandler {
     */
     Slice first(key.data(), size);
     Slice rest(node->keys+size, node->size-size);
-    any_ptr rest_ptr = CompressedData::build(self.storage, node->next.resolve(), rest);
-    any_ptr value_ptr = ValueData::build(self.storage, rest_ptr, value);
-    any_ptr first_ptr = CompressedData::build(self.storage, value_ptr, first);
+    any_ptr rest_ptr = CompressedData::build(self.trace, node->next.resolve(), rest);
+    any_ptr value_ptr = ValueData::build(self.trace, rest_ptr, value);
+    any_ptr first_ptr = CompressedData::build(self.trace, value_ptr, first);
 
-    self.storage->free(node);
+    self.trace->free(node);
     self.set(first_ptr);
   }
 
   bool remove(Transition& self, bool last) {
     CompressedData *node = self.compressed;
     if (!node->next) {
-      self.storage->free(node);
-      if (self.node_ptr != self.storage->start)
-        *self.node_ptr = offset_ptr();
-      else
-        *self.node_ptr = self.storage->null;
-
+      self.trace->free(node);
+      *self.node_ptr = offset_ptr();
       return true;
     }
 
-    any_ptr node_next = node->next.resolve();
-    if (node_next.node->type == kCompressed) {
-
-      CompressedData *next_node(node_next.compressed);
-      size_t size = (size_t)node->size + (size_t)next_node->size;
-
-      if (size < MAX_COMPRESSED_LEN) {
-        any_ptr nptr(self.storage->allocate(size+sizeof(CompressedData)).type(kCompressed));
-
-        CompressedData *new_node(nptr.compressed);
-        new_node->fill(next_node->next, Slice(node->keys, node->size));
-        memcpy(new_node->keys+node->size, next_node->keys, next_node->size);
-        new_node->size += next_node->size;
-
-        self.storage->free(next_node);
-        self.storage->free(node);
-
-        self.set(nptr);
-      }
+    CompressedData *child = node->next.resolve().compressed;
+    if (child->type == kCompressed) {
+      std::string tmp;
+      tmp.reserve(node->size + child->size);
+      tmp.append(node->keys, node->size);
+      tmp.append(child->keys, child->size);
+      any_ptr result = CompressedData::build(self.trace, child->next, tmp);
+      self.trace->free(node);
+      self.trace->free(child);
+      self.set(result);
     }
 
     return true;
@@ -229,8 +215,8 @@ struct Null : public NodeHandler {
   offset_ptr* prev(Transition& self, string& current_key) { return NULL; }
   offset_ptr* last(Transition& self, string& current_key) { return NULL; }
   void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
-    offset_ptr value_ptr(ValueData::build(self.storage, offset_ptr(), value));
-    self.set(CompressedData::build(self.storage, value_ptr, key));
+    offset_ptr value_ptr(ValueData::build(self.trace, offset_ptr(), value));
+    self.set(CompressedData::build(self.trace, value_ptr, key));
   }
   int advance(Transition& self, ISlice& key) { return -1; } // never
   bool remove(Transition& self, bool last) { return false; } // never
@@ -243,6 +229,32 @@ static Compressed compressed_handler;
 
 NodeHandler* Transition::handlers[] = {
   &value_handler, &null_handler, &compressed_handler, &trie_handler };
+
+
+any_ptr ValueData::build(Trace* trace, const offset_ptr& next, const Slice& value) {
+  any_ptr result(trace->allocate(value.size()+sizeof(ValueData)).type(kValue));
+  result.value->size = value.size();
+  memcpy(result.value->value, value.data(), value.size());
+  result.value->next = next;
+  return result;
+}
+
+any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key) {
+  if (key.empty())
+    return next;
+
+  if (key.size() > MAX_COMPRESSED_LEN) {
+    // divide key in multiple compressed
+    Slice first(key.data(), MAX_COMPRESSED_LEN);
+    Slice second(key.advance(MAX_COMPRESSED_LEN));
+    return build(trace, build(trace, next, second), first);
+  }
+
+  any_ptr result(trace->allocate(key.size()+sizeof(CompressedData)).type(kCompressed));
+  result.compressed->fill(next, key);
+  return result;
+}
+
 
 
 

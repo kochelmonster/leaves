@@ -1,6 +1,7 @@
 /* handling trie nodes
 */
 #include "trie.hpp"
+#include "trace.hpp"
 
 namespace leaves {
 
@@ -23,15 +24,16 @@ offset_ptr* Trie::find(Transition& self, ISlice& key, string& current_key) {
 
   offset_ptr *result = ifind(self, key[0]);
   current_key.push_back(self.key);
-  if (result)
+  if (result) {
+    self.cmp = 0;
     key.iadvance(1);
-
+  }
   return result;
 }
 
 offset_ptr* Trie::ifind(Transition& self, char key) {
-  self.cmp = 0;
   char value = self.key = key;
+  self.cmp = -1;
   self.second_ptr = self.upper->find(bit::upper(value));
   if (self.second_ptr) {
     assert(self.second_ptr->resolve().node->type == kTrie);
@@ -119,8 +121,7 @@ offset_ptr* Trie::last(Transition& self, string& current_key) {
 }
 
 int Trie::advance(Transition& self, ISlice& key) {
-  if (key.size() && key[0] == self.key) {
-    self.cmp = 0;
+  if (key.size() && key[0] == self.key && self.cmp == 0) {
     key.iadvance(1);
     return 1;
   }
@@ -130,7 +131,7 @@ int Trie::advance(Transition& self, ISlice& key) {
 void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
   if (self.cmp == 1) {
     // key was empty at find -> insert value key before
-    self.set(ValueData::build(self.storage, *self.node_ptr, value));
+    self.set(ValueData::build(self.trace, *self.node_ptr, value));
     return;
   }
 
@@ -138,14 +139,14 @@ void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& cur
   uint8_t upper = bit::upper(self.key);
   uint8_t lower = bit::lower(self.key);
 
-  any_ptr next(ValueData::build(self.storage, offset_ptr(), value));
+  any_ptr next(ValueData::build(self.trace, offset_ptr(), value));
   if (key.size() > 1) {
     Slice restkey(key.advance(1));
-    next = CompressedData::build(self.storage, next, restkey);
+    next = CompressedData::build(self.trace, next, restkey);
   }
 
   if (!self.lower) {
-    any_ptr lower_ptr = TrieData::create(self.storage, next, lower);
+    any_ptr lower_ptr = TrieData::create(self.trace, next, lower);
     self.lower = lower_ptr.trie;
     self.set(self.upper->insert(self, lower_ptr, upper));
     return;
@@ -166,9 +167,9 @@ bool Trie::remove(Transition& self, bool last) {
   if (popcount(self.upper->bits) == 1 && popcount(self.lower->bits) == 1) {
     any_ptr next = self.lower->children[0].resolve();
     char value = (ctz(self.upper->bits) << 4) | ctz(self.lower->bits);
-    self.storage->free(self.lower);
-    self.storage->free(self.upper);
-    self.set(CompressedData::build(self.storage, next, Slice(&value, 1)));
+    self.trace->free(self.lower);
+    self.trace->free(self.upper);
+    self.set(CompressedData::build(self.trace, next, Slice(&value, 1)));
     self.remove(last);  // combines compressed if possible
   }
   return true;
@@ -201,9 +202,9 @@ any_ptr TrieData::insert(Transition& self, any_ptr next, int bit) {
   size_t count = popcount(bits);
   if (full(count)) {
     // node must grow
-    any_ptr new_ptr = self.storage->allocate(size_of(count+1)).type(kTrie);
+    any_ptr new_ptr = self.trace->allocate(size_of(count+1)).type(kTrie);
     copy_to(new_ptr.trie, count);
-    self.storage->free(this);
+    self.trace->free(this);
     new_ptr.trie->add(bit, next);
     return new_ptr;
   }
@@ -225,7 +226,7 @@ bool TrieData::remove(Transition& self, TrieData** dest, offset_ptr *link, int b
 
   if (!bits) {
     // has been shrunken to pool 0 for shure
-    self.storage->free(this);
+    self.trace->free(this);
     *link = offset_ptr();
     return true;
   }
@@ -237,25 +238,25 @@ bool TrieData::remove(Transition& self, TrieData** dest, offset_ptr *link, int b
 
   if (full(count)) {
     // shrink
-    any_ptr new_ptr = self.storage->allocate(size_of(count)).type(kTrie);
+    any_ptr new_ptr = self.trace->allocate(size_of(count)).type(kTrie);
     copy_to(new_ptr, count);
     *dest = new_ptr.trie;
     *link = new_ptr;
-    self.storage->free(this);
+    self.trace->free(this);
   }
   return false;
 }
 
-any_ptr TrieData::create(Storage* storage, any_ptr next, int bit) {
-  any_ptr result = storage->pools[0].allocate().type(kTrie);
+any_ptr TrieData::create(Trace* trace, any_ptr next, int bit) {
+  any_ptr result = trace->storage.pools[0].allocate().type(kTrie);
   result.trie->bits = 1<<bit;
   result.trie->children[0] = next;
   return result;
 }
 
-any_ptr TrieData::build(Storage* storage, any_ptr next, char key) {
-  next = create(storage, next, bit::lower(key));
-  next = create(storage, next, bit::upper(key));
+any_ptr TrieData::build(Trace* trace, any_ptr next, char key) {
+  next = create(trace, next, bit::lower(key));
+  next = create(trace, next, bit::upper(key));
   return next;
 }
 

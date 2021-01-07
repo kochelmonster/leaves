@@ -27,8 +27,8 @@ struct TrieData : public Node {
   bool remove(Transition& self, TrieData** dest, offset_ptr *link, int bit);
   void copy_to(any_ptr dest, size_t count);
 
-  static any_ptr create(Storage* storage, any_ptr next, int bit);
-  static any_ptr build(Storage* storage, any_ptr next, char key);
+  static any_ptr create(Trace* trace, any_ptr next, int bit);
+  static any_ptr build(Trace* trace, any_ptr next, char key);
 };
 #pragma pack(0)
 

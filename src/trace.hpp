@@ -24,6 +24,9 @@ struct Trace {
   Slice get_value() const { return stack.back().get_value(); }
   void remove();
 
+  any_ptr allocate(size_t size) { return storage.allocate(size); }
+  void free(any_ptr ptr) { return storage.free(ptr); }
+
   void ifind();
   void imove_end(move_func_t move);
   void imove(move_func_t move, move_func_t move_end);

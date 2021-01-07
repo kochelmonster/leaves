@@ -10,6 +10,7 @@ using std::string;
 namespace leaves {
 
 struct Transition;
+struct Trace;
 
 enum NodeTypes {
   kValue = 0,
@@ -40,14 +41,6 @@ struct ISlice : public Slice {
 
 #pragma pack(2)
 
-struct Leaf : public Node {
-  uint16_t size;
-  offset_ptr value;
-  offset_ptr prev;
-  offset_ptr next;
-  char key;
-};
-
 struct ValueData : public Node {
   offset_ptr next;
   uint32_t size;
@@ -57,13 +50,7 @@ struct ValueData : public Node {
     return size + sizeof(ValueData);
   }
 
-  static any_ptr build(Storage* storage, const offset_ptr& next, const Slice& value) {
-    any_ptr result(storage->allocate(value.size()+sizeof(ValueData)).type(kValue));
-    result.value->size = value.size();
-    memcpy(result.value->value, value.data(), value.size());
-    result.value->next = next;
-    return result;
-  }
+  static any_ptr build(Trace* trace, const offset_ptr& next, const Slice& value);
 };
 
 inline char sign(int x) {
@@ -97,24 +84,8 @@ struct CompressedData : public Node {
     memcpy(keys, key.data(), key.size());
   }
 
-  static any_ptr build(Storage* storage, any_ptr next, const Slice& key) {
-    if (key.empty())
-      return next;
-
-    if (key.size() > MAX_COMPRESSED_LEN) {
-      // divide key in multiple compressed
-      Slice first(key.data(), MAX_COMPRESSED_LEN);
-      Slice second(key.advance(MAX_COMPRESSED_LEN));
-      return build(storage, build(storage, next, second), first);
-    }
-
-    any_ptr result(storage->allocate(key.size()+sizeof(CompressedData)).type(kCompressed));
-    result.compressed->fill(next, key);
-    return result;
-  }
-
+  static any_ptr build(Trace* trace, any_ptr next, const Slice& key);
 };
-
 
 #pragma pack(0)
 
@@ -124,8 +95,8 @@ struct TrieData;
 
 
 struct Transition {
-  Transition(offset_ptr* pptr, Storage* storage)
-    : node_ptr(pptr), value(node_ptr->resolve().value), storage(storage), cmp(0) {  }
+  Transition(offset_ptr* pptr, Trace* trace)
+    : node_ptr(pptr), value(node_ptr->resolve().value), trace(trace), cmp(0) {  }
 
   void set(any_ptr ptr) {
     *node_ptr = ptr;
@@ -154,7 +125,7 @@ struct Transition {
     TrieData *upper;
   };
   TrieData *lower;
-  Storage* storage;
+  Trace* trace;
   char key;
   char cmp;
   static NodeHandler* handlers[];

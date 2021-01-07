@@ -242,6 +242,18 @@ struct Storage {
   Pool *pools;
 };
 
+inline int pool_index(size_t size) {
+#ifdef SMALL_PTR
+  if (size <= 16) return 0;
+  if (size <= 34) return 1;
+  if (size <= 64) return 2;
+#else
+  if (size <= 20) return 0;
+  if (size <= 44) return 1;
+  if (size <= 84) return 2;
+#endif
+  return 3;
+}
 
 inline any_ptr::any_ptr(const offset_ptr& ptr) : node(ptr.resolve().node) { }
 
