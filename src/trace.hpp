@@ -9,9 +9,11 @@ typedef offset_ptr* (*move_func_t)(Transition& transition, string& current_key);
 struct Trace {
   typedef std::vector<Transition> stack_type;
 
-  Trace(Storage& storage) : storage(storage), version(*storage.version) {
+  Trace(Storage& storage, offset_ptr* root_=NULL) : storage(storage), version(*storage.version) {
     current_key.reserve(1024);
     stack.reserve(1024);
+    if (!root)
+      root = storage.root;
   }
 
   bool valid() const { return rest_key.empty() && stack.size() && stack.back().valid(); }
@@ -28,6 +30,7 @@ struct Trace {
   void free(any_ptr ptr) { return storage.free(ptr); }
 
   void ifind();
+  void iremove();
   void imove_end(move_func_t move);
   void imove(move_func_t move, move_func_t move_end);
 
@@ -40,8 +43,28 @@ struct Trace {
 
   stack_type stack;
   Storage& storage;
+  offset_ptr* root;
   ISlice rest_key;
   string current_key;
   uint64_t version;
 };
+
+template <typename type1, typename type2>
+void Transition::set_value(type1& dest, type2 src) {
+  trace->storage.set_value(dest, src);
+}
+
+inline void Transition::memcpy(void* dest, const void* src, size_t size) {
+  trace->storage.memcpy(dest, src, size);
+}
+
+inline void Transition::memmove(void* dest, const void* src, size_t size) {
+  trace->storage.memmove(dest, src, size);
+}
+
+inline void Transition::memset(void* dest, char val, size_t size) {
+  trace->storage.memset(dest, val, size);
+}
+
+
 } // namespace leaves

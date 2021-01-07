@@ -5,17 +5,6 @@
 
 namespace leaves {
 
-namespace bit {
-  uint8_t upper(uint8_t value) {
-    return value >> 4;
-  }
-
-  uint8_t lower(uint8_t value) {
-    return (value & 0x0F);
-  }
-}
-
-
 offset_ptr* Trie::find(Transition& self, ISlice& key, string& current_key) {
   if (key.empty()) {
     self.cmp = 1;
@@ -128,10 +117,11 @@ int Trie::advance(Transition& self, ISlice& key) {
   return -1;
 }
 
-void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
+void Trie::insert(Transition& self, ISlice& key, any_ptr next, string& current_key) {
   if (self.cmp == 1) {
     // key was empty at find -> insert value key before
-    self.set(ValueData::build(self.trace, *self.node_ptr, value));
+    self.set_value(next.value->next, *self.node_ptr);
+    self.set(next);
     return;
   }
 
@@ -139,7 +129,6 @@ void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& cur
   uint8_t upper = bit::upper(self.key);
   uint8_t lower = bit::lower(self.key);
 
-  any_ptr next(ValueData::build(self.trace, offset_ptr(), value));
   if (key.size() > 1) {
     Slice restkey(key.advance(1));
     next = CompressedData::build(self.trace, next, restkey);
@@ -158,7 +147,7 @@ void Trie::insert(Transition& self, ISlice& key, const Slice& value, string& cur
 }
 
 
-bool Trie::remove(Transition& self, bool last) {
+bool Trie::remove(Transition& self) {
   if (self.lower->remove(self, &self.lower, self.second_ptr,  bit::lower(self.key))) {
     self.upper->remove(self, &self.upper, self.node_ptr, bit::upper(self.key));
     return true;
@@ -170,7 +159,7 @@ bool Trie::remove(Transition& self, bool last) {
     self.trace->free(self.lower);
     self.trace->free(self.upper);
     self.set(CompressedData::build(self.trace, next, Slice(&value, 1)));
-    self.remove(last);  // combines compressed if possible
+    self.remove();  // combines compressed if possible
   }
   return true;
 }

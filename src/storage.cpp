@@ -16,7 +16,7 @@ namespace leaves {
 struct NullData : public Node {
   // we abuse it to save some singletons
   uint64_t version;
-  offset_ptr start;
+  offset_ptr root;
 };
 #pragma pack(0)
 
@@ -115,7 +115,7 @@ Storage::Storage(const char* path, const Options& options) {
     NullData *internal((NullData*)(address+header.null));
     null = (void*)internal;
     version = &internal->version;
-    start = &internal->start;
+    root = &internal->root;
   }
   else {
     std::ofstream fhead(path, std::ios::out|std::ios::binary);
@@ -159,8 +159,8 @@ Storage::Storage(const char* path, const Options& options) {
     internal->type = kNull;
     version = &internal->version;
     *version = 0;
-    start = &internal->start;
-    *start = internal;
+    root = &internal->root;
+    *root = internal;
 
     flush_header();
   }

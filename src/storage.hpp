@@ -229,6 +229,12 @@ struct Storage {
   void flush(bool async=true) { region.flush(0, 0, async); }
   void flush_header();
 
+  template <typename type1, typename type2>
+  void set_value(type1& dest, type2 src) { dest = src; }
+  void memcpy(void* dest, const void* src, size_t size) { memcpy(dest, src, size); }
+  void memmove(void* dest, const void* src, size_t size) { memmove(dest, src, size); }
+  void memset(void* dest, char val, size_t size) { memset(dest, val, size); }
+
   file_mapping file;
   size_t grow_size;
   size_t value_pool_start_size;
@@ -236,7 +242,7 @@ struct Storage {
   size_t value_pool_count;
   void *null;
   uint64_t* version;
-  offset_ptr* start;
+  offset_ptr* root;
   mapped_region region;
   managed_external_buffer memory;
   Pool *pools;

@@ -74,7 +74,7 @@ void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 
 void dump_db(std::ostream& out, DB::ptr db) {
   SingleDB *sdb(((SingleDB*)db.get()));
-  dump_node(out, *sdb->storage.start, &sdb->storage);
+  dump_node(out, *sdb->storage.root, &sdb->storage);
 }
 
 #endif

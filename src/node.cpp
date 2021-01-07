@@ -63,28 +63,19 @@ struct Value : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) {
     if (key.empty()) {
-      any_ptr new_ptr(ValueData::build(self.trace, self.value->next, value));
+      self.set_value(val_ptr.value->next, self.value->next);
       self.trace->free(self.value);
-      self.set(new_ptr);
+      self.set(val_ptr);
       return;
     }
 
     assert(!self.value->next);
-    any_ptr next(ValueData::build(self.trace, offset_ptr(), value));
-    self.value->next = CompressedData::build(self.trace, next, key);
+    self.value->next = CompressedData::build(self.trace, val_ptr, key);
   }
 
-  bool remove(Transition& self, bool last) {
-    if (last) {
-      *self.node_ptr = self.value->next;
-      self.trace->free(self.value);
-      return true;
-    }
-    // intermediate value
-    return false;
-  };
+  bool remove(Transition& self) { assert(0); return false; };
 };
 
 struct Compressed : public NodeHandler {
@@ -136,7 +127,8 @@ struct Compressed : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) {
+    assert(val_ptr.node->type == kValue);
     CompressedData* node = self.compressed;
 
     int size = std::min((size_t)node->size, key.size());
@@ -149,21 +141,20 @@ struct Compressed : public NodeHandler {
            [abcdefg] ==> [ab] -> |c| -> [efg]
                                  |h| -> [ij]
         */
-        Slice first(key.data(), i);
-        Slice rest(node->keys+i+1, node->size-i-1);
 
         // build trie node
+        Slice rest(node->keys+i+1, node->size-i-1);
         any_ptr rest_ptr = CompressedData::build(self.trace, node->next, rest);
         any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, node->keys[i]);
         self.trace->free(node);
-
         self.set(trie_ptr);
-        trie_handler.ifind(self, key[i]);
-        ISlice rest_key(key.advance(i));
-        current_key.push_back(self.key); // will be popped in trie.insert
-        self.insert(rest_key, value, current_key);
 
-        self.set(CompressedData::build(self.trace, trie_ptr, first));
+        ISlice first(key.advance(i));
+        trie_handler.ifind(self, key[i]);
+        current_key.push_back(self.key); // will be popped in trie.insert
+        self.insert(first, val_ptr, current_key);
+
+        self.set(CompressedData::build(self.trace, trie_ptr, Slice(key.data(), i)));
         return;
       }
     }
@@ -176,15 +167,14 @@ struct Compressed : public NodeHandler {
     */
     Slice first(key.data(), size);
     Slice rest(node->keys+size, node->size-size);
-    any_ptr rest_ptr = CompressedData::build(self.trace, node->next.resolve(), rest);
-    any_ptr value_ptr = ValueData::build(self.trace, rest_ptr, value);
-    any_ptr first_ptr = CompressedData::build(self.trace, value_ptr, first);
+    self.set_value(val_ptr.value->next, CompressedData::build(self.trace, node->next, rest));
+    any_ptr first_ptr = CompressedData::build(self.trace, val_ptr, first);
 
     self.trace->free(node);
     self.set(first_ptr);
   }
 
-  bool remove(Transition& self, bool last) {
+  bool remove(Transition& self) {
     CompressedData *node = self.compressed;
     if (!node->next) {
       self.trace->free(node);
@@ -214,12 +204,11 @@ struct Null : public NodeHandler {
   offset_ptr* first(Transition& self, string& current_key) { return NULL; }
   offset_ptr* prev(Transition& self, string& current_key) { return NULL; }
   offset_ptr* last(Transition& self, string& current_key) { return NULL; }
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) {
-    offset_ptr value_ptr(ValueData::build(self.trace, offset_ptr(), value));
-    self.set(CompressedData::build(self.trace, value_ptr, key));
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) {
+    self.set(CompressedData::build(self.trace, val_ptr, key));
   }
-  int advance(Transition& self, ISlice& key) { return -1; } // never
-  bool remove(Transition& self, bool last) { return false; } // never
+  int advance(Transition& self, ISlice& key) { assert(0); return -1; }
+  bool remove(Transition& self) { assert(0); return false; }
 };
 
 
@@ -231,11 +220,11 @@ NodeHandler* Transition::handlers[] = {
   &value_handler, &null_handler, &compressed_handler, &trie_handler };
 
 
-any_ptr ValueData::build(Trace* trace, const offset_ptr& next, const Slice& value) {
+any_ptr ValueData::build(Trace* trace, const Slice& value) {
   any_ptr result(trace->allocate(value.size()+sizeof(ValueData)).type(kValue));
-  result.value->size = value.size();
-  memcpy(result.value->value, value.data(), value.size());
-  result.value->next = next;
+  trace->storage.set_value(result.value->size, value.size());
+  trace->storage.memcpy(result.value->value, value.data(), value.size());
+  trace->storage.set_value(result.value->next, offset_ptr());
   return result;
 }
 
@@ -251,7 +240,7 @@ any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key) {
   }
 
   any_ptr result(trace->allocate(key.size()+sizeof(CompressedData)).type(kCompressed));
-  result.compressed->fill(next, key);
+  result.compressed->fill(trace->storage, next, key);
   return result;
 }
 

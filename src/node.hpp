@@ -21,20 +21,13 @@ enum NodeTypes {
 
 
 struct ISlice : public Slice {
-  size_t offset;
-
   ISlice(): Slice() {}
-  ISlice(const Slice& src) : Slice(src.data(), src.size()), offset(0) { }
+  ISlice(const Slice& src) : Slice(src.data(), src.size()) { }
 
   Slice& iadvance(size_t size) {
-    offset += size;
     _data += size;
     _size -= size;
     return *this;
-  }
-
-  Slice complete() const {
-    return Slice(_data-offset, _size+offset);
   }
 };
 
@@ -50,7 +43,7 @@ struct ValueData : public Node {
     return size + sizeof(ValueData);
   }
 
-  static any_ptr build(Trace* trace, const offset_ptr& next, const Slice& value);
+  static any_ptr build(Trace* trace, const Slice& value);
 };
 
 inline char sign(int x) {
@@ -61,7 +54,7 @@ inline char sign(int x) {
 
 struct CompressedData : public Node {
   offset_ptr next;
-  unsigned char size;
+  uint8_t size;
   char keys[];
 
   size_t size_of(size_t size) {
@@ -78,10 +71,10 @@ struct CompressedData : public Node {
     return cmp;
   }
 
-  void fill(any_ptr next_, const Slice& key) {
-    next = next_;
-    size = (unsigned char)key.size();
-    memcpy(keys, key.data(), key.size());
+  void fill(Storage& storage, any_ptr next_, const Slice& key) {
+    storage.set_value(next, next_);
+    storage.set_value(size, (uint8_t)key.size());
+    storage.memcpy(keys, key.data(), key.size());
   }
 
   static any_ptr build(Trace* trace, any_ptr next, const Slice& key);
@@ -110,10 +103,16 @@ struct Transition {
   offset_ptr* first(string& current_key);
   offset_ptr* last(string& current_key);
   int advance(ISlice& key);
-  void insert(ISlice& key, const Slice& value, string& current_key);
-  bool remove(bool last);
+  void insert(ISlice& key, any_ptr val_ptr, string& current_key);
+  bool remove();
   Slice get_value() const;
   NodeHandler* handler() const { return handlers[node->type]; }
+
+  template <typename type1, typename type2>
+  void set_value(type1& dest, type2 src);
+  void memcpy(void* dest, const void* src, size_t size);
+  void memmove(void* dest, const void* src, size_t size);
+  void memset(void* dest, char val, size_t size);
 
   offset_ptr* node_ptr;
   offset_ptr* second_ptr;
@@ -138,8 +137,8 @@ struct NodeHandler {
   virtual offset_ptr* first(Transition& self, string& current_key) = 0;
   virtual offset_ptr* prev(Transition& self, string& current_key) = 0;
   virtual offset_ptr* last(Transition& self, string& current_key) = 0;
-  virtual void insert(Transition& self, ISlice& key, const Slice& value, string& current_key) = 0;
-  virtual bool remove(Transition& self, bool last) = 0;
+  virtual void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) = 0;
+  virtual bool remove(Transition& self) = 0;
   virtual int advance(Transition& self, ISlice& key) = 0;
   virtual bool valid() const { return false; }
   virtual Slice get_value(const Transition& self) const { return Slice(); }
@@ -171,8 +170,8 @@ inline int Transition::advance(ISlice& key) {
   return handler()->advance(*this, key);
 }
 
-inline void Transition::insert(ISlice& key, const Slice& value, string& current_key) {
-  handler()->insert(*this, key, value, current_key);
+inline void Transition::insert(ISlice& key, any_ptr val_ptr, string& current_key) {
+  handler()->insert(*this, key, val_ptr, current_key);
 }
 
 inline bool Transition::valid() const {
@@ -183,8 +182,8 @@ inline Slice Transition::get_value() const {
   return handler()->get_value(*this);
 }
 
-inline bool Transition::remove(bool last) {
-  return handler()->remove(*this, last);
+inline bool Transition::remove() {
+  return handler()->remove(*this);
 }
 
 } // namespace leaves

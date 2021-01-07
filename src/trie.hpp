@@ -41,8 +41,8 @@ struct Trie : public NodeHandler {
   offset_ptr* prev(Transition& self, string& current_key);
   offset_ptr* last(Transition& self, string& current_key);
   int advance(Transition& self, ISlice& key);
-  void insert(Transition& self, ISlice& key, const Slice& value, string& current_key);
-  bool remove(Transition& self, bool last);
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key);
+  bool remove(Transition& self);
 };
 
 
@@ -102,5 +102,15 @@ inline offset_ptr* TrieData::last(uint8_t& bit) {
   bit = 15 - (clz(bits) & 0xf);
   return &children[index_of(bit)];
 }
+
+namespace bit {
+inline uint8_t upper(uint8_t value) {
+  return value >> 4;
+}
+
+inline uint8_t lower(uint8_t value) {
+  return (value & 0x0F);
+}
+} // namespace bit
 
 } // namespace leaves
