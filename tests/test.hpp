@@ -32,13 +32,13 @@ void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 
 inline void dump_graph(const char* output, Storage& storage) {
   std::ofstream out(output);
-  dump_node(out, *storage.start, &storage);
+  dump_node(out, *storage.root, &storage);
 }
 
 
 inline void compare_graph(const char* input, Storage& storage) {
   std::stringstream cstr;
-  dump_node(cstr, *storage.start, &storage);
+  dump_node(cstr, *storage.root, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)), (std::istreambuf_iterator<char>()));
@@ -83,4 +83,4 @@ inline void insert(Storage& storage, const Slice& key, const char* test_name) {
   BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
 }
 
-Options TEST_OPTIONS(1024*16, 100, 1);
+Options TEST_OPTIONS(1024*16, 100, 4, 1);

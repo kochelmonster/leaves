@@ -1,3 +1,6 @@
+#ifndef _LARCH_LEAVES_TRACE_HPP
+#define _LARCH_LEAVES_TRACE_HPP
+
 #include "storage.hpp"
 #include "node.hpp"
 
@@ -9,13 +12,7 @@ typedef offset_ptr* (*move_func_t)(Transition& transition, string& current_key);
 struct Trace {
   typedef std::vector<Transition> stack_type;
 
-  Trace(Storage& storage, offset_ptr* root_=NULL) : storage(storage), version(*storage.version) {
-    current_key.reserve(1024);
-    stack.reserve(1024);
-    if (!root)
-      root = storage.root;
-  }
-
+  Trace(Storage& storage, offset_ptr* root_=NULL);
   bool valid() const { return rest_key.empty() && stack.size() && stack.back().valid(); }
   void find(const Slice& key);
   void first();
@@ -23,23 +20,18 @@ struct Trace {
   void next();
   void prev();
   void set_value(const Slice& value);
-  Slice get_value() const { return stack.back().get_value(); }
+  Slice get_value() const;
   void remove();
 
-  any_ptr allocate(size_t size) { return storage.allocate(size); }
-  void free(any_ptr ptr) { return storage.free(ptr); }
+  any_ptr allocate(size_t size);
+  void free(any_ptr ptr);
 
+  any_ptr ipop_value();
+  void iinsert(any_ptr val_ptr);
   void ifind();
-  void iremove();
   void imove_end(move_func_t move);
   void imove(move_func_t move, move_func_t move_end);
-
-  void sanitize() {
-    while(version != *storage.version) {
-      // restore trace after another cursor changed the trie.
-      find(current_key);
-    }
-  }
+  void update();
 
   stack_type stack;
   Storage& storage;
@@ -49,22 +41,31 @@ struct Trace {
   uint64_t version;
 };
 
-template <typename type1, typename type2>
-void Transition::set_value(type1& dest, type2 src) {
-  trace->storage.set_value(dest, src);
+inline Slice Trace::get_value() const {
+  ValueData* node(stack.back().value);
+  assert(node->type == kValue);
+  return Slice(node->value, node->size);
 }
 
-inline void Transition::memcpy(void* dest, const void* src, size_t size) {
-  trace->storage.memcpy(dest, src, size);
+inline any_ptr Trace::allocate(size_t size) {
+  return storage.allocate(size);
 }
 
-inline void Transition::memmove(void* dest, const void* src, size_t size) {
-  trace->storage.memmove(dest, src, size);
+inline void Trace::free(any_ptr ptr) {
+  return storage.free(ptr);
 }
 
-inline void Transition::memset(void* dest, char val, size_t size) {
-  trace->storage.memset(dest, val, size);
+inline void Trace::update() {
+  while(version != *storage.version) {
+    // restore trace after another cursor changed the trie.
+    find(current_key);
+  }
 }
 
+inline void Trace::iinsert(any_ptr val_ptr) {
+  stack.back().insert(rest_key, val_ptr);
+}
 
 } // namespace leaves
+
+#endif // _LARCH_LEAVES_TRACE_HPP

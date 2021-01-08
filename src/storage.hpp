@@ -32,6 +32,7 @@ struct Node {
 struct CompressedData;
 struct ValueData;
 struct TrieData;
+struct TableData;
 
 union any_ptr {
   int64_t as_int;
@@ -41,11 +42,10 @@ union any_ptr {
   CompressedData* compressed;
   ValueData *value;
   TrieData *trie;
+  TableData *table;
 
   any_ptr(void* ptr=NULL) : as_char((char*)ptr) {}
   any_ptr(const offset_ptr& ptr);
-
-  const any_ptr& type(uint8_t type) { node->type = type; return *this; }
 };
 
 #pragma pack(2)
@@ -229,17 +229,12 @@ struct Storage {
   void flush(bool async=true) { region.flush(0, 0, async); }
   void flush_header();
 
-  template <typename type1, typename type2>
-  void set_value(type1& dest, type2 src) { dest = src; }
-  void memcpy(void* dest, const void* src, size_t size) { memcpy(dest, src, size); }
-  void memmove(void* dest, const void* src, size_t size) { memmove(dest, src, size); }
-  void memset(void* dest, char val, size_t size) { memset(dest, val, size); }
-
   file_mapping file;
   size_t grow_size;
   size_t value_pool_start_size;
   size_t value_pool_increment;
   size_t value_pool_count;
+  size_t table_count;
   void *null;
   uint64_t* version;
   offset_ptr* root;

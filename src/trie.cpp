@@ -12,8 +12,8 @@ offset_ptr* Trie::find(Transition& self, ISlice& key, string& current_key) {
   }
 
   offset_ptr *result = ifind(self, key[0]);
-  current_key.push_back(self.key);
   if (result) {
+    current_key.push_back(self.key);
     self.cmp = 0;
     key.iadvance(1);
   }
@@ -35,6 +35,15 @@ offset_ptr* Trie::ifind(Transition& self, char key) {
   return NULL;
 }
 
+void change_current_key(Transition& self, string& current_key, uint8_t upper, uint8_t lower) {
+  self.key = (upper << 4) | lower;
+  if (self.cmp < 0) {
+    self.cmp = 0;
+    current_key.push_back(self.key);
+  }
+  else current_key.back() = self.key;
+}
+
 offset_ptr* Trie::next(Transition& self, string& current_key) {
   if (self.cmp == 1)
     return self.first(current_key);
@@ -45,7 +54,7 @@ offset_ptr* Trie::next(Transition& self, string& current_key) {
     lower = bit::lower(self.key);
     offset_ptr* next = self.lower->next(lower);
     if (next) {
-      current_key.back() = self.key = (upper << 4) | lower;
+      change_current_key(self, current_key, upper, lower);
       return next;
     }
   }
@@ -54,11 +63,12 @@ offset_ptr* Trie::next(Transition& self, string& current_key) {
   if (self.second_ptr) {
     self.lower = self.second_ptr->resolve().trie;
     offset_ptr* next = self.lower->first(lower);
-    current_key.back() = self.key = (upper << 4) | lower;
+    change_current_key(self, current_key, upper, lower);
     return next;
   }
 
-  current_key.pop_back();
+  if (self.cmp == 0)
+    current_key.pop_back();
   return NULL;
 }
 
@@ -82,7 +92,7 @@ offset_ptr* Trie::prev(Transition& self, string& current_key) {
     lower = bit::lower(self.key);
     offset_ptr* next = self.lower->prev(lower);
     if (next) {
-      current_key.back() = self.key = (upper << 4) | lower;
+      change_current_key(self, current_key, upper, lower);
       return next;
     }
   }
@@ -91,11 +101,12 @@ offset_ptr* Trie::prev(Transition& self, string& current_key) {
   if (self.second_ptr) {
     self.lower = self.second_ptr->resolve().trie;
     offset_ptr* next = self.lower->last(lower);
-    current_key.back() = self.key = (upper << 4) | lower;
+    change_current_key(self, current_key, upper, lower);
     return next;
   }
 
-  current_key.pop_back();
+  if (self.cmp == 0)
+    current_key.pop_back();
   return NULL;
 }
 
@@ -117,15 +128,15 @@ int Trie::advance(Transition& self, ISlice& key) {
   return -1;
 }
 
-void Trie::insert(Transition& self, ISlice& key, any_ptr next, string& current_key) {
+void Trie::insert(Transition& self, ISlice& key, any_ptr next) {
   if (self.cmp == 1) {
     // key was empty at find -> insert value key before
-    self.set_value(next.value->next, *self.node_ptr);
+    assert(next.node->type == kValue);
+    next.value->next = *self.node_ptr;
     self.set(next);
     return;
   }
 
-  current_key.pop_back();
   uint8_t upper = bit::upper(self.key);
   uint8_t lower = bit::lower(self.key);
 
@@ -172,12 +183,13 @@ bool Trie::remove(Transition& self) {
 void TrieData::add(int bit, any_ptr next) {
   int moved_bit = 1 << bit;
   assert(!(bits & moved_bit));
-  bits |= moved_bit;
+
   int index = index_of_moved(moved_bit);
-  for(int i = popcount(bits)-1; i > index; i--) {
+  for(int i = popcount(bits); i > index; i--) {
     children[i] = children[i-1];
   }
   children[index] = next;
+  bits |= moved_bit;
 }
 
 void TrieData::copy_to(any_ptr dest, size_t count) {
@@ -191,7 +203,8 @@ any_ptr TrieData::insert(Transition& self, any_ptr next, int bit) {
   size_t count = popcount(bits);
   if (full(count)) {
     // node must grow
-    any_ptr new_ptr = self.trace->allocate(size_of(count+1)).type(kTrie);
+    any_ptr new_ptr = self.trace->allocate(size_of(count+1));
+    new_ptr.trie->type = kTrie;
     copy_to(new_ptr.trie, count);
     self.trace->free(this);
     new_ptr.trie->add(bit, next);
@@ -212,7 +225,6 @@ bool TrieData::remove(Transition& self, TrieData** dest, offset_ptr *link, int b
   }
 
   bits &= ~(1<<bit);
-
   if (!bits) {
     // has been shrunken to pool 0 for shure
     self.trace->free(this);
@@ -227,7 +239,8 @@ bool TrieData::remove(Transition& self, TrieData** dest, offset_ptr *link, int b
 
   if (full(count)) {
     // shrink
-    any_ptr new_ptr = self.trace->allocate(size_of(count)).type(kTrie);
+    any_ptr new_ptr = self.trace->allocate(size_of(count));
+    new_ptr.trie->type = kTrie;
     copy_to(new_ptr, count);
     *dest = new_ptr.trie;
     *link = new_ptr;
@@ -237,7 +250,8 @@ bool TrieData::remove(Transition& self, TrieData** dest, offset_ptr *link, int b
 }
 
 any_ptr TrieData::create(Trace* trace, any_ptr next, int bit) {
-  any_ptr result = trace->storage.pools[0].allocate().type(kTrie);
+  any_ptr result = trace->storage.pools[0].allocate();
+  result.trie->type = kTrie;
   result.trie->bits = 1<<bit;
   result.trie->children[0] = next;
   return result;

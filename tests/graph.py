@@ -7,17 +7,27 @@ usage: python tests/graph.py tests/cmpfiles/*
 import sys
 import yaml
 import sarge
+from itertools import islice
 from pathlib import Path
 
-
-CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size: {size}}}|{keys}}}"]"""
-VNODE = """"{id}" [label="{{{{{id}|size: {size}}}|{value}}}"]"""
+CNODE = """"{id}" [fillcolor=yellow label="{{{id}|size: {size}}}|{keys}"]"""
+VNODE = """"{id}" [label="{{{id}|size: {size}}}|{value}"]"""
 TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
+BNODE = """"{id}" [fillcolor=brown1 label="{{{{{id}|count: {count}}}|{{{slots}}}}}"]"""
+
+
+def batched(iterator, count):
+    """cluster an iterator in count-sized chunks"""
+    b = "".join(islice(iterator, count))
+    while b:
+        yield b
+        b = "".join(islice(iterator, count))
 
 
 class Graph:
     def make_graph(self, nodes):
-        lines = ["digraph G {", "node [shape=record style=filled]"]
+        lines = ["digraph G {", "node [shape=record style=filled]",
+                 'graph [rankdir = "LR"]']
         add = lines.append
 
         for n in nodes:
@@ -43,6 +53,8 @@ class Graph:
         return CNODE.format(**node)
 
     def handle_kValue(self, node):
+        value = node["value"]
+        node["value"] = "\\n".join(batched(iter(value), 30))
         return VNODE.format(**node)
 
     def handle_kTrie(self, node):
@@ -53,6 +65,11 @@ class Graph:
             slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(node["bitindex"]))
 
         return TNODE.format(slots=slots, **node)
+
+    def handle_kTable(self, node):
+        values = node["values"]
+        slots = "|".join(f"<f{i}> {v}" for i, v in enumerate(values))
+        return BNODE.format(slots=slots, **node)
 
     def handle_kNull(self, node):
         return "\"{id}\"".format(**node)

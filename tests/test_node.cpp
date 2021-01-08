@@ -1,5 +1,5 @@
-#define BOOST_TEST_MODULE ModifyTest
-//#define GENERATE
+#define BOOST_TEST_MODULE GraphTest
+#define GENERATE
 
 #include <cstdio>
 #include <vector>
@@ -162,26 +162,33 @@ BOOST_AUTO_TEST_CASE(insert_null) {
   test_insertion(storage, "insert_null", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_leaf_split) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abhij", NULL};
-  test_insertion(storage, "insert_leaf_split", keys);
-}
 
-BOOST_AUTO_TEST_CASE(inser_leaf_short) {
+BOOST_AUTO_TEST_CASE(inser_compress_short) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
   const char *keys[] = {"abcdefg", "abc", NULL};
-  test_insertion(storage, "insert_leaf_short", keys);
+  test_insertion(storage, "insert_compress_short", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_leaf_long) {
+BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abc", "abcdefg", NULL};
-  test_insertion(storage, "insert_leaf_long", keys);
+  const char *keys[] = {"abcdefg", "abhij", NULL};
+  test_insertion(storage, "insert_compress_split", keys);
 }
+
+BOOST_AUTO_TEST_CASE(insert_table_split) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abhij", "abdef", "abklmn", NULL};
+  test_insertion(storage, "insert_table_split", keys);
+}
+
+#if 0
+
+BOOST_AUTO_TEST_CASE(insert_table_duplicates) {
+}
+
 
 BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
@@ -377,6 +384,6 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   BOOST_REQUIRE_EQUAL(storage.pools[pool].pool->used_nodes, used_count);
   BOOST_REQUIRE_EQUAL(storage.pools[pool].pool->freed_nodes, free_count+1);
 }
-
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

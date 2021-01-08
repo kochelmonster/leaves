@@ -1,3 +1,6 @@
+#ifndef _LARCH_LEAVES_TRIE_HPP
+#define _LARCH_LEAVES_TRIE_HPP
+
 #include "node.hpp"
 #include "port.hpp"
 
@@ -41,7 +44,7 @@ struct Trie : public NodeHandler {
   offset_ptr* prev(Transition& self, string& current_key);
   offset_ptr* last(Transition& self, string& current_key);
   int advance(Transition& self, ISlice& key);
-  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key);
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr);
   bool remove(Transition& self);
 };
 
@@ -114,3 +117,4 @@ inline uint8_t lower(uint8_t value) {
 } // namespace bit
 
 } // namespace leaves
+#endif // _LARCH_LEAVES_TRIE_HPP

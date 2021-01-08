@@ -12,11 +12,15 @@
 using namespace leaves;
 
 
-#define SEGMENT_SIZE (1024*16)
+Options TEST_OPTIONS(1024*16, 100, 4, 1);
 
-Options TEST_OPTIONS(1024*16, 100, 1);
-
+#ifdef SMALL_PTR
 #define NODE_SIZE  64
+#define SEGMENT_SIZE (1024*16)
+#else
+#define NODE_SIZE  84
+#define SEGMENT_SIZE (1024*32)
+#endif
 
 
 size_t get_size(const Storage& storage) {
@@ -45,7 +49,6 @@ BOOST_AUTO_TEST_CASE(start_storage) {
 
     int64_t base = (int64_t)storage.region.get_address();
     any_ptr ptr1(storage.pools[2].allocate());
-
 
     int64_t delta = ptr1.as_int;
     std::cout << "allocated1 " << ptr1.as_int - base << std::endl;

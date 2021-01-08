@@ -3,20 +3,14 @@
 
 #include "node.hpp"
 #include "trie.hpp"
+#include "table.hpp"
 #include "trace.hpp"
 
 
 namespace leaves {
 
-static Trie trie_handler;
-
-
 struct Value : public NodeHandler {
   bool valid() const { return true; }
-
-  virtual Slice get_value(const Transition& self) const {
-    return Slice(self.value->value, self.value->size);
-  }
 
   offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
     if (key.size() && self.value->next) {
@@ -63,9 +57,9 @@ struct Value : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) {
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr) {
     if (key.empty()) {
-      self.set_value(val_ptr.value->next, self.value->next);
+      val_ptr.value->next = self.value->next;
       self.trace->free(self.value);
       self.set(val_ptr);
       return;
@@ -127,34 +121,28 @@ struct Compressed : public NodeHandler {
     return -1;
   }
 
-  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) {
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr) {
     assert(val_ptr.node->type == kValue);
     CompressedData* node = self.compressed;
-
     int size = std::min((size_t)node->size, key.size());
+
     for(int i = 0; i < size; i++) {
       if (node->keys[i] != key[i]) {
         /* divide compressed:
            node = [abcdefg]
            key = [abhij]
-                         first   trie    rest
+                         first   Table    rest
            [abcdefg] ==> [ab] -> |c| -> [efg]
                                  |h| -> [ij]
         */
 
-        // build trie node
-        Slice rest(node->keys+i+1, node->size-i-1);
-        any_ptr rest_ptr = CompressedData::build(self.trace, node->next, rest);
-        any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, node->keys[i]);
-        self.trace->free(node);
-        self.set(trie_ptr);
-
-        ISlice first(key.advance(i));
-        trie_handler.ifind(self, key[i]);
-        current_key.push_back(self.key); // will be popped in trie.insert
-        self.insert(first, val_ptr, current_key);
-
-        self.set(CompressedData::build(self.trace, trie_ptr, Slice(key.data(), i)));
+        // build table node
+        Slice rest(node->keys+i, node->size-i);
+        Slice prefix(key.slice(i));
+        any_ptr old_ptr = CompressedData::build(self.trace, node->next, rest);
+        any_ptr new_ptr = CompressedData::build(self.trace, val_ptr, key.advance(i));
+        any_ptr table = TableData::build(self.trace, old_ptr, new_ptr);
+        self.set(CompressedData::build(self.trace, table, key.slice(i)));
         return;
       }
     }
@@ -167,7 +155,7 @@ struct Compressed : public NodeHandler {
     */
     Slice first(key.data(), size);
     Slice rest(node->keys+size, node->size-size);
-    self.set_value(val_ptr.value->next, CompressedData::build(self.trace, node->next, rest));
+    val_ptr.value->next = CompressedData::build(self.trace, node->next, rest);
     any_ptr first_ptr = CompressedData::build(self.trace, val_ptr, first);
 
     self.trace->free(node);
@@ -204,7 +192,7 @@ struct Null : public NodeHandler {
   offset_ptr* first(Transition& self, string& current_key) { return NULL; }
   offset_ptr* prev(Transition& self, string& current_key) { return NULL; }
   offset_ptr* last(Transition& self, string& current_key) { return NULL; }
-  void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) {
+  void insert(Transition& self, ISlice& key, any_ptr val_ptr) {
     self.set(CompressedData::build(self.trace, val_ptr, key));
   }
   int advance(Transition& self, ISlice& key) { assert(0); return -1; }
@@ -215,16 +203,19 @@ struct Null : public NodeHandler {
 static Value value_handler;
 static Null null_handler;
 static Compressed compressed_handler;
+static Trie trie_handler;
+static Table table_handler;
 
 NodeHandler* Transition::handlers[] = {
-  &value_handler, &null_handler, &compressed_handler, &trie_handler };
+  &value_handler, &null_handler, &compressed_handler, &trie_handler, &table_handler };
 
 
 any_ptr ValueData::build(Trace* trace, const Slice& value) {
-  any_ptr result(trace->allocate(value.size()+sizeof(ValueData)).type(kValue));
-  trace->storage.set_value(result.value->size, value.size());
-  trace->storage.memcpy(result.value->value, value.data(), value.size());
-  trace->storage.set_value(result.value->next, offset_ptr());
+  any_ptr result(trace->allocate(value.size()+sizeof(ValueData)));
+  result.value->type = kValue;
+  result.value->size = value.size();
+  memcpy(result.value->value, value.data(), value.size());
+  result.value->next = offset_ptr();
   return result;
 }
 
@@ -239,12 +230,11 @@ any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key) {
     return build(trace, build(trace, next, second), first);
   }
 
-  any_ptr result(trace->allocate(key.size()+sizeof(CompressedData)).type(kCompressed));
-  result.compressed->fill(trace->storage, next, key);
+  any_ptr result(trace->allocate(key.size()+sizeof(CompressedData)));
+  result.compressed->type = kCompressed;
+  result.compressed->fill(next, key);
   return result;
 }
-
-
 
 
 #ifdef DEBUG
@@ -254,6 +244,7 @@ const char* handler_names[] = {
   "kNull",
   "kCompressed",
   "kTrie",
+  "kTable"
 };
 
 
@@ -391,16 +382,44 @@ struct TrieDumper : public DumpBase {
   }
 };
 
+
+struct TableDumper : public DumpBase {
+  void dump(std::ostream& out, any_ptr ptr, Storage* storage, int upper=-1) {
+    TableData *data = ptr.table;
+    out << "id: " << dump_id(ptr, storage) << std::endl;
+    out << "count: " << data->count << std::endl;
+
+    out << "values:" << std::endl;
+    std::string val;
+    for(int i = 0; i < data->count; i++) {
+      val.assign(data->data[i].fragment, 16);
+      out << "  - " << val.c_str() << std::endl;
+    }
+
+    out << "children: " << std::endl;
+    for(int i = 0; i < data->count; i++) {
+        out << "  - " << dump_id(data->get_ptr(i)->resolve(), storage) << std::endl;
+    }
+    out << "---" << std::endl;
+    for(int i = 0; i < data->count; i++) {
+      dump_node(out, data->get_ptr(i)->resolve(), storage);
+    }
+  }
+};
+
+
 ValueDumper value_dumper;
 NullDumper null_dumper;
 CompressDumper compress_dumper;
 TrieDumper trie_dumper;
+TableDumper table_dumper;
 
 DumpBase* dumpers[] = {
   &value_dumper,
   &null_dumper,
   &compress_dumper,
-  &trie_dumper
+  &trie_dumper,
+  &table_dumper
 };
 
 void dump_node(std::ostream& out, any_ptr ptr, Storage* storage, int upper) {

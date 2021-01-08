@@ -20,6 +20,16 @@ offset_ptr* iprev(Transition& transition, string& current_key) {
   return transition.prev(current_key);
 }
 
+
+Trace::Trace(Storage& storage, offset_ptr* root_)
+      : storage(storage), version(*storage.version) {
+  current_key.reserve(1024);
+  stack.reserve(1024);
+  if (!root_)
+    root = storage.root;
+}
+
+
 void Trace::find(const Slice& key) {
   rest_key = key;
 
@@ -40,8 +50,8 @@ void Trace::set_value(const Slice& value) {
   if (stack.empty())
     throw NoValidPosition();
 
-  sanitize();
-  stack.back().insert(rest_key, ValueData::build(this, value), current_key);
+  update();
+  iinsert(ValueData::build(this, value));
   (*storage.version)++;
   ifind();
 }
@@ -50,13 +60,10 @@ void Trace::remove() {
   if (!valid())
     throw NoValidPosition();
 
-  sanitize();
+  update();
 
-  Transition& end(stack.back());
-  assert(end.node->type == kValue);
-  *end.node_ptr = end.value->next;
-  storage.free(end.value);
-  iremove();
+  storage.free(ipop_value());
+  current_key.clear();
 
   if (!*root)
     *root = storage.null;
@@ -64,14 +71,16 @@ void Trace::remove() {
   (*storage.version)++;
 }
 
-void Trace::iremove() {
+any_ptr Trace::ipop_value() {
+  Transition &end(stack.back());
+  ValueData* result = end.value;
+  assert(result->type == kValue);
+  *end.node_ptr = result->next;
   stack.pop_back();
-
   while(stack.size() && stack.back().remove())
     stack.pop_back();
-
   stack.clear();
-  current_key.clear();
+  return result;
 }
 
 void Trace::first() {
@@ -108,7 +117,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
   if (stack.empty())
     throw NoValidPosition();
 
-  sanitize();
+  update();
   rest_key = Slice();
   offset_ptr *next;
   while(stack.size()) {

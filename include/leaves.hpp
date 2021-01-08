@@ -20,7 +20,7 @@ namespace leaves {
 #endif
 
 
-#define MAIN_POOL_COUNT 4
+#define MAIN_POOL_COUNT 5
 #define MAX_VALUE_POOL_COUNT 20
 #define MAX_DB_SIZE (((size_t)1)<<47)
 
@@ -129,6 +129,7 @@ struct Options {
   Options(
     size_t grow_size=1<<26,
     size_t area_count=2000,
+    size_t table_count=1000,
     size_t value_pool_count=5,
     size_t value_pool_start_size=128,
     size_t value_pool_increment=128,
@@ -136,6 +137,7 @@ struct Options {
     : max_db_size(max_db_size),
       grow_size(grow_size),
       area_count(area_count),
+      table_count(table_count),
       value_pool_count(value_pool_count),
       value_pool_start_size(value_pool_start_size),
       value_pool_increment(value_pool_increment) {}
@@ -157,6 +159,11 @@ struct Options {
      cannot be changed after creation.
   */
   size_t area_count;
+
+  /*
+  the count of items in a burst table
+  */
+  size_t table_count;
 
   /*
     Parameters to create segregated memory pools for Values opmizide ValueStorage

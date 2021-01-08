@@ -17,6 +17,7 @@ enum NodeTypes {
   kNull,
   kCompressed,
   kTrie,
+  kTable,
 };
 
 
@@ -71,10 +72,10 @@ struct CompressedData : public Node {
     return cmp;
   }
 
-  void fill(Storage& storage, any_ptr next_, const Slice& key) {
-    storage.set_value(next, next_);
-    storage.set_value(size, (uint8_t)key.size());
-    storage.memcpy(keys, key.data(), key.size());
+  void fill(any_ptr next_, const Slice& key) {
+    next = next_;
+    size = (uint8_t)key.size();
+    memcpy(keys, key.data(), key.size());
   }
 
   static any_ptr build(Trace* trace, any_ptr next, const Slice& key);
@@ -85,17 +86,14 @@ struct CompressedData : public Node {
 
 struct NodeHandler;
 struct TrieData;
+struct TableData;
 
 
 struct Transition {
   Transition(offset_ptr* pptr, Trace* trace)
     : node_ptr(pptr), value(node_ptr->resolve().value), trace(trace), cmp(0) {  }
 
-  void set(any_ptr ptr) {
-    *node_ptr = ptr;
-    node = ptr.node;
-  }
-
+  void set(any_ptr ptr);
   bool valid() const;
   offset_ptr* find(ISlice& key, string& current_key);
   offset_ptr* next(string& current_key);
@@ -103,16 +101,9 @@ struct Transition {
   offset_ptr* first(string& current_key);
   offset_ptr* last(string& current_key);
   int advance(ISlice& key);
-  void insert(ISlice& key, any_ptr val_ptr, string& current_key);
+  void insert(ISlice& key, any_ptr val_ptr);
   bool remove();
-  Slice get_value() const;
   NodeHandler* handler() const { return handlers[node->type]; }
-
-  template <typename type1, typename type2>
-  void set_value(type1& dest, type2 src);
-  void memcpy(void* dest, const void* src, size_t size);
-  void memmove(void* dest, const void* src, size_t size);
-  void memset(void* dest, char val, size_t size);
 
   offset_ptr* node_ptr;
   offset_ptr* second_ptr;
@@ -122,11 +113,13 @@ struct Transition {
     ValueData *value;
     CompressedData *compressed;
     TrieData *upper;
+    TableData *table;
   };
   TrieData *lower;
   Trace* trace;
   char key;
   char cmp;
+  int index;
   static NodeHandler* handlers[];
 };
 
@@ -137,13 +130,17 @@ struct NodeHandler {
   virtual offset_ptr* first(Transition& self, string& current_key) = 0;
   virtual offset_ptr* prev(Transition& self, string& current_key) = 0;
   virtual offset_ptr* last(Transition& self, string& current_key) = 0;
-  virtual void insert(Transition& self, ISlice& key, any_ptr val_ptr, string& current_key) = 0;
+  virtual void insert(Transition& self, ISlice& key, any_ptr val_ptr) = 0;
   virtual bool remove(Transition& self) = 0;
   virtual int advance(Transition& self, ISlice& key) = 0;
   virtual bool valid() const { return false; }
-  virtual Slice get_value(const Transition& self) const { return Slice(); }
 };
 
+
+inline void Transition::set(any_ptr ptr) {
+  *node_ptr = ptr;
+  node = ptr.node;
+}
 
 inline offset_ptr* Transition::find(ISlice& key, string& current_key) {
   return handler()->find(*this, key, current_key);
@@ -170,16 +167,12 @@ inline int Transition::advance(ISlice& key) {
   return handler()->advance(*this, key);
 }
 
-inline void Transition::insert(ISlice& key, any_ptr val_ptr, string& current_key) {
-  handler()->insert(*this, key, val_ptr, current_key);
+inline void Transition::insert(ISlice& key, any_ptr val_ptr) {
+  handler()->insert(*this, key, val_ptr);
 }
 
 inline bool Transition::valid() const {
   return handler()->valid();
-}
-
-inline Slice Transition::get_value() const {
-  return handler()->get_value(*this);
 }
 
 inline bool Transition::remove() {
@@ -187,4 +180,4 @@ inline bool Transition::remove() {
 }
 
 } // namespace leaves
-#endif // _LARCH_LEAVES_MEMORY_HPP
+#endif // _LARCH_LEAVES_NODE_HPP

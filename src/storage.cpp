@@ -4,6 +4,7 @@
 
 #include "storage.hpp"
 #include "node.hpp"
+#include "table.hpp"
 
 
 #define SIGNATURE "LarchLeaves"
@@ -23,6 +24,7 @@ struct NullData : public Node {
 struct StorageHeader {
   char signature[sizeof(SIGNATURE)];
   uint16_t file_version;
+  uint16_t table_count;
   size_t value_pool_start_size;
   size_t value_pool_increment;
   size_t value_pool_count;
@@ -95,6 +97,7 @@ Storage::Storage(const char* path, const Options& options) {
     if (strcmp(header.signature, SIGNATURE))
       throw std::runtime_error("wrong filetype");
 
+    table_count = header.table_count;
     value_pool_start_size = header.value_pool_start_size;
     value_pool_increment = header.value_pool_increment;
     value_pool_count = header.value_pool_count;
@@ -122,6 +125,7 @@ Storage::Storage(const char* path, const Options& options) {
     fhead << std::string(OFFSET, (char)0);
     fhead.close();
 
+    table_count = options.table_count;
     value_pool_start_size = std::max(options.value_pool_start_size, (size_t)100)+sizeof(ValueData);
     value_pool_start_size = ((value_pool_start_size+7)/8)*8;
     value_pool_increment = ((options.value_pool_increment+7)/8)*8;
@@ -139,11 +143,12 @@ Storage::Storage(const char* path, const Options& options) {
     PPool* p = (PPool*)memory.allocate(sizeof(PPool)*count);
 
 #ifdef SMALL_PTR
-    size_t pool_sizes[] = {16, 34, 64, MAX_POOL_SIZE};
+    size_t pool_sizes[] = {16, 34, 64, MAX_POOL_SIZE, 0};
 #else
-    size_t pool_sizes[] = {20, 44, 84, MAX_POOL_SIZE};
+    size_t pool_sizes[] = {20, 44, 84, MAX_POOL_SIZE, 0};
 #endif
     size_t i = 0;
+    pool_sizes[MAIN_POOL_COUNT-1] = TableData::calc_size(table_count);
     for(; i < MAIN_POOL_COUNT; i++) {
       pools[i].create(this, p++, i+1, pool_sizes[i], options.area_count);
     }
@@ -180,6 +185,7 @@ void Storage::flush_header() {
     file.get_name(), std::ios::in|std::ios::out|std::ios::binary);
   strcpy(header.signature, SIGNATURE);
   header.file_version = 0;
+  header.table_count = table_count;
   header.value_pool_start_size = value_pool_start_size;
   header.value_pool_increment = value_pool_increment;
   header.value_pool_count = value_pool_count;
