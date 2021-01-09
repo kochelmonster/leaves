@@ -43,8 +43,8 @@ struct Trie : public NodeHandler {
   offset_ptr* first(Transition& self, string& current_key);
   offset_ptr* prev(Transition& self, string& current_key);
   offset_ptr* last(Transition& self, string& current_key);
-  int advance(Transition& self, ISlice& key);
-  void insert(Transition& self, ISlice& key, any_ptr val_ptr);
+  int advance(Transition& self, const Slice& key);
+  void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);
 };
 

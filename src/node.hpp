@@ -15,7 +15,9 @@ struct Trace;
 enum NodeTypes {
   kValue = 0,
   kNull,
-  kCompressed,
+  kCompressedTrie,
+  kCompressedTable,
+  kCompressedLeaf,
   kTrie,
   kTable,
 };
@@ -23,9 +25,11 @@ enum NodeTypes {
 
 struct ISlice : public Slice {
   ISlice(): Slice() {}
-  ISlice(const Slice& src) : Slice(src.data(), src.size()) { }
+  ISlice(const Slice& src) : Slice(src) { }
+  ISlice(const char *data, size_t size) : Slice(data, size) { }
 
   Slice& iadvance(size_t size) {
+    size = std::min(size, _size);
     _data += size;
     _size -= size;
     return *this;
@@ -65,9 +69,8 @@ struct CompressedData : public Node {
   int find(ISlice& key, string& current_key) {
     size_t size_ = std::min(key.size(), (size_t)size);
     int cmp = sign(memcmp(key.data(), keys, size));
-    if (cmp == 0 && size_ == size) {
-      key.iadvance(size);
-      current_key.append(keys, size);
+    if (cmp == 0) {
+      return sign(size_-size);
     }
     return cmp;
   }
@@ -78,7 +81,8 @@ struct CompressedData : public Node {
     memcpy(keys, key.data(), key.size());
   }
 
-  static any_ptr build(Trace* trace, any_ptr next, const Slice& key);
+  static any_ptr build(Trace* trace, any_ptr next, const Slice& key, NodeTypes type);
+  static any_ptr eat_child(Trace* trace, CompressedData* child, const Slice& key);
 };
 
 #pragma pack(0)
@@ -100,8 +104,8 @@ struct Transition {
   offset_ptr* prev(string& current_key);
   offset_ptr* first(string& current_key);
   offset_ptr* last(string& current_key);
-  int advance(ISlice& key);
-  void insert(ISlice& key, any_ptr val_ptr);
+  int advance(const Slice& key);
+  void insert(const Slice& key, any_ptr val_ptr);
   bool remove();
   NodeHandler* handler() const { return handlers[node->type]; }
 
@@ -130,9 +134,9 @@ struct NodeHandler {
   virtual offset_ptr* first(Transition& self, string& current_key) = 0;
   virtual offset_ptr* prev(Transition& self, string& current_key) = 0;
   virtual offset_ptr* last(Transition& self, string& current_key) = 0;
-  virtual void insert(Transition& self, ISlice& key, any_ptr val_ptr) = 0;
+  virtual void insert(Transition& self, const Slice& key, any_ptr val_ptr) = 0;
   virtual bool remove(Transition& self) = 0;
-  virtual int advance(Transition& self, ISlice& key) = 0;
+  virtual int advance(Transition& self, const Slice& key) = 0;
   virtual bool valid() const { return false; }
 };
 
@@ -163,11 +167,11 @@ inline offset_ptr* Transition::last(string& current_key) {
 }
 
 
-inline int Transition::advance(ISlice& key) {
+inline int Transition::advance(const Slice& key) {
   return handler()->advance(*this, key);
 }
 
-inline void Transition::insert(ISlice& key, any_ptr val_ptr) {
+inline void Transition::insert(const Slice& key, any_ptr val_ptr) {
   handler()->insert(*this, key, val_ptr);
 }
 

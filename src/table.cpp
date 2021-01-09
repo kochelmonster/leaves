@@ -4,38 +4,33 @@
 #include "trie.hpp"
 #include "trace.hpp"
 
-
 namespace leaves {
 
 offset_ptr* Table::find(Transition& self, ISlice& key, string& current_key) {
-  TableData *table = self.table;
-  if (!(self.cmp = table->find(key, &self.index))) {
-    return table->get_ptr(self.index);
-  }
-  return NULL;
+  return self.table->find(self, key, current_key);
 }
 
 offset_ptr* Table::next(Transition& self, string& current_key) {
-  return self.table->next(self);
+  return self.table->next(self, current_key);
 }
 
 offset_ptr* Table::first(Transition& self, string& current_key) {
-  return self.table->first(self);
+  return self.table->first(self, current_key);
 }
 
 offset_ptr* Table::prev(Transition& self, string& current_key) {
-  return self.table->prev(self);
+  return self.table->prev(self, current_key);
 }
 
 offset_ptr* Table::last(Transition& self, string& current_key) {
-  return self.table->last(self);
+  return self.table->last(self, current_key);
 }
 
-int Table::advance(Transition& self, ISlice& key) {
+int Table::advance(Transition& self, const Slice& key) {
   return self.table->advance(key, self.index);
 }
 
-void Table::insert(Transition& self, ISlice& key, any_ptr val_ptr) {
+void Table::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   return self.table->insert(self, key, val_ptr);
 }
 
@@ -43,21 +38,7 @@ bool Table::remove(Transition& self) {
   return self.table->remove(self);
 }
 
-
-void TableData::insert_item(Transition& self, ISlice& key, any_ptr val_ptr, int index) {
-  memmove(data[index+1].fragment, data[index].fragment, sizeof(Item)*(count-index));
-
-  int end = bottom - count;
-  for(int i=bottom-index; i > end; i--)
-    data[i-1].ptr = data[i].ptr;
-
-  count++;
-  memset(data[index].fragment, 0, sizeof(Item));
-  memcpy(data[index].fragment, key.data(), std::min(key.size(), sizeof(Item)));
-  data[bottom-index].ptr = CompressedData::build(self.trace, val_ptr, key);
-}
-
-void TableData::insert(Transition& self, ISlice& key, any_ptr val_ptr) {
+void TableData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   if (!key.size()) {
     assert(val_ptr.node->type == kValue);
     self.cmp = 1;
@@ -66,81 +47,113 @@ void TableData::insert(Transition& self, ISlice& key, any_ptr val_ptr) {
     self.set(val_ptr);
   }
 
-  if (count >= self.trace->storage.table_count) {
+  if (count >= (bottom+1)/2) {
     split(self, key, val_ptr);
     return;
   }
 
-  size_t size_ = std::min(sizeof(Item), key.size());
-  if (memcmp(&data[count-1], key.data(), size_) < 0) {
-    // optimation for append
-    memset(data[count].fragment, 0, sizeof(Item));
-    memcpy(data[count].fragment, key.data(), size_);
-    data[bottom-count].ptr = CompressedData::build(self.trace, val_ptr, key);
-    count++;
-    return;
-  }
+  int index = self.index;
+  memmove(data[index+1].bytes, data[index].bytes, sizeof(Item)*(count-index));
 
-  int pivot;
-  switch(find(key, &pivot, count-2)) {
-    case -1: insert_item(self, key, val_ptr, pivot+1); break; // pivot < key
-    case 1: insert_item(self, key, val_ptr, pivot); break; // pivot > key
-    default: assert(0);  // we moved further
-  }
+  int end = bottom-index;
+  for(int i=bottom-count; i < end; i++)
+    data[i].ptr = data[i+1].ptr;
+
+  Item& item(data[index]);
+  item.size = min_size(key.size());
+  memcpy(item.fragment, key.data(), item.size);
+
+  val_ptr = CompressedData::build(self.trace, val_ptr, key.advance(item.size), kCompressedLeaf);
+  data[bottom-index].ptr = val_ptr;
+  count++;
 }
 
-int TableData::find(ISlice& key, int* pivot, int bottom) {
-  size_t size_ = std::min(sizeof(Item), key.size());
-  int top = 0, pivot_ = 0, cmp = -1;
-  while(top <= bottom) {
-    pivot_ = (bottom + top) / 2;
-    cmp = sign(memcmp(data[pivot_].fragment, key.data(), size_));
+offset_ptr* TableData::find(Transition& self, ISlice& key, string& current_key) {
+  offset_ptr* result = ifind(self, key);
+  if (result) {
+    Item& item(data[self.index]);
+    key.iadvance(item.size);
+    current_key.append(item.fragment, item.size);
+    return result;
+  }
+  return NULL;
+}
+
+offset_ptr* TableData::ifind(Transition& self, const Slice& key) {
+  int lo = 0, hi=count-1, pivot_ = 0, cmp = -1;
+
+  self.cmp = compare_item(count-1, key);
+  // optimation for append
+  switch(self.cmp) {
+    case -1:
+      self.index = count;
+      return NULL;
+    case 0:
+      self.index = count - 1;
+      return &data[bottom-self.index].ptr;
+  }
+
+  while(lo < hi) {
+    pivot_ = (lo + hi) / 2;
+    cmp = sign(compare_item(pivot_, key));
     switch(cmp) {
-      case -1: top = pivot_ + 1; break;
-      case 1: bottom = pivot_ - 1; break;
-      default: top = 1; bottom = 0;
+      case -1: lo= pivot_ + 1; break;
+      case 1: hi = pivot_; break;
+      default: lo = hi = pivot_;
     }
   }
-  *pivot = pivot_;
-  return cmp;
+  if (cmp < 0)
+    cmp = sign(compare_item(lo, key));
+
+  self.cmp = cmp;
+  self.index = lo;
+  return cmp == 0 ? &data[bottom-self.index].ptr : NULL;
 }
 
-void TableData::split(Transition& self, ISlice& key, any_ptr val_ptr) {
+void TableData::split(Transition& self, const Slice& key, any_ptr val_ptr) {
   char prefix[sizeof(Item)];
   // first extract a common prefix
+  size_t i;
+  bool go_on = true;
+  for(i = 0; go_on; i++) {
+    if (i >= key.size()) {
+      go_on = false;
+      continue;
+    }
 
-  for(int i = 0; i < (int)sizeof(prefix); i++) {
-    char cmp = prefix[i] = data[0].fragment[i];
-    for(int j = 1; j < count; j++) {
-      if (data[j].fragment[i] != cmp) {
-        trie_split(self, i, key, val_ptr);
-        self.trace->free(this);
-        return;
+    char cmp = prefix[i] = key[i];
+    for(int j = 0; j < count; j++) {
+      Item& item(data[j]);
+      if (item.size <= i || item.fragment[i] != cmp) {
+        go_on = false;
+        break;
       }
     }
   }
-  assert(0);
+  trie_split(self, --i, key, val_ptr);
 }
 
-void TableData::trie_split(Transition& self, int split_pos, ISlice& key, any_ptr val_ptr) {
+void TableData::trie_split(Transition& self, int split_pos, const Slice& key, any_ptr val_ptr) {
+  /* move the values into a new subtree */
+
   Trace remover(self.trace->storage, self.node_ptr);
   remover.first();
   any_ptr to_insert = remover.ipop_value();
 
-  // insert the first node in a newly created stuctur
+  // insert the first node in a newly created subtree
   Slice first(Slice(remover.current_key).advance(split_pos));
-  to_insert = CompressedData::build(self.trace, to_insert, first.advance(1));
+  to_insert = CompressedData::build(self.trace, to_insert, first.advance(1), kCompressedTable);
   any_ptr root = TrieData::build(self.trace, to_insert, first[0]);
-
   if (split_pos) {
+    // insert a prefix before the trie node
     Slice prefix(Slice(remover.current_key).slice(split_pos));
-    root = CompressedData::build(self.trace, root, prefix);
+    root = CompressedData::build(self.trace, root, prefix, kCompressedTrie);
   }
-  self.set(root);
+  offset_ptr proot(root);
+  Trace inserter(self.trace->storage, &proot);
+  // new subtree is now refrenced by inserter
 
-  Trace inserter(self.trace->storage, self.node_ptr);
-
-  // Now remove all edges and add to new trie
+  // Now remove items from the old subtree and insert them in the new
   remover.first();
   for(; remover.valid(); remover.first()) {
     inserter.find(remover.current_key);
@@ -150,6 +163,7 @@ void TableData::trie_split(Transition& self, int split_pos, ISlice& key, any_ptr
   // insert the new item
   inserter.find(key);
   inserter.iinsert(val_ptr);
+  self.set(root);
 }
 
 bool TableData::remove(Transition& self) {
@@ -158,41 +172,39 @@ bool TableData::remove(Transition& self) {
   if (data[bottom-index].ptr)
     return false;
 
-  if (count == 2) {
+  if (count == 1) {
     // purge this
-    self.set(self.index == 0 ? data[bottom-1].ptr : data[bottom].ptr);
+    assert(!data[bottom].ptr);
+    *self.node_ptr = offset_ptr();
     self.trace->free(this);
     return true;
   }
 
   count--;
-  memmove(data[index].fragment, &data[index+1], sizeof(Item)*(count-index));
+  memmove(data[index].bytes, data[index+1].bytes, sizeof(Item)*(count-index));
 
   int end = bottom - count;
   for(int i=bottom-index; i > end; i--)
     data[i].ptr = data[i-1].ptr;
+
   return true;
 }
 
-any_ptr TableData::build(Trace* trace, any_ptr next1, any_ptr next2) {
-  assert(next1.node->type == kCompressed);
-  assert(next2.node->type == kCompressed);
+any_ptr TableData::build(Trace* trace, any_ptr val_ptr, const Slice& key) {
+  assert(val_ptr.node->type == kValue);
+
+  val_ptr = CompressedData::build(
+      trace, val_ptr, key.advance(sizeof(Item::fragment)), kCompressedLeaf);
 
   TableData* table = trace->storage.pools[MAIN_POOL_COUNT-1].allocate().table;
   table->type = kTable;
   table->bottom = 2*trace->storage.table_count - 1;
-  table->count = 2;
+  table->count = 1;
 
-  if (next1.compressed->keys[0] > next2.compressed->keys[0]) {
-    any_ptr tmp = next1;
-    next1 = next2;
-    next2 = tmp;
-  }
-  memset(table->data[0].fragment, 0, sizeof(Item)*2);
-  memcpy(table->data[0].fragment, next1.compressed->keys, min_size(next1.compressed->size));
-  memcpy(table->data[1].fragment, next2.compressed->keys, min_size(next2.compressed->size));
-  table->data[table->bottom].ptr = next1;
-  table->data[table->bottom-1].ptr = next2;
+  Slice tkey(key.slice(sizeof(Item::fragment)));
+  uint8_t size = table->data[0].size = tkey.size();
+  memcpy(table->data[0].fragment, tkey.data(), size);
+  table->data[table->bottom].ptr = val_ptr;
   return table;
 }
 

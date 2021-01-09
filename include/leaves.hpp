@@ -66,7 +66,7 @@ class Slice {
 
 
   Slice slice(size_t len) const {
-      return Slice(data(), len);
+      return Slice(data(), std::min(len, _size));
     }
 
   std::string string() const {
@@ -74,8 +74,13 @@ class Slice {
     }
 
   template <typename ot> bool operator==(const ot& other) const {
-      return size() == other.size()
-        && memcmp(data(), other.data(), size()) == 0;
+      return size() == other.size() && memcmp(data(), other.data(), size()) == 0;
+    }
+
+  template <typename ot> int compare(const ot& other) const {
+      int cmp = 0, size_ = size() < other.size() ? size() : other.size();
+      (cmp = memcmp(data(), other.data(), size_)) || (cmp = size()-other.size());
+      return cmp;
     }
 
   char operator[](size_t index) const {
@@ -91,6 +96,7 @@ class Slice {
     }
 
   Slice advance(size_t size) const {
+      size = std::min(size, _size);
       return Slice(data()+size, _size-size);
     }
 

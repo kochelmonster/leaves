@@ -50,7 +50,18 @@ class Graph:
         return "\n".join(lines)
 
     def handle_kCompressed(self, node):
+        keys = node["keys"]
+        node["keys"] = "\\n".join(batched(iter(keys), 30))
         return CNODE.format(**node)
+
+    def handle_kCompressedTable(self, node):
+        return self.handle_kCompressed(node)
+
+    def handle_kCompressedTrie(self, node):
+        return self.handle_kCompressed(node)
+
+    def handle_kCompressedLeaf(self, node):
+        return self.handle_kCompressed(node)
 
     def handle_kValue(self, node):
         value = node["value"]

@@ -155,6 +155,7 @@ void test_remove(Storage& storage, const char* title, const char* keys[], const 
 
 BOOST_AUTO_TEST_SUITE(BasicCases)
 
+
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
@@ -162,75 +163,85 @@ BOOST_AUTO_TEST_CASE(insert_null) {
   test_insertion(storage, "insert_null", keys);
 }
 
-
-BOOST_AUTO_TEST_CASE(inser_compress_short) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abc", NULL};
-  test_insertion(storage, "insert_compress_short", keys);
-}
-
-BOOST_AUTO_TEST_CASE(insert_compress_split) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abhij", NULL};
-  test_insertion(storage, "insert_compress_split", keys);
-}
-
 BOOST_AUTO_TEST_CASE(insert_table_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abhij", "abdef", "abklmn", NULL};
+  const char *keys[] = {"abcdefg", "abhij", "abdef", "abklmn", "abklmo", NULL};
   test_insertion(storage, "insert_table_split", keys);
 }
 
-#if 0
-
 BOOST_AUTO_TEST_CASE(insert_table_duplicates) {
-}
-
-
-BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abcefgh", "abdefgh", NULL};
-  test_insertion(storage, "insert_compress_split", keys);
+  const char *keys[] = {
+    "abcdefghijklmnopqrstuvwxyz",
+    "bklmn",
+    "abcdefghijklmnopqrstuvwxyy", NULL};
+  test_insertion(storage, "insert_table_duplicates", keys);
 }
+
+BOOST_AUTO_TEST_CASE(insert_table_top) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abc", "abe", "ab", NULL};
+  test_insertion(storage, "insert_table_top", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_compresstrie_split) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abcdefghi", "abcdefghij", "abcdefghijk", "abcdefghijkl",  NULL};
+  test_insertion(storage, "insert_compresstrie_split", keys);
+}
+
+
+
+/*
+
+
 
 BOOST_AUTO_TEST_CASE(insert_compress_short) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abcefgh", "ab", "b", NULL};
+  const char *keys[] = {"abcdefg", "", NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_leaf_extend) {
+
+BOOST_AUTO_TEST_CASE(insert_trie_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"ab", "abcdefg", "abcefgh", NULL};
-  test_insertion(storage, "insert_leaf_extend", keys);
+  const char *keys[] = {"abc", "abd", "abe", "abf", "ac", NULL};
+  test_insertion(storage, "insert_trie_split", keys);
 }
-
-BOOST_AUTO_TEST_CASE(insert_trie_split_a) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abc", "abd", "abe", NULL};
-  test_insertion(storage, "insert_trie_split_a", keys);
-}
-
-BOOST_AUTO_TEST_CASE(insert_trie_split_b) {
-  Preparation p;
-  Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abc", "abe", "abd", NULL};
-  test_insertion(storage, "insert_trie_split_b", keys);
-}
-
+*/
+/*
 BOOST_AUTO_TEST_CASE(insert_trie_short) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
   const char *keys[] = {"abc", "abe", "ab", NULL};
   test_insertion(storage, "insert_trie_short", keys);
 }
+*/
+
+#if 0
+
+
+BOOST_AUTO_TEST_CASE(insert_table_short) {
+}
+
+
+
+
+
+BOOST_AUTO_TEST_CASE(purge_table_item0) {
+}
+
+BOOST_AUTO_TEST_CASE(purge_table_item1) {
+}
+
+
+
 
 BOOST_AUTO_TEST_CASE(remove_trie) {
   Preparation p;

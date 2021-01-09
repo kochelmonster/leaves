@@ -120,15 +120,11 @@ offset_ptr* Trie::last(Transition& self, string& current_key) {
   return next;
 }
 
-int Trie::advance(Transition& self, ISlice& key) {
-  if (key.size() && key[0] == self.key && self.cmp == 0) {
-    key.iadvance(1);
-    return 1;
-  }
-  return -1;
+int Trie::advance(Transition& self, const Slice& key) {
+  return key.size() && key[0] == self.key && self.cmp == 0 ? 1 : -1;
 }
 
-void Trie::insert(Transition& self, ISlice& key, any_ptr next) {
+void Trie::insert(Transition& self, const Slice& key, any_ptr next) {
   if (self.cmp == 1) {
     // key was empty at find -> insert value key before
     assert(next.node->type == kValue);
@@ -142,7 +138,7 @@ void Trie::insert(Transition& self, ISlice& key, any_ptr next) {
 
   if (key.size() > 1) {
     Slice restkey(key.advance(1));
-    next = CompressedData::build(self.trace, next, restkey);
+    next = CompressedData::build(self.trace, next, restkey, kCompressedTable);
   }
 
   if (!self.lower) {
@@ -169,7 +165,7 @@ bool Trie::remove(Transition& self) {
     char value = (ctz(self.upper->bits) << 4) | ctz(self.lower->bits);
     self.trace->free(self.lower);
     self.trace->free(self.upper);
-    self.set(CompressedData::build(self.trace, next, Slice(&value, 1)));
+    self.set(CompressedData::build(self.trace, next, Slice(&value, 1), kCompressedTrie));
     self.remove();  // combines compressed if possible
   }
   return true;

@@ -22,7 +22,7 @@ offset_ptr* iprev(Transition& transition, string& current_key) {
 
 
 Trace::Trace(Storage& storage, offset_ptr* root_)
-      : storage(storage), version(*storage.version) {
+      : storage(storage), root(root_), version(*storage.version) {
   current_key.reserve(1024);
   stack.reserve(1024);
   if (!root_)
@@ -41,6 +41,8 @@ void Trace::find(const Slice& key) {
       current_key.resize(same);
       break;
     }
+    else
+      rest_key.iadvance(add);
     same += add;
   }
   ifind();
@@ -65,9 +67,6 @@ void Trace::remove() {
   storage.free(ipop_value());
   current_key.clear();
 
-  if (!*root)
-    *root = storage.null;
-
   (*storage.version)++;
 }
 
@@ -80,6 +79,8 @@ any_ptr Trace::ipop_value() {
   while(stack.size() && stack.back().remove())
     stack.pop_back();
   stack.clear();
+  if (!*root)
+    *root = storage.null;
   return result;
 }
 
@@ -141,8 +142,7 @@ void Trace::ifind() {
 
   offset_ptr *next;
   while(true) {
-    Transition& active(stack.back());
-    next = active.find(rest_key, current_key);
+    next = stack.back().find(rest_key, current_key);
     if (!next)
       break;
     stack.push_back(Transition(next, this));
