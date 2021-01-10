@@ -19,7 +19,7 @@ def configure_leaves(cfg):
 
     leaves_path = Path(cfg.srcnode.abspath()).parents[1]
 
-    cfg.env.DEFINES_LEAVES = ["NDEBUG", "LEVELDB_PLATFORM_POSIX", "AREA_COUNT"]
+    cfg.env.DEFINES_LEAVES = ["NDEBUG", "LEVELDB_PLATFORM_POSIX", "AREA_COUNT", "PURE_TRIE"]
     cfg.env.CXXFLAGS_LEAVES = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
                                f"-I{gtest_path}", f"-I{leaves_path/'include'}", "-O3",
                                "-std=c++17"]
@@ -73,6 +73,12 @@ def build(bld):
     rpath = Path(os.path.relpath(leaves_path, bld.srcnode.abspath()))
     lsources = "storage.cpp trace.cpp node.cpp trie.cpp table.cpp leaves.cpp".split()
     lsources = [str(rpath/"src"/s) for s in lsources]
+
+    lmdb_path = Path(bld.srcnode.abspath()).parents[2]/"lmdb/libraries/liblmdb"
+    rpath = Path(os.path.relpath(lmdb_path, bld.srcnode.abspath()))
+    msources = ["mdb.c", "midl.c"]
+    msources = [str(rpath/s) for s in msources]
+
 
     bld.program(
         source=["db_bench_mdb.cc"]+sources,

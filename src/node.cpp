@@ -284,7 +284,11 @@ any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key, Node
   }
 
   any_ptr result(trace->allocate(key.size()+sizeof(CompressedData)));
+#ifdef PURE_TRIE
+  result.compressed->type = kCompressedTrie;
+#else
   result.compressed->type = type;
+#endif
   result.compressed->fill(next, key);
   return result;
 }
