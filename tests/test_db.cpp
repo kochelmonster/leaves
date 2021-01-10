@@ -146,9 +146,9 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   Stats stats;
   db->get_stats(stats);
   std::cout << "node statistics" << std::endl;
-  for(int i = 0; i < 5; i++) {
-    std::cout << "used_nodes  ["<<i<<"]:   " << stats.used_nodes[i] << std::endl;
-    std::cout << "freed_nodes ["<<i<<"]:   " << stats.freed_nodes[i] << std::endl;
+  for(int i = 0; i < 15; i++) {
+    std::cout << "used_nodes  ["<<i<<"]:   " << stats.pools[i].used_nodes << std::endl;
+    std::cout << "freed_nodes ["<<i<<"]:   " << stats.pools[i].free_nodes << std::endl;
   }
 
   std::cout << "start find test: " << count << std::endl;

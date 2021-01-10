@@ -9,27 +9,69 @@ struct Transition;
 struct ISlice;
 struct Slice;
 
+#pragma pack(4)
+
+struct ValueHeader {
+  uint32_t onpage:1;
+  uint32_t size:31;
+  union {
+    offset_ptr ptr;
+    char data[1];
+  };
+};
+
+
+/*
+The DataItem layout is
++--------------------------------+
+| key_size (16bit)               |
++--------------------------------+
+| key data (nbytes)              |
++--------------------------------+
+| ValueHeader                    |
++--------------------------------+
+*/
+
+struct DataItem {
+  uint16_t key_size;
+  char data[];
+
+  Slice get_key() const {
+    return Slice(data, key_size);
+  }
+
+  Slice get_value() const {
+    ValueHeader* value = (ValueHeader*)&data[key_size];
+    return value->onpage ? Slice(value->data, value->size)
+                         : Slice(value->ptr.resolve().as_char, value->size);
+  }
+
+  static size_t calc_size(size_t keys_size, size_t val_size) {
+    return sizeof(DataItem) + sizeof(ValueHeader) + keys_size + val_size;
+  }
+
+};
+
 /*
   The Table layout is
   +--------------------------------+
-  | key_fragment1 (16bytes)        |
+  | item_index[0]                  |
   +--------------------------------+
-  | key_fragment2 (16bytes)        |
+  | item_index[1]                  |
   +--------------------------------+
   |                                |
   |       free_space               |
   |                                |
   +--------------------------------+
-  | node_ptr for fragmen2 (16bytes)|
+  | DataItem[1]                    |
   +--------------------------------+
-  | node_ptr for fragmen1 (16bytes)|
+  | DataItem[0]                    \
   +--------------------------------+
 
 key_fragments grow from top to bottom
 node_pts grow from bottom to top
 */
 
-#pragma pack(8)
 struct TableData : public Node {
   uint16_t padding;
   uint16_t count;

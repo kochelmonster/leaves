@@ -134,19 +134,11 @@ public:
 struct Options {
   Options(
     size_t grow_size=1<<26,
-    size_t area_count=2000,
-    size_t table_count=128,
-    size_t value_pool_count=5,
-    size_t value_pool_start_size=128,
-    size_t value_pool_increment=128,
+    size_t burst_size=2,
     size_t max_db_size=((size_t)1)<<37) // 128 Giga)
     : max_db_size(max_db_size),
       grow_size(grow_size),
-      area_count(area_count),
-      table_count(table_count),
-      value_pool_count(value_pool_count),
-      value_pool_start_size(value_pool_start_size),
-      value_pool_increment(value_pool_increment) {}
+      burst_size(burst_size) {}
 
   /* the maximum size of the database
 
@@ -160,38 +152,20 @@ struct Options {
   */
   size_t grow_size;
 
-  /* the count of items in a segregated memory pool chunk
-
-     cannot be changed after creation.
-  */
-  size_t area_count;
-
   /*
-  the count of items in a burst table
+  the size of burst tables in pages
   */
-  size_t table_count;
-
-  /*
-    Parameters to create segregated memory pools for Values opmizide ValueStorage
-    value_pool_start_size = 100
-    value_pool_increment = 32
-    value_pool_count = 3
-    creates 3 memory pools for size 132, 164, 196 bytes
-
-    cannot be changed after creation.
-  */
-  size_t value_pool_count;
-  size_t value_pool_start_size;
-  size_t value_pool_increment;
+  size_t burst_size;
 };
 
 
 struct Stats : public Options {
-  // count of used nodes in the standard pools
-  size_t used_nodes[MAIN_POOL_COUNT+MAX_VALUE_POOL_COUNT];
-
-  // count of freed nodes in the standard pools
-  size_t freed_nodes[MAIN_POOL_COUNT+MAX_VALUE_POOL_COUNT];
+  struct Pools {
+    size_t node_size;
+    size_t used_nodes;
+    size_t free_nodes;
+  } pools[15];
+  size_t free_pages;
 };
 
 

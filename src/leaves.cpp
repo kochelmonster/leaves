@@ -45,17 +45,16 @@ struct SingleDB : public DB {
     }
 
     void get_stats(Stats& stats) {
-      stats.value_pool_start_size = storage.value_pool_start_size - sizeof(ValueData);
-      stats.value_pool_increment = storage.value_pool_increment;
-      stats.value_pool_count = storage.value_pool_count;
-      stats.table_count = storage.table_count;
-      stats.area_count = storage.pools[0].pool->area_size / storage.pools[0].pool->node_size;
+      stats.max_db_size = storage.region.get_size();
+      stats.burst_size = storage.burst_size;
       stats.grow_size = storage.grow_size;
       //stats.segment_count = storage.segments.size();
-      for(size_t i = 0; i < MAIN_POOL_COUNT + storage.value_pool_count; i++) {
-        stats.used_nodes[i] = storage.pools[i].pool->used_nodes;
-        stats.freed_nodes[i] = storage.pools[i].pool->freed_nodes;
+      for(size_t i = 0; i < 15; i++) {
+        stats.pools[i].node_size = storage.header->pools[i].node_size;
+        stats.pools[i].used_nodes = storage.header->pools[i].used_nodes;
+        stats.pools[i].free_nodes = storage.header->pools[i].free_nodes;
       }
+      stats.free_pages = storage.header->memory.free_count;
     }
 
     Storage storage;
@@ -75,7 +74,7 @@ void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 
 void dump_db(std::ostream& out, DB::ptr db) {
   SingleDB *sdb(((SingleDB*)db.get()));
-  dump_node(out, *sdb->storage.root, &sdb->storage);
+  dump_node(out, sdb->storage.header->root, &sdb->storage);
 }
 
 #endif

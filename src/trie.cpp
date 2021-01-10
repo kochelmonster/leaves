@@ -246,7 +246,7 @@ bool TrieData::remove(Transition& self, TrieData** dest, offset_ptr *link, int b
 }
 
 any_ptr TrieData::create(Trace* trace, any_ptr next, int bit) {
-  any_ptr result = trace->storage.pools[0].allocate();
+  any_ptr result = trace->storage.allocate(sizeof(TrieData));
   result.trie->type = kTrie;
   result.trie->bits = 1<<bit;
   result.trie->children[0] = next;

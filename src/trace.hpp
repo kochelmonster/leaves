@@ -56,7 +56,7 @@ inline void Trace::free(any_ptr ptr) {
 }
 
 inline void Trace::update() {
-  while(version != *storage.version) {
+  while(version != storage.header->version) {
     // restore trace after another cursor changed the trie.
     find(current_key);
   }

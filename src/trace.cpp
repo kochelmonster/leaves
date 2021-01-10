@@ -22,11 +22,11 @@ offset_ptr* iprev(Transition& transition, string& current_key) {
 
 
 Trace::Trace(Storage& storage, offset_ptr* root_)
-      : storage(storage), root(root_), version(*storage.version) {
+      : storage(storage), root(root_), version(storage.header->version) {
   current_key.reserve(1024);
   stack.reserve(1024);
   if (!root_)
-    root = storage.root;
+    root = &storage.header->root;
 }
 
 
@@ -54,7 +54,7 @@ void Trace::set_value(const Slice& value) {
 
   update();
   iinsert(ValueData::build(this, value));
-  (*storage.version)++;
+  storage.header->version++;
 }
 
 void Trace::remove() {
@@ -66,7 +66,7 @@ void Trace::remove() {
   storage.free(ipop_value());
   current_key.clear();
 
-  (*storage.version)++;
+  storage.header->version++;
 }
 
 any_ptr Trace::ipop_value() {
@@ -79,7 +79,7 @@ any_ptr Trace::ipop_value() {
     stack.pop_back();
   stack.clear();
   if (!*root)
-    *root = storage.null;
+    *root = &storage.header->null;
   return result;
 }
 
@@ -110,7 +110,7 @@ void Trace::imove_end(move_func_t move) {
         break;
       stack.push_back(Transition(next, this));
   }
-  version = *storage.version;
+  version = storage.header->version;
 }
 
 void Trace::imove(move_func_t move, move_func_t move_end) {
@@ -132,7 +132,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
       stack.push_back(Transition(next, this));
       next = move_end(stack.back(), current_key);
     }
-  version = *storage.version;
+  version = storage.header->version;
 }
 
 void Trace::ifind() {
@@ -146,7 +146,7 @@ void Trace::ifind() {
       break;
     stack.push_back(Transition(next, this));
   }
-  version = *storage.version;
+  version = storage.header->version;
 }
 
 } // namespace leaves

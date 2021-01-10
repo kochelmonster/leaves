@@ -55,7 +55,7 @@ inline char sign(int x) {
   return (x>0)-(x<0);
 }
 
-#define MAX_COMPRESSED_LEN  (MAX_POOL_SIZE - sizeof(CompressedData))
+#define MAX_COMPRESSED_LEN  255
 
 struct CompressedData : public Node {
   offset_ptr next;

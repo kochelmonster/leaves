@@ -14,7 +14,7 @@ struct Slice;
 #pragma pack(2)
 struct TrieData : public Node {
   uint16_t bits;
-  offset_ptr children[];
+  offset_ptr children[2];  // or more
 
   size_t size_of(size_t count);
   int index_of(int bit);

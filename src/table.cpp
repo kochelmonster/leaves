@@ -225,9 +225,10 @@ any_ptr TableData::build(Trace* trace, any_ptr val_ptr, const Slice& key) {
   val_ptr = CompressedData::build(
       trace, val_ptr, key.advance(sizeof(Item::fragment)), kCompressedLeaf);
 
-  TableData* table = trace->storage.pools[MAIN_POOL_COUNT-1].allocate().table;
+  size_t table_size = trace->storage.burst_size * PAGE_SIZE;
+  TableData* table = trace->storage.allocate(table_size).table;
   table->type = kTable;
-  table->bottom = 2*trace->storage.table_count - 1;
+  table->bottom = (table_size-sizeof(TableData))/sizeof(Item)-1;
   table->count = 1;
 
   Slice tkey(key.slice(sizeof(Item::fragment)));

@@ -1,11 +1,13 @@
 //  Handlers for all nodes
 #include <algorithm>
+#ifdef DEBUG
+#include <sstream>
+#endif
 
 #include "node.hpp"
 #include "trie.hpp"
 #include "table.hpp"
 #include "trace.hpp"
-
 
 namespace leaves {
 

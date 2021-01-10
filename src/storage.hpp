@@ -7,28 +7,31 @@
 
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/mapped_region.hpp>
-#include <boost/interprocess/managed_external_buffer.hpp>
 
 #include <leaves.hpp>
 
-#ifdef SMALL_PTR
-#define MAX_POOL_SIZE 100
-#else
-#define MAX_POOL_SIZE 132
-#endif
+
+#define PAGE_SIZE  4096
+#define MAX_REGION_SIZE (PAGE_SIZE*((1<<13)-1))
+#define MAX_VALUE (MAX_PAGE_SIZE - sizeof(MemoryObject))
+
 
 namespace leaves {
 
 struct Storage;
 struct offset_ptr;
 
-struct Node {
+
+struct MemoryObject {
   struct  {
+    uint16_t inpool:1;
     uint16_t type:3;
-    uint16_t pool:13;
+    #define pages  pool
+    uint16_t pool:12;
   };
 };
 
+typedef MemoryObject Node;
 struct CompressedData;
 struct ValueData;
 struct TrieData;
@@ -38,6 +41,7 @@ union any_ptr {
   int64_t as_int;
   char* as_char;
   offset_ptr* next;
+  MemoryObject* header;
   Node* node;
   CompressedData* compressed;
   ValueData *value;
@@ -49,79 +53,6 @@ union any_ptr {
 };
 
 #pragma pack(2)
-#ifdef SMALL_PTR
-struct offset_ptr {
-  /* All Objects are align on a 8 byte boundary
-     -> we keep the same address space by multiplying the delta with 8
-        and use the spared 3 bit for specifying the node type.
-  */
-  struct bit48int {
-    uint32_t v1;
-    uint16_t v2;
-  };
-
-  struct offset_converter {
-    union {
-      bit48int d48;
-      struct {
-        int64_t delta:48;
-        int64_t _:16;
-      };
-    };
-    offset_converter(int64_t delta) : delta(delta) {}
-    offset_converter(bit48int d48) : d48(d48) {}
-  };
-
-  bit48int delta;
-
-  offset_ptr() : delta(offset_converter(0).d48) {}
-
-  offset_ptr(any_ptr p) :
-    delta(offset_converter(p.as_int - (int64_t)this).d48) { }
-
-  void to_null() {
-    delta = offset_converter(0).d48;
-  }
-
-  const offset_ptr& operator=(const offset_ptr& other) {
-    int64_t odelta = offset_converter(other.delta).delta;
-    if (!odelta)
-      delta = other.delta;
-    else
-      *this = ((char*)&other) + odelta;
-    return *this;
-  }
-
-  const offset_ptr& operator=(any_ptr p) {
-    delta = offset_converter(p.as_int - (int64_t)this).d48;
-    return *this;
-  }
-
-  const offset_ptr& operator+=(int64_t diff) {
-    offset_converter c(delta);
-    c.delta += diff;
-    delta = c.d48;
-    return *this;
-  }
-
-  any_ptr operator+(int64_t diff) {
-    return resolve().as_char + diff;
-  }
-
-  int64_t operator-(offset_ptr& other) {
-    return resolve().as_int - other.resolve().as_int;
-  }
-
-  operator bool() const { return offset_converter(delta).delta != 0; }
-  bool operator!() const { return offset_converter(delta).delta == 0; }
-
-  any_ptr resolve() const {
-    assert(offset_converter(delta).delta != 0);
-    return (any_ptr)(((char*)this) + offset_converter(delta).delta);
-  }
-};
-#else
-
 struct offset_ptr {
   /* All Objects are align on a 8 byte boundary
      -> we keep the same address space by multiplying the delta with 8
@@ -172,48 +103,52 @@ struct offset_ptr {
   }
 };
 
-#endif  // SMALL_PTR
 #pragma pack(0)
 
 
-struct PPool {
-  // The persistent part of Pool
+struct MemoryPool {
   size_t node_size;
   size_t area_size;
   size_t used_nodes;
-  size_t freed_nodes;
+  size_t free_nodes;
   offset_ptr current_area;
-  offset_ptr next_node;
   offset_ptr next_free;
-};
+  offset_ptr next_node;
 
-
-struct Pool {
-  // the interface part of Pool
-
-  Storage* storage;
-  PPool* pool;
-  uint16_t index;
-
-  void open(Storage* storage_, PPool* pool_, uint16_t index_) {
-    storage = storage_;
-    pool = pool_;
-    index = index_;
-  }
-  void create(Storage* storage, PPool* pool, uint16_t index_, size_t node_size, size_t area_count);
-
+  void init(size_t node_size, size_t area_size);
   any_ptr allocate();
   void free(any_ptr ptr);
+  void new_area(any_ptr ptr);
+};
+
+struct PageManager {
+  size_t free_count;
+  size_t db_size;
+  offset_ptr next_free;
+  offset_ptr next_page;
+
+  void init(size_t db_size, any_ptr start);
+  void grow(size_t size) { db_size += size; }
+  any_ptr allocate(size_t size);
+  void free(any_ptr ptr);
+};
+
+#define SIGNATURE "LarchLeaves"
+
+
+struct FirstPage {
+  char signature[sizeof(SIGNATURE)];
+  uint16_t file_version;
+  uint64_t version; // transaction version
+  offset_ptr root;
+  Node null;
+  PageManager memory;
+  MemoryPool pools[1];
 };
 
 
 using boost::interprocess::file_mapping;
-using boost::interprocess::managed_external_buffer;
 using boost::interprocess::mapped_region;
-using boost::interprocess::create_only_t;
-using boost::interprocess::create_only;
-using boost::interprocess::open_only_t;
-using boost::interprocess::open_only;
 using boost::interprocess::read_write;
 
 
@@ -229,31 +164,36 @@ struct Storage {
   void flush(bool async=true) { region.flush(0, 0, async); }
   void flush_header();
 
+  FirstPage *header;
   file_mapping file;
-  size_t grow_size;
-  size_t value_pool_start_size;
-  size_t value_pool_increment;
-  size_t value_pool_count;
-  size_t table_count;
-  void *null;
-  uint64_t* version;
-  offset_ptr* root;
   mapped_region region;
-  managed_external_buffer memory;
-  Pool *pools;
+  size_t grow_size;
+  uint16_t burst_size;  // size for burst tables in pages
 };
 
+
+#define POOL(max, index)  if (size <= max) return index
+
 inline int pool_index(size_t size) {
-#ifdef SMALL_PTR
-  if (size <= 16) return 0;
-  if (size <= 34) return 1;
-  if (size <= 64) return 2;
-#else
-  if (size <= 20) return 0;
-  if (size <= 44) return 1;
-  if (size <= 84) return 2;
-#endif
-  return 3;
+  POOL(20, 0);
+  POOL(44, 1);
+  POOL(84, 2);
+  POOL(132, 3);
+  if (size <= 2560) {
+    POOL(256, 4);
+    POOL(512, 5);
+    POOL(1024, 6);
+    POOL(1536, 7);
+    POOL(2048, 8);
+    POOL(2560, 9);
+  }
+  POOL(3072, 10);
+  POOL(4096, -1);
+  POOL(5129, 11);
+  POOL(6144, 12);
+  POOL(7168, 13);
+  POOL(8192, 14);
+  return -1;
 }
 
 inline any_ptr::any_ptr(const offset_ptr& ptr) : node(ptr.resolve().node) { }
