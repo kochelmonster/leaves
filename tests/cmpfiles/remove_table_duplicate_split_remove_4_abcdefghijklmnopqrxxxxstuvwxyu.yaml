@@ -1,0 +1,25 @@
+id: kCompressedTrie-556
+size: 3
+keys: "[a][b][d]"
+children: 
+  - kTable-28560
+---
+id: kTable-28560
+count: 2
+values:
+  - e
+  - ef
+children: 
+  - kValue-516
+  - kValue-636
+---
+id: kValue-516
+size: 4
+value: "[a][b][d][e]"
+children: []
+---
+id: kValue-636
+size: 5
+value: "[a][b][d][e][f]"
+children: []
+---

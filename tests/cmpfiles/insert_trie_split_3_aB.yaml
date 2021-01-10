@@ -1,0 +1,33 @@
+id: kTable-28560
+count: 4
+values:
+  - a@
+  - aA
+  - aB
+  - aM
+children: 
+  - kValue-516
+  - kValue-536
+  - kValue-576
+  - kValue-556
+---
+id: kValue-516
+size: 2
+value: "[a][@]"
+children: []
+---
+id: kValue-536
+size: 2
+value: "[a][A]"
+children: []
+---
+id: kValue-576
+size: 2
+value: "[a][B]"
+children: []
+---
+id: kValue-556
+size: 2
+value: "[a][M]"
+children: []
+---

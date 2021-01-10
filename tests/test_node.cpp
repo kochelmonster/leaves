@@ -1,5 +1,5 @@
 #define BOOST_TEST_MODULE GraphTest
-#define GENERATE
+//#define GENERATE
 
 #include <cstdio>
 #include <vector>
@@ -119,7 +119,8 @@ void test_insertion(Storage& storage, const char* title, const char* keys[]) {
 }
 
 
-void test_remove(Storage& storage, const char* title, const char* keys[], const char *to_remove) {
+void test_remove(
+    Storage& storage, const char* title, const char* keys[], const char* to_remove[]) {
   strings_t strings;
   std::cout << "==========================================" << std::endl
             << "Test: " << title << std::endl
@@ -130,31 +131,40 @@ void test_remove(Storage& storage, const char* title, const char* keys[], const 
   Trace trace(storage);
 
   for(int i = 0; keys[i]; i++) {
+    std::cout << "insert " << keys[i] << std::endl;
     trace.find(keys[i]);
     BOOST_REQUIRE(!trace.valid());
     trace.set_value(keys[i]);
-    if (strcmp(keys[i], to_remove))
-      strings.push_back(keys[i]);
+    strings.push_back(keys[i]);
   }
 
   std::string name(title);
   name += "_begin";
-
   check_graph(name.c_str(), storage);
-  trace.find(to_remove);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
 
-  name = title;
-  name += "_end";
-  check_graph(name.c_str(), storage);
+  for(int i = 0; to_remove[i]; i++) {
+    std::cout << "remove " << to_remove[i] << std::endl;
+    trace.find(to_remove[i]);
+    BOOST_REQUIRE(trace.valid());
+    trace.remove();
+
+    std::stringstream cstr;
+    cstr << title << "_remove_" << i << "_" << to_remove[i];
+    check_graph(cstr.str().c_str(), storage);
+
+    for(strings_t::iterator iter=strings.begin(); iter != strings.end(); iter++) {
+      if (*iter == to_remove[i]) {
+        strings.erase(iter);
+        break;
+      }
+    }
+  }
 
   test_movement(storage, strings);
 }
 
 
 BOOST_AUTO_TEST_SUITE(BasicCases)
-
 
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
@@ -170,14 +180,24 @@ BOOST_AUTO_TEST_CASE(insert_table_split) {
   test_insertion(storage, "insert_table_split", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_table_duplicates) {
+BOOST_AUTO_TEST_CASE(insert_table_split_short) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abhij", "abdef", "abklmn", "ab", NULL};
+  test_insertion(storage, "insert_table_split_short", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_table_duplicate_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
   const char *keys[] = {
-    "abcdefghijklmnopqrstuvwxyz",
-    "bklmn",
-    "abcdefghijklmnopqrstuvwxyy", NULL};
-  test_insertion(storage, "insert_table_duplicates", keys);
+    "abcdefghijklmnopqrxxxxstuvwxyz",
+    "abcdefghijklmnopqrxxxxstuvwxyy",
+    "abcdefghijklmnopqrxxxxstuvwxyx",
+    "abcdefghijklmnopqrxxxxstuvwxyw",
+    "abcdefghijklmnopqrxxxxstuvwxyu",
+    "abde", "abdef", NULL};
+  test_insertion(storage, "insert_table_duplicate_split", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_table_top) {
@@ -190,39 +210,80 @@ BOOST_AUTO_TEST_CASE(insert_table_top) {
 BOOST_AUTO_TEST_CASE(insert_compresstrie_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "abcdefghi", "abcdefghij", "abcdefghijk", "abcdefghijkl",  NULL};
+  const char *keys[] = {
+      "abcdefg", "abcdefghi", "abcdefghij", "abcdefghijk", "abcdefghijkl",
+      "abd",  NULL};
   test_insertion(storage, "insert_compresstrie_split", keys);
 }
 
-
-
-/*
-
-
-
-BOOST_AUTO_TEST_CASE(insert_compress_short) {
+BOOST_AUTO_TEST_CASE(insert_compresstrie_short) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abcdefg", "", NULL};
-  test_insertion(storage, "insert_compress_short", keys);
+  const char *keys[] = {
+      "abcdefg", "abcdefghi", "abcdefghij", "abcdefghijk", "abcdefghijkl",
+      "ab",  NULL};
+  test_insertion(storage, "insert_compresstrie_short", keys);
 }
-
 
 BOOST_AUTO_TEST_CASE(insert_trie_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abc", "abd", "abe", "abf", "ac", NULL};
+  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
+                        "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
   test_insertion(storage, "insert_trie_split", keys);
 }
-*/
-/*
+
+
+BOOST_AUTO_TEST_CASE(remove_table_duplicate_split) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {
+    "abcdefghijklmnopqrxxxxstuvwxyz",
+    "abcdefghijklmnopqrxxxxstuvwxyy",
+    "abcdefghijklmnopqrxxxxstuvwxyx",
+    "abcdefghijklmnopqrxxxxstuvwxyw",
+    "abcdefghijklmnopqrxxxxstuvwxyu",
+    "abde", "abdef", NULL};
+
+  const char *remove[] = {
+    "abcdefghijklmnopqrxxxxstuvwxyz",
+    "abcdefghijklmnopqrxxxxstuvwxyy",
+    "abcdefghijklmnopqrxxxxstuvwxyx",
+    "abcdefghijklmnopqrxxxxstuvwxyw",
+    "abcdefghijklmnopqrxxxxstuvwxyu",
+    NULL,
+  };
+
+  test_remove(storage, "remove_table_duplicate_split", keys, remove);
+}
+
+BOOST_AUTO_TEST_CASE(remove_trie_split) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
+                        "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
+  const char *remove[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
+                          "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
+  test_remove(storage, "remove_trie", keys, remove);
+}
+
 BOOST_AUTO_TEST_CASE(insert_trie_short) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
-  const char *keys[] = {"abc", "abe", "ab", NULL};
+  const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
   test_insertion(storage, "insert_trie_short", keys);
 }
-*/
+
+BOOST_AUTO_TEST_CASE(remove_intermediate_value) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
+  const char *remove[] = {"ab", NULL };
+  test_remove(storage, "remove_intermediate_value", keys, remove);
+}
+
+
+
 
 #if 0
 

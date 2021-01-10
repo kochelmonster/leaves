@@ -4,6 +4,8 @@
 #include "trie.hpp"
 #include "trace.hpp"
 
+#include <fstream>
+
 namespace leaves {
 
 offset_ptr* Table::find(Transition& self, ISlice& key, string& current_key) {
@@ -39,13 +41,7 @@ bool Table::remove(Transition& self) {
 }
 
 void TableData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-  if (!key.size()) {
-    assert(val_ptr.node->type == kValue);
-    self.cmp = 1;
-    self.index = 0;
-    val_ptr.value->next = *self.node_ptr;
-    self.set(val_ptr);
-  }
+  assert(!key.empty());
 
   if (count >= (bottom+1)/2) {
     split(self, key, val_ptr);
@@ -111,59 +107,80 @@ offset_ptr* TableData::ifind(Transition& self, const Slice& key) {
 }
 
 void TableData::split(Transition& self, const Slice& key, any_ptr val_ptr) {
-  char prefix[sizeof(Item)];
   // first extract a common prefix
-  size_t i;
+  size_t split_pos;
   bool go_on = true;
-  for(i = 0; go_on; i++) {
-    if (i >= key.size()) {
+
+  // the fast normal branch
+  for(split_pos = 0; split_pos < sizeof(Item::fragment) && go_on; split_pos++) {
+    if (split_pos >= key.size()) {
       go_on = false;
       continue;
     }
 
-    char cmp = prefix[i] = key[i];
+    char cmp = key[split_pos];
     for(int j = 0; j < count; j++) {
       Item& item(data[j]);
-      if (item.size <= i || item.fragment[i] != cmp) {
+      if (item.size <= split_pos || item.fragment[split_pos] != cmp) {
         go_on = false;
         break;
       }
     }
   }
-  trie_split(self, --i, key, val_ptr);
+
+  if (go_on) {
+    // Still no split_pos found?
+    // -> the slow complete branch
+    Trace iter(self.trace->storage, self.node_ptr);
+    for(; go_on; split_pos++) {
+      if (split_pos >= key.size()) {
+        go_on = false;
+        continue;
+      }
+
+      char cmp = key[split_pos];
+      for(iter.first(); iter.valid(); iter.next()) {
+        if (iter.current_key.size() < split_pos || iter.current_key[split_pos] != cmp) {
+          go_on = false;
+          break;
+        }
+      }
+    }
+  }
+
+  trie_split(self, --split_pos, key, val_ptr);
 }
+
+void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
 
 void TableData::trie_split(Transition& self, int split_pos, const Slice& key, any_ptr val_ptr) {
   /* move the values into a new subtree */
 
-  Trace remover(self.trace->storage, self.node_ptr);
-  remover.first();
-  any_ptr to_insert = remover.ipop_value();
+  val_ptr = CompressedData::build(self.trace, val_ptr, key.advance(split_pos+1), kCompressedTable);
+  val_ptr = CompressedData::build(self.trace, val_ptr, key.slice(split_pos+1), kCompressedTrie);
 
-  // insert the first node in a newly created subtree
-  Slice first(Slice(remover.current_key).advance(split_pos));
-  to_insert = CompressedData::build(self.trace, to_insert, first.advance(1), kCompressedTable);
-  any_ptr root = TrieData::build(self.trace, to_insert, first[0]);
-  if (split_pos) {
-    // insert a prefix before the trie node
-    Slice prefix(Slice(remover.current_key).slice(split_pos));
-    root = CompressedData::build(self.trace, root, prefix, kCompressedTrie);
-  }
-  offset_ptr proot(root);
-  Trace inserter(self.trace->storage, &proot);
-  // new subtree is now refrenced by inserter
+  offset_ptr rroot(*self.node_ptr);
+  offset_ptr iroot(val_ptr);
+  Trace inserter(self.trace->storage, &iroot);
+  Trace remover(self.trace->storage, &rroot);
+  /*
+  int i = 0;
+  std::stringstream cstr;
+  cstr << "errors/error_" << i++ << ".yaml";
+  std::ofstream out(cstr.str());
+  dump_node(out, *inserter.root, &self.trace->storage);*/
 
-  // Now remove items from the old subtree and insert them in the new
-  remover.first();
-  for(; remover.valid(); remover.first()) {
+  for(remover.first(); remover.valid(); remover.first()) {
     inserter.find(remover.current_key);
     inserter.iinsert(remover.ipop_value());
+
+    /*std::stringstream cstr;
+    cstr << "errors/error_" << i++ << ".yaml";
+    std::ofstream out(cstr.str());
+    dump_node(out, *inserter.root, &self.trace->storage);*/
   }
 
-  // insert the new item
-  inserter.find(key);
-  inserter.iinsert(val_ptr);
-  self.set(root);
+  self.set(iroot);
 }
 
 bool TableData::remove(Transition& self) {

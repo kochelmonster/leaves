@@ -72,7 +72,7 @@ struct Value : public NodeHandler {
     }
 
     assert(!self.value->next);
-    self.value->next = CompressedData::build(self.trace, val_ptr, key, kCompressedTrie);
+    self.value->next = CompressedData::build(self.trace, val_ptr, key, kCompressedTable);
   }
 
   bool remove(Transition& self) { assert(0); return false; };
@@ -168,13 +168,13 @@ struct CompressedTrie : public Compressed {
 
         // build trie node
         any_ptr rest_ptr = CompressedData::build(
-            self.trace, node->next, rest.advance(i+1), kCompressedTable);
+            self.trace, node->next, rest.advance(i+1), kCompressedTrie);
         any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, keys[i]);
 
         self.set(trie_ptr);
         self.cmp = -1;
         trie_handler.ifind(self, key[i]);
-        self.insert(key.advance(i+1), val_ptr);
+        self.insert(key.advance(i), val_ptr);
 
         self.set(CompressedData::build(self.trace, trie_ptr, first, kCompressedTrie));
         self.trace->free(node);
@@ -212,7 +212,7 @@ struct CompressedTable : public Compressed {
 
   int advance(Transition& self, const Slice& key) {
     CompressedData* node = self.compressed;
-    if (node->size == key.size() && memcmp(node->keys, key.data(), node->size)) {
+    if (node->size == key.size() && !memcmp(node->keys, key.data(), node->size)) {
       self.cmp = 0;
       return node->size;
     }

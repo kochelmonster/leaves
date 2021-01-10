@@ -55,7 +55,6 @@ void Trace::set_value(const Slice& value) {
   update();
   iinsert(ValueData::build(this, value));
   (*storage.version)++;
-  ifind();
 }
 
 void Trace::remove() {

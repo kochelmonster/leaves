@@ -1,0 +1,91 @@
+id: kCompressedTrie-616
+size: 2
+keys: "[a][b]"
+children: 
+  - kTrie-576
+---
+id: kTrie-576
+size: 1
+bits: 40
+bitindex: [6]
+children: 
+  - kTrie-556
+---
+id: kTrie-556
+size: 2
+bits: 18
+bitindex: [3, 4]
+byteindex: ["c", "d"]
+children: 
+  - kCompressedTrie-2644
+  - kTable-28560
+---
+id: kCompressedTrie-2644
+size: 26
+keys: "[d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y]"
+children: 
+  - kTrie-536
+---
+id: kTrie-536
+size: 1
+bits: 80
+bitindex: [7]
+children: 
+  - kTrie-2732
+---
+id: kTrie-2732
+size: 5
+bits: 7a0
+bitindex: [5, 7, 8, 9, 10]
+byteindex: ["u", "w", "x", "y", "z"]
+children: 
+  - kValue-2864
+  - kValue-2776
+  - kValue-2556
+  - kValue-2600
+  - kValue-2512
+---
+id: kValue-2864
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][u]"
+children: []
+---
+id: kValue-2776
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][w]"
+children: []
+---
+id: kValue-2556
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][x]"
+children: []
+---
+id: kValue-2600
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][y]"
+children: []
+---
+id: kValue-2512
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][z]"
+children: []
+---
+id: kTable-28560
+count: 2
+values:
+  - e
+  - ef
+children: 
+  - kValue-516
+  - kValue-636
+---
+id: kValue-516
+size: 4
+value: "[a][b][d][e]"
+children: []
+---
+id: kValue-636
+size: 5
+value: "[a][b][d][e][f]"
+children: []
+---

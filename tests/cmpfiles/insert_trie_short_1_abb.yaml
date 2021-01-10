@@ -1,0 +1,19 @@
+id: kTable-28560
+count: 2
+values:
+  - aba
+  - abb
+children: 
+  - kValue-516
+  - kValue-556
+---
+id: kValue-516
+size: 3
+value: "[a][b][a]"
+children: []
+---
+id: kValue-556
+size: 3
+value: "[a][b][b]"
+children: []
+---

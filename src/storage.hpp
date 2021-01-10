@@ -130,7 +130,7 @@ struct offset_ptr {
   int64_t delta;
 
   offset_ptr() : delta(0) {}
-
+  offset_ptr(const offset_ptr& other) { *this = other; }
   offset_ptr(any_ptr p) : delta(p.as_int - (int64_t)this) { }
 
   void to_null() {

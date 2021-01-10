@@ -64,6 +64,7 @@ inline void Trace::update() {
 
 inline void Trace::iinsert(any_ptr val_ptr) {
   stack.back().insert(rest_key, val_ptr);
+  ifind();
 }
 
 } // namespace leaves

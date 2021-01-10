@@ -60,6 +60,8 @@ def test(name):
 
 
 def build(bld):
+    core = "storage.cpp trace.cpp node.cpp trie.cpp table.cpp"
+
     bld.program(
         features="test",
         source=test("test_storage.cpp")+source("storage.cpp"),
@@ -68,20 +70,21 @@ def build(bld):
 
     bld.program(
         features="test",
-        source=test("test_node.cpp")+source("storage.cpp trace.cpp node.cpp trie.cpp"),
+        source=test("test_node.cpp")+source(core),
         use="TEST BOOST",
         target="test_node")
 
     bld.program(
         features="test",
-        source=test("test_db.cpp")+source("storage.cpp trace.cpp node.cpp trie.cpp leaves.cpp"),
+        source=test("test_db.cpp")+source(core + " leaves.cpp"),
         use="TEST BOOST",
         target="test_db")
 
     bld.stlib(
-        source=source("storage.cpp trace.cpp node.cpp trie.cpp leaves.cpp"),
+        source=source(core + " leaves.cpp"),
         use="LIB",
         target="leaves")
+
 
     from waflib.Tools import waf_unit_test
     bld.add_post_fun(waf_unit_test.summary)

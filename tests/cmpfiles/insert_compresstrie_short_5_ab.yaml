@@ -1,0 +1,63 @@
+id: kCompressedTrie-596
+size: 2
+keys: "[a][b]"
+children: 
+  - kValue-516
+---
+id: kValue-516
+size: 2
+value: "[a][b]"
+children: 
+  - kCompressedTrie-536
+---
+id: kCompressedTrie-536
+size: 5
+keys: "[c][d][e][f][g]"
+children: 
+  - kValue-2512
+---
+id: kValue-2512
+size: 7
+value: "[a][b][c][d][e][f][g]"
+children: 
+  - kCompressedTrie-556
+---
+id: kCompressedTrie-556
+size: 1
+keys: "[h]"
+children: 
+  - kTable-28704
+---
+id: kTable-28704
+count: 4
+values:
+  - i
+  - ij
+  - ijk
+  - ijkl
+children: 
+  - kValue-2556
+  - kValue-2600
+  - kValue-2644
+  - kValue-2688
+---
+id: kValue-2556
+size: 9
+value: "[a][b][c][d][e][f][g][h][i]"
+children: []
+---
+id: kValue-2600
+size: 10
+value: "[a][b][c][d][e][f][g][h][i][j]"
+children: []
+---
+id: kValue-2644
+size: 11
+value: "[a][b][c][d][e][f][g][h][i][j][k]"
+children: []
+---
+id: kValue-2688
+size: 12
+value: "[a][b][c][d][e][f][g][h][i][j][k][l]"
+children: []
+---

@@ -1,0 +1,31 @@
+id: kTable-28560
+count: 2
+values:
+  - abcdefghijklmno
+  - abcdefghijklmno
+children: 
+  - kCompressedLeaf-2688
+  - kCompressedLeaf-2644
+---
+id: kCompressedLeaf-2688
+size: 15
+keys: "[p][q][r][x][x][x][x][s][t][u][v][w][x][y][y]"
+children: 
+  - kValue-2600
+---
+id: kValue-2600
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][y]"
+children: []
+---
+id: kCompressedLeaf-2644
+size: 15
+keys: "[p][q][r][x][x][x][x][s][t][u][v][w][x][y][z]"
+children: 
+  - kValue-2512
+---
+id: kValue-2512
+size: 30
+value: "[a][b][c][d][e][f][g][h][i][j][k][l][m][n][o][p][q][r][x][x][x][x][s][t][u][v][w][x][y][z]"
+children: []
+---

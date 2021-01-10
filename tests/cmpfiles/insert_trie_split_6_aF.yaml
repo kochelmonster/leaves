@@ -1,0 +1,62 @@
+id: kCompressedTrie-676
+size: 1
+keys: "[a]"
+children: 
+  - kTrie-656
+---
+id: kTrie-656
+size: 1
+bits: 10
+bitindex: [4]
+children: 
+  - kTrie-6928
+---
+id: kTrie-6928
+size: 7
+bits: 2077
+bitindex: [0, 1, 2, 4, 5, 6, 13]
+byteindex: ["@", "A", "B", "D", "E", "F", "M"]
+children: 
+  - kValue-516
+  - kValue-536
+  - kValue-576
+  - kValue-596
+  - kValue-636
+  - kValue-616
+  - kValue-556
+---
+id: kValue-516
+size: 2
+value: "[a][@]"
+children: []
+---
+id: kValue-536
+size: 2
+value: "[a][A]"
+children: []
+---
+id: kValue-576
+size: 2
+value: "[a][B]"
+children: []
+---
+id: kValue-596
+size: 2
+value: "[a][D]"
+children: []
+---
+id: kValue-636
+size: 2
+value: "[a][E]"
+children: []
+---
+id: kValue-616
+size: 2
+value: "[a][F]"
+children: []
+---
+id: kValue-556
+size: 2
+value: "[a][M]"
+children: []
+---
