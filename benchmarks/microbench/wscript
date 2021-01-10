@@ -71,7 +71,7 @@ def build(bld):
 
     leaves_path = Path(bld.srcnode.abspath()).parents[1]
     rpath = Path(os.path.relpath(leaves_path, bld.srcnode.abspath()))
-    lsources = "storage.cpp trace.cpp node.cpp trie.cpp leaves.cpp".split()
+    lsources = "storage.cpp trace.cpp node.cpp trie.cpp table.cpp leaves.cpp".split()
     lsources = [str(rpath/"src"/s) for s in lsources]
 
     bld.program(

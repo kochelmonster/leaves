@@ -1,5 +1,5 @@
 #define BOOST_TEST_MODULE GraphTest
-//#define GENERATE
+#define GENERATE
 
 #include <cstdio>
 #include <vector>
@@ -187,6 +187,13 @@ BOOST_AUTO_TEST_CASE(insert_table_split_short) {
   test_insertion(storage, "insert_table_split_short", keys);
 }
 
+BOOST_AUTO_TEST_CASE(insert_table_short) {
+  Preparation p;
+  Storage storage(TEST_FILE, TEST_OPTIONS);
+  const char *keys[] = {"abcdefg", "abchij", "abcklm", "abcklmn", "abcklmo", "abck", NULL};
+  test_insertion(storage, "insert_table_short", keys);
+}
+
 BOOST_AUTO_TEST_CASE(insert_table_duplicate_split) {
   Preparation p;
   Storage storage(TEST_FILE, TEST_OPTIONS);
@@ -286,10 +293,6 @@ BOOST_AUTO_TEST_CASE(remove_intermediate_value) {
 
 
 #if 0
-
-
-BOOST_AUTO_TEST_CASE(insert_table_short) {
-}
 
 
 

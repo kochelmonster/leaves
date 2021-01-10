@@ -83,10 +83,10 @@ struct Table : public NodeHandler {
 
 inline int TableData::compare_item(int index, const Slice& other) {
   Item& item(data[index]);
-  size_t size = min_size(other.size());
+  size_t size = std::min(other.size(), (size_t)item.size);
   int cmp;
 
-  (cmp = memcmp(item.fragment, other.data(), size)) || (cmp=item.size-size);
+  (cmp = memcmp(item.fragment, other.data(), size)) || (cmp=item.size-min_size(other.size()));
   cmp = sign(cmp);
 
   if (cmp == 0 && other.size() > sizeof(Item::fragment)) {

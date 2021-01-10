@@ -48,6 +48,7 @@ struct SingleDB : public DB {
       stats.value_pool_start_size = storage.value_pool_start_size - sizeof(ValueData);
       stats.value_pool_increment = storage.value_pool_increment;
       stats.value_pool_count = storage.value_pool_count;
+      stats.table_count = storage.table_count;
       stats.area_count = storage.pools[0].pool->area_size / storage.pools[0].pool->node_size;
       stats.grow_size = storage.grow_size;
       //stats.segment_count = storage.segments.size();

@@ -6,7 +6,6 @@
 #include "node.hpp"
 #include "table.hpp"
 
-
 #define SIGNATURE "LarchLeaves"
 
 using namespace boost::interprocess;

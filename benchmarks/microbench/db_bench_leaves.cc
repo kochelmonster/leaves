@@ -73,6 +73,10 @@ static bool FLAGS_histogram = false;
 // count of items in a segregated area
 static int FLAGS_area_count = 2000;
 
+// count of items in burst tables
+static int FLAGS_table_count = 128;
+
+
 // If true, do not destroy the existing database.  If you set this
 // flag and also specify a benchmark that wants a fresh database, that
 // benchmark will fail.
@@ -325,6 +329,7 @@ class Benchmark {
       leaves::Stats stats;
       db_->get_stats(stats);
       fprintf(stderr, "grow_size     :     %ld\n", stats.grow_size);
+      fprintf(stderr, "table_count   :     %ld\n", stats.table_count);
       fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
 
       for(int i = 0; i < MAIN_POOL_COUNT+stats.value_pool_count; i++) {
@@ -451,6 +456,7 @@ class Benchmark {
     options.max_db_size = 1<<30;
     options.grow_size = 1<<25;
     options.area_count = FLAGS_area_count;
+    options.table_count = FLAGS_table_count;
     db_ = leaves::DB::open(test_fname.c_str(), options);
   }
 
@@ -579,6 +585,8 @@ int main(int argc, char** argv) {
       FLAGS_value_size = n;
     } else if (sscanf(argv[i], "--area_count=%d%c", &n, &junk) == 1) {
       FLAGS_area_count = n;
+    } else if (sscanf(argv[i], "--burst_count=%d%c", &n, &junk) == 1) {
+      FLAGS_table_count = n;
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {

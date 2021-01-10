@@ -41,7 +41,14 @@ bool Table::remove(Transition& self) {
 }
 
 void TableData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-  assert(!key.empty());
+  if (key.empty()) {
+    assert(val_ptr.node->type == kValue);
+    self.cmp = 1;
+    self.index = 0;
+    val_ptr.value->next = *self.node_ptr;
+    self.set(val_ptr);
+    return;
+  }
 
   if (count >= (bottom+1)/2) {
     split(self, key, val_ptr);
@@ -151,7 +158,9 @@ void TableData::split(Transition& self, const Slice& key, any_ptr val_ptr) {
   trie_split(self, --split_pos, key, val_ptr);
 }
 
+#ifdef DEBUG_SPLIT
 void dump_node(std::ostream& out, any_ptr ptr, Storage* storage);
+#endif
 
 void TableData::trie_split(Transition& self, int split_pos, const Slice& key, any_ptr val_ptr) {
   /* move the values into a new subtree */
@@ -163,21 +172,24 @@ void TableData::trie_split(Transition& self, int split_pos, const Slice& key, an
   offset_ptr iroot(val_ptr);
   Trace inserter(self.trace->storage, &iroot);
   Trace remover(self.trace->storage, &rroot);
-  /*
+
+#ifdef DEBUG_SPLIT
   int i = 0;
   std::stringstream cstr;
   cstr << "errors/error_" << i++ << ".yaml";
   std::ofstream out(cstr.str());
-  dump_node(out, *inserter.root, &self.trace->storage);*/
+  dump_node(out, *inserter.root, &self.trace->storage);
+#endif
 
   for(remover.first(); remover.valid(); remover.first()) {
     inserter.find(remover.current_key);
     inserter.iinsert(remover.ipop_value());
-
-    /*std::stringstream cstr;
+#ifdef DEBUG_SPLIT
+    std::stringstream cstr;
     cstr << "errors/error_" << i++ << ".yaml";
     std::ofstream out(cstr.str());
-    dump_node(out, *inserter.root, &self.trace->storage);*/
+    dump_node(out, *inserter.root, &self.trace->storage);
+#endif
   }
 
   self.set(iroot);

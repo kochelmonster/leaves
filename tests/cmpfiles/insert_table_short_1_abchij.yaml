@@ -2,7 +2,7 @@ id: kTable-28560
 count: 2
 values:
   - abcdefg
-  - abhij
+  - abchij
 children: 
   - kValue-2512
   - kValue-536
@@ -13,7 +13,7 @@ value: "[a][b][c][d][e][f][g]"
 children: []
 ---
 id: kValue-536
-size: 5
-value: "[a][b][h][i][j]"
+size: 6
+value: "[a][b][c][h][i][j]"
 children: []
 ---

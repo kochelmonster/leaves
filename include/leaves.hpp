@@ -135,7 +135,7 @@ struct Options {
   Options(
     size_t grow_size=1<<26,
     size_t area_count=2000,
-    size_t table_count=1000,
+    size_t table_count=128,
     size_t value_pool_count=5,
     size_t value_pool_start_size=128,
     size_t value_pool_increment=128,
