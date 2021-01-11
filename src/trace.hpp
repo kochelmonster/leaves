@@ -8,12 +8,36 @@ namespace leaves {
 
 typedef offset_ptr* (*move_func_t)(Transition& transition, string& current_key);
 
+struct Trace;
 
-struct Trace {
+struct Stack {
   typedef std::vector<Transition> stack_type;
 
+  Stack(Trace& trace);
+  bool empty() const;
+  size_t size() const;
+  Transition* begin();
+  Transition* end();
+  void push_back(offset_ptr* next);
+  void pop_back();
+  Transition& back();
+  const Transition& back() const;
+  Transition& back(int index);
+  void erase(Transition* iter);
+  void grow();
+  void clear();
+
+  Trace& trace;
+  offset_ptr null;
+  size_t pos;
+  Transition* top;
+  stack_type data;
+};
+
+
+struct Trace {
   Trace(Storage& storage, offset_ptr* root_=NULL);
-  bool valid() const { return rest_key.empty() && stack.size() && stack.back().valid(); }
+  bool valid() const { return rest_key.empty() && stack.back().valid(); }
   void find(const Slice& key);
   void first();
   void last();
@@ -33,8 +57,8 @@ struct Trace {
   void imove(move_func_t move, move_func_t move_end);
   void update();
 
-  stack_type stack;
   Storage& storage;
+  Stack stack;
   offset_ptr* root;
   ISlice rest_key;
   string current_key;
@@ -65,6 +89,79 @@ inline void Trace::update() {
 inline void Trace::iinsert(any_ptr val_ptr) {
   stack.back().insert(rest_key, val_ptr);
   ifind();
+}
+
+/* Stack
+---------------------------------------------------------------------
+*/
+
+inline Stack::Stack(Trace& trace_) : trace(trace_), pos(1) {
+  grow();
+  null = &trace.storage.header->null;
+  data[0].init(&null);
+  top = &data[0];
+}
+
+inline void Stack::push_back(offset_ptr* next) {
+  if (pos++ >= data.size())
+    grow();
+  (++top)->init(next);
+}
+
+inline void Stack::pop_back() {
+  assert(pos>1);
+  top--;
+  pos--;
+}
+
+inline Transition& Stack::back() {
+  assert(pos >= 1);
+  return *top;
+}
+
+inline const Transition& Stack::back() const {
+  assert(pos >= 1);
+  return *top;
+}
+
+inline Transition& Stack::back(int index) {
+  assert(pos-index >= 1);
+  return *(top-index);
+}
+
+inline void Stack::grow() {
+  size_t old_size = data.size();
+  data.resize(data.size()+128);
+  for(size_t i = old_size; i < data.size(); i++) {
+    data[i].trace = &trace;
+  }
+  top = &data[pos-1];
+}
+
+inline void Stack::erase(Transition* iter) {
+  pos = (iter - &data[0]);
+  top = &data[pos-1];
+};
+
+inline Transition* Stack::begin() {
+  return &data[1];
+}
+
+inline Transition* Stack::end() {
+  return top+1;
+}
+
+inline bool Stack::empty() const {
+  return pos <= 1;
+}
+
+inline size_t Stack::size() const {
+  return pos > 1;
+}
+
+inline void Stack::clear() {
+  pos = 1;
+  top = &data[0];
 }
 
 } // namespace leaves

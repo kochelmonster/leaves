@@ -99,7 +99,7 @@ struct offset_ptr {
 
   any_ptr resolve() const {
     assert(delta != 0);
-    return (any_ptr)(((char*)this) + delta);
+    return ((char*)this) + delta;
   }
 };
 

@@ -92,9 +92,7 @@ struct TableData;
 
 
 struct Transition {
-  Transition(offset_ptr* pptr, Trace* trace)
-    : node_ptr(pptr), value(node_ptr->resolve().value), trace(trace), cmp(0) {  }
-
+  void init(offset_ptr* pptr);
   void set(any_ptr ptr);
   bool valid() const;
   offset_ptr* find(ISlice& key, string& current_key);
@@ -138,6 +136,11 @@ struct NodeHandler {
   virtual bool valid() const { return false; }
 };
 
+
+inline void Transition::init(offset_ptr* pptr) {
+  node_ptr = pptr;
+  node = node_ptr->resolve().node;
+}
 
 inline void Transition::set(any_ptr ptr) {
   *node_ptr = ptr;

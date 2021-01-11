@@ -83,6 +83,7 @@ struct TableData : public Node {
 
   static TableData* alloc(Trace* trace);
   static any_ptr build(Trace* trace, any_ptr val_ptr, const Slice& key);
+  static void burst_report(Trace& trace, Stats& stats);
 };
 #pragma pack(0)
 

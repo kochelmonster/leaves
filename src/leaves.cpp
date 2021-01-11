@@ -1,5 +1,12 @@
-#include "trace.hpp"
+#ifdef DEBUG
 #include <iostream>
+#endif
+
+#include "trace.hpp"
+#ifndef PURE_TRIE
+#include "table.hpp"
+#endif
+
 
 namespace leaves {
 
@@ -55,6 +62,10 @@ struct SingleDB : public DB {
         stats.pools[i].free_nodes = storage.header->pools[i].free_nodes;
       }
       stats.free_pages = storage.header->memory.free_count;
+#ifndef PURE_TRIE
+      Trace trace(storage);
+      TableData::burst_report(trace, stats);
+#endif
     }
 
     Storage storage;

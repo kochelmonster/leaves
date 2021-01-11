@@ -88,7 +88,7 @@ inline offset_ptr* TrieData::next(uint8_t& bit) {
 
 inline offset_ptr* TrieData::first(uint8_t& bit) {
   bit = ctz(bits);
-  return &children[index_of(bit)];
+  return &children[0];
 }
 
 inline offset_ptr* TrieData::prev(uint8_t& bit) {

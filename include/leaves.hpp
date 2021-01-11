@@ -5,6 +5,7 @@
 #include <string>
 #include <memory>
 #include <exception>
+#include <map>
 
 
 namespace leaves {
@@ -158,7 +159,6 @@ struct Options {
   size_t burst_size;
 };
 
-
 struct Stats : public Options {
   struct Pools {
     size_t node_size;
@@ -166,6 +166,8 @@ struct Stats : public Options {
     size_t free_nodes;
   } pools[15];
   size_t free_pages;
+  size_t max_depth;
+  std::map<int, int> burst_tables;
 };
 
 

@@ -22,9 +22,8 @@ offset_ptr* iprev(Transition& transition, string& current_key) {
 
 
 Trace::Trace(Storage& storage, offset_ptr* root_)
-      : storage(storage), root(root_), version(storage.header->version) {
+      : storage(storage), stack(*this), root(root_), version(storage.header->version) {
   current_key.reserve(1024);
-  stack.reserve(1024);
   if (!root_)
     root = &storage.header->root;
 }
@@ -39,10 +38,10 @@ void Trace::find(const Slice& key) {
   rest_key = key;
 
   int same = 0; // index of same
-  for(stack_type::iterator i = stack.begin(); i != stack.end(); i++) {
+  for(Transition* i = stack.begin(); i != stack.end(); i++) {
     int add = i->advance(rest_key);
     if (add < 0) {
-      stack.erase(++i, stack.end());
+      stack.erase(++i);
       current_key.resize(same);
       break;
     }
@@ -75,7 +74,7 @@ void Trace::remove() {
 }
 
 any_ptr Trace::ipop_value() {
-  Transition &end(stack.back());
+  Transition& end(stack.back());
   ValueData* result = end.value;
   assert(result->type == kValue);
   *end.node_ptr = result->next;
@@ -108,12 +107,12 @@ void Trace::imove_end(move_func_t move) {
   rest_key = Slice();
   current_key.clear();
   stack.clear();
-  stack.push_back(Transition(root, this));
+  stack.push_back(root);
   while(true) {
       offset_ptr *next = move(stack.back(), current_key);
       if (!next)
         break;
-      stack.push_back(Transition(next, this));
+      stack.push_back(next);
   }
   version = storage.header->version;
 }
@@ -135,7 +134,7 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
   // next == stack.back().node_ptr => use the node again
   if (next && next != stack.back().node_ptr)
     while(next) {
-      stack.push_back(Transition(next, this));
+      stack.push_back(next);
       next = move_end(stack.back(), current_key);
     }
   version = storage.header->version;
@@ -143,14 +142,14 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
 
 void Trace::ifind() {
   if (stack.empty())
-    stack.push_back(Transition(root, this));
+    stack.push_back(root);
 
   offset_ptr *next;
   while(true) {
     next = stack.back().find(rest_key, current_key);
     if (!next)
       break;
-    stack.push_back(Transition(next, this));
+    stack.push_back(next);
   }
   version = storage.header->version;
 }

@@ -289,4 +289,19 @@ any_ptr TableData::build(Trace* trace, any_ptr val_ptr, const Slice& key) {
   return table;
 }
 
+void TableData::burst_report(Trace& trace, Stats& stats) {
+  TableData *last = NULL;
+  stats.max_depth = 0;
+  for(trace.first(); trace.valid(); trace.next()) {
+    stats.max_depth = std::max(stats.max_depth, trace.stack.size());
+    if (trace.stack.size() > 1) {
+      Transition& parent(trace.stack.back(1));
+      if (parent.node->type == kTable && last != parent.table) {
+        last = parent.table;
+        stats.burst_tables[parent.table->count]++;
+      }
+    }
+  }
+}
+
 } // namespace leaves
