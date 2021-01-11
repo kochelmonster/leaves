@@ -1,0 +1,11 @@
+id: kCompressed-4116
+size: 3
+keys: "[a][b][c]"
+children: 
+  - kValue-4096
+---
+id: kValue-4096
+size: 3
+value: "[a][b][c]"
+children: []
+---

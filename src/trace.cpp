@@ -31,6 +31,11 @@ Trace::Trace(Storage& storage, offset_ptr* root_)
 
 
 void Trace::find(const Slice& key) {
+#ifndef PURE_TRIE
+  if (key.size() > storage.max_key_size)
+    throw WrongValue("keysize too big");
+#endif
+
   rest_key = key;
 
   int same = 0; // index of same
@@ -127,7 +132,8 @@ void Trace::imove(move_func_t move, move_func_t move_end) {
     stack.pop_back();
   }
 
-  if (next && next != stack.back().node_ptr)  // see node.cpp Value::prev
+  // next == stack.back().node_ptr => use the node again
+  if (next && next != stack.back().node_ptr)
     while(next) {
       stack.push_back(Transition(next, this));
       next = move_end(stack.back(), current_key);

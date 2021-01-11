@@ -1,6 +1,7 @@
 /* handling trie nodes
 */
 #include "trie.hpp"
+#include "table.hpp"
 #include "trace.hpp"
 
 namespace leaves {
@@ -133,13 +134,17 @@ void Trie::insert(Transition& self, const Slice& key, any_ptr next) {
     return;
   }
 
-  uint8_t upper = bit::upper(self.key);
-  uint8_t lower = bit::lower(self.key);
-
   if (key.size() > 1) {
     Slice restkey(key.advance(1));
-    next = CompressedData::build(self.trace, next, restkey, kCompressedTable);
+#if PURE_TRIE
+    next = CompressedData::build(self.trace, next, restkey);
+#else
+    next = TableData::build(self.trace, next, restkey);
+#endif
   }
+
+  uint8_t upper = bit::upper(self.key);
+  uint8_t lower = bit::lower(self.key);
 
   if (!self.lower) {
     any_ptr lower_ptr = TrieData::create(self.trace, next, lower);
@@ -153,6 +158,13 @@ void Trie::insert(Transition& self, const Slice& key, any_ptr next) {
   self.lower = result.trie;
 }
 
+bool Trie::one_branch(Transition& self) {
+  if (popcount(self.upper->bits) == 1 && popcount(self.lower->bits) == 1) {
+    self.key = (ctz(self.upper->bits) << 4) | ctz(self.lower->bits);
+    return true;
+  }
+  return false;
+}
 
 bool Trie::remove(Transition& self) {
   if (self.lower->remove(self, &self.lower, self.second_ptr,  bit::lower(self.key))) {
@@ -160,17 +172,17 @@ bool Trie::remove(Transition& self) {
     return true;
   }
 
-  if (popcount(self.upper->bits) == 1 && popcount(self.lower->bits) == 1) {
+  if (one_branch(self)) {
     any_ptr next = self.lower->children[0].resolve();
-    char value = (ctz(self.upper->bits) << 4) | ctz(self.lower->bits);
     self.trace->free(self.lower);
     self.trace->free(self.upper);
-    self.set(CompressedData::build(self.trace, next, Slice(&value, 1), kCompressedTrie));
+    self.set(CompressedData::build(self.trace, next, Slice(&self.key, 1)));
     self.remove();  // combines compressed if possible
   }
   return true;
 }
 
+Trie trie_handler;
 
 /* Trie Data
 ---------------------------------------------------------------------------------

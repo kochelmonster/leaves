@@ -6,13 +6,12 @@
 
 #include "node.hpp"
 #include "trie.hpp"
+#ifndef PURE_TRIE
 #include "table.hpp"
+#endif
 #include "trace.hpp"
 
 namespace leaves {
-
-static Trie trie_handler;
-static Table table_handler;
 
 
 struct Value : public NodeHandler {
@@ -74,7 +73,11 @@ struct Value : public NodeHandler {
     }
 
     assert(!self.value->next);
-    self.value->next = CompressedData::build(self.trace, val_ptr, key, kCompressedTable);
+#ifdef PURE_TRIE
+    self.value->next = CompressedData::build(self.trace, val_ptr, key);
+#else
+    self.value->next = TableData::build(self.trace, val_ptr, key);
+#endif
   }
 
   bool remove(Transition& self) { assert(0); return false; };
@@ -120,18 +123,10 @@ struct Compressed : public NodeHandler {
       *self.node_ptr = offset_ptr();
       return true;
     }
-
-    CompressedData *child = node->next.resolve().compressed;
-    if (child->type == kCompressedTrie || child->type == kCompressedTable) {
-      self.set(CompressedData::eat_child(self.trace, child, Slice(node->keys, node->size)));
-      self.trace->free(node);
-    }
-
+    node->eat_child(self);
     return true;
   }
-};
 
-struct CompressedTrie : public Compressed {
   offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
     if (!(self.cmp = self.compressed->find(key, current_key))) {
       key.iadvance(self.compressed->size);
@@ -169,8 +164,7 @@ struct CompressedTrie : public Compressed {
         Slice first(key.data(), i);
 
         // build trie node
-        any_ptr rest_ptr = CompressedData::build(
-            self.trace, node->next, rest.advance(i+1), kCompressedTrie);
+        any_ptr rest_ptr = CompressedData::build(self.trace, node->next, rest.advance(i+1));
         any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, keys[i]);
 
         self.set(trie_ptr);
@@ -178,7 +172,7 @@ struct CompressedTrie : public Compressed {
         trie_handler.ifind(self, key[i]);
         self.insert(key.advance(i), val_ptr);
 
-        self.set(CompressedData::build(self.trace, trie_ptr, first, kCompressedTrie));
+        self.set(CompressedData::build(self.trace, trie_ptr, first));
         self.trace->free(node);
         return;
       }
@@ -191,50 +185,10 @@ struct CompressedTrie : public Compressed {
        [abcdefg] ==> [ab] -> [] -> [cefg]
     */
     assert(key.size() < node->size);
-    val_ptr.value->next = CompressedData::build(
-        self.trace, node->next, rest.advance(key.size()), kCompressedTrie);
-    val_ptr = CompressedData::build(self.trace, val_ptr, key, kCompressedTrie);
+    val_ptr.value->next = CompressedData::build(self.trace, node->next, rest.advance(key.size()));
+    val_ptr = CompressedData::build(self.trace, val_ptr, key);
     self.set(val_ptr);
     self.trace->free(node);
-  }
-};
-
-struct CompressedTable : public Compressed {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
-    if (!(self.cmp = self.compressed->find(key, current_key))) {
-      if (key.size() == self.compressed->size) {
-        key.iadvance(self.compressed->size);
-        current_key.append(self.compressed->keys, self.compressed->size);
-        return &self.compressed->next;
-      }
-      self.cmp = 1;
-    }
-    return NULL;
-  }
-
-  int advance(Transition& self, const Slice& key) {
-    CompressedData* node = self.compressed;
-    if (node->size == key.size() && !memcmp(node->keys, key.data(), node->size)) {
-      self.cmp = 0;
-      return node->size;
-    }
-    return -1;
-  }
-
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-    CompressedData *node = self.compressed;
-    assert(node->next.resolve().node->type == kValue);
-    self.set(TableData::build(self.trace, node->next, Slice(node->keys, node->size)));
-    self.table->ifind(self, key);
-    self.insert(key, val_ptr);
-    self.trace->free(node);
-  }
-};
-
-
-struct CompressedLeaf : public CompressedTable {
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-    assert(0);
   }
 };
 
@@ -246,7 +200,11 @@ struct Null : public NodeHandler {
   offset_ptr* prev(Transition& self, string& current_key) { return NULL; }
   offset_ptr* last(Transition& self, string& current_key) { return NULL; }
   void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-    self.set(CompressedData::build(self.trace, val_ptr, key, kCompressedTable));
+#ifdef PURE_TRIE
+    self.set(CompressedData::build(self.trace, val_ptr, key));
+#else
+    self.set(TableData::build(self.trace, val_ptr, key));
+#endif
   }
   int advance(Transition& self, const Slice& key) { assert(0); return -1; }
   bool remove(Transition& self) { assert(0); return false; }
@@ -255,14 +213,15 @@ struct Null : public NodeHandler {
 
 static Value value_handler;
 static Null null_handler;
-static CompressedTrie compressed_trie_handler;
-static CompressedTable compressed_table_handler;
-static CompressedLeaf compressed_leaf_handler;
+static Compressed compressed_handler;
 
 
 NodeHandler* Transition::handlers[] = {
-  &value_handler, &null_handler, &compressed_trie_handler, &compressed_table_handler,
-  &compressed_leaf_handler, &trie_handler, &table_handler };
+  &value_handler, &null_handler, &compressed_handler, &trie_handler,
+#ifndef PURE_TRIE
+  &table_handler
+#endif
+};
 
 
 any_ptr ValueData::build(Trace* trace, const Slice& value) {
@@ -274,7 +233,7 @@ any_ptr ValueData::build(Trace* trace, const Slice& value) {
   return result;
 }
 
-any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key, NodeTypes type) {
+any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key) {
   if (key.empty())
     return next;
 
@@ -282,27 +241,27 @@ any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key, Node
     // divide key in multiple compressed
     Slice first(key.data(), MAX_COMPRESSED_LEN);
     Slice second(key.advance(MAX_COMPRESSED_LEN));
-    return build(trace, build(trace, next, second, type), first, type);
+    return build(trace, build(trace, next, second), first);
   }
 
   any_ptr result(trace->allocate(key.size()+sizeof(CompressedData)));
-#ifdef PURE_TRIE
-  result.compressed->type = kCompressedTrie;
-#else
-  result.compressed->type = type;
-#endif
+  result.compressed->type = kCompressed;
   result.compressed->fill(next, key);
   return result;
 }
 
-any_ptr CompressedData::eat_child(Trace* trace, CompressedData *child, const Slice& key) {
-  string tmp;
-  tmp.reserve(key.size() + child->size);
-  tmp.append(key.data(), key.size());
-  tmp.append(child->keys, child->size);
-  any_ptr result = CompressedData::build(trace, child->next, tmp, (NodeTypes)child->type);
-  trace->free(child);
-  return result;
+void CompressedData::eat_child(Transition& self) {
+  CompressedData *child = next.resolve().compressed;
+  if (child->type == kCompressed) {
+    string tmp;
+    tmp.reserve(size + child->size);
+    tmp.append(keys, size);
+    tmp.append(child->keys, child->size);
+    any_ptr result = CompressedData::build(self.trace, child->next, tmp);
+    self.trace->free(child);
+    self.trace->free(this);
+    self.set(result);
+  }
 }
 
 
@@ -311,9 +270,7 @@ any_ptr CompressedData::eat_child(Trace* trace, CompressedData *child, const Sli
 const char* handler_names[] = {
   "kValue",
   "kNull",
-  "kCompressedTrie",
-  "kCompressedTable",
-  "kCompressedLeaf",
+  "kCompressed",
   "kTrie",
   "kTable"
 };
@@ -453,7 +410,7 @@ struct TrieDumper : public DumpBase {
   }
 };
 
-
+#ifndef PURE_TRIE
 struct TableDumper : public DumpBase {
   void dump(std::ostream& out, any_ptr ptr, Storage* storage, int upper=-1) {
     TableData *data = ptr.table;
@@ -463,36 +420,38 @@ struct TableDumper : public DumpBase {
     out << "values:" << std::endl;
     std::string val;
     for(int i = 0; i < data->count; i++) {
-      val.assign(data->data[i].fragment, data->data[i].size);
+      DataItem *item = data->get_item(i);
+      val.assign(item->key_data, item->key_size);
       out << "  - " << val.c_str() << std::endl;
     }
 
     out << "children: " << std::endl;
     for(int i = 0; i < data->count; i++) {
-        out << "  - " << dump_id(data->get_ptr(i)->resolve(), storage) << std::endl;
+        out << "  - " << dump_id(data->get_item(i)->value.resolve(), storage) << std::endl;
     }
     out << "---" << std::endl;
     for(int i = 0; i < data->count; i++) {
-      dump_node(out, data->get_ptr(i)->resolve(), storage);
+      dump_node(out, data->get_item(i)->value.resolve(), storage);
     }
   }
 };
 
+TableDumper table_dumper;
+#endif
 
 ValueDumper value_dumper;
 NullDumper null_dumper;
 CompressDumper compress_dumper;
 TrieDumper trie_dumper;
-TableDumper table_dumper;
 
 DumpBase* dumpers[] = {
   &value_dumper,
   &null_dumper,
   &compress_dumper,
-  &compress_dumper,
-  &compress_dumper,
   &trie_dumper,
+#ifndef PURE_TRIE
   &table_dumper
+#endif
 };
 
 void dump_node(std::ostream& out, any_ptr ptr, Storage* storage, int upper) {

@@ -15,9 +15,7 @@ struct Trace;
 enum NodeTypes {
   kValue = 0,
   kNull,
-  kCompressedTrie,
-  kCompressedTable,
-  kCompressedLeaf,
+  kCompressed,
   kTrie,
   kTable,
 };
@@ -81,8 +79,8 @@ struct CompressedData : public Node {
     memcpy(keys, key.data(), key.size());
   }
 
-  static any_ptr build(Trace* trace, any_ptr next, const Slice& key, NodeTypes type);
-  static any_ptr eat_child(Trace* trace, CompressedData* child, const Slice& key);
+  void eat_child(Transition& self);
+  static any_ptr build(Trace* trace, any_ptr next, const Slice& key);
 };
 
 #pragma pack(0)

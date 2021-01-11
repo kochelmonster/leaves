@@ -1,0 +1,25 @@
+id: kCompressed-12288
+size: 3
+keys: "[a][b][k]"
+children: 
+  - kTable-45056
+---
+id: kTable-45056
+count: 2
+values:
+  - lmn
+  - lmo
+children: 
+  - kValue-12328
+  - kValue-12348
+---
+id: kValue-12328
+size: 6
+value: "[a][b][k][l][m][n]"
+children: []
+---
+id: kValue-12348
+size: 6
+value: "[a][b][k][l][m][o]"
+children: []
+---

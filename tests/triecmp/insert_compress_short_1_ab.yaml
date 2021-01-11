@@ -1,0 +1,23 @@
+id: kCompressed-8252
+size: 2
+keys: "[a][b]"
+children: 
+  - kValue-8212
+---
+id: kValue-8212
+size: 2
+value: "[a][b]"
+children: 
+  - kCompressed-8232
+---
+id: kCompressed-8232
+size: 5
+keys: "[c][d][e][f][g]"
+children: 
+  - kValue-4096
+---
+id: kValue-4096
+size: 7
+value: "[a][b][c][d][e][f][g]"
+children: []
+---

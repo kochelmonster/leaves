@@ -1,0 +1,56 @@
+id: kCompressed-8332
+size: 2
+keys: "[a][b]"
+children: 
+  - kValue-8192
+---
+id: kValue-8192
+size: 2
+value: "[a][b]"
+children: 
+  - kCompressed-8312
+---
+id: kCompressed-8312
+size: 1
+keys: "[c]"
+children: 
+  - kTrie-8252
+---
+id: kTrie-8252
+size: 1
+bits: 40
+bitindex: [6]
+children: 
+  - kTrie-8232
+---
+id: kTrie-8232
+size: 2
+bits: 30
+bitindex: [4, 5]
+byteindex: ["d", "e"]
+children: 
+  - kCompressed-8212
+  - kCompressed-8272
+---
+id: kCompressed-8212
+size: 3
+keys: "[e][f][g]"
+children: 
+  - kValue-4096
+---
+id: kValue-4096
+size: 7
+value: "[a][b][c][d][e][f][g]"
+children: []
+---
+id: kCompressed-8272
+size: 3
+keys: "[f][g][h]"
+children: 
+  - kValue-4140
+---
+id: kValue-4140
+size: 7
+value: "[a][b][c][e][f][g][h]"
+children: []
+---

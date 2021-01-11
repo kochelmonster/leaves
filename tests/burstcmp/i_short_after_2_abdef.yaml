@@ -1,0 +1,26 @@
+id: kTable-8192
+count: 3
+values:
+  - abcdefg
+  - abdef
+  - abhij
+children: 
+  - kValue-4096
+  - kValue-12308
+  - kValue-12288
+---
+id: kValue-4096
+size: 7
+value: "[a][b][c][d][e][f][g]"
+children: []
+---
+id: kValue-12308
+size: 5
+value: "[a][b][d][e][f]"
+children: []
+---
+id: kValue-12288
+size: 5
+value: "[a][b][h][i][j]"
+children: []
+---

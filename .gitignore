@@ -2,5 +2,6 @@ build
 .waf*
 waf
 .lock*
+.tags*
 .gcov
 graphs

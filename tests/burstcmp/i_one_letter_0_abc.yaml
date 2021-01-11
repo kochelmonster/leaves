@@ -1,0 +1,12 @@
+id: kTable-24576
+count: 1
+values:
+  - abc
+children: 
+  - kValue-4096
+---
+id: kValue-4096
+size: 3
+value: "[a][b][c]"
+children: []
+---

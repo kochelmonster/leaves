@@ -1,0 +1,85 @@
+id: kCompressed-16384
+size: 3
+keys: "[a][b][c]"
+children: 
+  - kTrie-16404
+---
+id: kTrie-16404
+size: 1
+bits: 40
+bitindex: [6]
+children: 
+  - kTrie-4316
+---
+id: kTrie-4316
+size: 5
+bits: 1f0
+bitindex: [4, 5, 6, 7, 8]
+byteindex: ["d", "e", "f", "g", "h"]
+children: 
+  - kTable-12288
+  - kTable-36864
+  - kTable-40960
+  - kTable-45056
+  - kTable-8192
+---
+id: kTable-12288
+count: 1
+values:
+  - efg
+children: 
+  - kValue-4096
+---
+id: kValue-4096
+size: 7
+value: "[a][b][c][d][e][f][g]"
+children: []
+---
+id: kTable-36864
+count: 1
+values:
+  - fghi
+children: 
+  - kValue-4140
+---
+id: kValue-4140
+size: 8
+value: "[a][b][c][e][f][g][h][i]"
+children: []
+---
+id: kTable-40960
+count: 1
+values:
+  - ghij
+children: 
+  - kValue-4184
+---
+id: kValue-4184
+size: 8
+value: "[a][b][c][f][g][h][i][j]"
+children: []
+---
+id: kTable-45056
+count: 1
+values:
+  - hijk
+children: 
+  - kValue-4228
+---
+id: kValue-4228
+size: 8
+value: "[a][b][c][g][h][i][j][k]"
+children: []
+---
+id: kTable-8192
+count: 1
+values:
+  - ijkl
+children: 
+  - kValue-4272
+---
+id: kValue-4272
+size: 8
+value: "[a][b][c][h][i][j][k][l]"
+children: []
+---

@@ -1,0 +1,33 @@
+id: kTable-24576
+count: 4
+values:
+  - abc
+  - abchij
+  - abk
+  - abkmo
+children: 
+  - kValue-4096
+  - kValue-4116
+  - kValue-4136
+  - kValue-4156
+---
+id: kValue-4096
+size: 3
+value: "[a][b][c]"
+children: []
+---
+id: kValue-4116
+size: 6
+value: "[a][b][c][h][i][j]"
+children: []
+---
+id: kValue-4136
+size: 3
+value: "[a][b][k]"
+children: []
+---
+id: kValue-4156
+size: 5
+value: "[a][b][k][m][o]"
+children: []
+---

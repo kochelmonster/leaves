@@ -122,9 +122,10 @@ struct MemoryPool {
 };
 
 struct PageManager {
+  #define FREE_POOL_SIZE  4
   size_t free_count;
   size_t db_size;
-  offset_ptr next_free;
+  offset_ptr next_free[4]; // 1..4 pages
   offset_ptr next_page;
 
   void init(size_t db_size, any_ptr start);
@@ -169,6 +170,7 @@ struct Storage {
   mapped_region region;
   size_t grow_size;
   uint16_t burst_size;  // size for burst tables in pages
+  uint16_t max_key_size;
 };
 
 
@@ -189,7 +191,7 @@ inline int pool_index(size_t size) {
   }
   POOL(3072, 10);
   POOL(4096, -1);
-  POOL(5129, 11);
+  POOL(5120, 11);
   POOL(6144, 12);
   POOL(7168, 13);
   POOL(8192, 14);

@@ -23,7 +23,7 @@ size_t pool_sizes[] = {
   2048,     8,
   2560,     5,
   3072,     6,
-  5129,     7,
+  5120,     8,
   6144,     6,
   7168,     7,
   8192,     4,
@@ -38,6 +38,7 @@ Storage::Storage(const char* path, const Options& options) {
   size_t fsize = 0;
 
   burst_size = options.burst_size;
+  max_key_size = (((burst_size*PAGE_SIZE)-sizeof(TableData))/sizeof(DataItem))/MIN_BURST_ITEMS;
 
   fs::file_status fstat(fs::status(path));
   if (fs::is_regular_file(fstat))
@@ -133,7 +134,8 @@ size_t page_count(size_t size) {
 void PageManager::init(size_t db_size_, any_ptr start) {
   db_size = db_size_;
   free_count = 0;
-  next_free = offset_ptr();
+  for(size_t i = 0; i < FREE_POOL_SIZE; i++)
+    next_free[i] = offset_ptr();
   next_page = start;
 }
 
@@ -141,12 +143,12 @@ any_ptr PageManager::allocate(size_t size) {
   any_ptr result;
   size = page_count(size);
 
-  if (size == 1 && next_free) {
-    result = next_free.resolve();
-    next_free = *result.next;
+  if (size <= FREE_POOL_SIZE && next_free[size-1]) {
+    result = next_free[size-1].resolve();
+    next_free[size-1] = *result.next;
     free_count--;
     result.header->inpool = false;
-    result.header->pages = 1;
+    result.header->pages = size;
     return result;
   }
 
@@ -162,11 +164,20 @@ any_ptr PageManager::allocate(size_t size) {
 
 void PageManager::free(any_ptr ptr) {
   size_t size = ptr.header->pages;
-  for(size_t i=0; i < size; i++) {
+  while(size > 0) {
     free_count++;
-    *(ptr.next) = next_free;
-    next_free = ptr;
-    ptr.as_int += PAGE_SIZE;
+    if (size > FREE_POOL_SIZE) {
+      *(ptr.next) = next_free[FREE_POOL_SIZE-1];
+      next_free[FREE_POOL_SIZE-1] = ptr;
+      ptr.as_int += FREE_POOL_SIZE*PAGE_SIZE;
+      size -= FREE_POOL_SIZE;
+    }
+    else {
+      *(ptr.next) = next_free[size-1];
+      next_free[size-1] = ptr;
+      ptr.as_int += size*PAGE_SIZE;
+      size = 0;
+    }
   }
 }
 

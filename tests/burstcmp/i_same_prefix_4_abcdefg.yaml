@@ -1,0 +1,50 @@
+id: kCompressed-4216
+size: 3
+keys: "[a][b][c]"
+children: 
+  - kValue-4096
+---
+id: kValue-4096
+size: 3
+value: "[a][b][c]"
+children: 
+  - kCompressed-4196
+---
+id: kCompressed-4196
+size: 1
+keys: "[d]"
+children: 
+  - kValue-4116
+---
+id: kValue-4116
+size: 4
+value: "[a][b][c][d]"
+children: 
+  - kTable-32768
+---
+id: kTable-32768
+count: 3
+values:
+  - e
+  - ef
+  - efg
+children: 
+  - kValue-4136
+  - kValue-4156
+  - kValue-28672
+---
+id: kValue-4136
+size: 5
+value: "[a][b][c][d][e]"
+children: []
+---
+id: kValue-4156
+size: 6
+value: "[a][b][c][d][e][f]"
+children: []
+---
+id: kValue-28672
+size: 7
+value: "[a][b][c][d][e][f][g]"
+children: []
+---

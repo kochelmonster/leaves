@@ -46,6 +46,7 @@ struct Trie : public NodeHandler {
   int advance(Transition& self, const Slice& key);
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);
+  bool one_branch(Transition& self);
 };
 
 
@@ -115,6 +116,8 @@ inline uint8_t lower(uint8_t value) {
   return (value & 0x0F);
 }
 } // namespace bit
+
+extern Trie trie_handler;
 
 } // namespace leaves
 #endif // _LARCH_LEAVES_TRIE_HPP

@@ -70,11 +70,8 @@ static double FLAGS_compression_ratio = 0.5;
 // Print histogram of operation timings
 static bool FLAGS_histogram = false;
 
-// count of items in a segregated area
-static int FLAGS_area_count = 2000;
-
 // count of items in burst tables
-static int FLAGS_table_count = 128;
+static int FLAGS_burst_size = 1;
 
 
 // If true, do not destroy the existing database.  If you set this
@@ -328,13 +325,12 @@ class Benchmark {
     if (db_) {
       leaves::Stats stats;
       db_->get_stats(stats);
-      fprintf(stderr, "grow_size     :     %ld\n", stats.grow_size);
-      fprintf(stderr, "table_count   :     %ld\n", stats.table_count);
-      fprintf(stderr, "area_count    :     %ld\n", stats.area_count);
+      fprintf(stderr, "grow_size   :     %ld\n", stats.grow_size);
+      fprintf(stderr, "burst_size  :     %ld\n", stats.burst_size);
 
-      for(int i = 0; i < MAIN_POOL_COUNT+stats.value_pool_count; i++) {
-        fprintf(stderr, "used_nodes [%i]:     %ld\n", i, stats.used_nodes[i]);
-        fprintf(stderr, "freed_nodes[%i]:     %ld\n", i, stats.freed_nodes[i]);
+      for(int i = 0; i < 5; i++) {
+        fprintf(stderr, "used_nodes[%i]:     %ld\n", i, stats.pools[i].used_nodes);
+        fprintf(stderr, "free_nodes[%i]:     %ld\n", i, stats.pools[i].free_nodes);
       }
     }
   }
@@ -455,8 +451,7 @@ class Benchmark {
     leaves::Options options;
     options.max_db_size = 1<<30;
     options.grow_size = 1<<25;
-    options.area_count = FLAGS_area_count;
-    options.table_count = FLAGS_table_count;
+    options.burst_size = FLAGS_burst_size;
     db_ = leaves::DB::open(test_fname.c_str(), options);
   }
 
@@ -583,10 +578,8 @@ int main(int argc, char** argv) {
       FLAGS_reads = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {
       FLAGS_value_size = n;
-    } else if (sscanf(argv[i], "--area_count=%d%c", &n, &junk) == 1) {
-      FLAGS_area_count = n;
     } else if (sscanf(argv[i], "--burst_count=%d%c", &n, &junk) == 1) {
-      FLAGS_table_count = n;
+      FLAGS_burst_size = n;
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {

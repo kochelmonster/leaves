@@ -1,0 +1,44 @@
+id: kCompressed-4196
+size: 1
+keys: "[a]"
+children: 
+  - kTrie-4176
+---
+id: kTrie-4176
+size: 1
+bits: 10
+bitindex: [4]
+children: 
+  - kTrie-28672
+---
+id: kTrie-28672
+size: 4
+bits: d008
+bitindex: [3, 12, 14, 15]
+byteindex: ["C", "L", "N", "O"]
+children: 
+  - kValue-4376
+  - kValue-4396
+  - kValue-4416
+  - kValue-4436
+---
+id: kValue-4376
+size: 2
+value: "[a][C]"
+children: []
+---
+id: kValue-4396
+size: 2
+value: "[a][L]"
+children: []
+---
+id: kValue-4416
+size: 2
+value: "[a][N]"
+children: []
+---
+id: kValue-4436
+size: 2
+value: "[a][O]"
+children: []
+---
