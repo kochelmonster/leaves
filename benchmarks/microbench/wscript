@@ -19,24 +19,23 @@ def configure_leaves(cfg):
 
     leaves_path = Path(cfg.srcnode.abspath()).parents[1]
 
-    cfg.env.DEFINES_LEAVES = ["NDEBUG", "LEVELDB_PLATFORM_POSIX", "AREA_COUNT", "PURE_TRIE"]
-    cfg.env.CXXFLAGS_LEAVES = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
-                               f"-I{gtest_path}", f"-I{leaves_path/'include'}", "-O3",
-                               "-std=c++17"]
-    cfg.env.LINKFLAGS_LEAVES = [
-        f"-L{leveldb_lib_path}", "-lleveldb", "-lpthread",]
+    cfg.env.DEFINES_LEAVES = ["NDEBUG"]
+    cfg.env.LINKFLAGS_LEAVES = [f"-L{leveldb_lib_path}", "-lleveldb", "-lpthread",]
         # f"-L{leaves_path/'build'}", "-lleaves"]
 
+    cfg.env.CXXFLAGS_LEAVES = ["-O3"]
     if False:
-        cfg.env.DEFINES_LEAVES = ["LEVELDB_PLATFORM_POSIX", "AREA_COUNT"]
-        cfg.env.CXXFLAGS_LEAVES = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
-                                   f"-I{gtest_path}", f"-I{leaves_path/'include'}", "-g",
-                                   "-std=c++17"]
+        cfg.env.DEFINES_LEAVES = ["LEVELDB_PLATFORM_POSIX"]
+        cfg.env.CXXFLAGS_LEAVES = [ "-g"]
 
     if False:
-        cfg.env.CXXFLAGS_LEAVES = [f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}",
-                                   f"-I{gtest_path}", f"-I{leaves_path/'include'}", "-g", "-O3",
-                                   "-std=c++17"]
+        cfg.env.CXXFLAGS_LEAVES = ["-g", "-O3"]
+
+    cfg.env.DEFINES_LEAVES += ["PURE_TRIE"]
+    cfg.env.DEFINES_LEAVES += ["LEVELDB_PLATFORM_POSIX"]
+    cfg.env.CXXFLAGS_LEAVES += [
+        f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}", f"-I{gtest_path}",
+        f"-I{leaves_path/'include'}", "-std=c++17", "-march=native"]
 
 
 def configure_mdb(cfg):

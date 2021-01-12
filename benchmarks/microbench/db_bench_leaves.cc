@@ -327,10 +327,23 @@ class Benchmark {
       db_->get_stats(stats);
       fprintf(stderr, "grow_size   :     %ld\n", stats.grow_size);
       fprintf(stderr, "burst_size  :     %ld\n", stats.burst_size);
+      fprintf(stderr, "max_depth   :     %ld\n", stats.max_depth);
+      fprintf(stderr, "free_pages  :     %ld\n", stats.free_pages);
 
       for(int i = 0; i < 5; i++) {
         fprintf(stderr, "used_nodes[%i]:     %ld\n", i, stats.pools[i].used_nodes);
         fprintf(stderr, "free_nodes[%i]:     %ld\n", i, stats.pools[i].free_nodes);
+      }
+
+      /*for(auto i=stats.burst_tables.begin(); i != stats.burst_tables.end(); ++i) {
+        fprintf(stderr, "burst: %d -> %d\n", i->first, i->second);
+      }*/
+
+      for (int i = 0; i < 256; i++) {
+        size_t count = stats.tries_nodes[i];
+        if (count) {
+          fprintf(stderr, "trie nodes with %i children: %ld\n", i, count);
+        }
       }
     }
   }

@@ -22,9 +22,10 @@ offset_ptr* Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
 
 offset_ptr* Trie::ifind(Transition& self, char key) {
   self.key = bit::upper(key);
-  self.lower.key = bit::lower(key);
-  if (self.lower.set(self.trie->find(self)))
+  if (self.lower.set(self.trie->find(self))) {
+    self.lower.key = bit::lower(key);
     return self.lower.trie->find(self.lower);
+  }
   return NULL;
 }
 
@@ -142,9 +143,9 @@ void Trie::report(offset_ptr* node, Stats& stats) {
   uint16_t count = 0;
   upper.set(node);
   lower.set(upper.trie->first(upper));
-  {
+  do {
     offset_ptr *next = lower.trie->first(lower);
-    {
+    do {
       count++;
       Transition::handlers[next->resolve().node->type]->report(next, stats);
     } while((next = lower.trie->next(lower)));

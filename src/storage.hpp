@@ -58,10 +58,7 @@ struct offset_ptr {
      -> we keep the same address space by multiplying the delta with 8
         and use the spared 3 bit for specifying the node type.
   */
-  struct {
-    int64_t data:8;
-    int64_t delta:56;
-  };
+  int64_t delta;
 
   offset_ptr() : delta(0) {}
   offset_ptr(const offset_ptr& other) { *this = other; }
