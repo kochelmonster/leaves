@@ -87,7 +87,7 @@ inline void insert(Storage& storage, const Slice& key, const char* test_name) {
   trace.set_value(key);
   check_graph(test_name, storage);
   BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
+  BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), key.string());
 }
 
 
@@ -109,7 +109,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
   for(strings_t::iterator i=strings.begin(); i != strings.end(); i++, trace.next()) {
     std::cout << "find \"" << *i << "\"";
     BOOST_REQUIRE(trace.valid());
-    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(!trace.valid());
@@ -121,7 +121,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
   for(strings_t::reverse_iterator i=strings.rbegin(); i != strings.rend(); i++, trace.prev()) {
     std::cout << "find \"" << *i << "\"";
     BOOST_REQUIRE(trace.valid());
-    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(!trace.valid());
@@ -142,25 +142,25 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     std::cout << "find \"" << find << "\"";
     trace.find(find);
     BOOST_REQUIRE(trace.valid());
-    BOOST_REQUIRE_EQUAL(trace.current_key, find);
+    BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), find);
     BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
     if (*i > 0) {
       trace.prev();
       BOOST_REQUIRE(trace.valid());
-      BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i-1]);
+      BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), strings[*i-1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i-1]);
     }
 
     if (*i < (int)strings.size()-1) {
       trace.find(find);
       BOOST_REQUIRE(trace.valid());
-      BOOST_REQUIRE_EQUAL(trace.current_key, find);
+      BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), find);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
       trace.next();
       BOOST_REQUIRE(trace.valid());
-      BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i+1]);
+      BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), strings[*i+1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i+1]);
     }
 

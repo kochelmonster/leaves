@@ -4,26 +4,25 @@
 namespace leaves {
 
 
-offset_ptr* ifirst(Transition& transition, string& current_key) {
+offset_ptr* ifirst(Transition& transition, KeyString& current_key) {
   return transition.first(current_key);
 }
 
-offset_ptr* ilast(Transition& transition, string& current_key) {
+offset_ptr* ilast(Transition& transition, KeyString& current_key) {
   return transition.last(current_key);
 }
 
-offset_ptr* inext(Transition& transition, string& current_key) {
+offset_ptr* inext(Transition& transition, KeyString& current_key) {
   return transition.next(current_key);
 }
 
-offset_ptr* iprev(Transition& transition, string& current_key) {
+offset_ptr* iprev(Transition& transition, KeyString& current_key) {
   return transition.prev(current_key);
 }
 
 
 Trace::Trace(Storage& storage, offset_ptr* root_)
       : storage(storage), stack(*this), root(root_), version(storage.header->version) {
-  current_key.reserve(1024);
   if (!root_)
     root = &storage.header->root;
 }
@@ -68,7 +67,7 @@ void Trace::remove() {
   update();
 
   storage.free(ipop_value());
-  current_key.clear();
+  current_key.resize(0);
 
   storage.header->version++;
 }
@@ -105,7 +104,7 @@ void Trace::prev() {
 
 void Trace::imove_end(move_func_t move) {
   rest_key = Slice();
-  current_key.clear();
+  current_key.resize(0);
   stack.clear();
   stack.push_back(root);
   while(true) {

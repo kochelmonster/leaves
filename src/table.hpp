@@ -62,18 +62,18 @@ struct TableData : public Node {
   bool remove(Transition& self, int index);
   int advance(const Slice& key, int index);
 
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key);
+  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key);
   offset_ptr* ifind(Transition& self, const Slice& key);
-  offset_ptr* next(Transition& self, string& current_key);
-  offset_ptr* prev(Transition& self, string& current_key);
-  offset_ptr* first(Transition& self, string& current_key);
-  offset_ptr* last(Transition& self, string& current_key);
+  offset_ptr* next(Transition& self, KeyString& current_key);
+  offset_ptr* prev(Transition& self, KeyString& current_key);
+  offset_ptr* first(Transition& self, KeyString& current_key);
+  offset_ptr* last(Transition& self, KeyString& current_key);
 
   void split(Transition& self, const Slice& key, any_ptr val_ptr);
   void trie_split(Transition& self, int split_pos);
   bool remove(Transition& self);
-  offset_ptr* fill(Transition& self, string& current_key);
-  void cut(Transition& self, string& current_key);
+  offset_ptr* fill(Transition& self, KeyString& current_key);
+  void cut(Transition& self, KeyString& current_key);
   int compare_item(int index, const Slice& other);
 
   DataItem* get_item(uint16_t index);
@@ -89,11 +89,11 @@ struct TableData : public Node {
 
 
 struct Table : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key);
-  offset_ptr* next(Transition& self, string& current_key);
-  offset_ptr* first(Transition& self, string& current_key);
-  offset_ptr* prev(Transition& self, string& current_key);
-  offset_ptr* last(Transition& self, string& current_key);
+  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key);
+  offset_ptr* next(Transition& self, KeyString& current_key);
+  offset_ptr* first(Transition& self, KeyString& current_key);
+  offset_ptr* prev(Transition& self, KeyString& current_key);
+  offset_ptr* last(Transition& self, KeyString& current_key);
   int advance(Transition& self, const Slice& key);
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);
@@ -110,20 +110,20 @@ inline DataItem* TableData::prepare_item(int index, size_t key_size) {
   return get_item(index);
 }
 
-inline offset_ptr* TableData::fill(Transition& self, string& current_key) {
+inline offset_ptr* TableData::fill(Transition& self, KeyString& current_key) {
   DataItem* item = get_item(self.index);
   current_key.append(item->key_data, item->key_size);
   return &item->value;
 }
 
-inline void TableData::cut(Transition& self, string& current_key) {
+inline void TableData::cut(Transition& self, KeyString& current_key) {
   if (self.cmp == 0) {
     DataItem* item = get_item(self.index);
     current_key.resize(current_key.size()-item->key_size);
   }
 }
 
-inline offset_ptr* TableData::next(Transition& self, string& current_key) {
+inline offset_ptr* TableData::next(Transition& self, KeyString& current_key) {
   cut(self, current_key);
   if (self.cmp > 0) {
     self.cmp = 0;
@@ -134,7 +134,7 @@ inline offset_ptr* TableData::next(Transition& self, string& current_key) {
   return ++self.index < count ? fill(self, current_key) : NULL;
 }
 
-inline offset_ptr* TableData::prev(Transition& self, string& current_key) {
+inline offset_ptr* TableData::prev(Transition& self, KeyString& current_key) {
   cut(self, current_key);
   if (self.cmp < 0) {
     self.cmp = 0;
@@ -144,13 +144,13 @@ inline offset_ptr* TableData::prev(Transition& self, string& current_key) {
   return (--self.index >= 0) ? fill(self, current_key) : NULL;
 }
 
-inline offset_ptr* TableData::first(Transition& self, string& current_key) {
+inline offset_ptr* TableData::first(Transition& self, KeyString& current_key) {
   self.index = 0;
   self.cmp = 0;
   return fill(self, current_key);
 }
 
-inline offset_ptr* TableData::last(Transition& self, string& current_key) {
+inline offset_ptr* TableData::last(Transition& self, KeyString& current_key) {
   self.index = count - 1;
   self.cmp = 0;
   return fill(self, current_key);

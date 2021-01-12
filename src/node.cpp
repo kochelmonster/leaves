@@ -17,7 +17,7 @@ namespace leaves {
 struct Value : public NodeHandler {
   bool valid() const { return true; }
 
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
+  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) {
     if (key.size()) {
       self.cmp = 1;
       if (self.value->next)
@@ -27,7 +27,7 @@ struct Value : public NodeHandler {
     return NULL;
   }
 
-  offset_ptr* next(Transition& self, string& current_key) {
+  offset_ptr* next(Transition& self, KeyString& current_key) {
     if (self.cmp == 0) {
       self.cmp = 1;
       return self.value->next ? &self.value->next : NULL;
@@ -35,12 +35,12 @@ struct Value : public NodeHandler {
     return NULL;
   }
 
-  offset_ptr* first(Transition& self, string& key) {
+  offset_ptr* first(Transition& self, KeyString& key) {
     self.cmp = 0;
     return NULL;
   }
 
-  offset_ptr* prev(Transition& self, string& current_key) {
+  offset_ptr* prev(Transition& self, KeyString& current_key) {
     if (self.cmp == 1) {
       self.cmp = 0;
       /* a hack (see trace.imove)
@@ -51,7 +51,7 @@ struct Value : public NodeHandler {
     return NULL;
   }
 
-  offset_ptr* last(Transition& self, string& current_key) {
+  offset_ptr* last(Transition& self, KeyString& current_key) {
     self.cmp = 1;
     return self.value->next ? &self.value->next : NULL;
   }
@@ -84,7 +84,7 @@ struct Value : public NodeHandler {
 };
 
 struct Compressed : public NodeHandler {
-  offset_ptr* move(Transition& self, string& current_key, bool do_it) {
+  offset_ptr* move(Transition& self, KeyString& current_key, bool do_it) {
     CompressedData* node = self.compressed;
     if (do_it) {
       self.cmp = 0;
@@ -98,20 +98,20 @@ struct Compressed : public NodeHandler {
     return NULL;
   }
 
-  offset_ptr* next(Transition& self, string& current_key) {
+  offset_ptr* next(Transition& self, KeyString& current_key) {
     return move(self, current_key, self.cmp < 0);
   }
 
-  offset_ptr* first(Transition& self, string& current_key) {
+  offset_ptr* first(Transition& self, KeyString& current_key) {
     self.cmp = -1;
     return self.next(current_key);
   }
 
-  offset_ptr* prev(Transition& self, string& current_key) {
+  offset_ptr* prev(Transition& self, KeyString& current_key) {
     return move(self, current_key, self.cmp > 0);
   }
 
-  offset_ptr* last(Transition& self, string& current_key) {
+  offset_ptr* last(Transition& self, KeyString& current_key) {
     self.cmp = 1;
     return self.prev(current_key);
   }
@@ -127,8 +127,8 @@ struct Compressed : public NodeHandler {
     return true;
   }
 
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) {
-    if (!(self.cmp = self.compressed->find(key, current_key))) {
+  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) {
+    if (!(self.cmp = self.compressed->find(key))) {
       key.iadvance(self.compressed->size);
       current_key.append(self.compressed->keys, self.compressed->size);
       return &self.compressed->next;
@@ -193,11 +193,11 @@ struct Compressed : public NodeHandler {
 
 
 struct Null : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key) { return NULL; }
-  offset_ptr* next(Transition& self, string& current_key) { return NULL; }
-  offset_ptr* first(Transition& self, string& current_key) { return NULL; }
-  offset_ptr* prev(Transition& self, string& current_key) { return NULL; }
-  offset_ptr* last(Transition& self, string& current_key) { return NULL; }
+  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) { return NULL; }
+  offset_ptr* next(Transition& self, KeyString& current_key) { return NULL; }
+  offset_ptr* first(Transition& self, KeyString& current_key) { return NULL; }
+  offset_ptr* prev(Transition& self, KeyString& current_key) { return NULL; }
+  offset_ptr* last(Transition& self, KeyString& current_key) { return NULL; }
   void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
 #ifdef PURE_TRIE
     self.set(CompressedData::build(self.trace, val_ptr, key));

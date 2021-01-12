@@ -38,12 +38,12 @@ struct TrieData : public Node {
 
 
 struct Trie : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, string& current_key);
+  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key);
   offset_ptr* ifind(Transition& self, char key);
-  offset_ptr* next(Transition& self, string& current_key);
-  offset_ptr* first(Transition& self, string& current_key);
-  offset_ptr* prev(Transition& self, string& current_key);
-  offset_ptr* last(Transition& self, string& current_key);
+  offset_ptr* next(Transition& self, KeyString& current_key);
+  offset_ptr* first(Transition& self, KeyString& current_key);
+  offset_ptr* prev(Transition& self, KeyString& current_key);
+  offset_ptr* last(Transition& self, KeyString& current_key);
   int advance(Transition& self, const Slice& key);
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);

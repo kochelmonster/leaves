@@ -8,23 +8,23 @@
 
 namespace leaves {
 
-offset_ptr* Table::find(Transition& self, ISlice& key, string& current_key) {
+offset_ptr* Table::find(Transition& self, ISlice& key, KeyString& current_key) {
   return self.table->find(self, key, current_key);
 }
 
-offset_ptr* Table::next(Transition& self, string& current_key) {
+offset_ptr* Table::next(Transition& self, KeyString& current_key) {
   return self.table->next(self, current_key);
 }
 
-offset_ptr* Table::first(Transition& self, string& current_key) {
+offset_ptr* Table::first(Transition& self, KeyString& current_key) {
   return self.table->first(self, current_key);
 }
 
-offset_ptr* Table::prev(Transition& self, string& current_key) {
+offset_ptr* Table::prev(Transition& self, KeyString& current_key) {
   return self.table->prev(self, current_key);
 }
 
-offset_ptr* Table::last(Transition& self, string& current_key) {
+offset_ptr* Table::last(Transition& self, KeyString& current_key) {
   return self.table->last(self, current_key);
 }
 
@@ -46,7 +46,7 @@ Table table_handler;
 ---------------------------------------------------------------------------------
 */
 
-offset_ptr* TableData::find(Transition& self, ISlice& key, string& current_key) {
+offset_ptr* TableData::find(Transition& self, ISlice& key, KeyString& current_key) {
   offset_ptr* result = ifind(self, key);
   if (result) {
     DataItem* item = get_item(self.index);

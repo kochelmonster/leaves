@@ -4,9 +4,10 @@
 #include "storage.hpp"
 #include "node.hpp"
 
+
 namespace leaves {
 
-typedef offset_ptr* (*move_func_t)(Transition& transition, string& current_key);
+typedef offset_ptr* (*move_func_t)(Transition& transition, KeyString& current_key);
 
 struct Trace;
 
@@ -34,7 +35,6 @@ struct Stack {
   stack_type data;
 };
 
-
 struct Trace {
   Trace(Storage& storage, offset_ptr* root_=NULL);
   bool valid() const { return rest_key.empty() && stack.back().valid(); }
@@ -61,7 +61,7 @@ struct Trace {
   Stack stack;
   offset_ptr* root;
   ISlice rest_key;
-  string current_key;
+  KeyString current_key;
   uint64_t version;
 };
 
@@ -82,7 +82,7 @@ inline void Trace::free(any_ptr ptr) {
 inline void Trace::update() {
   while(version != storage.header->version) {
     // restore trace after another cursor changed the trie.
-    find(current_key);
+    find(current_key.slice());
   }
 }
 

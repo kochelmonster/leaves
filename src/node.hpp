@@ -34,6 +34,25 @@ struct ISlice : public Slice {
   }
 };
 
+struct KeyString {
+  KeyString() : _size(0) {}
+
+  Slice slice() const { return Slice(_data, _size); }
+  size_t size() const { return _size; }
+  void push_back(char c) { _data[_size++] = c; }
+  void pop_back() { _size--; }
+  void resize(size_t size) { _size = size; }
+
+  void append(const char* data, size_t size) {
+    memcpy(_data+_size, data, size);
+    _size += size;
+  }
+
+
+  char _data[MAX_KEY_SIZE];
+  uint16_t _size;
+};
+
 
 #pragma pack(2)
 
@@ -64,7 +83,7 @@ struct CompressedData : public Node {
     return size+sizeof(CompressedData);
   }
 
-  int find(ISlice& key, string& current_key) {
+  int find(ISlice& key) {
     size_t size_ = std::min(key.size(), (size_t)size);
     int cmp = sign(memcmp(key.data(), keys, size));
     if (cmp == 0) {
@@ -110,11 +129,11 @@ struct TransitionData {
 struct Transition : public TransitionData {
   void init(offset_ptr* pptr);
   bool valid() const;
-  offset_ptr* find(ISlice& key, string& current_key);
-  offset_ptr* next(string& current_key);
-  offset_ptr* prev(string& current_key);
-  offset_ptr* first(string& current_key);
-  offset_ptr* last(string& current_key);
+  offset_ptr* find(ISlice& key, KeyString& current_key);
+  offset_ptr* next(KeyString& current_key);
+  offset_ptr* prev(KeyString& current_key);
+  offset_ptr* first(KeyString& current_key);
+  offset_ptr* last(KeyString& current_key);
   int advance(const Slice& key);
   void insert(const Slice& key, any_ptr val_ptr);
   bool remove();
@@ -128,11 +147,11 @@ struct Transition : public TransitionData {
 
 
 struct NodeHandler {
-  virtual offset_ptr* find(Transition& self, ISlice& key, string& current_key) = 0;
-  virtual offset_ptr* next(Transition& self, string& current_key) = 0;
-  virtual offset_ptr* first(Transition& self, string& current_key) = 0;
-  virtual offset_ptr* prev(Transition& self, string& current_key) = 0;
-  virtual offset_ptr* last(Transition& self, string& current_key) = 0;
+  virtual offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) = 0;
+  virtual offset_ptr* next(Transition& self, KeyString& current_key) = 0;
+  virtual offset_ptr* first(Transition& self, KeyString& current_key) = 0;
+  virtual offset_ptr* prev(Transition& self, KeyString& current_key) = 0;
+  virtual offset_ptr* last(Transition& self, KeyString& current_key) = 0;
   virtual void insert(Transition& self, const Slice& key, any_ptr val_ptr) = 0;
   virtual bool remove(Transition& self) = 0;
   virtual int advance(Transition& self, const Slice& key) = 0;
@@ -161,23 +180,23 @@ inline void Transition::init(offset_ptr* pptr) {
   node = node_ptr->resolve().node;
 }
 
-inline offset_ptr* Transition::find(ISlice& key, string& current_key) {
+inline offset_ptr* Transition::find(ISlice& key, KeyString& current_key) {
   return handler()->find(*this, key, current_key);
 }
 
-inline offset_ptr* Transition::next(string& current_key) {
+inline offset_ptr* Transition::next(KeyString& current_key) {
   return handler()->next(*this, current_key);
 }
 
-inline offset_ptr* Transition::first(string& current_key) {
+inline offset_ptr* Transition::first(KeyString& current_key) {
   return handler()->first(*this, current_key);
 }
 
-inline offset_ptr* Transition::prev(string& current_key) {
+inline offset_ptr* Transition::prev(KeyString& current_key) {
   return handler()->prev(*this, current_key);
 }
 
-inline offset_ptr* Transition::last(string& current_key) {
+inline offset_ptr* Transition::last(KeyString& current_key) {
   return handler()->last(*this, current_key);
 }
 

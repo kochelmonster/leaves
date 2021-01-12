@@ -23,7 +23,7 @@ struct CursorImpl : public Cursor {
   void last() { trace.last(); }
   void next() { trace.next(); }
   void prev() { trace.prev(); }
-  Slice key() const { return trace.current_key; }
+  Slice key() const { return trace.current_key.slice(); }
   Slice value() const {
     if (trace.valid()) return trace.get_value();
     throw NoValidPosition();

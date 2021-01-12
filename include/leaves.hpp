@@ -24,6 +24,7 @@ namespace leaves {
 #define MAIN_POOL_COUNT 5
 #define MAX_VALUE_POOL_COUNT 20
 #define MAX_DB_SIZE (((size_t)1)<<47)
+#define MAX_KEY_SIZE 1024
 
 
 

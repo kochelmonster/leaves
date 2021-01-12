@@ -6,7 +6,7 @@
 
 namespace leaves {
 
-offset_ptr* Trie::find(Transition& self, ISlice& key, string& current_key) {
+offset_ptr* Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
   if (key.empty()) {
     self.cmp = -1;
     return NULL;
@@ -28,7 +28,7 @@ offset_ptr* Trie::ifind(Transition& self, char key) {
   return NULL;
 }
 
-offset_ptr* Trie::next(Transition& self, string& current_key) {
+offset_ptr* Trie::next(Transition& self, KeyString& current_key) {
   offset_ptr* result = NULL;
 
   if (self.cmp == -1) {
@@ -53,14 +53,14 @@ offset_ptr* Trie::next(Transition& self, string& current_key) {
   return result;
 }
 
-offset_ptr* Trie::first(Transition& self, string& current_key) {
+offset_ptr* Trie::first(Transition& self, KeyString& current_key) {
   self.lower.set(self.trie->first(self));
   offset_ptr *result = self.lower.trie->first(self.lower);
   current_key.push_back(to_char(self));
   return result;
 }
 
-offset_ptr* Trie::prev(Transition& self, string& current_key) {
+offset_ptr* Trie::prev(Transition& self, KeyString& current_key) {
   offset_ptr *result = NULL;
 
   if (self.cmp == -1)
@@ -84,7 +84,7 @@ offset_ptr* Trie::prev(Transition& self, string& current_key) {
 }
 
 
-offset_ptr* Trie::last(Transition& self, string& current_key) {
+offset_ptr* Trie::last(Transition& self, KeyString& current_key) {
   self.lower.set(self.trie->last(self));
   offset_ptr *result = self.lower.trie->last(self.lower);
   current_key.push_back(to_char(self));
