@@ -49,6 +49,7 @@ struct Trie : public NodeHandler {
   bool remove(Transition& self);
   bool one_branch(Transition& self);
   char to_char(Transition& self);
+  void report(offset_ptr* node, Stats& stats);
 };
 
 inline char Trie::to_char(Transition& self) {
@@ -99,13 +100,8 @@ inline offset_ptr* TrieData::next(TransitionData& self) {
   uint16_t nbits = bits & (0xFFFF << (self.key+1));
   if (nbits) {
     self.key = ctz(nbits);
-    if (self.cmp) {
-      self.index = index_of(self.key);
-      self.cmp = 0;
-    }
-    else
-      self.index++;
-    return &children[self.index];
+    self.cmp = 0;
+    return &children[index_of(self.key)];
   }
   return NULL;
 }
@@ -122,13 +118,8 @@ inline offset_ptr* TrieData::prev(TransitionData& self) {
     uint16_t nbits = bits & (0xFFFF >> (16-self.key));
     if (nbits) {
       self.key = 15 - (clz(nbits) & 0xf);
-      if (self.cmp) {
-        self.index = index_of(self.key);
-        self.cmp = 0;
-      }
-      else
-        self.index--;
-      return &children[self.index];
+      self.cmp = 0;
+      return &children[index_of(self.key)];
     }
   }
   return NULL;

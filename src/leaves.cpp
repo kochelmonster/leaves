@@ -52,20 +52,7 @@ struct SingleDB : public DB {
     }
 
     void get_stats(Stats& stats) {
-      stats.max_db_size = storage.region.get_size();
-      stats.burst_size = storage.burst_size;
-      stats.grow_size = storage.grow_size;
-      //stats.segment_count = storage.segments.size();
-      for(size_t i = 0; i < 15; i++) {
-        stats.pools[i].node_size = storage.header->pools[i].node_size;
-        stats.pools[i].used_nodes = storage.header->pools[i].used_nodes;
-        stats.pools[i].free_nodes = storage.header->pools[i].free_nodes;
-      }
-      stats.free_pages = storage.header->memory.free_count;
-#ifndef PURE_TRIE
-      Trace trace(storage);
-      TableData::burst_report(trace, stats);
-#endif
+      storage.get_stats(stats);
     }
 
     Storage storage;

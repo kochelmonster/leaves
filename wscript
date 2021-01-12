@@ -58,7 +58,7 @@ def build(bld):
 
     bld.program(
         features="test",
-        source=join_test("test_storage.cpp")+join_source("storage.cpp"),
+        source=join_test("test_storage.cpp")+join_source(core),
         use="TEST BOOST",
         target="test_storage")
 

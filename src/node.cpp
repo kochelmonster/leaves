@@ -23,7 +23,13 @@ struct Value : public NodeHandler {
       if (self.value->next)
         return &self.value->next;
     }
-    else self.cmp = 0;
+    else
+      self.cmp = 0;
+    return NULL;
+  }
+
+  offset_ptr* first(Transition& self, KeyString& current_key) {
+    self.cmp = 0;
     return NULL;
   }
 
@@ -35,25 +41,21 @@ struct Value : public NodeHandler {
     return NULL;
   }
 
-  offset_ptr* first(Transition& self, KeyString& key) {
-    self.cmp = 0;
-    return NULL;
-  }
-
   offset_ptr* prev(Transition& self, KeyString& current_key) {
     if (self.cmp == 1) {
       self.cmp = 0;
-      /* a hack (see trace.imove)
-        if we come from node->next this value has to be returned
-      */
-      return self.value->next ? self.node_ptr : NULL;
+      return self.node_ptr;  // see trace.imove
     }
     return NULL;
   }
 
   offset_ptr* last(Transition& self, KeyString& current_key) {
-    self.cmp = 1;
-    return self.value->next ? &self.value->next : NULL;
+    if (self.value->next) {
+      self.cmp = 1;
+      return &self.value->next;
+    }
+    self.cmp = 0;
+    return NULL;
   }
 
   int advance(Transition& self, const Slice& key) {
@@ -81,6 +83,16 @@ struct Value : public NodeHandler {
   }
 
   bool remove(Transition& self) { assert(0); return false; };
+
+  void report(offset_ptr* node, Stats& stats) {
+    ValueData* value = node->resolve().value;
+    if (value->next) {
+      stats.intermediate_nodes++;
+      Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats);
+    }
+    else
+      stats.end_nodes++;
+  }
 };
 
 struct Compressed : public NodeHandler {
@@ -188,6 +200,13 @@ struct Compressed : public NodeHandler {
     val_ptr = CompressedData::build(self.trace, val_ptr, key);
     self.set(val_ptr);
     self.trace->free(node);
+  }
+
+  void report(offset_ptr* node, Stats& stats) {
+    CompressedData* value = node->resolve().compressed;
+    stats.intermediate_nodes++;
+    Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats);
+    stats.compressed_nodes++;
   }
 };
 

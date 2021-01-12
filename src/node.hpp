@@ -156,6 +156,7 @@ struct NodeHandler {
   virtual bool remove(Transition& self) = 0;
   virtual int advance(Transition& self, const Slice& key) = 0;
   virtual bool valid() const { return false; }
+  virtual void report(offset_ptr* node, Stats& stats) {}
 };
 
 
@@ -172,6 +173,7 @@ inline bool TransitionData::set(offset_ptr* pptr) {
     node = node_ptr->resolve().node;
     return true;
   }
+  node = NULL;
   return false;
 }
 

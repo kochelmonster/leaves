@@ -127,6 +127,26 @@ any_ptr Storage::mem_allocate(size_t size) {
   return result;
 }
 
+
+void Storage::get_stats(Stats& stats) {
+  stats.max_db_size = region.get_size();
+  stats.burst_size = burst_size;
+  stats.grow_size = grow_size;
+  //stats.segment_count = storage.segments.size();
+  for(size_t i = 0; i < 15; i++) {
+    stats.pools[i].node_size = header->pools[i].node_size;
+    stats.pools[i].used_nodes = header->pools[i].used_nodes;
+    stats.pools[i].free_nodes = header->pools[i].free_nodes;
+  }
+  stats.free_pages = header->memory.free_count;
+  memset(stats.tries_nodes, 0, sizeof(stats.tries_nodes));
+  stats.end_nodes = 0;
+  stats.intermediate_nodes = 0;
+  stats.compressed_nodes = 0;
+  Transition::handlers[header->root.resolve().node->type]->report(&header->root, stats);
+}
+
+
 size_t page_count(size_t size) {
   return (size+PAGE_SIZE/2) / PAGE_SIZE;
 }

@@ -169,6 +169,10 @@ struct Stats : public Options {
   size_t free_pages;
   size_t max_depth;
   std::map<int, int> burst_tables;
+  size_t tries_nodes[256];
+  size_t end_nodes;
+  size_t intermediate_nodes;
+  size_t compressed_nodes;
 };
 
 

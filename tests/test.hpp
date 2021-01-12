@@ -137,7 +137,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
   shuffle(indexes.begin(), indexes.end(), std::default_random_engine(42));
 
   for(ints_t::iterator i=indexes.begin(); i != indexes.end(); i++) {
-    std::string& find(strings[*i]);
+    std::string find(strings[*i]);
 
     std::cout << "find \"" << find << "\"";
     trace.find(find);
@@ -163,6 +163,31 @@ inline void test_movement(Storage& storage, strings_t& strings) {
       BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), strings[*i+1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i+1]);
     }
+
+    std::cout << std::endl;
+    // set cursor after find in a non valid position
+    find.push_back('!');
+    trace.find(find);
+    BOOST_REQUIRE(!trace.valid());
+    trace.prev();
+    find = strings[*i];
+    std::string cmp1 = trace.current_key.slice().string();
+    std::cout << "before cmp " << cmp1 << " == " << find << std::endl;
+    BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), find);
+    BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
+
+    // set cursor before find in a non valid position
+    find.back()--;
+    find.push_back('!');
+    trace.find(find);
+    BOOST_REQUIRE(!trace.valid());
+    trace.next();
+    find = strings[*i];
+    cmp1 = trace.current_key.slice().string();
+    std::cout << "after cmp " << cmp1 << " == " << find << std::endl;
+
+    BOOST_REQUIRE_EQUAL(trace.current_key.slice().string(), find);
+    BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
     std::cout << " ok" << std::endl;
   }
@@ -199,6 +224,8 @@ inline void test_insertion(Storage& storage, const char* title, const char* keys
     strings.push_back(keys[i]);
   }
   test_movement(storage, strings);
+  Stats stats;
+  storage.get_stats(stats);
 }
 
 

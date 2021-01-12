@@ -136,6 +136,24 @@ bool Trie::remove(Transition& self) {
   return true;
 }
 
+void Trie::report(offset_ptr* node, Stats& stats) {
+  TransitionData upper;
+  TransitionData lower;
+  uint16_t count = 0;
+  upper.set(node);
+  lower.set(upper.trie->first(upper));
+  {
+    offset_ptr *next = lower.trie->first(lower);
+    {
+      count++;
+      Transition::handlers[next->resolve().node->type]->report(next, stats);
+    } while((next = lower.trie->next(lower)));
+  }
+  while(lower.set(upper.trie->next(upper)));
+  stats.tries_nodes[count]++;
+}
+
+
 Trie trie_handler;
 
 /* Trie Data

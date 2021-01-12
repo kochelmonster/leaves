@@ -58,7 +58,10 @@ struct offset_ptr {
      -> we keep the same address space by multiplying the delta with 8
         and use the spared 3 bit for specifying the node type.
   */
-  int64_t delta;
+  struct {
+    int64_t data:8;
+    int64_t delta:56;
+  };
 
   offset_ptr() : delta(0) {}
   offset_ptr(const offset_ptr& other) { *this = other; }
@@ -164,6 +167,7 @@ struct Storage {
 
   void flush(bool async=true) { region.flush(0, 0, async); }
   void flush_header();
+  void get_stats(Stats& stats);
 
   FirstPage *header;
   file_mapping file;

@@ -40,6 +40,15 @@ bool Table::remove(Transition& self) {
   return self.table->remove(self);
 }
 
+void Table::report(offset_ptr* node, Stats& stats) {
+  TableData *table = node->resolve().table;
+  stats.burst_tables[table->count]++;
+  for(uint16_t i = 0; i < table->count; i++) {
+    offset_ptr *val = &table->get_item(i)->value;
+    Transition::handlers[val->resolve().node->type]->report(val, stats);
+  }
+}
+
 Table table_handler;
 
 /* Table Data
@@ -287,21 +296,6 @@ any_ptr TableData::build(Trace* trace, any_ptr val_ptr, const Slice& key) {
   table->prepare_item(0, key.size())->set(key, val_ptr);
   table->count = 1;
   return table;
-}
-
-void TableData::burst_report(Trace& trace, Stats& stats) {
-  TableData *last = NULL;
-  stats.max_depth = 0;
-  for(trace.first(); trace.valid(); trace.next()) {
-    stats.max_depth = std::max(stats.max_depth, trace.stack.size());
-    if (trace.stack.size() > 1) {
-      Transition& parent(trace.stack.back(1));
-      if (parent.node->type == kTable && last != parent.table) {
-        last = parent.table;
-        stats.burst_tables[parent.table->count]++;
-      }
-    }
-  }
 }
 
 } // namespace leaves

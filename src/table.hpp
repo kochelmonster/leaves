@@ -83,7 +83,6 @@ struct TableData : public Node {
 
   static TableData* alloc(Trace* trace);
   static any_ptr build(Trace* trace, any_ptr val_ptr, const Slice& key);
-  static void burst_report(Trace& trace, Stats& stats);
 };
 #pragma pack(0)
 
@@ -97,6 +96,7 @@ struct Table : public NodeHandler {
   int advance(Transition& self, const Slice& key);
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);
+  void report(offset_ptr* node, Stats& stats);
 };
 
 
@@ -136,7 +136,7 @@ inline offset_ptr* TableData::next(Transition& self, KeyString& current_key) {
 
 inline offset_ptr* TableData::prev(Transition& self, KeyString& current_key) {
   cut(self, current_key);
-  if (self.cmp < 0) {
+  if (self.cmp < 0 && self.index < count) {
     self.cmp = 0;
     return fill(self, current_key);
   }
