@@ -168,7 +168,6 @@ struct Compressed : public NodeHandler {
         any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, keys[i]);
 
         self.set(trie_ptr);
-        self.cmp = -1;
         trie_handler.ifind(self, key[i]);
         self.insert(key.advance(i), val_ptr);
 

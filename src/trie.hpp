@@ -20,14 +20,15 @@ struct TrieData : public Node {
   int index_of(int bit);
   int index_of_moved(int moved_bit);
   bool full(size_t count);
-  offset_ptr* find(int bit);
-  offset_ptr* next(uint8_t& bit);
-  offset_ptr* first(uint8_t& bit);
-  offset_ptr* prev(uint8_t& bit);
-  offset_ptr* last(uint8_t& bit);
-  void add(int bit, any_ptr next);
-  any_ptr insert(Transition& self, any_ptr next, int bit);
-  bool remove(Transition& self, TrieData** dest, offset_ptr *link, int bit);
+  offset_ptr* find(TransitionData& self);
+  offset_ptr* next(TransitionData& self);
+  offset_ptr* first(TransitionData& self);
+  offset_ptr* prev(TransitionData& self);
+  offset_ptr* last(TransitionData& self);
+  void add(int bit, any_ptr next, size_t count);
+  void insert(TransitionData& self, Trace* trace, any_ptr next);
+  bool remove(TransitionData& self, Trace* trace);
+  bool one_branch(TransitionData& self);
   void copy_to(any_ptr dest, size_t count);
 
   static any_ptr create(Trace* trace, any_ptr next, int bit);
@@ -47,8 +48,16 @@ struct Trie : public NodeHandler {
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);
   bool one_branch(Transition& self);
+  char to_char(Transition& self);
 };
 
+inline char Trie::to_char(Transition& self) {
+  return (self.key << 4) | self.lower.key;
+}
+
+inline bool Trie::one_branch(Transition& self) {
+  return self.lower.trie->one_branch(self.lower) && self.trie->one_branch(self);
+}
 
 inline size_t TrieData::size_of(size_t count) {
   return count * sizeof(offset_ptr) + sizeof(TrieData);
@@ -72,39 +81,64 @@ inline bool TrieData::full(size_t count) {
   return false;
 }
 
-inline offset_ptr* TrieData::find(int bit) {
-  int moved_bit = 1 << bit;
-  return (bits & moved_bit) ? &children[index_of_moved(moved_bit)] : NULL;
+inline bool TrieData::one_branch(TransitionData& self) {
+  if (popcount(bits) == 1) {
+    self.key = ctz(bits);
+    return true;
+  }
+  return false;
 }
 
-inline offset_ptr* TrieData::next(uint8_t& bit) {
-  uint16_t nbits = bits & (0xFFFF << (bit+1));
+inline offset_ptr* TrieData::find(TransitionData& self) {
+  int moved_bit = 1 << self.key;
+  self.cmp = !(bits & moved_bit);
+  return self.cmp ? NULL : &children[self.index=index_of_moved(moved_bit)];
+}
+
+inline offset_ptr* TrieData::next(TransitionData& self) {
+  uint16_t nbits = bits & (0xFFFF << (self.key+1));
   if (nbits) {
-    bit = ctz(nbits);
-    return &children[index_of(bit)];
+    self.key = ctz(nbits);
+    if (self.cmp) {
+      self.index = index_of(self.key);
+      self.cmp = 0;
+    }
+    else
+      self.index++;
+    return &children[self.index];
   }
   return NULL;
 }
 
-inline offset_ptr* TrieData::first(uint8_t& bit) {
-  bit = ctz(bits);
+inline offset_ptr* TrieData::first(TransitionData& self) {
+  self.key = ctz(bits);
+  self.cmp = 0;
+  self.index = 0;
   return &children[0];
 }
 
-inline offset_ptr* TrieData::prev(uint8_t& bit) {
-  if (bit) {
-    uint16_t nbits = bits & (0xFFFF >> (16-bit));
+inline offset_ptr* TrieData::prev(TransitionData& self) {
+  if (self.key) {
+    uint16_t nbits = bits & (0xFFFF >> (16-self.key));
     if (nbits) {
-      bit = 15 - (clz(nbits) & 0xf);
-      return &children[index_of(bit)];
+      self.key = 15 - (clz(nbits) & 0xf);
+      if (self.cmp) {
+        self.index = index_of(self.key);
+        self.cmp = 0;
+      }
+      else
+        self.index--;
+      return &children[self.index];
     }
   }
   return NULL;
 }
 
-inline offset_ptr* TrieData::last(uint8_t& bit) {
-  bit = 15 - (clz(bits) & 0xf);
-  return &children[index_of(bit)];
+inline offset_ptr* TrieData::last(TransitionData& self) {
+  self.key = 15 - (clz(bits) & 0xf);
+  self.cmp = 0;
+  self.index = popcount(bits)-1;
+  return &children[self.index];
 }
 
 namespace bit {

@@ -90,10 +90,25 @@ struct NodeHandler;
 struct TrieData;
 struct TableData;
 
-
-struct Transition {
-  void init(offset_ptr* pptr);
+struct TransitionData {
   void set(any_ptr ptr);
+  bool set(offset_ptr* pptr);
+
+  offset_ptr* node_ptr;
+  union {
+    Node* node;
+    ValueData *value;
+    CompressedData *compressed;
+    TrieData *trie;
+    TableData *table;
+  };
+  char key;
+  char cmp;
+  int16_t index;
+};
+
+struct Transition : public TransitionData {
+  void init(offset_ptr* pptr);
   bool valid() const;
   offset_ptr* find(ISlice& key, string& current_key);
   offset_ptr* next(string& current_key);
@@ -105,21 +120,9 @@ struct Transition {
   bool remove();
   NodeHandler* handler() const { return handlers[node->type]; }
 
-  offset_ptr* node_ptr;
-  offset_ptr* second_ptr;
+  TransitionData lower; // for lower trie
 
-  union {
-    Node* node;
-    ValueData *value;
-    CompressedData *compressed;
-    TrieData *upper;
-    TableData *table;
-  };
-  TrieData *lower;
   Trace* trace;
-  char key;
-  char cmp;
-  int index;
   static NodeHandler* handlers[];
 };
 
@@ -137,14 +140,25 @@ struct NodeHandler {
 };
 
 
+inline void TransitionData::set(any_ptr ptr) {
+  if (ptr.as_int) {
+    *node_ptr = ptr;
+    node = ptr.node;
+  }
+}
+
+inline bool TransitionData::set(offset_ptr* pptr) {
+  node_ptr = pptr;
+  if (pptr) {
+    node = node_ptr->resolve().node;
+    return true;
+  }
+  return false;
+}
+
 inline void Transition::init(offset_ptr* pptr) {
   node_ptr = pptr;
   node = node_ptr->resolve().node;
-}
-
-inline void Transition::set(any_ptr ptr) {
-  *node_ptr = ptr;
-  node = ptr.node;
 }
 
 inline offset_ptr* Transition::find(ISlice& key, string& current_key) {

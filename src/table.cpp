@@ -208,8 +208,8 @@ void TableData::trie_split(Transition& self, int split_pos) {
   trie_handler.ifind(self, cmp); // for one_branch test
   if (trie_handler.one_branch(self)) {
     // compress the trie
-    any_ptr next = self.lower->children[0].resolve();
-    cmp = self.key;
+    any_ptr next = self.lower.trie->children[0].resolve();
+    cmp = trie_handler.to_char(self); // sets trie_key
     self.trace->free(self.node);
     self.set(CompressedData::build(self.trace, next, trie_key));
   }
