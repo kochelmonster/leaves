@@ -81,6 +81,7 @@ inline void Trace::update() {
     // restore trace after another cursor changed the trie.
     find(current_key.slice());
   }
+  version = storage.header->version;
 }
 
 inline void Trace::iinsert(any_ptr val_ptr) {

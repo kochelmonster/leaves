@@ -19,6 +19,8 @@ void Trace::find(const Slice& key) {
 
   rest_key = key;
 
+  update();
+
   int same = 0; // index of same
   for(Transition* i = stack.begin(); i != stack.end(); i++) {
     int add = i->advance(rest_key);
@@ -38,12 +40,11 @@ void Trace::find(const Slice& key) {
 }
 
 void Trace::set_value(const Slice& value) {
+  update();
   if (stack.empty())
     throw NoValidPosition();
 
-  update();
   iinsert(ValueData::build(this, value));
-  storage.header->version++;
 }
 
 void Trace::remove() {
@@ -51,11 +52,8 @@ void Trace::remove() {
     throw NoValidPosition();
 
   update();
-
   storage.free(ipop_value());
   current_key.resize(0);
-
-  storage.header->version++;
 }
 
 any_ptr Trace::ipop_value() {
@@ -73,34 +71,33 @@ any_ptr Trace::ipop_value() {
 }
 
 void Trace::first() {
+  version = storage.header->version;
   rest_key.clear();
   current_key.resize(0);
   restart().first(current_key);
-  version = storage.header->version;
 }
 
 void Trace::last() {
+  version = storage.header->version;
   rest_key.clear();
   current_key.resize(0);
   restart().last(current_key);
-  version = storage.header->version;
 }
 
 void Trace::next() {
+  update();
   rest_key.clear();
   stack.back().next(current_key);
-  version = storage.header->version;
 }
 
 void Trace::prev() {
+  update();
   rest_key.clear();
   stack.back().prev(current_key);
-  version = storage.header->version;
 }
 
 void Trace::ifind() {
   stack.back().find(rest_key, current_key);
-  version = storage.header->version;
 }
 
 } // namespace leaves
