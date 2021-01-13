@@ -166,7 +166,7 @@ struct NodeHandler {
   virtual bool remove(Transition& self) = 0;
   virtual int advance(Transition& self, const Slice& key) = 0;
   virtual bool valid() const { return false; }
-  virtual void report(offset_ptr* node, Stats& stats) {}
+  virtual void report(offset_ptr* node, Stats& stats, size_t depth) {}
 };
 
 

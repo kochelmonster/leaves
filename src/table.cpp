@@ -48,12 +48,13 @@ bool Table::remove(Transition& self) {
   return self.table->remove(self);
 }
 
-void Table::report(offset_ptr* node, Stats& stats) {
+void Table::report(offset_ptr* node, Stats& stats, size_t depth) {
   TableData *table = node->resolve().table;
   stats.burst_tables[table->count]++;
+  depth++;
   for(uint16_t i = 0; i < table->count; i++) {
     offset_ptr *val = &table->get_item(i)->value;
-    Transition::handlers[val->resolve().node->type]->report(val, stats);
+    Transition::handlers[val->resolve().node->type]->report(val, stats, depth);
   }
 }
 

@@ -96,7 +96,7 @@ struct Table : public NodeHandler {
   int advance(Transition& self, const Slice& key);
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);
-  void report(offset_ptr* node, Stats& stats);
+  void report(offset_ptr* node, Stats& stats, size_t depth);
 };
 
 

@@ -49,7 +49,7 @@ struct Trie : public NodeHandler {
   bool remove(Transition& self);
   bool one_branch(Transition& self);
   char to_char(Transition& self);
-  void report(offset_ptr* node, Stats& stats);
+  void report(offset_ptr* node, Stats& stats, size_t depth);
 };
 
 inline char Trie::to_char(Transition& self) {

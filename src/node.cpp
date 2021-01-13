@@ -85,14 +85,16 @@ struct Value : public NodeHandler {
 
   bool remove(Transition& self) { assert(0); return false; };
 
-  void report(offset_ptr* node, Stats& stats) {
+  void report(offset_ptr* node, Stats& stats, size_t depth) {
     ValueData* value = node->resolve().value;
     if (value->next) {
       stats.intermediate_nodes++;
-      Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats);
+      Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats, depth+1);
     }
-    else
+    else {
       stats.end_nodes++;
+      stats.max_depth = std::max(stats.max_depth, depth);
+    }
   }
 };
 
@@ -210,10 +212,10 @@ struct Compressed : public NodeHandler {
     self.trace->free(node);
   }
 
-  void report(offset_ptr* node, Stats& stats) {
+  void report(offset_ptr* node, Stats& stats, size_t depth) {
     CompressedData* value = node->resolve().compressed;
     stats.intermediate_nodes++;
-    Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats);
+    Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats, depth+1);
     stats.compressed_nodes++;
   }
 };

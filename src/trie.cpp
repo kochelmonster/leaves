@@ -143,17 +143,18 @@ bool Trie::remove(Transition& self) {
   return true;
 }
 
-void Trie::report(offset_ptr* node, Stats& stats) {
+void Trie::report(offset_ptr* node, Stats& stats, size_t depth) {
   TransitionData upper;
   TransitionData lower;
   uint16_t count = 0;
   upper.set(node);
   lower.set(upper.trie->first(upper));
+  depth++;
   do {
     offset_ptr *next = lower.trie->first(lower);
     do {
       count++;
-      Transition::handlers[next->resolve().node->type]->report(next, stats);
+      Transition::handlers[next->resolve().node->type]->report(next, stats, depth);
     } while((next = lower.trie->next(lower)));
   }
   while(lower.set(upper.trie->next(upper)));

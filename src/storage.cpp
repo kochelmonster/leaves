@@ -141,9 +141,10 @@ void Storage::get_stats(Stats& stats) {
   stats.free_pages = header->memory.free_count;
   memset(stats.tries_nodes, 0, sizeof(stats.tries_nodes));
   stats.end_nodes = 0;
+  stats.max_depth = 0;
   stats.intermediate_nodes = 0;
   stats.compressed_nodes = 0;
-  Transition::handlers[header->root.resolve().node->type]->report(&header->root, stats);
+  Transition::handlers[header->root.resolve().node->type]->report(&header->root, stats, 0);
 }
 
 
