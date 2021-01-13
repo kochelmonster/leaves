@@ -12,9 +12,10 @@ offset_ptr* Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
     return NULL;
   }
 
-  offset_ptr *result = ifind(self, key[0]);
+  char ckey = key[0];
+  offset_ptr *result = ifind(self, ckey);
   if (result) {
-    current_key.push_back(to_char(self));
+    current_key.push_back(ckey);
     key.iadvance(1);
   }
   return result;
