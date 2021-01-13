@@ -7,8 +7,6 @@
 
 namespace leaves {
 
-typedef offset_ptr* (*move_func_t)(Transition& transition, KeyString& current_key);
-
 struct Trace;
 
 struct Stack {
@@ -16,17 +14,17 @@ struct Stack {
 
   Stack(Trace& trace);
   bool empty() const;
-  size_t size() const;
   Transition* begin();
   Transition* end();
   Transition& push_back(offset_ptr* next);
-  void pop_back();
+  Transition& pop_back();
   Transition& back();
   const Transition& back() const;
   Transition& back(int index);
   void erase(Transition* iter);
   void grow();
   void clear();
+  Transition& restart();
 
   Trace& trace;
   offset_ptr null;
@@ -46,6 +44,7 @@ struct Trace {
   void set_value(const Slice& value);
   Slice get_value() const;
   void remove();
+  Transition& restart();
 
   any_ptr allocate(size_t size);
   void free(any_ptr ptr);
@@ -53,8 +52,6 @@ struct Trace {
   any_ptr ipop_value();
   void iinsert(any_ptr val_ptr);
   void ifind();
-  void imove_end(move_func_t move);
-  void imove(move_func_t move, move_func_t move_end);
   void update();
 
   Storage& storage;
@@ -91,6 +88,12 @@ inline void Trace::iinsert(any_ptr val_ptr) {
   ifind();
 }
 
+inline Transition& Trace::restart() {
+  if (stack.empty())
+    stack.push_back(root);
+  return stack.restart();
+}
+
 /* Stack
 ---------------------------------------------------------------------
 */
@@ -108,10 +111,10 @@ inline Transition& Stack::push_back(offset_ptr* next) {
   return (++top)->init(next);
 }
 
-inline void Stack::pop_back() {
+inline Transition& Stack::pop_back() {
   assert(pos>1);
-  top--;
   pos--;
+  return *--top;
 }
 
 inline Transition& Stack::back() {
@@ -155,19 +158,37 @@ inline bool Stack::empty() const {
   return pos <= 1;
 }
 
-inline size_t Stack::size() const {
-  return pos > 1;
-}
-
 inline void Stack::clear() {
   pos = 1;
   top = &data[0];
 }
 
-
-inline void Transition::find_next(offset_ptr* next, ISlice& key, KeyString& current_key) {
-  trace->stack.push_back(next).find(key, current_key);
+inline Transition& Stack::restart() {
+  pos = 2;
+  top = &data[1];
+  return *top;
 }
+
+inline void Transition::child_find(offset_ptr* child, ISlice& key, KeyString& current_key) {
+  trace->stack.push_back(child).find(key, current_key);
+}
+
+inline void Transition::parent_next(KeyString& current_key) {
+  trace->stack.pop_back().next(current_key);
+}
+
+inline void Transition::parent_prev(KeyString& current_key) {
+  trace->stack.pop_back().prev(current_key);
+}
+
+inline void Transition::child_first(offset_ptr* child, KeyString& current_key) {
+  trace->stack.push_back(child).first(current_key);
+}
+
+inline void Transition::child_last(offset_ptr* child, KeyString& current_key) {
+  trace->stack.push_back(child).last(current_key);
+}
+
 
 
 } // namespace leaves

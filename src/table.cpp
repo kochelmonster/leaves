@@ -12,20 +12,28 @@ void Table::find(Transition& self, ISlice& key, KeyString& current_key) {
   self.table->find(self, key, current_key);
 }
 
-offset_ptr* Table::next(Transition& self, KeyString& current_key) {
-  return self.table->next(self, current_key);
+void Table::next(Transition& self, KeyString& current_key) {
+  offset_ptr* result = self.table->next(self, current_key);
+  if (result)
+    self.trace->stack.push_back(result).cmp = 0;
+  else
+    self.parent_next(current_key);
 }
 
-offset_ptr* Table::first(Transition& self, KeyString& current_key) {
-  return self.table->first(self, current_key);
+void Table::first(Transition& self, KeyString& current_key) {
+  self.trace->stack.push_back(self.table->first(self, current_key)).cmp = 0;
 }
 
-offset_ptr* Table::prev(Transition& self, KeyString& current_key) {
-  return self.table->prev(self, current_key);
+void Table::prev(Transition& self, KeyString& current_key) {
+  offset_ptr* result = self.table->prev(self, current_key);
+  if (result)
+    self.trace->stack.push_back(result).cmp = 0;
+  else
+    self.parent_prev(current_key);
 }
 
-offset_ptr* Table::last(Transition& self, KeyString& current_key) {
-  return self.table->last(self, current_key);
+void Table::last(Transition& self, KeyString& current_key) {
+  self.trace->stack.push_back(self.table->last(self, current_key)).cmp = 0;
 }
 
 int Table::advance(Transition& self, const Slice& key) {
@@ -33,7 +41,7 @@ int Table::advance(Transition& self, const Slice& key) {
 }
 
 void Table::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-  return self.table->insert(self, key, val_ptr);
+  self.table->insert(self, key, val_ptr);
 }
 
 bool Table::remove(Transition& self) {

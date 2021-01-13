@@ -89,10 +89,10 @@ struct TableData : public Node {
 
 struct Table : public NodeHandler {
   void find(Transition& self, ISlice& key, KeyString& current_key);
-  offset_ptr* next(Transition& self, KeyString& current_key);
-  offset_ptr* first(Transition& self, KeyString& current_key);
-  offset_ptr* prev(Transition& self, KeyString& current_key);
-  offset_ptr* last(Transition& self, KeyString& current_key);
+  void next(Transition& self, KeyString& current_key);
+  void first(Transition& self, KeyString& current_key);
+  void prev(Transition& self, KeyString& current_key);
+  void last(Transition& self, KeyString& current_key);
   int advance(Transition& self, const Slice& key);
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
   bool remove(Transition& self);

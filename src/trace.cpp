@@ -4,23 +4,6 @@
 namespace leaves {
 
 
-offset_ptr* ifirst(Transition& transition, KeyString& current_key) {
-  return transition.first(current_key);
-}
-
-offset_ptr* ilast(Transition& transition, KeyString& current_key) {
-  return transition.last(current_key);
-}
-
-offset_ptr* inext(Transition& transition, KeyString& current_key) {
-  return transition.next(current_key);
-}
-
-offset_ptr* iprev(Transition& transition, KeyString& current_key) {
-  return transition.prev(current_key);
-}
-
-
 Trace::Trace(Storage& storage, offset_ptr* root_)
       : storage(storage), stack(*this), root(root_), version(storage.header->version) {
   if (!root_)
@@ -42,12 +25,15 @@ void Trace::find(const Slice& key) {
     if (add < 0) {
       stack.erase(++i);
       current_key.resize(same);
-      break;
+      ifind();
+      return;
     }
     else
       rest_key.iadvance(add);
     same += add;
   }
+  if (stack.empty())
+    stack.push_back(root);
   ifind();
 }
 
@@ -78,7 +64,7 @@ any_ptr Trace::ipop_value() {
   assert(result->type == kValue);
   *end.node_ptr = result->next;
   stack.pop_back();
-  while(stack.size() && stack.back().remove())
+  while(!stack.empty() && stack.back().remove())
     stack.pop_back();
   stack.clear();
   if (!*root)
@@ -87,62 +73,32 @@ any_ptr Trace::ipop_value() {
 }
 
 void Trace::first() {
-  imove_end(ifirst);
-}
-
-void Trace::last() {
-  imove_end(ilast);
-}
-
-void Trace::next() {
-  imove(inext, ifirst);
-}
-
-void Trace::prev() {
-  imove(iprev, ilast);
-}
-
-void Trace::imove_end(move_func_t move) {
-  rest_key = Slice();
+  rest_key.clear();
   current_key.resize(0);
-  stack.clear();
-  stack.push_back(root);
-  while(true) {
-      offset_ptr *next = move(stack.back(), current_key);
-      if (!next)
-        break;
-      stack.push_back(next);
-  }
+  restart().first(current_key);
   version = storage.header->version;
 }
 
-void Trace::imove(move_func_t move, move_func_t move_end) {
-  if (stack.empty())
-    throw NoValidPosition();
+void Trace::last() {
+  rest_key.clear();
+  current_key.resize(0);
+  restart().last(current_key);
+  version = storage.header->version;
+}
 
-  update();
-  rest_key = Slice();
-  offset_ptr *next;
-  while(stack.size()) {
-    next = move(stack.back(), current_key);
-    if (next)
-      break;
-    stack.pop_back();
-  }
+void Trace::next() {
+  rest_key.clear();
+  stack.back().next(current_key);
+  version = storage.header->version;
+}
 
-  // next == stack.back().node_ptr => use the node again
-  if (next && next != stack.back().node_ptr)
-    while(next) {
-      stack.push_back(next);
-      next = move_end(stack.back(), current_key);
-    }
+void Trace::prev() {
+  rest_key.clear();
+  stack.back().prev(current_key);
   version = storage.header->version;
 }
 
 void Trace::ifind() {
-  if (stack.empty())
-    stack.push_back(root);
-
   stack.back().find(rest_key, current_key);
   version = storage.header->version;
 }

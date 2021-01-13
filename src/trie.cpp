@@ -17,7 +17,7 @@ void Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
   if (result) {
     current_key.push_back(ckey);
     key.iadvance(1);
-    self.find_next(result, key, current_key);
+    self.child_find(result, key, current_key);
   }
 }
 
@@ -30,7 +30,7 @@ offset_ptr* Trie::ifind(Transition& self, char key) {
   return NULL;
 }
 
-offset_ptr* Trie::next(Transition& self, KeyString& current_key) {
+void Trie::next(Transition& self, KeyString& current_key) {
   offset_ptr* result = NULL;
 
   if (self.cmp == -1) {
@@ -49,24 +49,28 @@ offset_ptr* Trie::next(Transition& self, KeyString& current_key) {
       result = self.lower.trie->first(self.lower);
   }
 
-  if (result)
+  if (result) {
     current_key.push_back(to_char(self));
-
-  return result;
+    self.child_first(result, current_key);
+  }
+  else
+    self.parent_next(current_key);
 }
 
-offset_ptr* Trie::first(Transition& self, KeyString& current_key) {
+void Trie::first(Transition& self, KeyString& current_key) {
   self.lower.set(self.trie->first(self));
   offset_ptr *result = self.lower.trie->first(self.lower);
   current_key.push_back(to_char(self));
-  return result;
+  self.child_first(result, current_key);
 }
 
-offset_ptr* Trie::prev(Transition& self, KeyString& current_key) {
+void Trie::prev(Transition& self, KeyString& current_key) {
   offset_ptr *result = NULL;
 
-  if (self.cmp == -1)
-    return NULL;
+  if (self.cmp == -1) {
+    self.parent_prev(current_key);
+    return;
+  }
 
   if (self.lower.trie) {
     if (!self.lower.cmp)
@@ -79,18 +83,19 @@ offset_ptr* Trie::prev(Transition& self, KeyString& current_key) {
       result = self.lower.trie->last(self.lower);
   }
 
-  if (result)
+  if (result) {
     current_key.push_back(to_char(self));
-
-  return result;
+    self.child_last(result, current_key);
+  }
+  else
+    self.parent_prev(current_key);
 }
 
-
-offset_ptr* Trie::last(Transition& self, KeyString& current_key) {
+void Trie::last(Transition& self, KeyString& current_key) {
   self.lower.set(self.trie->last(self));
   offset_ptr *result = self.lower.trie->last(self.lower);
   current_key.push_back(to_char(self));
-  return result;
+  self.child_last(result, current_key);
 }
 
 int Trie::advance(Transition& self, const Slice& key) {

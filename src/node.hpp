@@ -32,6 +32,10 @@ struct ISlice : public Slice {
     _size -= size;
     return *this;
   }
+
+  void clear() {
+    _size = 0;
+  }
 };
 
 struct KeyString {
@@ -123,19 +127,22 @@ struct TransitionData {
   };
   char key;
   char cmp;
-  int16_t index;
 };
 
 struct Transition : public TransitionData {
   Transition& init(offset_ptr* pptr);
   bool valid() const;
   void find(ISlice& key, KeyString& current_key);
-  offset_ptr* next(KeyString& current_key);
-  offset_ptr* prev(KeyString& current_key);
-  offset_ptr* first(KeyString& current_key);
-  offset_ptr* last(KeyString& current_key);
+  void next(KeyString& current_key);
+  void prev(KeyString& current_key);
+  void first(KeyString& current_key);
+  void last(KeyString& current_key);
 
-  void find_next(offset_ptr* next, ISlice& key, KeyString& current_key);
+  void child_find(offset_ptr* child, ISlice& key, KeyString& current_key);
+  void child_first(offset_ptr* child, KeyString& current_key);
+  void child_last(offset_ptr* child, KeyString& current_key);
+  void parent_next(KeyString& current_key);
+  void parent_prev(KeyString& current_key);
 
   int advance(const Slice& key);
   void insert(const Slice& key, any_ptr val_ptr);
@@ -143,7 +150,7 @@ struct Transition : public TransitionData {
   NodeHandler* handler() const { return handlers[node->type]; }
 
   TransitionData lower; // for lower trie
-
+  int16_t index;
   Trace* trace;
   static NodeHandler* handlers[];
 };
@@ -151,10 +158,10 @@ struct Transition : public TransitionData {
 
 struct NodeHandler {
   virtual void find(Transition& self, ISlice& key, KeyString& current_key) = 0;
-  virtual offset_ptr* next(Transition& self, KeyString& current_key) = 0;
-  virtual offset_ptr* first(Transition& self, KeyString& current_key) = 0;
-  virtual offset_ptr* prev(Transition& self, KeyString& current_key) = 0;
-  virtual offset_ptr* last(Transition& self, KeyString& current_key) = 0;
+  virtual void next(Transition& self, KeyString& current_key) = 0;
+  virtual void first(Transition& self, KeyString& current_key) = 0;
+  virtual void prev(Transition& self, KeyString& current_key) = 0;
+  virtual void last(Transition& self, KeyString& current_key) = 0;
   virtual void insert(Transition& self, const Slice& key, any_ptr val_ptr) = 0;
   virtual bool remove(Transition& self) = 0;
   virtual int advance(Transition& self, const Slice& key) = 0;
@@ -190,22 +197,21 @@ inline void Transition::find(ISlice& key, KeyString& current_key) {
   handler()->find(*this, key, current_key);
 }
 
-inline offset_ptr* Transition::next(KeyString& current_key) {
+inline void Transition::next(KeyString& current_key) {
   return handler()->next(*this, current_key);
 }
 
-inline offset_ptr* Transition::first(KeyString& current_key) {
+inline void Transition::first(KeyString& current_key) {
   return handler()->first(*this, current_key);
 }
 
-inline offset_ptr* Transition::prev(KeyString& current_key) {
+inline void Transition::prev(KeyString& current_key) {
   return handler()->prev(*this, current_key);
 }
 
-inline offset_ptr* Transition::last(KeyString& current_key) {
+inline void Transition::last(KeyString& current_key) {
   return handler()->last(*this, current_key);
 }
-
 
 inline int Transition::advance(const Slice& key) {
   return handler()->advance(*this, key);

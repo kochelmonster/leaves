@@ -21,40 +21,42 @@ struct Value : public NodeHandler {
     if (key.size()) {
       self.cmp = 1;
       if (self.value->next)
-        self.find_next(&self.value->next, key, current_key);
+        self.child_find(&self.value->next, key, current_key);
     }
     else
       self.cmp = 0;
   }
 
-  offset_ptr* first(Transition& self, KeyString& current_key) {
+  void first(Transition& self, KeyString& current_key) {
     self.cmp = 0;
-    return NULL;
   }
 
-  offset_ptr* next(Transition& self, KeyString& current_key) {
+  void next(Transition& self, KeyString& current_key) {
     if (self.cmp == 0) {
       self.cmp = 1;
-      return self.value->next ? &self.value->next : NULL;
+      if (self.value->next) {
+        self.child_first(&self.value->next, current_key);
+        return;
+      }
     }
-    return NULL;
+    self.parent_next(current_key);
   }
 
-  offset_ptr* prev(Transition& self, KeyString& current_key) {
+  void prev(Transition& self, KeyString& current_key) {
     if (self.cmp == 1) {
       self.cmp = 0;
-      return self.node_ptr;  // see trace.imove
+      return;
     }
-    return NULL;
+    self.parent_prev(current_key);
   }
 
-  offset_ptr* last(Transition& self, KeyString& current_key) {
+  void last(Transition& self, KeyString& current_key) {
     if (self.value->next) {
       self.cmp = 1;
-      return &self.value->next;
+      self.child_last(&self.value->next, current_key);
+      return;
     }
     self.cmp = 0;
-    return NULL;
   }
 
   int advance(Transition& self, const Slice& key) {
@@ -109,22 +111,30 @@ struct Compressed : public NodeHandler {
     return NULL;
   }
 
-  offset_ptr* next(Transition& self, KeyString& current_key) {
-    return move(self, current_key, self.cmp < 0);
+  void next(Transition& self, KeyString& current_key) {
+    offset_ptr* result = move(self, current_key, self.cmp < 0);
+    if (result)
+      self.child_first(result, current_key);
+    else
+      self.parent_next(current_key);
   }
 
-  offset_ptr* first(Transition& self, KeyString& current_key) {
+  void first(Transition& self, KeyString& current_key) {
     self.cmp = -1;
-    return self.next(current_key);
+    self.next(current_key);
   }
 
-  offset_ptr* prev(Transition& self, KeyString& current_key) {
-    return move(self, current_key, self.cmp > 0);
+  void prev(Transition& self, KeyString& current_key) {
+    offset_ptr* result = move(self, current_key, self.cmp > 0);
+    if (result)
+      self.child_last(result, current_key);
+    else
+      self.parent_prev(current_key);
   }
 
-  offset_ptr* last(Transition& self, KeyString& current_key) {
+  void last(Transition& self, KeyString& current_key) {
     self.cmp = 1;
-    return self.prev(current_key);
+    self.prev(current_key);
   }
 
   bool remove(Transition& self) {
@@ -142,7 +152,7 @@ struct Compressed : public NodeHandler {
     if (!(self.cmp = self.compressed->find(key))) {
       key.iadvance(self.compressed->size);
       current_key.append(self.compressed->keys, self.compressed->size);
-      self.find_next(&self.compressed->next, key, current_key);
+      self.child_find(&self.compressed->next, key, current_key);
     }
   }
 
@@ -211,10 +221,10 @@ struct Compressed : public NodeHandler {
 
 struct Null : public NodeHandler {
   void find(Transition& self, ISlice& key, KeyString& current_key) { }
-  offset_ptr* next(Transition& self, KeyString& current_key) { return NULL; }
-  offset_ptr* first(Transition& self, KeyString& current_key) { return NULL; }
-  offset_ptr* prev(Transition& self, KeyString& current_key) { return NULL; }
-  offset_ptr* last(Transition& self, KeyString& current_key) { return NULL; }
+  void next(Transition& self, KeyString& current_key) { }
+  void first(Transition& self, KeyString& current_key) { }
+  void prev(Transition& self, KeyString& current_key) { }
+  void last(Transition& self, KeyString& current_key) { }
   void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
 #ifdef PURE_TRIE
     self.set(CompressedData::build(self.trace, val_ptr, key));
@@ -222,7 +232,7 @@ struct Null : public NodeHandler {
     self.set(TableData::build(self.trace, val_ptr, key));
 #endif
   }
-  int advance(Transition& self, const Slice& key) { assert(0); return -1; }
+  int advance(Transition& self, const Slice& key) { return -1; }
   bool remove(Transition& self) { assert(0); return false; }
 };
 
