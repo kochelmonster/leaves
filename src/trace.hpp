@@ -19,7 +19,7 @@ struct Stack {
   size_t size() const;
   Transition* begin();
   Transition* end();
-  void push_back(offset_ptr* next);
+  Transition& push_back(offset_ptr* next);
   void pop_back();
   Transition& back();
   const Transition& back() const;
@@ -102,10 +102,10 @@ inline Stack::Stack(Trace& trace_) : trace(trace_), pos(1) {
   top = &data[0];
 }
 
-inline void Stack::push_back(offset_ptr* next) {
+inline Transition& Stack::push_back(offset_ptr* next) {
   if (pos++ >= data.size())
     grow();
-  (++top)->init(next);
+  return (++top)->init(next);
 }
 
 inline void Stack::pop_back() {
@@ -163,6 +163,12 @@ inline void Stack::clear() {
   pos = 1;
   top = &data[0];
 }
+
+
+inline void Transition::find_next(offset_ptr* next, ISlice& key, KeyString& current_key) {
+  trace->stack.push_back(next).find(key, current_key);
+}
+
 
 } // namespace leaves
 

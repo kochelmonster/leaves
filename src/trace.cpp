@@ -143,13 +143,7 @@ void Trace::ifind() {
   if (stack.empty())
     stack.push_back(root);
 
-  offset_ptr *next;
-  while(true) {
-    next = stack.back().find(rest_key, current_key);
-    if (!next)
-      break;
-    stack.push_back(next);
-  }
+  stack.back().find(rest_key, current_key);
   version = storage.header->version;
 }
 

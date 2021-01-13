@@ -62,7 +62,7 @@ struct TableData : public Node {
   bool remove(Transition& self, int index);
   int advance(const Slice& key, int index);
 
-  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key);
+  void find(Transition& self, ISlice& key, KeyString& current_key);
   offset_ptr* ifind(Transition& self, const Slice& key);
   offset_ptr* next(Transition& self, KeyString& current_key);
   offset_ptr* prev(Transition& self, KeyString& current_key);
@@ -88,7 +88,7 @@ struct TableData : public Node {
 
 
 struct Table : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key);
+  void find(Transition& self, ISlice& key, KeyString& current_key);
   offset_ptr* next(Transition& self, KeyString& current_key);
   offset_ptr* first(Transition& self, KeyString& current_key);
   offset_ptr* prev(Transition& self, KeyString& current_key);

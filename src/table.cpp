@@ -8,8 +8,8 @@
 
 namespace leaves {
 
-offset_ptr* Table::find(Transition& self, ISlice& key, KeyString& current_key) {
-  return self.table->find(self, key, current_key);
+void Table::find(Transition& self, ISlice& key, KeyString& current_key) {
+  self.table->find(self, key, current_key);
 }
 
 offset_ptr* Table::next(Transition& self, KeyString& current_key) {
@@ -55,15 +55,14 @@ Table table_handler;
 ---------------------------------------------------------------------------------
 */
 
-offset_ptr* TableData::find(Transition& self, ISlice& key, KeyString& current_key) {
+void TableData::find(Transition& self, ISlice& key, KeyString& current_key) {
   offset_ptr* result = ifind(self, key);
   if (result) {
     DataItem* item = get_item(self.index);
     key.iadvance(item->key_size);
     current_key.append(item->key_data, item->key_size);
-    return result;
+    self.trace->stack.push_back(result).cmp = 0;
   }
-  return NULL;
 }
 
 offset_ptr* TableData::ifind(Transition& self, const Slice& key) {

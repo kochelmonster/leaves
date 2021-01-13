@@ -38,7 +38,7 @@ struct TrieData : public Node {
 
 
 struct Trie : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key);
+  void find(Transition& self, ISlice& key, KeyString& current_key);
   offset_ptr* ifind(Transition& self, char key);
   offset_ptr* next(Transition& self, KeyString& current_key);
   offset_ptr* first(Transition& self, KeyString& current_key);

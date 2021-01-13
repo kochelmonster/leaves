@@ -127,13 +127,16 @@ struct TransitionData {
 };
 
 struct Transition : public TransitionData {
-  void init(offset_ptr* pptr);
+  Transition& init(offset_ptr* pptr);
   bool valid() const;
-  offset_ptr* find(ISlice& key, KeyString& current_key);
+  void find(ISlice& key, KeyString& current_key);
   offset_ptr* next(KeyString& current_key);
   offset_ptr* prev(KeyString& current_key);
   offset_ptr* first(KeyString& current_key);
   offset_ptr* last(KeyString& current_key);
+
+  void find_next(offset_ptr* next, ISlice& key, KeyString& current_key);
+
   int advance(const Slice& key);
   void insert(const Slice& key, any_ptr val_ptr);
   bool remove();
@@ -147,7 +150,7 @@ struct Transition : public TransitionData {
 
 
 struct NodeHandler {
-  virtual offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) = 0;
+  virtual void find(Transition& self, ISlice& key, KeyString& current_key) = 0;
   virtual offset_ptr* next(Transition& self, KeyString& current_key) = 0;
   virtual offset_ptr* first(Transition& self, KeyString& current_key) = 0;
   virtual offset_ptr* prev(Transition& self, KeyString& current_key) = 0;
@@ -177,13 +180,14 @@ inline bool TransitionData::set(offset_ptr* pptr) {
   return false;
 }
 
-inline void Transition::init(offset_ptr* pptr) {
+inline Transition& Transition::init(offset_ptr* pptr) {
   node_ptr = pptr;
   node = node_ptr->resolve().node;
+  return *this;
 }
 
-inline offset_ptr* Transition::find(ISlice& key, KeyString& current_key) {
-  return handler()->find(*this, key, current_key);
+inline void Transition::find(ISlice& key, KeyString& current_key) {
+  handler()->find(*this, key, current_key);
 }
 
 inline offset_ptr* Transition::next(KeyString& current_key) {

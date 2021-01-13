@@ -17,15 +17,14 @@ namespace leaves {
 struct Value : public NodeHandler {
   bool valid() const { return true; }
 
-  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) {
+  void find(Transition& self, ISlice& key, KeyString& current_key) {
     if (key.size()) {
       self.cmp = 1;
       if (self.value->next)
-        return &self.value->next;
+        self.find_next(&self.value->next, key, current_key);
     }
     else
       self.cmp = 0;
-    return NULL;
   }
 
   offset_ptr* first(Transition& self, KeyString& current_key) {
@@ -139,13 +138,12 @@ struct Compressed : public NodeHandler {
     return true;
   }
 
-  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) {
+  void find(Transition& self, ISlice& key, KeyString& current_key) {
     if (!(self.cmp = self.compressed->find(key))) {
       key.iadvance(self.compressed->size);
       current_key.append(self.compressed->keys, self.compressed->size);
-      return &self.compressed->next;
+      self.find_next(&self.compressed->next, key, current_key);
     }
-    return NULL;
   }
 
   int advance(Transition& self, const Slice& key) {
@@ -212,7 +210,7 @@ struct Compressed : public NodeHandler {
 
 
 struct Null : public NodeHandler {
-  offset_ptr* find(Transition& self, ISlice& key, KeyString& current_key) { return NULL; }
+  void find(Transition& self, ISlice& key, KeyString& current_key) { }
   offset_ptr* next(Transition& self, KeyString& current_key) { return NULL; }
   offset_ptr* first(Transition& self, KeyString& current_key) { return NULL; }
   offset_ptr* prev(Transition& self, KeyString& current_key) { return NULL; }

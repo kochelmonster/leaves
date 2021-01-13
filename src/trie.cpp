@@ -6,10 +6,10 @@
 
 namespace leaves {
 
-offset_ptr* Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
+void Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
   if (key.empty()) {
     self.cmp = -1;
-    return NULL;
+    return;
   }
 
   char ckey = key[0];
@@ -17,8 +17,8 @@ offset_ptr* Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
   if (result) {
     current_key.push_back(ckey);
     key.iadvance(1);
+    self.find_next(result, key, current_key);
   }
-  return result;
 }
 
 offset_ptr* Trie::ifind(Transition& self, char key) {
