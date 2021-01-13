@@ -31,7 +31,7 @@ def configure_leaves(cfg):
     if False:
         cfg.env.CXXFLAGS_LEAVES = ["-g", "-O3"]
 
-    cfg.env.DEFINES_LEAVES += ["PURE_TRIE"]
+    #cfg.env.DEFINES_LEAVES += ["BURST"]
     cfg.env.DEFINES_LEAVES += ["LEVELDB_PLATFORM_POSIX"]
     cfg.env.CXXFLAGS_LEAVES += [
         f"-I{leveldb_path}", f"-I{gmock_path}", f"-I{include_path}", f"-I{gtest_path}",

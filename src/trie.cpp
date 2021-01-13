@@ -115,17 +115,17 @@ void insert(Transition& self, const Slice& key, any_ptr next) {
 
   if (key.size() > 1) {
     Slice restkey(key.advance(1));
-#if PURE_TRIE
-    next = CompressedData::build(self.trace, next, restkey);
-#else
+#ifdef BURST
     next = TableData::build(self.trace, next, restkey);
+#else
+    next = CompressedData::build(self.trace, next, restkey);
 #endif
   }
 
   if (self.lower.trie)
     self.lower.trie->insert(self.lower, self.trace, next);
   else
-    self.trie->insert(self, self.trace, TrieData::create(self.trace, next, self.lower.key));
+    self.trie->insert(self, self.trace, TrieData::create(self.trace, next, bit::lower(key[0])));
 }
 
 bool remove(Transition& self) {

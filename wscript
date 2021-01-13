@@ -26,8 +26,8 @@ def configure(cfg):
     cfg.env.LINKFLAGS = []
 
     cfg.env.DEFINES_TEST += ['DEBUG', 'TESTING']
-    cfg.env.DEFINES_TRIE = ["PURE_TRIE", 'CMPFILES="{}"'.format(trie_cmp_path)]
-    cfg.env.DEFINES_BURST = ['CMPFILES="{}"'.format(cmpfiles_path), "SPLIT_COUNT=4"]
+    cfg.env.DEFINES_TRIE = ['CMPFILES="{}"'.format(trie_cmp_path)]
+    cfg.env.DEFINES_BURST = ["BURST", 'CMPFILES="{}"'.format(cmpfiles_path), "SPLIT_COUNT=4"]
 
     cfg.env.INCLUDES = [os.path.abspath("include"), os.path.abspath("src")]
     cfg.env.STLIBPATH_TEST = []

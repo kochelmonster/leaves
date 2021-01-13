@@ -3,7 +3,7 @@
 #endif
 
 #include "trace.hpp"
-#ifndef PURE_TRIE
+#ifdef BURST
 #include "table.hpp"
 #endif
 

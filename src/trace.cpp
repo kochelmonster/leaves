@@ -12,7 +12,7 @@ Trace::Trace(Storage& storage, offset_ptr* root_)
 
 
 void Trace::find(const Slice& key) {
-#ifndef PURE_TRIE
+#ifdef BURST
   if (key.size() > storage.max_key_size)
     throw WrongValue("keysize too big");
 #endif

@@ -6,7 +6,7 @@
 
 #include "node.hpp"
 #include "trie.hpp"
-#ifndef PURE_TRIE
+#ifdef BURST
 #include "table.hpp"
 #endif
 #include "trace.hpp"
@@ -24,7 +24,7 @@ void compressed_find(Transition& self, ISlice& key, KeyString& current_key) {
 void trie_find(Transition& self, ISlice& key, KeyString& current_key) {
   trie::find(self, key, current_key);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_find(Transition& self, ISlice& key, KeyString& current_key) {
   self.table->find(self, key, current_key);
 }
@@ -35,7 +35,7 @@ find_f Transition::find_handlers[kNodeCount] = {
   null_find,
   compressed_find,
   trie_find,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_find
 #endif
 };
@@ -52,7 +52,7 @@ void compressed_next(Transition& self, KeyString& current_key) {
 void trie_next(Transition& self, KeyString& current_key) {
   trie::next(self, current_key);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_next(Transition& self, KeyString& current_key) {
   self.table->next(self, current_key);
 }
@@ -63,7 +63,7 @@ move_f Transition::next_handlers[kNodeCount] = {
   null_next,
   compressed_next,
   trie_next,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_next
 #endif
 };
@@ -80,7 +80,7 @@ void compressed_first(Transition& self, KeyString& current_key) {
 void trie_first(Transition& self, KeyString& current_key) {
   trie::first(self, current_key);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_first(Transition& self, KeyString& current_key) {
   self.table->first(self, current_key);
 }
@@ -91,7 +91,7 @@ move_f Transition::first_handlers[kNodeCount] = {
   null_first,
   compressed_first,
   trie_first,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_first
 #endif
 };
@@ -108,7 +108,7 @@ void compressed_last(Transition& self, KeyString& current_key) {
 void trie_last(Transition& self, KeyString& current_key) {
   trie::last(self, current_key);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_last(Transition& self, KeyString& current_key) {
   self.table->last(self, current_key);
 }
@@ -119,7 +119,7 @@ move_f Transition::last_handlers[kNodeCount] = {
   null_last,
   compressed_last,
   trie_last,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_last
 #endif
 };
@@ -136,7 +136,7 @@ void compressed_prev(Transition& self, KeyString& current_key) {
 void trie_prev(Transition& self, KeyString& current_key) {
   trie::prev(self, current_key);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_prev(Transition& self, KeyString& current_key) {
   self.table->prev(self, current_key);
 }
@@ -147,7 +147,7 @@ move_f Transition::prev_handlers[kNodeCount] = {
   null_prev,
   compressed_prev,
   trie_prev,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_prev
 #endif
 };
@@ -157,11 +157,11 @@ void value_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   self.value->insert(self, key, val_ptr);
 }
 void null_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-  #ifdef PURE_TRIE
-      self.set(CompressedData::build(self.trace, val_ptr, key));
-  #else
-      self.set(TableData::build(self.trace, val_ptr, key));
-  #endif
+#ifdef BURST
+  self.set(TableData::build(self.trace, val_ptr, key));
+#else
+  self.set(CompressedData::build(self.trace, val_ptr, key));
+#endif
 }
 void compressed_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   self.compressed->insert(self, key, val_ptr);
@@ -169,7 +169,7 @@ void compressed_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
 void trie_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   trie::insert(self, key, val_ptr);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   self.table->insert(self, key, val_ptr);
 }
@@ -180,7 +180,7 @@ insert_f Transition::insert_handlers[kNodeCount] = {
   null_insert,
   compressed_insert,
   trie_insert,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_insert
 #endif
 };
@@ -199,7 +199,7 @@ bool compressed_remove(Transition& self) {
 bool trie_remove(Transition& self) {
   return trie::remove(self);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 bool table_remove(Transition& self) {
   return self.table->remove(self);
 }
@@ -210,7 +210,7 @@ remove_f Transition::remove_handlers[kNodeCount] = {
   null_remove,
   compressed_remove,
   trie_remove,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_remove
 #endif
 };
@@ -228,7 +228,7 @@ int compressed_advance(Transition& self, const Slice& key) {
 int trie_advance(Transition& self, const Slice& key) {
   return trie::advance(self, key);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 int table_advance(Transition& self, const Slice& key) {
   return self.table->advance(self, key);
 }
@@ -239,7 +239,7 @@ advance_f Transition::advance_handlers[kNodeCount] = {
   null_advance,
   compressed_advance,
   trie_advance,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_advance
 #endif
 };
@@ -255,7 +255,7 @@ void compressed_report(any_ptr node, Stats& stats, size_t depth) {
 void trie_report(any_ptr node, Stats& stats, size_t depth) {
   trie::report(node, stats, depth);
 }
-#ifndef PURE_TRIE
+#ifdef BURST
 void table_report(any_ptr node, Stats& stats, size_t depth) {
   node.table->report(stats, depth);
 }
@@ -266,7 +266,7 @@ report_f Transition::report_handlers[kNodeCount] = {
   null_report,
   compressed_report,
   trie_report,
-#ifndef PURE_TRIE
+#ifdef BURST
   table_report
 #endif
 };
@@ -290,10 +290,10 @@ void ValueData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
   }
 
   assert(!self.value->child);
-#ifdef PURE_TRIE
-  self.value->child = CompressedData::build(self.trace, val_ptr, key);
-#else
+#ifdef BURST
   self.value->child = TableData::build(self.trace, val_ptr, key);
+#else
+  self.value->child = CompressedData::build(self.trace, val_ptr, key);
 #endif
 }
 
@@ -541,7 +541,7 @@ struct TrieDumper : public DumpBase {
   }
 };
 
-#ifndef PURE_TRIE
+#ifdef BURST
 struct TableDumper : public DumpBase {
   void dump(std::ostream& out, any_ptr ptr, Storage* storage, int upper=-1) {
     TableData *data = ptr.table;
@@ -580,7 +580,7 @@ DumpBase* dumpers[] = {
   &null_dumper,
   &compress_dumper,
   &trie_dumper,
-#ifndef PURE_TRIE
+#ifdef BURST
   &table_dumper
 #endif
 };
