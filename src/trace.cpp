@@ -60,7 +60,7 @@ any_ptr Trace::ipop_value() {
   Transition& end(stack.back());
   ValueData* result = end.value;
   assert(result->type == kValue);
-  *end.node_ptr = result->next;
+  *end.node_ptr = result->child;
   stack.pop_back();
   while(!stack.empty() && stack.back().remove())
     stack.pop_back();

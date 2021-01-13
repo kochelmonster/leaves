@@ -8,61 +8,10 @@
 
 namespace leaves {
 
-void Table::find(Transition& self, ISlice& key, KeyString& current_key) {
-  self.table->find(self, key, current_key);
+
+void TableData::end_move(Transition& self, KeyString& current_key) {
+  self.trace->stack.push_back(fill(self, current_key)).cmp = 0;
 }
-
-void Table::next(Transition& self, KeyString& current_key) {
-  offset_ptr* result = self.table->next(self, current_key);
-  if (result)
-    self.trace->stack.push_back(result).cmp = 0;
-  else
-    self.parent_next(current_key);
-}
-
-void Table::first(Transition& self, KeyString& current_key) {
-  self.trace->stack.push_back(self.table->first(self, current_key)).cmp = 0;
-}
-
-void Table::prev(Transition& self, KeyString& current_key) {
-  offset_ptr* result = self.table->prev(self, current_key);
-  if (result)
-    self.trace->stack.push_back(result).cmp = 0;
-  else
-    self.parent_prev(current_key);
-}
-
-void Table::last(Transition& self, KeyString& current_key) {
-  self.trace->stack.push_back(self.table->last(self, current_key)).cmp = 0;
-}
-
-int Table::advance(Transition& self, const Slice& key) {
-  return self.table->advance(key, self.index);
-}
-
-void Table::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-  self.table->insert(self, key, val_ptr);
-}
-
-bool Table::remove(Transition& self) {
-  return self.table->remove(self);
-}
-
-void Table::report(offset_ptr* node, Stats& stats, size_t depth) {
-  TableData *table = node->resolve().table;
-  stats.burst_tables[table->count]++;
-  depth++;
-  for(uint16_t i = 0; i < table->count; i++) {
-    offset_ptr *val = &table->get_item(i)->value;
-    Transition::handlers[val->resolve().node->type]->report(val, stats, depth);
-  }
-}
-
-Table table_handler;
-
-/* Table Data
----------------------------------------------------------------------------------
-*/
 
 void TableData::find(Transition& self, ISlice& key, KeyString& current_key) {
   offset_ptr* result = ifind(self, key);
@@ -115,7 +64,7 @@ void TableData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
     assert(val_ptr.node->type == kValue);
     self.cmp = 1;
     self.index = 0;
-    val_ptr.value->next = *self.node_ptr;
+    val_ptr.value->child = *self.node_ptr;
     self.set(val_ptr);
     return;
   }
@@ -171,11 +120,11 @@ void TableData::split(Transition& self, const Slice& key, any_ptr val_ptr) {
 
 void TableData::insert_to_trie(Transition& self, const Slice& key, any_ptr next) {
   if (self.node->type == kTrie) {
-    offset_ptr *ptr = trie_handler.ifind(self, key[0]);
+    offset_ptr *ptr = trie::ifind(self, key[0]);
     if (ptr) {
       // a short is already here
       assert(ptr->resolve().node->type == kValue);
-      ptr->resolve().value->next = next;
+      ptr->resolve().value->child = next;
     }
     else
       self.insert(key, next);
@@ -222,11 +171,11 @@ void TableData::trie_split(Transition& self, int split_pos) {
     insert_to_trie(self, trie_key, table);
 
   assert(self.node->type == kTrie);
-  trie_handler.ifind(self, cmp); // for one_branch test
-  if (trie_handler.one_branch(self)) {
+  trie::ifind(self, cmp); // for one_branch test
+  if (trie::one_branch(self)) {
     // compress the trie
     any_ptr next = self.lower.trie->children[0].resolve();
-    cmp = trie_handler.to_char(self); // sets trie_key
+    cmp = trie::to_char(self); // sets trie_key
     self.trace->free(self.node);
     self.set(CompressedData::build(self.trace, next, trie_key));
   }
@@ -235,7 +184,7 @@ void TableData::trie_split(Transition& self, int split_pos) {
   if (start == 1) {
     // item[0] is short -> insert its value before
     any_ptr next = item->value;
-    next.value->next = *self.node_ptr;
+    next.value->child = *self.node_ptr;
     self.set(next);
   }
 
@@ -264,7 +213,6 @@ bool TableData::copy_to_split(Transition& self, TableData* dest, int start, int 
   return true;
 }
 
-
 bool TableData::remove(Transition& self) {
   if (count == 1) {
     // purge this
@@ -286,6 +234,14 @@ bool TableData::remove(Transition& self) {
   self.set(dest);
   self.trace->free(this);
   return true;
+}
+
+void TableData::report(Stats& stats, size_t depth) {
+  stats.burst_tables[count]++;
+  depth++;
+  for(uint16_t i = 0; i < count; i++) {
+    Transition::report(get_item(i)->value, stats, depth);
+  }
 }
 
 TableData* TableData::alloc(Trace* trace) {

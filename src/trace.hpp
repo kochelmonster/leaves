@@ -35,7 +35,7 @@ struct Stack {
 
 struct Trace {
   Trace(Storage& storage, offset_ptr* root_=NULL);
-  bool valid() const { return rest_key.empty() && stack.back().valid(); }
+  bool valid() const { return rest_key.empty() && stack.back().node->type == kValue; }
   void find(const Slice& key);
   void first();
   void last();

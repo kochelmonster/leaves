@@ -13,241 +13,261 @@
 
 namespace leaves {
 
-
-struct Value : public NodeHandler {
-  bool valid() const { return true; }
-
-  void find(Transition& self, ISlice& key, KeyString& current_key) {
-    if (key.size()) {
-      self.cmp = 1;
-      if (self.value->next)
-        self.child_find(&self.value->next, key, current_key);
-    }
-    else
-      self.cmp = 0;
-  }
-
-  void first(Transition& self, KeyString& current_key) {
-    self.cmp = 0;
-  }
-
-  void next(Transition& self, KeyString& current_key) {
-    if (self.cmp == 0) {
-      self.cmp = 1;
-      if (self.value->next) {
-        self.child_first(&self.value->next, current_key);
-        return;
-      }
-    }
-    self.parent_next(current_key);
-  }
-
-  void prev(Transition& self, KeyString& current_key) {
-    if (self.cmp == 1) {
-      self.cmp = 0;
-      return;
-    }
-    self.parent_prev(current_key);
-  }
-
-  void last(Transition& self, KeyString& current_key) {
-    if (self.value->next) {
-      self.cmp = 1;
-      self.child_last(&self.value->next, current_key);
-      return;
-    }
-    self.cmp = 0;
-  }
-
-  int advance(Transition& self, const Slice& key) {
-    if (key.empty()) {
-      self.cmp = 0;
-      return -1;
-    }
-    return 0;
-  }
-
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-    if (key.empty()) {
-      val_ptr.value->next = self.value->next;
-      self.trace->free(self.value);
-      self.set(val_ptr);
-      return;
-    }
-
-    assert(!self.value->next);
-#ifdef PURE_TRIE
-    self.value->next = CompressedData::build(self.trace, val_ptr, key);
-#else
-    self.value->next = TableData::build(self.trace, val_ptr, key);
-#endif
-  }
-
-  bool remove(Transition& self) { assert(0); return false; };
-
-  void report(offset_ptr* node, Stats& stats, size_t depth) {
-    ValueData* value = node->resolve().value;
-    if (value->next) {
-      stats.intermediate_nodes++;
-      Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats, depth+1);
-    }
-    else {
-      stats.end_nodes++;
-      stats.max_depth = std::max(stats.max_depth, depth);
-    }
-  }
-};
-
-struct Compressed : public NodeHandler {
-  offset_ptr* move(Transition& self, KeyString& current_key, bool do_it) {
-    CompressedData* node = self.compressed;
-    if (do_it) {
-      self.cmp = 0;
-      current_key.append(node->keys, node->size);
-      return &node->next;
-    }
-    if (self.cmp == 0) {
-      self.cmp = 1;
-      current_key.resize(current_key.size()-node->size);
-    }
-    return NULL;
-  }
-
-  void next(Transition& self, KeyString& current_key) {
-    offset_ptr* result = move(self, current_key, self.cmp < 0);
-    if (result)
-      self.child_first(result, current_key);
-    else
-      self.parent_next(current_key);
-  }
-
-  void first(Transition& self, KeyString& current_key) {
-    self.cmp = -1;
-    self.next(current_key);
-  }
-
-  void prev(Transition& self, KeyString& current_key) {
-    offset_ptr* result = move(self, current_key, self.cmp > 0);
-    if (result)
-      self.child_last(result, current_key);
-    else
-      self.parent_prev(current_key);
-  }
-
-  void last(Transition& self, KeyString& current_key) {
-    self.cmp = 1;
-    self.prev(current_key);
-  }
-
-  bool remove(Transition& self) {
-    CompressedData *node = self.compressed;
-    if (!node->next) {
-      self.trace->free(node);
-      *self.node_ptr = offset_ptr();
-      return true;
-    }
-    node->eat_child(self);
-    return true;
-  }
-
-  void find(Transition& self, ISlice& key, KeyString& current_key) {
-    if (!(self.cmp = self.compressed->find(key))) {
-      key.iadvance(self.compressed->size);
-      current_key.append(self.compressed->keys, self.compressed->size);
-      self.child_find(&self.compressed->next, key, current_key);
-    }
-  }
-
-  int advance(Transition& self, const Slice& key) {
-    CompressedData* node = self.compressed;
-    if (node->size <= key.size() && !memcmp(node->keys, key.data(), node->size)) {
-      self.cmp = 0;
-      return node->size;
-    }
-    return -1;
-  }
-
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-    assert(val_ptr.node->type == kValue);
-    CompressedData *node = self.compressed;
-    size_t size = std::min((size_t)node->size, key.size());
-    char* keys = node->keys;
-    Slice rest(keys, node->size);
-
-    for(size_t i = 0; i < size; i++) {
-      if (keys[i] != key[i]) {
-        /* insert_compressed_split:
-           node = [abcdefg]
-           key = [abhij]
-                         first   trie    rest
-           [abcdefg] ==> [ab] -> |c| -> [efg]
-                                 |h| -> [ij]
-        */
-        Slice first(key.data(), i);
-
-        // build trie node
-        any_ptr rest_ptr = CompressedData::build(self.trace, node->next, rest.advance(i+1));
-        any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, keys[i]);
-
-        self.set(trie_ptr);
-        trie_handler.ifind(self, key[i]);
-        self.insert(key.advance(i), val_ptr);
-
-        self.set(CompressedData::build(self.trace, trie_ptr, first));
-        self.trace->free(node);
-        return;
-      }
-    }
-
-    /* insert_compressed_short: (key is a substring of node)
-       node = [abcdefg]
-       key = [abhij]
-                     first  Leaf   rest
-       [abcdefg] ==> [ab] -> [] -> [cefg]
-    */
-    assert(key.size() < node->size);
-    val_ptr.value->next = CompressedData::build(self.trace, node->next, rest.advance(key.size()));
-    val_ptr = CompressedData::build(self.trace, val_ptr, key);
-    self.set(val_ptr);
-    self.trace->free(node);
-  }
-
-  void report(offset_ptr* node, Stats& stats, size_t depth) {
-    CompressedData* value = node->resolve().compressed;
-    stats.intermediate_nodes++;
-    Transition::handlers[value->next.resolve().node->type]->report(&value->next, stats, depth+1);
-    stats.compressed_nodes++;
-  }
-};
-
-
-struct Null : public NodeHandler {
-  void find(Transition& self, ISlice& key, KeyString& current_key) { }
-  void next(Transition& self, KeyString& current_key) { }
-  void first(Transition& self, KeyString& current_key) { }
-  void prev(Transition& self, KeyString& current_key) { }
-  void last(Transition& self, KeyString& current_key) { }
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr) {
-#ifdef PURE_TRIE
-    self.set(CompressedData::build(self.trace, val_ptr, key));
-#else
-    self.set(TableData::build(self.trace, val_ptr, key));
-#endif
-  }
-  int advance(Transition& self, const Slice& key) { return -1; }
-  bool remove(Transition& self) { assert(0); return false; }
-};
-
-
-static Value value_handler;
-static Null null_handler;
-static Compressed compressed_handler;
-
-
-NodeHandler* Transition::handlers[] = {
-  &value_handler, &null_handler, &compressed_handler, &trie_handler,
+void value_find(Transition& self, ISlice& key, KeyString& current_key) {
+  self.value->find(self, key, current_key);
+}
+void null_find(Transition& self, ISlice& key, KeyString& current_key) {
+}
+void compressed_find(Transition& self, ISlice& key, KeyString& current_key) {
+  self.compressed->find(self, key, current_key);
+}
+void trie_find(Transition& self, ISlice& key, KeyString& current_key) {
+  trie::find(self, key, current_key);
+}
 #ifndef PURE_TRIE
-  &table_handler
+void table_find(Transition& self, ISlice& key, KeyString& current_key) {
+  self.table->find(self, key, current_key);
+}
+#endif
+
+find_f Transition::find_handlers[kNodeCount] = {
+  value_find,
+  null_find,
+  compressed_find,
+  trie_find,
+#ifndef PURE_TRIE
+  table_find
+#endif
+};
+
+
+void value_next(Transition& self, KeyString& current_key) {
+  self.value->next(self, current_key);
+}
+void null_next(Transition& self, KeyString& current_key) {
+}
+void compressed_next(Transition& self, KeyString& current_key) {
+  self.compressed->next(self, current_key);
+}
+void trie_next(Transition& self, KeyString& current_key) {
+  trie::next(self, current_key);
+}
+#ifndef PURE_TRIE
+void table_next(Transition& self, KeyString& current_key) {
+  self.table->next(self, current_key);
+}
+#endif
+
+move_f Transition::next_handlers[kNodeCount] = {
+  value_next,
+  null_next,
+  compressed_next,
+  trie_next,
+#ifndef PURE_TRIE
+  table_next
+#endif
+};
+
+
+void value_first(Transition& self, KeyString& current_key) {
+  self.value->first(self, current_key);
+}
+void null_first(Transition& self, KeyString& current_key) {
+}
+void compressed_first(Transition& self, KeyString& current_key) {
+  self.compressed->first(self, current_key);
+}
+void trie_first(Transition& self, KeyString& current_key) {
+  trie::first(self, current_key);
+}
+#ifndef PURE_TRIE
+void table_first(Transition& self, KeyString& current_key) {
+  self.table->first(self, current_key);
+}
+#endif
+
+move_f Transition::first_handlers[kNodeCount] = {
+  value_first,
+  null_first,
+  compressed_first,
+  trie_first,
+#ifndef PURE_TRIE
+  table_first
+#endif
+};
+
+
+void value_last(Transition& self, KeyString& current_key) {
+  self.value->last(self, current_key);
+}
+void null_last(Transition& self, KeyString& current_key) {
+}
+void compressed_last(Transition& self, KeyString& current_key) {
+  self.compressed->last(self, current_key);
+}
+void trie_last(Transition& self, KeyString& current_key) {
+  trie::last(self, current_key);
+}
+#ifndef PURE_TRIE
+void table_last(Transition& self, KeyString& current_key) {
+  self.table->last(self, current_key);
+}
+#endif
+
+move_f Transition::last_handlers[kNodeCount] = {
+  value_last,
+  null_last,
+  compressed_last,
+  trie_last,
+#ifndef PURE_TRIE
+  table_last
+#endif
+};
+
+
+void value_prev(Transition& self, KeyString& current_key) {
+  self.value->prev(self, current_key);
+}
+void null_prev(Transition& self, KeyString& current_key) {
+}
+void compressed_prev(Transition& self, KeyString& current_key) {
+  self.compressed->prev(self, current_key);
+}
+void trie_prev(Transition& self, KeyString& current_key) {
+  trie::prev(self, current_key);
+}
+#ifndef PURE_TRIE
+void table_prev(Transition& self, KeyString& current_key) {
+  self.table->prev(self, current_key);
+}
+#endif
+
+move_f Transition::prev_handlers[kNodeCount] = {
+  value_prev,
+  null_prev,
+  compressed_prev,
+  trie_prev,
+#ifndef PURE_TRIE
+  table_prev
+#endif
+};
+
+
+void value_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  self.value->insert(self, key, val_ptr);
+}
+void null_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  #ifdef PURE_TRIE
+      self.set(CompressedData::build(self.trace, val_ptr, key));
+  #else
+      self.set(TableData::build(self.trace, val_ptr, key));
+  #endif
+}
+void compressed_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  self.compressed->insert(self, key, val_ptr);
+}
+void trie_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  trie::insert(self, key, val_ptr);
+}
+#ifndef PURE_TRIE
+void table_insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  self.table->insert(self, key, val_ptr);
+}
+#endif
+
+insert_f Transition::insert_handlers[kNodeCount] = {
+  value_insert,
+  null_insert,
+  compressed_insert,
+  trie_insert,
+#ifndef PURE_TRIE
+  table_insert
+#endif
+};
+
+
+bool value_remove(Transition& self) {
+  assert(0);
+  return false;
+}
+bool null_remove(Transition& self) {
+  return false;
+}
+bool compressed_remove(Transition& self) {
+  return self.compressed->remove(self);
+}
+bool trie_remove(Transition& self) {
+  return trie::remove(self);
+}
+#ifndef PURE_TRIE
+bool table_remove(Transition& self) {
+  return self.table->remove(self);
+}
+#endif
+
+remove_f Transition::remove_handlers[kNodeCount] = {
+  value_remove,
+  null_remove,
+  compressed_remove,
+  trie_remove,
+#ifndef PURE_TRIE
+  table_remove
+#endif
+};
+
+
+int value_advance(Transition& self, const Slice& key) {
+  return self.value->advance(self, key);
+}
+int null_advance(Transition& self, const Slice& key) {
+  return 0;
+}
+int compressed_advance(Transition& self, const Slice& key) {
+  return self.compressed->advance(self, key);
+}
+int trie_advance(Transition& self, const Slice& key) {
+  return trie::advance(self, key);
+}
+#ifndef PURE_TRIE
+int table_advance(Transition& self, const Slice& key) {
+  return self.table->advance(self, key);
+}
+#endif
+
+advance_f Transition::advance_handlers[kNodeCount] = {
+  value_advance,
+  null_advance,
+  compressed_advance,
+  trie_advance,
+#ifndef PURE_TRIE
+  table_advance
+#endif
+};
+
+void value_report(any_ptr node, Stats& stats, size_t depth) {
+  node.value->report(stats, depth);
+}
+void null_report(any_ptr node, Stats& stats, size_t depth) {
+}
+void compressed_report(any_ptr node, Stats& stats, size_t depth) {
+  node.compressed->report(stats, depth);
+}
+void trie_report(any_ptr node, Stats& stats, size_t depth) {
+  trie::report(node, stats, depth);
+}
+#ifndef PURE_TRIE
+void table_report(any_ptr node, Stats& stats, size_t depth) {
+  node.table->report(stats, depth);
+}
+#endif
+
+report_f Transition::report_handlers[kNodeCount] = {
+  value_report,
+  null_report,
+  compressed_report,
+  trie_report,
+#ifndef PURE_TRIE
+  table_report
 #endif
 };
 
@@ -257,8 +277,91 @@ any_ptr ValueData::build(Trace* trace, const Slice& value) {
   result.value->type = kValue;
   result.value->size = value.size();
   memcpy(result.value->value, value.data(), value.size());
-  result.value->next = offset_ptr();
+  result.value->child = offset_ptr();
   return result;
+}
+
+void ValueData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  if (key.empty()) {
+    val_ptr.value->child = self.value->child;
+    self.trace->free(self.value);
+    self.set(val_ptr);
+    return;
+  }
+
+  assert(!self.value->child);
+#ifdef PURE_TRIE
+  self.value->child = CompressedData::build(self.trace, val_ptr, key);
+#else
+  self.value->child = TableData::build(self.trace, val_ptr, key);
+#endif
+}
+
+
+void CompressedData::insert(Transition& self, const Slice& key, any_ptr val_ptr) {
+  assert(val_ptr.node->type == kValue);
+  size_t size_ = std::min((size_t)size, key.size());
+  Slice rest(keys, size);
+
+  for(size_t i = 0; i < size_; i++) {
+    if (keys[i] != key[i]) {
+      /* insert_compressed_split:
+         node = [abcdefg]
+         key = [abhij]
+                       first   trie    rest
+         [abcdefg] ==> [ab] -> |c| -> [efg]
+                               |h| -> [ij]
+      */
+      Slice first(key.data(), i);
+
+      // build trie node
+      any_ptr rest_ptr = build(self.trace, child, rest.advance(i+1));
+      any_ptr trie_ptr = TrieData::build(self.trace, rest_ptr, keys[i]);
+
+      self.set(trie_ptr);
+      trie::ifind(self, key[i]);
+      self.insert(key.advance(i), val_ptr);
+
+      self.set(build(self.trace, trie_ptr, first));
+      self.trace->free(this);
+      return;
+    }
+  }
+
+  /* insert_compressed_short: (key is a substring of node)
+     node = [abcdefg]
+     key = [abhij]
+                   first  Leaf   rest
+     [abcdefg] ==> [ab] -> [] -> [cefg]
+  */
+  assert(key.size() < size);
+  val_ptr.value->child = build(self.trace, child, rest.advance(key.size()));
+  val_ptr = build(self.trace, val_ptr, key);
+  self.set(val_ptr);
+  self.trace->free(this);
+}
+
+offset_ptr* CompressedData::move(Transition& self, KeyString& current_key, bool do_it) {
+  if (do_it) {
+    self.cmp = 0;
+    current_key.append(keys, size);
+    return &child;
+  }
+  if (self.cmp == 0) {
+    self.cmp = 1;
+    current_key.resize(current_key.size()-size);
+  }
+  return NULL;
+}
+
+bool CompressedData::remove(Transition& self) {
+  if (!child) {
+    self.trace->free(this);
+    *self.node_ptr = offset_ptr();
+    return true;
+  }
+  eat_child(self);
+  return true;
 }
 
 any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key) {
@@ -279,14 +382,14 @@ any_ptr CompressedData::build(Trace* trace, any_ptr next, const Slice& key) {
 }
 
 void CompressedData::eat_child(Transition& self) {
-  CompressedData *child = next.resolve().compressed;
-  if (child->type == kCompressed) {
+  CompressedData *child_ = child.resolve().compressed;
+  if (child_->type == kCompressed) {
     string tmp;
-    tmp.reserve(size + child->size);
+    tmp.reserve(size + child_->size);
     tmp.append(keys, size);
-    tmp.append(child->keys, child->size);
-    any_ptr result = CompressedData::build(self.trace, child->next, tmp);
-    self.trace->free(child);
+    tmp.append(child_->keys, child_->size);
+    any_ptr result = CompressedData::build(self.trace, child_->child, tmp);
+    self.trace->free(child_);
     self.trace->free(this);
     self.set(result);
   }
@@ -353,11 +456,11 @@ struct ValueDumper : public DumpBase {
       out << "]";
     }
     out << "\"" << std::endl;
-    if (data->next) {
+    if (data->child) {
       out << "children: " << std::endl;
-      out << "  - " << dump_id(data->next, storage) << std::endl;
+      out << "  - " << dump_id(data->child, storage) << std::endl;
       out << "---" << std::endl;
-      dump_node(out, data->next, storage);
+      dump_node(out, data->child, storage);
     }
     else {
       out << "children: []" << std::endl;
@@ -379,10 +482,10 @@ struct CompressDumper : public DumpBase {
     }
     out << "\"" << std::endl;
     out << "children: " << std::endl;
-    out << "  - " << dump_id(data->next, storage) << std::endl;
+    out << "  - " << dump_id(data->child, storage) << std::endl;
     out << "---" << std::endl;
-    if (data->next)
-      dump_node(out, data->next, storage);
+    if (data->child)
+      dump_node(out, data->child, storage);
   }
 };
 

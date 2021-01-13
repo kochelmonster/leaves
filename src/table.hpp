@@ -59,20 +59,20 @@ struct TableData : public Node {
   uint16_t ptrs[];
 
   void insert(Transition& self, const Slice& key, any_ptr val_ptr);
-  bool remove(Transition& self, int index);
-  int advance(const Slice& key, int index);
+  bool remove(Transition& self);
+  int advance(Transition& self, const Slice& key);
 
   void find(Transition& self, ISlice& key, KeyString& current_key);
   offset_ptr* ifind(Transition& self, const Slice& key);
-  offset_ptr* next(Transition& self, KeyString& current_key);
-  offset_ptr* prev(Transition& self, KeyString& current_key);
-  offset_ptr* first(Transition& self, KeyString& current_key);
-  offset_ptr* last(Transition& self, KeyString& current_key);
+  void next(Transition& self, KeyString& current_key);
+  void prev(Transition& self, KeyString& current_key);
+  void first(Transition& self, KeyString& current_key);
+  void last(Transition& self, KeyString& current_key);
 
   void split(Transition& self, const Slice& key, any_ptr val_ptr);
   void trie_split(Transition& self, int split_pos);
-  bool remove(Transition& self);
   offset_ptr* fill(Transition& self, KeyString& current_key);
+  void end_move(Transition& self, KeyString& current_key);
   void cut(Transition& self, KeyString& current_key);
   int compare_item(int index, const Slice& other);
 
@@ -81,23 +81,12 @@ struct TableData : public Node {
   bool copy_to_split(Transition& self, TableData* dest, int start, int end, int offset);
   void insert_to_trie(Transition& self, const Slice& key, any_ptr next);
 
+  void report(Stats& stats, size_t depth);
+
   static TableData* alloc(Trace* trace);
   static any_ptr build(Trace* trace, any_ptr val_ptr, const Slice& key);
 };
 #pragma pack(0)
-
-
-struct Table : public NodeHandler {
-  void find(Transition& self, ISlice& key, KeyString& current_key);
-  void next(Transition& self, KeyString& current_key);
-  void first(Transition& self, KeyString& current_key);
-  void prev(Transition& self, KeyString& current_key);
-  void last(Transition& self, KeyString& current_key);
-  int advance(Transition& self, const Slice& key);
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr);
-  bool remove(Transition& self);
-  void report(offset_ptr* node, Stats& stats, size_t depth);
-};
 
 
 inline DataItem* TableData::get_item(uint16_t index) {
@@ -123,46 +112,51 @@ inline void TableData::cut(Transition& self, KeyString& current_key) {
   }
 }
 
-inline offset_ptr* TableData::next(Transition& self, KeyString& current_key) {
+inline void TableData::next(Transition& self, KeyString& current_key) {
   cut(self, current_key);
   if (self.cmp > 0) {
     self.cmp = 0;
-    return fill(self, current_key);
+    end_move(self, current_key);
+    return;
   }
 
   self.cmp = 0;
-  return ++self.index < count ? fill(self, current_key) : NULL;
+  if (++self.index < count)
+    end_move(self, current_key);
+  else
+    self.parent_next(current_key);
 }
 
-inline offset_ptr* TableData::prev(Transition& self, KeyString& current_key) {
+inline void TableData::prev(Transition& self, KeyString& current_key) {
   cut(self, current_key);
   if (self.cmp < 0 && self.index < count) {
     self.cmp = 0;
-    return fill(self, current_key);
+    end_move(self, current_key);
+    return;
   }
   self.cmp = 0;
-  return (--self.index >= 0) ? fill(self, current_key) : NULL;
+  if (--self.index >= 0)
+    end_move(self, current_key);
+  else
+    self.parent_prev(current_key);
 }
 
-inline offset_ptr* TableData::first(Transition& self, KeyString& current_key) {
+inline void TableData::first(Transition& self, KeyString& current_key) {
   self.index = 0;
   self.cmp = 0;
-  return fill(self, current_key);
+  end_move(self, current_key);
 }
 
-inline offset_ptr* TableData::last(Transition& self, KeyString& current_key) {
+inline void TableData::last(Transition& self, KeyString& current_key) {
   self.index = count - 1;
   self.cmp = 0;
-  return fill(self, current_key);
+  end_move(self, current_key);
 }
 
-
-inline int TableData::advance(const Slice& key, int index) {
-  DataItem* item = get_item(index);
+inline int TableData::advance(Transition& self, const Slice& key) {
+  DataItem* item = get_item(self.index);
   return item->compare(key) ? -1 : item->key_size;
 }
-
-extern Table table_handler;
 
 } // namespace leaves
 #endif // _LARCH_LEAVES_TABLE_HPP

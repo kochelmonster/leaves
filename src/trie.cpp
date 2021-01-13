@@ -6,7 +6,9 @@
 
 namespace leaves {
 
-void Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
+
+namespace trie {
+void find(Transition& self, ISlice& key, KeyString& current_key) {
   if (key.empty()) {
     self.cmp = -1;
     return;
@@ -21,7 +23,7 @@ void Trie::find(Transition& self, ISlice& key, KeyString& current_key) {
   }
 }
 
-offset_ptr* Trie::ifind(Transition& self, char key) {
+offset_ptr* ifind(Transition& self, char key) {
   self.key = bit::upper(key);
   if (self.lower.set(self.trie->find(self))) {
     self.lower.key = bit::lower(key);
@@ -30,7 +32,7 @@ offset_ptr* Trie::ifind(Transition& self, char key) {
   return NULL;
 }
 
-void Trie::next(Transition& self, KeyString& current_key) {
+void next(Transition& self, KeyString& current_key) {
   offset_ptr* result = NULL;
 
   if (self.cmp == -1) {
@@ -57,14 +59,14 @@ void Trie::next(Transition& self, KeyString& current_key) {
     self.parent_next(current_key);
 }
 
-void Trie::first(Transition& self, KeyString& current_key) {
+void first(Transition& self, KeyString& current_key) {
   self.lower.set(self.trie->first(self));
   offset_ptr *result = self.lower.trie->first(self.lower);
   current_key.push_back(to_char(self));
   self.child_first(result, current_key);
 }
 
-void Trie::prev(Transition& self, KeyString& current_key) {
+void prev(Transition& self, KeyString& current_key) {
   offset_ptr *result = NULL;
 
   if (self.cmp == -1) {
@@ -91,22 +93,22 @@ void Trie::prev(Transition& self, KeyString& current_key) {
     self.parent_prev(current_key);
 }
 
-void Trie::last(Transition& self, KeyString& current_key) {
+void last(Transition& self, KeyString& current_key) {
   self.lower.set(self.trie->last(self));
   offset_ptr *result = self.lower.trie->last(self.lower);
   current_key.push_back(to_char(self));
   self.child_last(result, current_key);
 }
 
-int Trie::advance(Transition& self, const Slice& key) {
+int advance(Transition& self, const Slice& key) {
   return key.size() && self.lower.cmp == 0 && key[0] == to_char(self) ? 1 : -1;
 }
 
-void Trie::insert(Transition& self, const Slice& key, any_ptr next) {
+void insert(Transition& self, const Slice& key, any_ptr next) {
   if (self.cmp == -1) {
     // key was empty at find -> insert value key before
     assert(next.node->type == kValue);
-    next.value->next = *self.node_ptr;
+    next.value->child = *self.node_ptr;
     self.set(next);
     return;
   }
@@ -126,7 +128,7 @@ void Trie::insert(Transition& self, const Slice& key, any_ptr next) {
     self.trie->insert(self, self.trace, TrieData::create(self.trace, next, self.lower.key));
 }
 
-bool Trie::remove(Transition& self) {
+bool remove(Transition& self) {
   if (self.lower.trie->remove(self.lower, self.trace)) {
     self.trie->remove(self, self.trace);
     return true;
@@ -143,26 +145,27 @@ bool Trie::remove(Transition& self) {
   return true;
 }
 
-void Trie::report(offset_ptr* node, Stats& stats, size_t depth) {
+void report(any_ptr node, Stats& stats, size_t depth) {
   TransitionData upper;
   TransitionData lower;
   uint16_t count = 0;
-  upper.set(node);
+  offset_ptr src = node;
+  upper.set(&src);
   lower.set(upper.trie->first(upper));
   depth++;
   do {
     offset_ptr *next = lower.trie->first(lower);
     do {
       count++;
-      Transition::handlers[next->resolve().node->type]->report(next, stats, depth);
+      Transition::report(*next, stats, depth);
     } while((next = lower.trie->next(lower)));
   }
   while(lower.set(upper.trie->next(upper)));
   stats.tries_nodes[count]++;
 }
 
+} // namespace trie
 
-Trie trie_handler;
 
 /* Trie Data
 ---------------------------------------------------------------------------------

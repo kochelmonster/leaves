@@ -144,7 +144,7 @@ void Storage::get_stats(Stats& stats) {
   stats.max_depth = 0;
   stats.intermediate_nodes = 0;
   stats.compressed_nodes = 0;
-  Transition::handlers[header->root.resolve().node->type]->report(&header->root, stats, 0);
+  Transition::report(header->root, stats, 0);
 }
 
 

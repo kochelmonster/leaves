@@ -37,28 +37,28 @@ struct TrieData : public Node {
 #pragma pack(0)
 
 
-struct Trie : public NodeHandler {
-  void find(Transition& self, ISlice& key, KeyString& current_key);
-  offset_ptr* ifind(Transition& self, char key);
-  void next(Transition& self, KeyString& current_key);
-  void first(Transition& self, KeyString& current_key);
-  void prev(Transition& self, KeyString& current_key);
-  void last(Transition& self, KeyString& current_key);
-  int advance(Transition& self, const Slice& key);
-  void insert(Transition& self, const Slice& key, any_ptr val_ptr);
-  bool remove(Transition& self);
-  bool one_branch(Transition& self);
-  char to_char(Transition& self);
-  void report(offset_ptr* node, Stats& stats, size_t depth);
-};
+namespace trie {
+void find(Transition& self, ISlice& key, KeyString& current_key);
+offset_ptr* ifind(Transition& self, char key);
+void next(Transition& self, KeyString& current_key);
+void first(Transition& self, KeyString& current_key);
+void prev(Transition& self, KeyString& current_key);
+void last(Transition& self, KeyString& current_key);
+int advance(Transition& self, const Slice& key);
+void insert(Transition& self, const Slice& key, any_ptr val_ptr);
+bool remove(Transition& self);
+void report(any_ptr node, Stats& stats, size_t depth);
 
-inline char Trie::to_char(Transition& self) {
+inline char to_char(Transition& self) {
   return (self.key << 4) | self.lower.key;
 }
 
-inline bool Trie::one_branch(Transition& self) {
+inline bool one_branch(Transition& self) {
   return self.lower.trie->one_branch(self.lower) && self.trie->one_branch(self);
 }
+}  // namespace trie
+
+
 
 inline size_t TrieData::size_of(size_t count) {
   return count * sizeof(offset_ptr) + sizeof(TrieData);
@@ -139,8 +139,6 @@ inline uint8_t lower(uint8_t value) {
   return (value & 0x0F);
 }
 } // namespace bit
-
-extern Trie trie_handler;
 
 } // namespace leaves
 #endif // _LARCH_LEAVES_TRIE_HPP
