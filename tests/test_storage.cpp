@@ -9,68 +9,105 @@
 
 #define TEST_FILE "test.lvs"
 
-using namespace larch_leaves;
+using namespace leaves;
 
-
-#define SEGMENT_SIZE 1024*16
 
 
 BOOST_AUTO_TEST_CASE(start_storage) {
   std::remove(TEST_FILE);
 
   {
-    Storage storage(TEST_FILE, SEGMENT_SIZE);
-    BOOST_REQUIRE_EQUAL(*storage.version, 0);
-    BOOST_REQUIRE_EQUAL(storage.segments.size(), 3);
-    *storage.version = 1;
+    Storage storage(TEST_FILE, 8*PAGE_SIZE, 2*PAGE_SIZE);
+    BOOST_REQUIRE_EQUAL(storage.start->header.version, 0);
   }
 
   {
-    Storage storage(TEST_FILE, SEGMENT_SIZE);
-    BOOST_REQUIRE_EQUAL(*storage.version, 1);
-    BOOST_REQUIRE_EQUAL(storage.segments.size(), 3);
+    Storage storage(TEST_FILE, 8*PAGE_SIZE, 2*PAGE_SIZE);
 
-    segment_ptr ptr1 = storage.pools[4].allocate();
-    BOOST_REQUIRE_EQUAL(ptr1.segment_id, 2);
-    BOOST_REQUIRE_EQUAL(ptr1.delta, 144);
+    const Page *root = storage.page(0);
+    BOOST_REQUIRE_EQUAL(root, storage.start);
 
-    segment_ptr ptr2 = storage.pools[4].allocate();
-    BOOST_REQUIRE_EQUAL(ptr2.segment_id, 2);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 144+100);
+    BOOST_REQUIRE_EQUAL(storage.transaction_id(), 0);
+    BOOST_REQUIRE_EQUAL(storage.block_end, 8);
+    BOOST_REQUIRE_EQUAL(storage.start->header.freed_head, 0);
+    BOOST_REQUIRE_EQUAL(storage.start->header.free_block, 2);
 
-    storage.pools[4].free(ptr1);
-    storage.pools[4].free(ptr2);
+    storage.transaction_inc();
+    location_p page = storage.alloc();
+    storage.flush();
 
-    ptr1 = storage.pools[4].allocate();
-    BOOST_REQUIRE_EQUAL(ptr1.segment_id, 2);
-    BOOST_REQUIRE_EQUAL(ptr1.delta, 144+100);
+    BOOST_REQUIRE_EQUAL(page.page, 2);
+    BOOST_REQUIRE_EQUAL(storage.transaction_id(), 1);
+    BOOST_REQUIRE_EQUAL(storage.start->header.free_block, 3);
 
-    ptr2 = storage.pools[4].allocate();
-    BOOST_REQUIRE_EQUAL(ptr2.segment_id, 2);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 144);
+    location_p page1 = storage.alloc(7*PAGE_SIZE-4);
+    storage.flush();
 
-    ptr1 = storage.pools[2].allocate();
-    for(int i = 0; i < 500; i++) {
-      ptr2 = storage.pools[2].allocate();
-    }
-    //std::cout << "allocated1 " << ptr1.delta << ", " << ptr1.segment_id << std::endl;
-    //std::cout << "allocated2 " << ptr2.delta << ", " << ptr2.segment_id << std::endl;
-    BOOST_REQUIRE_EQUAL(ptr2.segment_id, 3);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 5360);
+    root = storage.page(1);
+    BOOST_REQUIRE_EQUAL(root, storage.start+1);
+    BOOST_REQUIRE_EQUAL(page1.page, 3);
 
-    storage.pools[2].free(ptr1);
-    ptr2 = storage.pools[2].allocate();
-    BOOST_REQUIRE_EQUAL(ptr2.segment_id, 0);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, 4784);
+    location_p page2 = storage.alloc();
+    storage.flush();
 
-    ptr2 = storage.allocate(2000);
-    storage.free(ptr2);
+    BOOST_REQUIRE_EQUAL(page2.page, 10);
 
-    ptr1 = storage.allocate(2000);
-    BOOST_REQUIRE_EQUAL(ptr2.segment_id, ptr1.segment_id);
-    BOOST_REQUIRE_EQUAL(ptr2.delta, ptr1.delta);
+    storage.free(page1, 7*PAGE_SIZE-4);
+    storage.flush();
+    BOOST_REQUIRE_EQUAL(storage.start->header.freed_head, 3);
 
-    // std::cout << "allocated " << ptr2.delta << ", " << ptr2.segment_id << std::endl;
+    const Page* fp = storage.page(3);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 4);
+
+    fp = storage.page(4);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 5);
+
+    fp = storage.page(5);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 6);
+
+    fp = storage.page(6);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 7);
+
+    fp = storage.page(7);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 8);
+
+    fp = storage.page(8);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 9);
+
+    fp = storage.page(9);
+    BOOST_REQUIRE_EQUAL(fp->next_storage, 0);
+
+   
+    page = storage.alloc();
+    storage.flush();
+    BOOST_REQUIRE_EQUAL(page.page, 3);
+    BOOST_REQUIRE_EQUAL(storage.start->header.freed_head, 4);
+
+    Page* wp = storage.get_writable(1);
+    wp->content[0] = 1;
+
+    wp = storage.get_writable(10);
+    wp->content[0] = 2;
+
+    wp = storage.get_writable(3);
+    wp->content[0] = 3;
+
+    wp = storage.get_writable(9);
+    wp->content[1] = 4;
+
+    storage.flush();
+
+    fp = storage.page(1);
+    BOOST_REQUIRE_EQUAL(fp->content[0], 1);
+
+    fp = storage.page(10);
+    BOOST_REQUIRE_EQUAL(fp->content[0], 2);
+    
+    fp = storage.page(3);
+    BOOST_REQUIRE_EQUAL(fp->content[0], 3);
+
+    fp = storage.page(9);
+    BOOST_REQUIRE_EQUAL(fp->content[1], 4);
 
     std::remove(TEST_FILE);
   }

@@ -1,12 +1,12 @@
-id: kCompressed-0-400
+id: kCompressed-0P1
+space: 10
 size: 7
 keys: "[a][b][c][d][e][f][g]"
 children: 
-  - kValue-0-1968
+  - kLeaf-10P1
 ---
-id: kValue-0-1968
+id: kLeaf-10P1
+space: 11
 size: 7
 value: "[a][b][c][d][e][f][g]"
-children: 
-  - kNull-0-0
 ---

@@ -1,802 +1,960 @@
-//  Handlers for all nodes
-#include "node.hpp"
-#include "port.hpp"
-#include <algorithm>
-#ifdef DEBUG
-#include <ctype.h>
-#endif
+#include "page.hpp"
+#include "storage.hpp"
+#include "trace.hpp"
 
-namespace larch_leaves {
+namespace leaves
+{
 
-#define MAX_POOL_SIZE (4 + (POOL_COUNT-1) * NODE_INCREMENT)
-
-#define MAX_VAL_SIZE  (MAX_POOL_SIZE - sizeof(ValueData))
-#define VDELTA 29
-
-
-#pragma pack(2)
-struct ValueData {
-  uint32_t size;
-  segment_ptr next;
-  char value[];
-
-  static int get_pool_index(size_t size) {
-    return size <= 6 ? 0 : (size+VDELTA)/NODE_INCREMENT;
+  node_p node_p::b(uint16_t offset_, uint16_t type_)
+  {
+    node_p result;
+    result.offset = offset_;
+    result.type = type_;
+    return result;
   }
 
-  void free(Transition& self) {
-    if (size > MAX_VAL_SIZE)
-      self.storage->free(*self.node_ptr);
-    else
-      self.storage->pools[get_pool_index(size)].free(*self.node_ptr);
-  }
-};
-#pragma pack(0)
-
-struct Value : public NodeHandler {
-  ValueData* ptr(const Transition& self) const {
-    return (ValueData*)self.node_ptr->resolve(self.storage);
+  location_p location_p::b(uint64_t page_)
+  {
+    location_p result;
+    result.page = page_;
+    result.node = node_p::b();
+    return result;
   }
 
-  bool valid() const { return true; }
-  virtual Slice get_value(const Transition& self) const {
-    ValueData* node(ptr(self));
-    return Slice(node->value, node->size);
+  location_p location_p::b(uint64_t page_, node_p node_)
+  {
+    location_p result;
+    result.page = page_;
+    result.node = node_;
+    return result;
   }
 
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) {
-    ValueData *node(ptr(self));
-    if (key.size() && node->next) {
-      self.cmp = 1;
-      return &node->next;
+  location_p location_p::b(uint64_t page_, uint16_t offset, uint16_t type)
+  {
+    location_p result;
+    result.page = page_;
+    result.offset = offset;
+    result.type = type;
+    return result;
+  }
+
+  Page *Link::make_page_to_move(Trace &trace, size_t nsize)
+  {
+    const Node *croot = trace.storage.node(loc);
+    if (loc.type == kEndLeaf && croot->endleaf.struct_size() + nsize >= PAGE_SIZE)
+    {
+      // big page -> no move to the big page put an ordinary page before
+      location_p plink_page = trace.storage.alloc();
+      Page *link_page = trace.storage.get_writable(plink_page);
+      Link &tmp = link_page->node(link_page->alloc(trace, sizeof(Link)))->link;
+      tmp.loc = loc;
+      loc = plink_page;
+      loc.type = kLink;
+      link_page->end.type = kLink;
+      return link_page;
     }
-    return NULL;
+    return trace.storage.get_writable(loc);
   }
 
-  segment_ptr* next(Transition& self, string& current_key) {
-    if (self.cmp == 0) {
-      ValueData *node(ptr(self));
-      self.cmp = 1;
-      return node->next ? &node->next : NULL;
+  namespace bit
+  {
+    char upper(char value)
+    {
+      return value >> 4;
     }
-    return NULL;
-  }
 
-  segment_ptr* first(Transition& self, string& key) {
-    self.cmp = 0;
-    return NULL;
-  }
-
-  segment_ptr* prev(Transition& self, string& current_key) {
-    if (self.cmp == 1) {
-      ValueData *node(ptr(self));
-      self.cmp = 0;
-      /* a hack (see trace.imove)
-        if we come from node->next this value has to be returned
-      */
-      return node->next ? self.node_ptr : NULL;
+    char lower(char value)
+    {
+      return (value & 0x0F);
     }
-    return NULL;
   }
 
-  segment_ptr* last(Transition& self, string& current_key) {
-    ValueData *node(ptr(self));
-    self.cmp = 1;
-    return node->next ? &node->next : NULL;
-  }
-
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
-
-  bool remove(Transition& self, bool last) {
-    if (last) {
-      ValueData* node(ptr(self));
-      segment_ptr next = node->next;
-      node->free(self);
-      *self.node_ptr = next;
-      return true;
-    }
-    // intermediate value
-    return false;
+  struct LinkHandler : public NodeHandler
+  {
+    bool find(Trace &trace);
+    void insert(Trace &trace, const Slice &value);
+    void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
+    bool move_node(Trace &trace, Page *page, node_p *offset);
+    static node_p create(Trace &trace, Page *page, location_p loc);
   };
 
-  static segment_ptr build(Storage* storage, segment_ptr next, const Slice& value) {
-    segment_ptr result;
-    size_t size = value.size();
-    if (size > MAX_VAL_SIZE)
-      result = storage->allocate(size+sizeof(ValueData));
-    else
-      result = storage->pools[ValueData::get_pool_index(size)].allocate();
+  struct LeafHandler : public NodeHandler
+  {
+    bool valid(const Trace &trace) const { return trace.rest_key.empty(); }
+    void adjust_pointers(Page *page, node_p npos, size_t start, int delta) {}
+  };
 
-    ValueData *node = (ValueData*)result.resolve(storage);
-    node->size = value.size();
-    memcpy(node->value, value.data(), node->size);
-    node->next = next;
-    result.type = kValue;
-    return result;
-  }
-};
+  struct EndLeafHandler : public LeafHandler
+  {
+    bool find(Trace &trace);
+    void insert(Trace &trace, const Slice &value);
+    bool move_node(Trace &trace, Page *page, node_p *offset);
+    static node_p create(Trace &trace, Page *page, const Slice &value);
+  };
 
-namespace bit {
-  char upper(char value) {
-    return value >> 4;
-  }
+  struct MiddleLeafHandler : public LeafHandler
+  {
+    bool find(Trace &trace);
+    void insert(Trace &trace, const Slice &value);
+    void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
+    bool move_node(Trace &trace, Page *page, node_p *offset);
+  };
 
-  char lower(char value) {
-    return (value & 0x0F);
-  }
-}
+  struct CompressedHandler : public NodeHandler
+  {
+    bool find(Trace &trace);
+    void insert(Trace &trace, const Slice &value);
+    void split_at_middle(Trace &trace, Location &last, size_t pos, const Slice &value);
+    void split_at_middle_leaf(Trace &trace, Location &last, size_t pos, const Slice &value);
+    void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
+    bool move_node(Trace &trace, Page *page, node_p *offset);
+    static node_p create(Trace &trace, Page *page, const Slice &key, const Slice &value);
+  };
 
-#pragma pack(2)
-struct TrieData {
-  uint16_t bits;
-  segment_ptr children[];
+  struct NullHandler : public NodeHandler
+  {
+    bool find(Trace &trace);
+    void insert(Trace &trace, const Slice &value);
+    void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
+    bool move_node(Trace &trace, Page *page, node_p *offset);
+  };
 
-  size_t get_pool_index() {
-    size_t count(popcount(bits));
-    return count > 2 ? (count+3) / 4 : 0;
-  }
+  struct TrieHandler : public NodeHandler
+  {
+    virtual char bits(char value) const = 0;
 
-  int index_of(int bit) {
-    return popcount(bits & ((1<<bit)-1));
-  }
+    bool find(Trace &trace);
+    void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
+    bool move_node(Trace &trace, Page *page, node_p *offset);
 
-  bool full() {
-    size_t count(popcount(bits));
-    return (count & 3) == 0 || count == 2;
-  }
-
-  segment_ptr* find(int bit) {
-    return (bits & (1<<bit)) ? &children[index_of(bit)] : NULL;
-  }
-
-  segment_ptr* next(char& bit) {
-    uint16_t nbits = bits & (0xFFFF << (bit+1));
-    if (nbits) {
-      bit = ctz(nbits);
-      return &children[index_of(bit)];
-    }
-    return NULL;
-  }
-
-  segment_ptr* first(char& bit) {
-    bit = ctz(bits);
-    return &children[index_of(bit)];
-  }
-
-  segment_ptr* prev(char& bit) {
-    if (bit) {
-      uint16_t nbits = bits & (0xFFFF >> (16-bit));
-      if (nbits) {
-        bit = 15 - (clz(nbits) & 0xf);
-        return &children[index_of(bit)];
+    node_p *add(Trace &trace, Location &last);
+    static void create(Trace &trace, Page *page, node_p pos, char node_key, node_p child,
+                       const Slice &key, const Slice &value);
+    static size_t calc_size(char key1, char key2)
+    {
+      if (bit::upper(key1) == bit::upper(key2))
+      {
+        return 2 * sizeof(Trie) + 3 * sizeof(node_p);
       }
+      return 3 * sizeof(Trie) + 4 * sizeof(node_p);
     }
-    return NULL;
-  }
+  };
 
-  segment_ptr* last(char& bit) {
-    bit = 15 - (clz(bits) & 0xf);
-    return &children[index_of(bit)];
-  }
+  struct UpperTrieHandler : public TrieHandler
+  {
+    char bits(char value) const;
+    void insert(Trace &trace, const Slice &value);
+  };
 
-  void add(int bit, segment_ptr next) {
-    assert(!(bits & 1<<bit));
-    bits |= 1 << bit;
-    int index = index_of(bit);
-    for(int i = popcount(bits)-1; i > index; i--) {
-      children[i] = children[i-1];
-    }
-    children[index] = next;
-  }
+  struct LowerTrieHandler : public TrieHandler
+  {
+    char bits(char value) const;
+    bool find(Trace &trace);
+    void insert(Trace &trace, const Slice &value);
+    static node_p create(Trace &trace, Page *page, const Slice &value);
+  };
 
-  segment_ptr insert(Transition& self, segment_ptr* to_me, segment_ptr next, int bit) {
-    if (full()) {
-      // node must grow
-      size_t index = get_pool_index();
-      segment_ptr new_ptr = self.storage->pools[index+1].allocate();
-      new_ptr.type = kTrie;
-      TrieData *new_node((TrieData*)self.resolve(new_ptr));
-      memcpy((void*)new_node, this, sizeof(TrieData)+popcount(bits)*sizeof(segment_ptr));
-      self.storage->pools[index].free(*to_me);
-      *to_me = new_ptr;
-      new_node->add(bit, next);
-      return new_ptr;
-    }
-
-    add(bit, next);
-    return *to_me;
-  }
-
-  bool remove(Transition& self, segment_ptr* to_me, int bit) {
-    assert(bits & (1<<bit));
-    size_t pool_index = get_pool_index();
-    int index = index_of(bit);
-
-    if (children[index]) {
-      // the node is still active => remove of intermediate value
-      return false;
-    }
-
-    bits &= ~(1<<bit);
-
-    if (!bits) {
-      self.storage->pools[pool_index].free(*to_me);
-      *to_me = segment_ptr();
-      return true;
-    }
-
-    int size = popcount(bits);
-    for(int i = index; i < size; i++) {
-      children[i] = children[i+1];
-    }
-    if (full()) {
-      // we are the upper edge of the next smaller pool
-      segment_ptr new_ptr = self.storage->pools[pool_index-1].allocate();
-      new_ptr.type = kTrie;
-      TrieData *new_node((TrieData*)self.resolve(new_ptr));
-      memcpy((void*)new_node, this, sizeof(TrieData)+size*sizeof(segment_ptr));
-      self.storage->pools[pool_index].free(*to_me);
-      *to_me = new_ptr;
-    }
-    return false;
-  }
-
-};
-#pragma pack(0)
-
-struct Trie : public NodeHandler {
-  TrieData* ptr1(Transition& self) {
-    return (TrieData*)self.resolve(*self.node_ptr);
-  }
-
-  TrieData* ptr2(Transition& self) {
-    return (TrieData*)self.resolve(*self.second_ptr);
-  }
-
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) {
-    if (key.empty()) {
-      self.cmp = 1;
-      return NULL;
-    }
-
-    self.cmp = 0;
-    char value = self.value = key[0];
-    current_key.push_back(value);
-
-    self.second_ptr = ptr1(self)->find(bit::upper(value));
-    if (self.second_ptr) {
-      assert(self.second_ptr->type == kTrie);
-      char lower = bit::lower(value);
-      segment_ptr *next(ptr2(self)->find(lower));
-      if (next) {
-        key = key.advance(1);
-        return next;
-      }
-    }
-
-    return NULL;
-  }
-
-  segment_ptr* next(Transition& self, string& current_key) {
-    if (self.cmp == 1)
-      return self.first(current_key);
-
-    TrieData* node(ptr1(self));
-    char upper(bit::upper(self.value)), lower;
-    self.second_ptr = node->find(upper);
-    if (self.second_ptr) {
-      assert(self.second_ptr->type == kTrie);
-      lower = bit::lower(self.value);
-      segment_ptr* next = ptr2(self)->next(lower);
-      if (next) {
-        current_key.back() = self.value = (upper << 4) | lower;
-        return next;
-      }
-    }
-
-    self.second_ptr = node->next(upper);
-    if (self.second_ptr) {
-      segment_ptr* next = ptr2(self)->first(lower);
-      current_key.back() = self.value = (upper << 4) | lower;
-      return next;
-    }
-
-    current_key.pop_back();
-    return NULL;
-  }
-
-  segment_ptr* first(Transition& self, string& current_key) {
-    char upper, lower;
-    self.cmp = 0;
-    self.second_ptr = ptr1(self)->first(upper);
-    segment_ptr *next = ptr2(self)->first(lower);
-    current_key.push_back(self.value = (upper << 4) | lower);
-    return next;
-  }
-
-  segment_ptr* prev(Transition& self, string& current_key) {
-    if (self.cmp == 1)
-      return NULL;
-
-    TrieData* node(ptr1(self));
-    char upper(bit::upper(self.value)), lower;
-    self.second_ptr = node->find(upper);
-    if (self.second_ptr) {
-      assert(self.second_ptr->type == kTrie);
-      lower = bit::lower(self.value);
-      segment_ptr* next = ptr2(self)->prev(lower);
-      if (next) {
-        current_key.back() = self.value = (upper << 4) | lower;
-        return next;
-      }
-    }
-
-    self.second_ptr = node->prev(upper);
-    if (self.second_ptr) {
-      segment_ptr* next = ptr2(self)->last(lower);
-      current_key.back() = self.value = (upper << 4) | lower;
-      return next;
-    }
-
-    current_key.pop_back();
-    return NULL;
-  }
-
-  segment_ptr* last(Transition& self, string& current_key) {
-    char upper, lower;
-    self.cmp = 0;
-    self.second_ptr = ptr1(self)->last(upper);
-    segment_ptr *next = ptr2(self)->last(lower);
-    current_key.push_back(self.value = (upper << 4) | lower);
-    return next;
-  }
-
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key);
-  bool remove(Transition& self, bool last);
-
-  static segment_ptr create(Storage* storage, segment_ptr next, int bit) {
-    segment_ptr result = storage->pools[0].allocate();
-    TrieData* node = (TrieData*)result.resolve(storage);
-    node->bits = 1<<bit;
-    node->children[0] = next;
-    result.type = kTrie;
-    return result;
-  }
-
-  static segment_ptr build(Storage* storage, segment_ptr next, char key) {
-    next = create(storage, next, bit::lower(key));
-    next = create(storage, next, bit::upper(key));
-    return next;
-  }
-};
-
-
-#define MAX_COMPRESSED_LEN (MAX_POOL_SIZE - sizeof(CompressedData))
-#define CDELTA  26
-
-#pragma pack(1)
-struct CompressedData {
-  segment_ptr next;
-  unsigned char size;
-  char keys[];
-
-  static size_t get_pool_index(size_t size) {
-    return size <= 9 ? 0 : (size+CDELTA)/NODE_INCREMENT;
-  }
-
-  void free(Transition& self) {
-    self.storage->pools[get_pool_index(size)].free(*self.node_ptr);
-  }
-};
-#pragma pack(0)
-
-inline char sign(int x) {
-  return (x>0)-(x<0);
-}
-
-
-struct Compressed : public NodeHandler {
-  static CompressedData* ptr(Transition& self) {
-    return (CompressedData*)self.resolve(*self.node_ptr);
-  }
-
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) {
-    CompressedData* node = ptr(self);
-    size_t size = std::min(key.size(), (size_t)node->size);
-    if (!(self.cmp=sign(memcmp(key.data(), node->keys, size))) && size == node->size) {
-      key = key.advance(node->size);
-      current_key.append(node->keys, node->size);
-      return &node->next;
-    }
-    return NULL;
-  }
-
-  segment_ptr* move(Transition& self, string& current_key, bool do_it) {
-    if (do_it) {
-      self.cmp = 0;
-      CompressedData* node = ptr(self);
-      current_key.append(node->keys, node->size);
-      return &node->next;
-    }
-    if (self.cmp == 0) {
-      self.cmp = 1;
-      CompressedData* node = ptr(self);
-      current_key.resize(current_key.size()-node->size);
-    }
-    return NULL;
-  }
-
-  segment_ptr* next(Transition& self, string& current_key) {
-    return move(self, current_key, self.cmp < 0);
-  }
-
-  segment_ptr* first(Transition& self, string& current_key) {
-    self.cmp = -1;
-    return self.next(current_key);
-  }
-
-  segment_ptr* prev(Transition& self, string& current_key) {
-    return move(self, current_key, self.cmp > 0);
-  }
-
-  segment_ptr* last(Transition& self, string& current_key) {
-    self.cmp = 1;
-    return self.prev(current_key);
-  }
-
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
-    CompressedData* node = ptr(self);
-
-    int size = std::min((size_t)node->size, key.size());
-    for(int i = 0; i < size; i++) {
-      if (node->keys[i] != key[i]) {
-        /* divide compressed:
-           node = [abcdefg]
-           key = [abhij]
-                         first   trie    rest
-           [abcdefg] ==> [ab] -> |c| -> [efg]
-                                 |h| -> [ij]
-        */
-        Slice first(key.data(), i);
-        Slice rest(node->keys+i+1, node->size-i-1);
-
-        // build trie node
-        segment_ptr rest_ptr = build(self.storage, node->next, rest);
-        segment_ptr trie_ptr = Trie::build(self.storage, rest_ptr, node->keys[i]);
-        Transition trie = Transition(&trie_ptr, self.storage);
-        trie.value = key[i];
-        Slice rest_key(key.advance(i));
-        current_key.push_back(trie.value); // will be popped in trie.insert
-        trie_ptr = *trie.insert(rest_key, value, current_key);
-
-        segment_ptr first_ptr(build(self.storage, trie_ptr, first));
-        node->free(self);
-        *self.node_ptr = first_ptr;
-        return self.node_ptr;
-      }
-    }
-
-    /* key is a substring of node
-       node = [abcdefg]
-       key = [abhij]
-                     first  value   rest
-       [abcdefg] ==> [ab] -> [] -> [cefg]
-    */
-    Slice first(key.data(), size);
-    Slice rest(node->keys+size, node->size-size);
-    segment_ptr rest_ptr = build(self.storage, node->next, rest);
-    segment_ptr value_ptr = Value::build(self.storage, rest_ptr, value);
-    segment_ptr first_ptr = build(self.storage, value_ptr, first);
-
-    node->free(self);
-    *self.node_ptr = first_ptr;
-    return self.node_ptr;
-  }
-
-  bool remove(Transition& self, bool last) {
-    CompressedData *node(ptr(self));
-    if (!node->next) {
-      node->free(self);
-      *self.node_ptr = segment_ptr();
-      return true;
-    }
-
-    if (node->next.type == kCompressed) {
-      Transition next(&node->next, self.storage);
-      CompressedData *next_node(ptr(next));
-      size_t size = (size_t)node->size + (size_t)next_node->size;
-
-      if (size < MAX_COMPRESSED_LEN) {
-        int index = CompressedData::get_pool_index(size);
-        segment_ptr new_ptr(self.storage->pools[index].allocate());
-        new_ptr = fill(self.storage, new_ptr, next_node->next, Slice(node->keys, node->size));
-
-        CompressedData *new_node((CompressedData*)self.resolve(new_ptr));
-        memcpy(new_node->keys+node->size, next_node->keys, next_node->size);
-        new_node->size += next_node->size;
-
-        next_node->free(next);
-        node->free(self);
-
-        *self.node_ptr = new_ptr;
-      }
-    }
-
+  bool LinkHandler::find(Trace &trace)
+  {
+    Location last = trace.back();
+    trace.stack.push_back(last.next(&last.node->link.loc));
     return true;
   }
 
-  static segment_ptr fill(Storage* storage, segment_ptr node_ptr, segment_ptr next,
-                          const Slice& key) {
-    node_ptr.type = kCompressed;
-    CompressedData *node = (CompressedData*)node_ptr.resolve(storage);
-    node->next = next;
-    node->size = (unsigned char)key.size();
-    memcpy(node->keys, key.data(), node->size);
-    return node_ptr;
+  void LinkHandler::insert(Trace &trace, const Slice &value)
+  {
+    assert(0);
   }
 
-  static segment_ptr build(Storage* storage, segment_ptr next, const Slice& key) {
-    if (key.empty())
-      return next;
+  void LinkHandler::adjust_pointers(Page *page, node_p npos, size_t start, int delta) {}
 
-    int index = CompressedData::get_pool_index(key.size());
-    if (index > POOL_COUNT) {
-      // divide key in multiple compressed
-      Slice first(key.data(), MAX_COMPRESSED_LEN);
-      Slice second(key.advance(MAX_COMPRESSED_LEN));
-      return build(storage, build(storage, next, second), first);
+  bool LinkHandler::move_node(Trace &trace, Page *page, node_p *offset)
+  {
+    return false;
+  }
+
+  node_p LinkHandler::create(Trace &trace, Page *page, location_p pos)
+  {
+    node_p result = page->alloc(trace, sizeof(Link), kLink);
+    Node *node = page->node(result);
+    node->link.loc = pos;
+    return result;
+  }
+
+  LinkHandler linkHandler;
+
+  bool EndLeafHandler::find(Trace &trace)
+  {
+    return false;
+  }
+
+  void EndLeafHandler::insert(Trace &trace, const Slice &value)
+  {
+    // change the value
+    Location last = trace.back();
+    EndLeaf &leaf = last.node->endleaf;
+    size_t leaf_struct_size = sizeof(EndLeaf) + leaf.size;
+    size_t new_struct_size = std::max(sizeof(EndLeaf) + value.size(), sizeof(Link));
+
+    if (leaf_struct_size > PAGE_SIZE)
+    {
+      // Big Page
+      if (PAGE_ROUND_UP(leaf_struct_size) == PAGE_ROUND_UP(new_struct_size))
+      {
+        // the page can be reused
+        trace.storage.write_value(last.loc, value);
+        return;
+      }
+
+      // free the leaf page
+      trace.storage.free(last.loc, leaf_struct_size);
+
+      // move back in stack
+      trace.stack.pop_back();
+      last = trace.back();
+
+      // the node must be a link!
+      assert(trace.stack.back().plink.type == kLink);
+
+      leaf_struct_size = sizeof(Link);
     }
 
-    segment_ptr result(storage->pools[index].allocate());
-    return fill(storage, result, next, key);
-  }
-};
+    // we are in an ordinary page
+    int delta = new_struct_size - leaf_struct_size;
+    if (delta < 0 || (int)last.page->free() > delta)
+    {
+      EndLeaf &leaf = last.node->endleaf;
+      // the new value fits in the same page
+      last.page->scale_node(trace, last.loc.node.offset, delta);
+      trace.change_type(kEndLeaf);
+      leaf.size = value.size();
+      memcpy(&leaf.data[0], value.data(), leaf.size);
+      return;
+    }
 
-struct Null : public NodeHandler {
-  segment_ptr* find(Transition& self, Slice& key, string& current_key) { return NULL; }
-  segment_ptr* next(Transition& self, string& current_key) { return NULL; }
-  segment_ptr* first(Transition& self, string& current_key) { return NULL; }
-  segment_ptr* prev(Transition& self, string& current_key) { return NULL; }
-  segment_ptr* last(Transition& self, string& current_key) { return NULL; }
-  segment_ptr* insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
-    segment_ptr value_ptr(Value::build(self.storage, segment_ptr(), value));
-    *self.node_ptr = Compressed::build(self.storage, value_ptr, key);
-    return self.node_ptr;
-  }
-  bool remove(Transition& self, bool last) { return false; } // never
-};
-
-
-static Value value_handler;
-static Null null;
-static Compressed compressed;
-static Trie trie;
-
-NodeHandler* Transition::handlers[] = { &value_handler, &null, &compressed, &trie };
-
-
-segment_ptr* Trie::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
-  if (self.cmp == 1) {
-    // key was empty at find -> insert value key before
-    *self.node_ptr = Value::build(self.storage, *self.node_ptr, value);
-    return self.node_ptr;
+    // We have to insert a link and write the value at a new page.
+    last.page->scale_node(trace, last.loc.node.offset, sizeof(Link) - leaf_struct_size);
+    Link &link = last.node->link;
+    trace.change_type(kLink);
+    link.loc = trace.storage.alloc(new_struct_size);
+    link.loc.type = kEndLeaf;
+    trace.storage.write_value(link.loc, value);
   }
 
-  current_key.pop_back();
-  char upper = bit::upper(self.value);
-  char lower = bit::lower(self.value);
+  node_p EndLeafHandler::create(Trace &trace, Page *page, const Slice &value)
+  {
+    node_p result;
+    Node *node;
+    /* node_size must be at least the size of link, to be able to extend the leaf,
+       on a full page*/
+    size_t node_size = std::max(sizeof(EndLeaf) + value.size(), sizeof(Link));
 
-  segment_ptr next(Value::build(self.storage, segment_ptr(), value));
-  if (key.size() > 1) {
-    Slice restkey(key.advance(1));
-    next = Compressed::build(self.storage, next, restkey);
+    if (page->free() < node_size)
+    {
+      location_p ploc = trace.storage.alloc(node_size);
+      ploc.type = kEndLeaf;
+      result = LinkHandler::create(trace, page, ploc);
+      if (node_size > PAGE_SIZE)
+      {
+        trace.storage.write_value(ploc, value);
+        return result;
+      }
+      Page *dest = trace.storage.get_writable(ploc);
+      dest->end.type = kEndLeaf;
+      node = dest->node(0);
+    }
+    else
+    {
+      result = page->alloc(trace, node_size, kEndLeaf);
+      node = page->node(result);
+    }
+
+    node->endleaf.size = value.size();
+    memcpy(&node->endleaf.data[0], value.data(), value.size());
+    return result;
   }
 
-  TrieData *node(ptr1(self));
-  self.second_ptr = node->find(upper);
-  if (!self.second_ptr) {
-    segment_ptr lower_ptr = create(self.storage, next, lower);
-    *self.node_ptr = node->insert(self, self.node_ptr, lower_ptr, upper);
-    return self.node_ptr;
+  bool EndLeafHandler::move_node(Trace &trace, Page *page, node_p *npos)
+  {
+    EndLeaf &leaf = page->node(*npos)->endleaf;
+
+    size_t node_size = leaf.struct_size();
+    if (node_size <= sizeof(Link) || !npos->offset)
+    {
+      // nothing to gain
+      return false;
+    }
+
+    location_p ploc = trace.storage.alloc();
+    Page *pnew = trace.storage.get_writable(ploc);
+    pnew->alloc(trace, node_size);
+    memcpy(&pnew->node(0)->endleaf, &leaf, node_size);
+    pnew->end.type = ploc.type = kEndLeaf;
+
+    // change lead to link
+    page->scale_node(trace, npos->offset, node_size - sizeof(Link));
+    Link &link = page->node(*npos)->link;
+    link.loc = ploc;
+    npos->type = kLink;
+    return true;
   }
 
-  node = ptr2(self);
-  *self.second_ptr = node->insert(self, self.second_ptr, next, lower);
-  return self.node_ptr;
-}
+  EndLeafHandler endLeafHandler;
 
-
-bool Trie::remove(Transition& self, bool last) {
-  TrieData *lower(ptr2(self)), *upper;
-
-  if (lower->remove(self, self.second_ptr, bit::lower(self.value))) {
-    upper = ptr1(self);
-    upper->remove(self, self.node_ptr, bit::upper(self.value));
+  bool MiddleLeafHandler::find(Trace &trace)
+  {
+    Location last = trace.back();
+    if (trace.rest_key.empty())
+    {
+      trace.push_back(last.next(&last.node->middleleaf.leaf));
+    }
+    else
+    {
+      trace.push_back(last.next(&last.node->middleleaf.child));
+    }
+    return true;
   }
 
-  lower = ptr2(self);
-  upper = ptr1(self);
-
-  if (popcount(upper->bits) == 1 && popcount(lower->bits) == 1) {
-    segment_ptr next = lower->children[0];
-    char value = (ctz(upper->bits) << 4) | ctz(lower->bits);
-    self.storage->pools[lower->get_pool_index()].free(*self.second_ptr);
-    self.storage->pools[upper->get_pool_index()].free(*self.node_ptr);
-    *self.node_ptr = Compressed::build(self.storage, next, Slice(&value, 1));
-    self.remove(last);  // combines compressed if possible
-  }
-  return true;
-}
-
-segment_ptr* Value::insert(Transition& self, Slice& key, const Slice& value, string& current_key) {
-  ValueData* node(ptr(self));
-  if (key.empty()) {
-    segment_ptr new_ptr(build(self.storage, node->next, value));
-    node->free(self);
-    *self.node_ptr = new_ptr;
-    return self.node_ptr;
+  void MiddleLeafHandler::insert(Trace &trace, const Slice &value)
+  {
+    assert(0); // may never happen
   }
 
-  assert(!node->next);
-  segment_ptr next(build(self.storage, segment_ptr(), value));
-  node->next = Compressed::build(self.storage, next, key);
-  return self.node_ptr;
-}
+  void MiddleLeafHandler::adjust_pointers(Page *page, node_p npos, size_t start, int delta)
+  {
+    MiddleLeaf &node = page->node(npos)->middleleaf;
+    if (node.child.offset >= start)
+    {
+      node.child.offset += delta;
+    }
+    page->adjust_pointers(node.child, start, delta);
+  }
 
+  bool MiddleLeafHandler::move_node(Trace &trace, Page *page, node_p *npos)
+  {
+    Node *node = page->node(*npos);
+    return (page->move_node(trace, &node->middleleaf.leaf) || page->move_node(trace, &node->middleleaf.child));
+  }
+
+  MiddleLeafHandler middleLeafHandler;
+
+  bool CompressedHandler::find(Trace &trace)
+  {
+    Location last = trace.back();
+    const Compressed &node = last.node->compressed;
+    size_t size = std::min(trace.rest_key.size(), (size_t)node.size);
+    if (size == node.size && !memcmp(trace.rest_key.data(), node.key, size))
+    {
+      trace.current_key.append(node.key, node.size);
+      trace.rest_key = trace.rest_key.advance(size);
+      trace.push_back(last.next(&node.child));
+      return true;
+    }
+
+    return false;
+  }
+
+  void CompressedHandler::insert(Trace &trace, const Slice &value)
+  {
+    Location last = trace.back();
+    const Compressed &node = last.node->compressed;
+    Slice &key(trace.rest_key);
+
+    size_t size = std::min((size_t)node.size, key.size());
+    size_t i;
+    for (i = 0; i < size; i++)
+    {
+      if (node.key[i] != key[i])
+      {
+        split_at_middle(trace, last, i, value);
+        return;
+      }
+    }
+
+    assert(i < node.size);
+    split_at_middle_leaf(trace, last, i, value);
+  }
+
+  void CompressedHandler::split_at_middle(
+      Trace &trace, Location &last, size_t pos, const Slice &value)
+  {
+    /*
+        node = [abcdefg]
+        key =  [abhij]
+                      first   trie   second
+        [abcdefg] ==> [ab] -> |c| -> [efg]
+                              |h| -> [ij]
+    */
+    Compressed &node = last.node->compressed;
+    size_t node_struct_size = sizeof(Compressed) + node.size;
+    char node_key = node.key[pos];
+    size_t trie_size = TrieHandler::calc_size(node_key, trace.rest_key[0]);
+    uint8_t second_size = node.size - pos - 1;
+    size_t first_struct_size = pos ? sizeof(Compressed) + pos : 0;
+    size_t second_struct_size = second_size ? sizeof(Compressed) + second_size : 0;
+
+    assert(first_struct_size + trie_size + second_struct_size > node_struct_size);
+    last.page->scale_node(trace, last.loc.node.offset + node_struct_size,
+                          first_struct_size + trie_size + second_struct_size - node_struct_size);
+
+    node_p child1;
+    if (second_size)
+    {
+      child1 = node_p::b(last.loc.node.offset + first_struct_size + trie_size, kCompressed);
+      Compressed &second = last.page->node(child1)->compressed;
+      memmove(&second.key[0], &node.key[pos + 1], second_size);
+      second.size = second_size;
+      second.child = node.child;
+    }
+    else
+      child1 = node.child;
+
+    node_p trie_offset = node_p::b(last.loc.node.offset + first_struct_size, kUpperTrie);
+    if (pos)
+    {
+      node.size = pos;
+      node.child = trie_offset.replace(kUpperTrie);
+    }
+    else
+    {
+      trace.change_type(kUpperTrie);
+    }
+
+    TrieHandler::create(trace, last.page, trie_offset, node_key, child1,
+                        trace.rest_key.advance(pos), value);
+  }
+
+  void CompressedHandler::split_at_middle_leaf(
+      Trace &trace, Location &last, size_t pos, const Slice &value)
+  {
+    /* key is a substring of node
+        node = [abcdefg]
+        key =  [ab]
+                      first  MiddleLeaf   rest
+        [abcdefg] ==> [ab] ->    []       -> [cefg]
+    */
+    Compressed &node = last.node->compressed;
+    size_t node_struct_size = sizeof(Compressed) + node.size;
+    size_t leaf_size = sizeof(MiddleLeaf);
+    uint8_t second_size = node.size - pos;
+    size_t first_struct_size = sizeof(Compressed) + pos;
+    size_t second_struct_size = sizeof(Compressed) + second_size;
+
+    assert(first_struct_size + leaf_size + second_struct_size > node_struct_size);
+    last.page->scale_node(trace, last.loc.node.offset + node_struct_size,
+                          first_struct_size + leaf_size + second_struct_size - node_struct_size);
+
+    node_p second_offset = node_p::b(
+        last.loc.node.offset + first_struct_size + leaf_size, kCompressed);
+    Compressed &second = last.page->node(second_offset)->compressed;
+    second.child = node.child;
+
+    memmove(&second.key[0], &node.key[pos], second_size);
+    second.size = second_size;
+
+    node.size = pos;
+    node.child = node_p::b(last.loc.node.offset + first_struct_size, kMiddleLeaf);
+
+    MiddleLeaf &leaf = last.page->node(node.child)->middleleaf;
+    leaf.child = second_offset;
+    leaf.leaf = EndLeafHandler::create(trace, last.page, value);
+  }
+
+  void CompressedHandler::adjust_pointers(Page *page, node_p npos, size_t start, int delta)
+  {
+    Compressed &node = page->node(npos)->compressed;
+    if (node.child.offset >= start)
+    {
+      node.child.offset += delta;
+    }
+    page->adjust_pointers(node.child, start, delta);
+  }
+
+  bool CompressedHandler::move_node(Trace &trace, Page *page, node_p *pnpos)
+  {
+    Compressed &node = page->node(*pnpos)->compressed;
+    if (node.child.type == kLink && pnpos->offset)
+    {
+      Link &link = page->node(node.child)->link;
+      size_t node_size = node.struct_size();
+      Page *dest = link.make_page_to_move(trace, node_size);
+      location_p ploc = link.loc;
+
+      // copy the node to the new page
+      dest->end.type = kCompressed;
+      Compressed &dnode = dest->node(0)->compressed;
+      dest->scale_node(trace, 0, node_size);
+      memcpy(&dnode, &node, node_size);
+      dnode.child = node_p::b(node_size, ploc.type);
+
+      // remove the link
+      page->scale_node(trace, node.child.offset, -(int)sizeof(Link));
+
+      // change the compressed to link
+      page->scale_node(trace, pnpos->offset, sizeof(Link) - node_size);
+      Link &nlink = page->node(*pnpos)->link;
+      nlink.loc = location_p::b(ploc.page, 0, kCompressed);
+      pnpos->type = kLink;
+      return true;
+    }
+    return page->move_node(trace, &node.child);
+  }
+
+  node_p CompressedHandler::create(Trace &trace, Page *page, const Slice &key, const Slice &value)
+  {
+    size_t csize = std::min(key.size(), (size_t)255);
+    size_t node_size = sizeof(Compressed) + csize;
+
+    if (page->free() < node_size + sizeof(Link))
+    {
+      location_p ppos = trace.storage.alloc();
+      create(trace, trace.storage.get_writable(ppos), key, value);
+      return LinkHandler::create(trace, page, ppos);
+    }
+
+    if (csize)
+    {
+      node_p result = page->alloc(trace, node_size, kCompressed);
+      Node *node = page->node(result);
+      node->compressed.size = csize;
+      memcpy(node->compressed.key, key.data(), csize);
+      node->compressed.child = create(trace, page, key.advance(csize), value);
+      if (result.offset == 0)
+      {
+        page->end.type = kCompressed;
+      }
+      return result;
+    }
+
+    return EndLeafHandler::create(trace, page, value);
+  }
+
+  CompressedHandler compressedHandler;
+
+  bool TrieHandler::find(Trace &trace)
+  {
+    if (trace.rest_key.empty())
+      return false;
+
+    Location last = trace.back();
+    Trie &node = last.node->trie;
+
+    int index = node.index(bits(trace.rest_key[0]));
+    if (index < 0)
+      return false;
+
+    trace.push_back(last.next(&node.children[index]));
+    return true;
+  }
+
+  void TrieHandler::adjust_pointers(Page *page, node_p npos, size_t start, int delta)
+  {
+    Trie &trie = page->node(npos)->trie;
+    size_t count = trie.size();
+    for (size_t i = 0; i < count; i++)
+    {
+      if (trie.children[i].offset >= start)
+      {
+        trie.children[i].offset += delta;
+      }
+      page->adjust_pointers(trie.children[i], start, delta);
+    }
+  }
+
+  bool TrieHandler::move_node(Trace &trace, Page *page, node_p *pnpos)
+  {
+    Trie &trie = page->node(*pnpos)->trie;
+    size_t count = trie.size();
+    bool can_move = pnpos->offset != 0;
+
+    for (size_t i = 0; i < count; i++)
+    {
+      if (trie.children[i].type != kLink)
+      {
+        can_move = false;
+        if (page->move_node(trace, &trie.children[i]))
+          return true;
+      }
+    }
+
+    if (can_move)
+    {
+      // Move the node to the first child
+      assert(trie.children[0].type == kLink);
+      Link &link = page->node(trie.children[0])->link;
+      size_t trie_size = trie.struct_size();
+      size_t links_size = (trie.size() - 1) * sizeof(Link);
+      Page *dest = link.make_page_to_move(trace, trie_size + links_size);
+      location_p ploc = link.loc;
+
+      dest->scale_node(trace, 0, trie_size + links_size);
+
+      // copy trie to new dest
+      Trie &dtrie = dest->node(0)->trie;
+      memcpy(&dtrie, &trie, trie_size);
+      dtrie.children[0] = node_p::b(trie_size + links_size, ploc.type); // the former root
+      dest->end.type = pnpos->type;
+
+      node_p link_offset = node_p::b(trie_size, kLink);
+      for (size_t i = 1; i < count; i++)
+      {
+        dtrie.children[i] = link_offset;
+        Link &link = dest->node(link_offset)->link;
+        link.loc = page->node(trie.children[i])->link.loc;
+        link_offset.offset += sizeof(Link);
+      }
+
+      // remove links from old page
+      for (size_t i = 0; i < count; i++)
+      {
+        page->scale_node(trace, trie.children[i].offset, -(int)sizeof(Link));
+      }
+
+      // trie -> link
+      page->scale_node(trace, pnpos->offset, sizeof(Link) - trie_size);
+      Link &nlink = page->node(*pnpos)->link;
+      ploc.type = pnpos->type;
+      nlink.loc = ploc;
+      pnpos->type = kLink;
+      return true;
+    }
+
+    return false;
+  }
+
+  node_p *TrieHandler::add(Trace &trace, Location &last)
+  {
+    Trie &trie = last.node->trie;
+    assert((bits(trace.rest_key[0]) & trie.bits) == 0); // A new key!
+    last.page->scale_node(trace, last.loc.node.offset + trie.struct_size(), sizeof(node_p));
+    return trie.add(bits(trace.rest_key[0]));
+  }
+
+  void TrieHandler::create(
+      Trace &trace, Page *page, node_p pos, char key1, node_p child,
+      const Slice &key, const Slice &value)
+  {
+    Trie &upper = page->node(pos)->trie;
+    char key2 = key[0];
+
+    upper.bits = (1 << bit::upper(key1)) | (1 << bit::upper(key2));
+
+    if (upper.size() == 1)
+    {
+      // key1 and key2 have the same upper bits
+      node_p pos_lower = node_p::b(pos.offset + sizeof(Trie) + sizeof(node_p), kLowerTrie);
+      upper.children[0] = pos_lower;
+      Trie &lower = page->node(pos_lower)->trie;
+
+      lower.bits = (1 << bit::lower(key1)) | (1 << bit::lower(key2));
+      lower.children[lower.index(bit::lower(key1))] = child;
+      lower.children[lower.index(bit::lower(key2))] = CompressedHandler::create(
+          trace, page, key.advance(1), value);
+      return;
+    }
+
+    node_p pos_lower1 = node_p::b(pos.offset + sizeof(Trie) + 2 * sizeof(node_p), kLowerTrie);
+    node_p pos_lower2 = node_p::b(pos_lower1.offset + sizeof(Trie) + sizeof(node_p), kLowerTrie);
+
+    upper.children[upper.index(bit::upper(key1))] = pos_lower1;
+    upper.children[upper.index(bit::upper(key2))] = pos_lower2;
+
+    Trie &lower1 = page->node(pos_lower1)->trie;
+    lower1.bits = 1 << bit::lower(key1);
+    lower1.children[0] = child;
+
+    Trie &lower2 = page->node(pos_lower2)->trie;
+    lower2.bits = 1 << bit::lower(key2);
+    lower2.children[0] = CompressedHandler::create(trace, page, key.advance(1), value);
+  }
+
+  char UpperTrieHandler::bits(char value) const
+  {
+    return bit::upper(value);
+  };
+
+  void UpperTrieHandler::insert(Trace &trace, const Slice &value)
+  {
+    Location last = trace.back();
+    node_p *child = add(trace, last);
+    *child = LowerTrieHandler::create(trace, last.page, value);
+  }
+
+  UpperTrieHandler upperTrieHandler;
+
+  char LowerTrieHandler::bits(char value) const
+  {
+    return bit::lower(value);
+  }
+
+  bool LowerTrieHandler::find(Trace &trace)
+  {
+    if (TrieHandler::find(trace))
+    {
+      trace.current_key.push_back(trace.rest_key[0]);
+      trace.rest_key = trace.rest_key.advance(1);
+      return true;
+    }
+    return false;
+  }
+
+  void LowerTrieHandler::insert(Trace &trace, const Slice &value)
+  {
+    Location last = trace.back();
+    node_p *child = add(trace, last);
+    *child = CompressedHandler::create(trace, last.page, trace.rest_key.advance(1), value);
+  }
+
+  node_p LowerTrieHandler::create(Trace &trace, Page *page, const Slice &value)
+  {
+    node_p result;
+    size_t trie_struct_size = sizeof(Trie) + sizeof(node_p);
+    Node *node;
+    if (page->free() < trie_struct_size + sizeof(Link))
+    {
+      result = page->alloc(trace, sizeof(Link), kLink);
+      Link &link = page->node(result)->link;
+      link.loc = trace.storage.alloc();
+      link.loc.type = kLowerTrie;
+      page = trace.storage.get_writable(link.loc);
+      node = page->node(0);
+      page->end.type = kLowerTrie;
+    }
+    else
+    {
+      result = page->alloc(trace, trie_struct_size, kLowerTrie);
+      node = page->node(result);
+    }
+
+    Trie &trie = node->trie;
+    trie.bits = 1 << bit::lower(trace.rest_key[0]);
+    trie.children[0] = CompressedHandler::create(trace, page, trace.rest_key.advance(1), value);
+    return result;
+  }
+
+  LowerTrieHandler lowerTrieHandler;
+
+  bool NullHandler::find(Trace &trace)
+  {
+    return false;
+  }
+
+  void NullHandler::insert(Trace &trace, const Slice &value)
+  {
+    Location last = trace.back();
+    CompressedHandler::create(trace, last.page, trace.rest_key, value);
+    trace.change_type(kCompressed);
+  }
+
+  bool NullHandler::move_node(Trace &trace, Page *page, node_p *pnpos)
+  {
+    return false;
+  }
+
+  void NullHandler::adjust_pointers(Page *page, node_p npos, size_t start, int delta) {}
+
+  NullHandler nullHandler;
+
+  NodeHandler *NodeHandler::HANDLERS[] = {
+      &nullHandler,
+      &endLeafHandler,
+      &middleLeafHandler,
+      &linkHandler,
+      &compressedHandler,
+      &upperTrieHandler,
+      &lowerTrieHandler};
 
 #ifdef DEBUG
 
-const char* handler_names[] = {
-  "kValue",
-  "kNull",
-  "kCompressed",
-  "kTrie",
-};
+  const char *handler_names[] = {
+      "kNull",
+      "kLeaf",
+      "kMiddleLeaf",
+      "kLink",
+      "kCompressed",
+      "kUpperTrie",
+      "kLowerTrie",
+  };
 
-
-std::ostream& operator<<(std::ostream& out, segment_ptr ptr) {
-  out << handler_names[ptr.type] << "-" << ptr.segment_id << "-" << ptr.delta;
-  return out;
-}
-
-
-void dump_char(std::ostream& out, char bit) {
-  if (isprint(bit)) {
-    out << bit;
-  }
-  else {
-    out << "0x" << std::hex << (unsigned)(unsigned char)bit << std::dec;
-  }
-}
-
-
-struct DumpBase {
-  virtual void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) = 0;
-};
-
-
-struct NullDumper : public DumpBase {
-  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    out << "id: " << ptr << std::endl;
-  }
-};
-
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage, int upper);
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
-
-struct ValueDumper : public DumpBase {
-  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    ValueData *data = (ValueData*)ptr.resolve(storage);
-    out << "id: " << ptr << std::endl;
-    out << "size: " << (int)data->size << std::endl;
-    out << "value: \"";
-    for(size_t i = 0; i < data->size; i++) {
-      out << "[";
-      dump_char(out, data->value[i]);
-      out << "]";
+  void dump_char(std::ostream &out, char bit)
+  {
+    if (isprint(bit))
+    {
+      out << bit;
     }
-    out << "\"" << std::endl;
-    out << "children: " << std::endl;
-    out << "  - " << data->next << std::endl;
-    out << "---" << std::endl;
-    if (data->next)
-      dump_node(out, data->next, storage);
-  }
-};
-
-struct CompressDumper : public DumpBase {
-  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    CompressedData *data = (CompressedData*)ptr.resolve(storage);
-    out << "id: " << ptr << std::endl;
-    out << "size: " << (int)data->size << std::endl;
-    out << "keys: \"";
-    for(int i = 0; i < data->size; i++) {
-      out << "[";
-      dump_char(out, data->keys[i]);
-      out << "]";
+    else
+    {
+      out << "0x" << std::hex << (unsigned)(unsigned char)bit << std::dec;
     }
-    out << "\"" << std::endl;
-    out << "children: " << std::endl;
-    out << "  - " << data->next << std::endl;
-    out << "---" << std::endl;
-    if (data->next)
-      dump_node(out, data->next, storage);
   }
-};
 
-struct TrieDumper : public DumpBase {
-  void dump(std::ostream& out, segment_ptr ptr, Storage* storage, int upper=-1) {
-    TrieData *data = (TrieData*)ptr.resolve(storage);
-    int size = popcount(data->bits);
-    out << "id: " << ptr << std::endl;
-    out << "size: " << popcount(data->bits) << std::endl;
-    out << "bits: " << std::hex << data->bits << std::dec << std::endl;
+  std::ostream &operator<<(std::ostream &out, node_p loc)
+  {
+    out << handler_names[loc.type] << "-" << (uint16_t)loc.offset;
+    return out;
+  }
 
-    int indizes[17];
-    out << "bitindex: [";
-    unsigned int bits = data->bits;
-    int index = 0, i = 0;
-    while(bits){
-      index = ctz(bits);
-      out << index;
-      indizes[i++] = index;
-      bits &= ~(1 << index);
-      if (bits) {
-        out << ", ";
+  std::ostream &operator<<(std::ostream &out, location_p loc)
+  {
+    out << loc.node << "P" << (uint64_t)loc.page;
+    return out;
+  }
+
+  struct DumpBase
+  {
+    virtual void dump(std::ostream &out, location_p loc, Storage *storage)
+    {
+      out << "id: " << loc << std::endl;
+      out << "---" << std::endl;
+    }
+  };
+
+  struct NullDumper : public DumpBase
+  {
+  };
+
+  void dump_node(std::ostream &out, location_p loc, Storage *storage);
+
+  struct EndLeafDumper : public DumpBase
+  {
+    void dump(std::ostream &out, location_p loc, Storage *storage)
+    {
+      out << "id: " << loc << std::endl;
+
+      const EndLeaf &leaf = storage->node(loc)->endleaf;
+      uint32_t size = std::min(leaf.size, (uint32_t)128);
+      out << "space: " << sizeof(EndLeaf)+(int)leaf.size << std::endl;
+      out << "size: " << (int)leaf.size << std::endl;
+      out << "value: \"";
+      for (uint32_t i = 0; i < size; i++)
+      {
+        out << "[";
+        dump_char(out, leaf.data[i]);
+        out << "]";
       }
+      out << "\"" << std::endl;
+      out << "---" << std::endl;
     }
-    out << "]" << std::endl;
+  };
 
-    if (upper >= 0) {
-      upper <<= 4;
-      out << "byteindex: [";
-      unsigned int bits = data->bits;
+  struct MiddleLeafDumper : public DumpBase
+  {
+    void dump(std::ostream &out, location_p loc, Storage *storage)
+    {
+      out << "id: " << loc << std::endl;
+      out << "space: " << sizeof(MiddleLeaf) << std::endl;
+
+      const MiddleLeaf &leaf = storage->node(loc)->middleleaf;
+
+      out << "children: " << std::endl;
+      out << "  - " << leaf.leaf << "P" << loc.page << std::endl;
+      out << "  - " << leaf.child << "P" << loc.page << std::endl;
+      out << "---" << std::endl;
+      dump_node(out, loc.replace(leaf.leaf), storage);
+      dump_node(out, loc.replace(leaf.child), storage);
+    }
+  };
+
+  struct LinkDumper : public DumpBase
+  {
+    void dump(std::ostream &out, location_p loc, Storage *storage)
+    {
+      out << "id: " << loc << std::endl;
+      out << "space: " << sizeof(Link) << std::endl;
+
+      const Link &link = storage->node(loc)->link;
+
+      out << "children: " << std::endl;
+      out << "  - " << link.loc << std::endl;
+      out << "---" << std::endl;
+      dump_node(out, link.loc, storage);
+    }
+  };
+
+  struct CompressDumper : public DumpBase
+  {
+    void dump(std::ostream &out, location_p loc, Storage *storage)
+    {
+      const Compressed &node_ = storage->node(loc)->compressed;
+      out << "id: " << loc << std::endl;
+      out << "space: " << sizeof(Compressed) + node_.size << std::endl;
+      out << "size: " << (int)node_.size << std::endl;
+      out << "keys: \"";
+      for (int i = 0; i < node_.size; i++)
+      {
+        out << "[";
+        dump_char(out, node_.key[i]);
+        out << "]";
+      }
+      out << "\"" << std::endl;
+      out << "children: " << std::endl;
+      out << "  - " << node_.child << "P" << loc.page << std::endl;
+      out << "---" << std::endl;
+      dump_node(out, loc.replace(node_.child), storage);
+    }
+  };
+
+  struct TrieDumper : public DumpBase
+  {
+    void dump(std::ostream &out, location_p loc, Storage *storage)
+    {
+      const Trie &trie = storage->node(loc)->trie;
+      out << "id: " << loc << std::endl;
+
+      int size = trie.size();
+      out << "space: " << sizeof(Trie)+size*sizeof(node_p) << std::endl;
+      out << "size: " << size << std::endl;
+      out << "bits: " << std::hex << trie.bits << std::dec << std::endl;
+
+      out << "bitindex: [";
+      unsigned int bits = trie.bits;
       int index = 0;
-      while(bits){
+      while (bits)
+      {
         index = ctz(bits);
-        out << '"';
-        dump_char(out, (char)(upper | index));
-        out << '"';
+        out << index;
         bits &= ~(1 << index);
-        if (bits) {
+        if (bits)
+        {
           out << ", ";
         }
       }
       out << "]" << std::endl;
-    }
 
-    out << "children: " << std::endl;
-    for(int i = 0; i < size; i++) {
-        out << "  - " << data->children[i] << std::endl;
+      out << "children: " << std::endl;
+      for (int i = 0; i < size; i++)
+      {
+        out << "  - " << trie.children[i] << "P" << loc.page << std::endl;
+      }
+      out << "---" << std::endl;
+      for (int i = 0; i < size; i++)
+      {
+        dump_node(out, loc.replace(trie.children[i]), storage);
+      }
     }
-    out << "---" << std::endl;
-    for(int i = 0; i < size; i++) {
-      dump_node(out, data->children[i], storage, indizes[i]);
-    }
+  };
+
+  NullDumper null_dumper;
+  EndLeafDumper endleaf_dumper;
+  MiddleLeafDumper middleleaf_dumper;
+  LinkDumper link_dumper;
+  CompressDumper compress_dumper;
+  TrieDumper trie_dumper;
+
+  DumpBase *dumpers[] = {
+      &null_dumper,
+      &endleaf_dumper,
+      &middleleaf_dumper,
+      &link_dumper,
+      &compress_dumper,
+      &trie_dumper,
+      &trie_dumper};
+
+  void dump_node(std::ostream &out, location_p loc, Storage *storage)
+  {
+    dumpers[loc.type]->dump(out, loc, storage);
   }
-};
-
-ValueDumper value_dumper;
-NullDumper null_dumper;
-CompressDumper compress_dumper;
-TrieDumper trie_dumper;
-
-DumpBase* dumpers[] = {
-  &value_dumper,
-  &null_dumper,
-  &compress_dumper,
-  &trie_dumper
-};
-
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage, int upper) {
-  dumpers[ptr.type]->dump(out, ptr, storage, upper);
-}
-
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage) {
-  dump_node(out, ptr, storage, -1);
-}
 
 #endif
 
-
-} // namespace larch_leaves
+} // namespace leaves

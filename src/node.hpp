@@ -1,101 +1,189 @@
-// declarations for the node stroage
-#ifndef _LARCH_LEAVES_NODE_HPP
-#define _LARCH_LEAVES_NODE_HPP
+#ifndef _LEAVES_NODE_HPP
+#define _LEAVES_NODE_HPP
 
-#include "../include/leaves.hpp"
-#include "storage.hpp"
+#include <cstdint>
+#include <cassert>
+#include <leaves.hpp>
+#include "port.hpp"
 
-using std::string;
-
-namespace larch_leaves {
+namespace leaves {
 
 enum NodeTypes {
-  kValue = 0,
-  kNull,
+  kNull = 0,
+  kEndLeaf,
+  kMiddleLeaf,
+  kLink,
   kCompressed,
-  kTrie,
+  kUpperTrie,
+  kLowerTrie,
+  kNTEnd
 };
 
-struct NodeHandler;
+/*
+  An abstract pointer to a Node within a Page
+*/
 
-struct Transition {
-  Transition(segment_ptr* pptr, Storage* storage):
-    node_ptr(pptr), storage(storage), cmp(0) {}
 
-  void* resolve(segment_ptr ptr) { return ptr.resolve(storage); }
+struct node_p {
+  uint16_t type:3;
+  uint16_t offset:13;
 
-  bool valid() const;
-  segment_ptr* find(Slice& key, string& current_key);
-  segment_ptr* next(string& current_key);
-  segment_ptr* prev(string& current_key);
-  segment_ptr* first(string& current_key);
-  segment_ptr* last(string& current_key);
-
-  segment_ptr* insert(Slice& key, const Slice& value, string& current_key);
-  bool remove(bool last);
-  Slice get_value() const;
-  NodeHandler* handler() const { return handlers[node_ptr->type]; }
-
-  segment_ptr* node_ptr;
-  segment_ptr* second_ptr;
-  Storage* storage;
-  char value;
-  char cmp;
-  static NodeHandler* handlers[];
+  static node_p b(uint16_t offset_=0, uint16_t type_=0);
+  node_p replace(uint16_t type_) const { return b(offset, type_); }
 };
 
+
+struct location_p {
+  union {
+    node_p node;
+    struct {
+      uint64_t type:3;
+      uint64_t offset:13;
+      uint64_t page:48;
+    };
+  };
+  
+  static location_p b(uint64_t page_=0);
+  static location_p b(uint64_t page_, node_p node_);
+  static location_p b(uint64_t page_, uint16_t offset, uint16_t type);
+  location_p replace(node_p n) const { return location_p::b(page, n); }
+};
+
+
+
+struct Trace;
+struct Page;
+
+#pragma pack(1)
+
+struct Trie {
+  uint16_t bits;
+  node_p children[];
+
+  size_t struct_size() const {
+      return sizeof(Trie) + size() * sizeof(node_p);
+    }
+
+  size_t size() const {
+      return popcount(bits);
+    }
+
+  int index(int bit) const {
+      uint16_t bitval = (1<<bit);
+      return bits & bitval ? popcount(bits & (bitval-1)) : -1;
+    }
+
+  int next(int bit) const {
+      uint16_t nbits = bits & (0xFFFF << (bit+1));
+      if (nbits) {
+        return ctz(nbits);
+      }
+      return -1;
+    }
+
+  int first() const {
+      return ctz(bits);
+    }
+
+  int prev(int bit) const {
+      if (bit) {
+        uint16_t nbits = bits & (0xFFFF >> (16-bit));
+        if (nbits)
+          return 15 - (clz(nbits) & 0xf);
+      }
+      return -1;
+    }
+
+  int last() const {
+      return 15 - (clz(bits) & 0xf);
+    }
+
+  node_p* add(int bit) {
+      assert(!(bits & 1<<bit));
+      bits |= 1 << bit;
+      int idx = index(bit);
+      for(int i = popcount(bits)-1; i > idx; i--) {
+        children[i] = children[i-1];
+      }
+      return &children[idx];
+    }
+};
+
+struct Link {
+  location_p loc;
+  Page* make_page_to_move(Trace& trace, size_t nsize);
+};
+
+struct Compressed {
+  uint8_t size;
+  node_p child;
+  char key[];
+
+  size_t struct_size() const {
+      return sizeof(Compressed) + size;
+    }
+};
+
+struct EndLeaf {
+  uint32_t size;
+  char data[];
+
+  size_t struct_size() const {
+      return sizeof(EndLeaf) + size;
+    }
+};
+
+struct MiddleLeaf {
+  node_p leaf;
+  node_p child;
+};
+
+
+struct Node {
+  union {
+    Trie trie;
+    Link link;
+    Compressed compressed;
+    EndLeaf endleaf;
+    MiddleLeaf middleleaf;
+  };
+};
+
+
+#pragma pack(0)
 
 struct NodeHandler {
-  virtual segment_ptr* find(Transition& self, Slice& key, string& current_key) = 0;
-  virtual segment_ptr* next(Transition& self, string& current_key) = 0;
-  virtual segment_ptr* first(Transition& self, string& current_key) = 0;
-  virtual segment_ptr* prev(Transition& self, string& current_key) = 0;
-  virtual segment_ptr* last(Transition& self, string& current_key) = 0;
-  virtual segment_ptr* insert(
-    Transition& self, Slice& key, const Slice& value, string& current_key) = 0;
+  /*
+  Find the next node. Returns true to go on or false
+  */
+  virtual bool find(Trace& trace) = 0;
+
+  /*
+  Returns true if key is at a valid position.
+  */
+  virtual bool valid(const Trace& trace) const { return false; }
+
+  virtual void insert(Trace& trace, const Slice& value) = 0;
+
+  virtual void adjust_pointers(Page* page, node_p npos, size_t start, int delta) = 0;
+  virtual bool move_node(Trace& trace, Page* page, node_p* pnos) = 0;
+
+#if 0
+  virtual Node* next(Trace& trace) = 0;
+  virtual Node* first(Trace& trace) = 0;
+  virtual Node* prev(Trace& trace) = 0;
+  virtual Node* last(Trace& trace) = 0;
+
+  
   virtual bool remove(Transition& self, bool last) = 0;
   //virtual segment_ptr* last(Transition& self) { return self.node_ptr; }
-  virtual bool valid() const { return false; }
+  
   virtual Slice get_value(const Transition& self) const { return Slice(); }
+ #endif
+
+  static NodeHandler* HANDLERS[kNTEnd];
 };
 
+} // namespace leaves
 
-inline segment_ptr* Transition::find(Slice& key, string& current_key) {
-  return handler()->find(*this, key, current_key);
-}
-
-inline segment_ptr* Transition::next(string& current_key) {
-  return handler()->next(*this, current_key);
-}
-
-inline segment_ptr* Transition::first(string& current_key) {
-  return handler()->first(*this, current_key);
-}
-
-inline segment_ptr* Transition::prev(string& current_key) {
-  return handler()->prev(*this, current_key);
-}
-
-inline segment_ptr* Transition::last(string& current_key) {
-  return handler()->last(*this, current_key);
-}
-
-inline segment_ptr* Transition::insert(Slice& key, const Slice& value, string& current_key) {
-  return handler()->insert(*this, key, value, current_key);
-}
-
-inline bool Transition::valid() const {
-  return handler()->valid();
-}
-
-inline Slice Transition::get_value() const {
-  return handler()->get_value(*this);
-}
-
-inline bool Transition::remove(bool last) {
-  return handler()->remove(*this, last);
-}
-
-
-} // namespace larch_leaves
-#endif // _LARCH_LEAVES_MEMORY_HPP
+#endif  // _LEAVES_NODE_HPP

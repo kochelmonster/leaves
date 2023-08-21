@@ -1,7 +1,9 @@
-#include "trace.hpp"
 #include <iostream>
+#include <leaves.hpp>
+#include "storage.hpp"
+#include "trace.hpp"
 
-namespace larch_leaves {
+namespace leaves {
 
 struct CursorImpl : public Cursor {
   CursorImpl(Storage& storage, DB::db_ptr pdb) : trace(storage), pdb(pdb) {}
@@ -27,16 +29,15 @@ struct CursorImpl : public Cursor {
 DB::~DB() { }
 
 
-struct SingleDB : public DB {
-    SingleDB(const char *path, size_t segment_size, ValuePools pools)
-      : storage(path, segment_size) { }
+struct DBImpl : public DB {
+    DBImpl(const char *path, size_t size, size_t delta) : storage(path, size, delta) { }
 
     cursor_ptr create_cursor() {
       return cursor_ptr(new CursorImpl(storage, me.lock()));
     }
 
     void flush() {
-        storage.flush();
+      storage.output.flush();
     }
 
     Storage storage;
@@ -44,22 +45,22 @@ struct SingleDB : public DB {
 };
 
 
-DB::db_ptr DB::open(const char *path, size_t segment_size, ValuePools pools) {
-  db_ptr result(new SingleDB(path, segment_size, pools));
-  ((SingleDB*)result.get())->me = result;
+DB::db_ptr DB::open(const char *path, size_t size, size_t delta) {
+  db_ptr result(new DBImpl(path, size, delta));
+  ((DBImpl*)result.get())->me = result;
   return result;
 }
 
 #ifdef DEBUG
 
-void dump_node(std::ostream& out, segment_ptr ptr, Storage* storage);
+void dump_node(std::ostream& out, location_p loc, Storage* storage);
 
 void dump_db(std::ostream& out, DB::db_ptr db) {
-  SingleDB *sdb(((SingleDB*)db.get()));
-  dump_node(out, *sdb->storage.start, &sdb->storage);
+  DBImpl *sdb(((DBImpl*)db.get()));
+  dump_node(out, sdb->storage->start.header.root, &sdb->storage);
 }
 
 #endif
 
 
-} // namespace larch_leaves
+} // namespace leaves

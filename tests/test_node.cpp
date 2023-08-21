@@ -2,9 +2,12 @@
 //#define GENERATE
 
 #include <cstdio>
+#include <string>
 #include <boost/test/included/unit_test.hpp>
 #include "test.hpp"
 
+
+using namespace std;
 
 void test_insert_first(Storage& storage) {
   check_graph("empty", storage);
@@ -47,7 +50,7 @@ BOOST_AUTO_TEST_SUITE(ModifyNullNode)
 
 BOOST_AUTO_TEST_CASE(insert) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
 }
 
@@ -58,21 +61,21 @@ BOOST_AUTO_TEST_SUITE(ModifyCompressedNode)
 
 BOOST_AUTO_TEST_CASE(trie_divide) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
 }
 
 BOOST_AUTO_TEST_CASE(value_divide) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed_value(storage);
 }
 
 BOOST_AUTO_TEST_CASE(very_big) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
 
   std::string key;
@@ -88,7 +91,7 @@ BOOST_AUTO_TEST_SUITE(ModifyValueNode)
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
 
   Slice key("abcdefg");
@@ -111,7 +114,7 @@ BOOST_AUTO_TEST_CASE(replace_value) {
 
 BOOST_AUTO_TEST_CASE(remove_intermediate) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed_value(storage);
 
@@ -125,7 +128,7 @@ BOOST_AUTO_TEST_CASE(remove_intermediate) {
 
 BOOST_AUTO_TEST_CASE(remove_until_intermediate) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed_value(storage);
 
@@ -145,7 +148,7 @@ BOOST_AUTO_TEST_SUITE(ModifyTrieNode)
 BOOST_AUTO_TEST_CASE(add_value_node) {
   // add a value to trie
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   test_add_value_node(storage);
@@ -159,7 +162,7 @@ BOOST_AUTO_TEST_CASE(add_value_node) {
 
 BOOST_AUTO_TEST_CASE(insert_index) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   test_insert_index(storage);
@@ -167,7 +170,7 @@ BOOST_AUTO_TEST_CASE(insert_index) {
 
 BOOST_AUTO_TEST_CASE(insert_grow_lower) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   test_insert_index(storage);
@@ -176,7 +179,7 @@ BOOST_AUTO_TEST_CASE(insert_grow_lower) {
 
 BOOST_AUTO_TEST_CASE(insert_grow_upper) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   insert(storage, Slice("abp"), "insert_index_p");
@@ -185,7 +188,7 @@ BOOST_AUTO_TEST_CASE(insert_grow_upper) {
 
 BOOST_AUTO_TEST_CASE(shrink_lower) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   test_insert_index(storage);
@@ -202,7 +205,7 @@ BOOST_AUTO_TEST_CASE(shrink_lower) {
 
 BOOST_AUTO_TEST_CASE(remove_trie) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
 
@@ -216,7 +219,7 @@ BOOST_AUTO_TEST_CASE(remove_trie) {
 
 BOOST_AUTO_TEST_CASE(remove_lower) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   insert(storage, Slice("abp"), "insert_index_p");
@@ -232,7 +235,7 @@ BOOST_AUTO_TEST_CASE(remove_lower) {
 
 BOOST_AUTO_TEST_CASE(keep_lower) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   test_insert_first(storage);
   test_divide_compressed(storage);
   insert(storage, Slice("abp"), "insert_index_p");
@@ -266,7 +269,7 @@ BOOST_AUTO_TEST_SUITE(MoveForward)
 
 BOOST_AUTO_TEST_CASE(move_forward_empty) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   Trace trace(storage);
 
   trace.first();
@@ -278,7 +281,7 @@ BOOST_AUTO_TEST_CASE(move_forward_empty) {
 
 BOOST_AUTO_TEST_CASE(move_forward) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   fill_db(storage);
 
   Trace trace(storage);
@@ -394,7 +397,7 @@ BOOST_AUTO_TEST_CASE(move_forward) {
 
 BOOST_AUTO_TEST_CASE(move_backward) {
   Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
+  Storage storage(TEST_FILE);
   fill_db(storage);
 
   Trace trace(storage);

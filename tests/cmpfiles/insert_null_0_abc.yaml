@@ -1,0 +1,12 @@
+id: kCompressed-0P1
+space: 6
+size: 3
+keys: "[a][b][c]"
+children: 
+  - kLeaf-6P1
+---
+id: kLeaf-6P1
+space: 7
+size: 3
+value: "[a][b][c]"
+---

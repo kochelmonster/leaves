@@ -6,9 +6,11 @@ import sarge
 from pathlib import Path
 
 
-CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size: {size}}}|{keys}}}"]"""
-VNODE = """"{id}" [label="{{{{{id}|size: {size}}}|{value}}}"]"""
-TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
+CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size:{size}/{space}}}|{keys}}}"]"""
+LNODE = """"{id}" [label="{{{{{id}|size: {size}/{space}}}|{value}}}"]"""
+MLNODE = """"{id}" [fillcolor=darksalmon label="{{{id}|space: {space}}}}}"]"""
+LINODE = """"{id}" [label="{{{id}|space: {space}}}}}"]"""
+TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|space: {space}|bits: {bits}}}|{{{slots}}}}}"]"""
 
 
 class Graph:
@@ -22,9 +24,9 @@ class Graph:
 
         for n in nodes:
             type_ = n["id"].split("-", 1)[0]
-            if type_ != "kTrie":
+            if not type_.endswith("Trie"):
                 for c in n.get("children", ()):
-                    if c != "kNull-0-0":
+                    if c != "kNull-0P0":
                         add(f'"{n["id"]}" -> "{c}"')
             else:
                 for i, c in enumerate(n.get("children", ())):
@@ -38,13 +40,29 @@ class Graph:
     def handle_kCompressed(self, node):
         return CNODE.format(**node)
 
-    def handle_kValue(self, node):
-        return VNODE.format(**node)
+    def handle_kLeaf(self, node):
+        return LNODE.format(**node)
+    
+    def handle_kMiddleLeaf(self, node):
+        return MLNODE.format(**node)
+    
+    def handle_kLink(self, node):
+        return LINODE.format(**node)
 
-    def handle_kTrie(self, node):
+    def handle_kUpperTrie(self, node):
+        self.last_upper = node
+        return self.handle_kTrie(node)
+
+    def handle_kLowerTrie(self, node):
+        index = self.last_upper["children"].index(node["id"])
+        upper_bit = self.last_upper["bitindex"][index]
+        chars = [chr((upper_bit << 4) + lb)+"("+str(lb)+")" for lb in node["bitindex"]]
+        return self.handle_kTrie(node, chars)
+
+    def handle_kTrie(self, node, chars=None):
         byteindex = node.get("byteindex")
-        if byteindex:
-            slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(byteindex))
+        if chars:
+            slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
         else:
             slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(node["bitindex"]))
 

@@ -1,0 +1,30 @@
+id: kCompressed-0P1
+space: 5
+size: 2
+keys: "[a][b]"
+children: 
+  - kMiddleLeaf-5P1
+---
+id: kMiddleLeaf-5P1
+space: 4
+children: 
+  - kLeaf-33P1
+  - kCompressed-9P1
+---
+id: kLeaf-33P1
+space: 6
+size: 2
+value: "[a][b]"
+---
+id: kCompressed-9P1
+space: 8
+size: 5
+keys: "[c][d][e][f][g]"
+children: 
+  - kLeaf-17P1
+---
+id: kLeaf-17P1
+space: 11
+size: 7
+value: "[a][b][c][d][e][f][g]"
+---

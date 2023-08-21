@@ -1,156 +1,125 @@
 // declarations for the node storage
-#ifndef _LARCH_LEAVES_STORAGE_HPP
-#define _LARCH_LEAVES_STORAGE_HPP
+#ifndef _LEAVES_STORAGE_HPP
+#define _LEAVES_STORAGE_HPP
 
+#include <fstream>
 #include <memory>
 #include <vector>
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
+#include <map>
+#include "page.hpp"
 
 
-#ifndef AREA_COUNT
-#define AREA_COUNT 100
-#endif
-
-
-#define NODE_INCREMENT  24
-#define POOL_COUNT  5
-
-namespace larch_leaves {
-
-
-typedef uint16_t segment_index_t;
-
-struct Storage;
-
-
-#pragma pack(2)
-struct segment_ptr {
-  // The persistent part of a segment pointer
-
-  uint32_t delta:30;
-  uint32_t type:2;
-  segment_index_t segment_id;
-
-  segment_ptr(segment_index_t segment_id=0, uint32_t delta=0, uint32_t type=1)
-    : delta(delta), type(type), segment_id(segment_id) {}
-
-  segment_ptr operator=(segment_ptr* other) {
-    (*this) = *other;
-    return *this;
-  }
-
-  segment_ptr operator+=(uint32_t diff) {
-    delta += diff;
-    return *this;
-  }
-
-  segment_ptr operator+(uint32_t diff) {
-    return segment_ptr(segment_id, delta + diff);
-  }
-
-  segment_ptr operator-(uint32_t diff) {
-    return segment_ptr(segment_id, delta - diff);
-  }
-
-  int64_t operator-(segment_ptr& other) {
-    assert(segment_id == other.segment_id);
-    return delta - other.delta;
-  }
-
-  operator bool() const { return type != 1; }
-  bool operator!() const { return type == 1; }
-
-  void* resolve(const Storage* storage) const;
-};
-#pragma pack(0)
-
-
-struct PPool {
-  // The persistent part of Pool
-  size_t node_size;
-  size_t area_size;
-  segment_ptr current_area;
-  segment_ptr next_node;
-  segment_ptr next_free;
-};
-
-struct Pool {
-  // the interface part of Pool
-
-  struct Free {
-    segment_ptr next;
-  };
-
-  Storage* storage;
-  PPool* pool;
-
-  void open(Storage* storage, PPool* pool) {
-    this->storage = storage;
-    this->pool = pool;
-  }
-  void create(Storage* storage, PPool* pool, size_t node_size, size_t area_count);
-
-  segment_ptr allocate();
-  void free(const segment_ptr& ptr);
-};
-
+namespace leaves {
 
 using boost::interprocess::file_mapping;
-using boost::interprocess::managed_external_buffer;
 using boost::interprocess::mapped_region;
-using boost::interprocess::create_only_t;
-using boost::interprocess::create_only;
-using boost::interprocess::open_only_t;
-using boost::interprocess::open_only;
-using boost::interprocess::read_write;
+
+struct StorageHeader;
+
+#define POOL_COUNT 100
+
+typedef std::map<uint64_t, Page*> pagemap_t;
 
 
-struct Segment {
-  mapped_region region;
-  managed_external_buffer memory;
+struct PagePool {
+  Page* free_list;
+  Page* free_block;
+  Page* pool;
+  
+  PagePool(): free_list(NULL) , free_block(NULL){
+    free_block = pool = new Page[POOL_COUNT];
+  }
+  ~PagePool() {
+    delete[] pool;
+  }
+  Page* alloc() {
+    if (free_list) {
+      Page *result = (Page*)free_list;
+      free_list = free_list->next_mem;
+      return result;
+    }
 
-  Segment(create_only_t, file_mapping& file, size_t offset, size_t size)
-    : region(file, read_write, offset, size),
-      memory(create_only, region.get_address(), size)
-  { }
-
-  Segment(open_only_t, file_mapping& file, size_t offset, size_t size)
-    : region(file, read_write, offset, size),
-      memory(open_only, region.get_address(), size)
-  { }
-};
-
-
-struct Storage {
-  typedef std::vector<Segment> segment_v;
-
-  Storage(const char* path, size_t segment_size);
-  ~Storage();
-
-  segment_ptr allocate(size_t size);
-  void free(segment_ptr ptr);
-  void flush();
-  void flush_header();
-
-  size_t get_segment_address(segment_index_t index) const {
-    return (size_t)segments[index].region.get_address();
+    if (free_block < pool + POOL_COUNT) {
+      return free_block++;
+    }
+    return NULL;
   }
 
-  file_mapping file;
-  size_t segment_size;
-  Pool pools[POOL_COUNT];
-  uint64_t* version;
-  segment_ptr* start;
-  segment_v segments;
+  void free(Page* page) {
+    page->next_mem = free_list;
+    free_list = page;
+  }
 };
 
+struct Storage {
+  Storage(const char* path, size_t size=START_SIZE, size_t delta=INCREMENT_SIZE);
+  ~Storage();
 
-inline void* segment_ptr::resolve(const Storage* storage) const {
-  return (void*)(storage->get_segment_address(segment_id) + delta);
-}
+  location_p alloc(size_t size=PAGE_SIZE);
+  void free(location_p id, size_t size);
+  void increase(size_t size);
+  void flush();
 
-}
+  Node* node(location_p pos) {
+    return (start + pos.page)->node(pos.node);
+  }
 
-#endif // _LARCH_LEAVES_STORAGE_HPP
+  Page* page(uint64_t pos, bool writable=false) {
+      return writable ? get_writable(pos): start + pos;
+    }
+
+  Page* page(location_p pos, bool writable=false) {
+      return page(pos.page, writable);
+    }
+
+  location_p locate(const Page* page) const {
+      return location_p::b(page - start);
+    }
+
+  bool readonly(const Page* page) const {
+      return start < page && page < start + block_end;
+    }
+
+  size_t offset(uint64_t pos) const {
+      return pos * PAGE_SIZE;
+    }
+
+  size_t offset(location_p pos) const {
+      return pos.page * PAGE_SIZE + pos.offset;
+    }
+
+  size_t offset(const Page* page) const {
+      return offset(locate(page));
+    }
+
+  uint64_t transaction_id() const {
+      return start->header.transaction_id;
+    }
+
+  void transaction_inc();
+
+  Page *get_writable(uint64_t pos);
+
+  Page *get_writable(location_p pos) {
+    return get_writable(pos.page);
+  }
+
+  void write_value(location_p pos, const Slice& value);
+    
+  file_mapping file;
+  mapped_region *region;
+  std::ofstream output;
+  size_t delta;
+  size_t block_end;
+  PagePool tmpmem;
+  pagemap_t pages_to_write;
+  Page *start;
+};
+
+} // namespace leaves
+
+#endif // _LEAVES_STORAGE_HPP
+
