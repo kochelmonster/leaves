@@ -80,17 +80,21 @@ inline void check_graph(const char* name, Storage& storage) {
 }
 
 
-inline void insert(Storage& storage, const Slice& key, const char* test_name) {
+inline void insert(Storage& storage, const char* test_name, const Slice& key, const Slice& value) {
   Trace trace(storage);
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
   BOOST_REQUIRE(!trace.valid());
 
-  trace.set_value(key);
+  trace.set_value(value);
   trace.commit();
   check_graph(test_name, storage);
   BOOST_REQUIRE(trace.valid());
   BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
+}
+
+inline void insert(Storage& storage, const char* test_name, const Slice& key) {
+  insert(storage, test_name, key, key);
 }
 
 
@@ -223,7 +227,7 @@ inline void test_insertion(Storage& storage, const char* title, const char* keys
     std::cout << "insert " << keys[i] << std::endl;
     std::string test_name(cstr.str());
     test_name.resize(30);
-    insert(storage, keys[i], test_name.c_str());
+    insert(storage, test_name.c_str(), keys[i]);
     strings.push_back(keys[i]);
   }
 #ifdef MOVEMENT

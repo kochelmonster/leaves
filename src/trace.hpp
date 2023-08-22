@@ -1,28 +1,28 @@
 #ifndef _LEAVES_TRACE_HPP
 #define _LEAVES_TRACE_HPP
 #include <leaves.hpp>
-#include "storage.hpp"
+
 #include "page.hpp"
+#include "storage.hpp"
 
 namespace leaves {
 
-
 struct Trace;
 
-
 struct Transition {
-  location_p pnode;  // Position to the node 
+  location_p pnode;  // Position to the node
   location_p plink;  // Position to the link of the node
-  Transition(location_p pnode_, location_p plink_): pnode(pnode_), plink(plink_) {}
+  Transition(location_p pnode_, location_p plink_)
+      : pnode(pnode_), plink(plink_) {}
 };
 
-
-struct Location  {
+struct Location {
   location_p loc;
   Page* page;
   Node* node;
-  
-  Location(location_p loc_, Page* page_, Node* node_) : loc(loc_), page(page_), node(node_) {}
+
+  Location(location_p loc_, Page* page_, Node* node_)
+      : loc(loc_), page(page_), node(node_) {}
 
   Transition next(const node_p* link) const {
     return Transition(loc.replace(*link), loc.replace(page->offset(link)));
@@ -33,11 +33,10 @@ struct Location  {
   }
 };
 
-
 struct Trace {
-  Trace(Storage& storage) 
-      : storage(storage), 
-        transaction_id(storage.transaction_id()), 
+  Trace(Storage& storage)
+      : storage(storage),
+        transaction_id(storage.transaction_id()),
         writing(false) {
     current_key.reserve(1024);
     stack.reserve(128);
@@ -58,8 +57,7 @@ struct Trace {
     return NodeHandler::HANDLERS[stack.back().pnode.type];
   }
 
-  
-  void change_type(uint16_t type);
+  void change_link(uint16_t offset, uint16_t type);
   void push_back(const Transition& trans);
   Location back() const;
 
@@ -74,7 +72,7 @@ struct Trace {
 inline void Trace::push_back(const Transition& trans) {
   return stack.push_back(trans);
 }
-  
+
 inline Location Trace::back() const {
   const Transition& last = stack.back();
   Page* page = storage.page(last.pnode, writing);
@@ -82,23 +80,17 @@ inline Location Trace::back() const {
   return Location(last.pnode, page, node);
 }
 
-inline void Trace::change_type(uint16_t type) {
+inline void Trace::change_link(uint16_t offset, uint16_t type) {
   Transition& last = stack.back();
   Page* p = storage.page(last.plink, true);
-  ((node_p*)&p->content[last.plink.offset])->type 
-      = last.plink.type = last.pnode.type = type;
+  *(node_p*)&p->content[last.plink.offset] = last.pnode.node =
+      node_p::b(offset, type);
   if (last.pnode.node.offset == 0) {
     p = storage.page(last.pnode, true);
     p->end.type = type;
   }
 }
 
-} // namespace leaves
+}  // namespace leaves
 
-
-
-
-
-
-
-#endif // _LEAVES_TRACE_HPP
+#endif  // _LEAVES_TRACE_HPP

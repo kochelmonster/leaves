@@ -20,18 +20,20 @@ void Page::scale_node(Trace& trace, size_t start, int delta)  {
     return;
   }
 
-  size_t rest_size = end.offset - start;
   node_p root = node_p::b(0, end.type);
 
   if (delta > 0) {
+    size_t move_size = end.offset - start;
     alloc(trace, delta);
+    memmove(&content[start+delta], &content[start], move_size);
     if (!start)
       root.offset = delta;
   }
-  else
+  else {
     end.offset += delta;
-  
-  memmove(&content[start+delta], &content[start], rest_size);
+    memmove(&content[start], &content[start-delta], end.offset-start);
+  }
+    
   adjust_pointers(root, start, delta);
 }
 

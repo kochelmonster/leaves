@@ -8,7 +8,7 @@ from pathlib import Path
 
 CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size:{size}/{space}}}|{keys}}}"]"""
 LNODE = """"{id}" [label="{{{{{id}|size: {size}/{space}}}|{value}}}"]"""
-MLNODE = """"{id}" [fillcolor=darksalmon label="{{{id}|space: {space}}}}}"]"""
+MLNODE = """"{id}" [fillcolor=darksalmon label="{{{{{id}|space: {space}}}}}}}"]"""
 LINODE = """"{id}" [label="{{{id}|space: {space}}}}}"]"""
 TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|space: {space}|bits: {bits}}}|{{{slots}}}}}"]"""
 

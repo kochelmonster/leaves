@@ -61,7 +61,7 @@ def build(bld):
         target="test_storage")
 
     bld.program(
-        features="test",
+        # features="test",
         source=join_test("test_trie.cpp")+join_source(core),
         use="TEST BOOST",
         target="test_trie")
@@ -79,8 +79,8 @@ def build(bld):
         target="leaves")
 
     #bld.add_post_fun(lcov_zerocounters)
-    bld.add_post_fun(waf_unit_test.summary)
-    ##bld.add_post_fun(lcov_report)
+    #bld.add_post_fun(waf_unit_test.summary)
+    #bld.add_post_fun(lcov_report)
 
     print("-----------------------------")
     print("missing test!  Value::advance")

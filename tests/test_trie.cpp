@@ -5,7 +5,6 @@ Test the trie nodes without bursting.
 //#define GENERATE
 
 #include "test.hpp"
-
 #if 0
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
@@ -13,7 +12,6 @@ BOOST_AUTO_TEST_CASE(insert_null) {
   const char *keys[] = {"abc", NULL};
   test_insertion(storage, "insert_null", keys);
 }
-#endif 
 
 BOOST_AUTO_TEST_CASE(insert_compresstrie_split) {
   Preparation p;
@@ -22,15 +20,12 @@ BOOST_AUTO_TEST_CASE(insert_compresstrie_split) {
   test_insertion(storage, "insert_compress_split", keys);
 }
 
-
-#if 0
 BOOST_AUTO_TEST_CASE(insert_compresstrie_short) {
   Preparation p;
   Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ab",  NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
-
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
@@ -73,7 +68,6 @@ BOOST_AUTO_TEST_CASE(big_compressed) {
   const char *keys[] = {key1.c_str(), NULL};
   test_insertion(storage, "big_compressed", keys);
 }
-
 
 #ifdef WITH_REMOVE
 BOOST_AUTO_TEST_CASE(remove_trie) {
@@ -139,3 +133,13 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   trace.set_value(key);
 }
 #endif
+
+BOOST_AUTO_TEST_CASE(insert_link) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  string value(4050, 'a');
+  insert(storage, "insert_link_0", "abc", value);
+  insert(storage, "insert_link_1", "abcdef", value);
+  value.append(3000, 'b');
+  insert(storage, "insert_link_2", "abcdeghijklmnopqrst", value);
+}
