@@ -11,6 +11,13 @@
         "unordered_map": "cpp",
         "vector": "cpp",
         "string_view": "cpp",
-        "initializer_list": "cpp"
-    }
+        "initializer_list": "cpp",
+        "*.ipp": "cpp",
+        "atomic": "cpp",
+        "*.tcc": "cpp",
+        "fstream": "cpp",
+        "sstream": "cpp",
+        "regex": "cpp"
+    },
+    "cmake.configureOnOpen": true
 }

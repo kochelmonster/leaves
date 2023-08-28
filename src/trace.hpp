@@ -18,7 +18,10 @@ struct Transition {
 
 struct Location {
   location_p loc;
-  Page* page;
+  union {
+    Page* page;
+    WritablePage* wpage;
+  };
   Node* node;
 
   Location(location_p loc_, Page* page_, Node* node_)
@@ -59,6 +62,7 @@ struct Trace {
 
   void change_link(uint16_t offset, uint16_t type);
   void push_back(const Transition& trans);
+  void refresh();
   Location back() const;
 
   Storage& storage;

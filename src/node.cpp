@@ -11,6 +11,8 @@ node_p node_p::b(uint16_t offset_, uint16_t type_) {
   return result;
 }
 
+node_p node_p::null = node_p::b(0, 0);
+
 location_p location_p::b(uint64_t page_) {
   location_p result;
   result.page = page_;
@@ -33,23 +35,6 @@ location_p location_p::b(uint64_t page_, uint16_t offset, uint16_t type) {
   return result;
 }
 
-Page *Link::make_page_to_move(Trace &trace, size_t nsize) {
-  const Node *croot = trace.storage.node(loc);
-  if (loc.type == kEndLeaf &&
-      croot->endleaf.struct_size() + nsize >= PAGE_SIZE) {
-    // big page -> no move to the big page put an ordinary page before
-    location_p plink_page = trace.storage.alloc();
-    Page *link_page = trace.storage.get_writable(plink_page);
-    Link &tmp = link_page->node(link_page->alloc(trace, sizeof(Link)))->link;
-    tmp.loc = loc;
-    loc = plink_page;
-    loc.type = kLink;
-    link_page->end.type = kLink;
-    return link_page;
-  }
-  return trace.storage.get_writable(loc);
-}
-
 namespace bit {
 char upper(char value) { return value >> 4; }
 
@@ -59,14 +44,18 @@ char lower(char value) { return (value & 0x0F); }
 struct LinkHandler : public NodeHandler {
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
-  void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
-  bool move_node(Trace &trace, Page *page, node_p *offset);
-  static node_p create(Trace &trace, Page *page, location_p loc);
+  void adjust_pointers(WritablePage *page, node_p npos, size_t start,
+                       int delta);
+  node_p merge_node(Storage &storage, WritablePage *page, node_p npos);
+  node_p move_node(WritablePage *src, node_p *npos, WritablePage *dest);
+  size_t find_split_link(Page *page, node_p npos, SplitCandidate& candidate);
+  static node_p create(Trace &trace, WritablePage *page, location_p loc);
 };
 
 struct LeafHandler : public NodeHandler {
   bool valid(const Trace &trace) const { return trace.rest_key.empty(); }
-  void adjust_pointers(Page *page, node_p npos, size_t start, int delta) {}
+  void adjust_pointers(WritablePage *page, node_p npos, size_t start,
+                       int delta) {}
 };
 
 struct EndLeafHandler : public LeafHandler {
@@ -74,15 +63,20 @@ struct EndLeafHandler : public LeafHandler {
   void insert(Trace &trace, const Slice &value);
   void change_value(Trace &trace, const Slice &value);
   void insert_compressed(Trace &trace, const Slice &value);
-  bool move_node(Trace &trace, Page *page, node_p *offset);
-  static node_p create(Trace &trace, Page *page, const Slice &value);
+  node_p merge_node(Storage &storage, WritablePage *page, node_p npos);
+  node_p move_node(WritablePage *src, node_p *npos, WritablePage *dest);
+  size_t find_split_link(Page *page, node_p npos, SplitCandidate& candidate);
+  static node_p create(Trace &trace, WritablePage *page, const Slice &value);
 };
 
 struct MiddleLeafHandler : public LeafHandler {
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
-  void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
-  bool move_node(Trace &trace, Page *page, node_p *offset);
+  void adjust_pointers(WritablePage *page, node_p npos, size_t start,
+                       int delta);
+  node_p merge_node(Storage &storage, WritablePage *page, node_p npos);
+  node_p move_node(WritablePage *src, node_p *npos, WritablePage *dest);
+  size_t find_split_link(Page *page, node_p npos, SplitCandidate& candidate);
 };
 
 struct CompressedHandler : public NodeHandler {
@@ -92,29 +86,38 @@ struct CompressedHandler : public NodeHandler {
                        const Slice &value);
   void split_at_middle_leaf(Trace &trace, Location &last, size_t pos,
                             const Slice &value);
-  void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
-  bool move_node(Trace &trace, Page *page, node_p *offset);
-  static node_p create(Trace &trace, Page *page, const Slice &key,
+  void adjust_pointers(WritablePage *page, node_p npos, size_t start,
+                       int delta);
+  node_p merge_node(Storage &storage, WritablePage *page, node_p npos);
+  node_p move_node(WritablePage *src, node_p *npos, WritablePage *dest);
+  size_t find_split_link(Page *page, node_p npos, SplitCandidate& candidate);
+  static node_p create(Trace &trace, WritablePage *page, const Slice &key,
                        const Slice &value);
 };
 
 struct NullHandler : public NodeHandler {
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
-  void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
-  bool move_node(Trace &trace, Page *page, node_p *offset);
+  void adjust_pointers(WritablePage *page, node_p npos, size_t start,
+                       int delta);
+  node_p merge_node(Storage &storage, WritablePage *page, node_p npos);
+  node_p move_node(WritablePage *src, node_p *npos, WritablePage *dest);
+  size_t find_split_link(Page *page, node_p npos, SplitCandidate& candidate);
 };
 
 struct TrieHandler : public NodeHandler {
   virtual char bits(char value) const = 0;
 
   bool find(Trace &trace);
-  void adjust_pointers(Page *page, node_p npos, size_t start, int delta);
-  bool move_node(Trace &trace, Page *page, node_p *offset);
-
+  void adjust_pointers(WritablePage *page, node_p npos, size_t start,
+                       int delta);
+  node_p merge_node(Storage &storage, WritablePage *page, node_p npos);
+  node_p move_node(WritablePage *src, node_p *npos, WritablePage *dest);
+  size_t find_split_link(Page *page, node_p npos, SplitCandidate& candidate);
   node_p *add(Trace &trace, Location &last);
-  static void create(Trace &trace, Page *page, node_p pos, char node_key,
-                     node_p child, const Slice &key, const Slice &value);
+  static void create(Trace &trace, WritablePage *page, node_p pos,
+                     char node_key, node_p child, const Slice &key,
+                     const Slice &value);
   static size_t calc_size(char key1, char key2) {
     if (bit::upper(key1) == bit::upper(key2)) {
       return 2 * sizeof(Trie) + 3 * sizeof(node_p);
@@ -132,7 +135,7 @@ struct LowerTrieHandler : public TrieHandler {
   char bits(char value) const;
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
-  static node_p create(Trace &trace, Page *page, const Slice &value);
+  static node_p create(Trace &trace, WritablePage *page, const Slice &value);
 };
 
 bool LinkHandler::find(Trace &trace) {
@@ -143,15 +146,45 @@ bool LinkHandler::find(Trace &trace) {
 
 void LinkHandler::insert(Trace &trace, const Slice &value) { assert(0); }
 
-void LinkHandler::adjust_pointers(Page *page, node_p npos, size_t start,
+void LinkHandler::adjust_pointers(WritablePage *page, node_p npos, size_t start,
                                   int delta) {}
 
-bool LinkHandler::move_node(Trace &trace, Page *page, node_p *offset) {
-  return false;
+node_p LinkHandler::merge_node(Storage &storage, WritablePage *page,
+                               node_p npos) {
+  Link &link = page->node(npos)->link;
+  const Page *csrc = storage.get_newest(link.loc.page);
+
+  if (link.loc.type == kEndLeaf && csrc->node(0)->endleaf.size > BIG_VALUE) {
+    return npos;
+  }
+
+  if (csrc->end.offset < page->free()) {
+    location_p old = link.loc;
+    npos.type = link.loc.type;
+    WritablePage *src = storage.get_writable(old);
+    page->scale_node(npos.offset, -(int)sizeof(Link));  // remove the link
+    node_p root = node_p::b(0, npos.type);
+    npos = src->move_node(&root, page);
+    storage.free(old, PAGE_SIZE);
+  }
+
+  return npos;
 }
 
-node_p LinkHandler::create(Trace &trace, Page *page, location_p pos) {
-  node_p result = page->alloc(trace, sizeof(Link), kLink);
+node_p LinkHandler::move_node(WritablePage *src, node_p *npos,
+                              WritablePage *dest) {
+  node_p result = dest->alloc(sizeof(Link), kLink);
+  memcpy(dest->node(result), src->node(*npos), sizeof(Link));
+  src->scale_node(npos->offset, -(int)sizeof(Link));
+  return result;
+}
+
+size_t LinkHandler::find_split_link(Page *page, node_p npos, SplitCandidate& candidate) {
+  return sizeof(Link);
+}
+
+node_p LinkHandler::create(Trace &trace, WritablePage *page, location_p pos) {
+  node_p result = page->alloc(sizeof(Link), kLink);
   Node *node = page->node(result);
   node->link.loc = pos;
   return result;
@@ -169,14 +202,15 @@ void EndLeafHandler::insert(Trace &trace, const Slice &value) {
 }
 
 void EndLeafHandler::insert_compressed(Trace &trace, const Slice &value) {
+  location_p *pnode = &trace.stack.back().pnode;
+  WritablePage *page = trace.storage.get_writable(pnode->page);
   size_t space = sizeof(MiddleLeaf);
-  location_p &pnode = trace.stack.back().pnode;
-  uint16_t offset = pnode.offset;
-  Page *page = trace.storage.page(pnode.page, true);
-  page->scale_node(trace, offset, space);
+  uint16_t offset = pnode->offset;
+
+  page->scale_node(offset, space);
 
   MiddleLeaf &leaf = page->node(offset)->middleleaf;
-  leaf.leaf = node_p::b(offset + space, kEndLeaf);
+  leaf.leaf = node_p::b(offset + space, pnode->type);
   leaf.child = CompressedHandler::create(trace, page, trace.rest_key, value);
   trace.change_link(offset, kMiddleLeaf);
 }
@@ -186,8 +220,7 @@ void EndLeafHandler::change_value(Trace &trace, const Slice &value) {
   Location last = trace.back();
   EndLeaf &leaf = last.node->endleaf;
   size_t leaf_struct_size = sizeof(EndLeaf) + leaf.size;
-  size_t new_struct_size =
-      std::max(sizeof(EndLeaf) + value.size(), sizeof(Link));
+  size_t new_struct_size = sizeof(EndLeaf) + value.size();
 
   if (leaf_struct_size > PAGE_SIZE) {
     // Big Page
@@ -212,10 +245,10 @@ void EndLeafHandler::change_value(Trace &trace, const Slice &value) {
 
   // we are in an ordinary page
   int delta = new_struct_size - leaf_struct_size;
-  if (delta < 0 || (int)last.page->free() > delta) {
+  if (delta < 0 || (int)last.wpage->free() > delta) {
     EndLeaf &leaf = last.node->endleaf;
     // the new value fits in the same page
-    last.page->scale_node(trace, last.loc.node.offset, delta);
+    last.wpage->scale_node(last.loc.node.offset, delta);
     trace.change_link(last.loc.node.offset, kEndLeaf);
     leaf.size = value.size();
     memcpy(&leaf.data[0], value.data(), leaf.size);
@@ -223,8 +256,7 @@ void EndLeafHandler::change_value(Trace &trace, const Slice &value) {
   }
 
   // We have to insert a link and write the value at a new page.
-  last.page->scale_node(trace, last.loc.node.offset,
-                        sizeof(Link) - leaf_struct_size);
+  last.wpage->scale_node(last.loc.node.offset, sizeof(Link) - leaf_struct_size);
   Link &link = last.node->link;
   trace.change_link(last.loc.node.offset, kLink);
   link.loc = trace.storage.alloc(new_struct_size);
@@ -232,26 +264,29 @@ void EndLeafHandler::change_value(Trace &trace, const Slice &value) {
   trace.storage.write_value(link.loc, value);
 }
 
-node_p EndLeafHandler::create(Trace &trace, Page *page, const Slice &value) {
+node_p EndLeafHandler::create(Trace &trace, WritablePage *page,
+                              const Slice &value) {
   node_p result;
   Node *node;
   /* node_size must be at least the size of link, to be able to extend the leaf,
      on a full page*/
-  size_t node_size = std::max(sizeof(EndLeaf) + value.size(), sizeof(Link));
+  size_t node_size = sizeof(EndLeaf) + value.size();
 
   if (page->free() < node_size) {
-    location_p ploc = trace.storage.alloc(node_size);
+    page->too_small = true;
+    size_t complete_page_size = node_size + sizeof(page->end);
+    location_p ploc = trace.storage.alloc(complete_page_size);
+
     ploc.type = kEndLeaf;
     result = LinkHandler::create(trace, page, ploc);
-    if (node_size > PAGE_SIZE) {
+    if (value.size() > BIG_VALUE) {
       trace.storage.write_value(ploc, value);
       return result;
     }
-    Page *dest = trace.storage.get_writable(ploc);
-    dest->end.type = kEndLeaf;
-    node = dest->node(0);
+    WritablePage *dest = trace.storage.get_writable(ploc);
+    node = dest->node(dest->alloc(node_size, kEndLeaf).offset);
   } else {
-    result = page->alloc(trace, node_size, kEndLeaf);
+    result = page->alloc(node_size, kEndLeaf);
     node = page->node(result);
   }
 
@@ -260,27 +295,26 @@ node_p EndLeafHandler::create(Trace &trace, Page *page, const Slice &value) {
   return result;
 }
 
-bool EndLeafHandler::move_node(Trace &trace, Page *page, node_p *npos) {
-  EndLeaf &leaf = page->node(*npos)->endleaf;
+node_p EndLeafHandler::merge_node(Storage &storage, WritablePage *page,
+                                  node_p npos) {
+  return npos;
+}
 
-  size_t node_size = leaf.struct_size();
-  if (node_size <= sizeof(Link) || !npos->offset) {
-    // nothing to gain
-    return false;
-  }
+node_p EndLeafHandler::move_node(WritablePage *src, node_p *npos,
+                                 WritablePage *dest) {
+  EndLeaf &sleaf = src->node(*npos)->endleaf;
+  size_t node_size = sleaf.struct_size();
+  node_p result = dest->alloc(node_size, kEndLeaf);
+  EndLeaf &dleaf = dest->node(result)->endleaf;
+  memcpy(&dleaf, &sleaf, node_size);
+  uint16_t offset = npos->offset;
+  *npos = node_p::null;  // stop adjust_pointer
+  src->scale_node(offset, -node_size);
+  return result;
+}
 
-  location_p ploc = trace.storage.alloc();
-  Page *pnew = trace.storage.get_writable(ploc);
-  pnew->alloc(trace, node_size);
-  memcpy(&pnew->node(0)->endleaf, &leaf, node_size);
-  pnew->end.type = ploc.type = kEndLeaf;
-
-  // change lead to link
-  page->scale_node(trace, npos->offset, sizeof(Link)-node_size);
-  Link &link = page->node(*npos)->link;
-  link.loc = ploc;
-  npos->type = kLink;
-  return true;
+size_t EndLeafHandler::find_split_link(Page *page, node_p npos, SplitCandidate& candidate) {
+  return page->node(npos)->endleaf.struct_size();
 }
 
 EndLeafHandler endLeafHandler;
@@ -299,19 +333,52 @@ void MiddleLeafHandler::insert(Trace &trace, const Slice &value) {
   assert(0);  // may never happen
 }
 
-void MiddleLeafHandler::adjust_pointers(Page *page, node_p npos, size_t start,
-                                        int delta) {
+void MiddleLeafHandler::adjust_pointers(WritablePage *page, node_p npos,
+                                        size_t start, int delta) {
   MiddleLeaf &node = page->node(npos)->middleleaf;
   if (node.child.offset >= start) {
     node.child.offset += delta;
   }
+  if (node.leaf.offset >= start) {
+    node.leaf.offset += delta;
+  }
   page->adjust_pointers(node.child, start, delta);
 }
 
-bool MiddleLeafHandler::move_node(Trace &trace, Page *page, node_p *npos) {
-  Node *node = page->node(*npos);
-  return (page->move_node(trace, &node->middleleaf.leaf) ||
-          page->move_node(trace, &node->middleleaf.child));
+node_p MiddleLeafHandler::merge_node(Storage &storage, WritablePage *page,
+                                     node_p npos) {
+  MiddleLeaf &leaf = page->node(npos)->middleleaf;
+  leaf.child = page->merge_node(storage, leaf.child);
+  leaf.leaf = page->merge_node(storage, leaf.leaf);
+  return npos;
+}
+
+node_p MiddleLeafHandler::move_node(WritablePage *src, node_p *npos,
+                                    WritablePage *dest) {
+  MiddleLeaf &sleaf = src->node(*npos)->middleleaf;
+  node_p result = dest->alloc(sizeof(MiddleLeaf), kMiddleLeaf);
+  MiddleLeaf &dleaf = dest->node(result)->middleleaf;
+
+  // to stop adjust pointer
+  dleaf.child = src->move_node(&sleaf.child, dest);
+  dleaf.leaf = src->move_node(&sleaf.leaf, dest);
+  uint16_t offset = npos->offset;
+  *npos = node_p::null;  // stop adjust_pointer
+  src->scale_node(offset, -(int)sizeof(MiddleLeaf));
+  return result;
+}
+
+size_t MiddleLeafHandler::find_split_link(Page *page, node_p npos, SplitCandidate& candidate) {
+  MiddleLeaf &leaf = page->node(npos)->middleleaf;
+  size_t size1 = page->find_split_link(leaf.child, candidate);
+  if (candidate.set_link(&leaf.child, size1))
+    return size1;
+
+  size_t size2 = page->find_split_link(leaf.leaf, candidate);
+  if (candidate.set_link(&leaf.leaf, size2))
+    return size2;
+
+  return size1 + size2;
 }
 
 MiddleLeafHandler middleLeafHandler;
@@ -372,7 +439,7 @@ void CompressedHandler::split_at_middle(Trace &trace, Location &last,
   node_p node_child = node.child;
   node_child.offset += delta;
 
-  last.page->scale_node(trace, last.loc.node.offset + node_struct_size, delta);
+  last.wpage->scale_node(last.loc.node.offset + node_struct_size, delta);
 
   node_p child1;
   if (second_size) {
@@ -394,7 +461,7 @@ void CompressedHandler::split_at_middle(Trace &trace, Location &last,
     trace.change_link(last.loc.node.offset, kUpperTrie);
   }
 
-  TrieHandler::create(trace, last.page, trie_offset, node_key, child1,
+  TrieHandler::create(trace, last.wpage, trie_offset, node_key, child1,
                       trace.rest_key.advance(pos), value);
 }
 
@@ -414,8 +481,8 @@ void CompressedHandler::split_at_middle_leaf(Trace &trace, Location &last,
   size_t second_struct_size = sizeof(Compressed) + second_size;
 
   assert(first_struct_size + leaf_size + second_struct_size > node_struct_size);
-  last.page->scale_node(
-      trace, last.loc.node.offset + node_struct_size,
+  last.wpage->scale_node(
+      last.loc.node.offset + node_struct_size,
       first_struct_size + leaf_size + second_struct_size - node_struct_size);
 
   node_p second_offset = node_p::b(
@@ -431,11 +498,11 @@ void CompressedHandler::split_at_middle_leaf(Trace &trace, Location &last,
 
   MiddleLeaf &leaf = last.page->node(node.child)->middleleaf;
   leaf.child = second_offset;
-  leaf.leaf = EndLeafHandler::create(trace, last.page, value);
+  leaf.leaf = EndLeafHandler::create(trace, last.wpage, value);
 }
 
-void CompressedHandler::adjust_pointers(Page *page, node_p npos, size_t start,
-                                        int delta) {
+void CompressedHandler::adjust_pointers(WritablePage *page, node_p npos,
+                                        size_t start, int delta) {
   Compressed &node = page->node(npos)->compressed;
   if (node.child.offset >= start) {
     node.child.offset += delta;
@@ -443,54 +510,57 @@ void CompressedHandler::adjust_pointers(Page *page, node_p npos, size_t start,
   page->adjust_pointers(node.child, start, delta);
 }
 
-bool CompressedHandler::move_node(Trace &trace, Page *page, node_p *pnpos) {
-  Compressed &node = page->node(*pnpos)->compressed;
-  if (node.child.type == kLink && pnpos->offset) {
-    Link &link = page->node(node.child)->link;
-    size_t node_size = node.struct_size();
-    Page *dest = link.make_page_to_move(trace, node_size);
-    location_p ploc = link.loc;
-
-    // copy the node to the new page
-    dest->end.type = kCompressed;
-    Compressed &dnode = dest->node(0)->compressed;
-    dest->scale_node(trace, 0, node_size);
-    memcpy(&dnode, &node, node_size);
-    dnode.child = node_p::b(node_size, ploc.type);
-
-    // remove the link
-    page->scale_node(trace, node.child.offset, -(int)sizeof(Link));
-
-    // change the compressed to link
-    page->scale_node(trace, pnpos->offset, sizeof(Link) - node_size);
-    Link &nlink = page->node(*pnpos)->link;
-    nlink.loc = location_p::b(ploc.page, 0, kCompressed);
-    pnpos->type = kLink;
-    return true;
-  }
-  return page->move_node(trace, &node.child);
+node_p CompressedHandler::merge_node(Storage &storage, WritablePage *page,
+                                     node_p npos) {
+  Compressed &node = page->node(npos)->compressed;
+  node.child = page->merge_node(storage, node.child);
+  return npos;
 }
 
-node_p CompressedHandler::create(Trace &trace, Page *page, const Slice &key,
-                                 const Slice &value) {
-  size_t csize = std::min(key.size(), (size_t)255);
-  size_t node_size = sizeof(Compressed) + csize;
+node_p CompressedHandler::move_node(WritablePage *src, node_p *npos,
+                                    WritablePage *dest) {
+  Compressed &snode = src->node(*npos)->compressed;
+  size_t node_size = snode.struct_size();
+  node_p result = dest->alloc(node_size, kCompressed);
+  Compressed &dnode = dest->node(result)->compressed;
+  memcpy(&dnode, &snode, node_size);
 
-  if (page->free() < node_size + sizeof(Link)) {
-    location_p ppos = trace.storage.alloc();
-    create(trace, trace.storage.get_writable(ppos), key, value);
-    return LinkHandler::create(trace, page, ppos);
+  // to avoid adjust_pointer
+  dnode.child = src->move_node(&snode.child, dest);
+  uint16_t offset = npos->offset;
+  *npos = node_p::null;  // stop adjust_pointer
+  src->scale_node(offset, -node_size);
+  return result;
+}
+
+size_t CompressedHandler::find_split_link(Page *page, node_p npos, SplitCandidate& candidate) {
+  Compressed &node = page->node(npos)->compressed;
+  size_t size = page->find_split_link(node.child, candidate);
+  if (candidate.set_link(&node.child, size)) {
+    return size;
   }
 
+  return size + node.struct_size();
+}
+
+node_p CompressedHandler::create(Trace &trace, WritablePage *page,
+                                 const Slice &key, const Slice &value) {
+  size_t csize = std::min(key.size(), (size_t)255);
+
   if (csize) {
-    node_p result = page->alloc(trace, node_size, kCompressed);
+    size_t node_size = sizeof(Compressed) + csize;
+    if (page->free() < node_size) {
+      page->too_small = true;
+      location_p ppos = trace.storage.alloc();
+      ppos = ppos.replace(
+          create(trace, trace.storage.get_writable(ppos), key, value));
+      return LinkHandler::create(trace, page, ppos);
+    }
+    node_p result = page->alloc(node_size, kCompressed);
     Node *node = page->node(result);
     node->compressed.size = csize;
     memcpy(node->compressed.key, key.data(), csize);
     node->compressed.child = create(trace, page, key.advance(csize), value);
-    if (result.offset == 0) {
-      page->end.type = kCompressed;
-    }
     return result;
   }
 
@@ -512,10 +582,10 @@ bool TrieHandler::find(Trace &trace) {
   return true;
 }
 
-void TrieHandler::adjust_pointers(Page *page, node_p npos, size_t start,
+void TrieHandler::adjust_pointers(WritablePage *page, node_p npos, size_t start,
                                   int delta) {
   Trie &trie = page->node(npos)->trie;
-  size_t count = trie.size();
+  size_t count = trie.count();
   for (size_t i = 0; i < count; i++) {
     if (trie.children[i].offset >= start) {
       trie.children[i].offset += delta;
@@ -524,77 +594,66 @@ void TrieHandler::adjust_pointers(Page *page, node_p npos, size_t start,
   }
 }
 
-bool TrieHandler::move_node(Trace &trace, Page *page, node_p *pnpos) {
-  Trie &trie = page->node(*pnpos)->trie;
-  size_t count = trie.size();
-  bool can_move = pnpos->offset != 0;
-
+node_p TrieHandler::merge_node(Storage &storage, WritablePage *page,
+                               node_p npos) {
+  Trie &trie = page->node(npos)->trie;
+  size_t count = trie.count();
   for (size_t i = 0; i < count; i++) {
-    if (trie.children[i].type != kLink) {
-      can_move = false;
-      if (page->move_node(trace, &trie.children[i])) return true;
-    }
+    trie.children[i] = page->merge_node(storage, trie.children[i]);
+  }
+  return npos;
+}
+
+node_p TrieHandler::move_node(WritablePage *src, node_p *npos,
+                              WritablePage *dest) {
+  Trie &strie = src->node(*npos)->trie;
+  size_t node_size = strie.struct_size();
+  node_p result = dest->alloc(node_size, npos->type);
+  Trie &dtrie = dest->node(result)->trie;
+  memcpy(&dtrie, &strie, node_size);
+  size_t count = strie.count();
+  for (size_t i = 0; i < count; i++) {
+    // to avoid adjust_pointer
+    dtrie.children[i] = src->move_node(&strie.children[i], dest);
   }
 
-  if (can_move) {
-    // Move the node to the first child
-    assert(trie.children[0].type == kLink);
-    Link &link = page->node(trie.children[0])->link;
-    size_t trie_size = trie.struct_size();
-    size_t links_size = (trie.size() - 1) * sizeof(Link);
-    Page *dest = link.make_page_to_move(trace, trie_size + links_size);
-    location_p ploc = link.loc;
+  uint16_t offset = npos->offset;
+  *npos = node_p::null;  // stop adjust_pointer
+  src->scale_node(offset, -node_size);
+  return result;
+}
 
-    dest->scale_node(trace, 0, trie_size + links_size);
-
-    // copy trie to new dest
-    Trie &dtrie = dest->node(0)->trie;
-    memcpy(&dtrie, &trie, trie_size);
-    dtrie.children[0] =
-        node_p::b(trie_size + links_size, ploc.type);  // the former root
-    dest->end.type = pnpos->type;
-
-    node_p link_offset = node_p::b(trie_size, kLink);
-    for (size_t i = 1; i < count; i++) {
-      dtrie.children[i] = link_offset;
-      Link &link = dest->node(link_offset)->link;
-      link.loc = page->node(trie.children[i])->link.loc;
-      link_offset.offset += sizeof(Link);
+size_t TrieHandler::find_split_link(Page *page, node_p npos, SplitCandidate& candidate) {
+  Trie &trie = page->node(npos)->trie;
+  size_t count = trie.count();
+  size_t sum = trie.struct_size();
+  for (size_t i = 0; i < count; i++) {
+    size_t size = page->find_split_link(trie.children[i], candidate);
+    if (candidate.set_link(&trie.children[i], size)) {
+      return size;
     }
-
-    // remove links from old page
-    for (size_t i = 0; i < count; i++) {
-      page->scale_node(trace, trie.children[i].offset, -(int)sizeof(Link));
-    }
-
-    // trie -> link
-    page->scale_node(trace, pnpos->offset, sizeof(Link) - trie_size);
-    Link &nlink = page->node(*pnpos)->link;
-    ploc.type = pnpos->type;
-    nlink.loc = ploc;
-    pnpos->type = kLink;
-    return true;
+    sum += size;
   }
-
-  return false;
+  return sum;
 }
 
 node_p *TrieHandler::add(Trace &trace, Location &last) {
   Trie &trie = last.node->trie;
   assert((1 << bits(trace.rest_key[0]) & trie.bits) == 0);  // A new key!
-  last.page->scale_node(trace, last.loc.node.offset + trie.struct_size(),
-                        sizeof(node_p));
+  last.wpage->scale_node(last.loc.node.offset + trie.struct_size(),
+                         sizeof(node_p));
   return trie.add(bits(trace.rest_key[0]));
 }
 
-void TrieHandler::create(Trace &trace, Page *page, node_p pos, char key1,
-                         node_p child, const Slice &key, const Slice &value) {
+void TrieHandler::create(Trace &trace, WritablePage *page, node_p pos,
+                         char key1, node_p child, const Slice &key,
+                         const Slice &value) {
   Trie &upper = page->node(pos)->trie;
   char key2 = key[0];
 
   upper.bits = (1 << bit::upper(key1)) | (1 << bit::upper(key2));
 
-  if (upper.size() == 1) {
+  if (upper.count() == 1) {
     // key1 and key2 have the same upper bits
     node_p pos_lower =
         node_p::b(pos.offset + sizeof(Trie) + sizeof(node_p), kLowerTrie);
@@ -633,8 +692,8 @@ void UpperTrieHandler::insert(Trace &trace, const Slice &value) {
     size_t space = sizeof(MiddleLeaf);
     location_p &pnode = trace.stack.back().pnode;
     uint16_t offset = pnode.offset;
-    Page *page = trace.storage.page(pnode.page, true);
-    page->scale_node(trace, offset, space);
+    WritablePage *page = trace.storage.get_writable(pnode.page);
+    page->scale_node(offset, space);
     MiddleLeaf &leaf = page->node(offset)->middleleaf;
     leaf.leaf = EndLeafHandler::create(trace, page, value);
     leaf.child = node_p::b(offset + space, kUpperTrie);
@@ -643,7 +702,7 @@ void UpperTrieHandler::insert(Trace &trace, const Slice &value) {
   }
   Location last = trace.back();
   node_p *child = add(trace, last);
-  *child = LowerTrieHandler::create(trace, last.page, value);
+  *child = LowerTrieHandler::create(trace, last.wpage, value);
 }
 
 UpperTrieHandler upperTrieHandler;
@@ -662,26 +721,17 @@ bool LowerTrieHandler::find(Trace &trace) {
 void LowerTrieHandler::insert(Trace &trace, const Slice &value) {
   Location last = trace.back();
   node_p *child = add(trace, last);
-  *child = CompressedHandler::create(trace, last.page,
+  *child = CompressedHandler::create(trace, last.wpage,
                                      trace.rest_key.advance(1), value);
 }
 
-node_p LowerTrieHandler::create(Trace &trace, Page *page, const Slice &value) {
+node_p LowerTrieHandler::create(Trace &trace, WritablePage *page,
+                                const Slice &value) {
   node_p result;
   size_t trie_struct_size = sizeof(Trie) + sizeof(node_p);
   Node *node;
-  if (page->free() < trie_struct_size + sizeof(Link)) {
-    result = page->alloc(trace, sizeof(Link), kLink);
-    Link &link = page->node(result)->link;
-    link.loc = trace.storage.alloc();
-    link.loc.type = kLowerTrie;
-    page = trace.storage.get_writable(link.loc);
-    node = page->node(0);
-    page->end.type = kLowerTrie;
-  } else {
-    result = page->alloc(trace, trie_struct_size, kLowerTrie);
-    node = page->node(result);
-  }
+  result = page->alloc(trie_struct_size, kLowerTrie);
+  node = page->node(result);
 
   Trie &trie = node->trie;
   trie.bits = 1 << bit::lower(trace.rest_key[0]);
@@ -696,15 +746,27 @@ bool NullHandler::find(Trace &trace) { return false; }
 
 void NullHandler::insert(Trace &trace, const Slice &value) {
   Location last = trace.back();
-  CompressedHandler::create(trace, last.page, trace.rest_key, value);
-  trace.change_link(0, kCompressed);
+  node_p result =
+      CompressedHandler::create(trace, last.wpage, trace.rest_key, value);
+  trace.change_link(0, result.type);
 }
 
-bool NullHandler::move_node(Trace &trace, Page *page, node_p *pnpos) {
-  return false;
+node_p NullHandler::merge_node(Storage &storage, WritablePage *page,
+                               node_p npos) {
+  return npos;
 }
 
-void NullHandler::adjust_pointers(Page *page, node_p npos, size_t start,
+node_p NullHandler::move_node(WritablePage *src, node_p *npos,
+                              WritablePage *dest) {
+  return *npos;
+}
+
+size_t NullHandler::find_split_link(Page *page, node_p npos, SplitCandidate& candidate) {
+  assert(0);
+  return 0;
+}
+
+void NullHandler::adjust_pointers(WritablePage *page, node_p npos, size_t start,
                                   int delta) {}
 
 NullHandler nullHandler;
@@ -721,7 +783,7 @@ const char *handler_names[] = {
 };
 
 void dump_char(std::ostream &out, char bit) {
-  if (isprint(bit)) {
+  if (isalnum(bit)) {
     out << bit;
   } else {
     out << "0x" << std::hex << (unsigned)(unsigned char)bit << std::dec;
@@ -741,6 +803,7 @@ std::ostream &operator<<(std::ostream &out, location_p loc) {
 struct DumpBase {
   virtual void dump(std::ostream &out, location_p loc, Storage *storage) {
     out << "id: " << loc << std::endl;
+    out << "pspace: " << storage->page(loc)->end << std::endl;
     out << "---" << std::endl;
   }
 };
@@ -752,10 +815,11 @@ void dump_node(std::ostream &out, location_p loc, Storage *storage);
 struct EndLeafDumper : public DumpBase {
   void dump(std::ostream &out, location_p loc, Storage *storage) {
     out << "id: " << loc << std::endl;
+    out << "pspace: " << storage->page(loc)->end << std::endl;
 
     const EndLeaf &leaf = storage->node(loc)->endleaf;
-    uint32_t size = std::min(leaf.size, (uint32_t)16);
-    size_t space = std::max(sizeof(Link), sizeof(EndLeaf) + leaf.size);
+    uint32_t size = std::min(leaf.size, (uint32_t)1);
+    size_t space = sizeof(EndLeaf) + leaf.size;
 
     out << "space: " << space << std::endl;
     out << "size: " << (int)leaf.size << std::endl;
@@ -773,6 +837,7 @@ struct EndLeafDumper : public DumpBase {
 struct MiddleLeafDumper : public DumpBase {
   void dump(std::ostream &out, location_p loc, Storage *storage) {
     out << "id: " << loc << std::endl;
+    out << "pspace: " << storage->page(loc)->end << std::endl;
     out << "space: " << sizeof(MiddleLeaf) << std::endl;
 
     const MiddleLeaf &leaf = storage->node(loc)->middleleaf;
@@ -789,6 +854,7 @@ struct MiddleLeafDumper : public DumpBase {
 struct LinkDumper : public DumpBase {
   void dump(std::ostream &out, location_p loc, Storage *storage) {
     out << "id: " << loc << std::endl;
+    out << "pspace: " << storage->page(loc)->end << std::endl;
     out << "space: " << sizeof(Link) << std::endl;
 
     const Link &link = storage->node(loc)->link;
@@ -804,6 +870,7 @@ struct CompressDumper : public DumpBase {
   void dump(std::ostream &out, location_p loc, Storage *storage) {
     const Compressed &node_ = storage->node(loc)->compressed;
     out << "id: " << loc << std::endl;
+    out << "pspace: " << storage->page(loc)->end << std::endl;
     out << "space: " << sizeof(Compressed) + node_.size << std::endl;
     out << "size: " << (int)node_.size << std::endl;
     out << "keys: \"";
@@ -824,8 +891,9 @@ struct TrieDumper : public DumpBase {
   void dump(std::ostream &out, location_p loc, Storage *storage) {
     const Trie &trie = storage->node(loc)->trie;
     out << "id: " << loc << std::endl;
+    out << "pspace: " << storage->page(loc)->end << std::endl;
 
-    int size = trie.size();
+    int size = trie.count();
     out << "space: " << sizeof(Trie) + size * sizeof(node_p) << std::endl;
     out << "size: " << size << std::endl;
     out << "bits: " << std::hex << trie.bits << std::dec << std::endl;

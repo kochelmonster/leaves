@@ -4,3 +4,4 @@ waf
 .lock*
 .gcov
 graphs
+leveldb

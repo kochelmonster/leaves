@@ -20,6 +20,7 @@ struct CursorImpl : public Cursor {
   }
   void set_value(const Slice& value) { trace.set_value(value); }
   void remove() { trace.remove(); }
+  void commit() { trace.commit(); }
 
   Trace trace;
   DB::db_ptr pdb;
@@ -57,7 +58,7 @@ void dump_node(std::ostream& out, location_p loc, Storage* storage);
 
 void dump_db(std::ostream& out, DB::db_ptr db) {
   DBImpl *sdb(((DBImpl*)db.get()));
-  dump_node(out, sdb->storage->start.header.root, &sdb->storage);
+  dump_node(out, sdb->storage.start->header.root, &sdb->storage);
 }
 
 #endif

@@ -21,24 +21,25 @@ struct StorageHeader;
 
 #define POOL_COUNT 100
 
-typedef std::map<uint64_t, Page*> pagemap_t;
+
+typedef std::map<uint64_t, WritablePage*> pagemap_t;
 
 
 struct PagePool {
-  Page* free_list;
-  Page* free_block;
-  Page* pool;
+  WritablePage* free_list;
+  WritablePage* free_block;
+  WritablePage* pool;
   
   PagePool(): free_list(NULL) , free_block(NULL){
-    free_block = pool = new Page[POOL_COUNT];
+    free_block = pool = new WritablePage[POOL_COUNT];
   }
   ~PagePool() {
     delete[] pool;
   }
-  Page* alloc() {
+  WritablePage* alloc() {
     if (free_list) {
-      Page *result = (Page*)free_list;
-      free_list = free_list->next_mem;
+      WritablePage *result = free_list;
+      free_list = (WritablePage*)free_list->next_mem;
       return result;
     }
 
@@ -48,7 +49,7 @@ struct PagePool {
     return NULL;
   }
 
-  void free(Page* page) {
+  void free(WritablePage * page) {
     page->next_mem = free_list;
     free_list = page;
   }
@@ -101,13 +102,16 @@ struct Storage {
 
   void transaction_inc();
 
-  Page *get_writable(uint64_t pos);
+  Page *get_newest(uint64_t pos);
 
-  Page *get_writable(location_p pos) {
+  WritablePage* get_writable(uint64_t pos);
+
+  WritablePage* get_writable(location_p pos) {
     return get_writable(pos.page);
   }
 
   void write_value(location_p pos, const Slice& value);
+  bool rearrange_pages();
     
   file_mapping file;
   mapped_region *region;

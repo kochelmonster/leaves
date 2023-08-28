@@ -49,31 +49,61 @@ Storage::~Storage() {
   output.close();
 }
 
+bool Storage::rearrange_pages() {
+  int changed = 0;
+  pagemap_t::iterator i;
+  for(i = pages_to_write.begin(); i != pages_to_write.end(); i++) {
+    changed += i->second->split(*this);
+  }
+
+  for(i = pages_to_write.begin(); i != pages_to_write.end(); i++) {
+    changed += i->second->merge(*this);  // can erase i
+  }
+  return changed > 0;
+}
+
 void Storage::flush() {
   pagemap_t::iterator i;
+
   for(i = pages_to_write.begin(); i != pages_to_write.end(); i++) {
     output.seekp(offset(i->first), std::ios_base::beg);
     output.write((const char*)i->second, sizeof(Page));
     tmpmem.free(i->second);
   }
+
+  if (!pages_to_write.empty()) {
+    transaction_inc();
+  }
+
   pages_to_write.clear();
   output.flush();
 }
 
-Page *Storage::get_writable(uint64_t pos) {
+WritablePage *Storage::get_writable(uint64_t pos) {
   auto f = pages_to_write.find(pos);
   if (f != pages_to_write.end()) {
     return f->second;
   }
-  Page *result = tmpmem.alloc();
+  WritablePage* result = tmpmem.alloc();
   if (!result) {
     flush();
     result = tmpmem.alloc();
   }
-  memcpy(result, page(pos), sizeof(Page));
+  memcpy((Page*)result, page(pos), sizeof(Page));
+  result->backed_end = result->end.offset;
+  result->too_small = false;
   pages_to_write[pos] = result;
   return result;
 }
+
+Page *Storage::get_newest(uint64_t pos) {
+  auto f = pages_to_write.find(pos);
+  if (f != pages_to_write.end()) {
+    return f->second;
+  }
+  return page(pos);
+}
+
 
 void Storage::transaction_inc() {
   size_t trans_id(start->header.transaction_id + 1);
@@ -95,6 +125,11 @@ location_p Storage::alloc(size_t size) {
     size_t free_block = result.page + count;
     output.seekp(offsetof(StorageHeader, free_block), std::ios_base::beg);
     output.write((char*)&free_block, sizeof(free_block));
+
+    uint16_t end = 0;
+    output.seekp(offset(result), std::ios_base::beg);
+    output.write((char*)&end, sizeof(end)); // set the end offset to 0
+    output.flush();
     return result;
   }
 
@@ -105,6 +140,11 @@ location_p Storage::alloc(size_t size) {
   size_t freed_head = p->next_storage;
   output.seekp(offsetof(StorageHeader, freed_head), std::ios_base::beg);
   output.write((char*)&freed_head, sizeof(freed_head));
+
+  uint16_t end = 0;
+  output.seekp(offset(result), std::ios_base::beg);
+  output.write((char*)&end, sizeof(end)); // set the end offset to 0
+  output.flush();
   return result;
 }
   
@@ -123,14 +163,21 @@ void Storage::free(location_p pos, size_t size) {
 
   output.seekp(offsetof(StorageHeader, freed_head), std::ios_base::beg);
   output.write((char*)&first_page, sizeof(first_page));
+
+  auto iter = pages_to_write.find(pos.page);
+  if (iter != pages_to_write.end()) {
+    tmpmem.free(iter->second);
+    pages_to_write.erase(iter);
+  }
 }
 
 void Storage::write_value(location_p pos, const Slice& value) {
   EndLeaf node;
   node.size = value.size();
-  output.seekp(offset(pos), std::ios_base::beg);
+  output.seekp(offset(pos)+sizeof(Page::end), std::ios_base::beg);
   output.write((char*)&node, sizeof(node));
   output.write(value.data(), value.size());
+  output.flush();
 }
 
 void Storage::increase(size_t size) {

@@ -22,6 +22,9 @@ namespace leaves {
 #define INCREMENT_SIZE START_SIZE
 #define SIGNATURE "Leaves"
 
+static const int kMajorVersion = 3;
+static const int kMinorVersion = 0;
+
 
 class LeavesException : public std::exception {
 };
@@ -117,6 +120,7 @@ public:
   // sets the value raise an exception if a read cursor
   virtual void set_value(const Slice& value) = 0;
   virtual void remove() = 0;
+  virtual void commit() = 0;
 };
 
 
