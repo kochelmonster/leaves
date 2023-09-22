@@ -1,70 +1,83 @@
 #ifndef _LEAVES_NODE_HPP
 #define _LEAVES_NODE_HPP
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <leaves.hpp>
 
 #include "port.hpp"
 
+#ifdef TESTING
+#include <sstream>
+#endif
+
 namespace leaves {
 
-enum NodeTypes {
-  kNull = 0,
-  kEndLeaf,
-  kMiddleLeaf,
+enum NodeType {
+  kNull,
+  kValue,
   kLink,
+  kHeapLink,
   kCompressed,
   kUpperTrie,
   kLowerTrie,
-  kNTEnd
+  kEndType
 };
 
-/*
-  An abstract pointer to a Node within a Page
-*/
-
-struct node_p {
-  uint16_t type : 3;
-  uint16_t offset : 13;
-
-  static node_p b(uint16_t offset_ = 0, uint16_t type_ = 0);
-  static node_p null;
-  node_p replace(uint16_t type_) const { return b(offset, type_); }
+struct MemoryViewBase {
+  char* start;
 };
 
-struct location_p {
+typedef uint16_t node_t;
+struct stored_ptr {
+  static const int PAGE_POOL = 8;
   union {
-    node_p node;
     struct {
-      uint64_t type : 3;
-      uint64_t offset : 13;
-      uint64_t page : 48;
+      uint64_t size : 12;  // size of page
+      uint64_t offset : 52;
     };
+    uint64_t val;
   };
 
-  static location_p b(uint64_t page_ = 0);
-  static location_p b(uint64_t page_, node_p node_);
-  static location_p b(uint64_t page_, uint16_t offset, uint16_t type);
-  location_p replace(node_p n) const { return location_p::b(page, n); }
-  location_p replace(uint16_t offset, uint16_t type = 0) const {
-    return location_p::b(page, offset, type);
+  stored_ptr() : val(0) {}
+  stored_ptr(const stored_ptr& src) : val(src.val) {}
+
+  template <typename T>
+  T* get(MemoryViewBase* memview) const {
+    return (T*)(memview->start + offset);
+  }
+
+  int pool_id() const {
+    if (size > 20) {
+      size_t exact_size = size - 20;
+      int high_bit = 32 - clz((uint64_t)size | 1);
+      if ((1 << high_bit) < size) high_bit++;
+      return std::max(high_bit, 4) - 4;
+    }
+    return size + 8;
   }
 };
 
+struct ValueBlock;
 struct Trace;
 struct Page;
-struct WritablePage;
-struct SplitCandidate;
 struct Storage;
 
 #pragma pack(1)
 
+/*
+!!!Caution: all node_p links to other nodes on the same page are
+offsets from the original node ot the child node.
+With this technique whole pages just can be copied to
+ot  her pages in different positions.
+*/
+
 struct Trie {
   uint16_t bits;
-  node_p children[];
+  node_t children[];
 
-  size_t struct_size() const { return sizeof(Trie) + count() * sizeof(node_p); }
+  size_t struct_size() const { return sizeof(Trie) + count() * sizeof(node_t); }
 
   size_t count() const { return popcount(bits); }
 
@@ -93,50 +106,41 @@ struct Trie {
 
   int last() const { return 15 - (clz(bits) & 0xf); }
 
-  node_p* add(int bit) {
+  int add(int bit) {
     assert(!(bits & 1 << bit));
     bits |= 1 << bit;
     int idx = index(bit);
     for (int i = popcount(bits) - 1; i > idx; i--) {
       children[i] = children[i - 1];
     }
-    return &children[idx];
+    return idx;
   }
-};
-
-struct Link {
-  location_p loc;
 };
 
 struct Compressed {
   uint8_t size;
-  node_p child;
+  node_t child;
   char key[];
 
   size_t struct_size() const { return sizeof(Compressed) + size; }
+
+  static inline uint16_t calc_size(uint8_t size) {
+    return size ? sizeof(Compressed) + size : 0;
+  }
 };
 
-struct EndLeaf {
-  uint32_t size;
-  char data[];
-
-  size_t struct_size() const { return sizeof(EndLeaf) + size; }
-};
-
-#define BIG_VALUE (PAGE_SIZE - sizeof(EndLeaf) - sizeof(node_p))
-
-struct MiddleLeaf {
-  node_p leaf;
-  node_p child;
+struct Value {
+  stored_ptr value;
+  node_t child;  // if non zero link to the next node
 };
 
 struct Node {
   union {
+    Page* pointer;
+    stored_ptr link;
     Trie trie;
-    Link link;
     Compressed compressed;
-    EndLeaf endleaf;
-    MiddleLeaf middleleaf;
+    Value value;
   };
 };
 
@@ -153,13 +157,8 @@ struct NodeHandler {
   */
   virtual bool valid(const Trace& trace) const { return false; }
   virtual void insert(Trace& trace, const Slice& value) = 0;
-  virtual void adjust_pointers(WritablePage* page, node_p npos, size_t start,
-                               int delta) = 0;
-  virtual node_p move_node(WritablePage* src, node_p* npos,
-                           WritablePage* dest) = 0;
-  virtual size_t find_split_link(Page* page, node_p npos, SplitCandidate& candidate) = 0;
-  virtual node_p merge_node(Storage& storage, WritablePage* page,
-                            node_p npos) = 0;
+  virtual node_t copy_node(Page* dest, const Page* src, node_t id) = 0;
+  virtual uint16_t get_size(Node* node) = 0;
 
 #if 0
   virtual Node* next(Trace& trace) = 0;
@@ -174,8 +173,28 @@ struct NodeHandler {
   virtual Slice get_value(const Transition& self) const { return Slice(); }
 #endif
 
-  static NodeHandler* HANDLERS[kNTEnd];
+  static NodeHandler* HANDLERS[kEndType];
 };
+
+
+
+#ifdef TESTING
+
+struct TestPoints {
+  static std::stringstream tp_output;
+
+  static void testpoint(const char *str) {
+    tp_output << "TESTPOINT: " << str << std::endl;
+  }
+};
+
+inline std::stringstream TestPoints::tp_output;
+
+#define TESTPOINT(x) TestPoints::testpoint(#x)
+#else
+#define TESTPOINT(x)
+#endif
+
 
 }  // namespace leaves
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size:{size}/{space}}}|{keys}}}"]"""
-LNODE = """"{id}" [label="{{{{{id}}}|size: {size}/{space}|{value}}}"]"""
+LNODE = """"{id}" [fillcolor=darkolivegreen1 label="{{{{{id}}}|size: {size}/{space}|{value}}}"]"""
 MLNODE = """"{id}" [fillcolor=darksalmon label="{{{{{id}|space: {space}}}}}}}"]"""
 LINODE = """"{id}" [label="{{{id}|space: {space}}}}}"]"""
 TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|space: {space}|bits: {bits}}}|{{{slots}}}}}"]"""
@@ -18,7 +18,7 @@ class Graph:
         self.upper_bits = {}
         self.nodes = {}
 
-        lines = ["digraph G {", "node [shape=record style=filled]"]
+        lines = ["digraph G {", "layout=dot", "node [shape=record style=filled]"]
         add = lines.append
 
         # group nodes
@@ -29,12 +29,16 @@ class Graph:
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
-            size = pnodes[0]["pspace"]
+            try:
+                size = pnodes[0]["pspace"]
+            except KeyError:
+                print("wrong node", pnodes[0])
+                raise
             add(f"subgraph cluster_Page{k} {{")
             add(f'label = "{{{k}|size: {size}}}"')
             # add nodes
             for n in pnodes:
-                type_ = n["id"].split("-", 1)[0]
+                type_ = n["type"]
                 add(getattr(self, "handle_" + type_)(n))
             add("}")
 
@@ -52,15 +56,18 @@ class Graph:
         add("}")
         add("")
 
+        print("max page", max(map(int, pages.keys())))
         return "\n".join(lines)
 
     def handle_kCompressed(self, node):
         return CNODE.format(**node)
 
-    def handle_kLeaf(self, node):
+    def handle_kValue(self, node):
+        if len(node["value"]) > 9:
+            node["value"] = node["value"][:9] + "..."
         return LNODE.format(**node)
     
-    def handle_kMiddleLeaf(self, node):
+    def handle_kHeapLink(self, node):
         return MLNODE.format(**node)
     
     def handle_kLink(self, node):

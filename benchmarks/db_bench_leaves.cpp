@@ -26,18 +26,23 @@
 //   readseq100K   -- read N/1000 100K values in sequential order in async mode
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
-static const char* FLAGS_benchmarks =
+static const char* FLAGS_benchmarks1 =
     "fillseq,"
     "fillseqsync,"
     "fillrandsync,"
     "fillrandom,"
     "overwrite,"
     "readrandom,"
-    "readseq,"
+    "readseq," 
     "fillrand100K,"
     "fillseq100K,"
     "readseq100K,"
     "readrand100K,";
+
+static const char* FLAGS_benchmarks =
+    "fillseq"
+;
+
 
 
 // Use writable MMAP
@@ -47,7 +52,7 @@ static bool FLAGS_writemap = false;
 static bool FLAGS_metasync = false;
 
 // Number of key/values to place in database
-static int FLAGS_num = 1000000;
+static int FLAGS_num = 100000;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
@@ -83,11 +88,20 @@ static const char* FLAGS_db = nullptr;
 #ifdef DEBUG
 namespace leaves {
 void dump_db(std::ostream& out, DB::db_ptr db);
+uint64_t dump_info(std::ostream& out, DB::db_ptr db);
 }
 
 inline void dump_graph(const char* output, leaves::DB::db_ptr db) {
   std::ofstream out(output);
   leaves::dump_db(out, db);
+}
+
+inline uint64_t dump_info(leaves::DB::db_ptr db) {
+  return leaves::dump_info(std::cout, db);
+}
+#else 
+uint64_t dump_info(leaves::DB::db_ptr db) {
+  return 0;
 }
 #endif
 
@@ -354,6 +368,8 @@ class Benchmark {
       bool write_sync = false;
       if (name == Slice("fillseq")) {
         Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
+      } else if (name == Slice("fillbatch")) {
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("fillrandom")) {
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 1);
       } else if (name == Slice("overwrite")) {
@@ -457,12 +473,20 @@ class Benchmark {
         mval = gen_.Generate(value_size);
 
         cursor->find(mkey);
+
         cursor->set_value(mval);
 
         FinishedSingleOp();
       }
-      
       cursor->commit();
+#if 0
+      if (i == 607198) {
+        std::cout << "++debug: " << sync << "  " << i << std::endl;
+        dump_graph("debug.yaml", db_);
+        std::cout << "--debug: " << sync << "  " << i << std::endl;
+      }
+#endif
+
     }
   }
 

@@ -10,40 +10,33 @@ namespace leaves {
 struct Trace;
 
 struct Transition {
-  location_p pnode;  // Position to the node
-  location_p plink;  // Position to the link of the node
-  Transition(location_p pnode_, location_p plink_)
-      : pnode(pnode_), plink(plink_) {}
-};
+  Page* page;
+  stored_ptr pspage;
+  node_t nid;
+  size_t key_pos;
 
-struct Location {
-  location_p loc;
-  union {
-    Page* page;
-    WritablePage* wpage;
-  };
-  Node* node;
-
-  Location(location_p loc_, Page* page_, Node* node_)
-      : loc(loc_), page(page_), node(node_) {}
-
-  Transition next(const node_p* link) const {
-    return Transition(loc.replace(*link), loc.replace(page->offset(link)));
+  Transition() : page(0), nid(0), key_pos(0) {
+    pspage.val = 0;
   }
 
-  Transition next(const location_p* link) const {
-    return Transition(*link, loc.replace(page->offset(link)));
-  }
+  Transition(Page* page_, stored_ptr pspage_, node_t nid_, size_t key_pos_)
+      : page(page_), pspage(pspage_), nid(nid_), key_pos(key_pos_) {}
+
+  Node* get_node() { return page->get_node(nid); }
+  const Node* get_node() const { return page->get_node(nid); }
+
+  node_p* get_ie() const { return page->get_ie(nid); }
 };
 
 struct Trace {
-  Trace(Storage& storage)
-      : storage(storage),
-        transaction_id(storage.transaction_id()),
-        writing(false) {
+  Trace(Storage& storage_)
+      : storage(storage_), transaction_id(0), txn_root(nullptr) {
+    view = storage.view;
     current_key.reserve(1024);
     stack.reserve(128);
   }
+
+  ~Trace();
 
   bool valid() const { return handler()->valid(*this); }
   void find(const Slice& key);
@@ -55,45 +48,50 @@ struct Trace {
   Slice get_value() const;
   void remove();
   void commit();
+  void rollback();
+  void go_back(int index);
+
+  // if view has changed reload the stack
+  void reload();
+
+  // refresh the find position
+  void refresh();
 
   NodeHandler* handler() const {
-    return NodeHandler::HANDLERS[stack.back().pnode.type];
+    const Transition& back = stack.back();
+    return NodeHandler::HANDLERS[back.page->get_ie(back.nid)->type];
   }
 
-  void change_link(uint16_t offset, uint16_t type);
-  void push_back(const Transition& trans);
-  void refresh();
-  Location back() const;
+  void push_to_stack(stored_ptr link) {
+    Page* page = link.get<Page>(view.get());
+    stack.push_back(Transition(page, link, 0, current_key.size()));
+  }
+
+  void push_to_stack(Page* page) {
+    Transition& back = stack.back();
+    stack.push_back(Transition(page, stored_ptr(), 0, current_key.size()));
+  }
+
+  void push_to_stack(node_t nid) {
+    Transition& back = stack.back();
+    stack.push_back(
+        Transition(back.page, back.pspage, nid, current_key.size()));
+  }
+
+  void release_transaction_view();
+  void update_transaction_view();
+
+  bool split(Page* page);
 
   Storage& storage;
+  uint64_t transaction_id;
+  stored_ptr root;
+  Page* txn_root;
+  MemoryView_ptr view;
   std::vector<Transition> stack;
   Slice rest_key;
   std::string current_key;
-  uint64_t transaction_id;
-  bool writing;
 };
-
-inline void Trace::push_back(const Transition& trans) {
-  return stack.push_back(trans);
-}
-
-inline Location Trace::back() const {
-  const Transition& last = stack.back();
-  Page* page = storage.page(last.pnode, writing);
-  Node* node = page->node(last.pnode.node);
-  return Location(last.pnode, page, node);
-}
-
-inline void Trace::change_link(uint16_t offset, uint16_t type) {
-  Transition& last = stack.back();
-  Page* p = storage.page(last.plink, true);
-  *(node_p*)&p->content[last.plink.offset] = last.pnode.node =
-      node_p::b(offset, type);
-  if (last.pnode.node.offset == 0) {
-    p = storage.page(last.pnode, true);
-    p->end.type = type;
-  }
-}
 
 }  // namespace leaves
 

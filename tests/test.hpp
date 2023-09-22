@@ -8,14 +8,13 @@
 #include <boost/test/included/unit_test.hpp>
 
 #ifndef CMPFILES
-#define CMPFILES "."
+#define CMPFILES "./"
 #endif
 
 
 #define AREA_COUNT 100
 #include "../src/trace.hpp"
 #include "../src/storage.hpp"
-
 
 #define TEST_FILE "test.lvs"
 
@@ -35,19 +34,25 @@ struct Preparation {
 
 namespace leaves {
 // defined in node.cpp
-void dump_node(std::ostream& out, location_p loc, Storage* storage);
+void dump_node(std::ostream& out, Page* page, node_t nid, Storage* storage);
 }
 
 
 inline void dump_graph(const char* output, Storage& storage) {
   std::ofstream out(output);
-  dump_node(out, storage.start->header.root, &storage);
+  uint64_t transaction_id = storage.transaction_id();
+  int idx = transaction_id % TRANSACTION_COUNT;
+  stored_ptr root = storage.view->get_header()->txn[idx].root;
+  dump_node(out, storage.view->get_page(root.offset), 0, &storage);
 }
 
 
 inline void compare_graph(const char* input, Storage& storage) {
   std::stringstream cstr;
-  dump_node(cstr, storage.start->header.root, &storage);
+  uint64_t transaction_id = storage.transaction_id();
+  int idx = transaction_id % TRANSACTION_COUNT;
+  stored_ptr root = storage.view->get_header()->txn[idx].root;
+  dump_node(cstr, storage.view->get_page(root.offset), 0, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)), (std::istreambuf_iterator<char>()));
@@ -70,6 +75,7 @@ inline void check_graph(const char* name, Storage& storage) {
   std::string path(CMPFILES);
   path.append(name);
   path.append(".yaml");
+  std::replace(path.begin(), path.end(), ' ', '_');
 
 #ifdef GENERATE
   std::cout << "generate graph " << name << std::endl;
@@ -80,6 +86,44 @@ inline void check_graph(const char* name, Storage& storage) {
 }
 
 
+#ifdef GENERATE
+
+inline void check_testpoints(size_t case_count, const char *testpoints[]) {
+  std::cerr << "check case:" << TestPoints::tp_output.str().size() << std::endl;
+  std::cerr << TestPoints::tp_output.str() << std::endl;
+}
+#else 
+
+inline void check_testpoints(size_t case_count, const char *testpoints[]) {
+  std::vector<int> done;
+  done.resize(case_count);
+  std::string output(TestPoints::tp_output.str());
+  std::stringstream in(output);
+
+  while (in) {
+    std::string sub;
+    in >> sub;
+    for (size_t i = 0; i < case_count; i++) {
+      if (sub == testpoints[i])
+        done[i] = 1;
+    }
+
+    // std::cerr << "sub: " << sub << std::endl;
+  }
+
+  for (size_t i = 0; i < case_count; i++) {
+    if (!done[i]) {
+      std::cerr << "missing case: " << testpoints[i] << " in " << std::endl
+                << output << std::endl;
+      BOOST_REQUIRE(false);
+      break;
+    }
+  }
+
+  // std::cerr << tp_output.str() << std::endl;
+}
+#endif
+
 inline void insert(Storage& storage, const char* test_name, const Slice& key, const Slice& value) {
   Trace trace(storage);
   // std::cout << "insert " << test_name << std::endl;
@@ -87,6 +131,7 @@ inline void insert(Storage& storage, const char* test_name, const Slice& key, co
   BOOST_REQUIRE(!trace.valid());
 
   trace.set_value(value);
+  BOOST_REQUIRE(trace.valid());
   trace.commit();
   check_graph(test_name, storage);
   BOOST_REQUIRE(trace.valid());
@@ -224,7 +269,7 @@ inline void test_insertion(Storage& storage, const char* title, const char* keys
   for(int i = 0; keys[i]; i++) {
     std::stringstream cstr;
     cstr << title << "_" << i << "_" << keys[i];
-    std::cout << "insert " << keys[i] << std::endl;
+    //std::cout << "insert " << keys[i] << std::endl;
     std::string test_name(cstr.str());
     test_name.resize(30);
     insert(storage, test_name.c_str(), keys[i]);

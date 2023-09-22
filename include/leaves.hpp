@@ -18,8 +18,6 @@ namespace leaves {
   #endif
 #endif
 
-#define START_SIZE 1024*1024*32
-#define INCREMENT_SIZE START_SIZE
 #define SIGNATURE "Leaves"
 
 static const int kMajorVersion = 3;
@@ -27,6 +25,12 @@ static const int kMinorVersion = 0;
 
 
 class LeavesException : public std::exception {
+};
+
+class TransactionActive : public LeavesException {
+};
+
+class NoTransactionFree : public LeavesException {
 };
 
 class NoValidPosition : public LeavesException {
@@ -131,8 +135,7 @@ public:
   typedef std::shared_ptr<DB> db_ptr;
   virtual ~DB();
   virtual cursor_ptr create_cursor() = 0;
-  virtual void flush() = 0;
-  static db_ptr open(const char *path, size_t size=START_SIZE, size_t delta=INCREMENT_SIZE);
+  static db_ptr open(const char *path);
 };
 
 } // namespace leaves

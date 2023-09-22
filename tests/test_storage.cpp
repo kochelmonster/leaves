@@ -1,115 +1,198 @@
 #define BOOST_TEST_MODULE StorageTest
 
-#include <cstdio>
 #include <boost/test/included/unit_test.hpp>
+#include <cstdio>
+#include <vector>
 
 #define AREA_COUNT 100
 #include "../src/storage.hpp"
 
+#include "test.hpp"
 
 #define TEST_FILE "test.lvs"
 
 using namespace leaves;
 
 
-
 BOOST_AUTO_TEST_CASE(start_storage) {
-  std::remove(TEST_FILE);
+  Preparation p;
 
   {
-    Storage storage(TEST_FILE, 8*PAGE_SIZE, 2*PAGE_SIZE);
-    BOOST_REQUIRE_EQUAL(storage.start->header.version, 0);
+    Storage storage(TEST_FILE);
+    BOOST_REQUIRE_EQUAL(storage.get_header()->db_version, 0);
+    BOOST_REQUIRE_EQUAL(storage.header.db_version, 0);
   }
 
   {
-    Storage storage(TEST_FILE, 8*PAGE_SIZE, 2*PAGE_SIZE);
+    Storage storage(TEST_FILE);
+    BOOST_REQUIRE_EQUAL(storage.get_header()->db_version, 0);
+    BOOST_REQUIRE_EQUAL(storage.header.db_version, 0);
+  }
+}
 
-    const Page *root = storage.page(0);
-    BOOST_REQUIRE_EQUAL(root, storage.start);
+BOOST_AUTO_TEST_CASE(value_pools) {
+  Preparation p;
+  Storage storage(TEST_FILE);
 
-    BOOST_REQUIRE_EQUAL(storage.transaction_id(), 0);
-    BOOST_REQUIRE_EQUAL(storage.block_end, 8);
-    BOOST_REQUIRE_EQUAL(storage.start->header.freed_head, 0);
-    BOOST_REQUIRE_EQUAL(storage.start->header.free_block, 2);
-
-    storage.transaction_inc();
-    location_p page = storage.alloc();
-    storage.flush();
-
-    BOOST_REQUIRE_EQUAL(page.page, 2);
-    BOOST_REQUIRE_EQUAL(storage.transaction_id(), 1);
-    BOOST_REQUIRE_EQUAL(storage.start->header.free_block, 3);
-
-    location_p page1 = storage.alloc(7*PAGE_SIZE-4);
-    storage.flush();
-
-    root = storage.page(1);
-    BOOST_REQUIRE_EQUAL(root, storage.start+1);
-    BOOST_REQUIRE_EQUAL(page1.page, 3);
-
-    location_p page2 = storage.alloc();
-    storage.flush();
-
-    BOOST_REQUIRE_EQUAL(page2.page, 10);
-
-    storage.free(page1, 7*PAGE_SIZE-4);
-    storage.flush();
-    BOOST_REQUIRE_EQUAL(storage.start->header.freed_head, 3);
-
-    const Page* fp = storage.page(3);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 4);
-
-    fp = storage.page(4);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 5);
-
-    fp = storage.page(5);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 6);
-
-    fp = storage.page(6);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 7);
-
-    fp = storage.page(7);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 8);
-
-    fp = storage.page(8);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 9);
-
-    fp = storage.page(9);
-    BOOST_REQUIRE_EQUAL(fp->next_storage, 0);
-
-   
-    page = storage.alloc();
-    storage.flush();
-    BOOST_REQUIRE_EQUAL(page.page, 3);
-    BOOST_REQUIRE_EQUAL(storage.start->header.freed_head, 4);
-
-    Page* wp = storage.get_writable(1);
-    wp->content[0] = 1;
-
-    wp = storage.get_writable(10);
-    wp->content[0] = 2;
-
-    wp = storage.get_writable(3);
-    wp->content[0] = 3;
-
-    wp = storage.get_writable(9);
-    wp->content[1] = 4;
-
-    storage.flush();
-
-    fp = storage.page(1);
-    BOOST_REQUIRE_EQUAL(fp->content[0], 1);
-
-    fp = storage.page(10);
-    BOOST_REQUIRE_EQUAL(fp->content[0], 2);
-    
-    fp = storage.page(3);
-    BOOST_REQUIRE_EQUAL(fp->content[0], 3);
-
-    fp = storage.page(9);
-    BOOST_REQUIRE_EQUAL(fp->content[1], 4);
-
-    std::remove(TEST_FILE);
+  std::vector<std::string> vals;
+  for (int i = 4; i <= 31; i++) {
+    vals.push_back(std::string((1 << i) - 4, 'a'));
   }
 
+  storage.start_transaction();
+
+  std::vector<stored_ptr> vpointer;
+  int j = 0;
+  for (auto i = vals.begin(); i != vals.end(); i++, j++) {
+    vpointer.push_back(storage.new_value(*i));
+    StoragePool& pool = storage.header.pools[j];
+    offset_t start = pool.slast - block_size_per_pool[j];
+    if (j == 8) {
+      start += PAGE_SIZE;  // the first page allocation
+    }
+    BOOST_REQUIRE_EQUAL(pool.scurrent, start + (1 << (j + 4)));
+  }
+
+  storage.prepare_commit(stored_ptr());
+  storage.commit();
+
+  for (int i = 0; i <= 27; i++) {
+    StoragePool& pool = storage.header.pools[i];
+    offset_t start = pool.slast - block_size_per_pool[i];
+    if (i == 8) {
+      start += 28 * PAGE_SIZE +
+               PAGE_SIZE;  // 28 pages of txn_head + preallocation of first page
+    }
+    BOOST_REQUIRE_EQUAL(pool.scurrent, start + (1 << (i + 4)));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(rollback1) {
+  Preparation p;
+
+  Storage storage(TEST_FILE);
+
+  storage.start_transaction();
+  stored_ptr ptr1 = storage.new_value(std::string(16, 'a'));
+  BOOST_REQUIRE_EQUAL(ptr1.size, 36);
+  storage.rollback();
+
+  storage.start_transaction();
+  stored_ptr ptr2 = storage.new_value(std::string(16, 'a'));
+  BOOST_REQUIRE_EQUAL(ptr1.val, ptr2.val);
+  storage.rollback();
+
+  StoragePool& pool = storage.header.pools[0];
+  // the complete block is free
+  BOOST_REQUIRE_EQUAL(pool.scurrent + block_size_per_pool[0], pool.slast);
+}
+
+BOOST_AUTO_TEST_CASE(rollback2) {
+  Preparation p;
+
+  Storage storage(TEST_FILE);
+  StoragePool& pool = storage.header.pools[0];
+
+  storage.start_transaction();
+  stored_ptr ptr1 = storage.new_value(std::string(16, 'a'));
+  storage.prepare_commit(stored_ptr());
+  storage.rollback();
+  BOOST_REQUIRE(pool.sfree);  // a free block was created
+
+  storage.start_transaction();
+  stored_ptr ptr2 = storage.new_value(std::string(16, 'a'));
+  BOOST_REQUIRE_EQUAL(ptr1.val, ptr2.val);
+  storage.rollback();
+
+  BOOST_REQUIRE(!storage.header.pools[0].sfree);
+
+  // the complete block is free
+  BOOST_REQUIRE_EQUAL(pool.scurrent + block_size_per_pool[0], pool.slast + 16);
+}
+
+BOOST_AUTO_TEST_CASE(overflow_page) {
+  Preparation p;
+
+  Storage storage(TEST_FILE);
+
+  auto val = std::string(16, 'a');
+  storage.start_transaction();
+  std::vector<stored_ptr> values;
+  for (int i = 0; i < 800; i++) {
+    values.push_back(storage.new_value(val));
+  }
+  storage.prepare_commit(stored_ptr());
+  storage.rollback();
+
+  BOOST_REQUIRE(storage.header.pools[0].sfree);
+
+  MarkedBlocks* b = storage.view->get_blocks(storage.header.pools[0].sfree);
+  BOOST_REQUIRE_EQUAL(b->count, 800 - MarkedBlocks::REF_COUNT);
+  BOOST_REQUIRE(b->next);
+  b = storage.view->get_blocks(b->next);
+  BOOST_REQUIRE_EQUAL(b->count, 0 + MarkedBlocks::REF_COUNT);
+  BOOST_REQUIRE(!b->next);
+
+  storage.start_transaction();
+  for (int i = 0; i < 800; i++) {
+    stored_ptr pval = storage.new_value(val);
+    BOOST_REQUIRE_EQUAL(pval.val, values.back().val);
+    values.pop_back();
+  }
+
+  for (int i = 0; i < 400; i++) {
+    storage.new_value(val);
+  }
+
+  storage.prepare_commit(stored_ptr());
+  storage.rollback();
+
+  BOOST_REQUIRE(storage.header.pools[0].sfree);
+
+  b = storage.view->get_blocks(storage.header.pools[0].sfree);
+  BOOST_REQUIRE_EQUAL(b->count, 1200 - 2 * MarkedBlocks::REF_COUNT);
+  BOOST_REQUIRE(b->next);
+  b = storage.view->get_blocks(b->next);
+  BOOST_REQUIRE_EQUAL(b->count, 0 + MarkedBlocks::REF_COUNT);
+  BOOST_REQUIRE(b->next);
+  b = storage.view->get_blocks(b->next);
+  BOOST_REQUIRE_EQUAL(b->count, 0 + MarkedBlocks::REF_COUNT);
+  BOOST_REQUIRE(!b->next);
+}
+
+BOOST_AUTO_TEST_CASE(page_pool_overflow) {
+  Preparation p;
+
+  Storage storage(TEST_FILE);
+
+  storage.start_transaction();
+  storage.new_value(std::string(16, 'a'));
+
+  for (int i = 0; i < MarkedBlocks::REF_COUNT - 1; i++) {
+    Page* p = storage.alloc_new_page();
+    storage.write_page(p);
+  }
+  storage.prepare_commit(stored_ptr());
+  storage.rollback();
+
+  MarkedBlocks* b = storage.view->get_blocks(
+      storage.header.pools[stored_ptr::PAGE_POOL].sfree);
+
+  BOOST_REQUIRE_EQUAL(b->count, MarkedBlocks::REF_COUNT - 1);
+}
+
+BOOST_AUTO_TEST_CASE(multi_open) {
+  Preparation p;
+
+  {
+    Storage storage(TEST_FILE);
+    BOOST_REQUIRE_EQUAL(storage.get_header()->db_version, 0);
+    BOOST_REQUIRE_EQUAL(storage.header.db_version, 0);
+
+    {
+      Storage storage(TEST_FILE);
+      BOOST_REQUIRE_EQUAL(storage.get_header()->db_version, 0);
+      BOOST_REQUIRE_EQUAL(storage.header.db_version, 0);
+    }
+  }
 }

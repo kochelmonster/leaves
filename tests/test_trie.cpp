@@ -2,10 +2,8 @@
 Test the trie nodes without bursting.
 */
 #define BOOST_TEST_MODULE TrieTest
-//#define GENERATE
 
 #include "test.hpp"
-
 
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
@@ -61,14 +59,12 @@ BOOST_AUTO_TEST_CASE(big_compressed) {
   Preparation p;
   Storage storage(TEST_FILE);
 
-  std::string key1;
-  for(int i = 0; i < 30; i++) {
-    key1.append("abcdefghijklmn");
-  }
+  std::string key1(4010, 'a');
 
   const char *keys[] = {key1.c_str(), NULL};
   test_insertion(storage, "big_compressed", keys);
 }
+
 
 #ifdef WITH_REMOVE
 BOOST_AUTO_TEST_CASE(remove_trie) {
@@ -130,42 +126,7 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   BOOST_REQUIRE_EQUAL(trace.get_value().string(), value);
 
   trace.set_value(key);
-}
-
-BOOST_AUTO_TEST_CASE(insert_link) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-
-  insert(storage, "insert_link_0", "abc", string(1022, 'a'));
-  insert(storage, "insert_link_1", "abcdef", string(1022, 'b'));
-  string value(7000, 'b');
-  value[1] = 'c';
-  insert(storage, "insert_link_2", "abcdeghijklmnopqrst", value);
-  
-  insert(storage, "insert_link_3", "abcdefghijk", string(1022, 'c'));
-
-  insert(storage, "insert_link_4", "abcdefgghij", string(924, 'd'));
-
-  insert(storage, "insert_link_5", "abcdefghhij", string(1, 'e'));
-
-  Trace trace(storage);
-  trace.find("abcdeghijklmnopqrst");
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), value);
-  BOOST_REQUIRE_EQUAL(trace.get_value().size(), 7000);
-}
-
-BOOST_AUTO_TEST_CASE(insert_bigvalue) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  Slice key("abcdefg");
-  Trace trace(storage);
-  trace.find(key);
-  BOOST_REQUIRE(trace.get_value().empty());
-
-  string value(7000, 'b');
-  trace.set_value(value);
-  BOOST_REQUIRE_EQUAL(trace.get_value().size(), 7000);
+  trace.commit();
 }
 
 BOOST_AUTO_TEST_CASE(insert_at_empty) {
@@ -183,26 +144,36 @@ BOOST_AUTO_TEST_CASE(insert_at_empty) {
   check_graph("insert_empty_1", storage);
 }
 
-BOOST_AUTO_TEST_CASE(page_split_at_compressed) {
+BOOST_AUTO_TEST_CASE(page_split_compressed) {
   Preparation p;
   Storage storage(TEST_FILE);
-  insert(storage, "page_split_compressed_0", "a", string(666, 'a'));
-  insert(storage, "page_split_compressed_1", "ab", string(666, 'a'));
-  insert(storage, "page_split_compressed_2", "abc", string(666, 'a'));
-  insert(storage, "page_split_compressed_3", "abcd", string(666, 'a'));
-  insert(storage, "page_split_compressed_4", "abcde", string(666, 'a'));
-  insert(storage, "page_split_compressed_5", "abcdef", string(666, 'a'));
-  insert(storage, "page_split_compressed_6", "abcdefghij", string(1, 'c'));
-  insert(storage, "page_split_compressed_7", "abcdefghia", string(1, 'd'));
-  insert(storage, "page_split_compressed_8", "abcdefghib", string(1, 'b'));
+
+  std::string key1(3950, 'a');
+
+  const char *keys[] = {key1.c_str(), "abcdefghaijklmnopqrstxyz", NULL};
+  test_insertion(storage, "page_split_compressed", keys);
+
+  const char *testpoints[] = {"PageSplitAtNode", "PageSplit"};
+  check_testpoints(2, testpoints);
 }
 
 
-BOOST_AUTO_TEST_CASE(page_split_at_leaf) {
+BOOST_AUTO_TEST_CASE(page_split_trie) {
   Preparation p;
   Storage storage(TEST_FILE);
-  insert(storage, "page_split_leaf_0", "abc", string(2025, 'a'));
-  insert(storage, "page_split_leaf_1", "abcdef", string(2025, 'b'));
-  insert(storage, "page_split_leaf_2", "abcdefghij", string(1, 'c'));
-  insert(storage, "page_split_leaf_3", "abcdefghia", string(1, 'd'));
+  Trace trace(storage);
+  for (int i = 0; i < 1000; i++) {
+    //std::cout << "insert " << i << std::endl;
+    std::string key = std::to_string(i);
+    trace.find(key);
+    BOOST_REQUIRE(!trace.valid());
+    trace.set_value(key);
+    trace.commit();
+  }
+  check_graph("page_split_trie", storage);
+
+  const char *testpoints[] = {"PageSplitAtTrie", "PageSplit", "PageMerge"};
+  check_testpoints(3, testpoints);
 }
+
+

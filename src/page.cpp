@@ -1,72 +1,137 @@
 #include "page.hpp"
+
 #include "storage.hpp"
 #include "trace.hpp"
 
 namespace leaves {
 
+void Page::grow(uint16_t offset, int delta) {
+  if (delta < 0)
+    memmove(&data[offset], &data[offset - delta], size - offset + delta);
+  else
+    memmove(&data[offset + delta], &data[offset], size - offset);
 
-uint16_t WritablePage::alloc(size_t size) {
-  assert(end.offset + size <= sizeof(content) + sizeof(overflow));
-  uint16_t result = end.offset;
-  end.offset += size;
+  size += delta;
+  node_p *ie = &root - 1;
+  for (node_t i = 1; i <= ie_count; i++, ie--) {
+    if (ie->offset >= offset && ie->type != kNull) {
+      ie->offset += delta;
+    }
+  }
+}
+
+node_t Page::alloc(uint16_t space, NodeType type) {
+  node_t result;
+  node_p *ie;
+
+  if (ie_free_count > 0) {
+    assert(size + space + ie_count * sizeof(node_p) < sizeof(data));
+    result = ie_free_head;
+    ie = &root - ie_free_head;
+    ie_free_head = ie->offset;
+    ie_free_count--;
+  } else {
+    assert(size + space + (ie_count + 1) * sizeof(node_p) < sizeof(data));
+    result = ie_count++;
+    ie = &root - result;
+  }
+  ie->type = type;
+  ie->offset = size;
+  size += space;
   return result;
 }
 
-void WritablePage::scale_node(size_t start, int delta)  {
-  if (!delta) {
-    return;
-  }
-
-  node_p root = node_p::b(0, end.type);
-  if (delta > 0) {
-    size_t move_size = end.offset - start;
-    alloc(delta);
-    memmove(&content[start+delta], &content[start], move_size);
-    if (!start)
-      root.offset = delta;
-
-    adjust_pointers(root, start, delta);
-  }
-  else {
-    end.offset += delta;
-    memmove(&content[start], &content[start-delta], end.offset-start);
-    if (end.offset)
-      adjust_pointers(root, start+1, delta); // we may not adjust pointer <= start 
+void Page::free(node_t index, uint16_t size) {
+  node_p *ie = &root - index;
+  grow(ie->offset, -(int)size);
+  if (index == ie_count) {
+    ie_count--;
+  } else {
+    ie->offset = ie_free_head;
+    ie->type = kNull;
+    ie_free_head = index;
+    ie_free_count++;
   }
 }
 
-bool WritablePage::split(Storage& storage) {
-  if (end.offset > sizeof(content) || too_small && free() < SPLIT_SIZE) {
-    SplitCandidate candidate;
-    node_p root_ = node_p::b(0, root.type);
-    find_split_link(root_, candidate);
-    location_p new_page_loc = storage.alloc();
-    WritablePage* new_page = storage.get_writable(new_page_loc);
-    new_page->root.type = new_page_loc.type = candidate._link->type;
-    move_node(candidate._link, new_page);
-       
-    // Replace original node with a link
-    *candidate._link = alloc(sizeof(Link), kLink);
-    Link& link_ = node(*candidate._link)->link;
-    link_.loc = new_page_loc;
-    assert(end.offset <= sizeof(content));
-    if (end.offset > sizeof(content)) {
-      *(char*)NULL = 1;
+bool Page::reserve(int space, uint16_t links) {
+  // for page splitting there must at least one Pointer Size left at every page
+  int needed = size + space + ie_count * sizeof(node_p) + sizeof(Page *);
+  return needed + links * sizeof(node_p) < sizeof(data);
+}
+
+node_t Page::find_split_node() {
+  node_p *ie = &root - 1;
+  node_t second_best = 0;
+  uint16_t middle = (sizeof(data) - ie_count * sizeof(node_p)) / 2;
+
+  for (node_t i = 1; i < ie_count; i++, ie--) {
+    if (ie->type >= kUpperTrie && ie->offset >= middle) {
+      TESTPOINT(PageSplitAtTrie);
+      return i;  // the best split is before a trie
     }
-    return true;
+    if (!second_best && ie->offset > middle) {
+      second_best = i;
+    }
   }
-  return false;
+  TESTPOINT(PageSplitAtNode);
+  return second_best;
 }
 
-bool WritablePage::merge(Storage& storage) {
-  uint16_t end_ = end.offset;
-  if (backed_end != end.offset && free() > SPLIT_SIZE) {
-    node_p root_ = node_p::b(0, root.type);
-    merge_node(storage, root_);
-  }
-  return end_ != end.offset;
+void Page::split(Storage &storage) {
+  node_t nid = find_split_node();
+  Page *child = storage.alloc_new_page();
+
+  node_p *pie = get_ie(nid);
+  NodeHandler::HANDLERS[pie->type]->copy_node(child, this, nid);
+  pie->type = kHeapLink;
+  pie->offset = size;
+  get_node(pie)->pointer = child;
+
+  Page tmp;
+  tmp.init();
+  NodeHandler::HANDLERS[root.type]->copy_node(&tmp, this, 0);
+  memcpy(this, &tmp, sizeof(tmp));
+
+  TESTPOINT(PageSplit);
 }
 
+stored_ptr Page::write_page(Storage &storage) {
+  node_p *ie = &root - 1;
+  assert(root.type != kNull);
+  for (node_t i = 1; i < ie_count; i++, ie--) {
+    if (ie->type == kHeapLink) {
+      Node *node = get_node(ie);
+      node->link.val = node->pointer->write_page(storage).val;
+      ie->type = kLink;
+    }
+    else if (ie->type == kLink) {
+      stored_ptr link = get_node(ie)->link;
+      if (size < 2560 && reserve(link.size + MIN_SPACE, 10 + MIN_COUNT)) {
+        TESTPOINT(PageMerge);
+        // The page might be merged but should be split right the merge
+        const Page *child = link.get<Page>(storage.view.get());
+        if (reserve(child->size + MIN_SPACE,
+                    child->ie_count - child->ie_free_count - 1 + MIN_COUNT)) {
+          free(i, sizeof(child));
+          add(child);
+          storage.add_page_to_copied(link);
+        }
+      }
+    }
+  }
+  return storage.write_page(this);
+}
 
+void Page::free_page(Storage &storage) {
+  node_p *ie = &root - 1;
+  for (node_t i = 1; i < ie_count; i++, ie--) {
+    if (ie->type == kHeapLink) {
+      Node *node = get_node(ie);
+      node->pointer->free_page(storage);
+    }
+  }
+  storage.free(this);
+}
 
-} // namespace leaves
+}  // namespace leaves

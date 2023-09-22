@@ -8,8 +8,8 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/test_db",
-            "args": [],
+            "program": "${workspaceFolder}/build/db_bench_leaves",
+            "args": [], //["-t", "page_split_compressed"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],
@@ -28,7 +28,5 @@
                 }
             ]
         }
-        
-
     ]
 }
