@@ -53,7 +53,7 @@ void Trace::reload() {
 void Trace::find(const Slice& key) {
   rest_key = key;
   current_key.clear();
-  stack.clear();
+  stack_size = 0;
   update_transaction_view();
   reload();
 
@@ -75,14 +75,15 @@ void Trace::set_value(const Slice& value) {
   Page *page = txn_root;
   int last_page_change = 0;
   // change pages to writable pages
-  for (auto i = stack.begin(); i != stack.end(); i++) {
+  int j = 0;
+  for (auto i = stack.begin(); j < stack_size; i++, j++) {
     if (i->pspage.val) {
       i->pspage.val = 0;
       i->page = page;
     }
     node_p *pie = i->get_ie();
     if (pie->type == kLink) {
-      last_page_change = i - stack.begin();
+      last_page_change = j;
       pie->type = kHeapLink;
       Node* node = i->page->get_node(pie);
       page = node->pointer = storage.get_writable_page(node->link);
@@ -115,8 +116,8 @@ bool Trace::split(Page* page) {
 }
 
 void Trace::go_back(int index) {
-  stack.resize(index+1);
-  Transition back = stack.back();
+  stack_size = index + 1;
+  Transition back = stack_back();
   int delta = current_key.size() - back.key_pos;
   rest_key = Slice(rest_key.data()-delta, rest_key.size()+delta);
   current_key.resize(back.key_pos);
@@ -124,7 +125,7 @@ void Trace::go_back(int index) {
 
 Slice Trace::get_value() const {
   if (valid()) {
-    const Transition& back = stack.back();
+    const Transition& back = stack_back();
     assert(back.get_ie()->type == kValue);
     return view->get_value(back.get_node()->value.value);
   }

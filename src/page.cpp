@@ -8,12 +8,14 @@ namespace leaves {
 void Page::grow(uint16_t offset, int delta) {
   if (delta < 0)
     memmove(&data[offset], &data[offset - delta], size - offset + delta);
-  else
+  else if (delta > 0)
     memmove(&data[offset + delta], &data[offset], size - offset);
+  else
+    return;
 
   size += delta;
   node_p *ie = &root - 1;
-  for (node_t i = 1; i <= ie_count; i++, ie--) {
+  for (node_t i = 1; i < ie_count; i++, ie--) {
     if (ie->offset >= offset && ie->type != kNull) {
       ie->offset += delta;
     }
@@ -56,7 +58,7 @@ void Page::free(node_t index, uint16_t size) {
 
 bool Page::reserve(int space, uint16_t links) {
   // for page splitting there must at least one Pointer Size left at every page
-  int needed = size + space + ie_count * sizeof(node_p) + sizeof(Page *);
+  int needed = size + space + ie_count * sizeof(node_p);
   return needed + links * sizeof(node_p) < sizeof(data);
 }
 
@@ -81,16 +83,16 @@ node_t Page::find_split_node() {
 void Page::split(Storage &storage) {
   node_t nid = find_split_node();
   Page *child = storage.alloc_new_page();
-
   node_p *pie = get_ie(nid);
-  NodeHandler::HANDLERS[pie->type]->copy_node(child, this, nid);
+  copy_node(child, nid);
   pie->type = kHeapLink;
-  pie->offset = size;
   get_node(pie)->pointer = child;
-
+ 
   Page tmp;
   tmp.init();
-  NodeHandler::HANDLERS[root.type]->copy_node(&tmp, this, 0);
+  copy_node(&tmp, 0);
+
+  assert(tmp.size + child->size - sizeof(Page*) == size);
   memcpy(this, &tmp, sizeof(tmp));
 
   TESTPOINT(PageSplit);

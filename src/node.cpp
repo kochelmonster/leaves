@@ -17,14 +17,14 @@ struct LinkHandler : public NodeHandler {
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
   node_t copy_node(Page *dest, const Page *src, node_t id);
-  uint16_t get_size(Node *node);
+  uint16_t get_size(const Node *node);
 };
 
 struct PointerLinkHandler : public NodeHandler {
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
   node_t copy_node(Page *dest, const Page *src, node_t id);
-  uint16_t get_size(Node *node);
+  uint16_t get_size(const Node *node);
 };
 
 struct ValueHandler : public NodeHandler {
@@ -33,7 +33,7 @@ struct ValueHandler : public NodeHandler {
   void insert(Trace &trace, const Slice &value);
   void change_value(Trace &trace, const Slice &value);
   node_t copy_node(Page *dest, const Page *src, node_t id);
-  uint16_t get_size(Node *node);
+  uint16_t get_size(const Node *node);
 };
 
 struct CompressedHandler : public NodeHandler {
@@ -42,7 +42,7 @@ struct CompressedHandler : public NodeHandler {
   void split_with_trie(Trace &trace, size_t pos, const Slice &value);
   void split_with_leaf(Trace &trace, size_t pos, const Slice &value);
   node_t copy_node(Page *dest, const Page *src, node_t id);
-  uint16_t get_size(Node *node);
+  uint16_t get_size(const Node *node);
   static node_t create(Storage &storage, Page *page, const Slice &key,
                        const Slice &value);
   static node_t create(Page *page, const Slice &key, node_t value);
@@ -52,14 +52,14 @@ struct NullHandler : public NodeHandler {
   bool find(Trace &trace);
   void insert(Trace &trace, const Slice &value);
   node_t copy_node(Page *dest, const Page *src, node_t id);
-  uint16_t get_size(Node *node) { return 0; }
+  uint16_t get_size(const Node *node) { return 0; }
 };
 
 struct TrieHandler : public NodeHandler {
   virtual char bits(char value) const = 0;
   int find_index(Trace &trace, Trie &node);
   node_t copy_node(Page *dest, const Page *src, node_t id);
-  uint16_t get_size(Node *node);
+  uint16_t get_size(const Node *node);
 };
 
 struct UpperTrieHandler : public TrieHandler {
@@ -76,7 +76,7 @@ struct LowerTrieHandler : public TrieHandler {
 };
 
 bool LinkHandler::find(Trace &trace) {
-  trace.push_to_stack(trace.stack.back().get_node()->link);
+  trace.push_to_stack(trace.stack_back().get_node()->link);
   return true;
 }
 
@@ -88,12 +88,12 @@ node_t LinkHandler::copy_node(Page *dest, const Page *src, node_t id) {
   return nid;
 }
 
-uint16_t LinkHandler::get_size(Node *node) { return sizeof(stored_ptr); }
+uint16_t LinkHandler::get_size(const Node *node) { return sizeof(stored_ptr); }
 
 LinkHandler linkHandler;
 
 bool PointerLinkHandler::find(Trace &trace) {
-  trace.push_to_stack(trace.stack.back().get_node()->pointer);
+  trace.push_to_stack(trace.stack_back().get_node()->pointer);
   return true;
 }
 
@@ -105,7 +105,7 @@ node_t PointerLinkHandler::copy_node(Page *dest, const Page *src, node_t id) {
   return nid;
 }
 
-uint16_t PointerLinkHandler::get_size(Node *node) { return sizeof(Page *); }
+uint16_t PointerLinkHandler::get_size(const Node *node) { return sizeof(Page *); }
 
 PointerLinkHandler pointerlinkHandler;
 
@@ -114,7 +114,7 @@ bool ValueHandler::valid(const Trace &trace) const {
 }
 
 bool ValueHandler::find(Trace &trace) {
-  Transition &back = trace.stack.back();
+  Transition &back = trace.stack_back();
   Value &node = back.get_node()->value;
   if (node.child && trace.rest_key.size()) {
     trace.push_to_stack(node.child);
@@ -124,7 +124,7 @@ bool ValueHandler::find(Trace &trace) {
 }
 
 void ValueHandler::insert(Trace &trace, const Slice &value) {
-  Transition &back = trace.stack.back();
+  Transition &back = trace.stack_back();
   Value &node = back.get_node()->value;
   if (trace.rest_key.empty()) {
     trace.storage.add_value_to_copied(node.value);
@@ -132,7 +132,7 @@ void ValueHandler::insert(Trace &trace, const Slice &value) {
   } else {
     assert(node.child == 0);
     node.child = CompressedHandler::create(
-        trace.storage, trace.stack.back().page, trace.rest_key, value);
+        trace.storage, trace.stack_back().page, trace.rest_key, value);
   }
 }
 
@@ -145,12 +145,12 @@ node_t ValueHandler::copy_node(Page *dest, const Page *src, node_t id) {
   return nid;
 }
 
-uint16_t ValueHandler::get_size(Node *node) { return sizeof(Value); }
+uint16_t ValueHandler::get_size(const Node *node) { return sizeof(Value); }
 
 ValueHandler valueHandler;
 
 bool CompressedHandler::find(Trace &trace) {
-  Compressed &node = trace.stack.back().get_node()->compressed;
+  Compressed &node = trace.stack_back().get_node()->compressed;
   size_t size = std::min(trace.rest_key.size(), (size_t)node.size);
   if (size == node.size && !memcmp(trace.rest_key.data(), node.key, size)) {
     trace.current_key.append(node.key, node.size);
@@ -163,7 +163,7 @@ bool CompressedHandler::find(Trace &trace) {
 }
 
 void CompressedHandler::insert(Trace &trace, const Slice &value) {
-  Compressed &node = trace.stack.back().get_node()->compressed;
+  Compressed &node = trace.stack_back().get_node()->compressed;
   Slice &key(trace.rest_key);
   size_t size = std::min((size_t)node.size, key.size());
   size_t i;
@@ -187,7 +187,7 @@ node_t CompressedHandler::copy_node(Page *dest, const Page *src, node_t id) {
   return nid;
 }
 
-uint16_t CompressedHandler::get_size(Node *node) {
+uint16_t CompressedHandler::get_size(const Node *node) {
   return node->compressed.struct_size();
 }
 
@@ -208,13 +208,13 @@ void CompressedHandler::split_with_trie(Trace &trace, size_t pos,
       [abcdefg] ==> [ab] -> |c| -> [efg]
                             |h| -> [ij]
   */
-  Transition &back = trace.stack.back();
+  Transition &back = trace.stack_back();
   Page *page = back.page;
   node_p *pie = back.get_ie();
   Compressed &first = page->get_node(pie)->compressed;
   char nkey = trace.rest_key[pos], okey = first.key[pos];
-  Trie upper;
-  upper.bits = (1 << bit::upper(nkey)) | (1 << bit::upper(okey));
+  Trie tmp_trie;
+  tmp_trie.bits = (1 << bit::upper(nkey)) | (1 << bit::upper(okey));
 
   char buffer[255];
   memcpy(buffer, first.key, first.size);
@@ -224,15 +224,16 @@ void CompressedHandler::split_with_trie(Trace &trace, size_t pos,
   Node *node;
   if (pos) {
     // shrink node to first
-    page->grow(pie->offset + Compressed::calc_size(pos),
-               (int)pos - (int)first.size);
+    int nsize = Compressed::calc_size(pos);
+    int osize = Compressed::calc_size(key.size());
+    page->grow(pie->offset + nsize, nsize - osize);
     first.size = pos;
-    node_t tid = first.child = page->alloc(upper.struct_size(), kUpperTrie);
+    node_t tid = first.child = page->alloc(tmp_trie.struct_size(), kUpperTrie);
     node = page->get_node(tid);
     TESTPOINT(CompressSplitTrie1);
   } else {
     // change node to trie
-    int trie_size = upper.struct_size();
+    int trie_size = tmp_trie.struct_size();
     page->grow(pie->offset + trie_size, trie_size - (int)first.struct_size());
     pie->type = kUpperTrie;
     node = page->get_node(pie);
@@ -241,14 +242,15 @@ void CompressedHandler::split_with_trie(Trace &trace, size_t pos,
 
   // add Upper Trie
   Trie &utrie = node->trie;
-  utrie.bits = upper.bits;
+  utrie.bits = tmp_trie.bits;
 
   if (utrie.count() == 1) {
     // add lower trie
+    tmp_trie.bits = (1 << bit::lower(nkey)) | (1 << bit::lower(okey));
     node_t lnid = utrie.children[0] =
-        back.page->alloc(sizeof(Trie) + 2 * sizeof(node_t), kLowerTrie);
+        back.page->alloc(tmp_trie.struct_size(), kLowerTrie);
     Trie &ltrie = page->get_node(lnid)->trie;
-    ltrie.bits = (1 << bit::lower(nkey)) | (1 << bit::lower(okey));
+    ltrie.bits = tmp_trie.bits;
     set_lower(ltrie, okey,
               CompressedHandler::create(page, key.advance(pos + 1), child));
     set_lower(ltrie, nkey,
@@ -258,12 +260,13 @@ void CompressedHandler::split_with_trie(Trace &trace, size_t pos,
     return;
   }
 
-  
   // add lower trie
   TESTPOINT(CompressSplitTrieUpper2);
   assert(utrie.count() == 2);
-  node_t lnid1 = page->alloc(sizeof(Trie) + sizeof(node_t), kLowerTrie);
-  node_t lnid2 = page->alloc(sizeof(Trie) + sizeof(node_t), kLowerTrie);
+  tmp_trie.bits = 1;
+  size_t tsize = tmp_trie.struct_size();
+  node_t lnid1 = page->alloc(tsize, kLowerTrie);
+  node_t lnid2 = page->alloc(tsize, kLowerTrie);
   set_upper(utrie, okey, lnid1);
   set_upper(utrie, nkey, lnid2);
   Trie &ltrie1 = back.page->get_node(lnid1)->trie;
@@ -286,7 +289,7 @@ void CompressedHandler::split_with_leaf(Trace &trace, size_t pos,
       [abcdefg] ==> [ab] ->    []       -> [cefg]
   */
 
-  Transition &back = trace.stack.back();
+  Transition &back = trace.stack_back();
   Page *page = back.page;
   node_p *pie = back.get_ie();
   Compressed &first = page->get_node(pie)->compressed;
@@ -296,11 +299,9 @@ void CompressedHandler::split_with_leaf(Trace &trace, size_t pos,
   Value *val = &back.page->get_node(pie_value)->value;
   val->value.val = trace.storage.new_value(value).val;
 
-  if (!pos) {
-    // Insert value before
-    // firsthttps://mail.yahoo.com/d/folders/1/messages/704?reason=invalid_crumb&guce_referrer=aHR0cHM6Ly9tYWlsLnlhaG9vLmNvbS8&guce_referrer_sig=AQAAAD8xMAbS5p8MGN9w9CFcMtuDgb8vJsAeMf0tSOqIB2GHJt5Rdq2JIDy0PCKbTZSYwfQIF9WM9JBsPBsQ--SOnG9WT5whjqhUN2iW5T1JDmRgMB5qy3Zm2pj0Nf1-L6m2Mi1oHukPCNdNW-tSILfRx9DlxOBjIIlptkdo6lvcObDU
-    node_p tmp;
+  if (!pos) {  // Insert value before first
     // exchange the index entries
+    node_p tmp;
     tmp.val = pie->val;
     pie->val = pie_value->val;
     pie_value->val = tmp.val;
@@ -314,8 +315,9 @@ void CompressedHandler::split_with_leaf(Trace &trace, size_t pos,
   Slice key(buffer, first.size);
   node_t child = first.child;
 
-  page->grow(pie->offset + Compressed::calc_size(pos),
-             (int)pos - (int)first.size);
+  int nsize = Compressed::calc_size(pos);
+  int osize = Compressed::calc_size(first.size);
+  page->grow(pie->offset + nsize, nsize - osize);
   first.size = pos;
   first.child = nid;
   val = &back.page->get_node(pie_value)->value;
@@ -386,12 +388,12 @@ node_t TrieHandler::copy_node(Page *dest, const Page *src, node_t id) {
   return nid;
 }
 
-uint16_t TrieHandler::get_size(Node *node) { return node->trie.struct_size(); }
+uint16_t TrieHandler::get_size(const Node *node) { return node->trie.struct_size(); }
 
 char UpperTrieHandler::bits(char value) const { return bit::upper(value); };
 
 bool UpperTrieHandler::find(Trace &trace) {
-  Trie &node = trace.stack.back().get_node()->trie;
+  Trie &node = trace.stack_back().get_node()->trie;
   int index = find_index(trace, node);
   if (index < 0) return false;
 
@@ -400,7 +402,7 @@ bool UpperTrieHandler::find(Trace &trace) {
 }
 
 void UpperTrieHandler::insert(Trace &trace, const Slice &value) {
-  Transition back = trace.stack.back();
+  Transition back = trace.stack_back();
   node_p *pie_trie = back.get_ie();
 
   if (trace.rest_key.empty()) {
@@ -420,7 +422,9 @@ void UpperTrieHandler::insert(Trace &trace, const Slice &value) {
   }
 
   Trie &trie = back.page->get_node(pie_trie)->trie;
-  back.page->grow(pie_trie->offset + trie.struct_size(), sizeof(node_t));
+  int osize = trie.struct_size();
+  int nsize = trie.struct_size(1);
+  back.page->grow(pie_trie->offset + osize, nsize - osize);
   assert((1 << bits(trace.rest_key[0]) & trie.bits) == 0);  // A new key!
   int idx = trie.add(bits(trace.rest_key[0]));
   trie.children[idx] = LowerTrieHandler::create(trace, value);
@@ -431,7 +435,7 @@ UpperTrieHandler upperTrieHandler;
 char LowerTrieHandler::bits(char value) const { return bit::lower(value); }
 
 bool LowerTrieHandler::find(Trace &trace) {
-  Trie &node = trace.stack.back().get_node()->trie;
+  Trie &node = trace.stack_back().get_node()->trie;
   int index = find_index(trace, node);
   if (index < 0) return false;
 
@@ -444,10 +448,12 @@ bool LowerTrieHandler::find(Trace &trace) {
 void LowerTrieHandler::insert(Trace &trace, const Slice &value) {
   assert(trace.rest_key.size() >= 1);
 
-  Transition &back = trace.stack.back();
+  Transition &back = trace.stack_back();
   node_p *pie = back.get_ie();
   Trie &trie = back.page->get_node(pie)->trie;
-  back.page->grow(pie->offset + trie.struct_size(), sizeof(node_t));
+  int osize = trie.struct_size();
+  int nsize = trie.struct_size(1);
+  back.page->grow(pie->offset + osize, nsize - osize);
   assert((1 << bits(trace.rest_key[0]) & trie.bits) == 0);  // A new key!
   int idx = trie.add(bits(trace.rest_key[0]));
   trie.children[idx] = CompressedHandler::create(
@@ -455,7 +461,7 @@ void LowerTrieHandler::insert(Trace &trace, const Slice &value) {
 }
 
 node_t LowerTrieHandler::create(Trace &trace, const Slice &value) {
-  Transition &back = trace.stack.back();
+  Transition &back = trace.stack_back();
   node_t nid = back.page->alloc(sizeof(Trie) + sizeof(node_t), kLowerTrie);
   Trie &trie = back.page->get_node(nid)->trie;
   trie.bits = 1 << bit::lower(trace.rest_key[0]);
@@ -469,7 +475,7 @@ LowerTrieHandler lowerTrieHandler;
 bool NullHandler::find(Trace &trace) { return false; }
 
 void NullHandler::insert(Trace &trace, const Slice &value) {
-  CompressedHandler::create(trace.storage, trace.stack.back().page,
+  CompressedHandler::create(trace.storage, trace.stack_back().page,
                             trace.rest_key, value);
 }
 
@@ -585,7 +591,7 @@ struct CompressDumper : public DumpBase {
     out << "id: " << (int)nid << "P" << storage->get_page_id(page) << std::endl;
     out << "type: kCompressed" << std::endl;
     out << "pspace: " << page->size << std::endl;
-    out << "space: " << sizeof(Compressed) + node_.size << std::endl;
+    out << "space: " << node_.struct_size() << std::endl;
     out << "size: " << (int)node_.size << std::endl;
     out << "keys: \"";
     for (int i = 0; i < node_.size; i++) {
@@ -625,7 +631,7 @@ struct TrieDumper : public DumpBase {
 
     int size = trie.count();
     assert(size >= 1);
-    out << "space: " << sizeof(Trie) + size * sizeof(node_p) << std::endl;
+    out << "space: " << trie.struct_size() << std::endl;
     out << "size: " << size << std::endl;
     out << "bits: " << std::hex << trie.bits << std::dec << std::endl;
 

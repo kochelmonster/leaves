@@ -40,7 +40,15 @@ static const char* FLAGS_benchmarks1 =
     "readrand100K,";
 
 static const char* FLAGS_benchmarks =
-    "fillseq"
+    "fillseq,"
+    "fillseqsync,"
+    "fillrandsync,"
+    "fillrandom,"
+    "overwrite,"
+    "readrandom,"
+    "fillrand100K,"
+    "fillseq100K,"
+    "readrand100K,";
 ;
 
 
@@ -52,7 +60,7 @@ static bool FLAGS_writemap = false;
 static bool FLAGS_metasync = false;
 
 // Number of key/values to place in database
-static int FLAGS_num = 100000;
+static int FLAGS_num = 1000000;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;

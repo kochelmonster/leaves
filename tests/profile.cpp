@@ -7,7 +7,7 @@
 
 using namespace leaves;
 
-const size_t COUNT = 1000;
+const size_t COUNT = 10000;
 
 #ifdef DEBUG
 namespace leaves {
@@ -49,9 +49,9 @@ int main(int argc, char** argv) {
         val[0] = (char)i;
         cursor->set_value(mval);
         cursor->commit();
-        if (i + 1 % 1000) {
+        /*if (i + 1 % 1000) {
             std::cout << "added " << i << std::endl;
-        }
+        }*/
     }
     #ifdef DEBUG
     //dump_graph("debug.yaml", db);

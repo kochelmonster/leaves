@@ -6,7 +6,7 @@ project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-option(LEAVES_GCOV "Add gconv support for tests" OFF)
+option(LEAVES_GCOV "Add gconv support for tests" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
@@ -98,8 +98,8 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp src/leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread core)
-target_compile_options(db_bench_leaves PUBLIC -g)
-# target_compile_options(db_bench_leaves PUBLIC -O3)
+# target_compile_options(db_bench_leaves PUBLIC -g)
+target_compile_options(db_bench_leaves PUBLIC -O3)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 

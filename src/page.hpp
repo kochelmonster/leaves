@@ -9,16 +9,11 @@
 #define PAGE_SIZE 4096
 #endif
 
-#define SPLIT_SIZE (PAGE_SIZE / 4)
-
-#define PAGE_ROUND_UP(x) ((((size_t)(x)) + PAGE_SIZE - 1) & (~(PAGE_SIZE - 1)))
-
 namespace leaves {
 
 #pragma pack(1)
 
 struct Storage;
-
 
 struct node_p {
   union {
@@ -37,10 +32,9 @@ struct node_p {
 */
 
 struct Page {
-  static const int MIN_SPACE =
-      3 * sizeof(Trie) + 3 * sizeof(node_t) + sizeof(Value) + sizeof(stored_ptr);
+  static const int MIN_SPACE = 5 * sizeof(Page*);
   static const int MIN_COUNT = 5;
-  
+
   uint16_t size;
 
   // ie for index entry
@@ -62,15 +56,16 @@ struct Page {
   }
 
   const node_p* get_ie(node_t index) const { return (&root - index); }
-  node_p* get_ie(node_t index){ return (&root - index); }
-  const Node* get_node(const node_p* pie) const { return (Node*)&data[pie->offset]; }
+  node_p* get_ie(node_t index) { return (&root - index); }
+  const Node* get_node(const node_p* pie) const {
+    return (Node*)&data[pie->offset];
+  }
   Node* get_node(const node_p* pie) { return (Node*)&data[pie->offset]; }
   const Node* get_node(node_t index) const { return get_node(get_ie(index)); }
   Node* get_node(node_t index) { return get_node(get_ie(index)); }
   node_t copy_node(Page* dest, node_t id) const {
     return NodeHandler::HANDLERS[get_ie(id)->type]->copy_node(dest, this, id);
   }
-
   void grow(uint16_t offset, int delta);
   node_t alloc(uint16_t space, NodeType type);
   void free(node_t index, uint16_t size);
@@ -81,7 +76,6 @@ struct Page {
   stored_ptr write_page(Storage& storage);
   void free_page(Storage& storage);
 };
-
 
 #pragma pack(0)
 

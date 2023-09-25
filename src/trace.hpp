@@ -15,13 +15,6 @@ struct Transition {
   node_t nid;
   size_t key_pos;
 
-  Transition() : page(0), nid(0), key_pos(0) {
-    pspage.val = 0;
-  }
-
-  Transition(Page* page_, stored_ptr pspage_, node_t nid_, size_t key_pos_)
-      : page(page_), pspage(pspage_), nid(nid_), key_pos(key_pos_) {}
-
   Node* get_node() { return page->get_node(nid); }
   const Node* get_node() const { return page->get_node(nid); }
 
@@ -33,7 +26,7 @@ struct Trace {
       : storage(storage_), transaction_id(0), txn_root(nullptr) {
     view = storage.view;
     current_key.reserve(1024);
-    stack.reserve(128);
+    stack.resize(128);
   }
 
   ~Trace();
@@ -58,29 +51,52 @@ struct Trace {
   void refresh();
 
   NodeHandler* handler() const {
-    const Transition& back = stack.back();
+    const Transition& back = stack_back();
     return NodeHandler::HANDLERS[back.page->get_ie(back.nid)->type];
   }
 
   void push_to_stack(stored_ptr link) {
-    Page* page = link.get<Page>(view.get());
-    stack.push_back(Transition(page, link, 0, current_key.size()));
+    Transition& back = push_stack();
+    back.page = link.get<Page>(view.get());
+    back.pspage.val = link.val;
+    back.nid = 0;
+    back.key_pos = current_key.size();
   }
 
   void push_to_stack(Page* page) {
-    Transition& back = stack.back();
-    stack.push_back(Transition(page, stored_ptr(), 0, current_key.size()));
+    Transition& back = push_stack();
+    back.page = page;
+    back.pspage.val = 0;
+    back.nid = 0;
+    back.key_pos = current_key.size();
   }
 
   void push_to_stack(node_t nid) {
-    Transition& back = stack.back();
-    stack.push_back(
-        Transition(back.page, back.pspage, nid, current_key.size()));
+    Transition& pback = stack_back();
+    Transition& back = push_stack();
+    back.page = pback.page;
+    back.pspage.val = pback.pspage.val;
+    back.nid = nid;
+    back.key_pos = current_key.size();
+  }
+
+  Transition& push_stack() {
+    if (stack.size() <= stack_size) {
+      stack.resize(stack_size+100);
+    }
+    return stack[stack_size++];
+  }
+
+  Transition& stack_back() {
+    return stack[stack_size-1];
+  }
+
+  const Transition& stack_back() const {
+    return stack[stack_size-1];
   }
 
   void release_transaction_view();
   void update_transaction_view();
-
   bool split(Page* page);
 
   Storage& storage;
@@ -90,6 +106,7 @@ struct Trace {
   MemoryView_ptr view;
   std::vector<Transition> stack;
   Slice rest_key;
+  size_t stack_size;
   std::string current_key;
 };
 

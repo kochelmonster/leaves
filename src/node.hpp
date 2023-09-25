@@ -77,7 +77,12 @@ struct Trie {
   uint16_t bits;
   node_t children[];
 
-  size_t struct_size() const { return sizeof(Trie) + count() * sizeof(node_t); }
+  // minimum size is Pointer size
+  size_t struct_size(int delta=0) const {
+    int ec = count() + delta;
+    ec += ec & 1;
+    return std::max(sizeof(Trie) + ec * sizeof(node_t), sizeof(Page*));
+  }
 
   size_t count() const { return popcount(bits); }
 
@@ -122,10 +127,13 @@ struct Compressed {
   node_t child;
   char key[];
 
-  size_t struct_size() const { return sizeof(Compressed) + size; }
+  // minimum size is Pointer size
+  size_t struct_size() const {
+    return std::max(sizeof(Compressed) + size, sizeof(Page*));
+  }
 
   static inline uint16_t calc_size(uint8_t size) {
-    return size ? sizeof(Compressed) + size : 0;
+    return size ? std::max(sizeof(Compressed) + size, sizeof(Page*)) : 0;
   }
 };
 
@@ -158,7 +166,7 @@ struct NodeHandler {
   virtual bool valid(const Trace& trace) const { return false; }
   virtual void insert(Trace& trace, const Slice& value) = 0;
   virtual node_t copy_node(Page* dest, const Page* src, node_t id) = 0;
-  virtual uint16_t get_size(Node* node) = 0;
+  virtual uint16_t get_size(const Node* node) = 0;
 
 #if 0
   virtual Node* next(Trace& trace) = 0;
@@ -176,14 +184,12 @@ struct NodeHandler {
   static NodeHandler* HANDLERS[kEndType];
 };
 
-
-
 #ifdef TESTING
 
 struct TestPoints {
   static std::stringstream tp_output;
 
-  static void testpoint(const char *str) {
+  static void testpoint(const char* str) {
     tp_output << "TESTPOINT: " << str << std::endl;
   }
 };
@@ -194,7 +200,6 @@ inline std::stringstream TestPoints::tp_output;
 #else
 #define TESTPOINT(x)
 #endif
-
 
 }  // namespace leaves
 
