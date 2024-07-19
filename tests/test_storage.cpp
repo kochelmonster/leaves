@@ -45,8 +45,8 @@ BOOST_AUTO_TEST_CASE(value_pools) {
   int j = 0;
   for (auto i = vals.begin(); i != vals.end(); i++, j++) {
     vpointer.push_back(storage.new_value(*i));
-    StoragePool& pool = storage.header.pools[j];
-    offset_t start = pool.slast - block_size_per_pool[j];
+    BlockPool& pool = storage.header.pools[j];
+    offset_ptr start = pool.slast - BLOCK_SIZES[j];
     if (j == 8) {
       start += PAGE_SIZE;  // the first page allocation
     }
@@ -57,8 +57,8 @@ BOOST_AUTO_TEST_CASE(value_pools) {
   storage.commit();
 
   for (int i = 0; i <= 27; i++) {
-    StoragePool& pool = storage.header.pools[i];
-    offset_t start = pool.slast - block_size_per_pool[i];
+    BlockPool& pool = storage.header.pools[i];
+    offset_ptr start = pool.slast - BLOCK_SIZES[i];
     if (i == 8) {
       start += 28 * PAGE_SIZE +
                PAGE_SIZE;  // 28 pages of txn_head + preallocation of first page
@@ -82,16 +82,16 @@ BOOST_AUTO_TEST_CASE(rollback1) {
   BOOST_REQUIRE_EQUAL(ptr1.val, ptr2.val);
   storage.rollback();
 
-  StoragePool& pool = storage.header.pools[0];
+  BlockPool& pool = storage.header.pools[0];
   // the complete block is free
-  BOOST_REQUIRE_EQUAL(pool.scurrent + block_size_per_pool[0], pool.slast);
+  BOOST_REQUIRE_EQUAL(pool.scurrent + BLOCK_SIZES[0], pool.slast);
 }
 
 BOOST_AUTO_TEST_CASE(rollback2) {
   Preparation p;
 
   Storage storage(TEST_FILE);
-  StoragePool& pool = storage.header.pools[0];
+  BlockPool& pool = storage.header.pools[0];
 
   storage.start_transaction();
   stored_ptr ptr1 = storage.new_value(std::string(16, 'a'));
@@ -107,7 +107,7 @@ BOOST_AUTO_TEST_CASE(rollback2) {
   BOOST_REQUIRE(!storage.header.pools[0].sfree);
 
   // the complete block is free
-  BOOST_REQUIRE_EQUAL(pool.scurrent + block_size_per_pool[0], pool.slast + 16);
+  BOOST_REQUIRE_EQUAL(pool.scurrent + BLOCK_SIZES[0], pool.slast + 16);
 }
 
 BOOST_AUTO_TEST_CASE(overflow_page) {

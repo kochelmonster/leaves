@@ -2,112 +2,118 @@
 #define _LEAVES_TRACE_HPP
 #include <leaves.hpp>
 
-#include "page.hpp"
+#include "node.hpp"
 #include "storage.hpp"
 
 namespace leaves {
 
-struct Trace;
+enum TrieState { Upper, Lower };
 
 struct Transition {
-  Page* page;
-  stored_ptr pspage;
-  node_t nid;
-  size_t key_pos;
+  // offset of the trie block this transition works with
+  offset_ptr offset;
 
-  Node* get_node() { return page->get_node(nid); }
-  const Node* get_node() const { return page->get_node(nid); }
+  // the pointer offset points to
+  BlockUnion* block;
 
-  node_p* get_ie() const { return page->get_ie(nid); }
+  // pointer to a Node union: node = &trie_block.data[pnode->offset]
+  Node* node;
+
+  // pointer to a node_ptr to node: pnode = &trie_block.data[offset]
+  node_ptr* pnode;
+
+  // offset to pnode
+  ssize_t onode;
+
+  // position inside the key
+  ssize_t keypos;
+
+  // upper or lower bits of char
+  TrieState trie_state;
+
+  // the index of the current branch
+  int index;
+
+  // true the key was found
+  bool found;
+
+  Transition(offset_ptr offset_ = 0, ssize_t onode_ = 0, ssize_t keypos_ = 0);
+
+  // fill node, pnode, offset
+  void resolve(Trace& cursor);
+  void to_writable(BlockUnion* block);
+
+  bool advance(Trace& cursor);
+  bool find(Trace& cursor);
+  Slice get_value(Trace& cursor) const;
+  void set_value(Trace& cursor, const Slice& value);
+  ssize_t mark_deep_size(Trace& cursor, TrieBlock& sizes);
 };
 
+// A cursor to
 struct Trace {
-  Trace(Storage& storage_)
-      : storage(storage_), transaction_id(0), txn_root(nullptr) {
-    view = storage.view;
-    current_key.reserve(1024);
-    stack.resize(128);
-  }
-
+  Trace(Storage& storage_);
   ~Trace();
 
-  bool valid() const { return handler()->valid(*this); }
+  // return true if the cursor is on a valid position
+  bool isvalid() const;
   void find(const Slice& key);
   void first();
   void last();
   void next();
   void prev();
-  void set_value(const Slice& value);
+  bool set_value(const Slice& value);
   Slice get_value() const;
   void remove();
   void commit();
   void rollback();
-  void go_back(int index);
 
-  // if view has changed reload the stack
-  void reload();
-
-  // refresh the find position
-  void refresh();
-
-  NodeHandler* handler() const {
-    const Transition& back = stack_back();
-    return NodeHandler::HANDLERS[back.page->get_ie(back.nid)->type];
+  block_ptr get_block(offset_ptr offset) const {
+    return storage.get_block(offset);
   }
 
-  void push_to_stack(stored_ptr link) {
-    Transition& back = push_stack();
-    back.page = link.get<Page>(view.get());
-    back.pspage.val = link.val;
-    back.nid = 0;
-    back.key_pos = current_key.size();
-  }
+  /* allocates size bytes for a new node from the current block, add a new
+     Transition to the stack. returns the new transition.
 
-  void push_to_stack(Page* page) {
-    Transition& back = push_stack();
-    back.page = page;
-    back.pspage.val = 0;
-    back.nid = 0;
-    back.key_pos = current_key.size();
-  }
+     size: the size to allocate
+     dnode: dnode is the offset delta to the last child
+     type: the nodes type of the new transition
 
-  void push_to_stack(node_t nid) {
-    Transition& pback = stack_back();
-    Transition& back = push_stack();
-    back.page = pback.page;
-    back.pspage.val = pback.pspage.val;
-    back.nid = nid;
-    back.key_pos = current_key.size();
-  }
+     returns the new transition of the new node
 
-  Transition& push_stack() {
-    if (stack.size() <= stack_size) {
-      stack.resize(stack_size+100);
-    }
-    return stack[stack_size++];
-  }
+     This function will always succeed. If necessary, it creates new blocks and
+     rearrange the memory.
+   */
+  Transition& alloc(ssize_t size, ssize_t dnode, NodeType type);
 
-  Transition& stack_back() {
-    return stack[stack_size-1];
-  }
+  /* A sub function of alloc: 
+     Does the same as alloc but returns NULL if the block does not
+     provide enough free space.
+   */
+  Transition* alloc_in_block(ssize_t size, ssize_t dnode, NodeType type);
 
-  const Transition& stack_back() const {
-    return stack[stack_size-1];
-  }
+  /* A sub function of alloc: 
+     Moves the node in the last transition to a new block and ensures the new
+     block has at least 2048 byte free.
+     the function corrects the stack by inserting a link node.
+   */
+  void move_last_node();
 
-  void release_transaction_view();
-  void update_transaction_view();
-  bool split(Page* page);
 
   Storage& storage;
-  uint64_t transaction_id;
-  stored_ptr root;
-  Page* txn_root;
-  MemoryView_ptr view;
+
+  // registration id in storage.shared
+  int cursor_id;
+
+  offset_ptr root;
   std::vector<Transition> stack;
   Slice rest_key;
-  size_t stack_size;
   std::string current_key;
+
+  // the trie state of the stack.back
+  TrieState trie_state;
+
+  bool transaction_active;
 };
 
 }  // namespace leaves

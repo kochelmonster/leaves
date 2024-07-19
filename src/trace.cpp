@@ -1,160 +1,256 @@
-#include <boost/interprocess/detail/atomic.hpp>
+#include "trace.hpp"
 
-#include <trace.hpp>
-
-using namespace boost::interprocess;
+#include "node.hpp"
 
 namespace leaves {
 
-Trace::~Trace() {
-  release_transaction_view();
+INLINE Trace::Trace(Storage& storage_)
+    : storage(storage_), transaction_active(false) {
+  const PersistBlock& root_block = storage.memory->get_root()->block;
+  root = root_block.offset;
+  cursor_id = storage.alloc_cursor(root_block.transaction);
+  current_key.reserve(1024);
+  stack.resize(128);
 }
 
+INLINE Trace::~Trace() { storage.free_cursor(cursor_id); }
 
-void Trace::refresh() {
-  std::string key = current_key;
-  key.append(rest_key.data(), rest_key.size());
-  find(key);
-}
+INLINE void Trace::find(const Slice& key) {
+  if (key.size() > 1024) throw KeyToBig();
 
-void Trace::release_transaction_view() {
-  int idx = transaction_id % TRANSACTION_COUNT;
-  const Header* header = storage.get_header();
-  const Transaction &old = header->txn[idx];
-  if (old.id == transaction_id) {
-    ipcdetail::atomic_dec32(&storage.shared->txn_ref_count[idx]);
-  }
-  transaction_id = 0;
-}
-
-void Trace::update_transaction_view() {
-  if (transaction_id != storage.transaction_id()) {
-    release_transaction_view();
-    transaction_id = storage.transaction_id();
-    int idx = transaction_id % TRANSACTION_COUNT;
-    ipcdetail::atomic_inc32(&storage.shared->txn_ref_count[idx]);
-    root = view->get_header()->txn[idx].root;
-  }
-}
-
-void Trace::reload() {
-  storage.check_size();
-  if (view != storage.view) {
-    view = storage.view;
-    MemoryView* view_ = view.get();
-    auto last = stack.begin();
-    for (auto i = stack.begin(); i != stack.end(); i++) {
-      if (i->pspage.val)
-        i->page = i->pspage.get<Page>(view_);
-    }
-  }
-}
-
-void Trace::find(const Slice& key) {
   rest_key = key;
-  current_key.clear();
-  stack_size = 0;
-  update_transaction_view();
-  reload();
 
-  if (txn_root)
-    push_to_stack(txn_root);
-  else 
-    push_to_stack(root);
-
-  while (handler()->find(*this))
-    ;
-}
-
-void Trace::set_value(const Slice& value) {
-  if (storage.start_transaction()) {
-    assert(!txn_root);
-    txn_root = storage.get_writable_page(stack.begin()->pspage);
-  }
-
-  Page *page = txn_root;
-  int last_page_change = 0;
-  // change pages to writable pages
-  int j = 0;
-  for (auto i = stack.begin(); j < stack_size; i++, j++) {
-    if (i->pspage.val) {
-      i->pspage.val = 0;
-      i->page = page;
-    }
-    node_p *pie = i->get_ie();
-    if (pie->type == kLink) {
-      last_page_change = j;
-      pie->type = kHeapLink;
-      Node* node = i->page->get_node(pie);
-      page = node->pointer = storage.get_writable_page(node->link);
-    } else if (pie->type == kHeapLink) {
-      Node* node = i->page->get_node(pie);
-      page = node->pointer;
+  for (auto iter = stack.begin(); iter != stack.end(); iter++) {
+    if (!iter->advance(*this)) {
+      stack.erase(iter, stack.end());
+      current_key.resize(iter->keypos);
+      break;
     }
   }
 
-  while (split(page)) {
-    // reload the last page in the stack
-    go_back(last_page_change);
-    while (handler()->find(*this))
-      ;
+  if (stack.empty()) {
+    current_key.clear();
+    stack.push_back(Transition(root));
   }
 
-  handler()->insert(*this, value);
-  
-  while (handler()->find(*this))
-    ;
+  while (stack.back().find(*this));
 }
 
-bool Trace::split(Page* page) {
-  bool need_reload = false;
-  while (!page->reserve(Page::MIN_SPACE, Page::MIN_COUNT)) {
-    page->split(storage);
-    need_reload = true;
+INLINE bool Trace::isvalid() const {
+  if (rest_key.empty() || stack.empty()) return false;
+
+  const Transition& back = stack.back();
+  return leaves::is_valid[back.pnode->type](back);
+}
+
+INLINE bool Trace::set_value(const Slice& value) {
+  if (value.size() > T - sizeof(PersistBlock))
+    throw WrongValue("value too big");
+
+  if (!transaction_active) {
+    if (!storage.start_transaction()) return false;
+    transaction_active = true;
   }
-  return need_reload;
-}
 
-void Trace::go_back(int index) {
-  stack_size = index + 1;
-  Transition back = stack_back();
-  int delta = current_key.size() - back.key_pos;
-  rest_key = Slice(rest_key.data()-delta, rest_key.size()+delta);
-  current_key.resize(back.key_pos);
-}
+  Transition& back = stack.back();
 
-Slice Trace::get_value() const {
-  if (valid()) {
-    const Transition& back = stack_back();
-    assert(back.get_ie()->type == kValue);
-    return view->get_value(back.get_node()->value.value);
+  if (back.block->block.transaction != storage.active_transaction) {
+    // not a writable page -> change all pages in the cursor stack to writeables
+    offset_ptr offset = 0;
+    for (auto iter = stack.rbegin(); iter != stack.rend();) {
+      if (iter->block->block.transaction != storage.active_transaction) {
+        BlockUnion* block = storage.get_cow_block(iter->offset);
+        block->block.transaction = storage.active_transaction;
+        iter->to_writable(block);
+        if (iter->pnode->type == kLink) iter->node->link = offset;
+
+        offset = block->block.offset;
+        offset_ptr old_offset = iter->offset;
+
+        for (iter--; iter != stack.rend(); iter--) {
+          if (iter->offset == old_offset) iter->to_writable(block);
+        }
+      } else {
+        if (offset) {
+          assert(iter->pnode->type == kLink);
+          iter->node->link = offset;
+          offset = 0;
+        }
+        break;
+      }
+    }
+    if (offset) {
+      assert(root != offset);
+      root = offset;
+    }
   }
-  return Slice();
+
+  back.set_value(*this, value);
 }
 
-void Trace::remove() {}
+INLINE Transition* Trace::alloc_in_block(ssize_t size, ssize_t dnode,
+                                         NodeType type) {
+  Transition* back = &stack.back();
+  ssize_t offset = back->block->trie.alloc(size);
+  Transition new_trans(back->offset, back->pnode->offset + dnode,
+                       current_key.size());
 
+  if (!offset) {
+    // cannot allocate size
 
-void Trace::rollback() {
-  storage.rollback();
-  txn_root->free_page(storage);
-  txn_root = nullptr;
-  refresh();
+    if (size <= sizeof(offset_ptr)) return NULL;
+
+    // try to allocate a link
+    offset = back->block->trie.alloc(sizeof(offset_ptr));
+    if (!offset) return NULL;  // even not space left for a link
+
+    stack.push_back(new_trans);
+    Transition& link = stack.back();
+    link.pnode = (node_ptr*)&back->block->trie.data[new_trans.onode];
+    link.pnode->offset = offset;
+    link.pnode->type = kLink;
+    link.resolve(*this);
+    BlockUnion* block = storage.alloc_cow_block(TRIE_PAGE_SIZE);
+    new_trans.offset = link.node->link = block->trie.offset;
+    new_trans.block = block;
+    new_trans.onode = 0;
+    offset = block->trie.alloc(size);
+    assert(offset != 0);
+  }
+
+  stack.push_back(new_trans);
+  Transition& result = stack.back();
+  result.pnode = (node_ptr*)&result.block->trie.data[result.onode];
+  result.pnode->offset = offset;
+  result.pnode->type = type;
+  result.node = (Node*)&result.block->trie.data[offset];
+  return &result;
 }
 
-void Trace::commit() {
-  storage.prepare_commit(txn_root->write_page(storage));
+INLINE Transition& Trace::alloc(ssize_t size, ssize_t dnode, NodeType type) {
+  // round up size to a multiple of 8
+  size = ((size + 7) >> 3) << 3;
+
+  Transition* result = alloc_in_block(size, dnode, type);
+  if (result) return *result;
+
+  move_last_node();
+  return *alloc_in_block(size, dnode, type);
+}
+
+INLINE void Trace::move_last_node() {
+  Transition& back = stack.back();
+
+  // move the current node to a new block
+  TrieBlock sizes;
+  memset(sizes.data, 0, sizes.DATA_SIZE);
+  leaves::mark_deep_size[back.pnode->type](*this, back, sizes);
+
+  BlockUnion* block = storage.alloc_cow_block(TRIE_PAGE_SIZE);
+  leaves::move_node[back.pnode->type](*this, back, block, 0, sizes);
+
+  if (back.onode == 0) {
+    // the moved node is the root of the block
+
+    // free the former block
+    storage.memory->free_block(back.block);
+
+    // update the last transition
+    back.offset = block->block.offset;
+    back.block = block;
+    back.resolve(*this);
+
+    if (stack.size() > 1) {
+      // change the link to the block
+      Transition& link = stack[stack.size() - 1];
+      assert(link.pnode->type == kLink);
+      link.node->link = block->block.offset;
+      TESTPOINT("MoveBlockRoot");
+    } else {
+      // It is the root block -> change the root
+      root = block->block.offset;
+      TESTPOINT("MoveGlobalRoot");
+    }
+    return;
+  }
+
+  // replace the node by a link
+  Transition cloned_node(block->block.offset, 0, back.keypos);
+  back.pnode->offset = back.block->trie.alloc(sizeof(offset_ptr));
+  back.pnode->type = kLink;
+  back.resolve(*this);
+  back.node->link = block->block.offset;
+  stack.push_back(cloned_node);
+  stack.back().resolve(*this);
+}
+
+INLINE void Trace::commit() {
+  storage.prepare_commit();
   storage.commit();
-  txn_root = nullptr;
-  refresh();
 }
 
-void Trace::first() {}
+INLINE void Trace::rollback() {
+  storage.rollback();
+  stack.clear();
+  find(current_key);
+}
 
-void Trace::last() {}
+INLINE Transition::Transition(offset_ptr offset_, ssize_t onode_,
+                              ssize_t keypos_)
+    : offset(offset_), onode(onode_), keypos(keypos_), trie_state(Upper) {}
 
-void Trace::next() {}
+INLINE Transition& Transition::resolve(Trace& cursor) {
+  if (!block) {
+    block = cursor.get_block(offset);
+    pnode = (node_ptr*)&block->trie.data[onode];
+    node = (Node*)&block->trie.data[pnode->offset];
+  }
+  return *this;
+}
 
-void Trace::prev() {}
+INLINE void Transition::to_writable(BlockUnion* block_) {
+  offset = block->block.offset;
+  block = block_;
+  pnode = (node_ptr*)&block->trie.data[onode];
+  node = (Node*)&block->trie.data[pnode->offset];
+}
+
+INLINE bool Transition::advance(Trace& cursor) {
+  return leaves::advance[pnode->type](cursor, *this);
+}
+
+INLINE bool Transition::find(Trace& cursor) {
+  resolve(cursor);
+  keypos = cursor.current_key.size();
+  return leaves::find[pnode->type](cursor, *this);
+}
+
+INLINE Slice Transition::get_value(Trace& cursor) const {
+  return leaves::get_value[pnode->type](cursor, *this);
+}
+
+INLINE void Transition::set_value(Trace& cursor, const Slice& value) {
+  return leaves::set_value[pnode->type](cursor, this, value);
+}
+
+INLINE ssize_t Transition::mark_deep_size(Trace& cursor, TrieBlock& sizes) {
+  resolve(cursor);
+  size_t size = leaves::mark_deep_size[pnode->type](cursor, *this, sizes);
+  *(ssize_t*)&sizes.data[onode] = size;
+  return size;
+}
 
 }  // namespace leaves
+/*
+void first();
+void last();
+void next();
+void prev();
+void set_value(const Slice& value);
+Slice get_value() const;
+void remove();
+void commit();
+void rollback();
+
+
+*/

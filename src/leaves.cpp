@@ -5,7 +5,7 @@
 
 namespace leaves {
 
-struct CursorImpl : public Cursor {
+struct CursorImpl : public Trace {
   CursorImpl(Storage& storage, DB::db_ptr pdb) : trace(storage), pdb(pdb) {}
   bool valid() const { return trace.valid(); }
   void find(const Slice& key) { return trace.find(key); }

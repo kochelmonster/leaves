@@ -2,42 +2,38 @@
 #define _LEAVES_HPP
 
 #include <string.h>
-#include <string>
-#include <memory>
+
 #include <exception>
+#include <memory>
+#include <string>
 
 namespace leaves {
 
 #ifndef _MSC_VER
-  #define NOEXCEPT noexcept
+#define NOEXCEPT noexcept
 #else
-  #if _MSC_VER >= 1600
-    #define NOEXCEPT noexcept
-  #else
-    #define NOEXCEPT
-  #endif
+#if _MSC_VER >= 1600
+#define NOEXCEPT noexcept
+#else
+#define NOEXCEPT
+#endif
 #endif
 
-#define SIGNATURE "Leaves"
-
+const char SIGNATURE[] = "larch-leaves";
 static const int kMajorVersion = 3;
 static const int kMinorVersion = 0;
 
+class LeavesException : public std::exception {};
 
-class LeavesException : public std::exception {
-};
+class TransactionActive : public LeavesException {};
 
-class TransactionActive : public LeavesException {
-};
+class NoTransactionFree : public LeavesException {};
 
-class NoTransactionFree : public LeavesException {
-};
+class NoValidPosition : public LeavesException {};
 
-class NoValidPosition : public LeavesException {
-};
+class NotImplemented : public LeavesException {};
 
-class NotImplemented : public LeavesException {
-};
+class KeyToBig : public LeavesException {};
 
 class WrongValue : public LeavesException {
  private:
@@ -46,11 +42,8 @@ class WrongValue : public LeavesException {
  public:
   WrongValue(const char* msg) : _msg(msg) {}
 
-  const char* what() const NOEXCEPT {
-    return _msg;
-  }
+  const char* what() const NOEXCEPT { return _msg; }
 };
-
 
 class Slice {
  private:
@@ -58,55 +51,52 @@ class Slice {
   const char* _data;
 
  public:
-  Slice(const char *data, size_t size) : _size(size), _data(data) { }
+  Slice(const char* data, size_t size) : _size(size), _data(data) {}
 
-  Slice(const char* str) : _size(strlen(str)), _data(str) { }
+  Slice(const char* str) : _size(strlen(str)), _data(str) {}
 
-  Slice(const std::string& src)
-    : _size(src.size()), _data(src.data()) { }
+  Slice(const std::string& src) : _size(src.size()), _data(src.data()) {}
 
-  Slice()
-    : _size(0), _data(NULL) { }
+  Slice() : _size(0), _data(NULL) {}
 
+  Slice slice(size_t len) const { return Slice(data(), len); }
 
-  Slice slice(size_t len) const {
-      return Slice(data(), len);
-    }
+  std::string string() const { return std::string(data(), _size); }
 
-  std::string string() const {
-      return std::string(data(), _size);
-    }
+  template <typename ot>
+  bool operator==(const ot& other) const {
+    return size() == other.size() && memcmp(data(), other.data(), size()) == 0;
+  }
 
-  template <typename ot> bool operator==(const ot& other) const {
-      return size() == other.size()
-        && memcmp(data(), other.data(), size()) == 0;
-    }
+  template <typename ot>
+  int compare(const ot& other) const {
+    int cmp = 0, size_ = size() < other.size() ? size() : other.size();
+    (cmp = memcmp(data(), other.data(), size_)) ||
+        (cmp = size() - other.size());
+    return cmp;
+  }
 
-  char operator[](size_t index) const {
-      return data()[index];
-    }
+  char operator[](size_t index) const { return data()[index]; }
 
-  const char* data() const {
-      return _data;
-    }
+  const char* data() const { return _data; }
 
-  size_t size() const {
-      return _size;
-    }
+  size_t size() const { return _size; }
 
   Slice advance(size_t size) const {
-      return Slice(data()+size, _size-size);
-    }
+    return Slice(data() + size, _size - size);
+  }
 
-  bool empty() const {
-      return _size == 0;
-    }
+  void iadvance(size_t size)  {
+    assert(size >= _size);
+    _data += size;
+    _size -= size;
+  }
+
+  bool empty() const { return _size == 0; }
 };
 
-
-
 class Cursor {
-public:
+ public:
   // returns true if cursor is on a valid position
   virtual bool valid() const = 0;
 
@@ -127,18 +117,17 @@ public:
   virtual void commit() = 0;
 };
 
-
+struct Trace;
 
 class DB {
-public:
-  typedef std::shared_ptr<Cursor> cursor_ptr;
+ public:
+  typedef std::shared_ptr<Trace> cursor_ptr;
   typedef std::shared_ptr<DB> db_ptr;
   virtual ~DB();
   virtual cursor_ptr create_cursor() = 0;
-  static db_ptr open(const char *path);
+  static db_ptr open(const char* path);
 };
 
-} // namespace leaves
+}  // namespace leaves
 
-
-#endif // _LEAVES_HPP
+#endif  // _LEAVES_HPP

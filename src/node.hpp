@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <leaves.hpp>
 
+#include "memory.hpp"
 #include "port.hpp"
 
 #ifdef TESTING
@@ -16,75 +17,68 @@ namespace leaves {
 
 enum NodeType {
   kNull,
+  kBitTrie,
+  kTrie,
   kValue,
   kLink,
-  kHeapLink,
+  kTableLink,
   kCompressed,
-  kUpperTrie,
-  kLowerTrie,
   kEndType
 };
 
-struct MemoryViewBase {
-  char* start;
-};
+struct Transition;
+typedef uint16_t ssize_t;
+union Node;
 
-typedef uint16_t node_t;
-struct stored_ptr {
-  static const int PAGE_POOL = 8;
+// A pointer inside a trie block.
+struct node_ptr {
   union {
     struct {
-      uint64_t size : 12;  // size of page
-      uint64_t offset : 52;
+      // offset within the data attribute
+      uint16_t offset : 13;
+
+      // type of the node
+      uint16_t type : 3;
     };
-    uint64_t val;
+    uint16_t val;
   };
 
-  stored_ptr() : val(0) {}
-  stored_ptr(const stored_ptr& src) : val(src.val) {}
+  node_ptr(uint16_t val_) : val(val) {}
+  node_ptr(uint16_t offset_, uint8_t type_) : offset(offset), type(type_) {}
 
-  template <typename T>
-  T* get(MemoryViewBase* memview) const {
-    return (T*)(memview->start + offset);
+  const node_ptr& operator=(node_ptr& src) {
+    val = src.val;
+    return *this;
   }
 
-  int pool_id() const {
-    if (size > 20) {
-      size_t exact_size = size - 20;
-      int high_bit = 32 - clz((uint64_t)size | 1);
-      if ((1 << high_bit) < size) high_bit++;
-      return std::max(high_bit, 4) - 4;
-    }
-    return size + 8;
-  }
+  const Node* resolve(const TrieBlock* block) const;
 };
-
-struct ValueBlock;
-struct Trace;
-struct Page;
-struct Storage;
 
 #pragma pack(1)
 
-/*
-!!!Caution: all node_p links to other nodes on the same page are
-offsets from the original node ot the child node.
-With this technique whole pages just can be copied to
-ot  her pages in different positions.
-*/
-
-struct Trie {
-  uint16_t bits;
-  node_t children[];
-
-  // minimum size is Pointer size
-  size_t struct_size(int delta=0) const {
-    int ec = count() + delta;
-    ec += ec & 1;
-    return std::max(sizeof(Trie) + ec * sizeof(node_t), sizeof(Page*));
+// A trie node that represents the upper or lower 4bits of a char
+struct BitTrie {
+  static BitTrie& cast(Transition& trans);
+  static ssize_t size(int count) {
+    if (count <= (8 - sizeof(bits)) / sizeof(node_ptr)) return 8;
+    if (count <= (16 - sizeof(bits)) / sizeof(node_ptr)) return 16;
+    return 24;
   }
 
   size_t count() const { return popcount(bits); }
+
+  // returns the relative offset of the child with given index
+  ssize_t offset(int index) const {
+    return sizeof(bits) + sizeof(node_ptr) * index;
+  }
+
+  // returns the index of the found child or -1
+  int find(char key) const {
+    int bit = 1 << key;
+    if (!(bits & bit)) return -1;
+
+    return popcount(bits & (bit - 1));
+  }
 
   int index(int bit) const {
     uint16_t bitval = (1 << bit);
@@ -120,86 +114,165 @@ struct Trie {
     }
     return idx;
   }
+
+  // bit mask of the childrens bit value
+  uint16_t bits;
+  node_ptr children[];
 };
 
+struct Trie {
+  static const int CHILDREN = 16;
+  node_ptr children[CHILDREN];
+
+  static Trie& cast(Transition& trans);
+
+  // returns the index of the found child or -1
+  int find(char bit) const {
+    if (!children[bit].val) return -1;
+    return bit;
+  }
+
+  int next(int bit) const {
+    for (; bit < CHILDREN; bit++) {
+      if (children[bit].val) break;
+    }
+    return bit;
+  }
+
+  int add(int bit) { return bit; }
+
+  static ssize_t offset(int index) { return sizeof(node_ptr) * index; }
+  size_t count() const { return CHILDREN; }
+};
+
+// compressed trie node
 struct Compressed {
+  node_ptr child;
   uint8_t size;
-  node_t child;
   char key[];
-
-  // minimum size is Pointer size
-  size_t struct_size() const {
-    return std::max(sizeof(Compressed) + size, sizeof(Page*));
-  }
-
-  static inline uint16_t calc_size(uint8_t size) {
-    return size ? std::max(sizeof(Compressed) + size, sizeof(Page*)) : 0;
-  }
+  static ssize_t offset() { return offsetof(Value, child); }
 };
 
 struct Value {
-  stored_ptr value;
-  node_t child;  // if non zero link to the next node
+  static const size_t SMALL_SIZE = 1024;
+  node_ptr child;
+  size_t size;
+  union {
+    offset_ptr link;
+    char data[1];
+  };
+
+  static ssize_t calc_struct_size(ssize_t size_) {
+    return std::max(sizeof(node_ptr) + sizeof(size) + size_, sizeof(Value));
+  }
+
+  static ssize_t offset() { return offsetof(Value, child); }
 };
 
-struct Node {
-  union {
-    Page* pointer;
-    stored_ptr link;
-    Trie trie;
-    Compressed compressed;
-    Value value;
-  };
+union Node {
+  offset_ptr link;
+  BitTrie bit_trie;
+  Trie trie;
+  Compressed compressed;
+  Value value;
 };
 
 #pragma pack(0)
 
-struct NodeHandler {
-  /*
-  Find the next node. Returns true to go on or false
-  */
-  virtual bool find(Trace& trace) = 0;
+struct TrieBlock;
+struct Trace;
+struct Transition;
 
-  /*
-  Returns true if key is at a valid position.
-  */
-  virtual bool valid(const Trace& trace) const { return false; }
-  virtual void insert(Trace& trace, const Slice& value) = 0;
-  virtual node_t copy_node(Page* dest, const Page* src, node_t id) = 0;
-  virtual uint16_t get_size(const Node* node) = 0;
+typedef ssize_t (*is_valid_t)(const Transition& trans);
+ssize_t is_valid_null(const Transition& trans);
+ssize_t is_valid_value(const Transition& trans);
+ssize_t is_valid_table_link(const Transition& trans);
+const is_valid_t is_valid[] = {
+    is_valid_null, is_valid_null,       is_valid_null, is_valid_value,
+    is_valid_null, is_valid_table_link, is_valid_null};
 
-#if 0
-  virtual Node* next(Trace& trace) = 0;
-  virtual Node* first(Trace& trace) = 0;
-  virtual Node* prev(Trace& trace) = 0;
-  virtual Node* last(Trace& trace) = 0;
+typedef ssize_t (*get_size_t)(const Transition& trans);
+ssize_t get_size_null(const Transition& trans);
+ssize_t get_size_bit_trie(const Transition& trans);
+ssize_t get_size_trie(const Transition& trans);
+ssize_t get_size_value(const Transition& trans);
+ssize_t get_size_link(const Transition& trans);
+ssize_t get_size_compressed(const Transition& trans);
 
-  
-  virtual bool remove(Transition& self, bool last) = 0;
-  //virtual segment_ptr* last(Transition& self) { return self.node_ptr; }
-  
-  virtual Slice get_value(const Transition& self) const { return Slice(); }
-#endif
+const get_size_t get_size[] = {
+    get_size_null, get_size_bit_trie, get_size_trie,      get_size_value,
+    get_size_link, get_size_link,     get_size_compressed};
 
-  static NodeHandler* HANDLERS[kEndType];
-};
+typedef bool (*find_t)(Trace& cursor, Transition& trans);
+bool find_null(Trace& cursor, Transition& trans);
+bool find_bit_trie(Trace& cursor, Transition& trans);
+bool find_trie(Trace& cursor, Transition& trans);
+bool find_value(Trace& cursor, Transition& trans);
+bool find_link(Trace& cursor, Transition& trans);
+bool find_table_link(Trace& cursor, Transition& trans);
+bool find_compressed(Trace& cursor, Transition& trans);
+const find_t find[] = {find_null, find_bit_trie,   find_trie,      find_value,
+                       find_link, find_table_link, find_compressed};
 
-#ifdef TESTING
+typedef Slice (*get_value_t)(Trace& cursor, const Transition& trans);
+Slice get_value_null(Trace& cursor, const Transition& trans);
+Slice get_value_value(Trace& cursor, const Transition& trans);
+Slice get_value_table_value(Trace& cursor, const Transition& trans);
+const get_value_t get_value[] = {
+    get_value_null, get_value_null,        get_value_null, get_value_value,
+    get_value_null, get_value_table_value, get_value_null};
 
-struct TestPoints {
-  static std::stringstream tp_output;
+typedef bool (*advance_t)(Trace& cursor, const Transition& trans);
+bool advance_null(Trace& cursor, const Transition& trans);
+bool advance_trie(Trace& cursor, const Transition& trans);
+bool advance_value(Trace& cursor, const Transition& trans);
+bool advance_link(Trace& cursor, const Transition& trans);
+bool advance_table_link(Trace& cursor, const Transition& trans);
+bool advance_compressed(Trace& cursor, const Transition& trans);
+const advance_t advance[] = {
+    advance_null, advance_trie,       advance_trie,      advance_value,
+    advance_link, advance_table_link, advance_compressed};
 
-  static void testpoint(const char* str) {
-    tp_output << "TESTPOINT: " << str << std::endl;
-  }
-};
+typedef void (*set_value_t)(Trace& cursor, Transition& trans,
+                            const Slice& value);
+void set_value_null(Trace& cursor, Transition& trans, const Slice& value);
+void set_value_bit_trie(Trace& cursor, Transition& trans, const Slice& value);
+void set_value_trie(Trace& cursor, Transition& trans, const Slice& value);
+void set_value_value(Trace& cursor, Transition& trans, const Slice& value);
+void set_value_link(Trace& cursor, Transition& trans, const Slice& value);
+void set_value_table_link(Trace& cursor, Transition& trans, const Slice& value);
+void set_value_compressed(Trace& cursor, Transition& trans, const Slice& value);
+const set_value_t set_value[] = {
+    set_value_null, set_value_bit_trie,   set_value_trie,      set_value_value,
+    set_value_link, set_value_table_link, set_value_compressed};
 
-inline std::stringstream TestPoints::tp_output;
+/* writes the deep sizes of all children in the data attribute of the sizes
+ block. */
+typedef ssize_t (*mark_deep_size_t)(Trace& cursor, const Transition& trans,
+                                    TrieBlock& sizes);
+ssize_t mark_deep_size_null(Trace& cursor, const Transition& trans,
+                            TrieBlock& sizes);
+ssize_t mark_deep_size_trie(Trace& cursor, const Transition& trans,
+                            TrieBlock& sizes);
+ssize_t mark_deep_size_bit_trie(Trace& cursor, const Transition& trans,
+                                TrieBlock& sizes);
+ssize_t mark_deep_size_value(Trace& cursor, const Transition& trans,
+                             TrieBlock& sizes);
+ssize_t mark_deep_size_link(Trace& cursor, const Transition& trans,
+                            TrieBlock& sizes);
+ssize_t mark_deep_size_compressed(Trace& cursor, const Transition& trans,
+                                  TrieBlock& sizes);
+const mark_deep_size_t mark_deep_size[] = {
+    mark_deep_size_null,      mark_deep_size_bit_trie, mark_deep_size_trie,
+    mark_deep_size_value,     mark_deep_size_link,     mark_deep_size_link,
+    mark_deep_size_compressed};
 
-#define TESTPOINT(x) TestPoints::testpoint(#x)
-#else
-#define TESTPOINT(x)
-#endif
+inline char sign(int x) { return (x > 0) - (x < 0); }
+
+void create_table(Trace& cursor, Transition& trans, ssize_t onode,
+                  const Slice& value);
+void create_value(Trace& cursor, Transition& trans, ssize_t onode,
+                  const Slice& value);
 
 }  // namespace leaves
 

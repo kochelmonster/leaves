@@ -18,12 +18,12 @@ target_sources(core INTERFACE
     src/port.hpp
     src/storage.cpp
     src/storage.hpp
-    src/page.cpp
-    src/page.hpp
+    src/trie.cpp
     src/node.cpp
     src/node.hpp
     src/trace.cpp
-    src/trace.hpp)
+    src/trace.hpp
+    src/table.cpp)
 
 target_include_directories(core
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include

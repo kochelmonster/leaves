@@ -17,3 +17,7 @@ readrandom   :       0.359 micros/op;  229.4 MB/s
 fillrand100K :      25.866 micros/op; 3687.6 MB/s (1000 ops)
 fillseq100K  :      29.313 micros/op; 3253.9 MB/s (1000 ops)
 readrand100K :       1.408 micros/op; 23345.6 MB/s 
+
+
+
+
