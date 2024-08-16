@@ -61,7 +61,7 @@ struct Storage {
   }
 
   void write_value(offset_ptr offset, const Slice& value) {
-    memory->write_value(active_transaction, offset, value);
+    memory->write_value(offset, value);
   }
 
   // allocate space for registering a read cursor

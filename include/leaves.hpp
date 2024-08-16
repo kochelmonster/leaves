@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include <cassert>
 #include <exception>
 #include <memory>
 #include <string>
@@ -87,7 +88,7 @@ class Slice {
   }
 
   void iadvance(size_t size)  {
-    assert(size >= _size);
+    assert(size < _size);
     _data += size;
     _size -= size;
   }

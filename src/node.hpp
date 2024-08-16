@@ -51,7 +51,7 @@ struct node_ptr {
     return *this;
   }
 
-  const Node* resolve(const TrieBlock* block) const;
+  uint16_t point() const { return offset << 3; }
 };
 
 #pragma pack(1)
@@ -59,6 +59,7 @@ struct node_ptr {
 // A trie node that represents the upper or lower 4bits of a char
 struct BitTrie {
   static BitTrie& cast(Transition& trans);
+  static const BitTrie& cast(const Transition& trans);
   static ssize_t size(int count) {
     if (count <= (8 - sizeof(bits)) / sizeof(node_ptr)) return 8;
     if (count <= (16 - sizeof(bits)) / sizeof(node_ptr)) return 16;
@@ -125,6 +126,7 @@ struct Trie {
   node_ptr children[CHILDREN];
 
   static Trie& cast(Transition& trans);
+  static const Trie& cast(const Transition& trans);
 
   // returns the index of the found child or -1
   int find(char bit) const {
@@ -150,7 +152,7 @@ struct Compressed {
   node_ptr child;
   uint8_t size;
   char key[];
-  static ssize_t offset() { return offsetof(Value, child); }
+  static ssize_t offset() { return offsetof(Compressed, child); }
 };
 
 struct Value {
@@ -233,6 +235,7 @@ const advance_t advance[] = {
     advance_null, advance_trie,       advance_trie,      advance_value,
     advance_link, advance_table_link, advance_compressed};
 
+#if 0
 typedef void (*set_value_t)(Trace& cursor, Transition& trans,
                             const Slice& value);
 void set_value_null(Trace& cursor, Transition& trans, const Slice& value);
@@ -245,6 +248,7 @@ void set_value_compressed(Trace& cursor, Transition& trans, const Slice& value);
 const set_value_t set_value[] = {
     set_value_null, set_value_bit_trie,   set_value_trie,      set_value_value,
     set_value_link, set_value_table_link, set_value_compressed};
+#endif
 
 /* writes the deep sizes of all children in the data attribute of the sizes
  block. */

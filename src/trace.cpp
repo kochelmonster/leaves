@@ -92,7 +92,7 @@ INLINE Transition* Trace::alloc_in_block(ssize_t size, ssize_t dnode,
                                          NodeType type) {
   Transition* back = &stack.back();
   ssize_t offset = back->block->trie.alloc(size);
-  Transition new_trans(back->offset, back->pnode->offset + dnode,
+  Transition new_trans(back->offset, back->pnode->point() + dnode,
                        current_key.size());
 
   if (!offset) {
@@ -110,7 +110,7 @@ INLINE Transition* Trace::alloc_in_block(ssize_t size, ssize_t dnode,
     link.pnode->offset = offset;
     link.pnode->type = kLink;
     link.resolve(*this);
-    BlockUnion* block = storage.alloc_cow_block(TRIE_PAGE_SIZE);
+    BlockUnion* block = storage.alloc_cow_block(TrieBlock::SIZE);
     new_trans.offset = link.node->link = block->trie.offset;
     new_trans.block = block;
     new_trans.onode = 0;
@@ -139,6 +139,7 @@ INLINE Transition& Trace::alloc(ssize_t size, ssize_t dnode, NodeType type) {
 }
 
 INLINE void Trace::move_last_node() {
+#if 0
   Transition& back = stack.back();
 
   // move the current node to a new block
@@ -146,7 +147,7 @@ INLINE void Trace::move_last_node() {
   memset(sizes.data, 0, sizes.DATA_SIZE);
   leaves::mark_deep_size[back.pnode->type](*this, back, sizes);
 
-  BlockUnion* block = storage.alloc_cow_block(TRIE_PAGE_SIZE);
+  BlockUnion* block = storage.alloc_cow_block(TrieBlock::SIZE);
   leaves::move_node[back.pnode->type](*this, back, block, 0, sizes);
 
   if (back.onode == 0) {
@@ -176,12 +177,13 @@ INLINE void Trace::move_last_node() {
 
   // replace the node by a link
   Transition cloned_node(block->block.offset, 0, back.keypos);
-  back.pnode->offset = back.block->trie.alloc(sizeof(offset_ptr));
+  back.pnode->offset = back.block->trie.alloc(sizeof(offset_ptr)) >> 3;
   back.pnode->type = kLink;
   back.resolve(*this);
   back.node->link = block->block.offset;
   stack.push_back(cloned_node);
   stack.back().resolve(*this);
+#endif
 }
 
 INLINE void Trace::commit() {
@@ -203,7 +205,7 @@ INLINE Transition& Transition::resolve(Trace& cursor) {
   if (!block) {
     block = cursor.get_block(offset);
     pnode = (node_ptr*)&block->trie.data[onode];
-    node = (Node*)&block->trie.data[pnode->offset];
+    node = (Node*)&block->trie.data[pnode->point()];
   }
   return *this;
 }
@@ -212,7 +214,7 @@ INLINE void Transition::to_writable(BlockUnion* block_) {
   offset = block->block.offset;
   block = block_;
   pnode = (node_ptr*)&block->trie.data[onode];
-  node = (Node*)&block->trie.data[pnode->offset];
+  node = (Node*)&block->trie.data[pnode->point()];
 }
 
 INLINE bool Transition::advance(Trace& cursor) {
@@ -230,7 +232,7 @@ INLINE Slice Transition::get_value(Trace& cursor) const {
 }
 
 INLINE void Transition::set_value(Trace& cursor, const Slice& value) {
-  return leaves::set_value[pnode->type](cursor, this, value);
+  // leaves::set_value[pnode->type](cursor, *this, value);
 }
 
 INLINE ssize_t Transition::mark_deep_size(Trace& cursor, TrieBlock& sizes) {

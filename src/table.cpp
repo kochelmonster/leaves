@@ -52,7 +52,7 @@ INLINE bool advance_table_link(Trace& cursor, const Transition& trans) {
 INLINE void set_value_table_link(Trace& cursor, Transition& trans, const Slice& value) {
   if (trans.index < 0) {
     offset_ptr link = trans.node->link;
-    trans.block->trie.free(trans.pnode->offset, sizeof(link));
+    trans.block->trie.free(trans.pnode->point(), sizeof(link));
     ssize_t onode = trans.onode;
     cursor.stack.pop_back(); // remove this transition
     create_value(cursor, trans, onode, value);
@@ -70,7 +70,7 @@ INLINE void create_table(Trace& cursor, Transition& trans, ssize_t onode,
   Transition& back(cursor.alloc(sizeof(offset_ptr), onode, kTableLink));
   TableBlock& block = cursor.storage.alloc_cow_block(BURST_PAGE_SIZE)->table;
   back.node->link = block.offset;
-  block.init(cursor.storage.active_transaction);
+  block.init();
   block.offsets[0] = block.add_item(cursor, value);
   assert(block.offsets[0] > 0);
   block.count = 1;
@@ -160,6 +160,7 @@ INLINE ssize_t TableBlock::add_item(Trace& cursor, const Slice& value) {
 }
 
 INLINE void TableBlock::insert(Trace& cursor, const Slice& value) {
+#if 0
   ssize_t offset_ = add_item(cursor, value);
   if (!offset_) {
     cursor.burst();
@@ -170,7 +171,7 @@ INLINE void TableBlock::insert(Trace& cursor, const Slice& value) {
   if (cursor.rest_key.empty()) {
     // replace 
   }
-
+#endif
 }
 
 }  // namespace leaves

@@ -1,7 +1,7 @@
 #ifndef _LEAVES_TRACE_HPP
 #define _LEAVES_TRACE_HPP
 #include <leaves.hpp>
-
+#include <vector>
 #include "node.hpp"
 #include "storage.hpp"
 
@@ -40,7 +40,7 @@ struct Transition {
   Transition(offset_ptr offset_ = 0, ssize_t onode_ = 0, ssize_t keypos_ = 0);
 
   // fill node, pnode, offset
-  void resolve(Trace& cursor);
+  Transition& resolve(Trace& cursor);
   void to_writable(BlockUnion* block);
 
   bool advance(Trace& cursor);

@@ -6,6 +6,7 @@
 #include <random>
 
 #include <boost/test/included/unit_test.hpp>
+#include "../src/memory.hpp"
 
 #ifndef CMPFILES
 #define CMPFILES "./"
@@ -13,9 +14,6 @@
 
 
 #define AREA_COUNT 100
-#include "../src/trace.hpp"
-#include "../src/storage.hpp"
-
 #define TEST_FILE "test.lvs"
 
 using namespace leaves;
@@ -32,27 +30,26 @@ struct Preparation {
   }
 };
 
+#ifdef GRAPH
 namespace leaves {
 // defined in node.cpp
-void dump_node(std::ostream& out, Page* page, node_t nid, Storage* storage);
+
+struct node_ptr;
+void dump_node(std::ostream& out, const BlockUnion* page, node_ptr nid, Storage* storage);
 }
 
 
 inline void dump_graph(const char* output, Storage& storage) {
   std::ofstream out(output);
-  uint64_t transaction_id = storage.transaction_id();
-  int idx = transaction_id % TRANSACTION_COUNT;
-  stored_ptr root = storage.view->get_header()->txn[idx].root;
-  dump_node(out, storage.view->get_page(root.offset), 0, &storage);
+  const BlockUnion* root = storage.memory->get_root();
+  dump_node(out, root, 0, &storage);
 }
 
 
 inline void compare_graph(const char* input, Storage& storage) {
   std::stringstream cstr;
-  uint64_t transaction_id = storage.transaction_id();
-  int idx = transaction_id % TRANSACTION_COUNT;
-  stored_ptr root = storage.view->get_header()->txn[idx].root;
-  dump_node(cstr, storage.view->get_page(root.offset), 0, &storage);
+  const BlockUnion* root = storage.memory->get_root();
+  dump_node(cstr, root, 0, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)), (std::istreambuf_iterator<char>()));
@@ -85,56 +82,17 @@ inline void check_graph(const char* name, Storage& storage) {
 #endif
 }
 
-
-#ifdef GENERATE
-
-inline void check_testpoints(size_t case_count, const char *testpoints[]) {
-  std::cerr << "check case:" << TestPoints::tp_output.str().size() << std::endl;
-  std::cerr << TestPoints::tp_output.str() << std::endl;
-}
-#else 
-
-inline void check_testpoints(size_t case_count, const char *testpoints[]) {
-  std::vector<int> done;
-  done.resize(case_count);
-  std::string output(TestPoints::tp_output.str());
-  std::stringstream in(output);
-
-  while (in) {
-    std::string sub;
-    in >> sub;
-    for (size_t i = 0; i < case_count; i++) {
-      if (sub == testpoints[i])
-        done[i] = 1;
-    }
-
-    // std::cerr << "sub: " << sub << std::endl;
-  }
-
-  for (size_t i = 0; i < case_count; i++) {
-    if (!done[i]) {
-      std::cerr << "missing case: " << testpoints[i] << " in " << std::endl
-                << output << std::endl;
-      BOOST_REQUIRE(false);
-      break;
-    }
-  }
-
-  // std::cerr << tp_output.str() << std::endl;
-}
-#endif
-
 inline void insert(Storage& storage, const char* test_name, const Slice& key, const Slice& value) {
   Trace trace(storage);
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
-  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE(!trace.isvalid());
 
   trace.set_value(value);
-  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE(trace.isvalid());
   trace.commit();
   check_graph(test_name, storage);
-  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE(trace.isvalid());
   BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
 }
 
@@ -160,11 +118,11 @@ inline void test_movement(Storage& storage, strings_t& strings) {
   trace.first();
   for(strings_t::iterator i=strings.begin(); i != strings.end(); i++, trace.next()) {
     std::cout << "find \"" << *i << "\"";
-    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE(trace.isvalid());
     BOOST_REQUIRE_EQUAL(trace.current_key, *i);
     std::cout << " ok" << std::endl;
   }
-  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE(!trace.isvalid());
 
   std::cout << std::endl
             << "iter backward" << std::endl
@@ -172,11 +130,11 @@ inline void test_movement(Storage& storage, strings_t& strings) {
   trace.last();
   for(strings_t::reverse_iterator i=strings.rbegin(); i != strings.rend(); i++, trace.prev()) {
     std::cout << "find \"" << *i << "\"";
-    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE(trace.isvalid());
     BOOST_REQUIRE_EQUAL(trace.current_key, *i);
     std::cout << " ok" << std::endl;
   }
-  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE(!trace.isvalid());
 
   std::cout << std::endl
             << "find" << std::endl
@@ -193,25 +151,25 @@ inline void test_movement(Storage& storage, strings_t& strings) {
 
     std::cout << "find \"" << find << "\"";
     trace.find(find);
-    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE(trace.isvalid());
     BOOST_REQUIRE_EQUAL(trace.current_key, find);
     BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
     if (*i > 0) {
       trace.prev();
-      BOOST_REQUIRE(trace.valid());
+      BOOST_REQUIRE(trace.isvalid());
       BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i-1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i-1]);
     }
 
     if (*i < (int)strings.size()-1) {
       trace.find(find);
-      BOOST_REQUIRE(trace.valid());
+      BOOST_REQUIRE(trace.isvalid());
       BOOST_REQUIRE_EQUAL(trace.current_key, find);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
       trace.next();
-      BOOST_REQUIRE(trace.valid());
+      BOOST_REQUIRE(trace.isvalid());
       BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i+1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i+1]);
     }
@@ -220,7 +178,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     // set cursor after find in a non valid position
     find.push_back('!');
     trace.find(find);
-    BOOST_REQUIRE(!trace.valid());
+    BOOST_REQUIRE(!trace.isvalid());
     trace.prev();
     find = strings[*i];
     std::string cmp1 = trace.current_key;
@@ -232,7 +190,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     find.back()--;
     find.push_back('!');
     trace.find(find);
-    BOOST_REQUIRE(!trace.valid());
+    BOOST_REQUIRE(!trace.isvalid());
     trace.next();
     find = strings[*i];
     cmp1 = trace.current_key;
@@ -252,7 +210,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     missing.append(".");
     std::cout << "find \"" << missing << "\"";
     trace.find(missing);
-    BOOST_REQUIRE(!trace.valid());
+    BOOST_REQUIRE(!trace.isvalid());
     std::cout << " ok (not found)" << std::endl;
   }
   std::cout << std::endl << std::endl;
@@ -295,7 +253,7 @@ inline void test_remove(
   for(int i = 0; keys[i]; i++) {
     std::cout << "insert " << keys[i] << std::endl;
     trace.find(keys[i]);
-    BOOST_REQUIRE(!trace.valid());
+    BOOST_REQUIRE(!trace.isvalid());
     trace.set_value(keys[i]);
     strings.push_back(keys[i]);
   }
@@ -307,7 +265,7 @@ inline void test_remove(
   for(int i = 0; to_remove[i]; i++) {
     std::cout << "remove " << to_remove[i] << std::endl;
     trace.find(to_remove[i]);
-    BOOST_REQUIRE(trace.valid());
+    BOOST_REQUIRE(trace.isvalid());
     trace.remove();
 
     std::stringstream cstr;
@@ -325,3 +283,7 @@ inline void test_remove(
   test_movement(storage, strings);
 #endif
 }
+
+#endif
+
+

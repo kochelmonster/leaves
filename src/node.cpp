@@ -14,7 +14,12 @@ INLINE BitTrie& BitTrie::cast(Transition& trans) {
   return trans.node->bit_trie;
 }
 
+INLINE const BitTrie& BitTrie::cast(const Transition& trans) {
+  return trans.node->bit_trie;
+}
+
 INLINE Trie& Trie::cast(Transition& trans) { return trans.node->trie; }
+INLINE const Trie& Trie::cast(const Transition& trans) { return trans.node->trie; }
 
 /*
 is_valid
@@ -96,8 +101,7 @@ INLINE bool find_link(Trace& cursor, Transition& trans) {
   return true;
 }
 
-INLINE bool find_compressed(Trace& cursor, Transition& trans,
-                            const TrieBlock& block) {
+INLINE bool find_compressed(Trace& cursor, Transition& trans) {
   const Compressed& node = trans.node->compressed;
   size_t size = std::min((size_t)node.size, cursor.rest_key.size());
   if (size < cursor.rest_key.size()) {
@@ -217,7 +221,7 @@ template <class T>
 ssize_t mark_deep_size_trie(Trace& cursor, const Transition& trans,
                             TrieBlock& sizes) {
   ssize_t size = 0;
-  T& trie = T::cast(trans);
+  const T& trie = T::cast(trans);
   int count = trie.count();
   for (int i = 0; i < count; i++) {
     Transition child(trans.offset, trans.onode + trie.offset(i));
@@ -280,7 +284,7 @@ INLINE void set_value_null(Trace& cursor, Transition& trans,
 template <class T> void set_value_trie(Trace& cursor, Transition& trans, const Slice& value) {
   ssize_t keypos = trans.keypos;
   char key = cursor.rest_key[0];
-
+#if 0
   T& trie = T::cast(trans.node);
 
   if (trans.trie_state == Lower) {
@@ -290,7 +294,6 @@ template <class T> void set_value_trie(Trace& cursor, Transition& trans, const S
   }
   else {
     trans.index = trie.add(bit::upper(key));
-
 
     Transition& back =
         cursor.alloc(BitTrie::size(1), trie.offset(trans.index), kBitTrie);
@@ -305,6 +308,7 @@ template <class T> void set_value_trie(Trace& cursor, Transition& trans, const S
   // Grow!!
   back.index = lower.add(bit::lower(key));
   create_leaf(cursor, back, lower.offset(back.index), value);
+#endif
 }
 
 

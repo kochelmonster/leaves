@@ -42,7 +42,7 @@ value(content_t content, size_t size=0) {
   return result;
 }
 struct TestMemoryDB {
-  MemoryDatabase *db;
+  DBMemory *db;
 
   std::string number(int number, size_t size=0) {
       std::stringstream f;

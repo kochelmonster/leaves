@@ -5,15 +5,19 @@
 #include <algorithm>
 #include <bit>
 #include <fstream>
+#include <leaves.hpp>
 #include <unordered_map>
-
-#include "leaves.hpp"
 #ifdef WASM
 #else
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
+#endif
+
+#ifdef TESTING
+#include <string>
+#include <vector>
 #endif
 
 #ifdef HEADER_ONLY
@@ -30,11 +34,11 @@ using boost::interprocess::mapped_region;
 using boost::interprocess::shared_memory_object;
 #endif
 
-const size_t PAGE_SIZE = 4096;
-const uint64_t BLOCK_SIZE1 = 1 << 20;
-const uint64_t BLOCK_SIZE2 = 1 << 28;
-const uint64_t BLOCK_SIZE3 = 1 << 30;
-const uint64_t BLOCK_SIZE4 = (uint64_t)1 << 34;
+const size_t PAGE_SIZE = 1 << 16;
+const size_t BLOCK_SIZE1 = 1 << 20;
+const size_t BLOCK_SIZE2 = 1 << 28;
+const size_t BLOCK_SIZE3 = 1 << 30;
+const size_t BLOCK_SIZE4 = (size_t)1 << 34;
 
 struct BlockArea {
   size_t area_size;
@@ -46,41 +50,6 @@ const size_t M = 1024 * K;
 const size_t G = 1024 * M;
 const size_t T = 1024 * G;
 
-const static BlockArea BLOCK_SIZES[] = {
-    {BLOCK_SIZE1, 2 * K},    // 0  -> 2048
-    {BLOCK_SIZE1, 4 * K},    // 1  -> 4096
-    {BLOCK_SIZE1, 8 * K},    // 2  -> 8192
-    {BLOCK_SIZE1, 16 * K},   // 3  -> 16K
-    {BLOCK_SIZE1, 32 * K},   // 4  -> 32K
-    {BLOCK_SIZE1, 64 * K},   // 5  -> 64K
-    {BLOCK_SIZE2, 128 * K},  // 6  -> 128K
-    {BLOCK_SIZE2, 256 * K},  // 7  -> 256K
-    {BLOCK_SIZE2, 512 * K},  // 8  -> 512K
-    {BLOCK_SIZE2, M},        // 9  -> 1M
-    {BLOCK_SIZE2, 2 * M},    // 10 -> 2M
-    {BLOCK_SIZE2, 4 * M},    // 11 -> 4M
-    {BLOCK_SIZE3, 8 * M},    // 12 -> 8M
-    {BLOCK_SIZE3, 16 * M},   // 13 -> 16M
-    {BLOCK_SIZE3, 32 * M},   // 14 -> 32M
-    {BLOCK_SIZE3, 64 * M},   // 15 -> 64M
-    {BLOCK_SIZE3, 128 * M},  // 16 -> 128M
-    {BLOCK_SIZE3, 256 * M},  // 17 -> 256M
-    {BLOCK_SIZE4, 512 * M},  // 18 -> 512M
-    {BLOCK_SIZE4, G},        // 19 -> 1G
-    {BLOCK_SIZE4, 2 * G},    // 20 -> 2G
-    {BLOCK_SIZE4, 4 * G},    // 21 -> 4G
-};
-
-const int BLOCK_POOL_COUNT = sizeof(BLOCK_SIZES) / sizeof(BlockArea);
-
-// returns the right pool id for a block size
-inline int get_pool(size_t size) {
-  for (int i = 0; i < BLOCK_POOL_COUNT; i++) {
-    if (size <= BLOCK_SIZES[i].block_size) return i;
-  }
-}
-
-const int PAGE_POOL = get_pool(PAGE_SIZE);
 
 typedef uint64_t offset_ptr;
 typedef uint64_t tid_t;
@@ -107,40 +76,41 @@ struct PersistBlock {
   // the blocks offset (==id)
   offset_ptr offset;
 
-  // the transaction id the block belongs to
-  tid_t transaction;
+  // the block size
   size_t size;
-
-  // returns the block size
-  size_t block_size() const;
 
   // returns the pool id of the block
   uint16_t pool_id() const;
 };
 
+
 struct BlockContainer : public PersistBlock {
+  struct FreedBlock {
+    offset_ptr offset;
+    tid_t txn_id;  // transaction that freed the block
+  };
+
   // count of items in blocks
   size_t count;
   // next BlockContainer or 0
   offset_ptr next;
 
-  static const size_t MAX_ITEMS =
-      (PAGE_SIZE - sizeof(PersistBlock) - sizeof(count) - sizeof(next)) /
-      sizeof(offset_ptr);
+  static const size_t SIZE = 4 * K;
+  static const size_t MAX_ITEMS = (SIZE - sizeof(PersistBlock) -
+                                   sizeof(count) - sizeof(next)) /
+                                  sizeof(FreedBlock);
 
   // array of free blocks
-  offset_ptr blocks[MAX_ITEMS];
+  FreedBlock blocks[MAX_ITEMS];
 
   void init(offset_ptr offset_) {
+    assert(size == SIZE);
     offset = offset_;
-    transaction = 0;
-    size = PAGE_SIZE;
     count = 0;
     next = 0;
   }
 };
 
-const size_t TRIE_PAGE_SIZE = PAGE_SIZE;
 
 typedef uint16_t ssize_t;
 
@@ -156,6 +126,7 @@ struct TrieBlock : public PersistBlock {
     ssize_t free;
   };
 
+  static const size_t SIZE = PAGE_SIZE;
   static const ssize_t MIN_SIZE = sizeof(offset_ptr);
 
   /* offsets to FreeBlocks
@@ -169,15 +140,14 @@ struct TrieBlock : public PersistBlock {
   // count of used space in data array
   ssize_t used;
 
-  static const size_t DATA_SIZE = TRIE_PAGE_SIZE - sizeof(PersistBlock) -
+  static const size_t DATA_SIZE = SIZE - sizeof(PersistBlock) -
                                   sizeof(free_blocks) - sizeof(used);
 
   // memory of trie nodes
   char data[DATA_SIZE];
 
-  void init(tid_t transaction_) {
-    transaction = transaction_;
-    size = PAGE_SIZE;
+  void init() {
+    assert(size == SIZE);
     memset(free_blocks, 0, sizeof(free_blocks));
     used = 2;
     data[0] = data[1] = 0;  // pointer to kNull
@@ -244,15 +214,14 @@ struct TableBlock : public PersistBlock {
     char data[BURST_PAGE_SIZE - sizeof(PersistBlock)];
   };
 
-  void init(tid_t transaction_) {
-    transaction = transaction_;
-    size = PAGE_SIZE;
+  void init() {
+    assert(size == BURST_PAGE_SIZE);
     count = 0;
-    item_start = sizeof(data);
+    item_start = (ssize_t)sizeof(data);
   }
-  
+
   ssize_t available_space() const {
-    return item_start - sizeof(ssize_t)*count;
+    return item_start - sizeof(ssize_t) * count;
   }
 
   Item* get_item(uint16_t index) const;
@@ -261,8 +230,49 @@ struct TableBlock : public PersistBlock {
   ssize_t add_item(Trace& cursor, const Slice& value);
 };
 
-
 #pragma pack(0)
+
+
+const static BlockArea BLOCK_SIZES[] = {
+    {BLOCK_SIZE1, 2 * K},    // 0  -> 2048
+    {BLOCK_SIZE1, 4 * K},    // 1  -> 4096
+    {BLOCK_SIZE1, 8 * K},    // 2  -> 8192
+    {BLOCK_SIZE1, 16 * K},   // 3  -> 16K
+    {BLOCK_SIZE1, 32 * K},   // 4  -> 32K
+    {BLOCK_SIZE1, 64 * K},   // 5  -> 64K
+    {BLOCK_SIZE2, 128 * K},  // 6  -> 128K
+    {BLOCK_SIZE2, 256 * K},  // 7  -> 256K
+    {BLOCK_SIZE2, 512 * K},  // 8  -> 512K
+    {BLOCK_SIZE2, M},        // 9  -> 1M
+    {BLOCK_SIZE2, 2 * M},    // 10 -> 2M
+    {BLOCK_SIZE2, 4 * M},    // 11 -> 4M
+    {BLOCK_SIZE3, 8 * M},    // 12 -> 8M
+    {BLOCK_SIZE3, 16 * M},   // 13 -> 16M
+    {BLOCK_SIZE3, 32 * M},   // 14 -> 32M
+    {BLOCK_SIZE3, 64 * M},   // 15 -> 64M
+    {BLOCK_SIZE3, 128 * M},  // 16 -> 128M
+    {BLOCK_SIZE3, 256 * M},  // 17 -> 256M
+    {BLOCK_SIZE4, 512 * M},  // 18 -> 512M
+    {BLOCK_SIZE4, G},        // 19 -> 1G
+    {BLOCK_SIZE4, 2 * G},    // 20 -> 2G
+    {BLOCK_SIZE4, 4 * G},    // 21 -> 4G
+    {BLOCK_SIZE1, BlockContainer::SIZE},    // Area for free blocks
+};
+
+const int BLOCK_POOL_COUNT = (sizeof(BLOCK_SIZES) / sizeof(BlockArea)) - 1;
+// The pool that is used for free block containers
+const int FREE_POOL = BLOCK_POOL_COUNT;
+
+
+// returns the right pool id for a block size
+inline int get_pool(size_t size) {
+  for (int i = 0; i < BLOCK_POOL_COUNT; i++) {
+    if (size <= BLOCK_SIZES[i].block_size) return i;
+  }
+  assert(0);
+  return BLOCK_POOL_COUNT - 1;
+}
+
 
 union BlockUnion {
   PersistBlock block;
@@ -274,7 +284,7 @@ union BlockUnion {
 
 struct DBMeta {
   // Block Pools
-  BlockPool pools[BLOCK_POOL_COUNT];
+  BlockPool pools[BLOCK_POOL_COUNT+1];
 
   // pointer to the active root of the trie
   offset_ptr root;
@@ -294,7 +304,7 @@ struct HeaderBlock {
 
       DBMeta head[2];
     };
-    char data[PAGE_SIZE];
+    char data[2*K];
   };
 };
 
@@ -308,6 +318,9 @@ struct DBMemory {
 
   DBMemory(const char* path, size_t map_size = 0);
 
+  // initialize a database file
+  static void init(const char* path);
+
   size_t get_size() const { return region.get_size(); }
 
   const char* get_filename() const { return file.get_name(); }
@@ -316,45 +329,44 @@ struct DBMemory {
   block_ptr get_block(offset_ptr offset) const;
 
   // returns a heap version of a block with the same offset
-  BlockUnion* get_writeable_block(offset_ptr offset);
+  BlockUnion* get_writeable_block(offset_ptr offset, size_t size);
 
   /* allocs a new block for copy on write, and returns a heap copy of that
      block. if the block is reclaimed from the free blocks, its transaction id
-     must be lower than max_transaction.
+     must be lower than min_txn_id.
    */
-  BlockUnion* alloc_cow_block(tid_t max_transaction, size_t size=PAGE_SIZE);
+  BlockUnion* alloc_cow_block(tid_t min_txn_id, size_t size = PAGE_SIZE);
 
   /* allocs a new block for copy on write, creates a heap version
      and copies the given block to that heap copy.
 
+     txn_id is the currently active transaction id.
+
      if the block is reclaimed from the free blocks, its transaction id must be
-     lower than max_transaction.
+     lower than min_txn_id.
    */
-  BlockUnion* get_cow_block(tid_t max_transaction, offset_ptr offset);
+  BlockUnion* get_cow_block(tid_t txn_id, tid_t min_txn_id, offset_ptr offset);
 
   /* Allocates a block from the database memory.
      if the block is reclaimed from the free blocks, its transaction id must be
-     lower than max_transaction.
+     lower than min_txn_id.
   */
-  offset_ptr alloc_block(tid_t max_transaction, size_t size);
+  offset_ptr alloc_block(tid_t min_txn_id, size_t size);
 
   // Allocs a new block in the pool area. It will not reuse a block
   offset_ptr alloc_new_block(int pool_id);
 
   // Releases a block to free memory.
-  void free_block(block_ptr block);
+  void free_block(tid_t txn_id, block_ptr block);
 
-  // initialize a database file
-  static void init(const char* path);
-
-  // grows the database file and updates the pointers
-  void grow_file(size_t new_size);
+  BlockContainer* alloc_container();
+  void free_container(BlockContainer* container);
 
   // writes data to the database file
   void write(offset_ptr offset, const void* data, size_t size);
 
   // Writes the ValueBlock at offset
-  void write_value(tid_t transaction, offset_ptr offset, const Slice& value);
+  void write_value(offset_ptr offset, const Slice& value);
 
   // returns the database active head
   const DBMeta* get_active_head() const;
@@ -366,10 +378,10 @@ struct DBMemory {
   void prepare_transaction();
 
   // write the current transaction to the db
-  void write_transaction(int active);
+  void write_transaction();
 
   // write active
-  void write_active(int active);
+  void commit_transaction();
 
   // clears head and writeables
   void end_transaction();
@@ -386,8 +398,7 @@ struct DBMemory {
   // stream to write to the database file
   std::ofstream output;
 
-  // the start of the free area of the database file
-  offset_ptr free_start;
+  offset_ptr file_size;
 
   // map of active heap blocks
   writeable_m writeable_map;
@@ -397,24 +408,24 @@ inline block_ptr DBMemory::get_block(offset_ptr offset) const {
   return (block_ptr)(&db->data[offset]);
 }
 
-
 #ifdef TESTING
 
 struct TestPoints {
-  static std::stringstream tp_output;
+  typedef std::unordered_map<std::string, int> points_m;
 
-  static void testpoint(const char* str) {
-    tp_output << "TESTPOINT: " << str << std::endl;
-  }
+  static points_m tp_output;
+
+  static void clear() { tp_output.clear(); }
+
+  static void testpoint(const char* str) { tp_output[str] += 1; }
 };
 
-inline std::stringstream TestPoints::tp_output;
+inline TestPoints::points_m TestPoints::tp_output;
 
 #define TESTPOINT(x) TestPoints::testpoint(#x)
 #else
 #define TESTPOINT(x)
 #endif
-
 
 }  // namespace leaves
 

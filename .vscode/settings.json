@@ -74,7 +74,8 @@
         "cfenv": "cpp",
         "typeindex": "cpp",
         "typeinfo": "cpp",
-        "variant": "cpp"
+        "variant": "cpp",
+        "span": "cpp"
     },
     "cmake.configureOnOpen": true
 }

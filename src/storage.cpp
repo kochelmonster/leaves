@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <iostream>
 
-#include "page.hpp"
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
@@ -52,7 +51,7 @@ INLINE bool Storage::start_transaction() {
   }
 
   memory->prepare_transaction();
-  const PersistBlock& root = memory->get_block(memory->head.root)->block;
+  const PersistBlock& root = memory->get_root()->block;
   active_transaction = root.transaction + 1;
   return true;
 }

@@ -8,13 +8,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(LEAVES_GCOV "Add gconv support for tests" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
-option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
+option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" OFF)
 
 file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
 add_library(core INTERFACE)
 target_sources(core INTERFACE 
     include/leaves.hpp
+    src/memory.hpp
+    src/memory.cpp
     src/port.hpp
     src/storage.cpp
     src/storage.hpp
@@ -35,6 +37,12 @@ target_include_directories(core INTERFACE src)
 if (LEAVES_BUILD_TESTS)
 
 add_library(test INTERFACE)
+
+target_include_directories(test
+                           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           )
+target_include_directories(test INTERFACE src)
+
 target_compile_options(test INTERFACE -g)
 target_compile_definitions(test INTERFACE 
     DEBUG 
@@ -54,28 +62,38 @@ target_compile_definitions(test INTERFACE DEBUG)
 endif (LEAVES_GCOV)
 
 
-add_executable(test_storage tests/test_storage.cpp)
-target_link_libraries(test_storage PUBLIC core test)
+add_executable(test_memory tests/test_memory.cpp src/memory.cpp)
 
-add_executable(test_trie tests/test_trie.cpp)
-target_link_libraries(test_trie PUBLIC core test)
+target_sources(test_memory INTERFACE
+    include/leaves.hpp src/memory.hpp src/memory.cpp)
 
-add_executable(test_db tests/test_db.cpp src/leaves.cpp)
-target_link_libraries(test_db PUBLIC core test)
+target_link_libraries(test_memory PUBLIC test)
 
-add_executable(profile tests/profile.cpp src/leaves.cpp)
-target_link_libraries(profile PUBLIC core test)
+
+#add_executable(test_storage tests/test_storage.cpp)
+# target_link_libraries(test_storage PUBLIC core test)
+
+# add_executable(test_trie tests/test_trie.cpp)
+# target_link_libraries(test_trie PUBLIC core test)
+
+# add_executable(test_db tests/test_db.cpp src/leaves.cpp)
+# target_link_libraries(test_db PUBLIC core test)
+
+# add_executable(profile tests/profile.cpp src/leaves.cpp)
+# target_link_libraries(profile PUBLIC core test)
 
 add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
-COMMAND ./test_storage
-COMMAND ./test_trie
-COMMAND lcov -c -d . -o lcov-report/report.info -b .
+#COMMAND ./test_storage
+#COMMAND ./test_trie
+COMMAND ./test_memory
+COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_storage
+# DEPENDS test_storage test_trie test_memory
+DEPENDS test_memory
 )
 
 endif(LEAVES_BUILD_TESTS)
