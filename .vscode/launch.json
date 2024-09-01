@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_memory",
-            "args": ["-t", "test_write_value"],
+            "args": ["-t", "test_alloc_and_free_block"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],

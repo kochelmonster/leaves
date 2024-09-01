@@ -8,7 +8,7 @@ namespace leaves {
 
 struct ReadCursor {
   pid_t pid;
-  tid_t transaction;
+  tid_t txn_id;
 };
 
 struct SharedMem {
@@ -64,16 +64,24 @@ struct Storage {
     memory->write_value(offset, value);
   }
 
+  void free_cow_block(BlockUnion* block) {
+    memory->free_cow_block(block);
+  }
+
+  void free_value(offset_ptr offset) {
+    memory->free_block(get_block(offset));
+  }
+
   // allocate space for registering a read cursor
   int alloc_cursor(offset_ptr root);
 
   // free the register space
   void free_cursor(int id);
 
-  // get the max transaction that can be freed
+  /* only freed block with a txn_id < get_max_transaction() 
+     may be reused
+  */
   tid_t get_max_transaction();
-
-  tid_t active_transaction;
 
   // The database memory
   DBMemory_ptr memory;

@@ -5,7 +5,8 @@
 
 namespace leaves {
 
-INLINE ssize_t TrieBlock::alloc(ssize_t size) {
+INLINE node_ptr TrieBlock::alloc(ssize_t size, NodeType type) {
+  assert(type != kNull);
   assert(size & 7 == 0); // Must be a multiple of 8
   int id = block_id(size);
   ssize_t result;
@@ -40,11 +41,13 @@ INLINE ssize_t TrieBlock::alloc(ssize_t size) {
   }
 
   if (size + used > DATA_SIZE)
-    return 0;
+    return node_ptr(0, kNull);
 
   result = used;
   used += size;
-  return result;
+
+  memset(&data[result], 0, size);
+  return node_ptr(result << 3, type);
 }
 
 INLINE void TrieBlock::free(ssize_t offset, ssize_t size) {

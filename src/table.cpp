@@ -16,7 +16,6 @@ struct FindResult {
 INLINE bool find_table_link(Trace& cursor, Transition& trans) {
   if (cursor.rest_key.empty()) {
     trans.index = -1;
-    trans.found = false;
     return false;
   }
 
@@ -25,8 +24,7 @@ INLINE bool find_table_link(Trace& cursor, Transition& trans) {
   Slice& rest_key(cursor.rest_key);
   result.val = block.find(cursor.rest_key);
   trans.index = result.index;
-  trans.found = result.cmp == 0;
-  if (trans.found) {
+  if (result.cmp == 0) {
     cursor.current_key.append(rest_key.data(), rest_key.size());
     rest_key.iadvance(rest_key.size());
   }
@@ -52,7 +50,7 @@ INLINE bool advance_table_link(Trace& cursor, const Transition& trans) {
 INLINE void set_value_table_link(Trace& cursor, Transition& trans, const Slice& value) {
   if (trans.index < 0) {
     offset_ptr link = trans.node->link;
-    trans.block->trie.free(trans.pnode->point(), sizeof(link));
+    trans.block->trie.free(trans.pnode->offset(), sizeof(link));
     ssize_t onode = trans.onode;
     cursor.stack.pop_back(); // remove this transition
     create_value(cursor, trans, onode, value);
@@ -77,7 +75,7 @@ INLINE void create_table(Trace& cursor, Transition& trans, ssize_t onode,
 }
 
 INLINE ssize_t is_valid_table_link(const Transition& trans) {
-  return trans.found;
+  return false;
 }
 
 INLINE TableBlock::Item* TableBlock::get_item(uint16_t index) const {

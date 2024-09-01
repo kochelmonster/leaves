@@ -15,44 +15,10 @@
 
 namespace leaves {
 
-enum NodeType {
-  kNull,
-  kBitTrie,
-  kTrie,
-  kValue,
-  kLink,
-  kTableLink,
-  kCompressed,
-  kEndType
-};
-
 struct Transition;
+struct BlockSplitter;
 typedef uint16_t ssize_t;
 union Node;
-
-// A pointer inside a trie block.
-struct node_ptr {
-  union {
-    struct {
-      // offset within the data attribute
-      uint16_t offset : 13;
-
-      // type of the node
-      uint16_t type : 3;
-    };
-    uint16_t val;
-  };
-
-  node_ptr(uint16_t val_) : val(val) {}
-  node_ptr(uint16_t offset_, uint8_t type_) : offset(offset), type(type_) {}
-
-  const node_ptr& operator=(node_ptr& src) {
-    val = src.val;
-    return *this;
-  }
-
-  uint16_t point() const { return offset << 3; }
-};
 
 #pragma pack(1)
 
@@ -60,16 +26,12 @@ struct node_ptr {
 struct BitTrie {
   static BitTrie& cast(Transition& trans);
   static const BitTrie& cast(const Transition& trans);
-  static ssize_t size(int count) {
-    if (count <= (8 - sizeof(bits)) / sizeof(node_ptr)) return 8;
-    if (count <= (16 - sizeof(bits)) / sizeof(node_ptr)) return 16;
-    return 24;
-  }
+  static const NodeType type = kBitTrie;
 
   size_t count() const { return popcount(bits); }
 
   // returns the relative offset of the child with given index
-  ssize_t offset(int index) const {
+  static ssize_t offset(int index) {
     return sizeof(bits) + sizeof(node_ptr) * index;
   }
 
@@ -113,6 +75,7 @@ struct BitTrie {
     for (int i = popcount(bits) - 1; i > idx; i--) {
       children[i] = children[i - 1];
     }
+    children[idx].val = 0;
     return idx;
   }
 
@@ -127,6 +90,7 @@ struct Trie {
 
   static Trie& cast(Transition& trans);
   static const Trie& cast(const Transition& trans);
+  static const NodeType type = kTrie;
 
   // returns the index of the found child or -1
   int find(char bit) const {
@@ -150,9 +114,13 @@ struct Trie {
 // compressed trie node
 struct Compressed {
   node_ptr child;
-  uint8_t size;
+  uint16_t size;
   char key[];
+
   static ssize_t offset() { return offsetof(Compressed, child); }
+  static ssize_t calc_alloc_size(size_t size) {
+    return sizeof(Compressed) + size;
+  }
 };
 
 struct Value {
@@ -164,8 +132,11 @@ struct Value {
     char data[1];
   };
 
-  static ssize_t calc_struct_size(ssize_t size_) {
-    return std::max(sizeof(node_ptr) + sizeof(size) + size_, sizeof(Value));
+  static ssize_t calc_alloc_size(size_t size) {
+    ssize_t result = sizeof(Value);
+    if (size <= SMALL_SIZE)
+      result += std::max(size, sizeof(link)) - sizeof(link);
+    return result;
   }
 
   static ssize_t offset() { return offsetof(Value, child); }
@@ -235,48 +206,45 @@ const advance_t advance[] = {
     advance_null, advance_trie,       advance_trie,      advance_value,
     advance_link, advance_table_link, advance_compressed};
 
-#if 0
-typedef void (*set_value_t)(Trace& cursor, Transition& trans,
-                            const Slice& value);
-void set_value_null(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_bit_trie(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_trie(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_value(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_link(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_table_link(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_compressed(Trace& cursor, Transition& trans, const Slice& value);
+typedef void (*set_value_t)(Trace& cursor, const Slice& value);
+void set_value_null(Trace& cursor, const Slice& value);
+void set_value_bit_trie(Trace& cursor, const Slice& value);
+void set_value_trie(Trace& cursor, const Slice& value);
+void set_value_value(Trace& cursor, const Slice& value);
+void set_value_link(Trace& cursor, const Slice& value);
+void set_value_table_link(Trace& cursor, const Slice& value);
+void set_value_compressed(Trace& cursor, const Slice& value);
 const set_value_t set_value[] = {
     set_value_null, set_value_bit_trie,   set_value_trie,      set_value_value,
     set_value_link, set_value_table_link, set_value_compressed};
-#endif
 
-/* writes the deep sizes of all children in the data attribute of the sizes
- block. */
-typedef ssize_t (*mark_deep_size_t)(Trace& cursor, const Transition& trans,
-                                    TrieBlock& sizes);
-ssize_t mark_deep_size_null(Trace& cursor, const Transition& trans,
-                            TrieBlock& sizes);
-ssize_t mark_deep_size_trie(Trace& cursor, const Transition& trans,
-                            TrieBlock& sizes);
-ssize_t mark_deep_size_bit_trie(Trace& cursor, const Transition& trans,
-                                TrieBlock& sizes);
-ssize_t mark_deep_size_value(Trace& cursor, const Transition& trans,
-                             TrieBlock& sizes);
-ssize_t mark_deep_size_link(Trace& cursor, const Transition& trans,
-                            TrieBlock& sizes);
-ssize_t mark_deep_size_compressed(Trace& cursor, const Transition& trans,
-                                  TrieBlock& sizes);
-const mark_deep_size_t mark_deep_size[] = {
-    mark_deep_size_null,      mark_deep_size_bit_trie, mark_deep_size_trie,
-    mark_deep_size_value,     mark_deep_size_link,     mark_deep_size_link,
-    mark_deep_size_compressed};
+/* finds a branch with at least 4K size and moves it to a new page */
+typedef ssize_t (*find_splitpoint_t)(BlockSplitter& bs, Transition& trans);
+ssize_t find_splitpoint_null(BlockSplitter& bs, Transition& trans);
+ssize_t find_splitpoint_bit_trie(BlockSplitter& bs, Transition& trans);
+ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans);
+ssize_t find_splitpoint_value(BlockSplitter& bs, Transition& trans);
+ssize_t find_splitpoint_link(BlockSplitter& bs, Transition& trans);
+ssize_t find_splitpoint_compressed(BlockSplitter& bs, Transition& trans);
+const find_splitpoint_t find_splitpoint[] = {
+    find_splitpoint_null,      find_splitpoint_bit_trie, find_splitpoint_trie,
+    find_splitpoint_value,     find_splitpoint_link,     find_splitpoint_link,
+    find_splitpoint_compressed};
+
+/* moves a node and its children to a new block */
+typedef node_ptr (*move_t)(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+node_ptr move_null(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+node_ptr move_bit_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+node_ptr move_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+node_ptr move_value(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+node_ptr move_link(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+node_ptr move_compressed(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
+const move_t move[] = {move_null, move_bit_trie, move_trie,      move_value,
+                       move_link, move_link,     move_compressed};
 
 inline char sign(int x) { return (x > 0) - (x < 0); }
 
-void create_table(Trace& cursor, Transition& trans, ssize_t onode,
-                  const Slice& value);
-void create_value(Trace& cursor, Transition& trans, ssize_t onode,
-                  const Slice& value);
+bool add_value(Trace& cursor, const Slice& value);
 
 }  // namespace leaves
 

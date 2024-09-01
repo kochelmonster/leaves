@@ -56,6 +56,8 @@ typedef uint64_t tid_t;
 
 struct Storage;
 struct Trace;
+union Node;
+struct node_ptr;
 union BlockUnion;
 
 #pragma pack(1)
@@ -77,7 +79,10 @@ struct PersistBlock {
   offset_ptr offset;
 
   // the block size
-  size_t size;
+  struct {
+    uint64_t writable:1;
+    uint64_t size:63;
+  };
 
   // returns the pool id of the block
   uint16_t pool_id() const;
@@ -113,6 +118,44 @@ struct BlockContainer : public PersistBlock {
 
 
 typedef uint16_t ssize_t;
+
+enum NodeType {
+  kNull,
+  kBitTrie,
+  kTrie,
+  kValue,
+  kLink,
+  kTableLink,
+  kCompressed,
+  kEndType
+};
+
+// A pointer inside a trie block.
+struct node_ptr {
+  union {
+    struct {
+      /* mini offset within the data attribute
+         the real offset is moffset << 3
+       */
+      ssize_t moffset : 13;
+
+      // type of the node
+      ssize_t type : 3;
+    };
+    ssize_t val;
+  };
+
+  node_ptr(ssize_t val_ = 0) : val(val) {}
+  node_ptr(ssize_t moffset_, NodeType type_) : moffset(moffset_), type(type_) {}
+
+  node_ptr& operator=(const node_ptr& src) {
+    val = src.val;
+    return *this;
+  }
+
+  ssize_t offset() const { return moffset << 3; }
+};
+
 
 struct TrieBlock : public PersistBlock {
   struct FreeBlock {
@@ -158,8 +201,9 @@ struct TrieBlock : public PersistBlock {
   }
 
   // allocs size bytes and returns the offset of the allocated area
-  ssize_t alloc(ssize_t size);
+  node_ptr alloc(ssize_t size, NodeType type);
   void free(ssize_t offset, ssize_t size);
+  Node* resolve(node_ptr ptr) const;
 };
 
 // A block for a big value
@@ -286,6 +330,16 @@ struct DBMeta {
   // Block Pools
   BlockPool pools[BLOCK_POOL_COUNT+1];
 
+  /* the size of the file, this should be always equal the
+     size of the database file. But in case of a crash during
+     an transaction, the phyiscal file size could be bigger because
+     of an alloc_new.
+  */
+  size_t file_size;
+
+  // the transaction id of root
+  tid_t txn_id;
+
   // pointer to the active root of the trie
   offset_ptr root;
 };
@@ -337,15 +391,12 @@ struct DBMemory {
    */
   BlockUnion* alloc_cow_block(tid_t min_txn_id, size_t size = PAGE_SIZE);
 
-  /* allocs a new block for copy on write, creates a heap version
-     and copies the given block to that heap copy.
-
-     txn_id is the currently active transaction id.
-
+  /* get a writable block for the given offset.
+     if necessary a new block is allocated and the data is copied.
      if the block is reclaimed from the free blocks, its transaction id must be
      lower than min_txn_id.
    */
-  BlockUnion* get_cow_block(tid_t txn_id, tid_t min_txn_id, offset_ptr offset);
+  BlockUnion* get_cow_block(tid_t min_txn_id, offset_ptr offset);
 
   /* Allocates a block from the database memory.
      if the block is reclaimed from the free blocks, its transaction id must be
@@ -356,8 +407,11 @@ struct DBMemory {
   // Allocs a new block in the pool area. It will not reuse a block
   offset_ptr alloc_new_block(int pool_id);
 
+  // frees a a cow block
+  void free_cow_block(BlockUnion* block);
+
   // Releases a block to free memory.
-  void free_block(tid_t txn_id, block_ptr block);
+  void free_block(block_ptr block);
 
   BlockContainer* alloc_container();
   void free_container(BlockContainer* container);
@@ -397,8 +451,6 @@ struct DBMemory {
 
   // stream to write to the database file
   std::ofstream output;
-
-  offset_ptr file_size;
 
   // map of active heap blocks
   writeable_m writeable_map;

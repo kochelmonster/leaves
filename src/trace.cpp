@@ -8,15 +8,15 @@ INLINE Trace::Trace(Storage& storage_)
     : storage(storage_), transaction_active(false) {
   const PersistBlock& root_block = storage.memory->get_root()->block;
   root = root_block.offset;
-  cursor_id = storage.alloc_cursor(root_block.transaction);
-  current_key.reserve(1024);
+  cursor_id = storage.alloc_cursor(root_block.offset);
+  current_key.reserve(MAX_KEY_SIZE);
   stack.resize(128);
 }
 
 INLINE Trace::~Trace() { storage.free_cursor(cursor_id); }
 
 INLINE void Trace::find(const Slice& key) {
-  if (key.size() > 1024) throw KeyToBig();
+  if (key.size() > MAX_KEY_SIZE) throw KeyToBig();
 
   rest_key = key;
 
@@ -43,6 +43,42 @@ INLINE bool Trace::isvalid() const {
   return leaves::is_valid[back.pnode->type](back);
 }
 
+INLINE void Trace::make_stack_writable() {
+  // not a writable page -> change all pages in the cursor stack to writeables
+  offset_ptr offset = 0;
+  for (auto iter = stack.rbegin(); iter != stack.rend();) {
+    if (!iter->block->block.writable) {
+      BlockUnion* block = storage.get_cow_block(iter->offset);
+      iter->to_writable(block);
+      if (iter->pnode->type == kLink) {
+        assert(offset);  // the offset of last block
+        iter->node->link = offset;
+      }
+
+      offset = block->block.offset;
+      offset_ptr old_offset = iter->offset;
+
+      // change all stack items of the same block
+      for (iter++; iter != stack.rend(); iter++) {
+        if (iter->offset == old_offset) iter->to_writable(block);
+      }
+    } else {
+      if (offset) {
+        // parent is already writable => just change the link
+        assert(iter->pnode->type == kLink);
+        iter->node->link = offset;
+        offset = 0;
+      }
+      break;
+    }
+  }
+  if (offset) {
+    // change root
+    assert(root != offset);
+    root = offset;
+  }
+}
+
 INLINE bool Trace::set_value(const Slice& value) {
   if (value.size() > T - sizeof(PersistBlock))
     throw WrongValue("value too big");
@@ -52,138 +88,68 @@ INLINE bool Trace::set_value(const Slice& value) {
     transaction_active = true;
   }
 
-  Transition& back = stack.back();
-
-  if (back.block->block.transaction != storage.active_transaction) {
-    // not a writable page -> change all pages in the cursor stack to writeables
-    offset_ptr offset = 0;
-    for (auto iter = stack.rbegin(); iter != stack.rend();) {
-      if (iter->block->block.transaction != storage.active_transaction) {
-        BlockUnion* block = storage.get_cow_block(iter->offset);
-        block->block.transaction = storage.active_transaction;
-        iter->to_writable(block);
-        if (iter->pnode->type == kLink) iter->node->link = offset;
-
-        offset = block->block.offset;
-        offset_ptr old_offset = iter->offset;
-
-        for (iter--; iter != stack.rend(); iter--) {
-          if (iter->offset == old_offset) iter->to_writable(block);
-        }
-      } else {
-        if (offset) {
-          assert(iter->pnode->type == kLink);
-          iter->node->link = offset;
-          offset = 0;
-        }
-        break;
-      }
-    }
-    if (offset) {
-      assert(root != offset);
-      root = offset;
-    }
-  }
-
-  back.set_value(*this, value);
-}
-
-INLINE Transition* Trace::alloc_in_block(ssize_t size, ssize_t dnode,
-                                         NodeType type) {
   Transition* back = &stack.back();
-  ssize_t offset = back->block->trie.alloc(size);
-  Transition new_trans(back->offset, back->pnode->point() + dnode,
-                       current_key.size());
-
-  if (!offset) {
-    // cannot allocate size
-
-    if (size <= sizeof(offset_ptr)) return NULL;
-
-    // try to allocate a link
-    offset = back->block->trie.alloc(sizeof(offset_ptr));
-    if (!offset) return NULL;  // even not space left for a link
-
-    stack.push_back(new_trans);
-    Transition& link = stack.back();
-    link.pnode = (node_ptr*)&back->block->trie.data[new_trans.onode];
-    link.pnode->offset = offset;
-    link.pnode->type = kLink;
-    link.resolve(*this);
-    BlockUnion* block = storage.alloc_cow_block(TrieBlock::SIZE);
-    new_trans.offset = link.node->link = block->trie.offset;
-    new_trans.block = block;
-    new_trans.onode = 0;
-    offset = block->trie.alloc(size);
-    assert(offset != 0);
+  if (!back->block->block.writable) {
+    make_stack_writable();
   }
 
-  stack.push_back(new_trans);
-  Transition& result = stack.back();
-  result.pnode = (node_ptr*)&result.block->trie.data[result.onode];
-  result.pnode->offset = offset;
-  result.pnode->type = type;
-  result.node = (Node*)&result.block->trie.data[offset];
-  return &result;
-}
-
-INLINE Transition& Trace::alloc(ssize_t size, ssize_t dnode, NodeType type) {
-  // round up size to a multiple of 8
-  size = ((size + 7) >> 3) << 3;
-
-  Transition* result = alloc_in_block(size, dnode, type);
-  if (result) return *result;
-
-  move_last_node();
-  return *alloc_in_block(size, dnode, type);
-}
-
-INLINE void Trace::move_last_node() {
-#if 0
-  Transition& back = stack.back();
-
-  // move the current node to a new block
-  TrieBlock sizes;
-  memset(sizes.data, 0, sizes.DATA_SIZE);
-  leaves::mark_deep_size[back.pnode->type](*this, back, sizes);
-
-  BlockUnion* block = storage.alloc_cow_block(TrieBlock::SIZE);
-  leaves::move_node[back.pnode->type](*this, back, block, 0, sizes);
-
-  if (back.onode == 0) {
-    // the moved node is the root of the block
-
-    // free the former block
-    storage.memory->free_block(back.block);
-
-    // update the last transition
-    back.offset = block->block.offset;
-    back.block = block;
-    back.resolve(*this);
-
-    if (stack.size() > 1) {
-      // change the link to the block
-      Transition& link = stack[stack.size() - 1];
-      assert(link.pnode->type == kLink);
-      link.node->link = block->block.offset;
-      TESTPOINT("MoveBlockRoot");
-    } else {
-      // It is the root block -> change the root
-      root = block->block.offset;
-      TESTPOINT("MoveGlobalRoot");
+  do {
+    if (rest_key.empty()) {
+      // put a value before the node in back
+      add_value(*this, value);
+      return;
     }
-    return;
+    stack.back().set_value(*this, value);
+  } while (true);
+}
+
+INLINE Node* Trace::resolve(node_ptr node) {
+  return (Node*)&back().block->trie.data[node.offset()];
+}
+
+INLINE Trace::alloc_ptr Trace::alloc(ssize_t size, NodeType type) {
+  Transition* back = &stack.back();
+  node_ptr result = back->block->trie.alloc(size, type);
+  if (result.type) return alloc_ptr{result, false};
+
+  int last_keypos = 0;
+  // find the beginning of the last block
+  int i = stack.size() - 1;
+  for (; i >= 0; i--) {
+    Transition& t = stack[i];
+    last_keypos = t.keypos;
+    if (t.pnode->type == kLink) {
+      // found root of the last block
+      break;
+    }
   }
 
-  // replace the node by a link
-  Transition cloned_node(block->block.offset, 0, back.keypos);
-  back.pnode->offset = back.block->trie.alloc(sizeof(offset_ptr)) >> 3;
-  back.pnode->type = kLink;
-  back.resolve(*this);
-  back.node->link = block->block.offset;
-  stack.push_back(cloned_node);
-  stack.back().resolve(*this);
-#endif
+  rest_key = Slice(rest_key.data() - current_key.size() + last_keypos,
+                   rest_key.size() + current_key.size() - last_keypos);
+  current_key.resize(last_keypos);
+
+  Transition& block_root = stack[i + 1];
+  BlockSplitter splitter(*this);
+
+  if (i < 0) {
+    storage.memory->head.root = root = splitter.split_block(block_root);
+  }
+  else {
+    Transition& t = stack[i];
+    assert(t.pnode->type == kLink);
+    t.node->link = splitter.split_block(block_root);
+  }
+
+  stack.resize(i+1);
+  
+  if (stack.empty()) {
+    assert(current_key.empty());
+    stack.push_back(Transition(root));
+  }
+
+  // new find through splitted block
+  while (stack.back().find(*this));
+  return alloc_ptr{back->block->trie.alloc(size, type), true};
 }
 
 INLINE void Trace::commit() {
@@ -201,12 +167,24 @@ INLINE Transition::Transition(offset_ptr offset_, ssize_t onode_,
                               ssize_t keypos_)
     : offset(offset_), onode(onode_), keypos(keypos_), trie_state(Upper) {}
 
+INLINE Transition Transition::derive(ssize_t donode, ssize_t keypos_) const {
+  return Transition(offset, pnode->offset() + donode, keypos_);
+}
+
+INLINE Transition& Transition::clear(Trace& cursor) {
+  if (!block) {
+    block = cursor.get_block(offset);
+    pnode = (node_ptr*)&block->trie.data[onode];
+  }
+  pnode->val = 0;
+}
+
 INLINE Transition& Transition::resolve(Trace& cursor) {
   if (!block) {
     block = cursor.get_block(offset);
     pnode = (node_ptr*)&block->trie.data[onode];
-    node = (Node*)&block->trie.data[pnode->point()];
   }
+  node = (Node*)&block->trie.data[pnode->offset()];
   return *this;
 }
 
@@ -214,7 +192,7 @@ INLINE void Transition::to_writable(BlockUnion* block_) {
   offset = block->block.offset;
   block = block_;
   pnode = (node_ptr*)&block->trie.data[onode];
-  node = (Node*)&block->trie.data[pnode->point()];
+  node = (Node*)&block->trie.data[pnode->offset()];
 }
 
 INLINE bool Transition::advance(Trace& cursor) {
@@ -232,14 +210,43 @@ INLINE Slice Transition::get_value(Trace& cursor) const {
 }
 
 INLINE void Transition::set_value(Trace& cursor, const Slice& value) {
-  // leaves::set_value[pnode->type](cursor, *this, value);
+  leaves::set_value[pnode->type](cursor, value);
 }
 
-INLINE ssize_t Transition::mark_deep_size(Trace& cursor, TrieBlock& sizes) {
-  resolve(cursor);
-  size_t size = leaves::mark_deep_size[pnode->type](cursor, *this, sizes);
-  *(ssize_t*)&sizes.data[onode] = size;
+INLINE size_t BlockSplitter::find_splitpoint(Transition& transition) {
+  if (is_finished) return 0;
+
+  transition.resolve(cursor);
+  size_t size =
+      leaves::find_splitpoint[transition.pnode->type](*this, transition);
+  if (size > 4 * K) {
+    splitpoint = transition;
+    is_finished = true;
+  }
   return size;
+}
+
+INLINE offset_ptr
+BlockSplitter::split_block(Transition& block_root) {
+  assert(block_root.onode == 0);
+
+  find_splitpoint(block_root);
+
+  TrieBlock* split1 = &cursor.storage.alloc_cow_block(TrieBlock::SIZE)->trie;
+  node_ptr result = leaves::move[splitpoint.pnode->type](
+      &splitpoint.block->trie, *splitpoint.pnode, split1);
+  *((node_ptr*)&split1->data[0]) = result;
+
+  // change the splitpoint to a link to the new block
+  splitpoint.pnode->type = kLink;
+  splitpoint.node->link = split1->offset;
+
+  TrieBlock* split2 = &cursor.storage.alloc_cow_block(TrieBlock::SIZE)->trie;
+  node_ptr result = leaves::move[block_root.pnode->type](
+      &block_root.block->trie, *block_root.pnode, split2);
+
+  cursor.storage.free_cow_block(block_root.block);
+  return split2->offset;
 }
 
 }  // namespace leaves

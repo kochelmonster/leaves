@@ -22,6 +22,7 @@ INLINE void DBMemory::init(const char* path) {
     header.db_version = 0;
     header.active = 0;
     header.head[0].root = sizeof(header);
+    header.head[0].txn_id = 1;
 
     auto trie_pool = get_pool(TrieBlock::SIZE);
     const BlockArea& block_sizes = BLOCK_SIZES[trie_pool];
@@ -29,9 +30,12 @@ INLINE void DBMemory::init(const char* path) {
     pool.current = sizeof(header) + TrieBlock::SIZE;
     pool.last = sizeof(header) + block_sizes.area_size;
 
+    header.head[0].file_size = pool.last;
+
     TrieBlock root;
     root.offset = sizeof(header);
     root.size = TrieBlock::SIZE;
+    root.writable = 0;
     root.init();
 
     std::ofstream fhead(path, std::ios::out | std::ios::binary);
@@ -39,7 +43,7 @@ INLINE void DBMemory::init(const char* path) {
     fhead.write((char*)&root, sizeof(root));
     fhead.close();
 
-    std::filesystem::resize_file(path, pool.last);
+    std::filesystem::resize_file(path, header.head[0].file_size);
 
     TESTPOINT(DBMemory::init::1);
   } else {
@@ -57,7 +61,7 @@ INLINE void DBMemory::init(const char* path) {
 INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
   memset(&head, 0, sizeof(head));
 
-  file_size = std::filesystem::file_size(path);
+  size_t file_size = std::filesystem::file_size(path);
   file = file_mapping(path, read_only);
 
   if (!map_size) {
@@ -67,7 +71,9 @@ INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
   region = mapped_region(file, read_only, 0, map_size);
   db = (HeaderBlock*)region.get_address();
 
-  const DBMeta* head_ = get_active_head();
+  assert(db->head[0].file_size <= file_size);
+  assert(db->head[1].file_size <= file_size);
+
   writeable_map.reserve(128);
 
   output.open(path,
@@ -87,10 +93,16 @@ INLINE BlockUnion* DBMemory::alloc_cow_block(tid_t min_txn_id, size_t size) {
   BlockUnion& block = writeable_map[offset];
   block.block.offset = offset;
   block.block.size = size;
+  block.block.writable = 1;
   return &block;
 }
 
-INLINE BlockUnion* DBMemory::get_cow_block(tid_t txn_id, tid_t min_txn_id,
+INLINE void DBMemory::free_cow_block(BlockUnion* block) {
+  free_block(get_block(block->block.offset));
+  writeable_map.erase(block->block.offset);
+}
+
+INLINE BlockUnion* DBMemory::get_cow_block(tid_t min_txn_id,
                                            offset_ptr offset) {
   auto found = writeable_map.find(offset);
   if (found != writeable_map.end()) return &found->second;
@@ -102,7 +114,7 @@ INLINE BlockUnion* DBMemory::get_cow_block(tid_t txn_id, tid_t min_txn_id,
   memcpy(block, org_block, block->block.size);
   block->block.offset = new_offset;
 
-  free_block(txn_id, org_block);
+  free_block(org_block);
   return block;
 }
 
@@ -115,6 +127,7 @@ INLINE BlockUnion* DBMemory::get_writeable_block(offset_ptr offset,
   memcpy(&block, get_block(offset), size);
   block.block.offset = offset;
   block.block.size = size;
+  block.block.writable = 1;
   return &block;
 }
 
@@ -168,10 +181,10 @@ INLINE offset_ptr DBMemory::alloc_new_block(int pool_id) {
 
   if (pool.current == pool.last) {
     // we have to create a new pool area
-    pool.last = file_size + area.area_size;
+    pool.last = head.file_size + area.area_size;
     std::filesystem::resize_file(get_filename(), pool.last);
-    pool.current = file_size;
-    file_size = pool.last;
+    pool.current = head.file_size;
+    head.file_size = pool.last;
   }
 
   offset_ptr result(pool.current);
@@ -179,7 +192,7 @@ INLINE offset_ptr DBMemory::alloc_new_block(int pool_id) {
   return result;
 }
 
-INLINE void DBMemory::free_block(tid_t txn_id, block_ptr block) {
+INLINE void DBMemory::free_block(block_ptr block) {
   assert(head.root);
 
   auto pool_id = get_pool(block->block.size);
@@ -207,7 +220,7 @@ INLINE void DBMemory::free_block(tid_t txn_id, block_ptr block) {
 
   BlockContainer::FreedBlock& freed = container->blocks[container->count++];
   freed.offset = block->block.offset;
-  freed.txn_id = txn_id;
+  freed.txn_id = head.txn_id;
 }
 
 INLINE BlockContainer* DBMemory::alloc_container() {
@@ -285,12 +298,14 @@ INLINE void DBMemory::write_value(offset_ptr offset, const Slice& value) {
   ValueBlock block;
   block.offset = offset;
   block.size = area.block_size;
+  block.writable = 0;
   write(offset, &block, sizeof(block));
   write(offset + sizeof(block), value.data(), value.size());
 }
 
 INLINE void DBMemory::prepare_transaction() {
   memcpy(&head, get_active_head(), sizeof(head));
+  head.txn_id++;
 }
 
 INLINE void DBMemory::write_transaction() {
@@ -299,6 +314,7 @@ INLINE void DBMemory::write_transaction() {
   write(offset, &head, sizeof(head));
   for (auto iter = writeable_map.begin(); iter != writeable_map.end(); iter++) {
     BlockUnion& block = iter->second;
+    block.block.writable = 0;
     write(block.block.offset, &block, block.block.size);
   }
   output.flush();

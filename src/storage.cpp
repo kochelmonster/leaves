@@ -17,7 +17,7 @@ using namespace boost::interprocess;
 
 namespace leaves {
 
-INLINE Storage::Storage(const char* path) : active_transaction(0) {
+INLINE Storage::Storage(const char* path) {
   DBMemory::init(path);
   memory.reset(new DBMemory(path));
   init_shared();
@@ -49,30 +49,22 @@ INLINE bool Storage::start_transaction() {
   if (ipcdetail::atomic_cas32(&shared->transaction_active, 1, 0) == 1) {
     return false;
   }
-
   memory->prepare_transaction();
-  const PersistBlock& root = memory->get_root()->block;
-  active_transaction = root.transaction + 1;
   return true;
 }
 
 INLINE void Storage::rollback() {
   memory->end_transaction();
   shared->transaction_active = 0;
-  active_transaction = 0;
 }
 
 INLINE void Storage::prepare_commit() {
-  int active = (memory->db->active + 1) & 1;
-  memory->write_transaction(active);
+  memory->write_transaction();
   memory->end_transaction();
-  memory->output.flush();
 }
 
 INLINE void Storage::commit() {
-  int active = (memory->db->active + 1) & 1;
-  memory->write_active(active);
-  memory->output.flush();
+  memory->commit_transaction();
 }
 
 INLINE int Storage::alloc_cursor(offset_ptr root) {
@@ -81,10 +73,9 @@ INLINE int Storage::alloc_cursor(offset_ptr root) {
   for(int i = 0; i < SharedMem::READER_COUNT; i++) {
     ReadCursor& cursor = shared->readers[
         (i + last_index) % SharedMem::READER_COUNT];
-    if (!cursor.transaction) {
+    if (!cursor.txn_id) {
       if (ipcdetail::atomic_cas32(&shared->last_index, last_index, i+1) == last_index) {
-        const PersistBlock& root_block = memory->get_block(root)->block;
-        cursor.transaction = root_block.transaction;
+        cursor.txn_id = memory->get_active_head()->txn_id;
         return i;
       }
       else {
@@ -96,7 +87,7 @@ INLINE int Storage::alloc_cursor(offset_ptr root) {
 }
 
 INLINE void Storage::free_cursor(int id) {
-  shared->readers[id].transaction = 0;
+  shared->readers[id].txn_id = 0;
   shared->max_free_transaction = 0; // invalidate the transaction
 }
 
@@ -104,11 +95,11 @@ INLINE tid_t Storage::get_max_transaction() {
   if (shared->max_free_transaction)
     return shared->max_free_transaction;
 
-  tid_t min_trans = active_transaction - 1;
+  tid_t min_trans = memory->get_active_head()->txn_id;
   for(int i = 0; i < SharedMem::READER_COUNT; i++) {
       ReadCursor& cursor = shared->readers[i];
-      if (cursor.transaction)
-        min_trans = std::min(min_trans, cursor.transaction);
+      if (cursor.txn_id)
+        min_trans = std::min(min_trans, cursor.txn_id);
   }
 
   shared->max_free_transaction = min_trans;

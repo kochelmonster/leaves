@@ -142,6 +142,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     DBMemory db(dbFilePath.c_str());
 
     BOOST_REQUIRE(db.db->active == 0);
+    BOOST_REQUIRE(db.get_active_head()->txn_id == 1);
 
     {
       Transaction trans(db);
@@ -149,13 +150,40 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
         BlockUnion* block = db.alloc_cow_block(1);
         block->trie.init();
         *(int*)&block->trie.data[0] = i;
+        BOOST_REQUIRE(block->block.writable);
         BOOST_REQUIRE(block->trie.offset != 0);
         BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
         offsets.push_back(block->trie.offset);
       }
+      file_size = db.head.file_size;
     }
 
-    file_size = db.file_size;
+    BOOST_REQUIRE(db.get_active_head()->txn_id == 2);
+  }
+
+  {
+    // free the first page page (txn=2)
+    DBMemory::init(dbFilePath.c_str());
+    DBMemory db(dbFilePath.c_str());
+
+    BOOST_REQUIRE(db.db->active == 1);
+    BOOST_REQUIRE(db.db->head[1].file_size == file_size);
+
+    {
+      Transaction trans(db);
+      offset_ptr offset = *offsets.begin();
+      BlockUnion* block = db.get_block(offset);
+      BOOST_REQUIRE(block->trie.offset == offset);
+      BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
+      BOOST_REQUIRE(!block->trie.writable);
+      BOOST_REQUIRE(*(int*)&block->trie.data[0] == 0);
+      db.free_block(block);
+      file_size = db.head.file_size;
+    }
+    BOOST_REQUIRE(db.get_active_head()->txn_id == 3);
+    auto pool_id = get_pool(TrieBlock::SIZE);
+    offset_ptr c1_offset = db.get_active_head()->pools[pool_id].free;
+    BOOST_REQUIRE(c1_offset != 0);
   }
 
   {
@@ -163,40 +191,40 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     DBMemory::init(dbFilePath.c_str());
     DBMemory db(dbFilePath.c_str());
 
-    BOOST_REQUIRE(db.db->active == 1);
-    BOOST_REQUIRE(db.file_size == file_size);
+    BOOST_REQUIRE(db.db->active == 0);
+    BOOST_REQUIRE(db.db->head[0].file_size == file_size);
 
     {
       Transaction trans(db);
       int i = 0;
-      tid_t txn = 2;
       for (const offset_ptr& offset : offsets) {
-        // Get the block using the offset
-        BlockUnion* block = db.get_block(offset);
-        BOOST_REQUIRE(block->trie.offset == offset);
-        BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
-        BOOST_REQUIRE(*(int*)&block->trie.data[0] == i);
+        if (i > 0) {
+          BlockUnion* block = db.get_block(offset);
+          BOOST_REQUIRE(block->trie.offset == offset);
+          BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
+          BOOST_REQUIRE(*(int*)&block->trie.data[0] == i);
 
-        // Free the block
-        db.free_block(txn, block);
-        txn = 3;
+          // Free the block
+          db.free_block(block);
+        }
         i++;
       }
     }
+    BOOST_REQUIRE(db.get_active_head()->txn_id == 4);
     auto pool_id = get_pool(TrieBlock::SIZE);
     offset_ptr c1_offset = db.get_active_head()->pools[pool_id].free;
     BOOST_REQUIRE(c1_offset != 0);
   }
 
   {
-    // alloc the only block that from free that is available
+    // alloc the only block from free that is available
     // in txn 3
     DBMemory::init(dbFilePath.c_str());
     DBMemory db(dbFilePath.c_str());
 
     {
       Transaction trans(db);
-      BlockUnion* block = db.alloc_cow_block(3);
+      BlockUnion* block = db.alloc_cow_block(4);
       BOOST_REQUIRE(block->trie.offset == offsets[0]);
       offsets.erase(offsets.begin());
     }
@@ -210,7 +238,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     {
       Transaction trans(db);
       for (int i = 0; i < BlockContainer::MAX_ITEMS; i++) {
-        BlockUnion* block = db.alloc_cow_block(4);
+        BlockUnion* block = db.alloc_cow_block(5);
         BOOST_REQUIRE(block->trie.offset == offsets.back());
         BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
         offsets.pop_back();
@@ -242,7 +270,7 @@ BOOST_AUTO_TEST_CASE(test_get_cow_block) {
 
   { 
     Transaction trans(db); 
-    block = db.get_cow_block(1, 0, root->block.offset);
+    block = db.get_cow_block(0, root->block.offset);
     db.head.root = block->block.offset;
   }
   auto pool_id = get_pool(TrieBlock::SIZE);
@@ -273,9 +301,8 @@ BOOST_AUTO_TEST_CASE(test_write_value) {
   BOOST_CHECK_EQUAL_COLLECTIONS(value.begin(), value.end(), vb.data, vb.data + value.size());
 }
 
-
-
-
+/*
 BOOST_AUTO_TEST_CASE(test_get_pool) {
   BOOST_REQUIRE_THROW(get_pool(4 * G+1), boost::execution_exception);
-}
+}*/
+

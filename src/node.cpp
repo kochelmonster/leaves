@@ -19,7 +19,14 @@ INLINE const BitTrie& BitTrie::cast(const Transition& trans) {
 }
 
 INLINE Trie& Trie::cast(Transition& trans) { return trans.node->trie; }
-INLINE const Trie& Trie::cast(const Transition& trans) { return trans.node->trie; }
+
+INLINE const Trie& Trie::cast(const Transition& trans) {
+  return trans.node->trie;
+}
+
+INLINE Node* TrieBlock::resolve(node_ptr ptr) const {
+  return (Node*)&data[ptr.offset()];
+}
 
 /*
 is_valid
@@ -47,32 +54,30 @@ bool _find_inside_trie(Trace& cursor, Transition& trans, uint8_t bit) {
     return false;
   }
   trans.index = index;
-  ssize_t next_offset = trans.onode + trie.offset(index);
-  cursor.stack.push_back(Transition(trans.offset, next_offset));
+  ssize_t next_offset = trans.pnode->offset() + trie.offset(index);
+  Transition next_trans(trans.offset, next_offset);
+  if (trans.trie_state == Upper) next_trans.trie_state = Lower;
+  cursor.stack.push_back(next_trans);
   return true;
 }
 
 template <class TrieClass>
 bool _find_trie(Trace& cursor, Transition& trans) {
-  if (cursor.trie_state == Upper) {
-    trans.trie_state = Upper;
-    if (cursor.rest_key.empty()) return false;
-    cursor.trie_state = Lower;
+  if (trans.trie_state == Upper) {
+    if (cursor.rest_key.empty()) {
+      return false;
+    }
     return _find_inside_trie<TrieClass>(cursor, trans,
                                         bit::upper(cursor.rest_key[0]));
   }
 
   assert(cursor.rest_key.size());
-  trans.trie_state = Lower;
   char key = cursor.rest_key[0];
-
   if (!_find_inside_trie<TrieClass>(cursor, trans, bit::lower(key)))
     return false;
 
-  cursor.trie_state = Upper;
   cursor.rest_key.iadvance(1);
   cursor.current_key.push_back(key);
-
   return true;
 }
 
@@ -87,8 +92,7 @@ INLINE bool find_trie(Trace& cursor, Transition& trans) {
 INLINE bool find_value(Trace& cursor, Transition& trans) {
   if (cursor.rest_key.size() && trans.node->value.child.val) {
     trans.index = -1;
-    ssize_t next_offset = trans.onode + offsetof(Value, child);
-    cursor.stack.push_back(Transition(trans.offset, next_offset));
+    cursor.stack.push_back(trans.derive(Value::offset()));
     return true;
   }
 
@@ -104,17 +108,20 @@ INLINE bool find_link(Trace& cursor, Transition& trans) {
 INLINE bool find_compressed(Trace& cursor, Transition& trans) {
   const Compressed& node = trans.node->compressed;
   size_t size = std::min((size_t)node.size, cursor.rest_key.size());
-  if (size < cursor.rest_key.size()) {
-    trans.index = -1;
-    return false;
-  }
-
   trans.index = sign(memcmp(node.key, cursor.rest_key.data(), size));
-  ssize_t next_offset = trans.onode + offsetof(Compressed, child);
-  cursor.current_key.append(node.key, node.size);
-  cursor.rest_key.iadvance(node.size);
-  cursor.stack.push_back(Transition(trans.offset, next_offset));
-  return true;
+  if (!trans.index) {
+    if (node.size == cursor.rest_key.size()) {
+      cursor.current_key.append(node.key, node.size);
+      cursor.rest_key.iadvance(node.size);
+      cursor.stack.push_back(trans.derive(node.offset()));
+      return true;
+    }
+    if (node.size < cursor.rest_key.size())
+      trans.index = 1;
+    else
+      trans.index = -1;
+  }
+  return false;
 }
 
 /*
@@ -212,55 +219,114 @@ ssize_t get_size_compressed(const Transition& trans) {
 mark_deep_size
 ------------------------------------------------------
 */
-INLINE ssize_t mark_deep_size_null(Trace& cursor, const Transition& trans,
-                                   TrieBlock& sizes) {
+INLINE ssize_t find_splitpoint_null(BlockSplitter& bs, Transition& trans) {
   return 0;
 }
 
 template <class T>
-ssize_t mark_deep_size_trie(Trace& cursor, const Transition& trans,
-                            TrieBlock& sizes) {
+ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans) {
   ssize_t size = 0;
   const T& trie = T::cast(trans);
   int count = trie.count();
-  for (int i = 0; i < count; i++) {
-    Transition child(trans.offset, trans.onode + trie.offset(i));
-    size += child.mark_deep_size(cursor, sizes);
+  for (int i = 0; i < count && !bm.is_finished; i++) {
+    auto child = trans.derive(trie.offset(i));
+    size += bm.find_splitpoint(child);
   }
   return size;
 }
 
-INLINE ssize_t mark_deep_size_trie(Trace& cursor, const Transition& trans,
-                                   TrieBlock& sizes) {
-  return mark_deep_size_trie<Trie>(cursor, trans, sizes);
+INLINE ssize_t find_splitpoint_bit_trie(BlockSplitter& bs, Transition& trans) {
+  return find_splitpoint_trie<BitTrie>(bs, trans) + sizeof(BitTrie);
 }
 
-INLINE ssize_t mark_deep_size_bit_trie(Trace& cursor, const Transition& trans,
-                                       TrieBlock& sizes) {
-  return mark_deep_size_trie<BitTrie>(cursor, trans, sizes);
+INLINE ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans) {
+  return find_splitpoint_trie<Trie>(bs, trans) + sizeof(Trie);
 }
 
-INLINE ssize_t mark_deep_size_value(Trace& cursor, const Transition& trans,
-                                    TrieBlock& sizes) {
+INLINE ssize_t find_splitpoint_value(BlockSplitter& bs, Transition& trans) {
   Value& value = trans.node->value;
   ssize_t size = value.size;
-  if (value.child.offset) {
-    Transition child(trans.offset, value.offset());
-    size += child.mark_deep_size(cursor, sizes);
+  if (value.child.moffset) {
+    auto child = trans.derive(value.offset());
+    size += bs.find_splitpoint(child);
   }
   return size;
 }
 
-INLINE ssize_t mark_deep_size_link(Trace& cursor, const Transition& trans,
-                                   TrieBlock& sizes) {
+INLINE ssize_t find_splitpoint_link(BlockSplitter& bs, Transition& trans) {
   return sizeof(offset_ptr);
 }
 
-INLINE ssize_t mark_deep_size_compressed(Trace& cursor, const Transition& trans,
-                                         TrieBlock& sizes) {
+INLINE ssize_t find_splitpoint_compressed(BlockSplitter& bs,
+                                          Transition& trans) {
   Compressed& node = trans.node->compressed;
-  Transition child(trans.offset, node.offset());
-  return node.size + child.mark_deep_size(cursor, sizes);
+  auto child = trans.derive(node.offset());
+  return node.size + bs.find_splitpoint(child);
+}
+
+/*
+move
+------------------------------------------------------
+*/
+
+node_ptr move_null(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
+  assert(0);
+  return node_ptr();
+}
+
+node_ptr move_bit_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
+  node_ptr result = dest->alloc(sizeof(BitTrie), kBitTrie);
+  BitTrie& dnode = dest->resolve(result)->bit_trie;
+  BitTrie& snode = src->resolve(psrc)->bit_trie;
+  dnode.bits = snode.bits;
+  int count = snode.count();
+  for (int i = 0; i < count; i++) {
+    node_ptr& cptr = snode.children[i];
+    dnode.children[i] = move[cptr.type](src, cptr, dest);
+  }
+  return result;
+}
+
+node_ptr move_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
+  node_ptr result = dest->alloc(sizeof(Trie), kTrie);
+  Trie& dnode = dest->resolve(result)->trie;
+  Trie& snode = src->resolve(psrc)->trie;
+  int count = snode.count();
+  for (int i = 0; i < count; i++) {
+    node_ptr& cptr = snode.children[i];
+    if (cptr.type) dnode.children[i] = move[cptr.type](src, cptr, dest);
+  }
+  return result;
+}
+
+node_ptr move_value(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
+  Value& snode = src->resolve(psrc)->value;
+  ssize_t size = Value::calc_alloc_size(snode.size);
+  node_ptr result = dest->alloc(size, kValue);
+  Value& dnode = dest->resolve(result)->value;
+  dnode.size = snode.size;
+  memcpy(&dnode, &snode, size);
+  if (snode.child.type) {
+    dnode.child = move[snode.child.type](src, snode.child, dest);
+  }
+  return result;
+}
+
+node_ptr move_link(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
+  node_ptr result = dest->alloc(sizeof(offset_ptr), kLink);
+  dest->resolve(result)->link = src->resolve(psrc)->link;
+  return result;
+}
+
+node_ptr move_compressed(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
+  Compressed& snode = src->resolve(psrc)->compressed;
+  ssize_t size = Compressed::calc_alloc_size(snode.size);
+  node_ptr result = dest->alloc(size, kCompressed);
+  Compressed& dnode = dest->resolve(result)->compressed;
+  memcpy(&dnode, &snode, size);
+  assert(snode.child.type);
+  dnode.child = move[snode.child.type](src, snode.child, dest);
+  return result;
 }
 
 /*
@@ -268,131 +334,258 @@ set_value
 ------------------------------------------------------
 */
 
-inline void create_leaf(Trace& cursor, Transition& trans, ssize_t onode,
-                        const Slice& value) {
-  if (cursor.rest_key.empty())
-    create_value(cursor, trans, onode, value);
-  else
-    create_table(cursor, trans, onode, value);
-}
+INLINE bool add_value(Trace& cursor, const Slice& value) {
+  assert(cursor.rest_key.empty());
 
-INLINE void set_value_null(Trace& cursor, Transition& trans,
-                           const Slice& value) {
-  create_leaf(cursor, trans, 0, value);
-}
+  auto result = cursor.alloc(Value::calc_alloc_size(value.size()), kValue);
+  Transition& back(cursor.back());
+  Node* old_node = back.node;
+  node_ptr link_to_back(back.pnode->val);
 
-template <class T> void set_value_trie(Trace& cursor, Transition& trans, const Slice& value) {
-  ssize_t keypos = trans.keypos;
-  char key = cursor.rest_key[0];
-#if 0
-  T& trie = T::cast(trans.node);
+  // set back to the value
+  *back.pnode = result.ptr;
+  back.resolve(cursor);  // back now points to new value
 
-  if (trans.trie_state == Lower) {
-    // Grow !!
-    trans.index = trie.add(bit::lower(key));
-    create_leaf(cursor, trans, trie.offset(trans.index), value);
-  }
-  else {
-    trans.index = trie.add(bit::upper(key));
-
-    Transition& back =
-        cursor.alloc(BitTrie::size(1), trie.offset(trans.index), kBitTrie);
-    back.trie_state = Lower;
-    back.keypos = keypos;
-    BitTrie& lower = back.node->bit_trie;
-  }
-  
-  cursor.rest_key = cursor.rest_key.advance(1);
-  cursor.current_key.append(key, 1);
-
-  // Grow!!
-  back.index = lower.add(bit::lower(key));
-  create_leaf(cursor, back, lower.offset(back.index), value);
-#endif
-}
-
-
-
-void set_value_trie(Trace& cursor, Transition& trans, const Slice& value) {
-  Trie& trie = trans.node->trie;
-  assert(!trie.children[trans.index].offset);  // Replaces only in Value nodes
-
-  ssize_t keypos = trans.keypos;
-
-  if (trans.trie_state == Lower) {
-    create_leaf(cursor, trans, trie.offset(trans.index), value);
-    return;
-  }
-
-  Transition& back =
-      cursor.alloc(BitTrie::size(1), trie.offset(trans.index), kBitTrie);
-  back.trie_state = Lower;
-  back.keypos = keypos;
-  BitTrie& lower = back.node->bit_trie;
-  char key = cursor.rest_key[0];
-  cursor.rest_key = cursor.rest_key.advance(1);
-  cursor.current_key.append(key, 1);
-  back.index = lower.add(bit::lower(key));
-  create_leaf(cursor, back, lower.offset(back.index), value);
-}
-
-
-void set_value_value(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_link(Trace& cursor, Transition& trans, const Slice& value);
-void set_value_compressed(Trace& cursor, Transition& trans, const Slice& value);
-
-/*
-create
-------------------------------------------------------
-*/
-
-INLINE void create_value(Trace& cursor, Transition& trans, ssize_t onode,
-                         const Slice& value) {
-  if (value.size() > Value::SMALL_SIZE) {
-    Transition& back(cursor.alloc(sizeof(Value), onode, kValue));
-    back.resolve(cursor);
-    Value& node = back.node->value;
-    offset_ptr offset = cursor.storage.alloc_block(value.size());
-    cursor.storage.write_value(offset, value);
-    node.child.val = 0;
-    node.link = offset;
-    node.size = value.size();
-    return;
-  }
-  Transition& back(
-      cursor.alloc(Value::calc_struct_size(value.size()), onode, kValue));
-  Value& node = back.node->value;
+  Value& node = cursor.resolve(result.ptr)->value;
   node.child.val = 0;
   node.size = value.size();
-  memcpy(node.data, value.data(), node.size);
+
+  if (value.size() <= Value::SMALL_SIZE) {
+    memcpy(node.data, value.data(), node.size);
+  } else {
+    offset_ptr offset = cursor.storage.alloc_block(value.size());
+    cursor.storage.write_value(offset, value);
+    node.link = offset;
+  }
+
+  if (link_to_back.type == kValue) {
+    // it is a replace => remove old data
+    Value& old_val = old_node->value;
+    if (old_val.size > Value::SMALL_SIZE) {
+      cursor.storage.free_value(old_val.link);
+    }
+    back.block->trie.free(link_to_back.offset(),
+                          Value::calc_alloc_size(old_val.size));
+  } else if (link_to_back.type != kNull) {
+    // add old back to value child
+    assert(link_to_back.type != kLink);
+    node.child = link_to_back;
+  }
+
+  return result.need_refresh;
 }
 
-#if 0
-INLINE node_ptr add_compressed(Trace& cursor, Transition& trans,
-                               const Slice& value) {
-  ssize_t size =
-      sizeof(Compressed) + std::min(cursor.rest_key.size(), (size_t)256);
-  Transition& end = cursor.alloc(size, kCompressed);
-  Compressed& node = end.node->compressed;
-  node.size = size;
-  memcpy(node.key, cursor.rest_key.data(), size);
-  cursor.rest_key = cursor.rest_key.advance(size);
-  // if (cursor.rest_key.size())
+INLINE bool add_compressed(Trace& cursor) {
+  assert(cursor.rest_key.size());
 
-  return end.node_ptr
+  auto result = cursor.alloc(
+      Compressed::calc_alloc_size(cursor.rest_key.size()), kCompressed);
+  Transition& back(cursor.back());
+  *back.pnode = result.ptr;
+  back.resolve(cursor);
+  back.index = 0;
+  Compressed& node = back.node->compressed;
+  node.size = cursor.rest_key.size();
+  memcpy(node.key, cursor.rest_key.data(), node.size);
 
-             BlockUnion *
-             block = cursor.storage.alloc_cow_block();
-  ssize_t size = leaves::get_size[trans.upper.pnode->type](trans);
-  trans.block->trie.free(trans.upper.pnode->offset + TrieBlock::MIN_SIZE,
-                         size - TrieBlock::MIN_SIZE);
-  trans.upper.pnode->type = kLink;
+  cursor.stack.push_back(back.derive(node.offset()).clear(cursor));
+  cursor.current_key.append(node.key, node.size);
+  cursor.rest_key.iadvance(node.size);
+
+  return result.need_refresh;
 }
-else {
-  trans.upper.pnode->type = kCompressed;
-  trans.upper.pnode->offset = offset;
+
+INLINE void add_lower_bit_trie(Trace& cursor) {
+  assert(cursor.rest_key.size());
+
+  auto result = cursor.alloc(sizeof(BitTrie), kBitTrie);
+  char key(cursor.rest_key[0]);
+  Transition& back = cursor.back();
+
+  *back.pnode = result.ptr;
+  back.resolve(cursor);
+
+  BitTrie& node(back.node->bit_trie);
+  back.trie_state = Lower;
+  back.index = node.add(bit::lower(cursor.rest_key[0]));
+  cursor.rest_key.iadvance(1);
+  cursor.current_key.push_back(key);
+
+  cursor.stack.push_back(back.derive(node.offset(back.index)).clear(cursor));
+
+  if (cursor.rest_key.size()) add_compressed(cursor);
 }
+
+INLINE void set_value_null(Trace& cursor, const Slice& value) {
+  assert(cursor.rest_key.size());
+  add_compressed(cursor);
 }
-#endif
+
+template <class T>
+void set_value_trie(Trace& cursor, const Slice& value) {
+  Transition& back = cursor.back();
+  T& trie = T::cast(cursor.back().node);
+
+  back.found = true;
+
+  char key = cursor.rest_key[0];
+  if (back.trie_state == Upper) {
+    back.index = trie.add(bit::upper(key));
+    cursor.stack.push_back(back.derive(trie.offset(back.index)).clear(cursor));
+    add_lower_bit_trie(cursor);
+    return;
+  }
+
+  back.index = trie.add(bit::lower(key));
+  cursor.rest_key.iadvance(1);
+  cursor.current_key.append(key, 1);
+  cursor.stack.push_back(back.derive(trie.offset(back.index)).clear(cursor));
+
+  if (cursor.rest_key.size()) add_compressed(cursor);
+}
+
+void set_value_bit_trie(Trace& cursor, const Slice& value) {
+  Transition* back(&cursor.back());
+
+  BitTrie* btrie = &back->node->bit_trie;
+  if (btrie->count() == 7) {
+    auto aptr = cursor.alloc(sizeof(Trie), kTrie);
+    if (aptr.need_refresh) {
+      back = &cursor.back();
+      btrie = &back->node->bit_trie;
+    }
+    ssize_t to_free = back->pnode->offset();
+    *back->pnode = aptr.ptr;
+    back->resolve(cursor);
+
+    Trie& trie = back->node->trie;
+    memset(&trie, 0, sizeof(trie));
+
+    int val = btrie->first();
+    for (int i = 0; val >= 0; i++) {
+      trie.children[val] = btrie->children[i];
+      val = btrie->next(val);
+    }
+
+    back->block->trie.free(to_free, sizeof(BitTrie));
+
+    set_value_trie(cursor, value);
+    return;
+  }
+
+  set_value_trie<BitTrie>(cursor, value);
+}
+
+void set_value_trie(Trace& cursor, const Slice& value) {
+  set_value_trie<Trie>(cursor, value);
+}
+
+void set_value_value(Trace& cursor, const Slice& value) {
+  assert(cursor.rest_key.size());
+  Transition& back = cursor.back();
+  cursor.stack.push_back(back.derive(Value::offset()).clear(cursor));
+  add_compressed(cursor);
+}
+
+void set_value_link(Trace& cursor, const Slice& value) { assert(0); }
+
+inline node_ptr add(node_ptr src, ssize_t delta, NodeType type) {
+  return node_ptr((src.offset() + delta) >> 3, type);
+}
+
+void set_value_compressed(Trace& cursor, const Slice& value) {
+  Transition* back(&cursor.back());
+  Compressed* node(&back->node->compressed);
+  Slice& rest_key = cursor.rest_key;
+
+  ssize_t size = std::min(node->size, (ssize_t)cursor.rest_key.size());
+  const char *np = node->key, *rp = rest_key.data();
+  ssize_t split_index;
+  char key_node, key_cursor;
+  for (split_index = 0; split_index < node->size; split_index++) {
+    if (*np != *rp) {
+      key_node = *np;
+      key_cursor = *rp;
+      break;
+    }
+    np++;
+    rp++;
+  }
+
+  cursor.current_key.append(rest_key.data(), split_index + 1);
+  rest_key.iadvance(split_index + 1);
+
+  ssize_t rest_size = node->size - split_index - 1;
+
+  ssize_t space = Compressed::calc_alloc_size(rest_size) + sizeof(BitTrie) +
+                  sizeof(BitTrie);
+
+  bool two_lower = bit::upper(key_node) != bit::upper(key_cursor);
+  if (two_lower) {
+    // we need two lower bit tries
+    space += sizeof(BitTrie);
+  }
+  auto result = cursor.alloc(space, kCompressed);
+
+  if (result.need_refresh) {
+    back = &cursor.back();
+    node = &back->node->compressed;
+  }
+
+  node_ptr rest_ptr = result.ptr;
+  Compressed& rest = cursor.resolve(rest_ptr)->compressed;
+  rest.child = node->child;
+  rest.size = rest_size;
+  memcpy(rest.key, node->key + split_index + 1, rest_size);
+
+  node_ptr upper_ptr =
+      add(rest_ptr, Compressed::calc_alloc_size(rest_size), kBitTrie);
+  Transition tupper = back->derive(node->offset());
+  tupper.resolve(cursor);
+  BitTrie& upper = tupper.node->bit_trie;
+
+  cursor.stack.push_back(tupper);
+
+  if (two_lower) {
+    // resestablish the former node path
+    node_ptr lower_node_ptr = add(upper_ptr, sizeof(BitTrie), kBitTrie);
+    int index = upper.add(bit::upper(key_node));
+    upper.children[index] = lower_node_ptr;
+    Transition tlower_node = tupper.derive(BitTrie::offset(index));
+    tlower_node.resolve(cursor);
+    BitTrie& lower_node = tlower_node.node->bit_trie;
+    index = lower_node.add(bit::lower(key_node));
+    lower_node.children[index] = rest_ptr;
+
+    // add the new path
+    node_ptr lower_cursor_ptr = add(lower_node_ptr, sizeof(BitTrie), kBitTrie);
+    index = upper.add(bit::upper(key_cursor));
+    upper.children[index] = lower_cursor_ptr;
+    Transition tlower_cursor = tupper.derive(BitTrie::offset(index));
+    tlower_cursor.resolve(cursor);
+    BitTrie& lower_cursor = tlower_cursor.node->bit_trie;
+    index = lower_cursor.add(bit::lower(key_cursor));
+    lower_cursor.children[index] = 0;
+    cursor.stack.push_back(tlower_cursor);
+  } else {
+    // build trie structure
+    node_ptr lower_ptr = add(upper_ptr, sizeof(BitTrie), kBitTrie);
+    int index = upper.add(bit::upper(key_node));
+    upper.children[index] = lower_ptr;
+    Transition tlower = tupper.derive(BitTrie::offset(index));
+    tlower.resolve(cursor);
+    BitTrie& lower = tlower.node->bit_trie;
+    index = lower.add(bit::lower(key_node));
+    lower.children[index] = rest_ptr;
+
+    index = lower.add(bit::lower(key_cursor));
+    lower.children[index].val = 0;
+    cursor.stack.push_back(tlower);
+  }
+  node_ptr free_ptr =
+      add(*back->pnode, offsetof(Compressed, key) + split_index, kNull);
+  back->block->trie.free(free_ptr.offset(), rest_size + 1);
+  if (rest_key.size()) add_compressed(cursor);
+}
 
 }  // namespace leaves
