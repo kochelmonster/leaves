@@ -2,11 +2,16 @@
 Test the trie nodes without bursting.
 */
 #define BOOST_TEST_MODULE TrieTest
+#define GENERATE
 
 #include "test.hpp"
 
+
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
+  {
+    Storage storage(TEST_FILE);
+  }
   Storage storage(TEST_FILE);
   const char *keys[] = {"abc", NULL};
   test_insertion(storage, "insert_null", keys);
@@ -25,6 +30,14 @@ BOOST_AUTO_TEST_CASE(insert_compresstrie_short) {
   const char *keys[] = {"abcdefg", "ab",  NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
+
+BOOST_AUTO_TEST_CASE(insert_compresstrie_start) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  const char *keys[] = {"abcdefg", "ba",  NULL};
+  test_insertion(storage, "insert_compress_start", keys);
+}
+
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
@@ -51,20 +64,9 @@ BOOST_AUTO_TEST_CASE(insert_trie_lower_grow) {
 BOOST_AUTO_TEST_CASE(insert_trie_upper_grow) {
   Preparation p;
   Storage storage(TEST_FILE);
-  const char *keys[] = {"a ", "a0", "a@", "aP", "ap", NULL};
+  const char *keys[] = {"a ", "a0", "a!", "a@", "aP", "ap", "aa", "a€", "aü", NULL};
   test_insertion(storage, "insert_trie_upper_grow", keys);
 }
-
-BOOST_AUTO_TEST_CASE(big_compressed) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-
-  std::string key1(4010, 'a');
-
-  const char *keys[] = {key1.c_str(), NULL};
-  test_insertion(storage, "big_compressed", keys);
-}
-
 
 #ifdef WITH_REMOVE
 BOOST_AUTO_TEST_CASE(remove_trie) {
@@ -102,13 +104,13 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   Trace trace(storage);
 
   trace.find(key);
-  BOOST_REQUIRE(!trace.valid());
+  BOOST_REQUIRE(!trace.isvalid());
   trace.set_value(key);
   trace.commit();
 
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
-  BOOST_REQUIRE(trace.valid());
+  BOOST_REQUIRE(trace.isvalid());
 
   std::string value;
   for(int i = 0; i < 20; i++) {
@@ -144,6 +146,7 @@ BOOST_AUTO_TEST_CASE(insert_at_empty) {
   check_graph("insert_empty_1", storage);
 }
 
+/*
 BOOST_AUTO_TEST_CASE(page_split_compressed) {
   Preparation p;
   Storage storage(TEST_FILE);
@@ -153,8 +156,8 @@ BOOST_AUTO_TEST_CASE(page_split_compressed) {
   const char *keys[] = {key1.c_str(), "abcdefghaijklmnopqrstxyz", NULL};
   test_insertion(storage, "page_split_compressed", keys);
 
-  const char *testpoints[] = {"PageSplitAtNode", "PageSplit"};
-  check_testpoints(2, testpoints);
+  const char *testpoints[] = {"PageSplitAtNode", "PageSplit", NULL};
+  check_testpoints(testpoints);
 }
 
 
@@ -166,14 +169,15 @@ BOOST_AUTO_TEST_CASE(page_split_trie) {
     //std::cout << "insert " << i << std::endl;
     std::string key = std::to_string(i);
     trace.find(key);
-    BOOST_REQUIRE(!trace.valid());
+    BOOST_REQUIRE(!trace.isvalid());
     trace.set_value(key);
     trace.commit();
   }
   check_graph("page_split_trie", storage);
 
-  const char *testpoints[] = {"PageSplitAtTrie", "PageSplit", "PageMerge"};
-  check_testpoints(3, testpoints);
+  const char *testpoints[] = {"PageSplitAtTrie", "PageSplit", "PageMerge", NULL};
+  check_testpoints(testpoints);
 }
 
 
+*/

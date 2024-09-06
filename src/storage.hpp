@@ -44,15 +44,23 @@ struct Storage {
   void prepare_commit();
   void commit();
 
+  bool transaction_active() const {
+    return shared->transaction_active;
+  }
+
   block_ptr get_block(offset_ptr offset) const {
     return memory->get_block(offset);
   }
 
-  BlockUnion* get_cow_block(offset_ptr offset) {
-    return memory->get_cow_block(get_max_transaction(), offset);
+  block_ptr get_txn_block(offset_ptr offset) {
+    return memory->get_txn_block(offset);
   }
 
-  BlockUnion* alloc_cow_block(size_t size=PAGE_SIZE) {
+  block_ptr clone_cow_block(offset_ptr offset) {
+    return memory->clone_cow_block(get_max_transaction(), offset);
+  }
+
+  block_ptr alloc_cow_block(size_t size=PAGE_SIZE) {
     return memory->alloc_cow_block(get_max_transaction(), size);
   }
 
@@ -60,8 +68,8 @@ struct Storage {
     return memory->alloc_block(get_max_transaction(), size);
   }
 
-  void write_value(offset_ptr offset, const Slice& value) {
-    memory->write_value(offset, value);
+  offset_ptr write_value(const Slice& value) {
+    return memory->write_value(get_max_transaction(), value);
   }
 
   void free_cow_block(BlockUnion* block) {
@@ -73,7 +81,10 @@ struct Storage {
   }
 
   // allocate space for registering a read cursor
-  int alloc_cursor(offset_ptr root);
+  int alloc_cursor();
+
+  // update the cursor to the last transaction
+  offset_ptr update_cursor(int id);
 
   // free the register space
   void free_cursor(int id);

@@ -338,11 +338,11 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       if (name == Slice("fillseq")) {
-        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
+        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("fillrandom")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 1);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("overwrite")) {
-        Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, 1);
+        Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, 100);
       } else if (name == Slice("fillrandsync")) {
         write_sync = true;
         Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size, 1);
@@ -460,7 +460,7 @@ class Benchmark {
       mdb_cursor_open(txn, dbi_, &mc);
 
       for (int j=0; j < entries_per_batch; j++) {
-        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % num_entries);
+        const int k = (order == SEQUENTIAL) ? i+j : (rand_.Next() % num_entries);
         
         mkey.mv_size = snprintf(key, sizeof(key), "%016d", k);
         
@@ -524,6 +524,8 @@ int main(int argc, char** argv) {
     char junk;
     if (leveldb::Slice(argv[i]).starts_with("--benchmarks=")) {
       FLAGS_benchmarks = argv[i] + strlen("--benchmarks=");
+    } else if (leveldb::Slice(argv[i]).starts_with("--wmap")) {
+      FLAGS_writemap = true;      
     } else if (sscanf(argv[i], "--compression_ratio=%lf%c", &d, &junk) == 1) {
       FLAGS_compression_ratio = d;
     } else if (sscanf(argv[i], "--histogram=%d%c", &n, &junk) == 1 &&

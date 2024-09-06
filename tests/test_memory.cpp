@@ -2,6 +2,7 @@
 #define BOOST_TEST_MODULE DBMemoryTest
 
 #include <boost/test/included/unit_test.hpp>
+
 #include "../src/memory.hpp"
 #include "testpoints.hpp"
 
@@ -88,8 +89,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_container) {
       Transaction trans(db);
       for (const offset_ptr& offset : offsets) {
         // Get the block using the offset
-        BlockContainer* block =
-            &db.get_writeable_block(offset, BlockContainer::SIZE)->container;
+        BlockContainer* block = db.get_writeable_container(offset);
         db.free_container(block);
       }
     }
@@ -147,8 +147,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     {
       Transaction trans(db);
       for (int i = 0; i < BlockContainer::MAX_ITEMS + 1; i++) {
-        BlockUnion* block = db.alloc_cow_block(1);
-        block->trie.init();
+        block_ptr block = db.alloc_cow_block(1);
         *(int*)&block->trie.data[0] = i;
         BOOST_REQUIRE(block->block.writable);
         BOOST_REQUIRE(block->trie.offset != 0);
@@ -172,7 +171,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     {
       Transaction trans(db);
       offset_ptr offset = *offsets.begin();
-      BlockUnion* block = db.get_block(offset);
+      block_ptr block = db.get_block(offset);
       BOOST_REQUIRE(block->trie.offset == offset);
       BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
       BOOST_REQUIRE(!block->trie.writable);
@@ -199,7 +198,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       int i = 0;
       for (const offset_ptr& offset : offsets) {
         if (i > 0) {
-          BlockUnion* block = db.get_block(offset);
+          block_ptr block = db.get_block(offset);
           BOOST_REQUIRE(block->trie.offset == offset);
           BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
           BOOST_REQUIRE(*(int*)&block->trie.data[0] == i);
@@ -224,7 +223,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
 
     {
       Transaction trans(db);
-      BlockUnion* block = db.alloc_cow_block(4);
+      block_ptr block = db.alloc_cow_block(4);
       BOOST_REQUIRE(block->trie.offset == offsets[0]);
       offsets.erase(offsets.begin());
     }
@@ -238,7 +237,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     {
       Transaction trans(db);
       for (int i = 0; i < BlockContainer::MAX_ITEMS; i++) {
-        BlockUnion* block = db.alloc_cow_block(5);
+        block_ptr block = db.alloc_cow_block(5);
         BOOST_REQUIRE(block->trie.offset == offsets.back());
         BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
         offsets.pop_back();
@@ -257,28 +256,38 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   check_testpoints(test_points);
 }
 
-BOOST_AUTO_TEST_CASE(test_get_cow_block) {
+BOOST_AUTO_TEST_CASE(test_cow_block) {
   DirPreparation prep;
   // Create a temporary file path
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  
+
   DBMemory::init(dbFilePath.c_str());
   DBMemory db(dbFilePath.c_str());
 
   const BlockUnion* root = db.get_root();
-  BlockUnion* block;
+  block_ptr block;
+  offset_ptr offset;
 
-  { 
-    Transaction trans(db); 
-    block = db.get_cow_block(0, root->block.offset);
-    db.head.root = block->block.offset;
+  {
+    Transaction trans(db);
+    block = db.clone_cow_block(0, root->block.offset);
+    offset = db.head.root = block->block.offset;
+
+    block_ptr cmp_block = db.get_txn_block(db.head.root);
+    assert(cmp_block == block);
+    assert(cmp_block->block.writable);
   }
+
+  block_ptr cmp_block = db.get_txn_block(offset);
+  assert(cmp_block->block.offset == offset);
+  assert(!cmp_block->block.writable);
+
   auto pool_id = get_pool(TrieBlock::SIZE);
   offset_ptr c_offset = db.get_active_head()->pools[pool_id].free;
   BlockContainer& c = db.get_block(c_offset)->container;
   BOOST_REQUIRE(c.count == 1);
   BOOST_REQUIRE(c.blocks[0].offset == root->block.offset);
-  BOOST_REQUIRE(db.get_active_head()->root == block->block.offset);
+  BOOST_REQUIRE(db.get_active_head()->root == offset);
 }
 
 BOOST_AUTO_TEST_CASE(test_write_value) {
@@ -291,18 +300,18 @@ BOOST_AUTO_TEST_CASE(test_write_value) {
 
   std::string value("Hello, World!");
   offset_ptr offset;
-  { 
-    Transaction trans(db); 
+  {
+    Transaction trans(db);
     offset = db.alloc_block(1, value.size());
     db.write_value(offset, value);
   }
 
-  const ValueBlock& vb =  db.get_block(offset)->value;
-  BOOST_CHECK_EQUAL_COLLECTIONS(value.begin(), value.end(), vb.data, vb.data + value.size());
+  const ValueBlock& vb = db.get_block(offset)->value;
+  BOOST_CHECK_EQUAL_COLLECTIONS(value.begin(), value.end(), vb.data,
+                                vb.data + value.size());
 }
 
 /*
 BOOST_AUTO_TEST_CASE(test_get_pool) {
   BOOST_REQUIRE_THROW(get_pool(4 * G+1), boost::execution_exception);
 }*/
-

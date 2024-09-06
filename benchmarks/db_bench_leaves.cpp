@@ -31,7 +31,7 @@ static const char* FLAGS_benchmarks1 =
     "fillseqsync,"
     "fillrandsync,"
     "fillrandom,"
-    "overwrite,"
+    //"overwrite,"
     "readrandom,"
     "readseq," 
     "fillrand100K,"
@@ -40,9 +40,6 @@ static const char* FLAGS_benchmarks1 =
     "readrand100K,";
 
 static const char* FLAGS_benchmarks =
-    "fillseq,"
-    "fillseqsync,"
-    "fillrandsync,"
     "fillrandom,"
     "overwrite,"
     "readrandom,"
@@ -50,7 +47,6 @@ static const char* FLAGS_benchmarks =
     "fillseq100K,"
     "readrand100K,";
 ;
-
 
 
 // Use writable MMAP
@@ -375,11 +371,11 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       if (name == Slice("fillseq")) {
-        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 1);
+        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("fillbatch")) {
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("fillrandom")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 1);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("overwrite")) {
         Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrandsync")) {
@@ -464,6 +460,8 @@ class Benchmark {
       message_ = msg;
     }
 
+    std::ostream null_stream(nullptr);
+
     leaves::Slice mkey, mval;
     char key[100];
     int flag = 0, rc;
@@ -472,36 +470,32 @@ class Benchmark {
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
       for (int j=0; j < entries_per_batch; j++) {
-        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % num_entries);
-        
+        const int k = (order == SEQUENTIAL) ? i+j : (rand_.Next() % num_entries);
         snprintf(key, sizeof(key), "%016d", k);
         mkey = leaves::Slice(key);
+        //printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
-        cursor->find(mkey);
+        /*if (k == 16599) {
+          printf("will fail\n");
+        }*/
 
+        cursor->find(mkey);
         cursor->set_value(mval);
 
         FinishedSingleOp();
+        //dump_db(null_stream, db_);
       }
       cursor->commit();
-#if 0
-      if (i == 607198) {
-        std::cout << "++debug: " << sync << "  " << i << std::endl;
-        dump_graph("debug.yaml", db_);
-        std::cout << "--debug: " << sync << "  " << i << std::endl;
-      }
-#endif
-
     }
   }
 
   void ReadSequential() {
     leaves::Slice key, value;
     leaves::DB::cursor_ptr cursor = db_->create_cursor();
-    for(cursor->first(); cursor->valid(); cursor->next()) {
+    for(cursor->first(); cursor->isvalid(); cursor->next()) {
       key = cursor->key();
       value = cursor->value();
       bytes_ += key.size() + value.size();
@@ -518,7 +512,7 @@ class Benchmark {
       snprintf(ckey, sizeof(ckey), "%016d", k);
 
       cursor->find(ckey);
-      if (cursor->valid()) {
+      if (cursor->isvalid()) {
         bytes_ += key.size() + cursor->value().size();
       }
       FinishedSingleOp();

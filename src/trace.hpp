@@ -16,7 +16,7 @@ struct Transition {
   offset_ptr offset;
 
   // the pointer offset points to
-  BlockUnion* block;
+  block_ptr block;
 
   // pointer to a Node union: node = &trie_block.data[pnode->offset]
   Node* node;
@@ -43,11 +43,10 @@ struct Transition {
   Transition& clear(Trace& cursor);
   Transition derive(ssize_t donode = 0, ssize_t keypos_ = 0) const;
 
-  void to_writable(BlockUnion* block);
+  void to_writable(block_ptr block);
 
   bool advance(Trace& cursor);
   bool find(Trace& cursor);
-  Slice get_value(Trace& cursor) const;
   void set_value(Trace& cursor, const Slice& value);
 };
 
@@ -70,12 +69,14 @@ struct Trace {
   void rollback();
 
   block_ptr get_block(offset_ptr offset) const {
-    return storage.get_block(offset);
+    return transaction_active ? storage.get_txn_block(offset)
+                              : storage.get_block(offset);
   }
 
   Transition& back() { return stack.back(); }
 
   void make_stack_writable();
+  void update();
 
   struct alloc_ptr {
     node_ptr ptr;
@@ -99,6 +100,7 @@ struct Trace {
   std::string current_key;
 
   bool transaction_active;
+  uint32_t _debug_stat_page_splits;
 };
 
 struct BlockSplitter {

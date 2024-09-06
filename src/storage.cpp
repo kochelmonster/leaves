@@ -65,9 +65,10 @@ INLINE void Storage::prepare_commit() {
 
 INLINE void Storage::commit() {
   memory->commit_transaction();
+  shared->transaction_active = 0;
 }
 
-INLINE int Storage::alloc_cursor(offset_ptr root) {
+INLINE int Storage::alloc_cursor() {
   uint32_t last_index = shared->last_index;
 
   for(int i = 0; i < SharedMem::READER_COUNT; i++) {
@@ -79,12 +80,24 @@ INLINE int Storage::alloc_cursor(offset_ptr root) {
         return i;
       }
       else {
-        return alloc_cursor(root);
+        return alloc_cursor();
       }
     }
   }
   throw std::runtime_error("Cannot allocate cursor");
 }
+
+INLINE offset_ptr Storage::update_cursor(int id) {
+  ReadCursor& cursor = shared->readers[id];
+  const DBMeta* head = memory->get_active_head();
+  tid_t txn_id = head->txn_id;
+  if (txn_id != cursor.txn_id) {
+    cursor.txn_id = txn_id;
+    shared->max_free_transaction = 0;
+  }
+  return head->root;
+}
+
 
 INLINE void Storage::free_cursor(int id) {
   shared->readers[id].txn_id = 0;

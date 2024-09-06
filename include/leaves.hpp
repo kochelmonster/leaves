@@ -88,7 +88,7 @@ class Slice {
   }
 
   void iadvance(size_t size)  {
-    assert(size < _size);
+    assert(size <= _size);
     _data += size;
     _size -= size;
   }
@@ -99,7 +99,7 @@ class Slice {
 class Cursor {
  public:
   // returns true if cursor is on a valid position
-  virtual bool valid() const = 0;
+  virtual bool isvalid() const = 0;
 
   // sets the cursor to key
   virtual void find(const Slice& key) = 0;
@@ -118,11 +118,10 @@ class Cursor {
   virtual void commit() = 0;
 };
 
-struct Trace;
 
 class DB {
  public:
-  typedef std::shared_ptr<Trace> cursor_ptr;
+  typedef std::shared_ptr<Cursor> cursor_ptr;
   typedef std::shared_ptr<DB> db_ptr;
   virtual ~DB();
   virtual cursor_ptr create_cursor() = 0;

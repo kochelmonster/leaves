@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(LEAVES_GCOV "Add gconv support for tests" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
-option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" OFF)
+option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
 file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
@@ -24,8 +24,7 @@ target_sources(core INTERFACE
     src/node.cpp
     src/node.hpp
     src/trace.cpp
-    src/trace.hpp
-    src/table.cpp)
+    src/trace.hpp)
 
 target_include_directories(core
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -69,15 +68,14 @@ target_sources(test_memory INTERFACE
 
 target_link_libraries(test_memory PUBLIC test)
 
+add_executable(test_storage tests/test_storage.cpp)
+target_link_libraries(test_storage PUBLIC core test)
 
-#add_executable(test_storage tests/test_storage.cpp)
-# target_link_libraries(test_storage PUBLIC core test)
+add_executable(test_trie tests/test_trie.cpp)
+target_link_libraries(test_trie PUBLIC core test)
 
-# add_executable(test_trie tests/test_trie.cpp)
-# target_link_libraries(test_trie PUBLIC core test)
-
-# add_executable(test_db tests/test_db.cpp src/leaves.cpp)
-# target_link_libraries(test_db PUBLIC core test)
+add_executable(test_db tests/test_db.cpp src/leaves.cpp)
+target_link_libraries(test_db PUBLIC core test)
 
 # add_executable(profile tests/profile.cpp src/leaves.cpp)
 # target_link_libraries(profile PUBLIC core test)
@@ -86,7 +84,7 @@ add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
-#COMMAND ./test_storage
+COMMAND ./test_storage
 #COMMAND ./test_trie
 COMMAND ./test_memory
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch
@@ -116,12 +114,13 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp src/leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread core)
-# target_compile_options(db_bench_leaves PUBLIC -g)
-target_compile_options(db_bench_leaves PUBLIC -O3)
+target_compile_options(db_bench_leaves PUBLIC -g)
+#target_compile_options(db_bench_leaves PUBLIC -O3)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
     benchmark leveldb lmdb pthread)
 target_compile_options(db_bench_mdb PUBLIC -O3)
+# target_compile_options(db_bench_mdb PUBLIC -g)
 
 endif (LEAVES_BUILD_BENCHMARKS) 

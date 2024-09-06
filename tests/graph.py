@@ -5,12 +5,17 @@ import yaml
 import sarge
 from pathlib import Path
 
+MAX_VAL_SIZE = 27
 
-CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size:{size}/{space}}}|{keys}}}"]"""
-LNODE = """"{id}" [fillcolor=darkolivegreen1 label="{{{{{id}}}|size: {size}/{space}|{value}}}"]"""
-MLNODE = """"{id}" [fillcolor=darksalmon label="{{{{{id}|space: {space}}}}}}}"]"""
-LINODE = """"{id}" [label="{{{id}|space: {space}}}}}"]"""
-TNODE = """"{id}" [fillcolor=azure label="{{{{{id}|space: {space}|bits: {bits}}}|{{{slots}}}}}"]"""
+
+CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size:{size}}}|{keys}}}"]"""
+LNODE = (
+    """"{id}" [fillcolor=darkolivegreen1 label="{{{{{id}}}|size: {size}|{value}}}"]"""
+)
+MLNODE = """"{id}" [fillcolor=darksalmon label="{{{{{id}}}}}}}"]"""
+LINODE = """"{id}" [label="{{{id}}}}}"]"""
+BTNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
+TNODE = """"{id}" [fillcolor=azure label="{{{{{id}}}|{{{slots}}}}}"]"""
 
 
 class Graph:
@@ -25,7 +30,8 @@ class Graph:
         pages = {}
         for n in nodes:
             self.nodes[n["id"]] = n
-            page = n["id"].rsplit("P", 1)[1]
+            page = n["id"].rsplit("-", 1)[1]
+            n["type"] = n["id"].split("-", 1)[0]
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
@@ -63,57 +69,93 @@ class Graph:
         return CNODE.format(**node)
 
     def handle_kValue(self, node):
-        if len(node["value"]) > 9:
-            node["value"] = node["value"][:9] + "..."
+        if len(node["value"]) > MAX_VAL_SIZE:
+            node["value"] = node["value"][:MAX_VAL_SIZE] + "..."
         return LNODE.format(**node)
-    
+
     def handle_kHeapLink(self, node):
         return MLNODE.format(**node)
-    
+
     def handle_kLink(self, node):
         return LINODE.format(**node)
 
-    def handle_kUpperTrie(self, node):
+    def handle_kBitTrie(self, node):
+        if node["upper"]:
+            return self.UpperBitTrie(node)
+        else:
+            return self.LowerBitTrie(node)
+
+    def UpperBitTrie(self, node):
         for i, c in enumerate(node["children"]):
             id_ = c
             if id_.startswith("kLink"):
                 id_ = self.nodes[id_]["children"][0]
             self.upper_bits[id_] = node["bitindex"][i]
-        
-        return self.handle_kTrie(node)
 
-    def handle_kLowerTrie(self, node):
+        return self.bittrie(node)
+
+    def LowerBitTrie(self, node):
         upper_bit = self.upper_bits[node["id"]]
-        chars = [chr((upper_bit << 4) + lb)+"("+str(lb)+")" for lb in node["bitindex"]]
-        return self.handle_kTrie(node, chars)
+        chars = [
+            chr((upper_bit << 4) + lb) + "(" + str(lb) + ")" for lb in node["bitindex"]
+        ]
+        return self.bittrie(node, chars)
 
-    def handle_kTrie(self, node, chars=None):
-        byteindex = node.get("byteindex")
-        if chars:
-            slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
+    def bittrie(self, node, chars=None):
+        if not chars:
+            chars = [str(b) for b in node.get("bitindex", "")]
+        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
+        return BTNODE.format(slots=slots, **node)
+
+    def handle_kTrie(self, node):
+        if node["upper"]:
+            return self.UpperTrie(node)
         else:
-            slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(node["bitindex"]))
+            return self.LowerTrie(node)
 
+    def UpperTrie(self, node):
+        for i, c in enumerate(node["children"]):
+            id_ = c
+            if id_.startswith("kLink"):
+                id_ = self.nodes[id_]["children"][0]
+        return self.trie(node)
+
+    def LowerTrie(self, node):
+        return self.trie(node)
+
+    def trie(self, node):
+        chars = node.get("bytes", "")
+        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
         return TNODE.format(slots=slots, **node)
 
+
+
     def handle_kNull(self, node):
-        return "\"{id}\"".format(**node)
+        return '"{id}"'.format(**node)
 
 
 def main(paths):
     for p in paths:
         src = Path(p)
-        dest = Path("graphs")/(src.stem + ".svg")
-        print("dest", dest)
+        dest = Path(__file__).parent / "graphs" / (src.stem + ".svg")
+        print("dest", src, dest)
 
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
-            sarge.run(f"dot -Tsvg > {dest}", input=Graph().make_graph(list(filter(bool, nodes))))
-            # print(Graph().make_graph(list(filter(bool, nodes))))
+            #print(Graph().make_graph(list(filter(bool, nodes))))
+            #return 0
+            sarge.run(
+                f"dot -Tsvg > {dest}",
+                input=Graph().make_graph(list(filter(bool, nodes))),
+            )
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    debug = [
+        "cmpfiles/insert_trie_lower_grow_7_aG.yaml"
+    ]
 
+    debug = [Path(__file__).parent / d for d in debug]
+    sys.exit(main(sys.argv[1:] or debug))

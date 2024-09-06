@@ -6,20 +6,18 @@
 #include <filesystem>
 #include "../src/memory.hpp"
 
-#undef GENERATE
-
 #ifndef TESTING
 #error "TESTING must be defined"
 #endif
 
 using leaves::TestPoints;
-
+#define GENERATE
 #ifdef GENERATE
 
 inline void check_testpoints(const char* testpoints[]) {
   std::cerr << "check case:" << std::endl;
   for (const auto& item : TestPoints::tp_output) {
-    std::cerr << item << std::endl;
+    std::cerr << item.first << "(" << item.second << ")" << std::endl;
   }
 }
 #else

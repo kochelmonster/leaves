@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <boost/test/included/unit_test.hpp>
+#include <ostream>
 
 #define AREA_COUNT 100
 #include "test.hpp"
@@ -12,10 +13,10 @@
 
 
 const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
-  /*"Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
+  "Abbye's", "Abelard", "Abernathy's", "Abidjan", "Abie", "Aborigines",
   "Acadia", "Acadia's", "Adas", "Adella's", "Adena's", "Adey's",
   "Adham", "Ado's", "Adorne", "Adrianne", "Adriena", "Aeneas",
-  "Aeneid's", "Africa", "Ag's", "Agace", "Agana's", "Aggie", "Agnes's", */
+  "Aeneid's", "Africa", "Ag's", "Agace", "Agana's", "Aggie", "Agnes's",
   "Aguascalientes's", "Agustin's", "Aida", "Aida's", "Aila's", "Ailina",
   "Ajay's", "Akihito", "Aksel's", "Alabama's", "Alaine", "Alanson's",
   "Alaska", "Alasteir", "Alaster", "Alayne's", "Albany", "Albertine's",
@@ -101,7 +102,7 @@ const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
   "Consolata's", "Constantinople", "Continent's", NULL };
 
 
-namespace larch_leaves {
+namespace leaves {
 void dump_db(std::ostream& out, DB::db_ptr db);
 }
 
@@ -126,38 +127,36 @@ std::string number(int number, size_t size=0) {
 
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
+  {
+    DB::db_ptr db(DB::open(TEST_FILE));
+  }
 
   DB::db_ptr db(DB::open(TEST_FILE));
   DB::cursor_ptr cursor(db->create_cursor());
-
+  
   std::cout << "refcount" << db.use_count() << std::endl;
+  std::ostream null_stream(nullptr);
 
   size_t count;
   for(count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
-
-    /*if (count == 50) {
-      std::cout << "will fail" << std::endl;
-    }*/
-
     cursor->find(names[count]);
-    BOOST_REQUIRE(!cursor->valid());
-    cursor->set_value(value(1));
-    /*
-    std::stringstream cstr;
-    cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
-    std::ofstream out(cstr.str().c_str());
-    dump_db(out, db);
-    */
+    BOOST_REQUIRE(!cursor->isvalid());
+    cursor->set_value(value(count, 900));
   }
   cursor->commit();
+  std::stringstream cstr;
+  cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
+  std::ofstream out(cstr.str().c_str());
+  leaves::dump_db(out, db);
 
   std::cout << "start test: " << count << std::endl;
   for(int i = 0; i < 100; i++) {
-    const char* name = names[rand() % count];
-    std::cout << "test " << name << std::endl;
+    int rand_int = rand() % count;
+    const char* name = names[rand_int];
+    std::cout << "test " << name << " (" << rand_int << ")" << std::endl;
     cursor->find(name);
-    BOOST_REQUIRE(cursor->valid());
+    BOOST_REQUIRE(cursor->isvalid());
     BOOST_REQUIRE_EQUAL(cursor->key().string(), std::string(name));
   }
 }

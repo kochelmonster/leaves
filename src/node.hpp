@@ -81,7 +81,7 @@ struct BitTrie {
 
   // bit mask of the childrens bit value
   uint16_t bits;
-  node_ptr children[];
+  node_ptr children[7];
 };
 
 struct Trie {
@@ -119,7 +119,7 @@ struct Compressed {
 
   static ssize_t offset() { return offsetof(Compressed, child); }
   static ssize_t calc_alloc_size(size_t size) {
-    return sizeof(Compressed) + size;
+    return (sizeof(Compressed) + size + 7) & ~7;
   }
 };
 
@@ -136,7 +136,7 @@ struct Value {
     ssize_t result = sizeof(Value);
     if (size <= SMALL_SIZE)
       result += std::max(size, sizeof(link)) - sizeof(link);
-    return result;
+    return (result + 7) & ~7;
   }
 
   static ssize_t offset() { return offsetof(Value, child); }
@@ -159,10 +159,9 @@ struct Transition;
 typedef ssize_t (*is_valid_t)(const Transition& trans);
 ssize_t is_valid_null(const Transition& trans);
 ssize_t is_valid_value(const Transition& trans);
-ssize_t is_valid_table_link(const Transition& trans);
 const is_valid_t is_valid[] = {
     is_valid_null, is_valid_null,       is_valid_null, is_valid_value,
-    is_valid_null, is_valid_table_link, is_valid_null};
+    is_valid_null, is_valid_null};
 
 typedef ssize_t (*get_size_t)(const Transition& trans);
 ssize_t get_size_null(const Transition& trans);
@@ -174,7 +173,7 @@ ssize_t get_size_compressed(const Transition& trans);
 
 const get_size_t get_size[] = {
     get_size_null, get_size_bit_trie, get_size_trie,      get_size_value,
-    get_size_link, get_size_link,     get_size_compressed};
+    get_size_link, get_size_compressed};
 
 typedef bool (*find_t)(Trace& cursor, Transition& trans);
 bool find_null(Trace& cursor, Transition& trans);
@@ -182,29 +181,19 @@ bool find_bit_trie(Trace& cursor, Transition& trans);
 bool find_trie(Trace& cursor, Transition& trans);
 bool find_value(Trace& cursor, Transition& trans);
 bool find_link(Trace& cursor, Transition& trans);
-bool find_table_link(Trace& cursor, Transition& trans);
 bool find_compressed(Trace& cursor, Transition& trans);
 const find_t find[] = {find_null, find_bit_trie,   find_trie,      find_value,
-                       find_link, find_table_link, find_compressed};
-
-typedef Slice (*get_value_t)(Trace& cursor, const Transition& trans);
-Slice get_value_null(Trace& cursor, const Transition& trans);
-Slice get_value_value(Trace& cursor, const Transition& trans);
-Slice get_value_table_value(Trace& cursor, const Transition& trans);
-const get_value_t get_value[] = {
-    get_value_null, get_value_null,        get_value_null, get_value_value,
-    get_value_null, get_value_table_value, get_value_null};
+                       find_link, find_compressed};
 
 typedef bool (*advance_t)(Trace& cursor, const Transition& trans);
 bool advance_null(Trace& cursor, const Transition& trans);
 bool advance_trie(Trace& cursor, const Transition& trans);
 bool advance_value(Trace& cursor, const Transition& trans);
 bool advance_link(Trace& cursor, const Transition& trans);
-bool advance_table_link(Trace& cursor, const Transition& trans);
 bool advance_compressed(Trace& cursor, const Transition& trans);
 const advance_t advance[] = {
     advance_null, advance_trie,       advance_trie,      advance_value,
-    advance_link, advance_table_link, advance_compressed};
+    advance_link, advance_compressed};
 
 typedef void (*set_value_t)(Trace& cursor, const Slice& value);
 void set_value_null(Trace& cursor, const Slice& value);
@@ -212,11 +201,10 @@ void set_value_bit_trie(Trace& cursor, const Slice& value);
 void set_value_trie(Trace& cursor, const Slice& value);
 void set_value_value(Trace& cursor, const Slice& value);
 void set_value_link(Trace& cursor, const Slice& value);
-void set_value_table_link(Trace& cursor, const Slice& value);
 void set_value_compressed(Trace& cursor, const Slice& value);
 const set_value_t set_value[] = {
     set_value_null, set_value_bit_trie,   set_value_trie,      set_value_value,
-    set_value_link, set_value_table_link, set_value_compressed};
+    set_value_link, set_value_compressed};
 
 /* finds a branch with at least 4K size and moves it to a new page */
 typedef ssize_t (*find_splitpoint_t)(BlockSplitter& bs, Transition& trans);
@@ -228,7 +216,7 @@ ssize_t find_splitpoint_link(BlockSplitter& bs, Transition& trans);
 ssize_t find_splitpoint_compressed(BlockSplitter& bs, Transition& trans);
 const find_splitpoint_t find_splitpoint[] = {
     find_splitpoint_null,      find_splitpoint_bit_trie, find_splitpoint_trie,
-    find_splitpoint_value,     find_splitpoint_link,     find_splitpoint_link,
+    find_splitpoint_value,     find_splitpoint_link,
     find_splitpoint_compressed};
 
 /* moves a node and its children to a new block */
@@ -240,10 +228,13 @@ node_ptr move_value(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
 node_ptr move_link(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
 node_ptr move_compressed(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
 const move_t move[] = {move_null, move_bit_trie, move_trie,      move_value,
-                       move_link, move_link,     move_compressed};
+                       move_link, move_compressed};
 
 inline char sign(int x) { return (x > 0) - (x < 0); }
 
+/* adds a value an updates the current stack.
+   returns true if the values was replaced.
+ */
 bool add_value(Trace& cursor, const Slice& value);
 
 }  // namespace leaves
