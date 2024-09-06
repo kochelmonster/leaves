@@ -100,6 +100,9 @@ struct BlockContainer : public PersistBlock {
     tid_t txn_id;  // transaction that freed the block
   };
 
+  // optimiation: if != 0 all blocks.txn_id are bigger than min_txn_id
+  tid_t min_txn_id;
+
   // count of items in blocks
   size_t count;
   // next BlockContainer or 0
@@ -107,7 +110,7 @@ struct BlockContainer : public PersistBlock {
 
   static const size_t SIZE = 4 * K;
   static const size_t MAX_ITEMS =
-      (SIZE - sizeof(PersistBlock) - sizeof(count) - sizeof(next)) /
+      (SIZE - sizeof(PersistBlock) - sizeof(count) - sizeof(next) - sizeof(min_txn_id)) /
       sizeof(FreedBlock);
 
   // array of free blocks
@@ -122,6 +125,7 @@ struct BlockContainer : public PersistBlock {
     type = kContainer;
     size = SIZE;
     offset = offset_;
+    min_txn_id = 0;
     count = 0;
     next = 0;
   }

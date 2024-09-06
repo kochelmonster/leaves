@@ -162,6 +162,14 @@ INLINE offset_ptr DBMemory::alloc_block(tid_t min_txn_id, size_t size) {
     // find a freed block that is not in use by another cursor:
     // freed.txn_id < min_txn_id
     BlockContainer* container = get_writeable_container(*free);
+    if (container->min_txn_id >= min_txn_id) {
+        // there is now available free block in this container
+        free = &container->next;
+        TESTPOINT(DBMemory::alloc_block::1);
+        continue;
+    }
+
+    tid_t block_min_txn_id = 0xFFFFFFFFFFFFFFFF;
     for (int i = container->count - 1; i >= 0; i--) {
       BlockContainer::FreedBlock& freed = container->blocks[i];
       if (freed.txn_id < min_txn_id) {
@@ -173,19 +181,21 @@ INLINE offset_ptr DBMemory::alloc_block(tid_t min_txn_id, size_t size) {
 
         if (!container->count) {
           // free the container
-          TESTPOINT(DBMemory::alloc_block::1);
+          TESTPOINT(DBMemory::alloc_block::2);
           *free = container->next;  // remove from list
           free_container(container);
         }
         return pblock->block.offset;
       }
-      TESTPOINT(DBMemory::alloc_block::2);
+      block_min_txn_id = std::min(block_min_txn_id, freed.txn_id);
+      TESTPOINT(DBMemory::alloc_block::3);
     }
+    container->min_txn_id = block_min_txn_id;
     free = &container->next;
-    TESTPOINT(DBMemory::alloc_block::3);
+    TESTPOINT(DBMemory::alloc_block::4);
   }
 
-  TESTPOINT(DBMemory::alloc_block::4);
+  TESTPOINT(DBMemory::alloc_block::5);
   return alloc_new_block(pool_id);
 }
 
@@ -253,6 +263,7 @@ INLINE BlockContainer* DBMemory::alloc_container() {
       TESTPOINT(DBMemory::alloc_container::1);
       pool.free = container->next;  // remove from list
       container->next = 0;
+      assert(container->min_txn_id == 0);
       return container;
     }
 
@@ -273,25 +284,26 @@ void DBMemory::free_container(BlockContainer* container) {
   if (!pool.free) {
     TESTPOINT(DBMemory::free_container::1);
     container->next = 0;
+    container->min_txn_id = 0;
     pool.free = container->offset;
     return;
   }
 
-  BlockContainer* pool_container = get_writeable_container(pool.free);
+  BlockContainer* pool_free = get_writeable_container(pool.free);
 
-  if (pool_container->count == BlockContainer::MAX_ITEMS) {
+  if (pool_free->count == BlockContainer::MAX_ITEMS) {
     // the container is full -> create a new one and put it at the beginning of
     // the list
     TESTPOINT(DBMemory::free_container::2);
     offset_ptr offset = alloc_new_block(FREE_POOL);
-    pool_container = get_writeable_container(offset);
-    pool_container->init(offset);
-    pool_container->next = pool.free;
+    pool_free = get_writeable_container(offset);
+    pool_free->init(offset);
+    pool_free->next = pool.free;
     pool.free = offset;
   }
 
-  BlockContainer::FreedBlock& freed =
-      pool_container->blocks[pool_container->count++];
+  BlockContainer::FreedBlock& freed = pool_free->blocks[pool_free->count++];
+  container->min_txn_id = 0;
   freed.offset = container->offset;
   freed.txn_id = 0;
 }
