@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "../src/memory.hpp"
-#include "../src/storage.hpp"
 #include "../src/trace.hpp"
 #include "testpoints.hpp"
 
@@ -34,18 +33,18 @@ namespace leaves {
 
 struct node_ptr;
 void dump_node(std::ostream& out, const TrieBlock* page, node_ptr nid,
-               Storage* storage, int upper = -1);
+               DBMemory* storage, int upper = -1);
 }  // namespace leaves
 
-inline void dump_graph(const char* output, Storage& storage) {
+inline void dump_graph(const char* output, DBMemory& storage) {
   std::ofstream out(output);
-  const TrieBlock* root = &storage.memory->get_root()->trie;
+  const TrieBlock* root = &storage.get_root()->trie;
   dump_node(out, root, *root->resolve_ptr(0), &storage);
 }
 
-inline void compare_graph(const char* input, Storage& storage) {
+inline void compare_graph(const char* input, DBMemory& storage) {
   std::stringstream cstr;
-  const TrieBlock* root = &storage.memory->get_root()->trie;
+  const TrieBlock* root = &storage.get_root()->trie;
   dump_node(cstr, root, *root->resolve_ptr(0), &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
@@ -65,7 +64,7 @@ inline void compare_graph(const char* input, Storage& storage) {
   }
 }
 
-inline void check_graph(const char* name, Storage& storage) {
+inline void check_graph(const char* name, DBMemory& storage) {
   std::string path(CMPFILES);
   path.append(name);
   path.append(".yaml");
@@ -79,7 +78,7 @@ inline void check_graph(const char* name, Storage& storage) {
 #endif
 }
 
-inline void insert(Storage& storage, const char* test_name, const Slice& key,
+inline void insert(DBMemory& storage, const char* test_name, const Slice& key,
                    const Slice& value) {
   Trace trace(storage);
   // std::cout << "insert " << test_name << std::endl;
@@ -94,7 +93,7 @@ inline void insert(Storage& storage, const char* test_name, const Slice& key,
   BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
 }
 
-inline void insert(Storage& storage, const char* test_name, const Slice& key) {
+inline void insert(DBMemory& storage, const char* test_name, const Slice& key) {
   insert(storage, test_name, key, key);
 }
 
@@ -211,7 +210,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
 }
 #endif
 
-inline void test_insertion(Storage& storage, const char* title,
+inline void test_insertion(DBMemory& storage, const char* title,
                            const char* keys[]) {
   strings_t strings;
   std::cout << "==========================================" << std::endl
@@ -232,7 +231,7 @@ inline void test_insertion(Storage& storage, const char* title,
 #endif
 }
 
-inline void test_remove(Storage& storage, const char* title, const char* keys[],
+inline void test_remove(DBMemory& storage, const char* title, const char* keys[],
                         const char* to_remove[]) {
   strings_t strings;
   std::cout << "==========================================" << std::endl

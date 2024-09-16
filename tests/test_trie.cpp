@@ -10,30 +10,30 @@ Test the trie nodes without bursting.
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
   {
-    Storage storage(TEST_FILE);
+    DBMemory storage(TEST_FILE);
   }
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"abc", NULL};
   test_insertion(storage, "insert_null", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compresstrie_split) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abddefg", NULL};
   test_insertion(storage, "insert_compress_split", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compresstrie_short) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ab",  NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compresstrie_start) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ba",  NULL};
   test_insertion(storage, "insert_compress_start", keys);
 }
@@ -41,21 +41,21 @@ BOOST_AUTO_TEST_CASE(insert_compresstrie_start) {
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"abc", "abcdefg",  NULL};
   test_insertion(storage, "insert_value", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_trie_short) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
   test_insertion(storage, "insert_trie_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_trie_lower_grow) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
                         "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
   test_insertion(storage, "insert_trie_lower_grow", keys);
@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(insert_trie_lower_grow) {
 
 BOOST_AUTO_TEST_CASE(insert_trie_upper_grow) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   const char *keys[] = {"a ", "a0", "a!", "a@", "aP", "ap", "aa", "a€", "aü", NULL};
   test_insertion(storage, "insert_trie_upper_grow", keys);
 }
@@ -99,7 +99,7 @@ BOOST_AUTO_TEST_CASE(remove_compress_short) {
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   Slice key("abcdefg");
   Trace trace(storage);
 
@@ -133,7 +133,7 @@ BOOST_AUTO_TEST_CASE(replace_value) {
 
 BOOST_AUTO_TEST_CASE(insert_at_empty) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  DBMemory storage(TEST_FILE);
   Trace trace(storage);
   trace.find("");
   trace.set_value(string("aaa"));

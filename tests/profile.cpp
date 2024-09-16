@@ -11,7 +11,7 @@ const size_t COUNT = 10000;
 
 #ifdef DEBUG
 namespace leaves {
-void dump_db(std::ostream& out, DB::db_ptr db);
+size_t dump_db(std::ostream& out, DB::db_ptr db);
 }
 
 inline void dump_graph(const char* output, leaves::DB::db_ptr db) {

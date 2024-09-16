@@ -15,7 +15,7 @@ LNODE = (
 MLNODE = """"{id}" [fillcolor=darksalmon label="{{{{{id}}}}}}}"]"""
 LINODE = """"{id}" [label="{{{id}}}}}"]"""
 BTNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
-TNODE = """"{id}" [fillcolor=azure label="{{{{{id}}}|{{{slots}}}}}"]"""
+TNODE = """"{id}" [fillcolor=pink label="{{{{{id}}}|{{{slots}}}}}"]"""
 
 
 class Graph:
@@ -116,8 +116,12 @@ class Graph:
     def UpperTrie(self, node):
         for i, c in enumerate(node["children"]):
             id_ = c
+            self.upper_bits[id_] = i
+
             if id_.startswith("kLink"):
                 id_ = self.nodes[id_]["children"][0]
+
+            self.upper_bits[node["id"]]
         return self.trie(node)
 
     def LowerTrie(self, node):
@@ -127,7 +131,6 @@ class Graph:
         chars = node.get("bytes", "")
         slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
         return TNODE.format(slots=slots, **node)
-
 
 
     def handle_kNull(self, node):

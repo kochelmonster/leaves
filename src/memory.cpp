@@ -1,10 +1,17 @@
+// declarations for the memory mapped storage
+#ifndef _LEAVES_MEMORY_CPP
+#define _LEAVES_MEMORY_CPP
+
 #include "memory.hpp"
 
+#include <boost/algorithm/string.hpp>
+#include <boost/interprocess/detail/atomic.hpp>
+#include <boost/process/v2/pid.hpp>
 #include <algorithm>
-#include <cstddef>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
@@ -16,34 +23,45 @@ using namespace boost::interprocess;
 
 namespace leaves {
 
-INLINE void DBMemory::init(const char* path) {
+INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
+  memset(&txn, 0, sizeof(txn));
+  init_dbfile(path, map_size);
+  init_shared();
+}
+
+INLINE DBMemory::~DBMemory() {
+  shared_memory_object::remove(shared_object.get_name());
+}
+
+INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
   if (!std::filesystem::is_regular_file(path)) {
     HeaderBlock header;
     memset(&header, 0, sizeof(header));
     strcpy(header.signature, SIGNATURE);
     header.db_version = 0;
     header.active = 0;
-    header.head[0].root = sizeof(header);
-    header.head[0].txn_id = 1;
+    header.txn[0].root = sizeof(header);
+    header.txn[0].txn_id = 1;
 
     auto trie_pool = get_pool(TrieBlock::SIZE);
     const BlockArea& block_sizes = BLOCK_SIZES[trie_pool];
-    BlockPool& pool = header.head[0].pools[trie_pool];
+    BlockPool& pool = header.txn[0].pools[trie_pool];
     pool.current = sizeof(header) + TrieBlock::SIZE;
     pool.last = sizeof(header) + block_sizes.area_size;
 
-    header.head[0].file_size = pool.last;
+    header.txn[0].file_size = pool.last;
 
     TrieBlock root;
-    root.init(sizeof(header));
-    root.writable = 0;
+    root.offset = sizeof(header);
+    root.txn_id = 1;
+    root.init();
 
     std::ofstream fhead(path, std::ios::out | std::ios::binary);
     fhead.write((char*)&header, sizeof(header));
     fhead.write((char*)&root, sizeof(root));
     fhead.close();
 
-    std::filesystem::resize_file(path, header.head[0].file_size);
+    std::filesystem::resize_file(path, header.txn[0].file_size);
 
     TESTPOINT(DBMemory::init::1);
   } else {
@@ -56,301 +74,257 @@ INLINE void DBMemory::init(const char* path) {
       throw std::runtime_error("wrong filetype");
     }
   }
-}
-
-INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
-  memset(&head, 0, sizeof(head));
 
   size_t file_size = std::filesystem::file_size(path);
-  file = file_mapping(path, read_only);
+  file = file_mapping(path, read_write);
 
   if (!map_size) {
     map_size = (1 + (file_size / T)) * T;
+    // for Valgrind 
     map_size = 20 * G;
   }
 
-  std::cout << "create db: " << path << "  " << map_size << std::endl;
-  region = mapped_region(file, read_only, 0, map_size);
+  region = mapped_region(file, read_write, 0, map_size);
   db = (HeaderBlock*)region.get_address();
 
-  assert(db->head[0].file_size <= file_size);
-  assert(db->head[1].file_size <= file_size);
-
-  writeable_map.reserve(128);
-
-  output.open(path,
-              std::ios::in | std::ios::out | std::ios::binary | std::ios::ate);
+  assert(db->txn[0].file_size <= file_size);
+  assert(db->txn[1].file_size <= file_size);
 }
 
-INLINE DBMemory::~DBMemory() {}
+INLINE void DBMemory::init_shared() {
+  std::vector<std::string> parts;
+  boost::split(parts, get_filename(), boost::is_any_of("/\\"));
+  std::string name = *parts.rbegin();
+  name.insert(0, "shared-");
+  try {
+    shared_object = shared_memory_object(create_only, name.c_str(), read_write);
+    shared_object.truncate(sizeof(SharedMem));
+    shared_region = mapped_region(shared_object, read_write);
+    shared = (SharedMem*)shared_region.get_address();
+    memset(shared, 0, sizeof(SharedMem));
 
-INLINE const DBMeta* DBMemory::get_active_head() const {
-  return &db->head[db->active];
+    int next_active = (db->active + 1) & 1;
+    if (db->txn[db->active].txn_id < db->txn[next_active].txn_id) {
+      // an unfinished transaction
+      commit();
+      TESTPOINT(UnfinishedCommit);
+    }
+  } catch (...) {
+    shared_object = shared_memory_object(open_only, name.c_str(), read_write);
+    shared_region = mapped_region(shared_object, read_write);
+    shared = (SharedMem*)shared_region.get_address();
+  }
+}
+
+INLINE const DBTransaction* DBMemory::get_active_txn() const {
+  return &db->txn[db->active];
 }
 
 INLINE const BlockUnion* DBMemory::get_root() const {
-  return get_block(get_active_head()->root);
+  return get_block(get_active_txn()->root);
 }
 
-INLINE block_ptr DBMemory::alloc_cow_block(tid_t min_txn_id, size_t size) {
-  offset_ptr offset = alloc_block(min_txn_id, size);
-  BlockUnion* block = writeable_pool.malloc();
-  writeable_map[offset] = block;
-  block->trie.init(offset);
-  block->block.writable = 1;
+const int TRIE_POOL = get_pool(TrieBlock::SIZE);
+
+INLINE block_ptr DBMemory::alloc_cow_block() {
+  BlockUnion* block = alloc_block(TRIE_POOL);
+  block->trie.init();
   return block;
 }
 
 INLINE void DBMemory::free_cow_block(BlockUnion* block) {
-  assert(block->block.type == kTrieBlock);
-  free_block(get_block(block->block.offset));
-  writeable_map.erase(block->block.offset);
+  assert(block->meta.type == kTrieBlock);
+  free_block(get_block(block->meta.offset), TRIE_POOL);
 }
 
-INLINE block_ptr DBMemory::get_txn_block(offset_ptr offset) {
-  auto found = writeable_map.find(offset);
-  if (found == writeable_map.end()) return get_block(offset);
-  return found->second;
-}
-
-INLINE block_ptr DBMemory::clone_cow_block(tid_t min_txn_id,
-                                           offset_ptr offset) {
+INLINE block_ptr DBMemory::clone_cow_block(offset_ptr offset) {
   block_ptr org_block = get_block(offset);
-  BlockUnion* block = alloc_cow_block(min_txn_id, org_block->block.size);
+  assert(org_block->meta.type == kTrieBlock);
 
-  assert(org_block->block.type == kTrieBlock);
+  BlockUnion* block = alloc_cow_block();
+
   block->trie.used = org_block->trie.used;
   memcpy(block->trie.data, org_block->trie.data, block->trie.used);
 
-  free_block(org_block);
+  free_block(org_block, TRIE_POOL);
   return block;
 }
 
-INLINE BlockContainer* DBMemory::get_writeable_container(offset_ptr offset) {
-  if (offset) {
-    auto found = writeable_map.find(offset);
-    if (found != writeable_map.end()) return &found->second->container;
-
-    BlockUnion* block = writeable_pool.malloc();
-    writeable_map[offset] = block;
-    block->block.size = BlockContainer::SIZE;
-    block->block.offset = offset;
-    block->block.writable = 1;
-
-    BlockContainer* src = &get_block(offset)->container;
-    memcpy(block, src, src->used_bytes());
-    return &block->container;
+INLINE block_ptr DBMemory::alloc_block(int pool_id) {
+  assert(txn.root);
+  BlockPool& pool = txn.pools[pool_id];
+  if (pool.free_start) {
+    tid_t min_txn_id = get_min_txn_id();
+    block_ptr free_block = get_block(pool.free_start);
+    if (free_block->meta.free_txn_id < min_txn_id) {
+      TESTPOINT(DBMemory::alloc_block::1);
+      pool.free_start = free_block->meta.next_free;
+      if (!pool.free_start) pool.free_end = 0;
+      free_block->meta.txn_id = txn.txn_id;
+      return free_block;
+    }
+    TESTPOINT(DBMemory::alloc_block::2);
   }
 
-  offset = alloc_new_block(FREE_POOL);
-  BlockUnion* block = writeable_pool.malloc();
-  writeable_map[offset] = block;
-  block->container.init(offset);
-  return &block->container;
-}
-
-INLINE offset_ptr DBMemory::alloc_block(tid_t min_txn_id, size_t size) {
-  assert(head.root);
-
-  auto pool_id = get_pool(size);
-  BlockPool& pool = head.pools[pool_id];
-  const BlockArea& area = BLOCK_SIZES[pool_id];
-
-  // Try to get the block from the freed space
-  offset_ptr* free(&pool.free);
-  while (*free) {
-    // find a freed block that is not in use by another cursor:
-    // freed.txn_id < min_txn_id
-    BlockContainer* container = get_writeable_container(*free);
-    if (container->min_txn_id >= min_txn_id) {
-        // there is now available free block in this container
-        free = &container->next;
-        TESTPOINT(DBMemory::alloc_block::1);
-        continue;
-    }
-
-    tid_t block_min_txn_id = 0xFFFFFFFFFFFFFFFF;
-    for (int i = container->count - 1; i >= 0; i--) {
-      BlockContainer::FreedBlock& freed = container->blocks[i];
-      if (freed.txn_id < min_txn_id) {
-        // the block is surely not used by any other read cursor
-        block_ptr pblock = get_block(freed.offset);
-        container->count--;
-        memmove(&container->blocks[i], &container->blocks[i + 1],
-                sizeof(BlockContainer::FreedBlock) * (container->count - i));
-
-        if (!container->count) {
-          // free the container
-          TESTPOINT(DBMemory::alloc_block::2);
-          *free = container->next;  // remove from list
-          free_container(container);
-        }
-        return pblock->block.offset;
-      }
-      block_min_txn_id = std::min(block_min_txn_id, freed.txn_id);
-      TESTPOINT(DBMemory::alloc_block::3);
-    }
-    container->min_txn_id = block_min_txn_id;
-    free = &container->next;
-    TESTPOINT(DBMemory::alloc_block::4);
-  }
-
-  TESTPOINT(DBMemory::alloc_block::5);
-  return alloc_new_block(pool_id);
+  TESTPOINT(DBMemory::alloc_block::3);
+  offset_ptr new_offset = alloc_new_block(pool_id);
+  block_ptr free_block = get_block(new_offset);
+  free_block->meta.txn_id = txn.txn_id;
+  free_block->meta.offset = new_offset;
+  return free_block;
 }
 
 INLINE offset_ptr DBMemory::alloc_new_block(int pool_id) {
-  assert(head.root);
+  assert(txn.root);
 
-  BlockPool& pool = head.pools[pool_id];
+  BlockPool& pool = txn.pools[pool_id];
   const BlockArea& area = BLOCK_SIZES[pool_id];
 
   if (pool.current == pool.last) {
     // we have to create a new pool area
-    pool.last = head.file_size + area.area_size;
+    pool.last = txn.file_size + area.area_size;
     std::filesystem::resize_file(get_filename(), pool.last);
-    pool.current = head.file_size;
-    head.file_size = pool.last;
+    pool.current = txn.file_size;
+    txn.file_size = pool.last;
+    TESTPOINT(DBMemory::alloc_new_block::1);
   }
 
   offset_ptr result(pool.current);
   pool.current += area.block_size;
+  TESTPOINT(DBMemory::alloc_new_block::2);
   return result;
 }
 
-INLINE void DBMemory::free_block(block_ptr block) {
-  assert(head.root);
+INLINE void DBMemory::free_block(block_ptr block, int pool_id) {
+  assert(txn.root);  // transacrion is active
+  if (pool_id < 0) pool_id = get_pool(block->meta.size);
 
-  auto pool_id = get_pool(block->block.size);
-  BlockPool& pool = head.pools[pool_id];
-  BlockContainer* container;
+  block->meta.free_txn_id = txn.txn_id;
 
-  if (!pool.free) {
+  BlockPool& pool = txn.pools[pool_id];
+  if (pool.last_free_start) {
+    block->meta.next_free = pool.last_free_start;
+    pool.last_free_start = block->meta.offset;
     TESTPOINT(DBMemory::free_block::1);
-    container = alloc_container();
-    pool.free = container->offset;
   } else {
+    block->meta.next_free = 0;
+    pool.last_free_start = pool.last_free_end = block->meta.offset;
     TESTPOINT(DBMemory::free_block::2);
-    container = get_writeable_container(pool.free);
   }
-
-  if (container->count == BlockContainer::MAX_ITEMS) {
-    // the container is full -> create a new one and put it at the beginning of
-    // the list
-    TESTPOINT(DBMemory::free_block::3);
-    container = alloc_container();
-    container->next = pool.free;
-    pool.free = container->offset;
-  }
-
-  BlockContainer::FreedBlock& freed = container->blocks[container->count++];
-  freed.offset = block->block.offset;
-  freed.txn_id = head.txn_id;
 }
 
-INLINE BlockContainer* DBMemory::alloc_container() {
-  assert(head.root);
-
-  BlockPool& pool = head.pools[FREE_POOL];
-  const BlockArea& area = BLOCK_SIZES[FREE_POOL];
-
-  if (pool.free) {
-    // Get the block from the freed space
-    BlockContainer* container = get_writeable_container(pool.free);
-
-    if (!container->count) {
-      // the container is empty and free to use
-      TESTPOINT(DBMemory::alloc_container::1);
-      pool.free = container->next;  // remove from list
-      container->next = 0;
-      assert(container->min_txn_id == 0);
-      return container;
-    }
-
-    TESTPOINT(DBMemory::alloc_container::2);
-    BlockContainer::FreedBlock& freed = container->blocks[--container->count];
-    return get_writeable_container(freed.offset);
-  }
-
-  TESTPOINT(DBMemory::alloc_container::3);
-  return get_writeable_container(0);
-}
-
-void DBMemory::free_container(BlockContainer* container) {
-  assert(head.root);
-  assert(container->count == 0);
-
-  BlockPool& pool = head.pools[FREE_POOL];
-  if (!pool.free) {
-    TESTPOINT(DBMemory::free_container::1);
-    container->next = 0;
-    container->min_txn_id = 0;
-    pool.free = container->offset;
-    return;
-  }
-
-  BlockContainer* pool_free = get_writeable_container(pool.free);
-
-  if (pool_free->count == BlockContainer::MAX_ITEMS) {
-    // the container is full -> create a new one and put it at the beginning of
-    // the list
-    TESTPOINT(DBMemory::free_container::2);
-    offset_ptr offset = alloc_new_block(FREE_POOL);
-    pool_free = get_writeable_container(offset);
-    pool_free->init(offset);
-    pool_free->next = pool.free;
-    pool.free = offset;
-  }
-
-  BlockContainer::FreedBlock& freed = pool_free->blocks[pool_free->count++];
-  container->min_txn_id = 0;
-  freed.offset = container->offset;
-  freed.txn_id = 0;
-}
-
-INLINE void DBMemory::write(offset_ptr offset, const void* data, size_t size) {
-  output.seekp(offset, std::ios_base::beg);
-  output.write((const char*)data, size);
-}
-
-INLINE offset_ptr DBMemory::write_value(tid_t min_txn_id, const Slice& value) {
-  offset_ptr offset = alloc_block(min_txn_id, value.size());
+INLINE offset_ptr DBMemory::write_value(const Slice& value) {
+  auto pool_id = get_pool(value.size() + ValueBlock::OVERHEAD);
+  ValueBlock& block = alloc_block(pool_id)->value;
   const BlockArea& area = BLOCK_SIZES[get_pool(value.size())];
-  ValueBlock block;
   block.type = kValueBlock;
-  block.offset = offset;
   block.size = area.block_size;
-  block.writable = 0;
-  write(offset, &block, sizeof(block));
-  write(offset + sizeof(block), value.data(), value.size());
-  return offset;
+  memcpy(block.data, value.data(), value.size());
+  return block.offset;
 }
 
-INLINE void DBMemory::prepare_transaction() {
-  memcpy(&head, get_active_head(), sizeof(head));
-  head.txn_id++;
-}
-
-INLINE void DBMemory::write_transaction() {
-  int active = (db->active + 1) & 1;
-  offset_ptr offset = (((char*)&db->head[active]) - &db->data[0]);
-  write(offset, &head, sizeof(head));
-  for (auto iter = writeable_map.begin(); iter != writeable_map.end(); iter++) {
-    BlockUnion* block = iter->second;
-    block->block.writable = 0;
-    write(block->block.offset, block, block->block.size);
-    writeable_pool.free(block);
+INLINE bool DBMemory::start_transaction() {
+  if (ipcdetail::atomic_cas32(&shared->transaction_active, 1, 0) == 1) {
+    TESTPOINT(DBMemory::start_transaction::1);
+    return false;
   }
-  writeable_map.clear();
-  output.flush();
+
+  memcpy(&txn, get_active_txn(), sizeof(txn));
+  txn.txn_id++;
+
+  // add the free pools
+  for (int i = 0; i < BLOCK_POOL_COUNT; i++) {
+    BlockPool& pool = txn.pools[i];
+
+    if (pool.last_free_start) {
+      if (pool.free_end) {
+        get_block(pool.free_end)->meta.next_free = pool.last_free_start;
+        TESTPOINT(DBMemory::start_transaction::2);
+      }
+      else {
+        pool.free_start = pool.last_free_start;
+        TESTPOINT(DBMemory::start_transaction::3);
+      }
+
+      pool.free_end = pool.last_free_end;
+      pool.last_free_start = pool.last_free_end = 0;
+    }
+  }
+  return true;
 }
 
-INLINE void DBMemory::end_transaction() { memset(&head, 0, sizeof(head)); }
+INLINE void DBMemory::rollback() {
+  end_transaction();
+  shared->transaction_active = 0;
+}
 
-INLINE void DBMemory::commit_transaction() {
+INLINE void DBMemory::prepare_commit() {
   int active = (db->active + 1) & 1;
-  write(offsetof(HeaderBlock, active), &active, sizeof(active));
-  output.flush();
+  memcpy(&db->txn[active], &txn, sizeof(txn));
+  region.flush();
+  end_transaction();
 }
+
+INLINE void DBMemory::commit() {
+  db->active = (db->active + 1) & 1;
+  region.flush();
+  shared->transaction_active = 0;
+}
+
+INLINE void DBMemory::end_transaction() { memset(&txn, 0, sizeof(txn)); }
+
+INLINE int DBMemory::alloc_cursor() {
+  uint32_t last_index = shared->last_index;
+
+  for(int i = 0; i < SharedMem::READER_COUNT; i++) {
+    ReadCursor& cursor = shared->readers[
+        (i + last_index) % SharedMem::READER_COUNT];
+    if (!cursor.txn_id) {
+      if (ipcdetail::atomic_cas32(&shared->last_index, last_index, i+1) == last_index) {
+        cursor.txn_id = get_active_txn()->txn_id;
+        cursor.pid = boost::process::v2::current_pid();
+        return i;
+      }
+      else {
+        TESTPOINT(DBMemory::alloc_cursor::1);
+        return alloc_cursor();
+      }
+    }
+  }
+  throw std::runtime_error("Cannot allocate cursor");
+}
+
+INLINE offset_ptr DBMemory::update_cursor(int id) {
+  ReadCursor& cursor = shared->readers[id];
+  const DBTransaction* txn = get_active_txn();
+  if (txn->txn_id != cursor.txn_id) {
+    cursor.txn_id = txn->txn_id;
+    shared->max_free_transaction = 0;
+  }
+  return txn->root;
+}
+
+INLINE void DBMemory::free_cursor(int id) {
+  shared->readers[id].txn_id = 0;
+  shared->max_free_transaction = 0; // invalidate the transaction
+}
+
+INLINE tid_t DBMemory::get_min_txn_id() {
+  if (shared->max_free_transaction)
+    return shared->max_free_transaction;
+
+  tid_t min_trans = get_active_txn()->txn_id;
+  for(int i = 0; i < SharedMem::READER_COUNT; i++) {
+      ReadCursor& cursor = shared->readers[i];
+      if (cursor.txn_id)
+        min_trans = std::min(min_trans, cursor.txn_id);
+  }
+
+  shared->max_free_transaction = min_trans;
+  return min_trans;
+}
+
 
 }  // namespace leaves
+
+#endif  // _LEAVES_MEMORY_CPP

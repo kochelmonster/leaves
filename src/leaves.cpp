@@ -1,13 +1,13 @@
 #include <iostream>
 #include <leaves.hpp>
 
-#include "storage.hpp"
+#include "memory.hpp"
 #include "trace.hpp"
 
 namespace leaves {
 
 struct CursorImpl : public Cursor {
-  CursorImpl(Storage& storage, DB::db_ptr pdb) : trace(storage), pdb(pdb) {}
+  CursorImpl(DBMemory& storage, DB::db_ptr pdb) : trace(storage), pdb(pdb) {}
   bool isvalid() const { return trace.isvalid(); }
   void find(const Slice& key) { return trace.find(key); }
   void first() { trace.first(); }
@@ -36,7 +36,7 @@ struct DBImpl : public DB {
     return cursor_ptr(new CursorImpl(storage, me.lock()));
   }
 
-  Storage storage;
+  DBMemory storage;
   std::weak_ptr<DB> me;
 };
 
@@ -48,21 +48,21 @@ DB::db_ptr DB::open(const char* path) {
 
 #ifdef DEBUG
 
-void dump_node(std::ostream& out, const TrieBlock* page, node_ptr nid,
-               Storage* storage, int upper);
+size_t dump_node(std::ostream& out, const TrieBlock* page, node_ptr nid,
+                 DBMemory* storage, int upper);
 
-void dump_db(std::ostream& out, DB::db_ptr db) {
+size_t dump_db(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));
-  const TrieBlock* root = &sdb->storage.memory->get_root()->trie;
+  const TrieBlock* root = &sdb->storage.get_root()->trie;
   if (sdb->storage.transaction_active()) {
-    root = &sdb->storage.get_txn_block(sdb->storage.memory->head.root)->trie;
+    root = &sdb->storage.get_block(sdb->storage.txn.root)->trie;
   }
-  dump_node(out, root, *root->resolve_ptr(0), &sdb->storage, -1);
+  return dump_node(out, root, *root->resolve_ptr(0), &sdb->storage, -1);
 }
 
 uint64_t dump_info(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));
-  tid_t txn_id = sdb->storage.memory->get_active_head()->txn_id;
+  tid_t txn_id = sdb->storage.get_active_txn()->txn_id;
   out << "Transaction Id: " << txn_id << std::endl;
   return txn_id;
 }

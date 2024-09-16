@@ -4,11 +4,13 @@
 
 #include "node.hpp"
 
+#include <fstream>
+
 namespace leaves {
 
-INLINE Trace::Trace(Storage& storage_)
+INLINE Trace::Trace(DBMemory& storage_)
     : storage(storage_), transaction_active(false), _debug_stat_page_splits(0) {
-  const PersistBlock& root_block = storage.memory->get_root()->block;
+  const BlockMeta& root_block = storage.get_root()->meta;
   root = root_block.offset;
   cursor_id = storage.alloc_cursor();
   current_key.reserve(MAX_KEY_SIZE);
@@ -27,7 +29,7 @@ inline void check_offsets(Trace::stack_v stack) {
   offset_ptr offset = stack.begin()->offset;
   for (auto i = stack.begin(); i != stack.end(); i++) {
     assert(offset == i->offset);
-    assert(i->block->block.offset == offset);
+    assert(i->block->meta.offset == offset);
     if (i->pnode->type == kLink) {
       offset = i->node->link;
     }
@@ -87,7 +89,7 @@ INLINE void Trace::make_stack_writable() {
   // not a writable page -> change all pages in the cursor stack to writeables
   offset_ptr offset = 0;
   for (auto iter = stack.rbegin(); iter != stack.rend();) {
-    if (!iter->block->block.writable) {
+    if (iter->block->meta.txn_id != storage.txn.txn_id) {
       offset_ptr old_offset = iter->offset;
       block_ptr block = storage.clone_cow_block(iter->offset);
       iter->to_writable(block);
@@ -105,7 +107,7 @@ INLINE void Trace::make_stack_writable() {
           break;
       }
 
-      offset = block->block.offset;
+      offset = block->meta.offset;
     } else {
       if (offset) {
         // parent is already writable => just change the link
@@ -119,13 +121,13 @@ INLINE void Trace::make_stack_writable() {
   if (offset) {
     // change root
     assert(root != offset);
-    storage.memory->head.root = root = offset;
+    storage.txn.root = root = offset;
   }
   check_offsets(stack);
 }
 
 INLINE bool Trace::set_value(const Slice& value) {
-  if (value.size() > T - sizeof(PersistBlock))
+  if (value.size() > T - sizeof(BlockMeta))
     throw WrongValue("value too big");
 
   if (!transaction_active) {
@@ -134,9 +136,8 @@ INLINE bool Trace::set_value(const Slice& value) {
   }
 
   Transition* back = &stack.back();
-  if (!back->block->block.writable) {
+  if (back->block->meta.txn_id != storage.txn.txn_id)
     make_stack_writable();
-  }
 
   do {
     if (rest_key.empty()) {
@@ -152,6 +153,10 @@ INLINE bool Trace::set_value(const Slice& value) {
 INLINE Node* Trace::resolve(node_ptr pnode) {
   return back().block->trie.resolve(pnode);
 }
+
+size_t dump_node(std::ostream& out, const TrieBlock* page, node_ptr nid,
+                 DBMemory* storage, int upper);
+
 
 INLINE Trace::alloc_ptr Trace::alloc(ssize_t size, NodeType type) {
   node_ptr result = stack.back().block->trie.alloc(size, type);
@@ -179,7 +184,7 @@ INLINE Trace::alloc_ptr Trace::alloc(ssize_t size, NodeType type) {
   BlockSplitter splitter(*this);
 
   if (i < 0) {
-    storage.memory->head.root = root = splitter.split_block(block_root);
+    storage.txn.root = root = splitter.split_block(block_root);
   } else {
     Transition& t = stack[i];
     assert(t.pnode->type == kLink);
@@ -192,7 +197,6 @@ INLINE Trace::alloc_ptr Trace::alloc(ssize_t size, NodeType type) {
     assert(current_key.empty());
     stack.push_back(Transition(root));
   }
-
   // new find through splitted block
   while (stack.back().find(*this));
   return alloc_ptr{stack.back().block->trie.alloc(size, type), true};
@@ -249,7 +253,7 @@ INLINE Transition& Transition::clear(Trace& cursor) {
     block = cursor.get_block(offset);
     pnode = (node_ptr*)&block->trie.data[onode];
   }
-  pnode->val = 0;
+  pnode->type = 0;
   keypos = cursor.current_key.size();
   return *this;
 }
@@ -257,18 +261,18 @@ INLINE Transition& Transition::clear(Trace& cursor) {
 INLINE Transition& Transition::resolve(Trace& cursor) {
   if (!block) {
     block = cursor.get_block(offset);
-    assert(block->block.type == kTrieBlock);
-    pnode = (node_ptr*)&block->trie.data[onode];
+    assert(block->meta.type == kTrieBlock);
+    pnode = block->trie.resolve_ptr(onode);
   }
-  node = (Node*)&block->trie.data[pnode->offset()];
+  node = block->trie.resolve(*pnode);
   return *this;
 }
 
 INLINE void Transition::to_writable(block_ptr block_) {
   block = block_;
-  offset = block->block.offset;
-  pnode = (node_ptr*)&block->trie.data[onode];
-  node = (Node*)&block->trie.data[pnode->offset()];
+  offset = block->meta.offset;
+  pnode = block->trie.resolve_ptr(onode);
+  node = block->trie.resolve(*pnode);
 }
 
 INLINE bool Transition::advance(Trace& cursor) {
@@ -291,7 +295,7 @@ INLINE size_t BlockSplitter::find_splitpoint(Transition& transition) {
   transition.resolve(cursor);
   size_t size =
       leaves::find_splitpoint[transition.pnode->type](*this, transition);
-  if (!is_finished && size > 16 * K) {
+  if (!is_finished && size > TrieBlock::SPLIT) {
     splitpoint = transition;
     is_finished = true;
   }
@@ -304,23 +308,23 @@ INLINE offset_ptr BlockSplitter::split_block(Transition& block_root) {
   find_splitpoint(block_root);
 
   if (splitpoint.offset) {
-    TrieBlock* split1 = &cursor.storage.alloc_cow_block(TrieBlock::SIZE)->trie;
+    TrieBlock* split = &cursor.storage.alloc_cow_block()->trie;
     node_ptr result = leaves::move[splitpoint.pnode->type](
-        &splitpoint.block->trie, *splitpoint.pnode, split1);
-    *split1->resolve_ptr(0) = result;
+        &splitpoint.block->trie, *splitpoint.pnode, split);
+    *split->resolve_ptr(0) = result;
 
     // change the splitpoint to a link to the new block
     splitpoint.pnode->type = kLink;
-    splitpoint.node->link = split1->offset;
+    splitpoint.node->link = split->offset;
   }
 
-  TrieBlock* split2 = &cursor.storage.alloc_cow_block(TrieBlock::SIZE)->trie;
+  TrieBlock* split = &cursor.storage.alloc_cow_block()->trie;
   node_ptr result = leaves::move[block_root.pnode->type](
-      &block_root.block->trie, *block_root.pnode, split2);
-  *split2->resolve_ptr(0) = result;
+      &block_root.block->trie, *block_root.pnode, split);
+  *split->resolve_ptr(0) = result;
 
   cursor.storage.free_cow_block(block_root.block);
-  return split2->offset;
+  return split->offset;
 }
 
 }  // namespace leaves

@@ -89,7 +89,7 @@ INLINE bool find_trie(Trace& cursor, Transition& trans) {
 }
 
 INLINE bool find_value(Trace& cursor, Transition& trans) {
-  if (cursor.rest_key.size() && trans.node->value.child.val) {
+  if (cursor.rest_key.size() && trans.node->value.child.moffset) {
     trans.index = -1;
     cursor.stack.push_back(trans.derive(Value::offset()));
     return true;
@@ -206,7 +206,7 @@ INLINE ssize_t find_splitpoint_null(BlockSplitter& bs, Transition& trans) {
 
 template <class T>
 ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans) {
-  ssize_t size = 0;
+  ssize_t size = sizeof(T);
   const T& trie = T::cast(trans);
   int count = trie.count();
   for (int i = 0; i < count && !bs.is_finished; i++) {
@@ -217,11 +217,11 @@ ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans) {
 }
 
 INLINE ssize_t find_splitpoint_bit_trie(BlockSplitter& bs, Transition& trans) {
-  return find_splitpoint_trie<BitTrie>(bs, trans) + sizeof(BitTrie);
+  return find_splitpoint_trie<BitTrie>(bs, trans);
 }
 
 INLINE ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans) {
-  return find_splitpoint_trie<Trie>(bs, trans) + sizeof(Trie);
+  return find_splitpoint_trie<Trie>(bs, trans);
 }
 
 INLINE ssize_t find_splitpoint_value(BlockSplitter& bs, Transition& trans) {
@@ -274,7 +274,10 @@ node_ptr move_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
   int count = snode.count();
   for (int i = 0; i < count; i++) {
     node_ptr& cptr = snode.children[i];
-    if (cptr.type) dnode.children[i] = move[cptr.type](src, cptr, dest);
+    if (cptr.type) 
+      dnode.children[i] = move[cptr.type](src, cptr, dest);
+    else
+      dnode.children[i] = cptr;
   }
   return result;
 }
@@ -286,7 +289,7 @@ node_ptr move_value(TrieBlock* src, node_ptr psrc, TrieBlock* dest) {
   Value& dnode = dest->resolve(result)->value;
   dnode.size = snode.size;
   memcpy(&dnode, &snode, size);
-  if (snode.child.val)
+  if (snode.child.moffset)
     dnode.child = move[snode.child.type](src, snode.child, dest);
   return result;
 }
@@ -341,7 +344,7 @@ INLINE bool add_value(Trace& cursor, const Slice& value) {
     // it is a replace => remove old data
     Value& old_val = old_node->value;
     if (old_val.size > Value::SMALL_SIZE) {
-      cursor.storage.free_value(old_val.link);
+      cursor.storage.free_block(cursor.storage.get_block(old_val.link));
     }
     node.child = old_val.child;
     return true;
@@ -532,7 +535,7 @@ INLINE void set_value_compressed(Trace& cursor, const Slice& value) {
     back = &cursor.back();
     node = &back->node->compressed;
   }
-  node->size = split_index; // see upper comment
+  node->size = split_index;  // see upper comment
 
   node_ptr trie_child, upper_ptr(result.ptr);
   node_ptr lower_ptr(add(upper_ptr, sizeof(BitTrie), kBitTrie));
@@ -553,7 +556,7 @@ INLINE void set_value_compressed(Trace& cursor, const Slice& value) {
 
   // insert TrieUpper(TU) and TrieLower (TL) as child of node
   node->child = upper_ptr;
-  
+
   Transition tupper = back->derive(node->offset()).resolve(cursor);
   BitTrie& upper = tupper.node->bit_trie;
   tupper.index = upper.add(bit::upper(key));
@@ -582,8 +585,8 @@ INLINE void set_value_compressed(Trace& cursor, const Slice& value) {
 
 #ifdef DEBUG
 
-void dump_node(std::ostream& out, const TrieBlock* block, node_ptr pnode,
-               Storage* storage, int upper);
+size_t dump_node(std::ostream& out, const TrieBlock* block, node_ptr pnode,
+                 DBMemory* storage, int upper);
 
 const char* handler_names[] = {"kNull",  "kBitTrie", "kTrie",
                                "kValue", "kLink",    "kCompressed"};
@@ -610,13 +613,15 @@ INLINE void dump_id_space(std::ostream& out, const TrieBlock* block,
   out << "pspace: " << TrieBlock::DATA_SIZE - block->used << std::endl;
 }
 
-INLINE void dump_node_null(std::ostream& out, const TrieBlock* block,
-                           node_ptr pnode, Storage* storage, int upper) {
+INLINE size_t dump_node_null(std::ostream& out, const TrieBlock* block,
+                             node_ptr pnode, DBMemory* storage, int upper) {
   dump_id_space(out, block, pnode);
+  out << "---" << std::endl;
+  return 0;
 }
 
-INLINE void dump_node_link(std::ostream& out, const TrieBlock* block,
-                           node_ptr pnode, Storage* storage, int upper) {
+INLINE size_t dump_node_link(std::ostream& out, const TrieBlock* block,
+                             node_ptr pnode, DBMemory* storage, int upper) {
   dump_id_space(out, block, pnode);
 
   offset_ptr link = block->resolve(pnode)->link;
@@ -624,18 +629,18 @@ INLINE void dump_node_link(std::ostream& out, const TrieBlock* block,
 
   const TrieBlock* next_block = &storage->get_block(link)->trie;
   if (storage->transaction_active()) {
-    next_block = &storage->get_txn_block(link)->trie;
+    next_block = &storage->get_block(link)->trie;
   }
 
   node_ptr root = *next_block->resolve_ptr(0);
   out << "children: " << std::endl;
   out << "  - " << idstr(next_block, root) << std::endl;
   out << "---" << std::endl;
-  dump_node(out, next_block, root, storage, -1);
+  return dump_node(out, next_block, root, storage, -1);
 }
 
-INLINE void dump_node_bittrie(std::ostream& out, const TrieBlock* block,
-                              node_ptr pnode, Storage* storage, int upper) {
+INLINE size_t dump_node_bittrie(std::ostream& out, const TrieBlock* block,
+                                node_ptr pnode, DBMemory* storage, int upper) {
   const BitTrie& trie = block->resolve(pnode)->bit_trie;
   int size = trie.count();
   dump_id_space(out, block, pnode);
@@ -684,14 +689,16 @@ INLINE void dump_node_bittrie(std::ostream& out, const TrieBlock* block,
   /* upper < 0 means this trie object is the upper 4 bits
      otherwise it is the lower 4bits
    */
+  size_t value_count = 0;
   for (int i = 0; i < size; i++) {
     int u = upper < 0 ? indizes[i] : -1;
-    dump_node(out, block, trie.children[i], storage, u);
+    value_count += dump_node(out, block, trie.children[i], storage, u);
   }
+  return value_count;
 }
 
-INLINE void dump_node_trie(std::ostream& out, const TrieBlock* block,
-                           node_ptr pnode, Storage* storage, int upper) {
+INLINE size_t dump_node_trie(std::ostream& out, const TrieBlock* block,
+                             node_ptr pnode, DBMemory* storage, int upper) {
   const Trie& trie = block->resolve(pnode)->trie;
   int size = trie.count();
   dump_id_space(out, block, pnode);
@@ -702,7 +709,7 @@ INLINE void dump_node_trie(std::ostream& out, const TrieBlock* block,
     bool first = true;
     out << "bytes: [";
     for (int i = 0; i < 16; i++) {
-      if (trie.children[i].val) {
+      if (trie.children[i].moffset) {
         if (!first) {
           out << ", ";
         }
@@ -713,24 +720,42 @@ INLINE void dump_node_trie(std::ostream& out, const TrieBlock* block,
       }
     }
     out << "]" << std::endl;
+  } else {
+    bool first = true;
+    out << "bytes: [";
+    for (int i = 0; i < 16; i++) {
+      if (trie.children[i].moffset) {
+        if (!first) {
+          out << ", ";
+        }
+        first = false;
+        out << '"';
+        out << bitstr((char)i);
+        out << '"';
+      }
+    }
+    out << "]" << std::endl;
   }
 
   out << "children: " << std::endl;
   for (int i = 0; i < size; i++) {
-    if (trie.children[i].val)
+    if (trie.children[i].moffset) {
       out << "  - " << idstr(block, trie.children[i]) << std::endl;
-  }
-  out << "---" << std::endl;
-  for (int i = 0; i < size; i++) {
-    if (trie.children[i].val) {
-      int u = upper < 0 ? i : -1;
-      dump_node(out, block, trie.children[i], storage, u);
     }
   }
+  out << "---" << std::endl;
+  size_t value_count = 0;
+  for (int i = 0; i < size; i++) {
+    if (trie.children[i].moffset) {
+      int u = upper < 0 ? i : -1;
+      value_count += dump_node(out, block, trie.children[i], storage, u);
+    }
+  }
+  return value_count;
 }
 
-INLINE void dump_node_value(std::ostream& out, const TrieBlock* block,
-                            node_ptr pnode, Storage* storage, int upper) {
+INLINE size_t dump_node_value(std::ostream& out, const TrieBlock* block,
+                              node_ptr pnode, DBMemory* storage, int upper) {
   const Value& node = block->resolve(pnode)->value;
   dump_id_space(out, block, pnode);
   out << "size: " << (int)node.size << std::endl;
@@ -747,19 +772,21 @@ INLINE void dump_node_value(std::ostream& out, const TrieBlock* block,
     out << "[" << bitstr(p[i]) << "]";
   }
   out << "\"" << std::endl;
-  if (node.child.val) {
+  if (node.child.moffset) {
     out << "children: " << std::endl;
     out << "  - " << idstr(block, node.child) << std::endl;
     out << "---" << std::endl;
-    dump_node(out, block, node.child, storage, -1);
-  } else {
-    out << "children: []" << std::endl;
-    out << "---" << std::endl;
+    return dump_node(out, block, node.child, storage, -1) + 1;
   }
+
+  out << "children: []" << std::endl;
+  out << "---" << std::endl;
+  return 1;
 }
 
-INLINE void dump_node_compressed(std::ostream& out, const TrieBlock* block,
-                                 node_ptr pnode, Storage* storage, int upper) {
+INLINE size_t dump_node_compressed(std::ostream& out, const TrieBlock* block,
+                                   node_ptr pnode, DBMemory* storage,
+                                   int upper) {
   const Compressed& node = block->resolve(pnode)->compressed;
   dump_id_space(out, block, pnode);
   out << "size: " << (int)node.size << std::endl;
@@ -771,19 +798,19 @@ INLINE void dump_node_compressed(std::ostream& out, const TrieBlock* block,
   out << "children: " << std::endl;
   out << "  - " << idstr(block, node.child) << std::endl;
   out << "---" << std::endl;
-  dump_node(out, block, node.child, storage, -1);
+  return dump_node(out, block, node.child, storage, -1);
 }
 
-typedef void (*dump_node_t)(std::ostream& out, const TrieBlock* block,
-                            node_ptr pnode, Storage* storage, int upper);
+typedef size_t (*dump_node_t)(std::ostream& out, const TrieBlock* block,
+                              node_ptr pnode, DBMemory* storage, int upper);
 
 const dump_node_t dump_node_v[] = {dump_node_null, dump_node_bittrie,
                                    dump_node_trie, dump_node_value,
                                    dump_node_link, dump_node_compressed};
 
-INLINE void dump_node(std::ostream& out, const TrieBlock* block, node_ptr pnode,
-                      Storage* storage, int upper) {
-  dump_node_v[pnode.type](out, block, pnode, storage, upper);
+INLINE size_t dump_node(std::ostream& out, const TrieBlock* block,
+                        node_ptr pnode, DBMemory* storage, int upper) {
+  return dump_node_v[pnode.type](out, block, pnode, storage, upper);
 }
 
 #endif

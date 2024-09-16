@@ -94,18 +94,21 @@ struct Trie {
 
   // returns the index of the found child or -1
   int find(char bit) const {
-    if (!children[bit].val) return -1;
+    if (!children[bit].moffset) return -1;
     return bit;
   }
 
   int next(int bit) const {
     for (; bit < CHILDREN; bit++) {
-      if (children[bit].val) break;
+      if (children[bit].moffset) break;
     }
     return bit;
   }
 
-  int add(int bit) { return bit; }
+  int add(int bit) { 
+    children[bit] = node_ptr(1, kNull);
+    return bit; 
+  }
 
   static ssize_t offset(int index) { return sizeof(node_ptr) * index; }
   size_t count() const { return CHILDREN; }

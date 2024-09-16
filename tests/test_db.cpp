@@ -103,7 +103,7 @@ const char* names[] = { "A's", "ABC", "ACT", "AD", "AFC", "Abbe",
 
 
 namespace leaves {
-void dump_db(std::ostream& out, DB::db_ptr db);
+size_t dump_db(std::ostream& out, DB::db_ptr db);
 }
 
 
@@ -143,6 +143,10 @@ BOOST_AUTO_TEST_CASE(test_strings) {
     cursor->find(names[count]);
     BOOST_REQUIRE(!cursor->isvalid());
     cursor->set_value(value(count, 900));
+    /*if (leaves::dump_db(null_stream, db) != count+1) {
+      std::cerr << "error!" << std::endl;
+      break;
+    }*/
   }
   cursor->commit();
   std::stringstream cstr;

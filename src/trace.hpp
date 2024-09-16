@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "node.hpp"
-#include "storage.hpp"
+#include "memory.hpp"
 
 namespace leaves {
 
@@ -52,7 +52,7 @@ struct Transition {
 
 // A cursor to
 struct Trace {
-  Trace(Storage& storage_);
+  Trace(DBMemory& storage_);
   ~Trace();
 
   // return true if the cursor is on a valid position
@@ -69,8 +69,7 @@ struct Trace {
   void rollback();
 
   block_ptr get_block(offset_ptr offset) const {
-    return transaction_active ? storage.get_txn_block(offset)
-                              : storage.get_block(offset);
+    return storage.get_block(offset);
   }
 
   Transition& back() { return stack.back(); }
@@ -87,7 +86,7 @@ struct Trace {
   alloc_ptr alloc(ssize_t size, NodeType type);
   Node* resolve(node_ptr node);
 
-  Storage& storage;
+  DBMemory& storage;
 
   // registration id in storage.shared
   int cursor_id;

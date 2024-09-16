@@ -26,7 +26,7 @@
 //   readseq100K   -- read N/1000 100K values in sequential order in async mode
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
-static const char* FLAGS_benchmarks1 =
+static const char* FLAGS_benchmarks =
     "fillseq,"
     "fillseqsync,"
     "fillrandsync,"
@@ -39,7 +39,7 @@ static const char* FLAGS_benchmarks1 =
     "readseq100K,"
     "readrand100K,";
 
-static const char* FLAGS_benchmarks =
+static const char* FLAGS_benchmarks1 =
     "fillrandom,"
     "overwrite,"
     "readrandom,"
@@ -91,7 +91,7 @@ static const char* FLAGS_db = nullptr;
 
 #ifdef DEBUG
 namespace leaves {
-void dump_db(std::ostream& out, DB::db_ptr db);
+size_t dump_db(std::ostream& out, DB::db_ptr db);
 uint64_t dump_info(std::ostream& out, DB::db_ptr db);
 }
 

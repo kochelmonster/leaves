@@ -18,9 +18,8 @@ target_sources(core INTERFACE
     src/memory.hpp
     src/memory.cpp
     src/port.hpp
-    src/storage.cpp
-    src/storage.hpp
-    src/trie.cpp
+    src/pool.hpp
+    src/block.hpp
     src/node.cpp
     src/node.hpp
     src/trace.cpp
@@ -68,9 +67,6 @@ target_sources(test_memory INTERFACE
 
 target_link_libraries(test_memory PUBLIC test)
 
-add_executable(test_storage tests/test_storage.cpp)
-target_link_libraries(test_storage PUBLIC core test)
-
 add_executable(test_trie tests/test_trie.cpp)
 target_link_libraries(test_trie PUBLIC core test)
 
@@ -84,13 +80,12 @@ add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
-COMMAND ./test_storage
 #COMMAND ./test_trie
 COMMAND ./test_memory
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-# DEPENDS test_storage test_trie test_memory
+# DEPENDS test_trie test_memory
 DEPENDS test_memory
 )
 
@@ -115,7 +110,7 @@ add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp src/leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread core)
 target_compile_options(db_bench_leaves PUBLIC -g)
-#target_compile_options(db_bench_leaves PUBLIC -O3)
+target_compile_options(db_bench_leaves PUBLIC -O3)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
