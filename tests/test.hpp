@@ -32,20 +32,20 @@ namespace leaves {
 // defined in node.cpp
 
 struct node_ptr;
-void dump_node(std::ostream& out, const TrieBlock* page, node_ptr nid,
+void dump_node(std::ostream& out, const TrieBlock* page, const node_ptr& nid,
                DBMemory* storage, int upper = -1);
 }  // namespace leaves
 
 inline void dump_graph(const char* output, DBMemory& storage) {
   std::ofstream out(output);
-  const TrieBlock* root = &storage.get_root()->trie;
-  dump_node(out, root, *root->resolve_ptr(0), &storage);
+  const TrieBlock* root = storage.get_root().trie();
+  dump_node(out, root, root->root, &storage);
 }
 
 inline void compare_graph(const char* input, DBMemory& storage) {
   std::stringstream cstr;
-  const TrieBlock* root = &storage.get_root()->trie;
-  dump_node(cstr, root, *root->resolve_ptr(0), &storage);
+  const TrieBlock* root = storage.get_root().trie();
+  dump_node(cstr, root, root->root, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),
@@ -83,13 +83,13 @@ inline void insert(DBMemory& storage, const char* test_name, const Slice& key,
   Trace trace(storage);
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
-  BOOST_REQUIRE(!trace.isvalid());
+  BOOST_REQUIRE(!trace.is_valid());
 
   trace.set_value(value);
-  BOOST_REQUIRE(trace.isvalid());
+  BOOST_REQUIRE(trace.is_valid());
   trace.commit();
   check_graph(test_name, storage);
-  BOOST_REQUIRE(trace.isvalid());
+  BOOST_REQUIRE(trace.is_valid());
   BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
 }
 
@@ -220,7 +220,10 @@ inline void test_insertion(DBMemory& storage, const char* title,
   for (int i = 0; keys[i]; i++) {
     std::stringstream cstr;
     cstr << title << "_" << i << "_" << keys[i];
-    // std::cout << "insert " << keys[i] << std::endl;
+    std::cout << "insert " << i << ": " << keys[i] << std::endl;
+    if (i == 13) {
+      std::cout << "error" << std::endl;
+    }
     std::string test_name(cstr.str());
     test_name.resize(30);
     insert(storage, test_name.c_str(), keys[i]);
@@ -244,7 +247,7 @@ inline void test_remove(DBMemory& storage, const char* title, const char* keys[]
   for (int i = 0; keys[i]; i++) {
     std::cout << "insert " << keys[i] << std::endl;
     trace.find(keys[i]);
-    BOOST_REQUIRE(!trace.isvalid());
+    BOOST_REQUIRE(!trace.is_valid());
     trace.set_value(keys[i]);
     strings.push_back(keys[i]);
   }
@@ -256,7 +259,7 @@ inline void test_remove(DBMemory& storage, const char* title, const char* keys[]
   for (int i = 0; to_remove[i]; i++) {
     std::cout << "remove " << to_remove[i] << std::endl;
     trace.find(to_remove[i]);
-    BOOST_REQUIRE(trace.isvalid());
+    BOOST_REQUIRE(trace.is_valid());
     trace.remove();
 
     std::stringstream cstr;

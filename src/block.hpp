@@ -5,6 +5,8 @@
 #include <leaves.hpp>
 #include <stdexcept>
 
+#include "pool.hpp"
+
 #ifdef HEADER_ONLY
 #define INLINE inline
 #else
@@ -13,19 +15,11 @@
 
 namespace leaves {
 
-typedef uint64_t offset_ptr;
-typedef uint64_t tid_t;
-
-const size_t K = 1024;
-const size_t M = 1024 * K;
-const size_t G = 1024 * M;
-const size_t T = 1024 * G;
-
 #pragma pack(1)
 
 union Node;
 
-enum BlockType { kTrieBlock, kValueBlock };
+enum BlockType { kTrieBlock = 0, kValueBlock, kBigValueBlock };
 
 /* the metadata of a every block */
 struct BlockMeta {
@@ -49,93 +43,235 @@ struct BlockMeta {
   };
 };
 
+
+enum NodeType { kNull, kUpperTrie, kLowerTrie, kArray, kValue, kLink, kString };
+
 typedef uint16_t ssize_t;
 
-enum NodeType { kNull, kBitTrie, kTrie, kValue, kLink, kCompressed, kEndType };
+// the standard node size
+const ssize_t NODE_SIZE = 32;
 
-// A pointer inside a trie block.
+// the minimum node size (LinkNode)
+const ssize_t MIN_NODE_SIZE = sizeof(offset_ptr);
+
+
+// A pointer inside a TrieNode block.
 struct node_ptr {
   union {
     struct {
-      /* mini offset within the data attribute
-         the real offset is moffset << 3
-       */
-      ssize_t moffset : 13;
-
       // type of the node
-      ssize_t type : 3;
+      uint16_t type : 3;
+
+      // offset form
+      int16_t offset : 13;
     };
-    ssize_t val;
+    uint16_t val;
   };
-
-  node_ptr(ssize_t val_ = 0) : val(val_) {}
-  node_ptr(ssize_t moffset_, NodeType type_) : moffset(moffset_), type(type_) {}
-
-  node_ptr& operator=(const node_ptr& src) {
-    val = src.val;
-    return *this;
+  
+  node_ptr() : val(0) {}
+  node_ptr(const void* p, NodeType type_) : type(type_) {
+    offset = ((const char*)p - (const char*)this);
   }
 
-  ssize_t offset() const { return moffset << 3; }
+  bool is_valid() const { return offset != 0; }
+
+  Node* resolve() const {
+    return is_valid() ? (Node*)((char*)this + offset) : NULL;
+  }
+
+  void set(const void* p, NodeType type_) {
+    type = type_;
+    offset = ((const char*)p - (const char*)this);
+  }
+
+  operator Node*() { return resolve(); }
+
+  Node* operator->() { return resolve(); }
+  Node* operator->() const { return resolve(); }
+
+  node_ptr& operator=(const node_ptr& src) {
+    type = src.type;
+    offset = src.offset ? ((const char*)src.resolve() - (const char*)this) : 0;
+    return *this;
+  }
 };
 
+
 struct TrieBlock : public BlockMeta {
-  static const size_t SIZE = 16*K;
-  static const size_t SPLIT = SIZE / 16;
+  static const size_t SIZE = 4 * K;
+  static const int POOL_ID = get_pool(SIZE);
 
-  // count of used space in data array
-  ssize_t used;
+  offset_ptr value;  // pointer to Value block
+  ssize_t used;      // used bytes of data
+  node_ptr root;
 
-  static const size_t DATA_SIZE = SIZE - sizeof(BlockMeta) - sizeof(used);
+  static const size_t DATA_SIZE =
+      SIZE - sizeof(BlockMeta) - sizeof(value) - sizeof(used) - sizeof(root);
 
-  // memory of trie nodes
+  /* the maximum additional node size need to insert a new node
+   * in the structure (without the rest_key) */
+  static const size_t RESERVE_SIZE = 2 * NODE_SIZE;
+  static const size_t MAX_SPACE = DATA_SIZE - RESERVE_SIZE;
+
   char data[DATA_SIZE];
 
   void init() {
-    assert(offset);
-    size = SIZE;
+    assert(size == SIZE);
+    assert(offset > 0);
+    value = 0;
     type = kTrieBlock;
-    used = 8;  // multiple of 8
-    *resolve_ptr(0) = node_ptr();
+    used = 0;
+    root.val = 0;
   }
 
-  Node* resolve(node_ptr ptr) { return (Node*)&data[ptr.offset()]; }
-
-  const Node* resolve(node_ptr ptr) const {
-    return (const Node*)&data[ptr.offset()];
-  }
-
-  node_ptr* resolve_ptr(ssize_t onode) const { return (node_ptr*)&data[onode]; }
+  bool needs_split(ssize_t needed) const { return used + needed >= MAX_SPACE; }
+  ssize_t free_space() const { return DATA_SIZE - RESERVE_SIZE - used; }
 
   // allocs size bytes and returns node_ptr of the allocated area
-  node_ptr alloc(ssize_t size, NodeType type) {
-    assert(type != kNull);
-    assert((size & 7) == 0);
-
-    if (size + used <= DATA_SIZE) {
-      ssize_t allocated = used;
-      used += size;
-      memset(&data[allocated], 0, size);
-      return node_ptr(allocated >> 3, type);
-    }
-    return node_ptr(0, kNull);
+  Node* alloc(ssize_t size_ = NODE_SIZE) {
+    assert(used + size_ <= DATA_SIZE);
+    ssize_t allocated = used;
+    used += size_;
+    memset(&data[allocated], 0, size_);
+    return (Node*)&data[allocated];
   }
 };
 
+/* A block to save the small data of a TrieBlock.
 
-// A block for a big value
+   At the end of the block a reverse growing index table
+   pointing to the data block is stored.
+ */
+
 struct ValueBlock : public BlockMeta {
-  static const size_t OVERHEAD = sizeof(BlockMeta);
+  struct IndexEntry {
+    uint32_t offset;
+    uint32_t size;
+  };
+
+  uint32_t data_size;
+  uint16_t index_count;
+  static const size_t OVERHEAD =
+      sizeof(BlockMeta) + sizeof(index_count) + sizeof(data_size);
+  static const size_t INITAL_OVERHEAD = OVERHEAD + sizeof(IndexEntry);
+
+  char data[0];
+
+  IndexEntry& entry(uint16_t index) {
+    return *(((IndexEntry*)((char*)this + size)) - index);
+  }
+
+  void init() {
+    data_size = 0;
+    index_count = 0;
+  }
+
+  Slice get_value(uint16_t index) {
+    IndexEntry& entry_ = entry(index);
+    return Slice(&data[entry_.offset], entry_.size);
+  }
+
+  uint16_t set_init_value(const Slice& value) {
+    assert(size - INITAL_OVERHEAD > value.size());
+    assert(index_count == 0);
+    assert(data_size == 0);
+    index_count++;
+    IndexEntry& entry_ = entry(index_count);
+    entry_.offset = data_size;
+    entry_.size = value.size();
+    data_size += entry_.size;
+    memcpy(data + entry_.offset, value.data(), entry_.size);
+    return index_count;
+  }
+
+  size_t calc_copy_size(uint16_t index, const Slice& value) {
+    if (!index)
+      return data_size + OVERHEAD * (index_count + 1) * sizeof(IndexEntry) +
+             value.size();
+
+    auto entry_ = entry(index);
+    return data_size + OVERHEAD * (index_count) * sizeof(IndexEntry) +
+           value.size() - entry_.size;
+  }
+
+  uint16_t copy_block(ValueBlock* src, uint16_t index, const Slice& value) {
+    index_count = src->index_count;
+
+    memcpy(&entry(index_count), &src->entry(index_count),
+           sizeof(IndexEntry) * index_count);
+
+    if (!index) {
+      // Add new value
+      data_size = src->data_size;
+      memcpy(data, src->data, data_size);
+      IndexEntry& entry_ = entry(++index_count);
+      entry_.size = value.size();
+      entry_.offset = data_size;
+      memcpy(data + entry_.offset, value.data(), value.size());
+      data_size += entry_.size;
+      return index_count;
+    }
+
+    // Replace Value
+
+    IndexEntry& entry_ = entry(index);
+    data_size = src->data_size;
+    
+    // copy before index
+    memcpy(data, src->data, entry_.offset);
+
+    // copy value
+    memcpy(data + entry_.offset, value.data(), value.size());
+
+    // copy after index
+    memcpy(data + entry_.offset + value.size(),
+           src->data + entry_.offset + entry_.size,
+           data_size - entry_.offset - entry_.size);
+
+    // correct the entries
+    int delta = value.size() - entry_.size;
+    data_size += delta;
+    entry_.size = value.size();
+
+    for(int i = index+1 ; i <= index_count; i++) {
+      entry(i).offset += delta;
+    }
+    return index;
+  }
+};
+
+// A data block for very big Values
+struct BigValueBlock : public BlockMeta {
+  uint32_t data_size;
+  static const size_t OVERHEAD = sizeof(BlockMeta) + sizeof(data_size);
   char data[0];
 };
 
-#pragma pack(0)
+// typedef BlockMeta* block_ptr;
 
-union BlockUnion {
-  BlockMeta meta;
-  TrieBlock trie;
-  ValueBlock value;
+struct block_ptr {
+  BlockMeta* ptr;
+
+  TrieBlock* trie() { return static_cast<TrieBlock*>(ptr); }
+  BigValueBlock* bval() { return static_cast<BigValueBlock*>(ptr); }
+  ValueBlock* val() { return static_cast<ValueBlock*>(ptr); }
+
+  const TrieBlock* trie() const { return static_cast<const TrieBlock*>(ptr); }
+  BlockMeta* operator->() { return ptr; }
+  const BlockMeta* operator->() const { return ptr; }
+
+  void reset() { ptr = NULL; }
+
+  operator BlockMeta*() { return ptr; }
+  block_ptr& operator=(const block_ptr& src) {
+    ptr = src.ptr;
+    return *this;
+  }
+
+  bool is_valid() const { return ptr != NULL; }
 };
+
+#pragma pack(0)
 
 }  // namespace leaves
 

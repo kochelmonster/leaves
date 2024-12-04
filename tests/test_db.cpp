@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   for(count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
     cursor->find(names[count]);
-    BOOST_REQUIRE(!cursor->isvalid());
+    BOOST_REQUIRE(!cursor->is_valid());
     cursor->set_value(value(count, 900));
     /*if (leaves::dump_db(null_stream, db) != count+1) {
       std::cerr << "error!" << std::endl;
@@ -160,8 +160,8 @@ BOOST_AUTO_TEST_CASE(test_strings) {
     const char* name = names[rand_int];
     std::cout << "test " << name << " (" << rand_int << ")" << std::endl;
     cursor->find(name);
-    BOOST_REQUIRE(cursor->isvalid());
-    BOOST_REQUIRE_EQUAL(cursor->key().string(), std::string(name));
+    BOOST_REQUIRE(cursor->is_valid());
+    BOOST_REQUIRE_EQUAL(cursor->get_key().string(), std::string(name));
   }
 }
 

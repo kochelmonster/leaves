@@ -495,9 +495,9 @@ class Benchmark {
   void ReadSequential() {
     leaves::Slice key, value;
     leaves::DB::cursor_ptr cursor = db_->create_cursor();
-    for(cursor->first(); cursor->isvalid(); cursor->next()) {
-      key = cursor->key();
-      value = cursor->value();
+    for(cursor->first(); cursor->is_valid(); cursor->next()) {
+      key = cursor->get_key();
+      value = cursor->get_value();
       bytes_ += key.size() + value.size();
       FinishedSingleOp();
     }
@@ -512,8 +512,8 @@ class Benchmark {
       snprintf(ckey, sizeof(ckey), "%016d", k);
 
       cursor->find(ckey);
-      if (cursor->isvalid()) {
-        bytes_ += key.size() + cursor->value().size();
+      if (cursor->is_valid()) {
+        bytes_ += key.size() + cursor->get_value().size();
       }
       FinishedSingleOp();
     }

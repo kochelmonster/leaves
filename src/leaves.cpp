@@ -8,15 +8,15 @@ namespace leaves {
 
 struct CursorImpl : public Cursor {
   CursorImpl(DBMemory& storage, DB::db_ptr pdb) : trace(storage), pdb(pdb) {}
-  bool isvalid() const { return trace.isvalid(); }
+  bool is_valid() const { return trace.is_valid(); }
   void find(const Slice& key) { return trace.find(key); }
   void first() { trace.first(); }
   void last() { trace.last(); }
   void next() { trace.next(); }
   void prev() { trace.prev(); }
-  Slice key() const { return trace.current_key; }
-  Slice value() const {
-    if (trace.isvalid()) return trace.get_value();
+  Slice get_key() const { return trace.current_key; }
+  Slice get_value() {
+    if (trace.is_valid()) return trace.get_value();
     throw NoValidPosition();
   }
   void set_value(const Slice& value) { trace.set_value(value); }
@@ -48,16 +48,16 @@ DB::db_ptr DB::open(const char* path) {
 
 #ifdef DEBUG
 
-size_t dump_node(std::ostream& out, const TrieBlock* page, node_ptr nid,
+size_t dump_node(std::ostream& out, const TrieBlock* page, const node_ptr& pnode,
                  DBMemory* storage, int upper);
 
 size_t dump_db(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));
-  const TrieBlock* root = &sdb->storage.get_root()->trie;
+  const TrieBlock* root = sdb->storage.get_root().trie();
   if (sdb->storage.transaction_active()) {
-    root = &sdb->storage.get_block(sdb->storage.txn.root)->trie;
+    root = sdb->storage.get_block(sdb->storage.txn.root).trie();
   }
-  return dump_node(out, root, *root->resolve_ptr(0), &sdb->storage, -1);
+  return dump_node(out, root, root->root, &sdb->storage, -1);
 }
 
 uint64_t dump_info(std::ostream& out, DB::db_ptr db) {

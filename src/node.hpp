@@ -7,7 +7,6 @@
 #include <leaves.hpp>
 
 #include "memory.hpp"
-#include "port.hpp"
 
 #ifdef TESTING
 #include <sstream>
@@ -15,230 +14,189 @@
 
 namespace leaves {
 
-struct Transition;
-struct BlockSplitter;
-typedef uint16_t ssize_t;
-union Node;
-
-#pragma pack(1)
-
-// A trie node that represents the upper or lower 4bits of a char
-struct BitTrie {
-  static BitTrie& cast(Transition& trans);
-  static const BitTrie& cast(const Transition& trans);
-  static const NodeType type = kBitTrie;
-
-  size_t count() const { return popcount(bits); }
-
-  // returns the relative offset of the child with given index
-  static ssize_t offset(int index) {
-    return sizeof(bits) + sizeof(node_ptr) * index;
-  }
-
-  // returns the index of the found child or -1
-  int find(char key) const {
-    int bit = 1 << key;
-    if (!(bits & bit)) return -1;
-
-    return popcount(bits & (bit - 1));
-  }
-
-  int index(int bit) const {
-    uint16_t bitval = (1 << bit);
-    return bits & bitval ? popcount(bits & (bitval - 1)) : -1;
-  }
-
-  int next(int bit) const {
-    uint16_t nbits = bits & (0xFFFF << (bit + 1));
-    if (nbits) {
-      return ctz(nbits);
-    }
-    return -1;
-  }
-
-  int first() const { return ctz(bits); }
-
-  int prev(int bit) const {
-    if (bit) {
-      uint16_t nbits = bits & (0xFFFF >> (16 - bit));
-      if (nbits) return 15 - (clz(nbits) & 0xf);
-    }
-    return -1;
-  }
-
-  int last() const { return 15 - (clz(bits) & 0xf); }
-
-  int add(int bit) {
-    assert(!(bits & 1 << bit));
-    bits |= 1 << bit;
-    int idx = index(bit);
-    for (int i = popcount(bits) - 1; i > idx; i--) {
-      children[i] = children[i - 1];
-    }
-    children[idx].val = 0;
-    return idx;
-  }
-
-  // bit mask of the childrens bit value
-  uint16_t bits;
-  node_ptr children[7];
-};
-
-struct Trie {
-  static const int CHILDREN = 16;
-  node_ptr children[CHILDREN];
-
-  static Trie& cast(Transition& trans);
-  static const Trie& cast(const Transition& trans);
-  static const NodeType type = kTrie;
-
-  // returns the index of the found child or -1
-  int find(char bit) const {
-    if (!children[bit].moffset) return -1;
-    return bit;
-  }
-
-  int next(int bit) const {
-    for (; bit < CHILDREN; bit++) {
-      if (children[bit].moffset) break;
-    }
-    return bit;
-  }
-
-  int add(int bit) { 
-    children[bit] = node_ptr(1, kNull);
-    return bit; 
-  }
-
-  static ssize_t offset(int index) { return sizeof(node_ptr) * index; }
-  size_t count() const { return CHILDREN; }
-};
-
-// compressed trie node
-struct Compressed {
-  node_ptr child;
-  uint16_t size;
-  char key[];
-
-  static ssize_t offset() { return offsetof(Compressed, child); }
-  static ssize_t calc_alloc_size(size_t size) {
-    return (sizeof(Compressed) + size + 7) & ~7;
-  }
-};
-
-struct Value {
-  static const size_t SMALL_SIZE = 1024;
-  node_ptr child;
-  size_t size;
-  union {
-    offset_ptr link;
-    char data[1];
-  };
-
-  static ssize_t calc_alloc_size(size_t size) {
-    ssize_t result = sizeof(Value);
-    if (size <= SMALL_SIZE)
-      result += std::max(size, sizeof(link)) - sizeof(link);
-    return (result + 7) & ~7;
-  }
-
-  static ssize_t offset() { return offsetof(Value, child); }
-};
-
-union Node {
-  offset_ptr link;
-  BitTrie bit_trie;
-  Trie trie;
-  Compressed compressed;
-  Value value;
-};
-
-#pragma pack(0)
-
-struct TrieBlock;
 struct Trace;
 struct Transition;
-
-typedef ssize_t (*is_valid_t)(const Transition& trans);
-ssize_t is_valid_null(const Transition& trans);
-ssize_t is_valid_value(const Transition& trans);
-const is_valid_t is_valid[] = {
-    is_valid_null, is_valid_null,       is_valid_null, is_valid_value,
-    is_valid_null, is_valid_null};
-
-typedef ssize_t (*get_size_t)(const Transition& trans);
-ssize_t get_size_null(const Transition& trans);
-ssize_t get_size_bit_trie(const Transition& trans);
-ssize_t get_size_trie(const Transition& trans);
-ssize_t get_size_value(const Transition& trans);
-ssize_t get_size_link(const Transition& trans);
-ssize_t get_size_compressed(const Transition& trans);
-
-const get_size_t get_size[] = {
-    get_size_null, get_size_bit_trie, get_size_trie,      get_size_value,
-    get_size_link, get_size_compressed};
-
-typedef bool (*find_t)(Trace& cursor, Transition& trans);
-bool find_null(Trace& cursor, Transition& trans);
-bool find_bit_trie(Trace& cursor, Transition& trans);
-bool find_trie(Trace& cursor, Transition& trans);
-bool find_value(Trace& cursor, Transition& trans);
-bool find_link(Trace& cursor, Transition& trans);
-bool find_compressed(Trace& cursor, Transition& trans);
-const find_t find[] = {find_null, find_bit_trie,   find_trie,      find_value,
-                       find_link, find_compressed};
-
-typedef bool (*advance_t)(Trace& cursor, const Transition& trans);
-bool advance_null(Trace& cursor, const Transition& trans);
-bool advance_trie(Trace& cursor, const Transition& trans);
-bool advance_value(Trace& cursor, const Transition& trans);
-bool advance_link(Trace& cursor, const Transition& trans);
-bool advance_compressed(Trace& cursor, const Transition& trans);
-const advance_t advance[] = {
-    advance_null, advance_trie,       advance_trie,      advance_value,
-    advance_link, advance_compressed};
-
-typedef void (*set_value_t)(Trace& cursor, const Slice& value);
-void set_value_null(Trace& cursor, const Slice& value);
-void set_value_bit_trie(Trace& cursor, const Slice& value);
-void set_value_trie(Trace& cursor, const Slice& value);
-void set_value_value(Trace& cursor, const Slice& value);
-void set_value_link(Trace& cursor, const Slice& value);
-void set_value_compressed(Trace& cursor, const Slice& value);
-const set_value_t set_value[] = {
-    set_value_null, set_value_bit_trie,   set_value_trie,      set_value_value,
-    set_value_link, set_value_compressed};
-
-/* finds a branch with at least 4K size and moves it to a new page */
-typedef ssize_t (*find_splitpoint_t)(BlockSplitter& bs, Transition& trans);
-ssize_t find_splitpoint_null(BlockSplitter& bs, Transition& trans);
-ssize_t find_splitpoint_bit_trie(BlockSplitter& bs, Transition& trans);
-ssize_t find_splitpoint_trie(BlockSplitter& bs, Transition& trans);
-ssize_t find_splitpoint_value(BlockSplitter& bs, Transition& trans);
-ssize_t find_splitpoint_link(BlockSplitter& bs, Transition& trans);
-ssize_t find_splitpoint_compressed(BlockSplitter& bs, Transition& trans);
-const find_splitpoint_t find_splitpoint[] = {
-    find_splitpoint_null,      find_splitpoint_bit_trie, find_splitpoint_trie,
-    find_splitpoint_value,     find_splitpoint_link,
-    find_splitpoint_compressed};
-
-/* moves a node and its children to a new block */
-typedef node_ptr (*move_t)(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-node_ptr move_null(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-node_ptr move_bit_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-node_ptr move_trie(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-node_ptr move_value(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-node_ptr move_link(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-node_ptr move_compressed(TrieBlock* src, node_ptr psrc, TrieBlock* dest);
-const move_t move[] = {move_null, move_bit_trie, move_trie,      move_value,
-                       move_link, move_compressed};
+struct TrieBlock;
+struct DBMemory;
 
 inline char sign(int x) { return (x > 0) - (x < 0); }
 
-/* adds a value an updates the current stack.
-   returns true if the values was replaced.
- */
-bool add_value(Trace& cursor, const Slice& value);
+struct Trace;
+
+#pragma pack(1)
+
+struct NodeBase {
+  int min_space() const;
+};
+
+struct ValueNode : public NodeBase {
+  static const NodeType ntype = kValue;
+  static const size_t SMALL_SIZE =
+      1015;  // 256*1024 - sizeof(BlockMeta) - sizeof
+  int min_space() const { return child.is_valid() ? MIN_NODE_SIZE : 0; }
+
+  struct {
+    uint16_t bigval : 1;
+    uint16_t index : 15;  // index in ValueBlock (1 based, index==0 means no
+                          // value assigned)
+  };
+
+  /*
+  in find index = 1 means to go on ==> 
+  child is on same position as trie->children[1]
+  */
+  node_ptr child;
+
+  static ValueNode& cast(Node* n);
+  int reduce_space(int space) const { return space - sizeof(ValueNode); }
+  void move(ValueNode& dest, TrieBlock& block, int space_left,
+            DBMemory& storage);
+  void set_value(Trace& trace, const Slice& value);
+  const Slice& get_value(const Trace& trace) const;
+};
+
+struct StringNode : public NodeBase {
+  static const NodeType ntype = kString;
+  node_ptr child;
+  uint8_t size;  // assert(size >= 2) !
+  static const uint8_t MAX_SIZE = NODE_SIZE - sizeof(child) - sizeof(size);
+  char key[MAX_SIZE];
+
+  static StringNode& cast(Node* n);
+  int find(const Slice& rest_key) const {
+    size_t size_ = std::min((size_t)size, rest_key.size());
+    int index = sign(memcmp(key, rest_key.data(), size_));
+    return !index ? std::min(sign(rest_key.size() - size), (char)0) : index;
+  }
+
+  void add_key(Trace& trace);
+  void insert(Trace& trace);
+  void create_split_part(Trace& trace, ssize_t index, node_ptr& ptr);
+  int reduce_space(int space) const { return space - sizeof(StringNode); }
+  void move(StringNode& dest, TrieBlock& block, int space_left,
+            DBMemory& storage);
+};
+
+struct TrieNode : public NodeBase {
+  static const int CHILDREN = 16;
+  node_ptr children[CHILDREN];
+
+  int next(int bit) const {
+    for (; bit < CHILDREN; bit++) {
+      if (children[bit].is_valid()) break;
+    }
+    return bit;
+  }
+
+  void move(TrieNode& dest, TrieBlock& block, int space_left,
+            DBMemory& storage);
+};
+
+struct UpperTrieNode : public TrieNode {
+  static const NodeType ntype = kUpperTrie;
+  static UpperTrieNode& cast(Node* n);
+  static int calc_index(char key) { return (key >> 4) & 0xF; }
+  void insert(Trace& trace);
+  int reduce_space(int space) const;
+};
+
+inline int remove_last_bit(int number) { return (number >> 1) << 1; }
+
+struct LowerTrieNode : public TrieNode {
+  static const NodeType ntype = kLowerTrie;
+  static LowerTrieNode& cast(Node* n);
+  static int calc_index(char key) { return key & 0xF; }
+
+  void insert(Trace& trace);
+  int reduce_space(int space) const { return remove_last_bit(space); }
+  int min_space() const {
+    for (ssize_t i = 0; i < CHILDREN; i++) {
+      switch (children->type) {
+        case kArray:
+        case kString:
+        case kUpperTrie:
+          return NODE_SIZE + MIN_NODE_SIZE;
+      }
+    }
+    return MIN_NODE_SIZE;
+  }
+};
+
+struct ArrayNode : public NodeBase {
+  static const NodeType ntype = kArray;
+  static const int MAX_SIZE = 10;
+  node_ptr children[MAX_SIZE];
+  char keys[MAX_SIZE];
+  ssize_t size;
+
+  static ArrayNode& cast(Node* n);
+  UpperTrieNode& make_parent(Trace& trace, char key);
+  void insert(Trace& trace);
+
+  int min_space() const {
+    for (ssize_t i = 0; i < size; i++) {
+      switch (children->type) {
+        case kArray:
+        case kString:
+        case kUpperTrie:
+          return NODE_SIZE + MIN_NODE_SIZE;
+      }
+    }
+    return MIN_NODE_SIZE;
+  }
+
+  int reduce_space(int space) const {
+    if (space & 1 == 0) {
+      // Parent is no UpperTrieNode
+      space = (space - sizeof(ArrayNode)) / size;
+    }
+    return remove_last_bit(space);
+  }
+
+  void add_key(Trace& trace);
+  void move(ArrayNode& dest, TrieBlock& block, int space_left,
+            DBMemory& storage);
+};
+
+struct LinkNode : public NodeBase {
+  static const NodeType ntype = kLink;
+  int min_space() const { return 0; }
+  int reduce_space(int space) const { return space; }
+  offset_ptr link;
+
+  static LinkNode& cast(Node* n);
+  void move(LinkNode& dest, TrieBlock& block, int space_left,
+            DBMemory& storage);
+};
+
+union Node {
+  LinkNode link;
+  TrieNode trie;
+  UpperTrieNode utrie;
+  LowerTrieNode ltrie;
+  ArrayNode atrie;
+  StringNode string;
+  ValueNode value;
+};
+
+inline int NodeBase::min_space() const { return sizeof(LinkNode); }
+
+inline UpperTrieNode& UpperTrieNode::cast(Node* n) { return n->utrie; }
+
+inline LowerTrieNode& LowerTrieNode::cast(Node* n) { return n->ltrie; }
+
+inline ArrayNode& ArrayNode::cast(Node* n) { return n->atrie; };
+
+inline StringNode& StringNode::cast(Node* n) { return n->string; }
+
+inline ValueNode& ValueNode::cast(Node* n) { return n->value; }
+
+inline LinkNode& LinkNode::cast(Node* n) { return n->link; }
+
+#pragma pack(0)
+
+struct Trace;
+struct Transition;
 
 }  // namespace leaves
 

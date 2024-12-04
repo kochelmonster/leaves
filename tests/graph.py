@@ -20,7 +20,6 @@ TNODE = """"{id}" [fillcolor=pink label="{{{{{id}}}|{{{slots}}}}}"]"""
 
 class Graph:
     def make_graph(self, nodes):
-        self.upper_bits = {}
         self.nodes = {}
 
         lines = ["digraph G {", "layout=dot", "node [shape=record style=filled]"]
@@ -65,7 +64,7 @@ class Graph:
         print("max page", max(map(int, pages.keys())))
         return "\n".join(lines)
 
-    def handle_kCompressed(self, node):
+    def handle_kString(self, node):
         return CNODE.format(**node)
 
     def handle_kValue(self, node):
@@ -73,65 +72,22 @@ class Graph:
             node["value"] = node["value"][:MAX_VAL_SIZE] + "..."
         return LNODE.format(**node)
 
-    def handle_kHeapLink(self, node):
-        return MLNODE.format(**node)
-
     def handle_kLink(self, node):
         return LINODE.format(**node)
 
-    def handle_kBitTrie(self, node):
-        if node["upper"]:
-            return self.UpperBitTrie(node)
-        else:
-            return self.LowerBitTrie(node)
-
-    def UpperBitTrie(self, node):
-        for i, c in enumerate(node["children"]):
-            id_ = c
-            if id_.startswith("kLink"):
-                id_ = self.nodes[id_]["children"][0]
-            self.upper_bits[id_] = node["bitindex"][i]
-
-        return self.bittrie(node)
-
-    def LowerBitTrie(self, node):
-        upper_bit = self.upper_bits[node["id"]]
-        chars = [
-            chr((upper_bit << 4) + lb) + "(" + str(lb) + ")" for lb in node["bitindex"]
-        ]
-        return self.bittrie(node, chars)
-
-    def bittrie(self, node, chars=None):
-        if not chars:
-            chars = [str(b) for b in node.get("bitindex", "")]
-        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
-        return BTNODE.format(slots=slots, **node)
-
-    def handle_kTrie(self, node):
-        if node["upper"]:
-            return self.UpperTrie(node)
-        else:
-            return self.LowerTrie(node)
-
-    def UpperTrie(self, node):
-        for i, c in enumerate(node["children"]):
-            id_ = c
-            self.upper_bits[id_] = i
-
-            if id_.startswith("kLink"):
-                id_ = self.nodes[id_]["children"][0]
-
-            self.upper_bits[node["id"]]
+    def handle_kUpperTrie(self, node):
         return self.trie(node)
 
-    def LowerTrie(self, node):
+    def handle_kLowerTrie(self, node):
+        return self.trie(node)
+
+    def handle_kArray(self, node):
         return self.trie(node)
 
     def trie(self, node):
         chars = node.get("bytes", "")
         slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
         return TNODE.format(slots=slots, **node)
-
 
     def handle_kNull(self, node):
         return '"{id}"'.format(**node)

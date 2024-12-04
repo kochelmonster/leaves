@@ -6,43 +6,39 @@ Test the trie nodes without bursting.
 
 #include "test.hpp"
 
-
 BOOST_AUTO_TEST_CASE(insert_null) {
   Preparation p;
-  {
-    DBMemory storage(TEST_FILE);
-  }
+  { DBMemory storage(TEST_FILE); }
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abc", NULL};
   test_insertion(storage, "insert_null", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_compresstrie_split) {
+BOOST_AUTO_TEST_CASE(insert_string_split) {
   Preparation p;
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abddefg", NULL};
-  test_insertion(storage, "insert_compress_split", keys);
+  test_insertion(storage, "insert_string_split", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_compresstrie_short) {
+BOOST_AUTO_TEST_CASE(insert_string_short) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abcdefg", "ab",  NULL};
-  test_insertion(storage, "insert_compress_short", keys);
+  const char *keys[] = {"abcdefg", "ab", NULL};
+  test_insertion(storage, "insert_string_short", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_compresstrie_start) {
+BOOST_AUTO_TEST_CASE(insert_string_start) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abcdefg", "ba",  NULL};
-  test_insertion(storage, "insert_compress_start", keys);
+  const char *keys[] = {"abcdefg", "ba", NULL};
+  test_insertion(storage, "insert_string_start", keys);
 }
-
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abc", "abcdefg",  NULL};
+  const char *keys[] = {"abc", "abcdefg", NULL};
   test_insertion(storage, "insert_value", keys);
 }
 
@@ -51,6 +47,14 @@ BOOST_AUTO_TEST_CASE(insert_trie_short) {
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
   test_insertion(storage, "insert_trie_short", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_array_overflow) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"A", "1", "a", "B", "C", "D", "E", "F", "2", "3", "4",
+                        "5", "6", "b", "c", "d", "e", "f", NULL};
+  test_insertion(storage, "insert_array_overflow", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_trie_lower_grow) {
@@ -64,8 +68,18 @@ BOOST_AUTO_TEST_CASE(insert_trie_lower_grow) {
 BOOST_AUTO_TEST_CASE(insert_trie_upper_grow) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"a ", "a0", "a!", "a@", "aP", "ap", "aa", "a€", "aü", NULL};
-  test_insertion(storage, "insert_trie_upper_grow", keys);
+
+  for (uint16_t i = 0; i < 256; i++) {
+    std::stringstream cstr;
+    cstr << "insert_trie_upper_grow_" << i;
+    std::string test_name(cstr.str());
+
+    std::stringstream nstr;
+    nstr << i;
+    std::string snum(nstr.str());
+    uint8_t val = i;
+    insert(storage, test_name.c_str(), Slice((char *)&val, 1), snum);
+  }
 }
 
 #ifdef WITH_REMOVE
@@ -79,12 +93,11 @@ BOOST_AUTO_TEST_CASE(remove_trie) {
   test_remove(storage, "remove_trie", keys, remove);
 }
 
-
 BOOST_AUTO_TEST_CASE(remove_intermediate_value) {
   Preparation p;
   Storage storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
-  const char *remove[] = {"ab", NULL };
+  const char *remove[] = {"ab", NULL};
   test_remove(storage, "remove_intermediate_value", keys, remove);
 }
 
@@ -92,7 +105,7 @@ BOOST_AUTO_TEST_CASE(remove_compress_short) {
   Preparation p;
   Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "abcefgh", "ab", NULL};
-  const char *remove[] = {"ab", NULL };
+  const char *remove[] = {"ab", NULL};
   test_remove(storage, "remove_compress_short", keys, remove);
 }
 #endif
@@ -104,16 +117,18 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   Trace trace(storage);
 
   trace.find(key);
-  BOOST_REQUIRE(!trace.isvalid());
+  BOOST_REQUIRE(!trace.is_valid());
   trace.set_value(key);
+  BOOST_REQUIRE_EQUAL(trace.get_value().string(), key.string());
+
   trace.commit();
 
   // std::cout << "insert " << test_name << std::endl;
   trace.find(key);
-  BOOST_REQUIRE(trace.isvalid());
+  BOOST_REQUIRE(trace.is_valid());
 
   std::string value;
-  for(int i = 0; i < 20; i++) {
+  for (int i = 0; i < 20; i++) {
     value.append("abcdefghijklmn");
   }
   trace.set_value(value);
@@ -175,8 +190,8 @@ BOOST_AUTO_TEST_CASE(page_split_trie) {
   }
   check_graph("page_split_trie", storage);
 
-  const char *testpoints[] = {"PageSplitAtTrie", "PageSplit", "PageMerge", NULL};
-  check_testpoints(testpoints);
+  const char *testpoints[] = {"PageSplitAtTrie", "PageSplit", "PageMerge",
+NULL}; check_testpoints(testpoints);
 }
 
 

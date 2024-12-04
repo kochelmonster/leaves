@@ -10,11 +10,17 @@ const size_t BLOCK_SIZE1 = 1 << 20;
 const size_t BLOCK_SIZE2 = 1 << 28;
 const size_t BLOCK_SIZE3 = 1 << 30;
 const size_t BLOCK_SIZE4 = (size_t)1 << 34;
+const size_t K = 1024;
+const size_t M = 1024 * K;
+const size_t G = 1024 * M;
+const size_t T = 1024 * G;
+
 
 struct BlockArea {
   size_t area_size;
   size_t block_size;
 };
+
 
 const static BlockArea BLOCK_SIZES[] = {
     {BLOCK_SIZE1, 2 * K},    // 0  -> 2048
@@ -44,13 +50,17 @@ const static BlockArea BLOCK_SIZES[] = {
 const int BLOCK_POOL_COUNT = (sizeof(BLOCK_SIZES) / sizeof(BlockArea));
 
 // returns the right pool id for a block size
-inline int get_pool(size_t size) {
+inline constexpr int get_pool(size_t size) {
   for (int i = 0; i < BLOCK_POOL_COUNT; i++) {
     if (size <= BLOCK_SIZES[i].block_size) return i;
   }
   throw std::overflow_error((const char*)"block size too big");
   return BLOCK_POOL_COUNT;
 }
+
+typedef uint64_t offset_ptr;
+typedef uint64_t tid_t;
+
 
 // Allocates and frees Blocks
 struct BlockPool {

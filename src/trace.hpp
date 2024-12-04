@@ -3,51 +3,48 @@
 #include <leaves.hpp>
 #include <vector>
 
-#include "node.hpp"
 #include "memory.hpp"
+#include "node.hpp"
 
 namespace leaves {
 
-const size_t MAX_KEY_SIZE = 1024;
-enum TrieState { Upper, Lower };
-
 struct Transition {
-  // offset of the trie block this transition works with
-  offset_ptr offset;
-
   // the pointer offset points to
   block_ptr block;
-
-  // pointer to a Node union: node = &trie_block.data[pnode->offset]
-  Node* node;
 
   // pointer to a node_ptr to node: pnode = &trie_block.data[onode]
   node_ptr* pnode;
 
-  // offset to pnode
-  ssize_t onode;
-
   // position inside the key
-  ssize_t keypos;
-
-  // upper or lower bits of char
-  TrieState trie_state;
+  size_t keypos;
 
   // the index of the current branch
   int index;
 
-  Transition(offset_ptr offset_ = 0, ssize_t onode_ = 0, ssize_t keypos_ = 0);
+  void rebase(block_ptr dest) {
+    pnode = (node_ptr*)(((char*)pnode-(char*)block.ptr)+(char*)dest.ptr);
+    block = dest;
+  }
+};
 
-  // fill node, pnode, offset
-  Transition& resolve(Trace& cursor);
-  Transition& clear(Trace& cursor);
-  Transition derive(ssize_t donode = 0, ssize_t keypos_ = 0) const;
+struct Stack {
+  typedef std::vector<Transition> stack_v;
+  stack_v data;
+  size_t size;
 
-  void to_writable(block_ptr block);
+  Stack();
 
-  bool advance(Trace& cursor);
-  bool find(Trace& cursor);
-  void set_value(Trace& cursor, const Slice& value);
+  void push(block_ptr block, node_ptr* pnode, size_t keypos, int index);
+
+  Transition& front() { return data[0]; }
+  Transition& back() { return data[size - 1]; }
+  const Transition& back() const { return data[size - 1]; }
+  void clear(int size_ = 0) {
+    for (int i = size_; i < size; i++) {
+      data[i].block.reset();
+    }
+    size = size_;
+  }
 };
 
 // A cursor to
@@ -56,61 +53,43 @@ struct Trace {
   ~Trace();
 
   // return true if the cursor is on a valid position
-  bool isvalid() const;
+  bool is_valid() const;
   void find(const Slice& key);
   void first();
   void last();
   void next();
   void prev();
-  bool set_value(const Slice& value);
-  Slice get_value() const;
+  void set_value(Slice value);
+  Slice get_value();
   void remove();
   void commit();
   void rollback();
 
-  block_ptr get_block(offset_ptr offset) const {
-    return storage.get_block(offset);
-  }
-
-  Transition& back() { return stack.back(); }
-
-  void make_stack_writable();
-  void update();
-
-  struct alloc_ptr {
-    node_ptr ptr;
-    bool need_refresh;  // if true alloc changed the current block
-  };
-
-  // allocates size bytes on the current block for an object of type.
-  alloc_ptr alloc(ssize_t size, NodeType type);
-  Node* resolve(node_ptr node);
-
+  void _advance_stack();
+  void _find();
+  void _make_stack_writable();
+  void _prepare_trie();
+  void _add_key_to_trie();
+  node_ptr* _add_string(block_ptr block, node_ptr* pnode);
+  void _update();
+  void _split_block();
+  void _clear_value();
+  
   DBMemory& storage;
 
   // registration id in storage.shared
   int cursor_id;
 
-  typedef std::vector<Transition> stack_v;
-
   offset_ptr root;
-  stack_v stack;
+  Stack stack;
   Slice rest_key;
   std::string current_key;
-
   bool transaction_active;
+  int last_root;
+  block_ptr current_value;
+  block_ptr current_big_value;
+
   uint32_t _debug_stat_page_splits;
-};
-
-struct BlockSplitter {
-  BlockSplitter(Trace& cursor_) : is_finished(false), cursor(cursor_) {}
-
-  size_t find_splitpoint(Transition& trans);
-  offset_ptr split_block(Transition& block_root);
-
-  bool is_finished;
-  Transition splitpoint;
-  Trace& cursor;
 };
 
 }  // namespace leaves

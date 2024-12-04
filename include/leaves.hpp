@@ -64,6 +64,12 @@ class Slice {
 
   std::string string() const { return std::string(data(), _size); }
 
+  const Slice& operator=(const Slice& src) {
+    _size = src.size();
+    _data = src.data();
+    return *this;
+  }
+
   template <typename ot>
   bool operator==(const ot& other) const {
     return size() == other.size() && memcmp(data(), other.data(), size()) == 0;
@@ -99,7 +105,7 @@ class Slice {
 class Cursor {
  public:
   // returns true if cursor is on a valid position
-  virtual bool isvalid() const = 0;
+  virtual bool is_valid() const = 0;
 
   // sets the cursor to key
   virtual void find(const Slice& key) = 0;
@@ -109,8 +115,8 @@ class Cursor {
   virtual void next() = 0;
   virtual void prev() = 0;
 
-  virtual Slice key() const = 0;
-  virtual Slice value() const = 0;
+  virtual Slice get_key() const = 0;
+  virtual Slice get_value() = 0;
 
   // sets the value raise an exception if a read cursor
   virtual void set_value(const Slice& value) = 0;

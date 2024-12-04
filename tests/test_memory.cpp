@@ -80,10 +80,10 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
 
       for(int i = 0; i < 2; i++) {
         block_ptr block = db.alloc_cow_block();
-        BOOST_REQUIRE(block->meta.type == kTrieBlock);
-        BOOST_REQUIRE(block->trie.offset != 0);
-        BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
-        block_offsets.push_back(block->trie.offset);
+        BOOST_REQUIRE(block->type == kTrieBlock);
+        BOOST_REQUIRE(block->offset != 0);
+        BOOST_REQUIRE(block->size == TrieBlock::SIZE);
+        block_offsets.push_back(block->offset);
       }
       file_size = db.txn.file_size;
     }
@@ -103,9 +103,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
 
       for (offset_ptr bo : block_offsets) {
         block_ptr block = db.get_block(bo);
-        BOOST_REQUIRE(block->trie.offset == bo);
-        BOOST_REQUIRE(block->trie.size == TrieBlock::SIZE);
-        BOOST_REQUIRE(*(int*)&block->trie.data[0] == 0);
+        BOOST_REQUIRE(block->offset == bo);
+        BOOST_REQUIRE(block->size == TrieBlock::SIZE);
+        BOOST_REQUIRE(*(int*)&block.trie()->data[0] == 0);
         db.free_block(block);
       }
       file_size = db.txn.file_size;
@@ -158,9 +158,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       db.shared->readers[cursor_id].txn_id = 1;
 
       block_ptr block = db.alloc_cow_block();
-      BOOST_REQUIRE(block->meta.offset != block_offsets[1]);
-      BOOST_REQUIRE(block->meta.offset != block_offsets[0]);
-      block_offsets.push_back(block->trie.offset);
+      BOOST_REQUIRE(block->offset != block_offsets[1]);
+      BOOST_REQUIRE(block->offset != block_offsets[0]);
+      block_offsets.push_back(block->offset);
       db.free_block(block);
 
       auto &pool = db.txn.pools[TRIE_POOL];
@@ -197,7 +197,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       BOOST_REQUIRE(pool.free_end == block_offsets[2]);
 
       block_ptr block = db.alloc_cow_block();
-      BOOST_REQUIRE(block->meta.offset == block_offsets[1]);
+      BOOST_REQUIRE(block->offset == block_offsets[1]);
       
       BOOST_REQUIRE(pool.last_free_start == 0);
       BOOST_REQUIRE(pool.last_free_end == 0);

@@ -3,7 +3,6 @@
 #define _LEAVES_MEMORY_HPP
 
 #include "block.hpp"
-#include "pool.hpp"
 
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
@@ -26,8 +25,6 @@ namespace leaves {
 using boost::interprocess::file_mapping;
 using boost::interprocess::mapped_region;
 using boost::interprocess::shared_memory_object;
-
-typedef BlockUnion* block_ptr;
 
 
 // shared alloc structure for all read cursor
@@ -77,7 +74,9 @@ struct DBMemory {
   }
 
   // get const pointer to a memory block
-  block_ptr get_block(offset_ptr offset) const;
+  block_ptr get_block(offset_ptr offset) const {
+    return block_ptr{ .ptr = (BlockMeta*)&db->data[offset] };
+  }
 
   // get the minimal transaction id of all active cursors
   tid_t get_min_txn_id();
@@ -98,25 +97,25 @@ struct DBMemory {
      if the block is reclaimed from the free blocks, its transaction id must be
      lower than min_txn_id.
   */
-  block_ptr alloc_block(int poolid);
+  block_ptr alloc_block(int pool_id);
 
   // Allocs a new block in the pool area. It will not reuse a block
   offset_ptr alloc_new_block(int pool_id);
 
   // frees a a cow block
-  void free_cow_block(BlockUnion* block);
+  void free_cow_block(block_ptr block);
 
   // Releases a block to free memory.
   void free_block(block_ptr block, int pool_id=-1);
 
   // write a value direct to the database
-  offset_ptr write_value(const Slice& value);
+  block_ptr write_value(const Slice& value);
 
   // returns the database active transaction
   const DBTransaction* get_active_txn() const;
 
   // returns a pointer to the active root block
-  const BlockUnion* get_root() const;
+  const block_ptr get_root() const;
 
   // Transaction methods
   bool start_transaction();
@@ -146,9 +145,6 @@ struct DBMemory {
   DBTransaction txn;
 };
 
-inline block_ptr DBMemory::get_block(offset_ptr offset) const {
-  return (block_ptr)(&db->data[offset]);
-}
 
 #ifdef TESTING
 
