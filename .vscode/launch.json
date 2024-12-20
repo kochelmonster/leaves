@@ -11,7 +11,7 @@
             "_program": "${workspaceFolder}/build/db_bench_leaves",
             "program": "${workspaceFolder}/build/test_trie",
             "_program": "${workspaceFolder}/build/test_memory",
-            "args": ["-t", "insert_at_empty"],
+            "args": ["-t", "insert_leaf_split"],
             "_args": ["-t", "test_alloc_and_free_block"],
             "_args": ["--benchmarks=fillrandom", "--num=50000"],
             "stopAtEntry": false,

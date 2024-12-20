@@ -7,40 +7,33 @@ from pathlib import Path
 
 MAX_VAL_SIZE = 27
 
+LNODE = ('"{id}" [fillcolor=darkolivegreen1 label="(({id})|({keysize}-{key})|'
+         '({valuesize}-{value}))"]').replace("(", "{{").replace(")", "}}")
 
-CNODE = """"{id}" [fillcolor=yellow label="{{{{{id}|size:{size}}}|{keys}}}"]"""
-LNODE = (
-    """"{id}" [fillcolor=darkolivegreen1 label="{{{{{id}}}|size: {size}|{value}}}"]"""
-)
-MLNODE = """"{id}" [fillcolor=darksalmon label="{{{{{id}}}}}}}"]"""
-LINODE = """"{id}" [label="{{{id}}}}}"]"""
-BTNODE = """"{id}" [fillcolor=azure label="{{{{{id}|bits: {bits}}}|{{{slots}}}}}"]"""
-TNODE = """"{id}" [fillcolor=pink label="{{{{{id}}}|{{{slots}}}}}"]"""
+BNODE = '"{id}" [fillcolor={color} label="(({id})|{compress}({slots}))"]'.replace(
+    "(", "{{").replace(")", "}}")
 
 
 class Graph:
     def make_graph(self, nodes):
         self.nodes = {}
 
-        lines = ["digraph G {", "layout=dot", "node [shape=record style=filled]"]
+        lines = ["digraph G {", "layout=dot",
+                 "node [shape=record style=filled]"]
         add = lines.append
 
         # group nodes
         pages = {}
         for n in nodes:
             self.nodes[n["id"]] = n
-            page = n["id"].rsplit("-", 1)[1]
-            n["type"] = n["id"].split("-", 1)[0]
+            page = n["block"]
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
-            try:
-                size = pnodes[0]["pspace"]
-            except KeyError:
-                print("wrong node", pnodes[0])
-                raise
+            size = pnodes[0]["size"]
+            free = pnodes[0]["freespace"]
             add(f"subgraph cluster_Page{k} {{")
-            add(f'label = "{{{k}|size: {size}}}"')
+            add(f'label = "{{{k}|size: {size}|free: {free}}}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
@@ -49,14 +42,14 @@ class Graph:
 
         # add connections
         for n in nodes:
-            type_ = n["id"].split("-", 1)[0]
-            if not type_.endswith("Trie"):
-                for c in n.get("children", ()):
-                    if c != "kNull-0P0":
-                        add(f'"{n["id"]}" -> "{c}"')
-            else:
-                for i, c in enumerate(n.get("children", ())):
-                    add(f'"{n["id"]}":f{i} -> "{c}"')
+            type_ = n["type"]
+            start = 0
+            null_link = n.get("nulllink")
+            if null_link:
+                add(f'"{n["id"]}":f0 -> "{null_link}"')
+                start = 1
+            for i, c in enumerate(n.get("children", ()), start=start):
+                add(f'"{n["id"]}":f{i} -> "{c}"')
 
         add("}")
         add("")
@@ -64,33 +57,37 @@ class Graph:
         print("max page", max(map(int, pages.keys())))
         return "\n".join(lines)
 
-    def handle_kString(self, node):
-        return CNODE.format(**node)
+    def handle_branch(self, node):
+        branch = node.get("branch")
+        if branch == "array":
+            color = "yellow"
+        elif branch == "trie":
+            color = "lightblue"
+        else:
+            color = "pink"
 
-    def handle_kValue(self, node):
+        if node.get("compressed"):
+            compress = "{" + str(node["compressed"]["size"]) + \
+                "-" + node["compressed"]["key"] + "}|"
+        else:
+            compress = ""
+
+        children = []
+        null_link = node.get("nulllink")
+        if null_link:
+            children.append("")
+
+        keys = filter(bool, node.get("key", "").split("]["))
+        for k in keys:
+            children.append(k.lstrip("[").rstrip("]"))
+
+        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(children))
+        return BNODE.format(color=color, compress=compress, slots=slots, **node)
+
+    def handle_leaf(self, node):
         if len(node["value"]) > MAX_VAL_SIZE:
             node["value"] = node["value"][:MAX_VAL_SIZE] + "..."
         return LNODE.format(**node)
-
-    def handle_kLink(self, node):
-        return LINODE.format(**node)
-
-    def handle_kUpperTrie(self, node):
-        return self.trie(node)
-
-    def handle_kLowerTrie(self, node):
-        return self.trie(node)
-
-    def handle_kArray(self, node):
-        return self.trie(node)
-
-    def trie(self, node):
-        chars = node.get("bytes", "")
-        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(chars))
-        return TNODE.format(slots=slots, **node)
-
-    def handle_kNull(self, node):
-        return '"{id}"'.format(**node)
 
 
 def main(paths):
@@ -113,7 +110,7 @@ def main(paths):
 
 if __name__ == "__main__":
     debug = [
-        "cmpfiles/insert_trie_lower_grow_7_aG.yaml"
+        "cmpfiles/insert_compress_split_1_abddef.yaml"
     ]
 
     debug = [Path(__file__).parent / d for d in debug]

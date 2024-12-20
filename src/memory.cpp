@@ -23,8 +23,15 @@ using namespace boost::interprocess;
 
 namespace leaves {
 
+inline void init_block(Block* block, tid_t txn) {
+  block->txn_id = txn;
+  block->lower_bound = 0;
+  block->upper_bound =
+      BLOCK_SIZES[block->offset.pool_id].block_size - Block::HEADER_SIZE;
+  block->leaves.set(0, 0);
+}
+
 INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
-  assert(sizeof(node_ptr) == 2);
   assert(sizeof(block_ptr) == sizeof(char*));
   memset(&txn, 0, sizeof(txn));
   init_dbfile(path, map_size);
@@ -37,36 +44,31 @@ INLINE DBMemory::~DBMemory() {
 
 INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
   if (!std::filesystem::is_regular_file(path)) {
-    HeaderBlock header;
-    memset(&header, 0, sizeof(header));
+    const size_t BLOCK_START = padding(sizeof(Header), BLOCK0_SIZE);
+    union {
+      Header header;
+      char data[BLOCK_START];
+    };
+        
+    memset(&data, 0, sizeof(data));
     strcpy(header.signature, SIGNATURE);
     header.db_version = 0;
     header.active = 0;
-    header.txn[0].root = sizeof(header);
     header.txn[0].txn_id = 1;
+    header.txn[0].root.set(0, 0);
 
-    auto trie_pool = get_pool(TrieBlock::SIZE);
-    const BlockArea& block_sizes = BLOCK_SIZES[trie_pool];
-    BlockPool& pool = header.txn[0].pools[trie_pool];
-    pool.current = sizeof(header) + TrieBlock::SIZE;
-    pool.last = sizeof(header) + block_sizes.area_size;
-
+    // header is part of the first block area
+    const BlockArea& sizes = BLOCK_SIZES[0];
+    BlockPool& pool = header.txn[0].pools[0];
+    assert(sizeof(data) % sizes.block_size == 0);
+    pool.current = sizeof(data);
+    pool.last = sizes.area_size;
     header.txn[0].file_size = pool.last;
 
-    TrieBlock root;
-    root.size = TrieBlock::SIZE;
-    root.offset = sizeof(header);
-    root.txn_id = 1;
-    root.init();
-    memset(root.data, 0, sizeof(root.data));
-
     std::ofstream fhead(path, std::ios::out | std::ios::binary);
-    fhead.write((char*)&header, sizeof(header));
-    fhead.write((char*)&root, sizeof(root));
+    fhead.write(data, sizeof(data));
     fhead.close();
-
     std::filesystem::resize_file(path, header.txn[0].file_size);
-
     TESTPOINT(DBMemory::init::1);
   } else {
     TESTPOINT(DBMemory::init::2);
@@ -89,7 +91,7 @@ INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
   }
 
   region = mapped_region(file, read_write, 0, map_size);
-  db = (HeaderBlock*)region.get_address();
+  db = (Header*)region.get_address();
 
   assert(db->txn[0].file_size <= file_size);
   assert(db->txn[1].file_size <= file_size);
@@ -120,54 +122,29 @@ INLINE void DBMemory::init_shared() {
   }
 }
 
-INLINE const DBTransaction* DBMemory::get_active_txn() const {
+INLINE const DBTransaction* DBMemory::active_txn() const {
   return &db->txn[db->active];
 }
 
-INLINE const block_ptr DBMemory::get_root() const {
-  return get_block(get_active_txn()->root);
-}
-
-INLINE block_ptr DBMemory::alloc_cow_block() {
-  block_ptr block = alloc_block(TrieBlock::POOL_ID);
-  block.trie()->init();
-  return block;
-}
-
-INLINE void DBMemory::free_cow_block(block_ptr block) {
-  assert(block->type == kTrieBlock);
-  free_block(get_block(block->offset), TrieBlock::POOL_ID);
-}
-
-INLINE block_ptr DBMemory::clone_cow_block(offset_ptr offset) {
-  block_ptr org_block = get_block(offset);
-  assert(org_block->type == kTrieBlock);
-
-  block_ptr block = alloc_cow_block();
-  TrieBlock* dest = block.trie();
-  TrieBlock* src = org_block.trie();
-
-  dest->value = src->value;
-  dest->used = src->used;
-  dest->root.val = src->root.val;
-  memcpy(dest->data, src->data, dest->used);
-
-  free_block(org_block, TrieBlock::POOL_ID);
-  return block;
+INLINE block_ptr DBMemory::clone_cow_block(block_ptr src) {
+  block_ptr dest = alloc_block(src->offset.pool_id);
+  dest->copy(src);
+  free_block(src);
+  return dest;
 }
 
 INLINE block_ptr DBMemory::alloc_block(int pool_id) {
-  assert(txn.root);
   BlockPool& pool = txn.pools[pool_id];
   if (pool.free_start) {
     tid_t min_txn_id = get_min_txn_id();
     block_ptr free_block = get_block(pool.free_start);
     if (free_block->free_txn_id < min_txn_id) {
       TESTPOINT(DBMemory::alloc_block::1);
-      pool.free_start = free_block->next_free;
+      assert(free_block->offset.offset == pool.free_start);
+      assert(free_block->offset.pool_id == pool_id);
+      pool.free_start = free_block->next_free();
       if (!pool.free_start) pool.free_end = 0;
-      free_block->txn_id = txn.txn_id;
-      free_block->size = BLOCK_SIZES[pool_id].block_size;
+      init_block(free_block, txn.txn_id);
       return free_block;
     }
     TESTPOINT(DBMemory::alloc_block::2);
@@ -176,15 +153,12 @@ INLINE block_ptr DBMemory::alloc_block(int pool_id) {
   TESTPOINT(DBMemory::alloc_block::3);
   offset_ptr new_offset = alloc_new_block(pool_id);
   block_ptr free_block = get_block(new_offset);
-  free_block->txn_id = txn.txn_id;
   free_block->offset = new_offset;
-  free_block->size = BLOCK_SIZES[pool_id].block_size;
+  init_block(free_block, txn.txn_id);
   return free_block;
 }
 
 INLINE offset_ptr DBMemory::alloc_new_block(int pool_id) {
-  assert(txn.root);
-
   BlockPool& pool = txn.pools[pool_id];
   const BlockArea& area = BLOCK_SIZES[pool_id];
 
@@ -195,40 +169,41 @@ INLINE offset_ptr DBMemory::alloc_new_block(int pool_id) {
     pool.current = txn.file_size;
     txn.file_size = pool.last;
     TESTPOINT(DBMemory::alloc_new_block::1);
+    /*
+    TODO: save the new file extend in an extra backup for every database and
+    pool Background: In a multidatabase environment with independent transaction
+      the following could happen:
+
+      1. Transaction A: alloc_new_block with file extend
+      2. Transaction B: alloc_new_block with file extend
+      3. Transaction A: rollback
+      4. Transaction B: commit
+
+      the extended area would be lost because with the rollback all pointers
+      to the new created area of A are lost.
+    */
   }
 
-  offset_ptr result(pool.current);
+  offset_ptr result;
+  result.set(pool_id, pool.current);
   pool.current += area.block_size;
   TESTPOINT(DBMemory::alloc_new_block::2);
   return result;
 }
 
-INLINE void DBMemory::free_block(block_ptr block, int pool_id) {
-  assert(txn.root);  // transacrion is active
-  if (pool_id < 0) pool_id = get_pool(block->size);
-
+INLINE void DBMemory::free_block(block_ptr block) {
   block->free_txn_id = txn.txn_id;
 
-  BlockPool& pool = txn.pools[pool_id];
+  BlockPool& pool = txn.pools[block->offset.pool_id];
   if (pool.last_free_start) {
-    block->next_free = pool.last_free_start;
-    pool.last_free_start = block->offset;
+    block->set_next_free(pool.last_free_start);
+    pool.last_free_start = block->offset.start();
     TESTPOINT(DBMemory::free_block::1);
   } else {
-    block->next_free = 0;
-    pool.last_free_start = pool.last_free_end = block->offset;
+    block->set_next_free(0);
+    pool.last_free_start = pool.last_free_end = block->offset.offset;
     TESTPOINT(DBMemory::free_block::2);
   }
-}
-
-INLINE block_ptr DBMemory::write_value(const Slice& value) {
-  auto pool_id = get_pool(value.size() + BigValueBlock::OVERHEAD);
-  block_ptr block = alloc_block(pool_id);
-  BigValueBlock* bval = block.bval();
-  block->type = kBigValueBlock;
-  bval->data_size = value.size();
-  memcpy(bval->data, value.data(), value.size());
-  return block;
 }
 
 INLINE bool DBMemory::start_transaction() {
@@ -237,16 +212,16 @@ INLINE bool DBMemory::start_transaction() {
     return false;
   }
 
-  memcpy(&txn, get_active_txn(), sizeof(txn));
+  memcpy(&txn, active_txn(), sizeof(txn));
   txn.txn_id++;
 
   // add the free pools
-  for (int i = 0; i < BLOCK_POOL_COUNT; i++) {
+  for (int i = 0; i < AREA_COUNT; i++) {
     BlockPool& pool = txn.pools[i];
 
     if (pool.last_free_start) {
       if (pool.free_end) {
-        get_block(pool.free_end)->next_free = pool.last_free_start;
+        get_block(pool.free_end)->set_next_free(pool.last_free_start);
         TESTPOINT(DBMemory::start_transaction::2);
       } else {
         pool.free_start = pool.last_free_start;
@@ -289,7 +264,7 @@ INLINE int DBMemory::alloc_cursor() {
     if (!cursor.txn_id) {
       if (ipcdetail::atomic_cas32(&shared->last_index, last_index, i + 1) ==
           last_index) {
-        cursor.txn_id = get_active_txn()->txn_id;
+        cursor.txn_id = active_txn()->txn_id;
         cursor.pid = boost::process::v2::current_pid();
         return i;
       } else {
@@ -303,7 +278,7 @@ INLINE int DBMemory::alloc_cursor() {
 
 INLINE offset_ptr DBMemory::update_cursor(int id) {
   ReadCursor& cursor = shared->readers[id];
-  const DBTransaction* txn = get_active_txn();
+  const DBTransaction* txn = active_txn();
   if (txn->txn_id != cursor.txn_id) {
     cursor.txn_id = txn->txn_id;
     shared->max_free_transaction = 0;
@@ -319,7 +294,7 @@ INLINE void DBMemory::free_cursor(int id) {
 INLINE tid_t DBMemory::get_min_txn_id() {
   if (shared->max_free_transaction) return shared->max_free_transaction;
 
-  tid_t min_trans = get_active_txn()->txn_id;
+  tid_t min_trans = active_txn()->txn_id;
   for (int i = 0; i < SharedMem::READER_COUNT; i++) {
     ReadCursor& cursor = shared->readers[i];
     if (cursor.txn_id) min_trans = std::min(min_trans, cursor.txn_id);

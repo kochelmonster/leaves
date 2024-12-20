@@ -20,7 +20,13 @@ namespace leaves {
 #endif
 #endif
 
+constexpr size_t padding(size_t a, size_t b) {
+    return ((a + b - 1) / b) * b; // Round up to the next multiple of b
+}
+
+
 const char SIGNATURE[] = "larch-leaves";
+const size_t SIGNATURE_SIZE = padding(sizeof(SIGNATURE), 8);
 static const int kMajorVersion = 3;
 static const int kMinorVersion = 0;
 
@@ -52,7 +58,8 @@ class Slice {
   const char* _data;
 
  public:
-  Slice(const char* data, size_t size) : _size(size), _data(data) {}
+  Slice(const void* data, size_t size)
+      : _size(size), _data((const char*)data) {}
 
   Slice(const char* str) : _size(strlen(str)), _data(str) {}
 
@@ -93,7 +100,7 @@ class Slice {
     return Slice(data() + size, _size - size);
   }
 
-  void iadvance(size_t size)  {
+  void iadvance(size_t size) {
     assert(size <= _size);
     _data += size;
     _size -= size;
@@ -123,7 +130,6 @@ class Cursor {
   virtual void remove() = 0;
   virtual void commit() = 0;
 };
-
 
 class DB {
  public:

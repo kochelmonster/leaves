@@ -2,12 +2,12 @@
 #ifndef _LEAVES_MEMORY_HPP
 #define _LEAVES_MEMORY_HPP
 
-#include "block.hpp"
-
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
+
+#include "block.hpp"
 
 #ifdef TESTING
 #include <string>
@@ -25,6 +25,24 @@ namespace leaves {
 using boost::interprocess::file_mapping;
 using boost::interprocess::mapped_region;
 using boost::interprocess::shared_memory_object;
+
+#pragma pack(1)
+// The header of the database
+struct Header {
+  // first bytes of the db file
+  char signature[SIGNATURE_SIZE];
+  
+  // version of the db file
+  uint16_t db_version;
+
+  // active db
+  uint16_t active;
+
+  char _padding[padding(2*sizeof(uint16_t), 8) - 2*sizeof(uint16_t)];
+
+  DBTransaction txn[2];
+};
+#pragma pack(0)
 
 
 // shared alloc structure for all read cursor
@@ -51,7 +69,6 @@ struct SharedMem {
   tid_t max_free_transaction;
 };
 
-
 /*
 Manages the memory blocks of the database
 */
@@ -69,54 +86,45 @@ struct DBMemory {
 
   const char* get_filename() const { return file.get_name(); }
 
-  bool transaction_active() const {
-    return shared->transaction_active;
-  }
+  bool transaction_active() const { return shared->transaction_active; }
 
   // get const pointer to a memory block
-  block_ptr get_block(offset_ptr offset) const {
-    return block_ptr{ .ptr = (BlockMeta*)&db->data[offset] };
+  block_ptr get_block(offset_ptr ptr) const {
+    return block_ptr{.ptr = (Block*)&data[ptr.start()]};
+  }
+
+  block_ptr get_block(uint64_t offset) const {
+    return block_ptr{.ptr = (Block*)&data[offset]};
   }
 
   // get the minimal transaction id of all active cursors
   tid_t get_min_txn_id();
 
-  /* allocs a new block for copy on write, and returns a heap copy of that
-     block. if the block is reclaimed from the free blocks, its transaction id
+  /* clone a block into a newly allocated writable block
+     if the new block is reclaimed from the free blocks, its transaction id
      must be lower than min_txn_id.
    */
-  block_ptr alloc_cow_block();
-
-  /* clone a block into a newly allocated writable block
-     if the new block is reclaimed from the free blocks, its transaction id must
-     be lower than min_txn_id.
-   */
-  block_ptr clone_cow_block(offset_ptr offset);
+  block_ptr clone_cow_block(block_ptr src);
 
   /* Allocates a block from the database memory.
-     if the block is reclaimed from the free blocks, its transaction id must be
-     lower than min_txn_id.
+     if the block is reclaimed from the free blocks, its transaction id must
+     be lower than min_txn_id.
   */
   block_ptr alloc_block(int pool_id);
+
+  block_ptr alloc_block_size(size_t size) {
+    return alloc_block(get_pool(size + Block::HEADER_SIZE));
+  }
 
   // Allocs a new block in the pool area. It will not reuse a block
   offset_ptr alloc_new_block(int pool_id);
 
-  // frees a a cow block
-  void free_cow_block(block_ptr block);
-
   // Releases a block to free memory.
-  void free_block(block_ptr block, int pool_id=-1);
-
-  // write a value direct to the database
-  block_ptr write_value(const Slice& value);
+  void free_block(block_ptr block);
 
   // returns the database active transaction
-  const DBTransaction* get_active_txn() const;
-
-  // returns a pointer to the active root block
-  const block_ptr get_root() const;
-
+  const DBTransaction* active_txn() const;
+  
   // Transaction methods
   bool start_transaction();
   void rollback();
@@ -125,7 +133,7 @@ struct DBMemory {
   void end_transaction();
 
   // Cursor Methods
-  int alloc_cursor(); // returns an id
+  int alloc_cursor();  // returns an id
   offset_ptr update_cursor(int id);
   void free_cursor(int id);
 
@@ -139,8 +147,11 @@ struct DBMemory {
   mapped_region region;
 
   // the pointer to the memory mapped area of the db
-  HeaderBlock* db;
-
+  union {
+    Header* db;
+    uint8_t* data;
+  };
+  
   // the active writable transaction of db
   DBTransaction txn;
 };

@@ -48,21 +48,22 @@ DB::db_ptr DB::open(const char* path) {
 
 #ifdef DEBUG
 
-size_t dump_node(std::ostream& out, const TrieBlock* page, const node_ptr& pnode,
-                 DBMemory* storage, int upper);
+void dump_block(std::ostream& out, offset_ptr offset,  DBMemory* storage);
+
 
 size_t dump_db(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));
-  const TrieBlock* root = sdb->storage.get_root().trie();
+  offset_ptr root = sdb->storage.root();
+
   if (sdb->storage.transaction_active()) {
-    root = sdb->storage.get_block(sdb->storage.txn.root).trie();
+    root = sdb->storage.get_block(sdb->storage.txn.root);
   }
-  return dump_node(out, root, root->root, &sdb->storage, -1);
+  return dump_block(out, root, &sdb->storage);
 }
 
 uint64_t dump_info(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));
-  tid_t txn_id = sdb->storage.get_active_txn()->txn_id;
+  tid_t txn_id = sdb->storage.active_txn()->txn_id;
   out << "Transaction Id: " << txn_id << std::endl;
   return txn_id;
 }

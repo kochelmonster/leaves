@@ -4,27 +4,27 @@
 #include <vector>
 
 #include "memory.hpp"
-#include "node.hpp"
 
 namespace leaves {
 
 struct Transition {
-  // the pointer offset points to
   block_ptr block;
+  offset_ptr offset; // offset of block (with internal offset) block->offset == offset.start()
+  uint16_t prefix;  // count of equal chars in stringnode
+  uint16_t suffix;  // count of equal chars in keyvaluenode
 
-  // pointer to a node_ptr to node: pnode = &trie_block.data[onode]
-  node_ptr* pnode;
+  union {
+    TrieBranch::Index tindex;
+    char index;  // bit index or index of arraynode or trie_node -2 means value is used
+  };
+
+  bsize_t olink;  // the offset inside block that points to the resulting link
+  const Leaf* leaf;
 
   // position inside the key
-  size_t keypos;
+  bsize_t keypos;
 
-  // the index of the current branch
-  int index;
-
-  void rebase(block_ptr dest) {
-    pnode = (node_ptr*)(((char*)pnode-(char*)block.ptr)+(char*)dest.ptr);
-    block = dest;
-  }
+  offset_ptr* plink() { return (offset_ptr*)&block->data[olink]; }
 };
 
 struct Stack {
@@ -34,10 +34,11 @@ struct Stack {
 
   Stack();
 
-  void push(block_ptr block, node_ptr* pnode, size_t keypos, int index);
+  void push(const offset_ptr& offset, block_ptr block);
 
   Transition& front() { return data[0]; }
   Transition& back() { return data[size - 1]; }
+  Transition& parent() { assert(size > 1); return data[size - 2]; }
   const Transition& back() const { return data[size - 1]; }
   void clear(int size_ = 0) {
     for (int i = size_; i < size; i++) {
@@ -59,21 +60,25 @@ struct Trace {
   void last();
   void next();
   void prev();
-  void set_value(Slice value);
+  void set_value(const Slice& value);
   Slice get_value();
   void remove();
   void commit();
   void rollback();
 
-  void _advance_stack();
+  void push(const offset_ptr& ptr) {
+    stack.push(ptr, storage.get_block(ptr));
+  }
+
+  void _keep_stack();
   void _find();
-  void _make_stack_writable();
+  void _make_writable();
+
   void _prepare_trie();
   void _add_key_to_trie();
-  node_ptr* _add_string(block_ptr block, node_ptr* pnode);
+    
   void _update();
   void _split_block();
-  void _clear_value();
   
   DBMemory& storage;
 
@@ -85,12 +90,10 @@ struct Trace {
   Slice rest_key;
   std::string current_key;
   bool transaction_active;
-  int last_root;
-  block_ptr current_value;
-  block_ptr current_big_value;
-
-  uint32_t _debug_stat_page_splits;
 };
+
+
+
 
 }  // namespace leaves
 

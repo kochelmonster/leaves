@@ -10,13 +10,12 @@
 #error "TESTING must be defined"
 #endif
 
-using leaves::TestPoints;
 #define GENERATE
 #ifdef GENERATE
 
 inline void check_testpoints(const char* testpoints[]) {
   std::cerr << "check case:" << std::endl;
-  for (const auto& item : TestPoints::tp_output) {
+  for (const auto& item : leaves::TestPoints::tp_output) {
     std::cerr << item.first << "(" << item.second << ")" << std::endl;
   }
 }
@@ -41,7 +40,7 @@ inline void check_testpoints(const char* testpoints[]) {
 struct DirPreparation {
   DirPreparation() {
     tempDir = std::filesystem::temp_directory_path() / "test_db";
-    std::filesystem::remove_all(tempDir);
+    ::std::filesystem::remove_all(tempDir);
     std::filesystem::create_directory(tempDir);
     std::filesystem::path dbFilePath = tempDir / "test.lvs";
   }

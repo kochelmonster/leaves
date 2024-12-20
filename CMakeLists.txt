@@ -6,9 +6,9 @@ project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-option(LEAVES_GCOV "Add gconv support for tests" ON)
+option(LEAVES_GCOV "Add gconv support for tests" OFF)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
-option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
+option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" OFF)
 
 file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
@@ -20,8 +20,7 @@ target_sources(core INTERFACE
     src/port.hpp
     src/pool.hpp
     src/block.hpp
-    src/node.cpp
-    src/node.hpp
+    src/block.cpp
     src/trace.cpp
     src/trace.hpp)
 
@@ -63,15 +62,15 @@ endif (LEAVES_GCOV)
 add_executable(test_memory tests/test_memory.cpp src/memory.cpp)
 
 target_sources(test_memory INTERFACE
-    include/leaves.hpp src/memory.hpp src/memory.cpp)
+    include/leaves.hpp src/memory.hpp src/memory.cpp src/block.hpp)
 
 target_link_libraries(test_memory PUBLIC test)
 
 add_executable(test_trie tests/test_trie.cpp)
 target_link_libraries(test_trie PUBLIC core test)
 
-add_executable(test_db tests/test_db.cpp src/leaves.cpp)
-target_link_libraries(test_db PUBLIC core test)
+#add_executable(test_db tests/test_db.cpp src/leaves.cpp)
+#target_link_libraries(test_db PUBLIC core test)
 
 # add_executable(profile tests/profile.cpp src/leaves.cpp)
 # target_link_libraries(profile PUBLIC core test)

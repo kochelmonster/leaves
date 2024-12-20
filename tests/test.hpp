@@ -14,7 +14,6 @@
 #define CMPFILES "./"
 #endif
 
-#define AREA_COUNT 100
 #define TEST_FILE "test.lvs"
 
 using namespace leaves;
@@ -31,21 +30,19 @@ struct Preparation {
 namespace leaves {
 // defined in node.cpp
 
-struct node_ptr;
-void dump_node(std::ostream& out, const TrieBlock* page, const node_ptr& nid,
-               DBMemory* storage, int upper = -1);
+void dump_block(std::ostream& out, offset_ptr offset,  DBMemory* storage);
 }  // namespace leaves
 
 inline void dump_graph(const char* output, DBMemory& storage) {
   std::ofstream out(output);
-  const TrieBlock* root = storage.get_root().trie();
-  dump_node(out, root, root->root, &storage);
+  offset_ptr root = storage.active_txn()->root;
+  dump_block(out, root, &storage);
 }
 
 inline void compare_graph(const char* input, DBMemory& storage) {
   std::stringstream cstr;
-  const TrieBlock* root = storage.get_root().trie();
-  dump_node(cstr, root, root->root, &storage);
+  offset_ptr root = storage.active_txn()->root;
+  dump_block(cstr, root, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),

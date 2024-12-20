@@ -5,7 +5,6 @@
 #include <boost/test/included/unit_test.hpp>
 #include <ostream>
 
-#define AREA_COUNT 100
 #include "test.hpp"
 
 #undef SEGMENT_SIZE

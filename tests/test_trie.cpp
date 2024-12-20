@@ -14,25 +14,39 @@ BOOST_AUTO_TEST_CASE(insert_null) {
   test_insertion(storage, "insert_null", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_string_split) {
+BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abcdefghi", "abddefg", NULL};
-  test_insertion(storage, "insert_string_split", keys);
+  const char *keys[] = {"abcdefghi", "abc*efghi", "ab*defghi",  NULL};
+  test_insertion(storage, "insert_compress_split", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_string_short) {
+BOOST_AUTO_TEST_CASE(insert_compress_short) {
   Preparation p;
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ab", NULL};
-  test_insertion(storage, "insert_string_short", keys);
+  test_insertion(storage, "insert_compress_short", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_string_start) {
+BOOST_AUTO_TEST_CASE(insert_compress_start) {
   Preparation p;
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ba", NULL};
-  test_insertion(storage, "insert_string_start", keys);
+  test_insertion(storage, "insert_compress_start", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_leaf_split) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"abcdefghi", "abc*efghi", "abcd*fghi", "abcd*", NULL};
+  test_insertion(storage, "insert_leaf_split", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_leaf_extend) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"ab", "abcdefg", NULL};
+  test_insertion(storage, "insert_leaf_extend", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_value) {
@@ -52,8 +66,8 @@ BOOST_AUTO_TEST_CASE(insert_trie_short) {
 BOOST_AUTO_TEST_CASE(insert_array_overflow) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"A", "1", "a", "B", "C", "D", "E", "F", "2", "3", "4",
-                        "5", "6", "b", "c", "d", "e", "f", NULL};
+  const char *keys[] = {"A", "1", "a", "B", "C", "D", "E", "F", "2", "3",
+                        "4", "5", "6", "b", "c", "d", "e", "f", NULL};
   test_insertion(storage, "insert_array_overflow", keys);
 }
 
