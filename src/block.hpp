@@ -79,23 +79,12 @@ struct Compressed {
 };
 
 struct ArrayBranch {
+  const static bsize_t COUNT = 15;
   uint8_t size;
-  uint8_t keys[15];
+  uint8_t keys[COUNT];
   offset_ptr links[0];
 
   const offset_ptr* find(Trace& trace) const;
-
-  void change_block(uint64_t old_, uint64_t new_) {
-    for (uint8_t i = 0; i < size; i++) {
-      links[i].change_block(old_, new_);
-    }
-  }
-
-  void move_ioffset(const offset_ptr& pivot, int delta) {
-    for (char i = 0; i < size; i++) {
-      links[i].move_ioffset(pivot, delta);
-    }
-  }
 
   bsize_t nodesize() const {
     return sizeof(offset_ptr) * size + sizeof(size) + sizeof(keys);
@@ -138,25 +127,11 @@ struct TrieBranch {
     return popcount(bits[0]) + popcount(bits[1]) + popcount(bits[2]) +
            popcount(bits[3]);
   }
-
-  void move_ioffset(const offset_ptr& pivot, int delta) {
-    bsize_t size = count();
-    for (bsize_t i = 0; i < size; i++) {
-      links[i].move_ioffset(pivot, delta);
-    }
-  }
-
-  void change_block(uint64_t old_, uint64_t new_) {
-    bsize_t size = count();
-    for (bsize_t i = 0; i < size; i++) {
-      links[i].change_block(old_, new_);
-    }
-  }
 };
 
 // A leaf of the trie (a rest key and the value)
 struct Leaf {
-  const static lsize_t BIG_VAL_SIZE = 64 * K;
+  static const size_t MAX_LEAF_SIZE = 2047;
   /* BIG_VALUES are two time defered
     -> Normal Leaf with an offset as value
     -> pure value data in extra allocated block (with no header?) */
@@ -167,171 +142,207 @@ struct Leaf {
 
   void find(Trace& trace) const;
   Slice value() const { return Slice((char*)key_value + key_size, value_size); }
-  Slice key() const { return Slice((char*)key_value + key_size, value_size); }
+  Slice key() const { return Slice((char*)key_value, key_size); }
 
   const static uint16_t HEADER_SIZE = sizeof(value_size) + sizeof(bsize_t);
   uint16_t nodesize() const { return nodesize(key_size, value_size); }
 
   static bsize_t nodesize(bsize_t ksize, size_t vsize) {
-    return sizeof(Leaf) + ksize +
-           (vsize < BIG_VAL_SIZE ? vsize : sizeof(offset_ptr));
+    lsize_t tmp = sizeof(Leaf) + ksize + vsize;
+    return tmp <= MAX_LEAF_SIZE ? tmp : sizeof(Leaf) + ksize + sizeof(offset_ptr);
   }
 };
 
 /* the metadata of a every block */
 struct BlockHeader {
-  static const uint64_t COMPRESSED = (uint64_t)1 << 63;
-  static const uint64_t VALUE = (uint64_t)1 << 62;
-  static const uint64_t ARRAY = (uint64_t)1 << 61;
-  static const uint64_t TRIE = (uint64_t)1 << 60;
-  static const uint64_t BITS = COMPRESSED | VALUE | ARRAY | TRIE;
-  static const uint64_t NEXT_FREE = ~BITS;
-
   // the blocks offset (==id)
   offset_ptr offset;
 
   // the transaction id the block was created
   tid_t txn_id;
 
-  // the transaction id the block was freed
+  // the transaction id the block was created
   tid_t free_txn_id;
 
-  // 
+  static const uint64_t COMPRESSED = (uint64_t)1 << 63;
+  static const uint64_t NULL_LEAF = (uint64_t)1 << 62;
+  static const uint64_t ARRAY = (uint64_t)1 << 61;
+  static const uint64_t TRIE = (uint64_t)1 << 60;
+  static const uint64_t BITS = COMPRESSED | NULL_LEAF | ARRAY | TRIE;
+  static const uint64_t NEXT_FREE = ~BITS;
 
   /*
   bit layout of bits
   struct {
     uint64_t has_compressed : 1;
-    uint64_t has_value : 1;
+    uint64_t has_null_leaf : 1;
     uint64_t has_array : 1
     uint64_t has_trie : 1;
     // if the block is in a free list the free block
-    uint64_t next_free : 59; 
+    uint64_t next_free : 59;
   };*/
   uint64_t bits;
 
-  lsize_t lower_bound;  // the end of structural node
-  lsize_t upper_bound;  // the start of KeyValueNodes
-  offset_ptr leaves;    // link to the associated leaf block
-
   bool has_compressed() const { return bits & COMPRESSED; }
-  bool has_value() const { return bits & VALUE; }
+  bool has_null_leaf() const { return bits & NULL_LEAF; }
   bool has_array() const { return bits & ARRAY; }
   bool has_trie() const { return bits & TRIE; }
   uint64_t next_free() const { return bits & NEXT_FREE; }
 
   void set_next_free(uint64_t next) { bits = next & NEXT_FREE; }
   void set_compressed() { bits |= COMPRESSED; }
-  void set_value() { bits |= VALUE; }
+  void set_null_leaf() { bits |= NULL_LEAF; }
   void set_array() { bits |= ARRAY; }
   void set_trie() { bits |= TRIE; }
 
   void clear_compressed() { bits &= ~COMPRESSED; }
 
-  bool isleaf() const { return bits & BITS == 0; }
-  bool isbranch() const { return bits & BITS; }
+  size_t block_size() const { return BLOCK_SIZES[offset.pool_id()].block_size; }
 };
 
-struct Block : public BlockHeader {
+struct LeafBlock : public BlockHeader {
   static const size_t HEADER_SIZE = sizeof(BlockHeader);
-  static const size_t MAX_BRANCH_SIZE = 4096;
-  static const uint16_t MAX_BRANCH_SPACE = MAX_BRANCH_SIZE - HEADER_SIZE;
-  static const int MAX_BRANCH_POOL = get_pool(MAX_BRANCH_SPACE);
-  static const int MAX_LEAF_POOL = get_pool(0xffff);
+  static const size_t MAX_LEAF_SIZE = 2047;
+  uint8_t data[0];
+  size_t space() const { return block_size() - HEADER_SIZE; }
+  Leaf* leaf(const offset_ptr& ptr) { return (Leaf*)&data[ptr.offset()]; }
+};
+
+struct BranchBlockHeader : public BlockHeader {
+  bsize_t used;         // space used
+  offset_ptr leaves;    // link to the associated leaf block
+  lsize_t leaves_used;  // space used in leaves
+  lsize_t leaves_free;  // free holes in leaves
+};
+
+struct BranchBlock : public BranchBlockHeader {
+  static const size_t HEADER_SIZE = sizeof(BranchBlockHeader);
+  static const size_t MAX_SIZE = 4096;
+  static const uint16_t MAX_SPACE = MAX_SIZE - HEADER_SIZE;
+  static const int MAX_POOL = get_pool(MAX_SPACE);
 
   uint8_t data[0];
 
-  const Leaf* leaf(offset_ptr ptr) const {
-    assert(ptr.start() == offset.offset);
-    return (const Leaf*)&data[space() - ptr.ioffset()];
-  }
-
-  Leaf* leaf(offset_ptr ptr) {
-    assert(ptr.start() == offset.offset);
-    return (Leaf*)&data[space() - ptr.ioffset()];
-  }
-
   Compressed* compressed() { return (Compressed*)data; }
   const Compressed* compressed() const { return (const Compressed*)data; }
-  void* end() { return (void*)&data[lower_bound]; }
+  void* end() { return (void*)&data[used]; }
 
-    // usable space
-  size_t block_size() const { return BLOCK_SIZES[offset.pool_id].block_size; }
+  // usable space
   size_t space() const { return block_size() - HEADER_SIZE; }
-  size_t freespace() const { return upper_bound - lower_bound; }
-  size_t used() const { return space() - freespace(); }
+  size_t freespace() const { return space() - used; }
 
   // find the next chunk of the key and update the stack
   bool find(Trace& trace) const;
 
-  // follows the link and update the stack
-  bool follow_link(Trace& trace, const offset_ptr* link) const;
+  // calculate the offset of a link pointer
+  bsize_t olink(offset_ptr* link) { return (uint8_t*)link - data; }
 
-  // change the block part of all links pointing to leaf
-  void change_leaf_blocks(const offset_ptr& old_, const offset_ptr& new_);
+  offset_ptr* plink(bsize_t offset) { return (offset_ptr*)&data[offset]; }
 
-  // move all ioffsets of links pointing to leaves by delta
-  // if their own ioffset < pivot.ioffset()
-  void move_leaf_ioffsets(const offset_ptr& pivot, int delta);
+  template<typename OP> void iterate_leaves(OP oper) {
+    bsize_t ioffset = 0;
+    if (has_compressed())
+      ioffset = compressed()->nodesize();
+    
+    if (has_null_leaf()) {
+      offset_ptr* ptr = plink(ioffset);
+      if (ptr->leaf()) oper(*ptr);
+      ioffset += sizeof(offset_ptr);
+    }
 
-  // find the first leaf that has a size >= space
-  offset_ptr* find_leaf_to_move(bsize_t space);
-
-  void add_compressed(bsize_t size, const void* data) {
-    Compressed* cn = compressed();
-    cn->size = size;
-    memcpy(cn->key, data, size);
-    set_compressed();
-    lower_bound = cn->nodesize();
+    if (has_array()) {
+      ArrayBranch* branch = (ArrayBranch*)&data[ioffset];
+      for(int count = branch->size, i = 0; i < count; i++) {
+        if (branch->links[i].leaf()) oper(branch->links[i]);
+      }
+    }
+    else if (has_trie()) {
+      TrieBranch* branch = (TrieBranch*)&data[ioffset];
+      for(int count = branch->count(), i = 0; i < count; i++) {
+        if (branch->links[i].leaf()) oper(branch->links[i]);
+      }
+    }
   }
 
-  void add_value(const offset_ptr& offset) {
-    offset_ptr* val = (offset_ptr*)end();
-    *val = offset;
-    set_value();
-    lower_bound += sizeof(offset_ptr);
+  void add_compressed(const void* data, bsize_t size) {
+    if (size) {
+      Compressed* cn = compressed();
+      cn->size = size;
+      memcpy(cn->key, data, size);
+      set_compressed();
+      used = cn->nodesize();
+    }
   }
 
-  void add_array(uint8_t key1, const offset_ptr& link1, uint8_t key2,
-                 const offset_ptr& link2) {
+  bsize_t add_null_leaf() {
+    bsize_t offset = used;
+    set_null_leaf();
+    used += sizeof(offset_ptr);
+    return offset;
+  }
+
+  bsize_t add_array(uint8_t key1) {
     set_array();
     ArrayBranch* an = (ArrayBranch*)end();
     an->keys[0] = key1;
-    an->links[0] = link1;
-    if (link2.offset) {
-      an->size = 2;
-      an->keys[1] = key2;
-      an->links[1] = link2;
-    } else
-      an->size = 1;
-
-    lower_bound += an->nodesize();
+    an->size = 1;
+    used += an->nodesize();
+    return olink(&an->links[0]);
   }
 
-  void copy(const Block* src) {
-    memcpy(data, src->data, src->lower_bound);  // structural nodes
-    memcpy(&data[src->upper_bound], &src->data[src->upper_bound],
-           src->space() - src->upper_bound);  // key value nodes
+  bsize_t add_array(uint8_t key1, uint8_t key2, const offset_ptr& link2) {
+    set_array();
+    ArrayBranch* an = (ArrayBranch*)end();
+    an->size = 2;
+    an->keys[0] = key1;
+    an->keys[1] = key2;
+    an->links[1] = link2;
+    used += an->nodesize();
+    return olink(&an->links[0]);
+  }
+
+  void copy(const BranchBlock* src) {
+    memcpy(data, src->data, src->used);  // nodes
     bits = src->bits;
-    upper_bound = space() - (src->space() - src->upper_bound);
-    lower_bound = src->lower_bound;
+    used = src->used;
     leaves = src->leaves;
+    leaves_used = src->leaves_used;
+    leaves_free = src->leaves_free;
+  }
+
+  void copy_leaf(LeafBlock* dest, const LeafBlock* src) {
+    if (leaves_free) {
+      lsize_t ls = 0;
+      iterate_leaves([src, dest, &ls](offset_ptr& ptr) { 
+        Leaf* l = dest->leaf(ptr);
+        memcpy(&dest->data[ls], l, l->nodesize());
+        ptr.set(LEAF_BLOCK, ls);
+        ls += l->nodesize();
+      });  
+      leaves_used = ls;
+      leaves_free = 0;
+      return;
+    }
+    
+    memcpy(dest->data, src->data, leaves_used);
   }
 };
 
 struct block_ptr {
-  Block* ptr;
+  BlockHeader* ptr;
 
-  operator Block*() { return ptr; }
+  BranchBlock* operator->() { return (BranchBlock*)ptr; }
+  operator BranchBlock*() { return (BranchBlock*)ptr; }
+  LeafBlock* leaf() { return (LeafBlock*)ptr; }
+
   block_ptr& operator=(const block_ptr& src) {
     ptr = src.ptr;
     return *this;
   }
   bool operator==(const block_ptr& other) const { return ptr == other.ptr; }
-  bool operator==(const Block* other) const { return ptr == other; }
+  bool operator==(const BlockHeader* other) const { return ptr == other; }
   operator bool() const { return ptr != nullptr; }
 
-  Block* operator->() { return ptr; }
   void reset() { ptr = nullptr; }
   bool valid() const { return ptr != nullptr; }
 };

@@ -2,7 +2,7 @@
 #ifndef _LEAVES_POOL_HPP
 #define _LEAVES_POOL_HPP
 
-#include "array"
+#include <array>
 #include "block.hpp"
 
 namespace leaves {
@@ -20,11 +20,11 @@ struct BlockArea {
 };
 
 const int AREA_COUNT = 24;
+const int LEAF_BLOCK = AREA_COUNT;
 
-/*
-GENERATE POOL
-*/
-constexpr ::std::array<BlockArea, AREA_COUNT> fill_block_sizes() {
+// TODO: 3K Block einfügen == 3K + 1K = 4k (Den 1K in die free list)
+
+constexpr ::std::array<BlockArea, AREA_COUNT> generate_pool() {
   ::std::array<BlockArea, AREA_COUNT> result{0};
   int i = 0;
   for (; i < 9; i++) {
@@ -39,7 +39,7 @@ constexpr ::std::array<BlockArea, AREA_COUNT> fill_block_sizes() {
   return result;
 }
 
-constexpr ::std::array<BlockArea, 24> BLOCK_SIZES = fill_block_sizes();
+constexpr ::std::array<BlockArea, 24> BLOCK_SIZES = generate_pool();
 
 const size_t BLOCK0_SIZE = BLOCK_SIZES[0].block_size;
 
@@ -55,47 +55,40 @@ inline constexpr int get_pool(size_t size) {
 }
 
 struct offset_ptr {
-  static const uint64_t MASK_BASE = ((uint64_t)1 << (uint64_t)59) - 1;
-  uint64_t pool_id : 5;
-  uint64_t offset : 59;
+  static const uint64_t OFFSET_MASK = ((uint64_t)1 << (uint64_t)59) - 1;
+
+  uint64_t data;
 
   offset_ptr& operator=(offset_ptr src) {
-    pool_id = src.pool_id;
-    offset = src.offset;
+    data = src.data;
     return *this;
   }
 
-  bool operator==(offset_ptr cmp) const { return offset == cmp.offset; }
-  bool operator!=(offset_ptr cmp) const { return offset != cmp.offset; }
+  bool operator==(offset_ptr cmp) const { return data == cmp.data; }
+  bool operator!=(offset_ptr cmp) const { return data != cmp.data; }
 
-  operator bool() const { return offset != 0; }
+  operator bool() const { return data != 0; }
 
   void set(uint8_t pool_id_, uint64_t offset_) {
-    pool_id = pool_id_;
-    offset = offset_;
+    data = ((uint64_t)pool_id_ << 59) | (offset_ & OFFSET_MASK);
   }
+
+  uint8_t pool_id() const { return data >> 59; }
+
+  uint64_t offset() const { return data & OFFSET_MASK; }
 
   // the size of the block the ptr points to
-  size_t size() const { return BLOCK_SIZES[pool_id].block_size; }
+  size_t size() const { return BLOCK_SIZES[pool_id()].block_size; }
+  size_t mask() const { return OFFSET_MASK - (size() - 1); }
 
-  // masking out the inner block offset (blocks <= 64K)
-  size_t mask() const { return MASK_BASE - (std::min(size(), 64 * K) - 1); }
+  uint64_t start() const { return data & mask(); }
+  uint64_t ioffset() const { return data & ~mask(); }
 
-  // the start address of the block
-  uint64_t start() const { return offset & mask(); }
-
-  // offset inside block data
-  uint16_t ioffset() const { return offset & ~mask(); }
-
-  void change_block(uint64_t old_, uint64_t new_) {
-    if (start() == old_) offset = new_ + ioffset();
+  uint64_t merge(const offset_ptr& other) const {
+    return offset() + (leaf() ? other.offset() : 0);
   }
 
-  void move_ioffset(const offset_ptr& pivot, int delta) {
-    // this is a offset to leaf -> they grow from end to start.
-    if (pivot.start() == start() && ioffset() >= pivot.ioffset())
-      offset -= delta;
-  }
+  bool leaf() const { return pool_id() == LEAF_BLOCK; }
 };
 
 typedef uint64_t tid_t;
@@ -144,7 +137,6 @@ a separate list (last_free). This list will be appended to the original free
 list in the next transaction, than we can sure the last transaction was
 commited.
 */
-
 
 // Active Transaction Data
 struct DBTransaction {

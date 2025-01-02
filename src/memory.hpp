@@ -90,30 +90,30 @@ struct DBMemory {
 
   // get const pointer to a memory block
   block_ptr get_block(offset_ptr ptr) const {
-    return block_ptr{.ptr = (Block*)&data[ptr.start()]};
+    return block_ptr{.ptr = (BlockHeader*)&data[ptr.start()]};
   }
 
   block_ptr get_block(uint64_t offset) const {
-    return block_ptr{.ptr = (Block*)&data[offset]};
+    return block_ptr{.ptr = (BlockHeader*)&data[offset]};
   }
 
   // get the minimal transaction id of all active cursors
   tid_t get_min_txn_id();
 
-  /* clone a block into a newly allocated writable block
+  /* clone a branch block into a newly allocated writable block
      if the new block is reclaimed from the free blocks, its transaction id
      must be lower than min_txn_id.
    */
-  block_ptr clone_cow_block(block_ptr src);
+  block_ptr clone_branch(block_ptr src);
 
   /* Allocates a block from the database memory.
      if the block is reclaimed from the free blocks, its transaction id must
      be lower than min_txn_id.
   */
-  block_ptr alloc_block(int pool_id);
+  block_ptr alloc_block_by_pool(int pool_id);
 
-  block_ptr alloc_block_size(size_t size) {
-    return alloc_block(get_pool(size + Block::HEADER_SIZE));
+  block_ptr alloc_block(size_t size) {
+    return alloc_block_by_pool(get_pool(size));
   }
 
   // Allocs a new block in the pool area. It will not reuse a block

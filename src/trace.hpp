@@ -8,23 +8,26 @@
 namespace leaves {
 
 struct Transition {
-  block_ptr block;
-  offset_ptr offset; // offset of block (with internal offset) block->offset == offset.start()
-  uint16_t prefix;  // count of equal chars in stringnode
-  uint16_t suffix;  // count of equal chars in keyvaluenode
+  block_ptr branch;   // the branch block referenced in this transition
+  block_ptr leaf;     // the final leaf block if any
+  uint16_t prefix;    // count of equal chars in stringnode
+  uint16_t suffix;    // count of equal chars in keyvaluenode
 
   union {
     TrieBranch::Index tindex;
-    char index;  // bit index or index of arraynode or trie_node -2 means value is used
+    char index;       // bit index or index of arraynode or trie_node -2 means value is used
   };
 
-  bsize_t olink;  // the offset inside block that points to the resulting link
-  const Leaf* leaf;
+  bsize_t olink;      // the offset inside block that points to the output link
+  const Leaf* found_leaf;
+  bool success;
 
   // position inside the key
   bsize_t keypos;
 
-  offset_ptr* plink() { return (offset_ptr*)&block->data[olink]; }
+  offset_ptr* plink() { return branch->plink(olink); }
+  void reset() { branch.reset(); leaf.reset(); success = false; }
+  bool follow_link(Trace& trace, const offset_ptr* link);
 };
 
 struct Stack {
@@ -34,7 +37,7 @@ struct Stack {
 
   Stack();
 
-  void push(const offset_ptr& offset, block_ptr block);
+  void push(block_ptr block);
 
   Transition& front() { return data[0]; }
   Transition& back() { return data[size - 1]; }
@@ -42,7 +45,7 @@ struct Stack {
   const Transition& back() const { return data[size - 1]; }
   void clear(int size_ = 0) {
     for (int i = size_; i < size; i++) {
-      data[i].block.reset();
+      data[i].reset();
     }
     size = size_;
   }
@@ -66,8 +69,13 @@ struct Trace {
   void commit();
   void rollback();
 
+  void advance_key(size_t size) {
+    current_key.append(rest_key.data(), size);
+    rest_key.iadvance(size);
+  }
+
   void push(const offset_ptr& ptr) {
-    stack.push(ptr, storage.get_block(ptr));
+    stack.push(storage.get_block(ptr));
   }
 
   void _keep_stack();

@@ -23,14 +23,6 @@ using namespace boost::interprocess;
 
 namespace leaves {
 
-inline void init_block(Block* block, tid_t txn) {
-  block->txn_id = txn;
-  block->lower_bound = 0;
-  block->upper_bound =
-      BLOCK_SIZES[block->offset.pool_id].block_size - Block::HEADER_SIZE;
-  block->leaves.set(0, 0);
-}
-
 INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
   assert(sizeof(block_ptr) == sizeof(char*));
   memset(&txn, 0, sizeof(txn));
@@ -126,25 +118,24 @@ INLINE const DBTransaction* DBMemory::active_txn() const {
   return &db->txn[db->active];
 }
 
-INLINE block_ptr DBMemory::clone_cow_block(block_ptr src) {
-  block_ptr dest = alloc_block(src->offset.pool_id);
+INLINE block_ptr DBMemory::clone_branch(block_ptr src) {
+  block_ptr dest = alloc_block_by_pool(src->offset.pool_id());
   dest->copy(src);
   free_block(src);
   return dest;
 }
 
-INLINE block_ptr DBMemory::alloc_block(int pool_id) {
+INLINE block_ptr DBMemory::alloc_block_by_pool(int pool_id) {
   BlockPool& pool = txn.pools[pool_id];
   if (pool.free_start) {
     tid_t min_txn_id = get_min_txn_id();
     block_ptr free_block = get_block(pool.free_start);
     if (free_block->free_txn_id < min_txn_id) {
       TESTPOINT(DBMemory::alloc_block::1);
-      assert(free_block->offset.offset == pool.free_start);
-      assert(free_block->offset.pool_id == pool_id);
+      assert(free_block->offset.offset() == pool.free_start);
+      assert(free_block->offset.pool_id() == pool_id);
       pool.free_start = free_block->next_free();
       if (!pool.free_start) pool.free_end = 0;
-      init_block(free_block, txn.txn_id);
       return free_block;
     }
     TESTPOINT(DBMemory::alloc_block::2);
@@ -154,7 +145,6 @@ INLINE block_ptr DBMemory::alloc_block(int pool_id) {
   offset_ptr new_offset = alloc_new_block(pool_id);
   block_ptr free_block = get_block(new_offset);
   free_block->offset = new_offset;
-  init_block(free_block, txn.txn_id);
   return free_block;
 }
 
@@ -194,14 +184,14 @@ INLINE offset_ptr DBMemory::alloc_new_block(int pool_id) {
 INLINE void DBMemory::free_block(block_ptr block) {
   block->free_txn_id = txn.txn_id;
 
-  BlockPool& pool = txn.pools[block->offset.pool_id];
+  BlockPool& pool = txn.pools[block->offset.pool_id()];
   if (pool.last_free_start) {
     block->set_next_free(pool.last_free_start);
     pool.last_free_start = block->offset.start();
     TESTPOINT(DBMemory::free_block::1);
   } else {
     block->set_next_free(0);
-    pool.last_free_start = pool.last_free_end = block->offset.offset;
+    pool.last_free_start = pool.last_free_end = block->offset.offset();
     TESTPOINT(DBMemory::free_block::2);
   }
 }
