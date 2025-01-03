@@ -131,6 +131,24 @@ class Cursor {
   virtual void commit() = 0;
 };
 
+
+
+
+struct Statistics {
+  static const size_t POOL_COUNT = 24;
+  struct PoolStat {
+    size_t used;
+    size_t freed;
+    size_t frag;  // some of unused space in the pool only with extended stats
+  };
+
+  size_t size;
+  size_t branches;
+  size_t leaves;
+  PoolStat pools[POOL_COUNT];
+};
+
+
 class DB {
  public:
   typedef std::shared_ptr<Cursor> cursor_ptr;
@@ -138,6 +156,7 @@ class DB {
   virtual ~DB();
   virtual cursor_ptr create_cursor() = 0;
   static db_ptr open(const char* path);
+  virtual void statistics(Statistics& s, const Slice& variant, bool extended=false) = 0;
 };
 
 }  // namespace leaves

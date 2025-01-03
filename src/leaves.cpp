@@ -37,14 +37,42 @@ struct DBImpl : public DB {
   }
 
   void statistics(Statistics& s, const Slice& variant, bool extended);
+  void stat_traverse(block_ptr& branch, Statistics& s);
 
   DBMemory storage;
   std::weak_ptr<DB> me;
 };
 
+void DBImpl::stat_traverse(block_ptr& branch, Statistics& s) {
+  s.pools[branch->offset.pool_id()].frag += branch->freespace();
+  s.pools[branch->leaves.pool_id()].frag +=
+      branch->leaves.size() - LeafBlock::HEADER_SIZE - branch->leaves_used +
+      branch->leaves_free;
+
+  branch->iterate_links([&branch, &s, this](offset_ptr& link) {
+    if (!link.leaf()) {
+      block_ptr block = storage.get_block(link);
+      stat_traverse(block, s);
+    }
+  });
+}
 
 void DBImpl::statistics(Statistics& s, const Slice& variant, bool extended) {
-  
+  auto txn = storage.active_txn();
+  auto pools = txn->pools;
+  for (int i = 0; i < POOL_COUNT; i++) {
+    s.pools[i].used = pools[i].used;
+    s.pools[i].freed = pools[i].freed;
+    s.pools[i].frag = 0;
+  }
+  s.size = txn->file_size;
+  s.leaves = txn->leaves;
+  s.branches = txn->branches;
+
+  if (extended) {
+    block_ptr root = storage.get_block(txn->root);
+    stat_traverse(root, s);
+  }
 }
 
 DB::db_ptr DB::open(const char* path) {
@@ -53,11 +81,9 @@ DB::db_ptr DB::open(const char* path) {
   return result;
 }
 
-
 #ifdef DEBUG
 
 void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage);
-
 
 void dump_db(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));

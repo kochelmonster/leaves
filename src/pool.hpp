@@ -60,11 +60,6 @@ struct offset_ptr {
 
   uint64_t data;
 
-  offset_ptr& operator=(offset_ptr src) {
-    data = src.data;
-    return *this;
-  }
-
   bool operator==(offset_ptr cmp) const { return data == cmp.data; }
   bool operator!=(offset_ptr cmp) const { return data != cmp.data; }
 
@@ -110,7 +105,11 @@ struct BlockPool {
   uint64_t last_free_start;
   uint64_t last_free_end;
 
-  // TODO: Aditional backup for the last free_start (multi database multi
+  // statistical data
+  size_t used; // used pool objects
+  size_t freed; // freed pool objects
+
+  // TODO: Additional backup for the last free_start (multi database multi
   // thread)
 };
 
@@ -156,6 +155,12 @@ struct DBTransaction {
 
   // pointer to the active root of the trie
   offset_ptr root;
+
+  // the number of leaves in the database
+  size_t leaves;
+
+  // the number of branches in the database
+  size_t branches;
 };
 
 }  // namespace leaves

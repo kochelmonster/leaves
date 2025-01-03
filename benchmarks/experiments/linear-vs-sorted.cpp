@@ -9,7 +9,7 @@ g++ -o linear-vs-sorted -O3 linear-vs-sorted.cpp
 
 // Common variables and constants
 const int COUNT = 100000;
-const int ARRAY_SIZE = 10;
+const int ARRAY_SIZE = 15;
 
 typedef unsigned short test_t;
 
@@ -41,11 +41,6 @@ inline test_t find_sorted(test_t* array, test_t character) {
   return std::lower_bound(array, array + size, character) - array;
 }
 
-// Insert function for linear array
-inline void insert_linear(test_t* array, test_t character) {
-  array[size++] = character;
-}
-
 // Find function for linear array
 inline test_t find_linear(test_t* array, test_t character) {
   for (test_t i = 0; i < size; i++) {
@@ -55,6 +50,13 @@ inline test_t find_linear(test_t* array, test_t character) {
   }
   return size;
 }
+
+// Insert function for linear array
+inline void insert_linear(test_t* array, test_t character) {
+  find_linear(array, character);
+  array[size++] = character;
+}
+
 
 int main() {
   // Benchmark for sorted insert and find

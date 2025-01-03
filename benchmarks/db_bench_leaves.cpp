@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include <leaves.hpp>
-
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <leaves.hpp>
 
 #include "util/histogram.h"
 #include "util/random.h"
@@ -33,7 +32,7 @@ static const char* FLAGS_benchmarks1 =
     "fillrandom,"
     //"overwrite,"
     "readrandom,"
-    "readseq," 
+    "readseq,"
     "fillrand100K,"
     "fillseq100K,"
     "readseq100K,"
@@ -46,11 +45,10 @@ static const char* FLAGS_benchmarks =
     "readrandom,";
 ;
 
-
 // Use writable MMAP
 static bool FLAGS_writemap = false;
 
-// don't explicitly sync meta data 
+// don't explicitly sync meta data
 static bool FLAGS_metasync = false;
 
 // Number of key/values to place in database
@@ -87,11 +85,17 @@ static bool FLAGS_compression = true;
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
 
+
+namespace leaves {
+extern size_t _grow_leaf;
+extern size_t _grow_branch;
+}
+
 #ifdef DEBUG
 namespace leaves {
 size_t dump_db(std::ostream& out, DB::db_ptr db);
 uint64_t dump_info(std::ostream& out, DB::db_ptr db);
-}
+}  // namespace leaves
 
 inline void dump_graph(const char* output, leaves::DB::db_ptr db) {
   std::ofstream out(output);
@@ -101,12 +105,9 @@ inline void dump_graph(const char* output, leaves::DB::db_ptr db) {
 inline uint64_t dump_info(leaves::DB::db_ptr db) {
   return leaves::dump_info(std::cout, db);
 }
-#else 
-uint64_t dump_info(leaves::DB::db_ptr db) {
-  return 0;
-}
+#else
+uint64_t dump_info(leaves::DB::db_ptr db) { return 0; }
 #endif
-
 
 namespace leveldb {
 
@@ -156,8 +157,6 @@ static Slice TrimSpace(Slice s) {
 }
 
 }  // namespace
-
-
 
 class Benchmark {
  private:
@@ -344,9 +343,7 @@ class Benchmark {
     }
   }
 
-  ~Benchmark() {
-  	db_ = NULL;
-  }
+  ~Benchmark() { db_ = NULL; }
 
   void Run() {
     PrintHeader();
@@ -428,7 +425,6 @@ class Benchmark {
     sprintf(cmd, "mkdir -p %s", file_name);
     system(cmd);
 
-    
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
     db_ = leaves::DB::open(test_fname.c_str());
@@ -464,36 +460,56 @@ class Benchmark {
     char key[100];
     int flag = 0, rc;
 
+    leaves::_grow_branch = 0;
+    leaves::_grow_leaf = 0;
+
     leaves::DB::cursor_ptr cursor = db_->create_cursor();
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
-      for (int j=0; j < entries_per_batch; j++) {
-        const int k = (order == SEQUENTIAL) ? i+j : (rand_.Next() % num_entries);
+      for (int j = 0; j < entries_per_batch; j++) {
+        const int k =
+            (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
         snprintf(key, sizeof(key), "%016d", k);
         mkey = leaves::Slice(key);
-        //printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
+        // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
-
-        /*if (k == 16599) {
-          printf("will fail\n");
-        }*/
 
         cursor->find(mkey);
         cursor->set_value(mval);
 
         FinishedSingleOp();
-        //dump_db(null_stream, db_);
       }
       cursor->commit();
     }
+
+#ifdef DEBUG
+    leaves::Statistics stats;
+    db_->statistics(stats, "all", true);
+    std::cout << std::endl;
+
+    std::cout << "size: " << stats.size << std::endl;
+    std::cout << "branches: " << stats.branches << std::endl;
+    std::cout << "leaves: " << stats.leaves << std::endl;
+    for (size_t i = 0; i < leaves::Statistics::POOL_COUNT; i++) {
+      std::cout << "pool " << i << ": " << stats.pools[i].used << " used, "
+                << stats.pools[i].freed << " freed, " << stats.pools[i].frag
+                << " frag" << std::endl;
+    }
+
+    std::cout << "grow branch: " << leaves::_grow_branch << std::endl;
+    std::cout << "grow leaf: " << leaves::_grow_leaf << std::endl;
+
+    std::cout << std::endl;
+    std::cout << std::endl;
+#endif
   }
 
   void ReadSequential() {
     leaves::Slice key, value;
     leaves::DB::cursor_ptr cursor = db_->create_cursor();
-    for(cursor->first(); cursor->is_valid(); cursor->next()) {
+    for (cursor->first(); cursor->is_valid(); cursor->next()) {
       key = cursor->get_key();
       value = cursor->get_value();
       bytes_ += key.size() + value.size();

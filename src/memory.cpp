@@ -79,7 +79,7 @@ INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
   if (!map_size) {
     map_size = (1 + (file_size / T)) * T;
     // for Valgrind
-    map_size = 20 * G;
+    map_size = 20 * G; // TODO: remove
   }
 
   region = mapped_region(file, read_write, 0, map_size);
@@ -137,12 +137,15 @@ INLINE block_ptr DBMemory::alloc_block_by_pool(int pool_id) {
       pool.free_start = free_block->next_free();
       if (!pool.free_start) pool.free_end = 0;
       free_block->txn_id = txn.txn_id;
+      pool.freed--;
+      pool.used++;
       return free_block;
     }
     TESTPOINT(DBMemory::alloc_block::2);
   }
 
   TESTPOINT(DBMemory::alloc_block::3);
+  pool.used++;
   offset_ptr new_offset = alloc_new_block(pool_id);
   block_ptr free_block = get_block(new_offset);
   free_block->offset = new_offset;
@@ -187,6 +190,7 @@ INLINE void DBMemory::free_block(block_ptr block) {
   block->free_txn_id = txn.txn_id;
 
   BlockPool& pool = txn.pools[block->offset.pool_id()];
+  pool.freed++;
   if (pool.last_free_start) {
     block->set_next_free(pool.last_free_start);
     pool.last_free_start = block->offset.start();
