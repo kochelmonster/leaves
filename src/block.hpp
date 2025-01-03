@@ -113,9 +113,7 @@ struct TrieBranch {
     return ones;
   }
 
-  void set(uint8_t val) {
-    bits[idx(val)] |= ((uint64_t)1) << bit(val);
-  }
+  void set(uint8_t val) { bits[idx(val)] |= ((uint64_t)1) << bit(val); }
 
   bsize_t count() const {
     return popcount(bits[0]) + popcount(bits[1]) + popcount(bits[2]) +
@@ -143,7 +141,8 @@ struct Leaf {
 
   static bsize_t nodesize(bsize_t ksize, size_t vsize) {
     lsize_t tmp = sizeof(Leaf) + ksize + vsize;
-    return tmp <= MAX_LEAF_SIZE ? tmp : sizeof(Leaf) + ksize + sizeof(offset_ptr);
+    return tmp <= MAX_LEAF_SIZE ? tmp
+                                : sizeof(Leaf) + ksize + sizeof(offset_ptr);
   }
 };
 
@@ -201,7 +200,9 @@ struct LeafBlock : public BlockHeader {
   uint8_t data[0];
   size_t space() const { return block_size() - HEADER_SIZE; }
   Leaf* leaf(const offset_ptr& ptr) { return (Leaf*)&data[ptr.offset()]; }
-  const Leaf* leaf(const offset_ptr& ptr) const { return (Leaf*)&data[ptr.offset()]; }
+  const Leaf* leaf(const offset_ptr& ptr) const {
+    return (Leaf*)&data[ptr.offset()];
+  }
 };
 
 struct BranchBlockHeader : public BlockHeader {
@@ -235,27 +236,26 @@ struct BranchBlock : public BranchBlockHeader {
 
   offset_ptr* plink(bsize_t offset) { return (offset_ptr*)&data[offset]; }
 
-  template<typename OP> void iterate_leaves(OP oper) {
+  template <typename OP>
+  void iterate_links(OP oper) {
     bsize_t ioffset = 0;
-    if (has_compressed())
-      ioffset = compressed()->nodesize();
-    
+    if (has_compressed()) ioffset = compressed()->nodesize();
+
     if (has_null_leaf()) {
       offset_ptr* ptr = plink(ioffset);
-      if (ptr->leaf()) oper(*ptr);
+      oper(*ptr);
       ioffset += sizeof(offset_ptr);
     }
 
     if (has_array()) {
       ArrayBranch* branch = (ArrayBranch*)&data[ioffset];
-      for(int count = branch->size, i = 0; i < count; i++) {
-        if (branch->links[i].leaf()) oper(branch->links[i]);
+      for (int count = branch->size, i = 0; i < count; i++) {
+        oper(branch->links[i]);
       }
-    }
-    else if (has_trie()) {
+    } else if (has_trie()) {
       TrieBranch* branch = (TrieBranch*)&data[ioffset];
-      for(int count = branch->count(), i = 0; i < count; i++) {
-        if (branch->links[i].leaf()) oper(branch->links[i]);
+      for (int count = branch->count(), i = 0; i < count; i++) {
+        oper(branch->links[i]);
       }
     }
   }
@@ -309,17 +309,19 @@ struct BranchBlock : public BranchBlockHeader {
   void copy_leaf(LeafBlock* dest, const LeafBlock* src) {
     if (leaves_free) {
       lsize_t ls = 0;
-      iterate_leaves([src, dest, &ls](offset_ptr& ptr) { 
-        const Leaf* l = src->leaf(ptr);
-        memcpy(&dest->data[ls], l, l->nodesize());
-        ptr.set(LEAF_BLOCK, ls);
-        ls += l->nodesize();
-      });  
+      iterate_links([src, dest, &ls](offset_ptr& ptr) {
+        if (ptr.leaf()) {
+          const Leaf* l = src->leaf(ptr);
+          memcpy(&dest->data[ls], l, l->nodesize());
+          ptr.set(LEAF_BLOCK, ls);
+          ls += l->nodesize();
+        }
+      });
       leaves_used = ls;
       leaves_free = 0;
       return;
     }
-    
+
     memcpy(dest->data, src->data, leaves_used);
   }
 };
@@ -342,6 +344,25 @@ struct block_ptr {
   void reset() { ptr = nullptr; }
   bool valid() const { return ptr != nullptr; }
 };
+
+inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
+                         size_t size2) {
+  size_t i = 0;
+  size_t limit = std::min(size1, size2) / sizeof(uint64_t);
+  const uint64_t* wstr1 = reinterpret_cast<const uint64_t*>(str1);
+  const uint64_t* wstr2 = reinterpret_cast<const uint64_t*>(str2);
+
+  while (i < limit && wstr1[i] == wstr2[i]) {
+    i++;
+  }
+  i *= sizeof(uint64_t);
+
+  limit = std::min(size1, size2);
+  while (i < limit && str1[i] == str2[i]) {
+    i++;
+  }
+  return i;
+}
 
 #pragma pack(0)
 

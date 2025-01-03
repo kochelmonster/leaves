@@ -19,20 +19,21 @@ struct BlockArea {
   size_t block_size;
 };
 
-const int AREA_COUNT = 24;
-const int LEAF_BLOCK = AREA_COUNT;
+const int POOL_COUNT = 24;
+const int LEAF_BLOCK = POOL_COUNT;
 
 // TODO: 3K Block einfügen == 3K + 1K = 4k (Den 1K in die free list)
+// TODO: Anfangen mit 64 byte block
 
-constexpr ::std::array<BlockArea, AREA_COUNT> generate_pool() {
-  ::std::array<BlockArea, AREA_COUNT> result{0};
+constexpr ::std::array<BlockArea, POOL_COUNT> generate_pool() {
+  ::std::array<BlockArea, POOL_COUNT> result{0};
   int i = 0;
   for (; i < 9; i++) {
     result[i].area_size = AREA_SIZE1;
     result[i].block_size = 1 << (i + 8);
   };
 
-  for (; i < AREA_COUNT; i++) {
+  for (; i < POOL_COUNT; i++) {
     result[i].area_size = AREA_SIZE2,
     result[i].block_size = result[i - 1].block_size + 64 * K;
   }
@@ -46,7 +47,7 @@ const size_t BLOCK0_SIZE = BLOCK_SIZES[0].block_size;
 // returns the right pool id for a block size
 inline constexpr int get_pool(size_t size) {
   if (size >= BLOCK_SIZES[9].block_size) {
-    if (size >= BLOCK_SIZES[AREA_COUNT - 1].block_size) return AREA_COUNT;
+    if (size >= BLOCK_SIZES[POOL_COUNT - 1].block_size) return POOL_COUNT;
     return 9 + (size - 128 * K) / (64 * K);
   }
   int r = 0;
@@ -141,7 +142,7 @@ commited.
 // Active Transaction Data
 struct DBTransaction {
   // Block Pools
-  BlockPool pools[AREA_COUNT];
+  BlockPool pools[POOL_COUNT];
 
   /* the size of the file, this should be always equal the
      size of the database file. But in case of a crash during

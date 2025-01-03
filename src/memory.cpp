@@ -136,6 +136,7 @@ INLINE block_ptr DBMemory::alloc_block_by_pool(int pool_id) {
       assert(free_block->offset.pool_id() == pool_id);
       pool.free_start = free_block->next_free();
       if (!pool.free_start) pool.free_end = 0;
+      free_block->txn_id = txn.txn_id;
       return free_block;
     }
     TESTPOINT(DBMemory::alloc_block::2);
@@ -145,6 +146,7 @@ INLINE block_ptr DBMemory::alloc_block_by_pool(int pool_id) {
   offset_ptr new_offset = alloc_new_block(pool_id);
   block_ptr free_block = get_block(new_offset);
   free_block->offset = new_offset;
+  free_block->txn_id = txn.txn_id;
   return free_block;
 }
 
@@ -206,7 +208,7 @@ INLINE bool DBMemory::start_transaction() {
   txn.txn_id++;
 
   // add the free pools
-  for (int i = 0; i < AREA_COUNT; i++) {
+  for (int i = 0; i < POOL_COUNT; i++) {
     BlockPool& pool = txn.pools[i];
 
     if (pool.last_free_start) {

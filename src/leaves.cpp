@@ -36,15 +36,23 @@ struct DBImpl : public DB {
     return cursor_ptr(new CursorImpl(storage, me.lock()));
   }
 
+  void statistics(Statistics& s, const Slice& variant, bool extended);
+
   DBMemory storage;
   std::weak_ptr<DB> me;
 };
+
+
+void DBImpl::statistics(Statistics& s, const Slice& variant, bool extended) {
+  
+}
 
 DB::db_ptr DB::open(const char* path) {
   db_ptr result(new DBImpl(path));
   ((DBImpl*)result.get())->me = result;
   return result;
 }
+
 
 #ifdef DEBUG
 

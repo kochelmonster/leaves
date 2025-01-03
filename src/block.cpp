@@ -15,16 +15,12 @@
 namespace leaves {
 
 INLINE bool Compressed::find(Trace& trace) const {
-  uint16_t size_ = std::min(size_, (uint16_t)trace.rest_key.size());
-  const char* rest_key = trace.rest_key.data();
-  uint16_t i = 0;
-  for (; i < size_; i++) {
-    if (key[i] != rest_key[i]) break;
-  }
-  trace.stack.back().prefix = i;
-  trace.advance_key(i);
+  size_t same = get_prefix(trace.rest_key.data(), (const char*)key,
+                           trace.rest_key.size(), size);
+  trace.stack.back().prefix = same;
+  trace.advance_key(same);
   TESTPOINT(Compressed::find);
-  return i == size;
+  return same == size;
 }
 
 INLINE const offset_ptr* ArrayBranch::find(Trace& trace) const {
@@ -72,7 +68,6 @@ INLINE void Leaf::find(Trace& trace) const {
   back.success = back.suffix == key_size && trace.rest_key.size() == 0;
 }
 
-
 INLINE bool BranchBlock::find(Trace& trace) const {
   Transition& back = trace.stack.back();
 
@@ -117,7 +112,6 @@ INLINE bool BranchBlock::find(Trace& trace) const {
   return back.follow_link(trace, (offset_ptr*)back.branch->data);
 }
 
-
 #ifdef DEBUG
 
 INLINE std::string bitstr(char bit) {
@@ -131,15 +125,15 @@ INLINE std::string bitstr(char bit) {
   return cstr.str();
 }
 
-
-void dump_leaf(std::ostream& out, offset_ptr offset, block_ptr branch, DBMemory *storage) {
+void dump_leaf(std::ostream& out, offset_ptr offset, block_ptr branch,
+               DBMemory* storage) {
   block_ptr lb = storage->get_block(branch->leaves);
   LeafBlock* block = lb.leaf();
 
   out << "id: " << offset.merge(lb->offset) << std::endl;
   out << "block: " << branch->offset.offset() << std::endl;
   out << "type: leaf" << std::endl;
-  
+
   const Leaf* leaf = block->leaf(offset);
 
   out << "keysize: " << leaf->key_size << std::endl;
@@ -152,7 +146,7 @@ void dump_leaf(std::ostream& out, offset_ptr offset, block_ptr branch, DBMemory 
   out << "valuesize: " << leaf->value_size << std::endl;
   out << "value: \"";
   for (size_t i = 0, end = std::min((size_t)leaf->value_size, (size_t)10);
-        i < end; i++) {
+       i < end; i++) {
     out << "[" << bitstr(leaf->key_value[i + leaf->key_size]) << "]";
   }
   out << "\"" << std::endl;
@@ -161,12 +155,13 @@ void dump_leaf(std::ostream& out, offset_ptr offset, block_ptr branch, DBMemory 
 
 void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage);
 
-void dump_link(std::ostream& out, block_ptr parent, offset_ptr offset, DBMemory* storage) {
-  if(offset.pool_id() == LEAF_BLOCK) {
+void dump_link(std::ostream& out, block_ptr parent, offset_ptr offset,
+               DBMemory* storage) {
+  if (offset.pool_id() == LEAF_BLOCK) {
     dump_leaf(out, offset, parent, storage);
     return;
   }
-  assert(offset.pool_id() < AREA_COUNT);
+  assert(offset.pool_id() < POOL_COUNT);
   dump_branch(out, offset, storage);
 }
 
@@ -174,7 +169,7 @@ void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage) {
   block_ptr block = storage->get_block(offset);
   block_ptr lb = storage->get_block(block->leaves);
   LeafBlock* leaf = lb.leaf();
-    
+
   out << "id: " << offset.offset() << std::endl;
   out << "block: " << block->offset.offset() << std::endl;
   out << "size: " << block->block_size() << std::endl;
@@ -242,7 +237,7 @@ void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage) {
   out << "branch: trie" << std::endl;
   out << "key: \"";
   for (int i = 0; i < 256; i++) {
-    if (n->bits[TrieBranch::idx(i)] & (((uint64_t) 1) << TrieBranch::bit(i))) {
+    if (n->bits[TrieBranch::idx(i)] & (((uint64_t)1) << TrieBranch::bit(i))) {
       out << "[" << bitstr(i) << "]";
     }
   }
