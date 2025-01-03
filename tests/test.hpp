@@ -30,19 +30,19 @@ struct Preparation {
 namespace leaves {
 // defined in node.cpp
 
-void dump_block(std::ostream& out, offset_ptr offset,  DBMemory* storage);
+void dump_branch(std::ostream& out, offset_ptr offset,  DBMemory* storage);
 }  // namespace leaves
 
 inline void dump_graph(const char* output, DBMemory& storage) {
   std::ofstream out(output);
   offset_ptr root = storage.active_txn()->root;
-  dump_block(out, root, &storage);
+  dump_branch(out, root, &storage);
 }
 
 inline void compare_graph(const char* input, DBMemory& storage) {
   std::stringstream cstr;
   offset_ptr root = storage.active_txn()->root;
-  dump_block(cstr, root, &storage);
+  dump_branch(cstr, root, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),
@@ -218,9 +218,6 @@ inline void test_insertion(DBMemory& storage, const char* title,
     std::stringstream cstr;
     cstr << title << "_" << i << "_" << keys[i];
     std::cout << "insert " << i << ": " << keys[i] << std::endl;
-    if (i == 13) {
-      std::cout << "error" << std::endl;
-    }
     std::string test_name(cstr.str());
     test_name.resize(30);
     insert(storage, test_name.c_str(), keys[i]);

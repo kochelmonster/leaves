@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(LEAVES_GCOV "Add gconv support for tests" OFF)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
-option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" OFF)
+option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
 file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
@@ -69,8 +69,8 @@ target_link_libraries(test_memory PUBLIC test)
 add_executable(test_trie tests/test_trie.cpp)
 target_link_libraries(test_trie PUBLIC core test)
 
-#add_executable(test_db tests/test_db.cpp src/leaves.cpp)
-#target_link_libraries(test_db PUBLIC core test)
+add_executable(test_db tests/test_db.cpp src/leaves.cpp)
+target_link_libraries(test_db PUBLIC core test)
 
 # add_executable(profile tests/profile.cpp src/leaves.cpp)
 # target_link_libraries(profile PUBLIC core test)

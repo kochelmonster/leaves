@@ -13,10 +13,7 @@ struct Transition {
   uint16_t prefix;    // count of equal chars in stringnode
   uint16_t suffix;    // count of equal chars in keyvaluenode
 
-  union {
-    TrieBranch::Index tindex;
-    char index;       // bit index or index of arraynode or trie_node -2 means value is used
-  };
+  char index;         // bit index or index of arraynode or trie_node -2 means value is used
 
   bsize_t olink;      // the offset inside block that points to the output link
   const Leaf* found_leaf;
@@ -28,6 +25,19 @@ struct Transition {
   offset_ptr* plink() { return branch->plink(olink); }
   void reset() { branch.reset(); leaf.reset(); success = false; }
   bool follow_link(Trace& trace, const offset_ptr* link);
+
+  const Transition& operator=(const Transition& src) {
+    branch = src.branch;
+    leaf = src.leaf;
+    prefix = src.prefix;
+    suffix = src.suffix;
+    index = src.index;
+    olink = src.olink;
+    found_leaf = src.found_leaf;
+    success = src.success;
+    keypos = src.keypos;
+    return *this;
+  }
 };
 
 struct Stack {

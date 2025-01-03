@@ -111,8 +111,8 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for(int i = 0; i < 2; i++) {
-        block_ptr block = db.alloc_block_size(200);
-        BOOST_REQUIRE(block->offset.pool_id == 0);
+        block_ptr block = db.alloc_block(200);
+        BOOST_REQUIRE(block->offset.pool_id() == 0);
         BOOST_REQUIRE(block->offset.start() != 0);
         block_offsets.push_back(block->offset);
       }
@@ -135,7 +135,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       for (offset_ptr bo : block_offsets) {
         block_ptr block = db.get_block(bo);
         BOOST_REQUIRE(block->offset == bo);
-        BOOST_REQUIRE(block->offset.pool_id == 0);
+        BOOST_REQUIRE(block->offset.pool_id() == 0);
         BOOST_REQUIRE(block->data[0] == 0);
         db.free_block(block);
       }
@@ -144,8 +144,8 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     BOOST_REQUIRE(db.active_txn()->txn_id == 3);
     
     auto &pool = db.active_txn()->pools[0];
-    BOOST_REQUIRE(pool.last_free_start == block_offsets[1].offset);
-    BOOST_REQUIRE(pool.last_free_end == block_offsets[0].offset);
+    BOOST_REQUIRE(pool.last_free_start == block_offsets[1].offset());
+    BOOST_REQUIRE(pool.last_free_end == block_offsets[0].offset());
     BOOST_REQUIRE(pool.free_start == 0);
     BOOST_REQUIRE(pool.free_end == 0);
   }
@@ -163,16 +163,16 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       auto &pool = db.txn.pools[0];
       BOOST_REQUIRE(pool.last_free_start == 0);
       BOOST_REQUIRE(pool.last_free_end == 0);
-      BOOST_REQUIRE(pool.free_start == block_offsets[1].offset);
-      BOOST_REQUIRE(pool.free_end == block_offsets[0].offset);
+      BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
+      BOOST_REQUIRE(pool.free_end == block_offsets[0].offset());
     }
 
     BOOST_REQUIRE(db.active_txn()->txn_id == 4);
     auto &pool = db.active_txn()->pools[0];
     BOOST_REQUIRE(pool.last_free_start == 0);
     BOOST_REQUIRE(pool.last_free_end == 0);
-    BOOST_REQUIRE(pool.free_start == block_offsets[1].offset);
-    BOOST_REQUIRE(pool.free_end == block_offsets[0].offset);
+    BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
+    BOOST_REQUIRE(pool.free_end == block_offsets[0].offset());
   }
 
   {
@@ -188,27 +188,27 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       int cursor_id = db.alloc_cursor();
       db.shared->readers[cursor_id].txn_id = 1;
 
-      block_ptr block = db.alloc_block_size(200);
-      BOOST_REQUIRE(block->offset != block_offsets[1].offset);
-      BOOST_REQUIRE(block->offset != block_offsets[0].offset);
+      block_ptr block = db.alloc_block(200);
+      BOOST_REQUIRE(block->offset != block_offsets[1]);
+      BOOST_REQUIRE(block->offset != block_offsets[0]);
       block_offsets.push_back(block->offset);
       db.free_block(block);
 
       auto &pool = db.txn.pools[0];
-      BOOST_REQUIRE(pool.last_free_start == block_offsets[2].offset);
-      BOOST_REQUIRE(pool.last_free_end == block_offsets[2].offset);
-      BOOST_REQUIRE(pool.free_start == block_offsets[1].offset);
-      BOOST_REQUIRE(pool.free_end == block_offsets[0].offset);
+      BOOST_REQUIRE(pool.last_free_start == block_offsets[2].offset());
+      BOOST_REQUIRE(pool.last_free_end == block_offsets[2].offset());
+      BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
+      BOOST_REQUIRE(pool.free_end == block_offsets[0].offset());
 
       db.free_cursor(cursor_id);
     }
 
     BOOST_REQUIRE(db.active_txn()->txn_id == 5);
     auto &pool = db.active_txn()->pools[0];
-    BOOST_REQUIRE(pool.last_free_start == block_offsets[2].offset);
-    BOOST_REQUIRE(pool.last_free_end == block_offsets[2].offset);
-    BOOST_REQUIRE(pool.free_start == block_offsets[1].offset);
-    BOOST_REQUIRE(pool.free_end == block_offsets[0].offset);
+    BOOST_REQUIRE(pool.last_free_start == block_offsets[2].offset());
+    BOOST_REQUIRE(pool.last_free_end == block_offsets[2].offset());
+    BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
+    BOOST_REQUIRE(pool.free_end == block_offsets[0].offset());
   }
 
 
@@ -224,24 +224,24 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       auto &pool = db.txn.pools[0];
       BOOST_REQUIRE(pool.last_free_start == 0);
       BOOST_REQUIRE(pool.last_free_end == 0);
-      BOOST_REQUIRE(pool.free_start == block_offsets[1].offset);
-      BOOST_REQUIRE(pool.free_end == block_offsets[2].offset);
+      BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
+      BOOST_REQUIRE(pool.free_end == block_offsets[2].offset());
 
-      block_ptr block = db.alloc_block_size(200);
+      block_ptr block = db.alloc_block(200);
       BOOST_REQUIRE(block->offset == block_offsets[1]);
       
       BOOST_REQUIRE(pool.last_free_start == 0);
       BOOST_REQUIRE(pool.last_free_end == 0);
-      BOOST_REQUIRE(pool.free_start == block_offsets[0].offset);
-      BOOST_REQUIRE(pool.free_end == block_offsets[2].offset);
+      BOOST_REQUIRE(pool.free_start == block_offsets[0].offset());
+      BOOST_REQUIRE(pool.free_end == block_offsets[2].offset());
     }
 
     BOOST_REQUIRE(db.active_txn()->txn_id == 6);
     auto &pool = db.active_txn()->pools[0];
     BOOST_REQUIRE(pool.last_free_start == 0);
     BOOST_REQUIRE(pool.last_free_end == 0);
-    BOOST_REQUIRE(pool.free_start == block_offsets[0].offset);
-    BOOST_REQUIRE(pool.free_end == block_offsets[2].offset);
+    BOOST_REQUIRE(pool.free_start == block_offsets[0].offset());
+    BOOST_REQUIRE(pool.free_end == block_offsets[2].offset());
   }
 
   const char* test_points[] = {

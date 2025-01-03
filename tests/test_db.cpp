@@ -139,13 +139,25 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   size_t count;
   for(count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
+    if (count == 85) {
+      std::cout << "wrong" << std::endl;
+    }
+
     cursor->find(names[count]);
     BOOST_REQUIRE(!cursor->is_valid());
-    cursor->set_value(value(count, 900));
+    //cursor->set_value(value(count, 900));
+    cursor->set_value(value(count, 10));
     /*if (leaves::dump_db(null_stream, db) != count+1) {
       std::cerr << "error!" << std::endl;
       break;
     }*/
+
+    if (false) {
+      std::stringstream cstr;
+      cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count << ".yaml";
+      std::ofstream out(cstr.str().c_str());
+      leaves::dump_db(out, db);
+    }
   }
   cursor->commit();
   std::stringstream cstr;

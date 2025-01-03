@@ -32,8 +32,10 @@ class Graph:
         for k, pnodes in pages.items():
             size = pnodes[0]["size"]
             free = pnodes[0]["freespace"]
+            lsize = pnodes[0]["leaf_size"]
+            lfree = pnodes[0]["leaf_free"]
             add(f"subgraph cluster_Page{k} {{")
-            add(f'label = "{{{k}|size: {size}|free: {free}}}"')
+            add(f'label = "{k}\\nsize: {size}|free: {free}\\nlsize: {lsize}|lfree: {lfree}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
@@ -98,8 +100,8 @@ def main(paths):
 
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
-            #print(Graph().make_graph(list(filter(bool, nodes))))
-            #return 0
+            # print(Graph().make_graph(list(filter(bool, nodes))))
+            # return 0
             sarge.run(
                 f"dot -Tsvg > {dest}",
                 input=Graph().make_graph(list(filter(bool, nodes))),

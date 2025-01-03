@@ -6,18 +6,90 @@ Test the trie nodes without bursting.
 
 #include "test.hpp"
 
-BOOST_AUTO_TEST_CASE(insert_null) {
+BOOST_AUTO_TEST_CASE(insert_start_extend) {
   Preparation p;
   { DBMemory storage(TEST_FILE); }
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abc", NULL};
-  test_insertion(storage, "insert_null", keys);
+  const char *keys[] = {"abc", "abcd", NULL};
+  test_insertion(storage, "insert_start_extend", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_start_split) {
+  Preparation p;
+  { DBMemory storage(TEST_FILE); }
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"abc", "a*c", NULL};
+  test_insertion(storage, "insert_start_split", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_start_short) {
+  // A variant of insert_compress_extend
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  Trace trace(storage);
+  trace.find("abc");
+  trace.set_value(string("abc"));
+  trace.commit();
+  check_graph("insert_start_short_0", storage);
+
+  trace.find("");
+  trace.set_value(string(""));
+  trace.commit();
+  check_graph("insert_start_short_1", storage);
+}
+
+BOOST_AUTO_TEST_CASE(insert_start_null) {
+  // A variant of insert_compress_extend
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  Trace trace(storage);
+  trace.find("");
+  trace.set_value(string("aaa"));
+  trace.commit();
+  check_graph("insert_start_null_0", storage);
+
+  trace.find("abc");
+  trace.set_value(string("bbb"));
+  trace.commit();
+  check_graph("insert_start_null_1", storage);
+}
+
+BOOST_AUTO_TEST_CASE(change_start) {
+  // A variant of insert_compress_extend
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  Trace trace(storage);
+  trace.find("abc");
+  trace.set_value(string("aaa"));
+  trace.commit();
+  check_graph("change_start_0", storage);
+
+  trace.find("abc");
+  trace.set_value(string("bbb"));
+  trace.commit();
+  check_graph("change_start_1", storage);
+}
+
+BOOST_AUTO_TEST_CASE(change_start_null) {
+  // A variant of insert_compress_extend
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  Trace trace(storage);
+  trace.find("");
+  trace.set_value(string("aaa"));
+  trace.commit();
+  check_graph("change_start_null_0", storage);
+
+  trace.find("");
+  trace.set_value(string("bbb"));
+  trace.commit();
+  check_graph("change_start_null_1", storage);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abcdefghi", "abc*efghi", "ab*defghi",  NULL};
+  const char *keys[] = {"abcdefghi", "abc*efghi", "ab*defghi", NULL};
   test_insertion(storage, "insert_compress_split", keys);
 }
 
@@ -38,16 +110,47 @@ BOOST_AUTO_TEST_CASE(insert_compress_start) {
 BOOST_AUTO_TEST_CASE(insert_leaf_split) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abcdefghi", "abc*efghi", "abcd*fghi", "abcd*", NULL};
+  const char *keys[] = {"abcdefghi", "abc*efghi", "abc*e*ghi", NULL};
   test_insertion(storage, "insert_leaf_split", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_leaf_split_short) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"abcdefghi", "abcd*fghi", "abcd*", NULL};
+  test_insertion(storage, "insert_leaf_split_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_extend) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"ab", "abcdefg", NULL};
+  const char *keys[] = {"abcdefghi", "abc*efghi", "abc*efghijk", NULL};
   test_insertion(storage, "insert_leaf_extend", keys);
 }
+
+BOOST_AUTO_TEST_CASE(insert_array) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"aba", "abb", "abc", NULL};
+  test_insertion(storage, "insert_array", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_trie) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "abf",
+                        "abg", "abh", "abi", "abj", "abk", "abl",
+                        "abm", "abn", "abo", "abp", "abA", NULL};
+  test_insertion(storage, "insert_trie", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_null_leaf) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"aba", "abb", "abc", "ab", NULL};
+  test_insertion(storage, "insert_null_leaf", keys);
+}
+
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
@@ -56,45 +159,6 @@ BOOST_AUTO_TEST_CASE(insert_value) {
   test_insertion(storage, "insert_value", keys);
 }
 
-BOOST_AUTO_TEST_CASE(insert_trie_short) {
-  Preparation p;
-  DBMemory storage(TEST_FILE);
-  const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
-  test_insertion(storage, "insert_trie_short", keys);
-}
-
-BOOST_AUTO_TEST_CASE(insert_array_overflow) {
-  Preparation p;
-  DBMemory storage(TEST_FILE);
-  const char *keys[] = {"A", "1", "a", "B", "C", "D", "E", "F", "2", "3",
-                        "4", "5", "6", "b", "c", "d", "e", "f", NULL};
-  test_insertion(storage, "insert_array_overflow", keys);
-}
-
-BOOST_AUTO_TEST_CASE(insert_trie_lower_grow) {
-  Preparation p;
-  DBMemory storage(TEST_FILE);
-  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
-                        "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
-  test_insertion(storage, "insert_trie_lower_grow", keys);
-}
-
-BOOST_AUTO_TEST_CASE(insert_trie_upper_grow) {
-  Preparation p;
-  DBMemory storage(TEST_FILE);
-
-  for (uint16_t i = 0; i < 256; i++) {
-    std::stringstream cstr;
-    cstr << "insert_trie_upper_grow_" << i;
-    std::string test_name(cstr.str());
-
-    std::stringstream nstr;
-    nstr << i;
-    std::string snum(nstr.str());
-    uint8_t val = i;
-    insert(storage, test_name.c_str(), Slice((char *)&val, 1), snum);
-  }
-}
 
 #ifdef WITH_REMOVE
 BOOST_AUTO_TEST_CASE(remove_trie) {
@@ -158,21 +222,6 @@ BOOST_AUTO_TEST_CASE(replace_value) {
 
   trace.set_value(key);
   trace.commit();
-}
-
-BOOST_AUTO_TEST_CASE(insert_at_empty) {
-  Preparation p;
-  DBMemory storage(TEST_FILE);
-  Trace trace(storage);
-  trace.find("");
-  trace.set_value(string("aaa"));
-  trace.commit();
-  check_graph("insert_empty_0", storage);
-
-  trace.find("abc");
-  trace.set_value(string("bbb"));
-  trace.commit();
-  check_graph("insert_empty_1", storage);
 }
 
 /*

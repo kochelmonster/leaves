@@ -96,31 +96,25 @@ struct ArrayBranch {
 };
 
 struct TrieBranch {
-  union Index {
-    struct {
-      uint8_t idx : 2;  // 4 which of bits
-      uint8_t bit : 6;  // which bit of bits
-    };
-    uint8_t val;
-  };
-
   uint64_t bits[4];  // 256 bits for compression
   offset_ptr links[0];
 
   const offset_ptr* find(Trace& trace) const;
 
+  static uint8_t idx(uint8_t val) { return val >> 6; }
+  static uint8_t bit(uint8_t val) { return val & 63; }
+
   int index(uint8_t val) const {
-    Index idx = {.val = val};
-    uint64_t mask = (1 << idx.bit) - 1;
+    uint8_t idx_ = idx(val);
+    uint64_t mask = (((uint64_t)1) << bit(val)) - 1;
     int ones = 0;
-    for (int i = 0; i < idx.idx; i++) ones += popcount(bits[i]);
-    ones += popcount(bits[idx.idx] & mask);
+    for (int i = 0; i < idx_; i++) ones += popcount(bits[i]);
+    ones += popcount(bits[idx_] & mask);
     return ones;
   }
 
   void set(uint8_t val) {
-    Index idx = {.val = val};
-    bits[idx.idx] = 1 << idx.bit;
+    bits[idx(val)] |= ((uint64_t)1) << bit(val);
   }
 
   bsize_t count() const {
@@ -196,6 +190,7 @@ struct BlockHeader {
   void set_trie() { bits |= TRIE; }
 
   void clear_compressed() { bits &= ~COMPRESSED; }
+  void clear_array() { bits &= ~ARRAY; }
 
   size_t block_size() const { return BLOCK_SIZES[offset.pool_id()].block_size; }
 };
@@ -206,6 +201,7 @@ struct LeafBlock : public BlockHeader {
   uint8_t data[0];
   size_t space() const { return block_size() - HEADER_SIZE; }
   Leaf* leaf(const offset_ptr& ptr) { return (Leaf*)&data[ptr.offset()]; }
+  const Leaf* leaf(const offset_ptr& ptr) const { return (Leaf*)&data[ptr.offset()]; }
 };
 
 struct BranchBlockHeader : public BlockHeader {
@@ -314,7 +310,7 @@ struct BranchBlock : public BranchBlockHeader {
     if (leaves_free) {
       lsize_t ls = 0;
       iterate_leaves([src, dest, &ls](offset_ptr& ptr) { 
-        Leaf* l = dest->leaf(ptr);
+        const Leaf* l = src->leaf(ptr);
         memcpy(&dest->data[ls], l, l->nodesize());
         ptr.set(LEAF_BLOCK, ls);
         ls += l->nodesize();

@@ -48,17 +48,17 @@ DB::db_ptr DB::open(const char* path) {
 
 #ifdef DEBUG
 
-void dump_block(std::ostream& out, offset_ptr offset,  DBMemory* storage);
+void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage);
 
 
-size_t dump_db(std::ostream& out, DB::db_ptr db) {
+void dump_db(std::ostream& out, DB::db_ptr db) {
   DBImpl* sdb(((DBImpl*)db.get()));
-  offset_ptr root = sdb->storage.root();
+  offset_ptr root = sdb->storage.active_txn()->root;
 
   if (sdb->storage.transaction_active()) {
-    root = sdb->storage.get_block(sdb->storage.txn.root);
+    root = sdb->storage.txn.root;
   }
-  return dump_block(out, root, &sdb->storage);
+  return dump_branch(out, root, &sdb->storage);
 }
 
 uint64_t dump_info(std::ostream& out, DB::db_ptr db) {

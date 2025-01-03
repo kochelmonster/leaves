@@ -48,7 +48,7 @@ INLINE const offset_ptr* ArrayBranch::find(Trace& trace) const {
 INLINE const offset_ptr* TrieBranch::find(Trace& trace) const {
   Transition& back = trace.stack.back();
   back.index = trace.rest_key[0];
-  if (bits[back.tindex.idx] & (1 << back.tindex.bit)) {
+  if (bits[idx(back.index)] & ((uint64_t)1 << bit(back.index))) {
     trace.advance_key(1);
     return &links[index(back.index)];
   }
@@ -59,16 +59,16 @@ INLINE void Leaf::find(Trace& trace) const {
   Transition& back = trace.stack.back();
 
   back.found_leaf = this;
-  if (key_size) {
-    uint16_t size_ = std::min(key_size, (uint16_t)trace.rest_key.size());
-    const char* rest_key = trace.rest_key.data();
-    uint16_t i = 0;
-    for (; i < size_; i++) {
-      if (key_value[i] != rest_key[i]) break;
-    }
-    back.suffix = i;
-    trace.advance_key(back.suffix);
+
+  uint16_t size_ = std::min(key_size, (uint16_t)trace.rest_key.size());
+  const char* rest_key = trace.rest_key.data();
+  uint16_t i = 0;
+  for (; i < size_; i++) {
+    if (key_value[i] != rest_key[i]) break;
   }
+  back.suffix = i;
+  trace.advance_key(back.suffix);
+
   back.success = back.suffix == key_size && trace.rest_key.size() == 0;
 }
 
@@ -106,7 +106,15 @@ INLINE bool BranchBlock::find(Trace& trace) const {
     return back.follow_link(trace, link);
   }
 
-  return false;
+  // special case there is only one item in the trie: a leaf
+  assert(back.branch->used = sizeof(offset_ptr));
+  assert(!back.branch->has_compressed());
+  assert(!back.branch->has_array());
+  assert(!back.branch->has_trie());
+  assert(back.branch->has_null_leaf());
+  assert(trace.stack.size == 1);
+  back.index = -2;
+  return back.follow_link(trace, (offset_ptr*)back.branch->data);
 }
 
 
@@ -234,8 +242,7 @@ void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage) {
   out << "branch: trie" << std::endl;
   out << "key: \"";
   for (int i = 0; i < 256; i++) {
-    TrieBranch::Index idx = {.val = (uint8_t)i};
-    if (n->bits[idx.idx] & (1 << idx.bit)) {
+    if (n->bits[TrieBranch::idx(i)] & (((uint64_t) 1) << TrieBranch::bit(i))) {
       out << "[" << bitstr(i) << "]";
     }
   }
@@ -250,7 +257,7 @@ void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage) {
   if (null_child) dump_link(out, block, null_child, storage);
 
   for (int i = 0, end = n->count(); i < end; i++) {
-    if (n->links[i].offset()) {
+    if (n->links[i]) {
       dump_link(out, block, n->links[i], storage);
     }
   }
