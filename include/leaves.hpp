@@ -139,7 +139,8 @@ struct Statistics {
   struct PoolStat {
     size_t used;
     size_t freed;
-    size_t frag;  // some of unused space in the pool only with extended stats
+    size_t frag;   // freespace in used blocks (only with extended stats)
+    size_t cused;  // used blocks calculated by extended stats
   };
 
   size_t size;

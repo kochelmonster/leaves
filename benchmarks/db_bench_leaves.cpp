@@ -495,7 +495,7 @@ class Benchmark {
     for (size_t i = 0; i < leaves::Statistics::POOL_COUNT; i++) {
       std::cout << "pool " << i << ": " << stats.pools[i].used << " used, "
                 << stats.pools[i].freed << " freed, " << stats.pools[i].frag
-                << " frag" << std::endl;
+                << " frag, " << stats.pools[i].cused << " cused" << std::endl;
     }
 
     std::cout << "grow branch: " << leaves::_grow_branch << std::endl;

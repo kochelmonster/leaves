@@ -22,6 +22,11 @@ struct BlockArea {
 const int POOL_COUNT = 24;
 const int LEAF_BLOCK = POOL_COUNT;
 
+// 128, 192, 256, 384, 448, 576, 
+// 704, 832, 960, 
+// 1216, 1472, 1728
+// 2136, 
+
 // TODO: 3K Block einfügen == 3K + 1K = 4k (Den 1K in die free list)
 // TODO: Anfangen mit 64 byte block
 

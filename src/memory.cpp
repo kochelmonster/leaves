@@ -26,22 +26,31 @@ namespace leaves {
 INLINE DBMemory::DBMemory(const char* path, size_t map_size) {
   assert(sizeof(block_ptr) == sizeof(char*));
   memset(&txn, 0, sizeof(txn));
-  init_dbfile(path, map_size);
-  init_shared();
+  std::string shared_name;
+  init_dbfile(path, map_size, shared_name);
+  init_shared(shared_name);
 }
 
 INLINE DBMemory::~DBMemory() {
   shared_memory_object::remove(shared_object.get_name());
 }
 
-INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
+INLINE void DBMemory::init_dbfile(const char* path, size_t map_size,
+                                  std::string& shared_name) {
+  std::vector<std::string> parts;
+  boost::split(parts, path, boost::is_any_of("/\\"));
+  shared_name = *parts.rbegin();
+  shared_name.insert(0, "shared-");
+
   if (!std::filesystem::is_regular_file(path)) {
+    shared_memory_object::remove(shared_name.c_str());
+
     const size_t BLOCK_START = padding(sizeof(Header), BLOCK0_SIZE);
     union {
       Header header;
       char data[BLOCK_START];
     };
-        
+
     memset(&data, 0, sizeof(data));
     strcpy(header.signature, SIGNATURE);
     header.db_version = 0;
@@ -79,7 +88,7 @@ INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
   if (!map_size) {
     map_size = (1 + (file_size / T)) * T;
     // for Valgrind
-    map_size = 20 * G; // TODO: remove
+    map_size = 20 * G;  // TODO: remove
   }
 
   region = mapped_region(file, read_write, 0, map_size);
@@ -89,13 +98,10 @@ INLINE void DBMemory::init_dbfile(const char* path, size_t map_size) {
   assert(db->txn[1].file_size <= file_size);
 }
 
-INLINE void DBMemory::init_shared() {
-  std::vector<std::string> parts;
-  boost::split(parts, get_filename(), boost::is_any_of("/\\"));
-  std::string name = *parts.rbegin();
-  name.insert(0, "shared-");
+INLINE void DBMemory::init_shared(const std::string& shared_name) {
   try {
-    shared_object = shared_memory_object(create_only, name.c_str(), read_write);
+    shared_object =
+        shared_memory_object(create_only, shared_name.c_str(), read_write);
     shared_object.truncate(sizeof(SharedMem));
     shared_region = mapped_region(shared_object, read_write);
     shared = (SharedMem*)shared_region.get_address();
@@ -108,7 +114,8 @@ INLINE void DBMemory::init_shared() {
       TESTPOINT(UnfinishedCommit);
     }
   } catch (...) {
-    shared_object = shared_memory_object(open_only, name.c_str(), read_write);
+    shared_object =
+        shared_memory_object(open_only, shared_name.c_str(), read_write);
     shared_region = mapped_region(shared_object, read_write);
     shared = (SharedMem*)shared_region.get_address();
   }
@@ -127,6 +134,12 @@ INLINE block_ptr DBMemory::clone_branch(block_ptr src) {
 
 INLINE block_ptr DBMemory::alloc_block_by_pool(int pool_id) {
   BlockPool& pool = txn.pools[pool_id];
+  if (pool_id == 3) {
+    pool.freed++;
+    
+  }
+
+
   if (pool.free_start) {
     tid_t min_txn_id = get_min_txn_id();
     block_ptr free_block = get_block(pool.free_start);
@@ -191,6 +204,7 @@ INLINE void DBMemory::free_block(block_ptr block) {
 
   BlockPool& pool = txn.pools[block->offset.pool_id()];
   pool.freed++;
+  pool.used--;
   if (pool.last_free_start) {
     block->set_next_free(pool.last_free_start);
     pool.last_free_start = block->offset.start();
@@ -258,12 +272,14 @@ INLINE int DBMemory::alloc_cursor() {
     ReadCursor& cursor =
         shared->readers[(i + last_index) % SharedMem::READER_COUNT];
     if (!cursor.txn_id) {
-      if (ipcdetail::atomic_cas32(&shared->last_index, last_index, i + 1) ==
+      if (ipcdetail::atomic_cas32(&shared->last_index, i + 1, last_index) ==
           last_index) {
         cursor.txn_id = active_txn()->txn_id;
         cursor.pid = boost::process::v2::current_pid();
+        ipcdetail::atomic_inc32(&shared->count);
         return i;
       } else {
+        // start again
         TESTPOINT(DBMemory::alloc_cursor::1);
         return alloc_cursor();
       }
@@ -276,24 +292,37 @@ INLINE offset_ptr DBMemory::update_cursor(int id) {
   ReadCursor& cursor = shared->readers[id];
   const DBTransaction* txn = active_txn();
   if (txn->txn_id != cursor.txn_id) {
+    if (cursor.txn_id <= shared->max_free_transaction)
+      shared->max_free_transaction = 0;
+
     cursor.txn_id = txn->txn_id;
-    shared->max_free_transaction = 0;
   }
   return txn->root;
 }
 
 INLINE void DBMemory::free_cursor(int id) {
-  shared->readers[id].txn_id = 0;
-  shared->max_free_transaction = 0;  // invalidate the transaction
+  ReadCursor& cursor = shared->readers[id];
+  if (cursor.txn_id <= shared->max_free_transaction)
+    shared->max_free_transaction = 0;  // invalidate the transaction
+  cursor.txn_id = 0;
+  assert(shared->count > 0);
+
+  uint32_t last_index = shared->last_index;
+  ipcdetail::atomic_cas32(&shared->last_index, id, last_index );
+  ipcdetail::atomic_dec32(&shared->count);
 }
 
 INLINE tid_t DBMemory::get_min_txn_id() {
   if (shared->max_free_transaction) return shared->max_free_transaction;
 
   tid_t min_trans = active_txn()->txn_id;
-  for (int i = 0; i < SharedMem::READER_COUNT; i++) {
+  uint32_t set = 0, count = shared->count;
+  for (int i = 0; i < SharedMem::READER_COUNT && set < count; i++) {
     ReadCursor& cursor = shared->readers[i];
-    if (cursor.txn_id) min_trans = std::min(min_trans, cursor.txn_id);
+    if (cursor.txn_id) {
+      min_trans = std::min(min_trans, cursor.txn_id);
+      set++;
+    }
   }
 
   shared->max_free_transaction = min_trans;

@@ -31,19 +31,18 @@ using boost::interprocess::shared_memory_object;
 struct Header {
   // first bytes of the db file
   char signature[SIGNATURE_SIZE];
-  
+
   // version of the db file
   uint16_t db_version;
 
   // active db
   uint16_t active;
 
-  char _padding[padding(2*sizeof(uint16_t), 8) - 2*sizeof(uint16_t)];
+  char _padding[padding(2 * sizeof(uint16_t), 8) - 2 * sizeof(uint16_t)];
 
   DBTransaction txn[2];
 };
 #pragma pack(0)
-
 
 // shared alloc structure for all read cursor
 struct ReadCursor {
@@ -59,6 +58,9 @@ struct SharedMem {
 
   // the position of last registered reader
   uint32_t last_index;
+
+  // number of readers
+  uint32_t count;
 
   // if 1 a transaction is active
   uint32_t transaction_active;
@@ -77,10 +79,10 @@ struct DBMemory {
   ~DBMemory();
 
   // initialize the shared memory
-  void init_dbfile(const char* path, size_t map_size);
+  void init_dbfile(const char* path, size_t map_size, std::string& shared_name);
 
   // initialize the shared memory
-  void init_shared();
+  void init_shared(const std::string& shared_name);
 
   size_t get_size() const { return region.get_size(); }
 
@@ -124,7 +126,7 @@ struct DBMemory {
 
   // returns the database active transaction
   const DBTransaction* active_txn() const;
-  
+
   // Transaction methods
   bool start_transaction();
   void rollback();
@@ -151,11 +153,10 @@ struct DBMemory {
     Header* db;
     uint8_t* data;
   };
-  
+
   // the active writable transaction of db
   DBTransaction txn;
 };
-
 
 #ifdef TESTING
 

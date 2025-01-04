@@ -7,9 +7,9 @@
 
 namespace leaves {
 
+// TODO: Remove these debugging vars
 size_t _grow_leaf = 0;
 size_t _grow_branch = 0;
-
 
 INLINE bool Transition::follow_link(Trace& trace, const offset_ptr* link) {
   assert(link->data);
@@ -275,16 +275,19 @@ INLINE bool Inserter::split_compressed() {
 
   // cut compressed of original block
   bsize_t cut_size = _back->prefix + 1;
-  cn->size -= cut_size;
-  _back->branch->used -= cut_size;
-  if (cn->size) {
-    memmove(cn->key, &cn->key[cut_size],
-            _back->branch->used - sizeof(cn->size));
-  } else {
-    _back->branch->used -= sizeof(cn->size);
-    memmove(_back->branch->data, &cn->key[cut_size], _back->branch->used);
-    _back->branch->clear_compressed();
+  bsize_t before = cn->nodesize(), after = cn->nodesize(cn->size - cut_size);
+  if (before != after) {
+    assert(before > after);
+    memmove(_back->branch->data + after, _back->branch->data + before,
+            _back->branch->used - before);
+    _back->branch->used -= (before - after);
   }
+
+  if (after) {
+    cn->size -= cut_size;
+    memmove(cn->key, &cn->key[cut_size], cn->size);
+  } else
+    _back->branch->clear_compressed();
 
   block_ptr org = _back->branch;
 
@@ -485,7 +488,7 @@ INLINE offset_ptr Inserter::add_leaf(const Slice& key, const Slice& value) {
   l->key_size = key.size();
   l->value_size = value.size();
   memcpy(l->key_value, key.data(), l->key_size);
-  memcpy(l->key_value + l->key_size, value.data(), l->value_size);
+  memcpy(l->key_value + align(l->key_size), value.data(), l->value_size);
   _back->branch->leaves_used += l->nodesize();
 
   assert(_back->branch->leaves_used <= _back->leaf.leaf()->space());

@@ -70,12 +70,17 @@ The layout is CPU cache friendly
 typedef uint16_t bsize_t;  // size inside a branch block
 typedef uint32_t lsize_t;  // size inside a leaf block
 
+const static bsize_t ALIGN = sizeof(void*);
+constexpr bsize_t align(bsize_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
+
 struct Compressed {
   bsize_t size;
   uint8_t key[0];
   bool find(Trace& trace) const;
-  bsize_t nodesize() const { return size + sizeof(size); }
-  static bsize_t nodesize(bsize_t s) { return s ? sizeof(Compressed) + s : 0; }
+  static bsize_t nodesize(bsize_t s) {
+    return s ? align(sizeof(Compressed) + s) : 0;
+  }
+  bsize_t nodesize() const { return nodesize(size); }
 };
 
 struct ArrayBranch {
@@ -86,13 +91,11 @@ struct ArrayBranch {
 
   const offset_ptr* find(Trace& trace) const;
 
-  bsize_t nodesize() const {
-    return sizeof(offset_ptr) * size + sizeof(size) + sizeof(keys);
-  }
-
   static bsize_t nodesize(bsize_t s) {
     return sizeof(ArrayBranch) + s * sizeof(offset_ptr);
   }
+
+  bsize_t nodesize() const { return nodesize(size); }
 };
 
 struct TrieBranch {
@@ -129,21 +132,21 @@ struct Leaf {
     -> pure value data in extra allocated block (with no header?) */
 
   lsize_t value_size;
-  bsize_t key_size;
+  lsize_t key_size;  // actually we only need 2 bytes but we align to 8
   uint8_t key_value[0];
 
   void find(Trace& trace) const;
-  Slice value() const { return Slice((char*)key_value + key_size, value_size); }
+  Slice value() const { return Slice((char*)key_value + align(key_size), value_size); }
   Slice key() const { return Slice((char*)key_value, key_size); }
 
-  const static uint16_t HEADER_SIZE = sizeof(value_size) + sizeof(bsize_t);
-  uint16_t nodesize() const { return nodesize(key_size, value_size); }
-
   static bsize_t nodesize(bsize_t ksize, size_t vsize) {
-    lsize_t tmp = sizeof(Leaf) + ksize + vsize;
-    return tmp <= MAX_LEAF_SIZE ? tmp
-                                : sizeof(Leaf) + ksize + sizeof(offset_ptr);
+    lsize_t tmp = sizeof(Leaf) + align(ksize) + align(vsize);
+    return tmp <= MAX_LEAF_SIZE
+               ? tmp
+               : sizeof(Leaf) + align(ksize) + sizeof(offset_ptr);
   }
+
+  uint16_t nodesize() const { return nodesize(key_size, value_size); }
 };
 
 /* the metadata of a every block */
@@ -206,10 +209,13 @@ struct LeafBlock : public BlockHeader {
 };
 
 struct BranchBlockHeader : public BlockHeader {
-  bsize_t used;         // space used
   offset_ptr leaves;    // link to the associated leaf block
   lsize_t leaves_used;  // space used in leaves
   lsize_t leaves_free;  // free holes in leaves
+  union {
+    bsize_t used;         // space used in the branch block
+    uint64_t _padding;
+  };
 };
 
 struct BranchBlock : public BranchBlockHeader {
@@ -249,6 +255,7 @@ struct BranchBlock : public BranchBlockHeader {
 
     if (has_array()) {
       ArrayBranch* branch = (ArrayBranch*)&data[ioffset];
+      assert(branch->size <= ArrayBranch::COUNT);
       for (int count = branch->size, i = 0; i < count; i++) {
         oper(branch->links[i]);
       }

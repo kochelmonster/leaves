@@ -28,6 +28,8 @@ INLINE const offset_ptr* ArrayBranch::find(Trace& trace) const {
     trace.stack.back().index = -1;
     return nullptr;
   }
+
+  assert(size <= ArrayBranch::COUNT);
   uint8_t key = trace.rest_key[0];
   char i = 0;
   for (; i < size; i++) {
@@ -53,16 +55,11 @@ INLINE const offset_ptr* TrieBranch::find(Trace& trace) const {
 
 INLINE void Leaf::find(Trace& trace) const {
   Transition& back = trace.stack.back();
-
   back.found_leaf = this;
 
-  uint16_t size_ = std::min(key_size, (uint16_t)trace.rest_key.size());
-  const char* rest_key = trace.rest_key.data();
-  uint16_t i = 0;
-  for (; i < size_; i++) {
-    if (key_value[i] != rest_key[i]) break;
-  }
-  back.suffix = i;
+  size_t same = get_prefix(trace.rest_key.data(), (const char*)key_value,
+                           trace.rest_key.size(), key_size);
+  back.suffix = same;
   trace.advance_key(back.suffix);
 
   back.success = back.suffix == key_size && trace.rest_key.size() == 0;
@@ -83,10 +80,10 @@ INLINE bool BranchBlock::find(Trace& trace) const {
       back.index = -2;
       return back.follow_link(trace, (const offset_ptr*)&data[ioffset]);
     }
-
     ioffset += sizeof(offset_ptr);
   }
 
+  assert(ioffset % ALIGN == 0);
   if (has_array()) {
     const ArrayBranch* n = (const ArrayBranch*)&data[ioffset];
     const offset_ptr* link = n->find(trace);
@@ -206,6 +203,8 @@ void dump_branch(std::ostream& out, offset_ptr offset, DBMemory* storage) {
     const ArrayBranch* n = (const ArrayBranch*)&block->data[ioffset];
     out << "branch: array" << std::endl;
     out << "key: \"";
+    assert(n->size > 0);
+    assert(n->size <= ArrayBranch::COUNT);
     for (int i = 0; i < n->size; i++) {
       out << "[" << bitstr(n->keys[i]) << "]";
     }

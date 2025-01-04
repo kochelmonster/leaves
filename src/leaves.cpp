@@ -44,11 +44,13 @@ struct DBImpl : public DB {
 };
 
 void DBImpl::stat_traverse(block_ptr& branch, Statistics& s) {
+  s.pools[branch->offset.pool_id()].cused++;
   s.pools[branch->offset.pool_id()].frag += branch->freespace();
+  s.pools[branch->leaves.pool_id()].cused++;
   s.pools[branch->leaves.pool_id()].frag +=
       branch->leaves.size() - LeafBlock::HEADER_SIZE - branch->leaves_used +
       branch->leaves_free;
-
+  
   branch->iterate_links([&branch, &s, this](offset_ptr& link) {
     if (!link.leaf()) {
       block_ptr block = storage.get_block(link);
@@ -63,7 +65,7 @@ void DBImpl::statistics(Statistics& s, const Slice& variant, bool extended) {
   for (int i = 0; i < POOL_COUNT; i++) {
     s.pools[i].used = pools[i].used;
     s.pools[i].freed = pools[i].freed;
-    s.pools[i].frag = 0;
+    s.pools[i].frag = s.pools[i].cused = 0;
   }
   s.size = txn->file_size;
   s.leaves = txn->leaves;
