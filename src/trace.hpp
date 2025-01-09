@@ -8,36 +8,36 @@
 namespace leaves {
 
 struct Transition {
+  static const int NOT_SAME = 2; // branch_key was not found
+  static const int UNDEFINED = 3; // initial state of cmp
+
   block_ptr branch;   // the branch block referenced in this transition
   block_ptr leaf;     // the final leaf block if any
   uint16_t prefix;    // count of equal chars in stringnode
   uint16_t suffix;    // count of equal chars in keyvaluenode
-
-  char index;         // bit index or index of arraynode or trie_node -2 means value is used
-
+  uint8_t branch_key;
   bsize_t olink;      // the offset inside block that points to the output link
-  const Leaf* found_leaf;
-  bool success;
 
+  const Compressed *compressed;
+  union {
+    const ArrayBranch *array;
+    const TrieBranch *trie;
+  };
+  const Leaf* found_leaf;
+
+  // 1: the key to find is bigger than the found node
+  // 0: the key is found
+  // -1: the key to find is smalled than the found node
+  // NOT_SAME: it is not equal but not known if -1 or 1
+  int cmp;
+  
   // position inside the key
   bsize_t keypos;
 
+  bool success() const { return found_leaf && cmp == 0; }
   offset_ptr* plink() { return branch->plink(olink); }
-  void reset() { branch.reset(); leaf.reset(); success = false; }
-  bool follow_link(Trace& trace, const offset_ptr* link);
-
-  const Transition& operator=(const Transition& src) {
-    branch = src.branch;
-    leaf = src.leaf;
-    prefix = src.prefix;
-    suffix = src.suffix;
-    index = src.index;
-    olink = src.olink;
-    found_leaf = src.found_leaf;
-    success = src.success;
-    keypos = src.keypos;
-    return *this;
-  }
+  void reset() { branch.reset(); leaf.reset(); }
+  template<typename caller> bool follow_link(Trace& trace, const offset_ptr* link, caller c);
 };
 
 struct Stack {
@@ -47,7 +47,7 @@ struct Stack {
 
   Stack();
 
-  void push(block_ptr block);
+  void push(block_ptr block, bsize_t keypos=0);
 
   Transition& front() { return data[0]; }
   Transition& back() { return data[size - 1]; }
@@ -79,16 +79,38 @@ struct Trace {
   void commit();
   void rollback();
 
+
+  /* Helpers */
+
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
     rest_key.iadvance(size);
   }
 
   void push(const offset_ptr& ptr) {
-    stack.push(storage.get_block(ptr));
+    stack.push(storage.get_block(ptr), current_key.size());
   }
 
-  void _keep_stack();
+  void pop() {
+    assert(stack.size > 0);
+    current_key.resize(stack.back().keypos);
+    stack.size--;
+  }
+
+  void changed_branch_key() {
+    // used in move operations
+    Transition& back = stack.back();
+    bsize_t bpos = back.keypos + back.prefix;
+    if (current_key.size() == bpos) {
+      current_key.push_back(back.branch_key);
+    }
+    else {
+      assert(current_key.size() == bpos+1);
+      current_key.back() = back.branch_key;
+    }
+  }
+
+  bool _keep_stack();
   void _find();
   void _make_writable();
 
@@ -109,6 +131,26 @@ struct Trace {
   std::string current_key;
   bool transaction_active;
 };
+
+
+template<typename caller>
+inline bool Transition::follow_link(Trace& trace, const offset_ptr* link, caller c) {
+  assert(link->data);
+  assert(branch->data + BranchBlock::MAX_SPACE > (const uint8_t*)link);
+  BranchBlock* block = branch;
+
+  olink = (const uint8_t*)link - block->data;
+  if (link->pool_id() == LEAF_BLOCK) {
+    leaf = trace.storage.get_block(block->leaves);
+    c(trace, leaf.leaf()->leaf(*link));
+    return false;
+  }
+
+  assert(link->pool_id() < POOL_COUNT);
+  trace.stack.back().cmp = 0;
+  trace.push(*link);
+  return true;
+}
 
 
 

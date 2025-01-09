@@ -14,6 +14,8 @@
 #define CMPFILES "./"
 #endif
 
+#define MOVEMENT
+
 #define TEST_FILE "test.lvs"
 
 using namespace leaves;
@@ -100,7 +102,7 @@ typedef std::vector<string> strings_t;
 typedef std::vector<int> ints_t;
 
 #ifdef MOVEMENT
-inline void test_movement(Storage& storage, strings_t& strings) {
+inline void test_movement(DBMemory& storage, strings_t& strings) {
   std::sort(strings.begin(), strings.end());
 
   Trace trace(storage);
@@ -109,14 +111,15 @@ inline void test_movement(Storage& storage, strings_t& strings) {
             << "iter forward" << std::endl
             << "------------" << std::endl;
   trace.first();
-  for (strings_t::iterator i = strings.begin(); i != strings.end();
-       i++, trace.next()) {
+  strings_t::iterator i = strings.begin();
+  for (; i != strings.end(); i++, trace.next()) {
     std::cout << "find \"" << *i << "\"";
-    BOOST_REQUIRE(trace.isvalid());
+    BOOST_REQUIRE(trace.is_valid());
     BOOST_REQUIRE_EQUAL(trace.current_key, *i);
     std::cout << " ok" << std::endl;
   }
-  BOOST_REQUIRE(!trace.isvalid());
+  BOOST_REQUIRE(i == strings.end());
+  BOOST_REQUIRE(!trace.is_valid());
 
   std::cout << std::endl
             << "iter backward" << std::endl
@@ -125,11 +128,11 @@ inline void test_movement(Storage& storage, strings_t& strings) {
   for (strings_t::reverse_iterator i = strings.rbegin(); i != strings.rend();
        i++, trace.prev()) {
     std::cout << "find \"" << *i << "\"";
-    BOOST_REQUIRE(trace.isvalid());
+    BOOST_REQUIRE(trace.is_valid());
     BOOST_REQUIRE_EQUAL(trace.current_key, *i);
     std::cout << " ok" << std::endl;
   }
-  BOOST_REQUIRE(!trace.isvalid());
+  BOOST_REQUIRE(!trace.is_valid());
 
   std::cout << std::endl << "find" << std::endl << "----" << std::endl;
 
@@ -143,25 +146,25 @@ inline void test_movement(Storage& storage, strings_t& strings) {
 
     std::cout << "find \"" << find << "\"";
     trace.find(find);
-    BOOST_REQUIRE(trace.isvalid());
+    BOOST_REQUIRE(trace.is_valid());
     BOOST_REQUIRE_EQUAL(trace.current_key, find);
     BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
     if (*i > 0) {
       trace.prev();
-      BOOST_REQUIRE(trace.isvalid());
+      BOOST_REQUIRE(trace.is_valid());
       BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i - 1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i - 1]);
     }
 
     if (*i < (int)strings.size() - 1) {
       trace.find(find);
-      BOOST_REQUIRE(trace.isvalid());
+      BOOST_REQUIRE(trace.is_valid());
       BOOST_REQUIRE_EQUAL(trace.current_key, find);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
 
       trace.next();
-      BOOST_REQUIRE(trace.isvalid());
+      BOOST_REQUIRE(trace.is_valid());
       BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i + 1]);
       BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i + 1]);
     }
@@ -170,7 +173,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     // set cursor after find in a non valid position
     find.push_back('!');
     trace.find(find);
-    BOOST_REQUIRE(!trace.isvalid());
+    BOOST_REQUIRE(!trace.is_valid());
     trace.prev();
     find = strings[*i];
     std::string cmp1 = trace.current_key;
@@ -182,7 +185,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     find.back()--;
     find.push_back('!');
     trace.find(find);
-    BOOST_REQUIRE(!trace.isvalid());
+    BOOST_REQUIRE(!trace.is_valid());
     trace.next();
     find = strings[*i];
     cmp1 = trace.current_key;
@@ -200,7 +203,7 @@ inline void test_movement(Storage& storage, strings_t& strings) {
     missing.append(".");
     std::cout << "find \"" << missing << "\"";
     trace.find(missing);
-    BOOST_REQUIRE(!trace.isvalid());
+    BOOST_REQUIRE(!trace.is_valid());
     std::cout << " ok (not found)" << std::endl;
   }
   std::cout << std::endl << std::endl;

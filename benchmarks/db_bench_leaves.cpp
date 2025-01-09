@@ -40,10 +40,12 @@ static const char* FLAGS_benchmarks1 =
 
 static const char* FLAGS_benchmarks =
     "fillseq,"
+    "fillseqsync,"
+    "fillrandsync,"
     "fillrandom,"
     "overwrite,"
-    "readrandom,";
-;
+    "readrandom,"
+    "readseq,";
 
 // Use writable MMAP
 static bool FLAGS_writemap = false;
@@ -85,11 +87,10 @@ static bool FLAGS_compression = true;
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
 
-
 namespace leaves {
 extern size_t _grow_leaf;
 extern size_t _grow_branch;
-}
+}  // namespace leaves
 
 #ifdef DEBUG
 namespace leaves {
@@ -484,7 +485,7 @@ class Benchmark {
       cursor->commit();
     }
 
-#ifdef DEBUG
+#ifdef __DEBUG
     leaves::Statistics stats;
     db_->statistics(stats, "all", true);
     std::cout << std::endl;

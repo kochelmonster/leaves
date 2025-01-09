@@ -1,8 +1,8 @@
 #ifdef __GNUC__
 
-#define popcount __builtin_popcountl
-#define clz __builtin_clzl
-#define ctz __builtin_ctzl
+#define popcount __builtin_popcountll
+#define clz __builtin_clzll
+#define ctz __builtin_ctzll
 
 #endif
 

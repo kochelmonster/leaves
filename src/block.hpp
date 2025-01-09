@@ -5,8 +5,8 @@
 #include <leaves.hpp>
 #include <stdexcept>
 
-#include "pool.hpp"
 #include "port.hpp"
+#include "pool.hpp"
 
 #ifdef HEADER_ONLY
 #define INLINE inline
@@ -76,7 +76,9 @@ constexpr bsize_t align(bsize_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 struct Compressed {
   bsize_t size;
   uint8_t key[0];
+  
   bool find(Trace& trace) const;
+  uint16_t step(Trace& trace) const;   // for first, next, prev, last
   static bsize_t nodesize(bsize_t s) {
     return s ? align(sizeof(Compressed) + s) : 0;
   }
@@ -90,7 +92,10 @@ struct ArrayBranch {
   offset_ptr links[0];
 
   const offset_ptr* find(Trace& trace) const;
-
+  const offset_ptr* first(Trace& trace) const;
+  const offset_ptr* last(Trace& trace) const;
+  const offset_ptr* next(Trace& trace) const;
+  const offset_ptr* prev(Trace& trace) const;
   static bsize_t nodesize(bsize_t s) {
     return sizeof(ArrayBranch) + s * sizeof(offset_ptr);
   }
@@ -103,7 +108,10 @@ struct TrieBranch {
   offset_ptr links[0];
 
   const offset_ptr* find(Trace& trace) const;
-
+  const offset_ptr* first(Trace& trace) const;
+  const offset_ptr* last(Trace& trace) const;
+  const offset_ptr* next(Trace& trace) const;
+  const offset_ptr* prev(Trace& trace) const;
   static uint8_t idx(uint8_t val) { return val >> 6; }
   static uint8_t bit(uint8_t val) { return val & 63; }
 
@@ -117,11 +125,12 @@ struct TrieBranch {
   }
 
   void set(uint8_t val) { bits[idx(val)] |= ((uint64_t)1) << bit(val); }
-
   bsize_t count() const {
     return popcount(bits[0]) + popcount(bits[1]) + popcount(bits[2]) +
            popcount(bits[3]);
   }
+
+  template <typename F> const offset_ptr* step(Trace& trace, F&& lambda) const;
 };
 
 // A leaf of the trie (a rest key and the value)
@@ -136,6 +145,7 @@ struct Leaf {
   uint8_t key_value[0];
 
   void find(Trace& trace) const;
+  void step(Trace& trace) const;   // for first, next, prev, last
   Slice value() const { return Slice((char*)key_value + align(key_size), value_size); }
   Slice key() const { return Slice((char*)key_value, key_size); }
 
@@ -236,7 +246,10 @@ struct BranchBlock : public BranchBlockHeader {
 
   // find the next chunk of the key and update the stack
   bool find(Trace& trace) const;
-
+  bool first(Trace& trace) const;
+  bool last(Trace& trace) const;
+  bool next(Trace& trace) const;
+  bool prev(Trace& trace) const;
   // calculate the offset of a link pointer
   bsize_t olink(offset_ptr* link) { return (uint8_t*)link - data; }
 
@@ -353,7 +366,7 @@ struct block_ptr {
 };
 
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
-                         size_t size2) {
+                         size_t size2, int& cmp) {
   size_t i = 0;
   size_t limit = std::min(size1, size2) / sizeof(uint64_t);
   const uint64_t* wstr1 = reinterpret_cast<const uint64_t*>(str1);
@@ -368,6 +381,13 @@ inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
   while (i < limit && str1[i] == str2[i]) {
     i++;
   }
+
+  if (i < limit) {
+    cmp = str1[i] > str2[i] ? 1 : -1;
+  }
+  else if (size1 > limit) cmp = 1;
+  else if (size2 > limit) cmp = -1;
+  else cmp = 0;
   return i;
 }
 

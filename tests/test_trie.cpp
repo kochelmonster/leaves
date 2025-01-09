@@ -4,7 +4,19 @@ Test the trie nodes without bursting.
 #define BOOST_TEST_MODULE TrieTest
 #define GENERATE
 
+#include <boost/endian/conversion.hpp>
+
 #include "test.hpp"
+
+using boost::endian::big_to_native;
+using boost::endian::native_to_big;
+
+BOOST_AUTO_TEST_CASE(insert_one) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"abc", NULL};
+  test_insertion(storage, "insert_one", keys);
+}
 
 BOOST_AUTO_TEST_CASE(insert_start_extend) {
   Preparation p;
@@ -16,7 +28,6 @@ BOOST_AUTO_TEST_CASE(insert_start_extend) {
 
 BOOST_AUTO_TEST_CASE(insert_start_split) {
   Preparation p;
-  { DBMemory storage(TEST_FILE); }
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abc", "a*c", NULL};
   test_insertion(storage, "insert_start_split", keys);
@@ -96,7 +107,7 @@ BOOST_AUTO_TEST_CASE(insert_compress_split) {
 BOOST_AUTO_TEST_CASE(insert_compress_short) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"abcdefg", "ab", NULL};
+  const char *keys[] = {"abcdefg", "abc*efg", "ab", NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
 
@@ -105,6 +116,43 @@ BOOST_AUTO_TEST_CASE(insert_compress_start) {
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ba", NULL};
   test_insertion(storage, "insert_compress_start", keys);
+}
+
+BOOST_AUTO_TEST_CASE(insert_big_stack) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  const char *keys[] = {"a",     "ab",     "abc",    "abcd",
+                        "abcde", "abcdef", "abcdeg", NULL};
+  test_insertion(storage, "insert_big_stack", keys);
+
+  Trace trace(storage);
+  std::cout << "insert 7: abcd*" << std::endl;
+  trace.find("abcd*");
+  BOOST_REQUIRE(!trace.is_valid());
+  trace.set_value("abcd*");
+  BOOST_REQUIRE(trace.is_valid());
+
+  std::cout << "insert 8: abcde*" << std::endl;
+  trace.find("abcde*");
+  BOOST_REQUIRE(!trace.is_valid());
+  trace.set_value("abcde*");
+  BOOST_REQUIRE(trace.is_valid());
+  trace.commit();
+  check_graph("insert_big_stack_7", storage);
+
+#ifdef MOVEMENT
+  {
+    strings_t strings;
+    const char *keys[] = {"a",      "ab",     "abc",   "abcd",   "abcde",
+                          "abcdef", "abcdeg", "abcd*", "abcde*", NULL};
+    for (const char **key = keys; *key; key++) {
+      strings.push_back(*key);
+    }
+    test_movement(storage, strings);
+  }
+#endif
+
+  // TODO: move test for all
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_split) {
@@ -138,10 +186,52 @@ BOOST_AUTO_TEST_CASE(insert_array) {
 BOOST_AUTO_TEST_CASE(insert_trie) {
   Preparation p;
   DBMemory storage(TEST_FILE);
-  const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "abf",
-                        "abg", "abh", "abi", "abj", "abk", "abl",
-                        "abm", "abn", "abo", "abp", "abA", NULL};
+  const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "abf", "abg",
+                        "abh", "abi", "abj", "abk", "abl", "abm", "abn",
+                        "abo", "abp", "abA", "ab",  NULL};
+  // the last inserts a null leaf
   test_insertion(storage, "insert_trie", keys);
+}
+
+BOOST_AUTO_TEST_CASE(overflow_trie) {
+  Preparation p;
+  DBMemory storage(TEST_FILE);
+  uint16_t i;
+  Trace trace(storage);
+  for (i = 0; i < 258; i++) {
+    uint16_t key = native_to_big(i);
+    Slice skey((char *)&key, sizeof(key));
+    trace.find(skey);
+    BOOST_REQUIRE(!trace.is_valid());
+    std::string value = std::to_string(i);
+    trace.set_value(value);
+    trace.commit();
+  }
+  check_graph("overflow_trie", storage);
+
+  #ifdef MOVEMENT
+  {
+    uint16_t i = 0;
+    for(trace.first(); trace.is_valid(); trace.next(), i++) {
+      BOOST_REQUIRE(trace.is_valid());
+      uint16_t key = native_to_big(i);
+      Slice cmp_key((char *)&key, sizeof(key));
+      //std::cout << "iter forward: " << i << std::endl;
+      BOOST_REQUIRE(cmp_key == trace.current_key);
+    }
+    BOOST_REQUIRE(i == 258);
+
+    i = 257;
+    for(trace.last(); trace.is_valid(); trace.prev(), i--) {
+      BOOST_REQUIRE(trace.is_valid());
+      uint16_t key = native_to_big(i);
+      Slice cmp_key((char *)&key, sizeof(key));
+      // std::cout << "iter backward: " << i << std::endl;
+      BOOST_REQUIRE(cmp_key == trace.current_key);
+    }
+    BOOST_REQUIRE(i == 0xFFFF);  // overflow to -1
+  }
+  #endif
 }
 
 BOOST_AUTO_TEST_CASE(insert_null_leaf) {
@@ -151,14 +241,12 @@ BOOST_AUTO_TEST_CASE(insert_null_leaf) {
   test_insertion(storage, "insert_null_leaf", keys);
 }
 
-
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
   DBMemory storage(TEST_FILE);
   const char *keys[] = {"abc", "abcdefg", NULL};
   test_insertion(storage, "insert_value", keys);
 }
-
 
 #ifdef WITH_REMOVE
 BOOST_AUTO_TEST_CASE(remove_trie) {
@@ -223,39 +311,3 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   trace.set_value(key);
   trace.commit();
 }
-
-/*
-BOOST_AUTO_TEST_CASE(page_split_compressed) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-
-  std::string key1(3950, 'a');
-
-  const char *keys[] = {key1.c_str(), "abcdefghaijklmnopqrstxyz", NULL};
-  test_insertion(storage, "page_split_compressed", keys);
-
-  const char *testpoints[] = {"PageSplitAtNode", "PageSplit", NULL};
-  check_testpoints(testpoints);
-}
-
-
-BOOST_AUTO_TEST_CASE(page_split_trie) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  Trace trace(storage);
-  for (int i = 0; i < 1000; i++) {
-    //std::cout << "insert " << i << std::endl;
-    std::string key = std::to_string(i);
-    trace.find(key);
-    BOOST_REQUIRE(!trace.isvalid());
-    trace.set_value(key);
-    trace.commit();
-  }
-  check_graph("page_split_trie", storage);
-
-  const char *testpoints[] = {"PageSplitAtTrie", "PageSplit", "PageMerge",
-NULL}; check_testpoints(testpoints);
-}
-
-
-*/

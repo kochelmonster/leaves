@@ -3,6 +3,7 @@
 #define _LEAVES_POOL_HPP
 
 #include <array>
+
 #include "block.hpp"
 
 namespace leaves {
@@ -22,13 +23,6 @@ struct BlockArea {
 const int POOL_COUNT = 24;
 const int LEAF_BLOCK = POOL_COUNT;
 
-// 128, 192, 256, 384, 448, 576, 
-// 704, 832, 960, 
-// 1216, 1472, 1728
-// 2136, 
-
-// TODO: 3K Block einfügen == 3K + 1K = 4k (Den 1K in die free list)
-// TODO: Anfangen mit 64 byte block
 
 constexpr ::std::array<BlockArea, POOL_COUNT> generate_pool() {
   ::std::array<BlockArea, POOL_COUNT> result{0};
@@ -92,6 +86,12 @@ struct offset_ptr {
   bool leaf() const { return pool_id() == LEAF_BLOCK; }
 };
 
+// TODO: Make tid a 2bit overflowing counter: uint16_t
+// compare if one transaction is older than the other:
+// ta is the current transaction id
+// then t1 is older as t2 if (int)(ta - t1) < (int)(ta - t2)
+
+// Assumption:
 typedef uint64_t tid_t;
 
 // Allocates and frees Blocks
@@ -111,8 +111,8 @@ struct BlockPool {
   uint64_t last_free_end;
 
   // statistical data
-  size_t used; // used pool objects
-  size_t freed; // freed pool objects
+  size_t used;   // used pool objects
+  size_t freed;  // freed pool objects
 
   // TODO: Additional backup for the last free_start (multi database multi
   // thread)

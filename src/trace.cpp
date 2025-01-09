@@ -11,23 +11,6 @@ namespace leaves {
 size_t _grow_leaf = 0;
 size_t _grow_branch = 0;
 
-INLINE bool Transition::follow_link(Trace& trace, const offset_ptr* link) {
-  assert(link->data);
-  assert(branch->data + BranchBlock::MAX_SPACE > (const uint8_t*)link);
-  BranchBlock* block = branch;
-
-  olink = (const uint8_t*)link - block->data;
-  if (link->pool_id() == LEAF_BLOCK) {
-    leaf = trace.storage.get_block(block->leaves);
-    leaf.leaf()->leaf(*link)->find(trace);
-    return false;
-  }
-
-  assert(link->pool_id() < POOL_COUNT);
-  trace.push(*link);
-  return true;
-}
-
 struct Inserter {
   static const bsize_t OFFSET_LINK2 = offsetof(ArrayBranch, links[1]);
   static const bsize_t OFFSET_LINK1 = offsetof(ArrayBranch, links[0]);
@@ -69,7 +52,7 @@ struct Inserter {
   void extend_leaf();
   void change_leaf();
 
-  void purge_first();
+  bool purge_first();
 
   // alloc a new branch with at least size capacity and addtionally
   // create the leafs for _value and _mvalue in the new branch
@@ -101,7 +84,7 @@ INLINE void Inserter::start() {
 }
 
 inline void Inserter::_start() {
-  if (_back->success) return change_leaf();
+  if (_back->cmp == 0) return change_leaf();
 
   _trace.storage.txn.leaves++;
 
@@ -122,10 +105,10 @@ inline void Inserter::_start() {
 }
 
 inline bool Inserter::check_stack() {
-  for (size_t i = 0; i < _trace.stack.size - 1; i++) {
+  for (size_t i = 0; i < _trace.stack.size; i++) {
     Transition& t = _trace.stack.data[i];
-    assert(t.success == false);
-    assert(t.found_leaf == nullptr);
+    assert(t.cmp == 0);
+    assert(t.found_leaf == nullptr || i == _trace.stack.size-1);
   }
   return true;
 }
@@ -133,10 +116,9 @@ inline bool Inserter::check_stack() {
 INLINE void Inserter::first() {
   // reserve enough space for a future branch_node
   _back->prefix = 0;
-  _back->index = -2;
+  _back->cmp = 0;
   _back->suffix = _trace.rest_key.size();
   alloc(sizeof(offset_ptr));
-
   _back->olink = _back->branch->add_null_leaf();
   *_back->plink() = _new_leaf_link;
   _trace.storage.txn.leaves++;
@@ -156,10 +138,11 @@ INLINE void Inserter::add_to_array(bsize_t ioffset) {
     return;
   }
 
+  assert(_back->array);
   assert(_back->suffix == 0);
-  assert(_back->index == -1);
+  assert(_back->branch_key == (uint8_t)_trace.rest_key[0]);
 
-  uint8_t c = _trace.rest_key[0];
+  uint8_t nkey = _trace.rest_key[0];
   _trace.advance_key(1);
 
   ArrayBranch* n = (ArrayBranch*)&_back->branch->data[ioffset];
@@ -167,10 +150,10 @@ INLINE void Inserter::add_to_array(bsize_t ioffset) {
     _back->branch->used += alloc_branch(sizeof(offset_ptr));
     assert(_back->branch->freespace() >= sizeof(offset_ptr));
     n = (ArrayBranch*)&_back->branch->data[ioffset];  // _block may have changed
-    _back->index = n->size++;
-    _back->olink = _back->branch->olink(&n->links[_back->index]);
-    n->keys[_back->index] = c;
-    n->links[_back->index] = _new_leaf_link;
+    n->keys[n->size] = _back->branch_key = nkey;
+    n->links[n->size] = _new_leaf_link;
+    _back->olink = _back->branch->olink(&n->links[n->size]);
+    n->size++;
   } else {
     // change ArrayBranch to Trie branch
     const bsize_t MAX_ARRAY =
@@ -183,16 +166,15 @@ INLINE void Inserter::add_to_array(bsize_t ioffset) {
     for (int i = 0; i < n->size; i++) {
       tmp.set(n->keys[i]);
     }
-    tmp.set(c);
+    tmp.set(nkey);
 
     for (int i = 0; i < n->size; i++)
       tmp.links[tmp.index(n->keys[i])] = n->links[i];
 
-    _back->index = tmp.index(c);
-    _back->olink = _back->branch->olink(&n->links[_back->index]);
-
-    tmp.links[_back->index] = _new_leaf_link;
+    int index = tmp.index(nkey);
+    tmp.links[index] = _new_leaf_link;
     memcpy(n, &tmp, sizeof(tmp));
+    _back->olink = _back->branch->olink(&n->links[index]);
     _back->branch->clear_array();
     _back->branch->set_trie();
   }
@@ -204,11 +186,11 @@ INLINE void Inserter::add_to_trie(bsize_t ioffset) {
     return;
   }
 
-  assert(_back->index == _trace.rest_key[0]);
+  assert(_back->branch_key == (uint8_t)_trace.rest_key[0]);
 
   TrieBranch* n = (TrieBranch*)&_back->branch->data[ioffset];
-  assert((n->bits[n->idx(_back->index)] &
-          ((uint64_t)1 << n->bit(_back->index))) == 0);
+  assert((n->bits[n->idx(_back->branch_key)] &
+          ((uint64_t)1 << n->bit(_back->branch_key))) == 0);
 
   uint8_t c = _trace.rest_key[0];
   _trace.advance_key(1);
@@ -300,7 +282,6 @@ INLINE bool Inserter::split_compressed() {
     _back->branch->add_compressed(prefix.data(), prefix.size());
     _back->olink = _back->branch->add_array(key2, key1, org->offset);
     *_back->plink() = _new_leaf_link;
-    _back->index = 0;
   } else {
     // with empty key
     alloc(Compressed::nodesize(_back->prefix) + ArrayBranch::nodesize(1));
@@ -308,7 +289,6 @@ INLINE bool Inserter::split_compressed() {
     _back->olink = _back->branch->add_null_leaf();
     *_back->plink() = _new_leaf_link;
     *_back->branch->plink(_back->branch->add_array(key1)) = org->offset;
-    _back->index = -2;
   }
 
   _trace.storage.txn.branches++;
@@ -345,8 +325,6 @@ INLINE bool Inserter::split_leaf() {
   if (_back->suffix == _back->found_leaf->key_size) return false;  // extend
   assert(_back->suffix < _back->found_leaf->key_size);
 
-  make_back_writable();
-
   // save the prefix (_trace.rest_key.data()-_back->suffix is safe!)
   Slice prefix(_trace.rest_key.data() - _back->suffix, _back->suffix);
   _back->suffix = 0;
@@ -360,8 +338,8 @@ INLINE bool Inserter::split_leaf() {
   _mkey.iadvance(prefix.size() + 1);
 
   // extend the stack
-  assert(_back->success == false);
   _back->found_leaf = nullptr;
+  _back->cmp = 0;
   _trace.stack.push(block_ptr{.ptr = 0});
   _back = &_trace.stack.back();
   _back->keypos = _trace.current_key.size() - prefix.size();
@@ -374,19 +352,18 @@ INLINE bool Inserter::split_leaf() {
     alloc(Compressed::nodesize(prefix.size()) + ArrayBranch::nodesize(2));
     _back->branch->add_compressed(prefix.data(), prefix.size());
     _back->olink = _back->branch->add_array(key1, key2, _move_leaf_link);
-    _back->index = 0;
   } else {
     alloc(Compressed::nodesize(prefix.size()) + ArrayBranch::nodesize(1) +
           sizeof(offset_ptr));
     _back->branch->add_compressed(prefix.data(), prefix.size());
     _back->olink = _back->branch->add_null_leaf();
     *_back->branch->plink(_back->branch->add_array(key2)) = _move_leaf_link;
-    _back->index = -2;
   }
 
   *_back->plink() = _new_leaf_link;
   _trace.storage.txn.branches++;
-  purge_first();
+  if (!purge_first())
+      make_stack_writable();
   return true;
 }
 
@@ -412,8 +389,6 @@ INLINE void Inserter::extend_leaf() {
   assert(_back->suffix == _back->found_leaf->key_size);
   assert(_trace.rest_key.size() >= 1);
 
-  make_back_writable();
-
   // save the prefix
   Slice prefix(_trace.rest_key.data() - _back->suffix, _back->suffix);
   _back->suffix = 0;
@@ -425,8 +400,8 @@ INLINE void Inserter::extend_leaf() {
   _mvalue = _back->found_leaf->value();
 
   // extend the stack
-  assert(_back->success == false);
   _back->found_leaf = nullptr;
+  _back->cmp = 0;
   _trace.stack.push(block_ptr{.ptr = 0});
   _back = &_trace.stack.back();
   _back->keypos = _trace.current_key.size() - prefix.size();
@@ -442,13 +417,13 @@ INLINE void Inserter::extend_leaf() {
   *_back->branch->plink(_back->branch->add_null_leaf()) = _move_leaf_link;
   _back->olink = _back->branch->add_array(key);
   *_back->plink() = _new_leaf_link;
-  _back->index = -2;
 
   _trace.storage.txn.branches++;
-  purge_first();
+  if (!purge_first())
+    make_stack_writable();
 }
 
-INLINE void Inserter::purge_first() {
+INLINE bool Inserter::purge_first() {
   // purge the first block if is a non canonic block
   // it is recognized by "used == sizeof(offset_ptr)""
   Transition& front = _trace.stack.front();
@@ -460,12 +435,13 @@ INLINE void Inserter::purge_first() {
     _trace.stack.size = 1;
     assert(_trace.storage.txn.branches > 0);
     _trace.storage.txn.branches--;
+    return true;
   }
+  return false;
 }
 
 // change the value of leaf
 INLINE void Inserter::change_leaf() {
-  assert(_back->success);
   assert(_back->found_leaf);
 
   make_back_writable();
@@ -511,7 +487,7 @@ INLINE void Inserter::alloc(bsize_t size) {
 
   _new_leaf_link = add_leaf(_trace.rest_key, _value);
   _back->found_leaf = _back->leaf.leaf()->leaf(_new_leaf_link);
-  _back->success = true;
+  _back->cmp = 0;
   _trace.advance_key(_trace.rest_key.size());
   if (_trace.stack.size > 1)
     *_trace.stack.data[_trace.stack.size - 2].plink() = _back->branch->offset;
@@ -558,7 +534,7 @@ INLINE void Inserter::grow_leaf() {
   _new_leaf_link = add_leaf(_trace.rest_key, _value);
   _trace.advance_key(_trace.rest_key.size());
   _back->found_leaf = _back->leaf.leaf()->leaf(_new_leaf_link);
-  _back->success = true;
+  _back->cmp = 0;
 }
 
 INLINE void Inserter::make_back_writable() {
@@ -588,17 +564,18 @@ INLINE void Inserter::make_stack_writable() {
 
 INLINE Stack::Stack() : size(0) { data.resize(100); }
 
-INLINE void Stack::push(block_ptr block) {
+INLINE void Stack::push(block_ptr block, bsize_t keypos) {
   if (size == data.size()) data.resize(size * 2);
   Transition& back = data[size++];
   back.branch = block;
   back.leaf.reset();
-  back.keypos = 0;
-  back.index = -2;
+  back.keypos = keypos;
   back.prefix = back.suffix = 0;
   back.olink = 0;
+  back.compressed = nullptr;
+  back.array = nullptr;
   back.found_leaf = nullptr;
-  back.success = false;
+  back.cmp = Transition::UNDEFINED;
 }
 
 INLINE Trace::Trace(DBMemory& storage_)
@@ -616,15 +593,16 @@ INLINE void Trace::_update() {
   if (stack.size && stack.front().branch->offset != root) stack.clear();
 }
 
-INLINE void Trace::_keep_stack() {
+INLINE bool Trace::_keep_stack() {
   assert(stack.size > 0);
 
+  int cmp;
   size_t same = get_prefix(rest_key.data(), current_key.data(), rest_key.size(),
-                           current_key.size());
+                           current_key.size(), cmp);
   if (same == rest_key.size() && same == current_key.size()) {
     // already found
     rest_key.iadvance(same);
-    return;
+    return true;
   }
 
   int i = 0;
@@ -641,12 +619,15 @@ INLINE void Trace::_keep_stack() {
 
   Transition& back = stack.back();
   back.found_leaf = nullptr;
-  back.success = false;
+  back.compressed = nullptr;
+  back.array = nullptr;
+  back.cmp = Transition::UNDEFINED;
+  return false;
 }
 
 INLINE void Trace::find(const Slice& key) {
   rest_key = key;
-  if (stack.size) _keep_stack();
+  if (stack.size && _keep_stack()) return;
   _find();
 }
 
@@ -658,26 +639,58 @@ INLINE void Trace::_find() {
   }
 
   assert(stack.front().branch->offset == root);
-  Transition* b = &stack.back();
-  while (!b->success) {
-    b->keypos = current_key.size();
-    if (!b->branch->find(*this)) break;
-    b = &stack.back();
+  while (true) {
+    if (!stack.back().branch->find(*this)) break;
   }
 }
 
-INLINE void Trace::first() {}
+INLINE void Trace::first() {
+  if (!root) return
+  stack.clear(0);
+  rest_key = Slice();
+  current_key.clear();
+  push(root);
+  while(stack.back().branch->first(*this));
+}
 
-INLINE void Trace::last() {}
+INLINE void Trace::last() {
+  if (!root) return
+  stack.clear(0);
+  rest_key = Slice();
+  current_key.clear();
+  push(root);
+  while(stack.back().branch->last(*this));
+}
 
-INLINE void Trace::next() {}
+INLINE void Trace::next() {
+  rest_key.iadvance(rest_key.size());
+  while(stack.size) {
+    auto old = stack.size;
+    if (!stack.back().branch->next(*this)) break;
+    if (old < stack.size) {
+      while(stack.back().branch->first(*this));
+      break;
+    }
+  }
+}
 
-INLINE void Trace::prev() {}
+INLINE void Trace::prev() {
+  rest_key.iadvance(rest_key.size());
+  auto old = stack.size;
+  while(stack.size) {
+    auto old = stack.size;
+    if (!stack.back().branch->prev(*this)) break;
+    if (old < stack.size) {
+      while(stack.back().branch->last(*this));
+      break;
+    }
+  }
+}
 
 INLINE void Trace::remove() {}
 
 INLINE bool Trace::is_valid() const {
-  if (stack.size) return stack.back().success;
+  if (stack.size) return stack.back().success();
   return false;
 }
 
@@ -701,7 +714,7 @@ INLINE void Trace::set_value(const Slice& value) {
 
 INLINE Slice Trace::get_value() {
   const Transition& back = stack.back();
-  if (!back.success) return Slice();
+  if (back.cmp) return Slice();
   assert(back.found_leaf);
   return back.found_leaf->value();
 }
