@@ -6,10 +6,18 @@
 #include <cstdlib>
 #include <fstream>
 #include <leaves.hpp>
+#include <boost/endian/conversion.hpp>
 
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
+
+
+using boost::endian::big_to_native;
+using boost::endian::native_to_big;
+
+#define BINARY_KEY
+
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -470,9 +478,16 @@ class Benchmark {
       for (int j = 0; j < entries_per_batch; j++) {
         const int k =
             (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
+
+#ifdef BINARY_KEY
+        *(uint64_t*)key = native_to_big(k);
+        mkey = leaves::Slice(key, sizeof(uint64_t));
+        //printf("insert %i\n", k);
+#else
         snprintf(key, sizeof(key), "%016d", k);
         mkey = leaves::Slice(key);
         // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
+#endif
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
@@ -483,6 +498,8 @@ class Benchmark {
         FinishedSingleOp();
       }
       cursor->commit();
+      //std::ofstream out("errors/last.yaml");
+      //leaves::dump_db(out, db_);
     }
 
 #ifdef __DEBUG

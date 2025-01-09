@@ -176,7 +176,7 @@ inline void test_movement(DBMemory& storage, strings_t& strings) {
     BOOST_REQUIRE(!trace.is_valid());
     trace.prev();
     find = strings[*i];
-    std::string cmp1 = trace.current_key;
+    std::string cmp1(trace.current_key.data(), trace.current_key.size());
     std::cout << "before cmp " << cmp1 << " == " << find << std::endl;
     BOOST_REQUIRE_EQUAL(trace.current_key, find);
     BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
@@ -188,7 +188,7 @@ inline void test_movement(DBMemory& storage, strings_t& strings) {
     BOOST_REQUIRE(!trace.is_valid());
     trace.next();
     find = strings[*i];
-    cmp1 = trace.current_key;
+    cmp1.assign(trace.current_key.data(), trace.current_key.size());
     std::cout << "after cmp " << cmp1 << " == " << find << std::endl;
 
     BOOST_REQUIRE_EQUAL(trace.current_key, find);

@@ -11,6 +11,7 @@ namespace leaves {
 size_t _grow_leaf = 0;
 size_t _grow_branch = 0;
 
+
 struct Inserter {
   static const bsize_t OFFSET_LINK2 = offsetof(ArrayBranch, links[1]);
   static const bsize_t OFFSET_LINK1 = offsetof(ArrayBranch, links[0]);
@@ -159,7 +160,9 @@ INLINE void Inserter::add_to_array(bsize_t ioffset) {
     const bsize_t MAX_ARRAY =
         sizeof(ArrayBranch) + ArrayBranch::COUNT * sizeof(offset_ptr);
     StackTrieBranch tmp;
+
     memset(&tmp.bits, 0, sizeof(tmp.bits));
+   
     _back->branch->used += alloc_branch(sizeof(tmp) - MAX_ARRAY);
 
     n = (ArrayBranch*)&_back->branch->data[ioffset];  // _block may have changed
@@ -167,13 +170,24 @@ INLINE void Inserter::add_to_array(bsize_t ioffset) {
       tmp.set(n->keys[i]);
     }
     tmp.set(nkey);
-
-    for (int i = 0; i < n->size; i++)
+    
+    for (int i = 0; i < n->size; i++) {
       tmp.links[tmp.index(n->keys[i])] = n->links[i];
+    }
 
     int index = tmp.index(nkey);
-    tmp.links[index] = _new_leaf_link;
+    //tmp.links[index] = _new_leaf_link;  <- gcc "optimize" this line away
     memcpy(n, &tmp, sizeof(tmp));
+
+    /*
+       The next line is a bit weird:
+       Original the above commented line was used, but
+       it crashed if compiled under gcc 13.3.0 with the -O2 flag.
+       After some debugging, it turns out that -O2 optimation
+       removed the comment statement.
+       Therefor the optimizer had to be outfoxed.
+    */
+    ((TrieBranch*)n)->links[index] = _new_leaf_link;
     _back->olink = _back->branch->olink(&n->links[index]);
     _back->branch->clear_array();
     _back->branch->set_trie();
@@ -582,7 +596,6 @@ INLINE Trace::Trace(DBMemory& storage_)
     : storage(storage_), transaction_active(false) {
   root = storage.active_txn()->root;
   cursor_id = storage.alloc_cursor();
-  current_key.reserve(1024);
 }
 
 INLINE Trace::~Trace() { storage.free_cursor(cursor_id); }
