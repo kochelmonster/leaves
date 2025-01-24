@@ -1,0 +1,166 @@
+#ifndef _LEAVES__BIT_HPP
+#define _LEAVES__BIT_HPP
+
+#include <cstdint>
+
+#include "_port.hpp"
+
+namespace leaves {
+
+template <size_t N = 256>
+struct _BitField {
+  const static size_t FIELD_COUNT = N / 64;
+
+  uint64_t bits[FIELD_COUNT];  // 256 bits for compression
+
+  static int idx(int val) { return val >> 6; }
+  static int bit(int val) { return val & 63; }
+
+  void init() {
+    for (int i = 0; i < FIELD_COUNT; i++) bits[i] = 0;
+  }
+
+  template <typename T>
+  void unify(const T& src) {
+    assert(T::FIELD_COUNT == FIELD_COUNT);
+    for (int i = 0; i < FIELD_COUNT; i++) bits[i] |= src.bits[i];
+  }
+
+  void set(int val) { bits[idx(val)] |= ((uint64_t)1) << bit(val); }
+
+  void clear(int val) { bits[idx(val)] &= ~((uint64_t)1 << bit(val)); }
+
+  int count() const {
+    int count = 0;
+    for (int i = 0; i < FIELD_COUNT; i++) count += popcount(bits[i]);
+    return count;
+  }
+
+  // check if the index exists
+  bool get(int idx_) const {
+    return (bits[idx(idx_)] & ((uint64_t)1 << bit(idx_)));
+  }
+
+  // calculate the sparse index of val
+  int index(int val) const {
+    uint8_t idx_ = idx(val);
+    uint64_t mask = (((uint64_t)1) << bit(val)) - 1;
+    int ones = 0;
+    for (int i = 0; i < idx_; i++) ones += popcount(bits[i]);
+    ones += popcount(bits[idx_] & mask);
+    return ones;
+  }
+
+  int first() const {
+    for (char i = 0; i < FIELD_COUNT; i++) {
+      if (bits[i]) return i * 64 + ctz(bits[i]);
+    }
+    return -1;
+  }
+
+  int last() const {
+    for (int i = FIELD_COUNT - 1; i >= 0; i--) {
+      if (bits[i]) return i * 64 + (63 - clz(bits[i]));
+    }
+    return -1;
+  }
+
+  int next(int index) const {
+    char i = idx(index);
+    uint8_t bit_ = bit(index);
+    uint64_t mask = ~((1ul << (bit_ + 1)) - 1);
+    uint64_t v = bits[i] & mask;
+    if (!v || bit_ == 63) {
+      for (i++; i < FIELD_COUNT; i++) {
+        if (bits[i]) return i * 64 + ctz(bits[i]);
+      }
+      return -1;
+    } else
+      return i * 64 + ctz(v);
+  }
+
+  int prev(int index) const {
+    char i = idx(index);
+    uint8_t bit_ = bit(index);
+    uint64_t mask = (1ul << bit_) - 1;
+    uint64_t v = bits[i] & mask;
+    if (!v) {
+      for (i--; i >= 0; i--) {
+        if (bits[i]) return i * 64 + (63 - clz(bits[i]));
+      }
+      return -1;
+    } else
+      return i * 64 + 63 - clz(v);
+  }
+};
+
+template <typename T, size_t N = 256>
+struct _SparseArray {
+  typedef _BitField<N> BitField;
+
+  struct Iterator {
+    const _SparseArray* array;
+    int index;
+
+    Iterator(const _SparseArray* array_, int index_)
+        : array(array_), index(index_) {}
+
+    const T& operator*() { return array->values[array->bits.index(index)]; }
+
+    Iterator& operator++() {
+      index = array->bits.next(index);
+      return *this;
+    }
+
+    bool operator!=(const Iterator& other) { return index != other.index; }
+    bool operator==(const Iterator& other) { return index == other.index; }
+  };
+
+  Iterator begin() const { return Iterator(this, bits.first()); }
+  Iterator end() const { return Iterator(this, -1); }
+
+  void init() { bits.init(); }
+
+  bool get(int val) const { return bits.get(val); }
+
+  void set(int val, const T& value) {
+    if (!bits.get(val)) {
+      insert(val, value);
+    } else {
+      values[bits.index(val)] = value;
+    }
+  }
+
+  void insert(int idx, const T& value) {
+    assert(!bits.get(idx));
+    bits.set(idx);
+    memmove(values + bits.index(idx) + 1, values + bits.index(idx),
+            sizeof(T) * (bits.count() - bits.index(idx) - 1));
+    values[bits.index(idx)] = value;
+  }
+
+  void remove(int idx) {
+    assert(bits.get(idx));
+    memmove(values + bits.index(idx), values + bits.index(idx) + 1,
+            sizeof(T) * (bits.count() - bits.index(idx) - 1));
+    bits.clear(idx);
+  }
+
+  const T& operator[](uint8_t val) const { return values[bits.index(val)]; }
+  T& operator[](uint8_t val) { return values[bits.index(val)]; }
+
+  int count() const { return bits.count(); }
+
+  static constexpr size_t space(size_t size) {
+    return sizeof(BitField) + size * sizeof(T);
+  }
+
+  size_t space() const { return space(count()); }
+
+  BitField bits;
+  T values[0];
+};
+
+}  // namespace leaves
+
+#endif  // _LEAVES__BIT_HPP
