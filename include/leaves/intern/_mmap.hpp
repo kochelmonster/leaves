@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "./_cursor.hpp"
 #include "./_memory.hpp"
 
 using boost::interprocess::create_only;
@@ -35,14 +36,56 @@ static const size_t SIGNATURE_SIZE = padding(sizeof(SIGNATURE), 8);
 // definition og all headers and data types
 struct _MemoryMapBlocks {
   struct BlockHeader {
-    typedef uint8_t hash_t[16];
+    typedef uint8_t hash_t[0];
     typedef uint32_t bsize_t;  // block size
     typedef uint16_t ksize_t;  // key size
     typedef uint32_t vsize_t;  // value size
     typedef uint16_t scount_t;
-    typedef uint64_t offset_t;  // offset of blocks
-    typedef uint64_t tid_t;     // transaction id
+    typedef uint64_t tid_t;  // transaction id
     typedef BlockHeader* ptr;
+    typedef BlockHeader Base;
+
+    struct offset_t {
+      static const uint64_t LEAF = 1ul;
+      static const uint64_t MASK = ~LEAF;
+
+      uint64_t offset() const { return value & MASK; }
+      operator uint64_t() const { return offset(); }
+
+      bool leaf() const { return value & LEAF; }
+      void leaf(bool set) {
+        if (set)
+          value |= LEAF;
+        else
+          value &= MASK;
+      }
+      bool operator==(const offset_t& o) const { return value == o.value; }
+      bool operator!=(const offset_t& o) const { return value != o.value; }
+      uint64_t operator=(uint64_t v) {
+        assert((v & LEAF) == 0);
+        value = v | value & LEAF;
+        return v;
+      }
+      void operator+=(uint64_t v) {
+        assert((v & LEAF) == 0);
+        value += v;
+      }
+      operator bool() const { return value != 0; }
+
+      uint64_t value;
+    };
+
+    template <typename T>
+    struct Pointer {
+      typedef T Block;
+      ptr p;
+      Block* operator->() { return (Block*)(void*)p; }
+      const Block* operator->() const { return (const Block*)(const void*)p; }
+      operator Block*() { return (Block*)(void*)p; }
+      operator const Block*() const { return (const Block*)(const void*)p; }
+      Pointer(ptr p_ = nullptr) : p(p_) {}
+      operator bool() const { return p != nullptr; }
+    };
 
     tid_t txn_id;
     offset_t next_free;  // the next free block
@@ -52,25 +95,16 @@ struct _MemoryMapBlocks {
       bsize_t count;
     };
 
-    template <typename T>
-    void clone(const T& src) {
-      memcpy((char*)this + sizeof(BlockHeader),
-             (char*)&src + sizeof(BlockHeader), src.space());
-      size = src.size;
-      assert(block_size > src.space());
-    }
-
     /* all BlockHeader subclasses must implement a space method
        that returns the space used by the block (without BlockHeader)
      */
   };
 
-  struct MemManager : public _MemManager<BlockHeader> {
-    typedef MemManager* ptr;
-  };
+  typedef _MemManager<BlockHeader> MemManager;
 
   struct Transaction : public BlockHeader {
-    typedef Transaction* ptr;
+    typedef BlockHeader Base;
+    typedef BlockHeader::Pointer<Transaction> ptr;
 
     /* the size of the file, this should be always equal the
       size of the database file. But in case of a crash during
@@ -99,18 +133,18 @@ struct _MemoryMapBlocks {
 
     union {
       MemManager* src;  // available free blocks
-      uint64_t src_offset;
+      offset_t src_offset;
     };
 
     union {
       MemManager* sink;  // where free blocks are saved to
-      uint64_t sink_offset;
+      offset_t sink_offset;
     };
 
-    void add_ref() { count++; }
-    void dec_ref() { count--; }
-
-    size_t space() const { return sizeof(Transaction) - sizeof(BlockHeader); }
+    template <typename Storage>
+    static ptr alloc(Storage& storage) {
+      return storage.alloc(sizeof(Transaction));
+    }
   };
 };
 
@@ -120,10 +154,12 @@ struct _MemoryMapFile {
   using Transaction = typename Headers::Transaction;
   using MemManager = typename Headers::MemManager;
   using offset_t = typename BlockHeader::offset_t;
-  using tid_t = typename BlockHeader::offset_t;
+  using tid_t = typename BlockHeader::tid_t;
   using bsize_t = typename BlockHeader::bsize_t;
-  using ptr_t = typename BlockHeader::ptr;
-  using txnptr_t = typename Transaction::ptr;
+  using block_ptr = typename BlockHeader::ptr;
+  using txn_ptr = typename Transaction::ptr;
+  using mem_ptr = typename MemManager::ptr;
+  static const bool is_transactional = true;
   typedef _MemoryMapFile<Headers> MemoryMapFile;
 
   // A MemManager that has enough space to hold a full dumps array
@@ -207,8 +243,8 @@ struct _MemoryMapFile {
       start._txn.sink_offset = puint8(&start._isink) - puint8(&start);
       start._isrc.block_size = 128;
       start._isrc.txn_id = 1;
-      start._isrc.small.next_free = sizeof(start);
-      start._isrc.small.end_current_area = start._txn.file_size;
+      start._isrc.b128.next_free = sizeof(start);
+      start._isrc.b128.end_current_area = start._txn.file_size;
       start._isink.block_size = 128;
       start._isink.txn_id = 1;
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
@@ -226,6 +262,7 @@ struct _MemoryMapFile {
     _file = file_mapping(path, read_write);
     _region = mapped_region(_file, read_write, 0, map_size);
     _db = (FileHeader*)_region.get_address();
+    assert(((uint64_t)_db & 7) == 0);
     try {
       _mutex = new named_recursive_mutex(create_only, mname.c_str());
       sanitize_transactions();
@@ -234,59 +271,58 @@ struct _MemoryMapFile {
     }
   }
 
-  template <typename Block>
-  typename Block::ptr clone_branch(typename Block::ptr src) {
-    typename Block::ptr dest = alloc<Block>(src->space());
-    dest->clone(src);
-    free(src);
-    return dest;
+  template <typename ptr>
+  ptr cow_replace(const ptr& src) {
+    ptr result = src->clone(*this);
+    free(src.p);
+    return result;
   }
 
-  template <typename Block>
-  typename Block::ptr alloc(bsize_t space) {
-    auto result = _txn.src->alloc(space + sizeof(BlockHeader), *this);
+  block_ptr alloc(bsize_t space) {
+    auto result = _txn.src->alloc(space, *this);
     if (!result) {
       assert(space > 1000000);
+      assert(0);
       // big value handling
     }
     result->txn_id = _txn.txn_id;
-    return (typename Block::ptr)result;
+    return result;
   }
 
-  template <typename Block>
-  void free(typename Block::ptr block) {
+  void free(const block_ptr& block) {
     bool done = block->txn_id == _txn.txn_id ? _txn.src->free(block, *this)
                                              : _txn.sink->free(block, *this);
     if (!done) {
       assert(block->block_size > 1000000);
-      // the key will be block_size (big endian 4byte) + transaction id (8byte big endian)
-    }                                             
+      // the key will be block_size (big endian 4byte) + transaction id (8byte
+      // big endian)
+    }
   }
 
-  template <typename Block>
-  typename Block::ptr resolve(offset_t offset) {
-    return (typename Block::ptr)(puint8(_db) + offset);
+  block_ptr resolve(const offset_t& offset) {
+    return (block_ptr)(puint8(_db) + (uint64_t)offset);
   }
 
-  template <typename Block>
-  offset_t resolve(typename Block::ptr p) {
-    return puint8(p) - puint8(_db);
+  offset_t resolve(block_ptr p) {
+    return offset_t{.value = (uint64_t)p - (uint64_t)_db};
   }
 
   offset_t alloc_area(bsize_t size) {
-    offset_t result = _txn.file_size;
+    offset_t result = offset_t{.value = _txn.file_size};
     _txn.file_size += size;
+    if (_txn.file_size > _region.get_size()) throw std::bad_alloc();
+
     std::filesystem::resize_file(filename(), _txn.file_size);
     return result;
   }
 
   template <typename T>
   void iter_transactions(T caller) {
-    Transaction* txn = resolve<Transaction>(_db->active_txn);
+    txn_ptr txn = resolve(_db->active_txn);
     tid_t end = txn->txn_id;
     offset_t* link = &txn->start_txn;
     do {
-      txn = resolve<Transaction>(*link);
+      txn = resolve(*link);
       if (caller(txn)) break;
       link = &txn->next_txn;
     } while (txn->txn_id < end);
@@ -303,11 +339,11 @@ struct _MemoryMapFile {
       _region.flush();
     }
 
-    auto txn = resolve<Transaction>(_db->active_txn);
+    txn_ptr txn = resolve(_db->active_txn);
     std::filesystem::resize_file(filename(), txn->file_size);
   }
 
-  txnptr_t active_txn() { return resolve<Transaction>(_db->active_txn); }
+  txn_ptr active_txn() { return resolve(_db->active_txn); }
 
   bool start_transaction(bool wait = false) {
     if (wait)
@@ -318,10 +354,10 @@ struct _MemoryMapFile {
     // find a free transaction and the minimal used transaction
     memset(_src.buffer, 0, sizeof(_src));
     memset(_sink.buffer, 0, sizeof(_sink));
-    txnptr_t active = active_txn();
-    auto active_src = resolve<MemManager>(active->src_offset);
-
+    txn_ptr active = active_txn();
+    
     _txn.src = &_src.mm;
+    _txn.count = 0;
     _txn.sink = &_sink.mm;
     _txn.file_size = active->file_size;
     _txn.txn_id = active->txn_id + 1;
@@ -329,29 +365,30 @@ struct _MemoryMapFile {
     _txn.leaves = active->leaves;
     _txn.branches = active->branches;
     _txn.next_txn = _txn.start_txn = 0;
-    _txn.src->pclone(*active_src);
-
+    
     // Fillup bitfield for sparse dumps array
-    _txn.src->unify(*active_src);
-    iter_transactions([this](txnptr_t txn) -> bool {
+    mem_ptr active_src = resolve(active->src_offset);
+    _txn.src->pcopy(active_src);
+    _txn.src->unify(active_src);
+    iter_transactions([this](txn_ptr txn) -> bool {
       if (txn->count) return true;
-      auto sink = resolve<MemManager>(txn->sink_offset);
-      _txn.src->unify(*sink);
+      assert(txn->file_size <= _txn.file_size);
+      _txn.src->unify(resolve(txn->sink_offset));
       return false;
     });
 
     // add the dumps array data
-    _txn.src->add(*active_src);
-    iter_transactions([this](txnptr_t txn) -> bool {
+    _txn.src->add(active_src);
+    iter_transactions([this](txn_ptr txn) -> bool {
       if (txn->count) {
-        _txn.start_txn = resolve<Transaction>(txn);
+        _txn.start_txn = resolve(txn);
         return true;
       }
-      auto sink = resolve<MemManager>(txn->sink_offset);
-      _txn.src->add(*sink);
-      free<MemManager>(resolve<MemManager>(txn->src_offset));
-      free<MemManager>(sink);
-      free<Transaction>(txn);
+      auto sink = resolve(txn->sink_offset);
+      _txn.src->add(sink);
+      free(resolve(txn->src_offset));
+      free(sink);
+      free(txn);
       return false;
     });
 
@@ -365,24 +402,24 @@ struct _MemoryMapFile {
   }
 
   void prepare_commit() {
-    txnptr_t new_txn = alloc<Transaction>(sizeof(Transaction));
-    new_txn->clone(_txn);
+    // sink must be first! Because clone changes _txn.src.
+    txn_ptr new_txn = Transaction::alloc(*this);
 
-    auto bsrc = alloc<MemManager>(_txn.src->space());
-    auto bsink = alloc<MemManager>(_txn.sink->space());
+    mem_ptr bsink = _txn.sink->clone(*this);
+    mem_ptr bsrc = _txn.src->clone(*this);
 
-    bsrc->clone(*_txn.src);
-    bsink->clone(*_txn.sink);
+    copy(*new_txn, _txn);  // files_size could change between alloc and copy!
+    new_txn->count = 0;
+    new_txn->sink_offset = resolve(bsink);
+    new_txn->src_offset = resolve(bsrc);
 
-    new_txn->src_offset = resolve<MemManager>(bsrc);
-    new_txn->sink_offset = resolve<MemManager>(bsink);
-
-    _db->prepared_txn = resolve<Transaction>(new_txn);
+    _db->prepared_txn = resolve(new_txn);
     if (!_txn.start_txn) {
       // active_txn has been freed already
       new_txn->start_txn = _db->prepared_txn;
     } else {
-      resolve<Transaction>(_db->active_txn)->next_txn = _db->prepared_txn;
+      txn_ptr active = resolve(_db->active_txn);
+      active->next_txn = _db->prepared_txn;
     }
     _region.flush();
   }
@@ -394,9 +431,49 @@ struct _MemoryMapFile {
   }
 
   void end_transaction() { _mutex->unlock(); }
+
+  void garbage_statistics(MemStatistics& tofill) {
+    iter_transactions([&tofill, this](Transaction* txn) -> bool {
+      mem_ptr sink = resolve(txn->sink_offset);
+      for (auto iter = sink->dumps.begin(); iter != sink->dumps.end(); ++iter) {
+        auto dump = *iter;
+        tofill.add(BLOCK_SIZES[iter.index], dump.free);
+      }
+      return false;
+    });
+
+    mem_ptr src = resolve(active_txn()->src_offset);
+    for (auto iter = src->dumps.begin(); iter != src->dumps.end(); ++iter) {
+      auto dump = *iter;
+      tofill.add(BLOCK_SIZES[iter.index], dump.free);
+    }
+  }
+
+  void _add_node_statistics(MemStatistics& tofill, offset_t boffset) {
+    typedef _BranchNode<BlockHeader> BranchNode;
+    typename BranchNode::ptr branch = resolve(boffset);
+    tofill.add(branch->block_size, 1, branch->freespace());
+
+    if (branch->leaves) {
+      block_ptr leaf = resolve(branch->leaves);
+      tofill.add(leaf->block_size, 1,
+                 leaf->block_size - branch->leaves_used - sizeof(BlockHeader));
+    }
+
+    branch->iterate_links([&tofill, this](offset_t& offset) {
+      if (!offset.leaf()) {
+        _add_node_statistics(tofill, offset);
+      }
+    });
+  }
+
+  void node_statistics(MemStatistics& tofill) {
+    _add_node_statistics(tofill, active_txn()->root);
+  }
 };
 
 typedef _MemoryMapFile<_MemoryMapBlocks> DBMMap;
+typedef _Cursor<DBMMap> Cursor;
 
 }  // namespace leaves
 

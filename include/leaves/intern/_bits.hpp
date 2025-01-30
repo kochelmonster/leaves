@@ -131,12 +131,14 @@ struct _SparseArray {
     }
   }
 
-  void insert(int idx, const T& value) {
+  int insert(int idx, const T& value) {
     assert(!bits.get(idx));
+    int rindex = bits.index(idx);
+    memmove(values + rindex + 1, values + rindex,
+            sizeof(T) * (bits.count() - rindex));
     bits.set(idx);
-    memmove(values + bits.index(idx) + 1, values + bits.index(idx),
-            sizeof(T) * (bits.count() - bits.index(idx) - 1));
-    values[bits.index(idx)] = value;
+    values[rindex] = value;
+    return rindex;
   }
 
   void remove(int idx) {
@@ -151,6 +153,7 @@ struct _SparseArray {
 
   int count() const { return bits.count(); }
 
+  // the space needed for the array
   static constexpr size_t space(size_t size) {
     return sizeof(BitField) + size * sizeof(T);
   }

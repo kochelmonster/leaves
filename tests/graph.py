@@ -32,10 +32,12 @@ class Graph:
         for k, pnodes in pages.items():
             size = pnodes[0]["size"]
             free = pnodes[0]["freespace"]
+            space = pnodes[0]["space"]
             lsize = pnodes[0]["leaf_size"]
             lfree = pnodes[0]["leaf_free"]
+            lspace = pnodes[0]["leaf_space"]
             add(f"subgraph cluster_Page{k} {{")
-            add(f'label = "{k}\\nsize: {size}|free: {free}\\nlsize: {lsize}|lfree: {lfree}"')
+            add(f'label = "{k}\\nsize: {size}|free: {free}|space: {space}\\nlsize: {lsize}|lfree: {lfree}|lspace: {lspace}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]

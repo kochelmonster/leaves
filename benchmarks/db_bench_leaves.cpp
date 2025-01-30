@@ -2,22 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <boost/endian/conversion.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <leaves.hpp>
-#include <boost/endian/conversion.hpp>
 
+#include "leaves/intern/_mmap.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
-
 
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
 #define BINARY_KEY
-
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -95,12 +93,7 @@ static bool FLAGS_compression = true;
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
 
-namespace leaves {
-extern size_t _grow_leaf;
-extern size_t _grow_branch;
-}  // namespace leaves
-
-#ifdef DEBUG
+#ifdef UNDEF
 namespace leaves {
 size_t dump_db(std::ostream& out, DB::db_ptr db);
 uint64_t dump_info(std::ostream& out, DB::db_ptr db);
@@ -114,8 +107,6 @@ inline void dump_graph(const char* output, leaves::DB::db_ptr db) {
 inline uint64_t dump_info(leaves::DB::db_ptr db) {
   return leaves::dump_info(std::cout, db);
 }
-#else
-uint64_t dump_info(leaves::DB::db_ptr db) { return 0; }
 #endif
 
 namespace leveldb {
@@ -169,7 +160,7 @@ static Slice TrimSpace(Slice s) {
 
 class Benchmark {
  private:
-  leaves::DB::db_ptr db_;
+  leaves::DBMMap* db_;
   int db_num_;
   int num_;
   int reads_;
@@ -219,8 +210,8 @@ class Benchmark {
   }
 
   void PrintEnvironment() {
-    std::fprintf(stderr, "leaves:    version %d.%d\n", leaves::kMajorVersion,
-                 leaves::kMinorVersion);
+    // std::fprintf(stderr, "leaves:    version %d.%d\n", leaves::kMajorVersion,
+    //              leaves::kMinorVersion);
 
 #if defined(__linux)
     time_t now = time(nullptr);
@@ -352,7 +343,7 @@ class Benchmark {
     }
   }
 
-  ~Benchmark() { db_ = NULL; }
+  ~Benchmark() { delete db_; }
 
   void Run() {
     PrintHeader();
@@ -415,6 +406,32 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
+        auto txn = db_->active_txn();
+        size_t size = 0;
+        std::cout << "GARBAGE" << std::endl;
+        leaves::MemStatistics garbage;
+        db_->garbage_statistics(garbage);
+        for (auto slot : garbage.slots) {
+          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+                    << std::endl;
+          size += slot.block_size * slot.count;
+        }
+
+        std::cout << "NODES" << std::endl;
+        leaves::MemStatistics nodes;
+        db_->node_statistics(nodes);
+        for (auto slot : nodes.slots) {
+          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+                    << " : " << slot.free << std::endl;
+          size += slot.block_size * slot.count;
+        }
+        std::cout << std::endl;
+        std::cout << "file size: " << txn->file_size << " B"
+                  << std::endl;
+        std::cout << "calc size: " << size << " B"
+                  << std::endl;
+        std::cout << "leaves: " << txn->leaves
+                  << "  branches: " << txn->branches << std::endl;
       }
     }
   }
@@ -436,7 +453,7 @@ class Benchmark {
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
-    db_ = leaves::DB::open(test_fname.c_str());
+    db_ = new leaves::DBMMap(test_fname.c_str());
   }
 
   void Write(bool sync, Order order, DBState state, int num_entries,
@@ -450,7 +467,8 @@ class Benchmark {
       if (db_) {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
-        db_ = NULL;
+        delete db_;
+        db_ = nullptr;
         system(cmd);
       }
       Open(sync);
@@ -469,10 +487,7 @@ class Benchmark {
     char key[100];
     int flag = 0, rc;
 
-    leaves::_grow_branch = 0;
-    leaves::_grow_leaf = 0;
-
-    leaves::DB::cursor_ptr cursor = db_->create_cursor();
+    leaves::Cursor cursor(*db_);
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
       for (int j = 0; j < entries_per_batch; j++) {
@@ -482,7 +497,7 @@ class Benchmark {
 #ifdef BINARY_KEY
         *(uint64_t*)key = native_to_big(k);
         mkey = leaves::Slice(key, sizeof(uint64_t));
-        //printf("insert %i\n", k);
+        // printf("insert %i\n", k);
 #else
         snprintf(key, sizeof(key), "%016d", k);
         mkey = leaves::Slice(key);
@@ -492,17 +507,18 @@ class Benchmark {
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
-        cursor->find(mkey);
-        cursor->set_value(mval);
-
+        cursor.find(mkey);
+        cursor.value(mval);
         FinishedSingleOp();
       }
-      cursor->commit();
-      //std::ofstream out("errors/last.yaml");
-      //leaves::dump_db(out, db_);
+      cursor.commit();
+      // cursor.check();
+      // std::ofstream out("errors/last.yaml");
+      // leaves::dump_db(out, db_);
     }
 
 #ifdef __DEBUG
+
     leaves::Statistics stats;
     db_->statistics(stats, "all", true);
     std::cout << std::endl;
@@ -526,10 +542,10 @@ class Benchmark {
 
   void ReadSequential() {
     leaves::Slice key, value;
-    leaves::DB::cursor_ptr cursor = db_->create_cursor();
-    for (cursor->first(); cursor->is_valid(); cursor->next()) {
-      key = cursor->get_key();
-      value = cursor->get_value();
+    leaves::Cursor cursor(*db_);
+    for (cursor.first(); cursor.is_valid(); cursor.next()) {
+      key = cursor.key();
+      value = cursor.value();
       bytes_ += key.size() + value.size();
       FinishedSingleOp();
     }
@@ -537,15 +553,15 @@ class Benchmark {
 
   void ReadRandom() {
     leaves::Slice key;
-    leaves::DB::cursor_ptr cursor = db_->create_cursor();
+    leaves::Cursor cursor(*db_);
     char ckey[100];
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
       snprintf(ckey, sizeof(ckey), "%016d", k);
 
-      cursor->find(ckey);
-      if (cursor->is_valid()) {
-        bytes_ += key.size() + cursor->get_value().size();
+      cursor.find(ckey);
+      if (cursor.is_valid()) {
+        bytes_ += key.size() + cursor.value().size();
       }
       FinishedSingleOp();
     }

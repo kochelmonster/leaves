@@ -1,7 +1,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
-#include <leaves.hpp>
+#include "leaves/intern/_mmap.hpp"
 
 #define TEST_FILE "test.lvs"
 
@@ -9,16 +9,6 @@ using namespace leaves;
 
 const size_t COUNT = 1000000;
 
-#ifdef DEBUG
-namespace leaves {
-size_t dump_db(std::ostream& out, DB::db_ptr db);
-}
-
-inline void dump_graph(const char* output, leaves::DB::db_ptr db) {
-  std::ofstream out(output);
-  leaves::dump_db(out, db);
-}
-#endif
 
 struct Preparation {
   Preparation() { std::remove(TEST_FILE); }
@@ -30,8 +20,8 @@ struct Preparation {
 };
 
 void create() {
-  DB::db_ptr db(DB::open(TEST_FILE));
-  DB::cursor_ptr cursor(db->create_cursor());
+  DBMMap storage(TEST_FILE);
+  Cursor cursor(storage);
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
@@ -41,14 +31,14 @@ void create() {
     char key[100];
     snprintf(key, sizeof(key), "%016d", (int)i);
     mkey = leaves::Slice(key);
-    cursor->find(mkey);
+    cursor.find(mkey);
     val[0] = (char)i;
-    cursor->set_value(mval);
+    cursor.value(mval);
     if (i % 1000 == 0 && i > 0) {
-      cursor->commit();
+      cursor.commit();
     }
   }
-  cursor->commit();
+  cursor.commit();
 
   auto end = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double, std::milli> duration = end - start;
@@ -61,8 +51,8 @@ void create() {
 }
 
 void read() {
-  DB::db_ptr db(DB::open(TEST_FILE));
-  DB::cursor_ptr cursor(db->create_cursor());
+  DBMMap storage(TEST_FILE);
+  Cursor cursor(storage);
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
@@ -70,8 +60,8 @@ void read() {
 
   for(int j = 0; j < 10; j++) {
     size_t i = 0;
-    for (cursor->first(); cursor->is_valid(); cursor->next(), i++) {
-      Slice val = cursor->get_value();
+    for (cursor.first(); cursor.is_valid(); cursor.next(), i++) {
+      Slice val = cursor.value();
       if (val.size() != 100) {
         std::cout << "wrong" << std::endl;
       }

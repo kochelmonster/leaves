@@ -6,9 +6,7 @@
 #include <random>
 #include <vector>
 
-#include "../src/memory.hpp"
-#include "../src/trace.hpp"
-#include "testpoints.hpp"
+#include "leaves/intern/_mmap.hpp"
 
 #ifndef CMPFILES
 #define CMPFILES "./"
@@ -29,22 +27,20 @@ struct Preparation {
   }
 };
 
-namespace leaves {
 // defined in node.cpp
 
-void dump_branch(std::ostream& out, offset_ptr offset,  DBMemory* storage);
-}  // namespace leaves
+typedef leaves::_Dumper<DBMMap> Dumper;
 
-inline void dump_graph(const char* output, DBMemory& storage) {
+inline void dump_graph(const char* output, DBMMap& storage) {
   std::ofstream out(output);
-  offset_ptr root = storage.active_txn()->root;
-  dump_branch(out, root, &storage);
+  auto root = storage.active_txn()->root;
+  Dumper::dump_branch(out, root, &storage);
 }
 
-inline void compare_graph(const char* input, DBMemory& storage) {
+inline void compare_graph(const char* input, DBMMap& storage) {
   std::stringstream cstr;
-  offset_ptr root = storage.active_txn()->root;
-  dump_branch(cstr, root, &storage);
+  auto root = storage.active_txn()->root;
+  Dumper::dump_branch(cstr, root, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),
@@ -63,7 +59,7 @@ inline void compare_graph(const char* input, DBMemory& storage) {
   }
 }
 
-inline void check_graph(const char* name, DBMemory& storage) {
+inline void check_graph(const char* name, DBMMap& storage) {
   std::string path(CMPFILES);
   path.append(name);
   path.append(".yaml");
@@ -77,22 +73,22 @@ inline void check_graph(const char* name, DBMemory& storage) {
 #endif
 }
 
-inline void insert(DBMemory& storage, const char* test_name, const Slice& key,
+inline void insert(DBMMap& storage, const char* test_name, const Slice& key,
                    const Slice& value) {
-  Trace trace(storage);
+  Cursor cursor(storage);
   // std::cout << "insert " << test_name << std::endl;
-  trace.find(key);
-  BOOST_REQUIRE(!trace.is_valid());
+  cursor.find(key);
+  BOOST_REQUIRE(!cursor.is_valid());
 
-  trace.set_value(value);
-  BOOST_REQUIRE(trace.is_valid());
-  trace.commit();
+  cursor.value(value);
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.commit();
   check_graph(test_name, storage);
-  BOOST_REQUIRE(trace.is_valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, key.string());
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.current_key, key.string());
 }
 
-inline void insert(DBMemory& storage, const char* test_name, const Slice& key) {
+inline void insert(DBMMap& storage, const char* test_name, const Slice& key) {
   insert(storage, test_name, key, key);
 }
 
@@ -102,37 +98,37 @@ typedef std::vector<string> strings_t;
 typedef std::vector<int> ints_t;
 
 #ifdef MOVEMENT
-inline void test_movement(DBMemory& storage, strings_t& strings) {
+inline void test_movement(DBMMap& storage, strings_t& strings) {
   std::sort(strings.begin(), strings.end());
 
-  Trace trace(storage);
+  Cursor cursor(storage);
 
   std::cout << std::endl
             << "iter forward" << std::endl
             << "------------" << std::endl;
-  trace.first();
+  cursor.first();
   strings_t::iterator i = strings.begin();
-  for (; i != strings.end(); i++, trace.next()) {
+  for (; i != strings.end(); i++, cursor.next()) {
     std::cout << "find \"" << *i << "\"";
-    BOOST_REQUIRE(trace.is_valid());
-    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_REQUIRE_EQUAL(cursor.current_key, *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(i == strings.end());
-  BOOST_REQUIRE(!trace.is_valid());
+  BOOST_REQUIRE(!cursor.is_valid());
 
   std::cout << std::endl
             << "iter backward" << std::endl
             << "-------------" << std::endl;
-  trace.last();
+  cursor.last();
   for (strings_t::reverse_iterator i = strings.rbegin(); i != strings.rend();
-       i++, trace.prev()) {
+       i++, cursor.prev()) {
     std::cout << "find \"" << *i << "\"";
-    BOOST_REQUIRE(trace.is_valid());
-    BOOST_REQUIRE_EQUAL(trace.current_key, *i);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_REQUIRE_EQUAL(cursor.current_key, *i);
     std::cout << " ok" << std::endl;
   }
-  BOOST_REQUIRE(!trace.is_valid());
+  BOOST_REQUIRE(!cursor.is_valid());
 
   std::cout << std::endl << "find" << std::endl << "----" << std::endl;
 
@@ -145,54 +141,54 @@ inline void test_movement(DBMemory& storage, strings_t& strings) {
     std::string find(strings[*i]);
 
     std::cout << "find \"" << find << "\"";
-    trace.find(find);
-    BOOST_REQUIRE(trace.is_valid());
-    BOOST_REQUIRE_EQUAL(trace.current_key, find);
-    BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
+    cursor.find(find);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), find);
 
     if (*i > 0) {
-      trace.prev();
-      BOOST_REQUIRE(trace.is_valid());
-      BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i - 1]);
-      BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i - 1]);
+      cursor.prev();
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_REQUIRE_EQUAL(cursor.current_key, strings[*i - 1]);
+      BOOST_REQUIRE_EQUAL(cursor.value().string(), strings[*i - 1]);
     }
 
     if (*i < (int)strings.size() - 1) {
-      trace.find(find);
-      BOOST_REQUIRE(trace.is_valid());
-      BOOST_REQUIRE_EQUAL(trace.current_key, find);
-      BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
+      cursor.find(find);
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+      BOOST_REQUIRE_EQUAL(cursor.value().string(), find);
 
-      trace.next();
-      BOOST_REQUIRE(trace.is_valid());
-      BOOST_REQUIRE_EQUAL(trace.current_key, strings[*i + 1]);
-      BOOST_REQUIRE_EQUAL(trace.get_value().string(), strings[*i + 1]);
+      cursor.next();
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_REQUIRE_EQUAL(cursor.current_key, strings[*i + 1]);
+      BOOST_REQUIRE_EQUAL(cursor.value().string(), strings[*i + 1]);
     }
 
     std::cout << std::endl;
     // set cursor after find in a non valid position
     find.push_back('!');
-    trace.find(find);
-    BOOST_REQUIRE(!trace.is_valid());
-    trace.prev();
+    cursor.find(find);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.prev();
     find = strings[*i];
-    std::string cmp1(trace.current_key.data(), trace.current_key.size());
+    std::string cmp1(cursor.current_key.data(), cursor.current_key.size());
     std::cout << "before cmp " << cmp1 << " == " << find << std::endl;
-    BOOST_REQUIRE_EQUAL(trace.current_key, find);
-    BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
+    BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), find);
 
     // set cursor before find in a non valid position
     find.back()--;
     find.push_back('!');
-    trace.find(find);
-    BOOST_REQUIRE(!trace.is_valid());
-    trace.next();
+    cursor.find(find);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.next();
     find = strings[*i];
-    cmp1.assign(trace.current_key.data(), trace.current_key.size());
+    cmp1.assign(cursor.current_key.data(), cursor.current_key.size());
     std::cout << "after cmp " << cmp1 << " == " << find << std::endl;
 
-    BOOST_REQUIRE_EQUAL(trace.current_key, find);
-    BOOST_REQUIRE_EQUAL(trace.get_value().string(), find);
+    BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), find);
 
     std::cout << " ok" << std::endl;
   }
@@ -202,15 +198,15 @@ inline void test_movement(DBMemory& storage, strings_t& strings) {
     std::string missing(*i);
     missing.append(".");
     std::cout << "find \"" << missing << "\"";
-    trace.find(missing);
-    BOOST_REQUIRE(!trace.is_valid());
+    cursor.find(missing);
+    BOOST_REQUIRE(!cursor.is_valid());
     std::cout << " ok (not found)" << std::endl;
   }
   std::cout << std::endl << std::endl;
 }
 #endif
 
-inline void test_insertion(DBMemory& storage, const char* title,
+inline void test_insertion(DBMMap& storage, const char* title,
                            const char* keys[]) {
   strings_t strings;
   std::cout << "==========================================" << std::endl
@@ -231,7 +227,7 @@ inline void test_insertion(DBMemory& storage, const char* title,
 #endif
 }
 
-inline void test_remove(DBMemory& storage, const char* title, const char* keys[],
+inline void test_remove(DBMMap& storage, const char* title, const char* keys[],
                         const char* to_remove[]) {
   strings_t strings;
   std::cout << "==========================================" << std::endl
@@ -239,13 +235,13 @@ inline void test_remove(DBMemory& storage, const char* title, const char* keys[]
             << "==========================================" << std::endl;
   std::cout << "insert keys" << std::endl << "-----------" << std::endl;
 
-  Trace trace(storage);
+  Cursor cursor(storage);
 
   for (int i = 0; keys[i]; i++) {
     std::cout << "insert " << keys[i] << std::endl;
-    trace.find(keys[i]);
-    BOOST_REQUIRE(!trace.is_valid());
-    trace.set_value(keys[i]);
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
     strings.push_back(keys[i]);
   }
 
@@ -255,9 +251,9 @@ inline void test_remove(DBMemory& storage, const char* title, const char* keys[]
 
   for (int i = 0; to_remove[i]; i++) {
     std::cout << "remove " << to_remove[i] << std::endl;
-    trace.find(to_remove[i]);
-    BOOST_REQUIRE(trace.is_valid());
-    trace.remove();
+    cursor.find(to_remove[i]);
+    BOOST_REQUIRE(cursor.is_valid());
+    cursor.remove();
 
     std::stringstream cstr;
     cstr << title << "_remove_" << i << "_" << to_remove[i];

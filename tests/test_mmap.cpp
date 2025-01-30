@@ -94,20 +94,20 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   {
     Transaction trans(db);
-    block1 = db.alloc<BlockHeader>(311);
+    block1 = db.alloc(311);
   }
 
   {
     Transaction trans(db);
-    db.free<BlockHeader>(block1);
-    block2 = db.alloc<BlockHeader>(311);
+    db.free(block1);
+    block2 = db.alloc(311);
     BOOST_CHECK(block1 != block2);
   }
 
   {
     Transaction trans(db);
-    db.free<BlockHeader>(block2);
-    block3 = db.alloc<BlockHeader>(311);
+    db.free(block2);
+    block3 = db.alloc(311);
     BOOST_CHECK(block1 != block3);
     BOOST_CHECK(block2 != block3);
   }
@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   {
     Transaction trans(db);
-    block4 = db.alloc<BlockHeader>(311);
+    block4 = db.alloc(311);
     BOOST_CHECK(block4 != block3);
   }
 }
@@ -129,17 +129,17 @@ BOOST_AUTO_TEST_CASE(test_rollback) {
   DBMMap db(dbFilePath.c_str());
 
   db.start_transaction(true);
-  auto block1 = db.alloc<BlockHeader>(8123);
+  auto block1 = db.alloc(8123);
   db.prepare_commit();
   db.rollback();
 
   db.start_transaction();
-  auto block2 = db.alloc<BlockHeader>(8123);
+  auto block2 = db.alloc(8123);
   db.prepare_commit();
   db.commit();
 
   db.start_transaction();
-  auto block3 = db.alloc<BlockHeader>(8123);
+  auto block3 = db.alloc(8123);
   db.prepare_commit();
   db.commit();
 
@@ -164,10 +164,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for (int i = 0; i < 64; i++) {
-        BlockHeader::ptr block =
-            db.alloc<BlockHeader>(4 * K - sizeof(BlockHeader));
+        BlockHeader::ptr block = db.alloc(4 * K - sizeof(BlockHeader));
         BOOST_REQUIRE(block->block_size == 4 * K);
-        block_offsets.push_back(db.resolve<BlockHeader>(block));
+        block_offsets.push_back(db.resolve(block));
       }
       file_size = db._txn.file_size;
     }
@@ -186,9 +185,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for (offset_t bo : block_offsets) {
-        BlockHeader::ptr block = db.resolve<BlockHeader>(bo);
-        BOOST_REQUIRE(db.resolve<BlockHeader>(block) == bo);
-        db.free<BlockHeader>(block);
+        BlockHeader::ptr block = db.resolve(bo);
+        BOOST_REQUIRE(db.resolve(block) == bo);
+        db.free(block);
       }
       // file_size = db._txn.file_size;
     }
@@ -206,10 +205,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
       std::reverse(block_offsets.begin(), block_offsets.end());
       for (offset_t bo : block_offsets) {
-        BlockHeader::ptr block =
-            db.alloc<BlockHeader>(4 * K - sizeof(BlockHeader));
-        offset_t offset = db.resolve<BlockHeader>(block);
-        BOOST_REQUIRE(db.resolve<BlockHeader>(block) == bo);
+        BlockHeader::ptr block = db.alloc(4 * K - sizeof(BlockHeader));
+        offset_t offset = db.resolve(block);
+        BOOST_REQUIRE(db.resolve(block) == bo);
       }
       // file_size = db._txn.file_size;
     }

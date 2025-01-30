@@ -1,3 +1,13 @@
+
+// #include <leaves/db.hpp>
+
+#include "leaves/intern/_mmap.hpp"
+
+#include <iostream>
+
+using namespace leaves;
+
+
 #define BOOST_TEST_MODULE DBTest
 
 #include <stdlib.h>
@@ -510,14 +520,11 @@ const char* names[] = {"A's",
                        "Continent's",
                        NULL};
 
-namespace leaves {
-size_t dump_db(std::ostream& out, DB::db_ptr db);
-}
 
 template <typename content_t>
 std::string value(content_t content, size_t size = 0) {
   std::stringstream f;
-  f << "value-" << content;
+  f << "v:" << content;
   std::string result(f.str());
   while (result.size() < size) result.push_back('-');
 
@@ -532,25 +539,24 @@ std::string number(int number, size_t size = 0) {
 
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
-  { DB::db_ptr db(DB::open(TEST_FILE)); }
+  { DBMMap storage(TEST_FILE); }
 
-  DB::db_ptr db(DB::open(TEST_FILE));
-  DB::cursor_ptr cursor(db->create_cursor());
+  DBMMap storage(TEST_FILE);
+  Cursor cursor(storage);
 
-  std::cout << "refcount" << db.use_count() << std::endl;
   std::ostream null_stream(nullptr);
 
   size_t count;
   for (count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
-    if (count == 7) {
+    if (count == 116) {
       std::cout << "wrong" << std::endl;
     }
 
-    cursor->find(names[count]);
-    BOOST_REQUIRE(!cursor->is_valid());
+    cursor.find(names[count]);
+    BOOST_REQUIRE(!cursor.is_valid());
     // cursor->set_value(value(count, 900));
-    cursor->set_value(value(count, 10));
+    cursor.value(value(count, 10));
     /*if (leaves::dump_db(null_stream, db) != count+1) {
       std::cerr << "error!" << std::endl;
       break;
@@ -561,30 +567,29 @@ BOOST_AUTO_TEST_CASE(test_strings) {
       cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
            << ".yaml";
       std::ofstream out(cstr.str().c_str());
-      leaves::dump_db(out, db);
+      auto root = storage._txn.root;
+      Dumper::dump_branch(out, root, &storage);
     }
     if (count % 20 == 0 && count > 0) {
-      cursor->commit();
+      cursor.commit();
     }
   }
-  cursor->commit();
+  cursor.commit();
   std::stringstream cstr;
   cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  leaves::dump_db(out, db);
-  
-  cursor->find("Aubree's");
-  BOOST_REQUIRE(cursor->is_valid());
-
+  auto root = storage.active_txn()->root;
+  Dumper::dump_branch(out, root, &storage);
+    
   std::cout << "start test: " << count << std::endl;
   for (int i = 0; i < 100; i++) {
     int rand_int = rand() % count;
     const char* name = names[rand_int];
     std::cout << "test " << name << " (" << rand_int << ")" << std::endl;
-    cursor->find(name);
-    BOOST_REQUIRE(cursor->is_valid());
-    BOOST_REQUIRE_EQUAL(cursor->get_key().string(), std::string(name));
+    cursor.find(name);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_REQUIRE_EQUAL(cursor.key().string(), std::string(name));
   }
 }
 
