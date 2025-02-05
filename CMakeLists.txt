@@ -14,21 +14,20 @@ file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
 add_library(core INTERFACE)
 target_sources(core INTERFACE 
-    include/leaves.hpp
-    src/memory.hpp
-    src/memory.cpp
-    src/port.hpp
-    src/pool.hpp
-    src/block.hpp
-    src/block.cpp
-    src/trace.cpp
-    src/trace.hpp)
+    # include/leaves.hpp
+    include/leaves/intern/_util.hpp
+    include/leaves/intern/_exception.hpp
+    include/leaves/intern/_bits.hpp
+    include/leaves/intern/_memory.hpp
+    include/leaves/intern/_mmap.hpp
+    include/leaves/intern/_port.hpp
+    include/leaves/intern/_cursor.hpp
+)
 
 target_include_directories(core
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            )
 target_include_directories(core INTERFACE src)
-
 
 
 if (LEAVES_BUILD_TESTS)
@@ -58,20 +57,29 @@ target_compile_options(test INTERFACE -g)
 target_compile_definitions(test INTERFACE DEBUG)
 endif (LEAVES_GCOV)
 
-add_executable(test_memory tests/test_memory.cpp src/memory.cpp)
 
+add_executable(test_mmap tests/test_mmap.cpp)
+target_sources(test_mmap INTERFACE
+    include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp include/intern/_port.hpp)
+target_link_libraries(test_mmap PUBLIC test)
+
+add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
-    include/leaves.hpp src/memory.hpp src/memory.cpp src/block.hpp)
-
+    include/intern/_memory.hpp include/intern/_bits.hpp include/intern/_port.hpp)
 target_link_libraries(test_memory PUBLIC test)
+
+add_executable(test_bits tests/test_bits.cpp)
+target_sources(test_memory INTERFACE
+    include/intern/_bits.hpp include/intern/_port.hpp)
+target_link_libraries(test_bits PUBLIC test)
 
 add_executable(test_trie tests/test_trie.cpp)
 target_link_libraries(test_trie PUBLIC core test)
 
-add_executable(test_db tests/test_db.cpp src/leaves.cpp)
+add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
-add_executable(profile tests/profile.cpp src/leaves.cpp)
+add_executable(profile tests/profile.cpp)
 target_compile_options(profile PUBLIC -O2)
 target_link_libraries(profile PUBLIC core test)
 
@@ -81,8 +89,10 @@ COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
 COMMAND ./test_trie
 COMMAND ./test_memory
+COMMAND ./test_bits
+COMMAND ./test_mmap
 COMMAND ./test_db
-COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/src/*'
+COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
 # DEPENDS test_trie test_memory
@@ -99,18 +109,18 @@ add_subdirectory("leveldb/third_party/benchmark")
 add_library(lbench INTERFACE)
 target_include_directories(lbench INTERFACE leveldb)
 target_compile_definitions(lbench INTERFACE NDEBUG)
-target_compile_definitions(lbench INTERFACE DEBUG)
+#target_compile_definitions(lbench INTERFACE DEBUG)
 target_sources(lbench INTERFACE 
     "leveldb/util/histogram.cc"
     "leveldb/util/histogram.h"
     "leveldb/util/testutil.cc"
     "leveldb/util/testutil.h")
 
-add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp src/leaves.cpp)
+add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread core)
 target_compile_options(db_bench_leaves PUBLIC 
-    -march=corei7 -O2 -g)
+     -g -march=corei7 -O2)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 

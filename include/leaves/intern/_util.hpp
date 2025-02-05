@@ -102,9 +102,9 @@ constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
 template <typename Block>
 void copy(Block& dst, const Block& src, size_t space = 0) {
-  size_t base_size = sizeof(typename Block::Base), block_size = sizeof(Block);
+  size_t base_size = sizeof(typename Block::Base), src_size = sizeof(Block);
   memcpy((char*)&dst + base_size, (char*)&src + base_size,
-         space + block_size - base_size);
+         space + src_size - base_size);
   dst.size = src.size;
 }
 

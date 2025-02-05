@@ -549,7 +549,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   size_t count;
   for (count = 0; names[count]; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
-    if (count == 116) {
+    if (count == 12) {
       std::cout << "wrong" << std::endl;
     }
 

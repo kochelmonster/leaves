@@ -62,7 +62,7 @@ struct _Transition {
     assert(link);
 
     olink = (const uint8_t*)link - branch->data;
-    if (link->leaf()) {
+    if (isleaf(*link)) {
       leaf = cursor.storage.resolve(branch->leaves);
       c(cursor, leaf->leaf(*link));
       return false;
@@ -294,8 +294,8 @@ struct Inserter {
       // compressed went smaller move everything after compressed
       assert(before > after);
       memmove(_back->branch->data + after, _back->branch->data + before,
-              _back->branch->get_size() - before);
-      _back->branch->size -= (before - after);
+              _back->branch->b.used - before);
+      _back->branch->b.used -= (before - after);
     }
 
     block_ptr org = _back->branch;
@@ -311,7 +311,8 @@ struct Inserter {
       *_back->plink() = _new_leaf_link;
     } else {
       // with empty key
-      alloc(Compressed::nodesize(_back->prefix) + ArrayBranch::nodesize(1));
+      alloc(Compressed::nodesize(_back->prefix) + ArrayBranch::nodesize(1) +
+            sizeof(offset_t));
       _back->branch->add_compressed(prefix.data(), prefix.size());
       _back->olink = _back->branch->add_null_leaf();
       *_back->plink() = _new_leaf_link;
@@ -427,6 +428,7 @@ struct Inserter {
     // extend the stack
     _back->found_leaf = nullptr;
     _back->cmp = 0;
+
     _cursor.stack.push(nullptr);
     _back = &_cursor.stack.back();
     _back->keypos = _cursor.current_key.size() - prefix.size();
@@ -442,7 +444,6 @@ struct Inserter {
     *_back->branch->plink(_back->branch->add_null_leaf()) = _move_leaf_link;
     _back->olink = _back->branch->add_array(key);
     *_back->plink() = _new_leaf_link;
-
     _cursor.storage._txn.branches++;
     if (!purge_first()) make_stack_writable();
   }
@@ -477,7 +478,7 @@ struct Inserter {
 
     ArrayBranch* n = (ArrayBranch*)&_back->branch->data[ioffset];
     if (n->size < ArrayBranch::COUNT) {
-      _back->branch->size += alloc_branch(sizeof(offset_t));
+      _back->branch->b.used += alloc_branch(sizeof(offset_t));
 
       // _back->branch may have changed!
       n = (ArrayBranch*)&_back->branch->data[ioffset];
@@ -496,7 +497,7 @@ struct Inserter {
 
       tmp.trie.init();
 
-      _back->branch->size +=
+      _back->branch->b.used +=
           alloc_branch(tmp.nodesize(ArrayBranch::COUNT + 1) - MAX_ARRAY);
 
       // _block may have changed
@@ -544,20 +545,20 @@ struct Inserter {
 
     uint8_t c = _cursor.rest_key[0];
     _cursor._advance_key(1);
-    _back->branch->size += alloc_branch(sizeof(offset_t));
+    _back->branch->b.used += alloc_branch(sizeof(offset_t));
     n = (SparseBranch*)&_back->branch->data[ioffset];
     int index = n->trie.insert(c, _new_leaf_link);
     _back->olink = _back->branch->olink(&n->trie.values[index]);
   }
 
   void add_null_leaf(bsize_t ioffset) {
-    _back->branch->size += alloc_branch(sizeof(offset_t));
+    _back->branch->b.used += alloc_branch(sizeof(offset_t));
 
     assert(!_back->branch->has_null_leaf());
     assert(_back->branch->has_array() || _back->branch->has_sparse());
 
     memmove(&_back->branch->data[ioffset + sizeof(offset_t)],
-            &_back->branch->data[ioffset], _back->branch->get_size() - ioffset);
+            &_back->branch->data[ioffset], _back->branch->b.used - ioffset);
 
     _back->branch->set_null_leaf();
     _back->olink = ioffset;
@@ -568,8 +569,7 @@ struct Inserter {
     // purge the first block if is a non canonic block
     // it is recognized by "used == sizeof(offset_t)""
     Transition& front = _cursor.stack.front();
-    if (_cursor.stack.size == 2 &&
-        front.branch->get_size() == sizeof(offset_t)) {
+    if (_cursor.stack.size == 2 && front.branch->b.used == sizeof(offset_t)) {
       _cursor.storage.free(front.leaf);
       _cursor.storage.free(front.branch);
       front = *_back;
@@ -585,8 +585,8 @@ struct Inserter {
   // add a leaf to the _back->branch
   offset_t add_leaf(const Slice& key, const Slice& value) {
     // TODO: Big Value handling
-    offset_t pos = offset_t{.value = _back->branch->leaves_used};
-    pos.leaf(true);
+    offset_t pos = _back->branch->leaves_used;
+    setleaf(pos);
 
     Leaf* l = _back->leaf->leaf(pos);
     l->key_size = key.size();
@@ -631,9 +631,8 @@ struct Inserter {
   bsize_t alloc_branch(bsize_t space) {
     if (_back->branch->freespace() < space) {
       branch_ptr org = _back->branch;
-      _back->branch =
-          BranchNode::alloc(space + org->get_size(), _cursor.storage);
-      copy(*_back->branch, *org, org->get_size());
+      _back->branch = BranchNode::alloc(space + org->b.used, _cursor.storage);
+      copy(*_back->branch, *org, org->b.used);
       _cursor.storage.free(org);
       make_stack_writable();
     } else
@@ -670,7 +669,7 @@ struct Inserter {
     if (!Cursor::is_transactional) return;
 
     if (_back->branch->txn_id != _cursor.storage._txn.txn_id) {
-      _back->branch = _cursor.storage.cow_replace(_back->branch);
+      _back->branch = _back->branch->cow_replace(_cursor.storage);
       make_stack_writable();
     }
   }
@@ -683,7 +682,7 @@ struct Inserter {
     for (; i >= 0; i--) {
       Transition& t = _cursor.stack.data[i];
       if (t.branch->txn_id != _cursor.storage._txn.txn_id) {
-        t.branch = _cursor.storage.cow_replace(t.branch);
+        t.branch = t.branch->cow_replace(_cursor.storage);
         *t.plink() = resolve(_cursor.stack.data[i + 1].branch);
       } else {
         *t.plink() = resolve(_cursor.stack.data[i + 1].branch);
@@ -911,6 +910,7 @@ struct _Cursor {
     back.found_leaf = nullptr;
     back.compressed = nullptr;
     back.array = nullptr;
+    back.prefix = back.suffix = 0;
     back.cmp = Transition::UNDEFINED;
     return false;
   }
@@ -942,7 +942,7 @@ struct _Cursor {
     branch_ptr branch = storage.resolve(obranch);
     branch->check();
     branch->iterate_links([this](offset_t& offset) {
-      if (!offset.leaf()) {
+      if (!isleaf(offset)) {
         _check_trie(offset);
       }
     });

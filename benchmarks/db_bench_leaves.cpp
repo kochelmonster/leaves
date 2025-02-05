@@ -15,7 +15,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-#define BINARY_KEY
+// #define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -60,7 +60,7 @@ static bool FLAGS_writemap = false;
 static bool FLAGS_metasync = false;
 
 // Number of key/values to place in database
-static int FLAGS_num = 1000000;
+static int FLAGS_num = 50;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
@@ -425,11 +425,20 @@ class Benchmark {
                     << " : " << slot.free << std::endl;
           size += slot.block_size * slot.count;
         }
+
+        /*
+        std::cout << "BLOCKS: " << db_->blocks.b.used << std::endl;
+        for (auto block : db_->blocks) {
+          std::cout << block << std::endl;
+        }*/
+
         std::cout << std::endl;
-        std::cout << "file size: " << txn->file_size << " B"
-                  << std::endl;
-        std::cout << "calc size: " << size << " B"
-                  << std::endl;
+        std::cout << "file size: " << txn->file_size << " B" << std::endl;
+        std::cout << "spare: "
+                  << txn->garbage.end_area - txn->garbage.next_free +
+                         txn->garbage.end4k - txn->garbage.next4k
+                  << " B" << std::endl;
+        std::cout << "calc size: " << size << " B" << std::endl;
         std::cout << "leaves: " << txn->leaves
                   << "  branches: " << txn->branches << std::endl;
       }

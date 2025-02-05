@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE(std::filesystem::exists(dbFilePath));
 
     // Check if the active head is not null after initialization
-    const DBMMap::Transaction* head = db.active_txn();
+    const DBMMap::txn_ptr head = db.active_txn();
     BOOST_REQUIRE(head != nullptr);
 
     BOOST_REQUIRE_EQUAL(db._db->db_version, 0);
@@ -171,7 +171,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       file_size = db._txn.file_size;
     }
 
-    DBMMap::Transaction* txn = db.active_txn();
+    DBMMap::txn_ptr txn = db.active_txn();
     BOOST_REQUIRE(txn->txn_id == 2);
     BOOST_REQUIRE(file_size == db._txn.file_size);
   }
@@ -192,8 +192,15 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       // file_size = db._txn.file_size;
     }
 
-    DBMMap::Transaction* txn = db.active_txn();
+    DBMMap::txn_ptr txn = db.active_txn();
     BOOST_REQUIRE(txn->txn_id == 3);
+  }
+
+  {
+    // go one transaction ahead, to be able to harvest 
+    // the last freed bocks;
+    DBMMap db(dbFilePath.c_str());
+    Transaction trans(db);
   }
 
   {
@@ -203,7 +210,6 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
 
     {
       Transaction trans(db);
-      std::reverse(block_offsets.begin(), block_offsets.end());
       for (offset_t bo : block_offsets) {
         BlockHeader::ptr block = db.alloc(4 * K - sizeof(BlockHeader));
         offset_t offset = db.resolve(block);
@@ -212,8 +218,8 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       // file_size = db._txn.file_size;
     }
 
-    DBMMap::Transaction* txn = db.active_txn();
-    BOOST_REQUIRE(txn->txn_id == 4);
+    DBMMap::txn_ptr txn = db.active_txn();
+    BOOST_REQUIRE(txn->txn_id == 5);
   }
 }
 
