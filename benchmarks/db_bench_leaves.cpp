@@ -15,7 +15,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-// #define BINARY_KEY
+#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -60,7 +60,7 @@ static bool FLAGS_writemap = false;
 static bool FLAGS_metasync = false;
 
 // Number of key/values to place in database
-static int FLAGS_num = 50;
+static int FLAGS_num = 1000000;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
@@ -407,7 +407,9 @@ class Benchmark {
       if (known) {
         Stop(name);
         auto txn = db_->active_txn();
+
         size_t size = 0;
+        size_t counts = 0;
         std::cout << "GARBAGE" << std::endl;
         leaves::MemStatistics garbage;
         db_->garbage_statistics(garbage);
@@ -415,30 +417,37 @@ class Benchmark {
           std::cout << "Slot: " << slot.block_size << ": " << slot.count
                     << std::endl;
           size += slot.block_size * slot.count;
+          counts += slot.count;
         }
+
+        std::cout << "CHECK Garbage: " << size << "(" << counts << ")" << std::endl;
 
         std::cout << "NODES" << std::endl;
         leaves::MemStatistics nodes;
         db_->node_statistics(nodes);
+        size_t nsize = 0;
         for (auto slot : nodes.slots) {
           std::cout << "Slot: " << slot.block_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          size += slot.block_size * slot.count;
+          nsize += slot.block_size * slot.count;
         }
 
-        /*
-        std::cout << "BLOCKS: " << db_->blocks.b.used << std::endl;
-        for (auto block : db_->blocks) {
-          std::cout << block << std::endl;
-        }*/
+        std::cout << "CHECK Nodes: " << nsize << std::endl;
 
-        std::cout << std::endl;
-        std::cout << "file size: " << txn->file_size << " B" << std::endl;
-        std::cout << "spare: "
-                  << txn->garbage.end_area - txn->garbage.next_free +
-                         txn->garbage.end4k - txn->garbage.next4k
-                  << " B" << std::endl;
-        std::cout << "calc size: " << size << " B" << std::endl;
+        size += nsize;
+
+        size_t spare = txn->garbage.end_area - txn->garbage.next_free +
+                       txn->garbage.end4k - txn->garbage.next4k;
+
+        std::cout << std::endl
+                  << "file size: " << txn->file_size << " B" << std::endl
+                  << "endarea: " << txn->garbage.end_area << " B" << std::endl
+                  << "spare: " << spare << " B" << std::endl
+                  << "calc size: " << size << " B" << std::endl
+                  << "difference: "
+                  << (int)size + (int)spare + 64 - (int)txn->file_size
+                  << std::endl;
+
         std::cout << "leaves: " << txn->leaves
                   << "  branches: " << txn->branches << std::endl;
       }

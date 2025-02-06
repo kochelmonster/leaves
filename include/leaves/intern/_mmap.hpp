@@ -170,7 +170,11 @@ struct _MemoryMapFile {
     };
     union {
       Transaction _txn;
-      char _buffer2[Transaction::space(1)];
+      char _buffer2[padding(Transaction::space(1), 32)];
+    };
+    union {
+      typename MemManager::GarbageContainer _first;
+      char _buffer3[MemManager::GarbageContainer::SIZE];
     };
   };
 
@@ -187,9 +191,10 @@ struct _MemoryMapFile {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
 
+  typedef std::map<offset_t, bsize_t> blocks_t;
+
   _MemoryMapFile(const char* path, size_t map_size = G) {
     init_dbfile(path, map_size);
-
     // transaction is active if _txn.txn_id > active_txn()->txn_id
     _txn.txn_id = 0;
   }
@@ -224,11 +229,14 @@ struct _MemoryMapFile {
           puint8(&start._txn) - puint8(&start);
 
       // manually setup the first transaction
-      start._txn.block_size = 128;
+      start._txn.block_size = sizeof(start._buffer2);
       start._txn.txn_id = 1;
       start._txn.start_txn = start.header.active_txn;
-      start._txn.garbage.init(sizeof(start));
+      start._txn.garbage.init(sizeof(start)-start._first.SIZE);
       start._txn.file_size = start._txn.garbage.end_area;
+
+      start._first.txn_id = 1;
+      start._first.block_size = start._first.SIZE;
 
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.write((const char*)&start, sizeof(start));
@@ -388,25 +396,28 @@ struct _MemoryMapFile {
   void end_transaction() { _mutex->unlock(); }
 
   void garbage_statistics(MemStatistics& tofill) {
-    iter_transactions([&tofill, this](txn_ptr txn) -> bool {
-      for (auto iter = txn->garbage.slots.begin();
-           iter != txn->garbage.slots.end(); ++iter) {
-        auto slot = *iter;
-        tofill.add(BLOCK_SIZES[iter.index], slot.count);
-        int garbage = assign_block(MemManager::GarbageContainer::SIZE);
-        tofill.add(
-            BLOCK_SIZES[garbage],
-            (1 + slot.count / MemManager::GarbageContainer::BLOCK_COUNT));
+    txn_ptr txn = active_txn();
+    const int garbage = assign_block(MemManager::GarbageContainer::SIZE);
+    for (auto iter = txn->garbage.slots.begin();
+         iter != txn->garbage.slots.end(); ++iter) {
+      auto slot = *iter;
 
-        size_t count = 0;
-        slot.iter(*this, [this, &count](auto lblock) { count++; });
-        assert(count == slot.count);
+      // collect bocks
+      offset_t o = slot.ostart;
+      size_t count = 0;
+      while (true) {
+        typename MemManager::Slot::garb_ptr gc = resolve(o);
+        count++;
+        if (o == slot.oend) break;
+        o = gc->next;
       }
-      return false;
-    });
+      tofill.add(BLOCK_SIZES[garbage], count);
+      tofill.add(BLOCK_SIZES[iter.index], slot.count);
+    }
   }
 
   void _add_node_statistics(MemStatistics& tofill, offset_t boffset) {
+    size_t size1 = 0, size2 = 0;
     typedef _BranchNode<BlockHeader> BranchNode;
     typename BranchNode::ptr branch = resolve(boffset);
     tofill.add(branch->block_size, 1, branch->freespace());
@@ -426,6 +437,14 @@ struct _MemoryMapFile {
 
   void node_statistics(MemStatistics& tofill) {
     _add_node_statistics(tofill, active_txn()->root);
+
+    iter_transactions([this, &tofill](txn_ptr txn) -> bool {
+      tofill.add(
+          txn->block_size, 1,
+          txn->block_size - txn->garbage.extra_space() - sizeof(Transaction));
+      offset_t offset = resolve(txn);
+      return false;
+    });
   }
 };
 

@@ -104,7 +104,7 @@ struct _GarbageSlot {
         ostart = oend = 0;
         storage.free(front);
       } else {
-        istart = iend = GarbageContainer::BLOCK_COUNT / 2;
+        istart = iend = 0;
       }
     } else if (istart >= GarbageContainer::BLOCK_COUNT) {
       ostart = front->next;
