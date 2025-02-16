@@ -12,37 +12,62 @@ Generally the Tries are a smart version of a compressed trie
 (https://www.geeksforgeeks.org/compressed-tries/)
 
 
-Branch Node
-===========
+A node is composed of several parts
 
-consist of a
+one UpperBranchNode
+(Saves a compressed, null_leaf and the upper 3bits of key)
 
-- compressed part ["prefix"]
-- a branch part
+0 to 8 LowerBranchNode saving up to 32 links to Leaves and other
+UpperBranchNodes
 
+Every LowerBranchNode has a LeafNode
+
+
+
+UpperBranch Node
+================
+
+Memory Layout:
 
 The layout is
+
 ------------------------
 BlockHeader
 ------------------------
-branch node header
+hash?
 ------------------------
 compressed:size,data
 ------------------------
-branch meta (Array, Bit)
+Link LowerBranch 1
 ------------------------
-Link Branch1
-------------------------
-Link Branch2
+Link LowerBranch 2
 ------------------------
 ....
 -----------------------
-Link BranchN
-------------------------
-Link None Branch
+Null Leaf
 ------------------------
 
-the None Branch link is for a key that ends before the branch.
+
+LowerBranch Node
+================
+------------------------
+BlockHeader
+------------------------
+hash?
+------------------------
+leaves meta data
+-----------------------
+Link 1
+-----------------------
+Link 2
+-----------------------
+....
+-----------------------
+Link N
+-----------------------
+
+
+
 Example:
 -------------------------
 [thequick]  <- compressed
@@ -137,185 +162,6 @@ struct _Compressed {
   bsize_t nodesize() const { return nodesize(size); }
 };
 
-/*
-A Branch for up to 15 keys
-*/
-template <typename BlockHeader>
-struct _ArrayBranch {
-  using bsize_t = typename BlockHeader::bsize_t;
-  using offset_t = typename BlockHeader::offset_t;
-
-  const static size_t COUNT = 15;
-  uint8_t size;
-  uint8_t keys[COUNT];
-  offset_t links[0];
-
-  template <typename Cursor>
-  const offset_t* find(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-
-    assert(size <= _ArrayBranch::COUNT);
-    back.branch_key = cursor.rest_key[0];
-    char i = 0;
-    for (; i < size; i++) {
-      if (keys[i] == back.branch_key) {
-        cursor._advance_key(1);
-        return &links[i];
-      }
-    }
-    back.cmp = Cursor::Transition::NOT_SAME;
-    return nullptr;
-  }
-
-  template <typename Cursor>
-  const offset_t* first(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    back.branch_key = 0xff;
-    char imin = 0;
-    for (char i = 0; i < size; i++) {
-      if (keys[i] <= back.branch_key) {
-        back.branch_key = keys[i];
-        imin = i;
-      }
-    }
-    cursor.current_key.push_back(back.branch_key);
-    return &links[imin];
-  }
-
-  template <typename Cursor>
-  const offset_t* last(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    back.branch_key = 0;
-    char ilast = -1;
-    for (char i = 0; i < size; i++) {
-      if (keys[i] >= back.branch_key) {
-        back.branch_key = keys[i];
-        ilast = i;
-      }
-    }
-    cursor.current_key.push_back(back.branch_key);
-    return &links[ilast];
-  }
-
-  template <typename Cursor>
-  const offset_t* next(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    uint8_t max = 0xff, min = back.branch_key;
-    char inext = -1;
-    for (char i = 0; i < size; i++) {
-      if (keys[i] > min && keys[i] <= max) {
-        max = back.branch_key = keys[i];
-        inext = i;
-      }
-    }
-    if (inext >= 0) {
-      cursor._changed_branch_key();
-      return &links[inext];
-    }
-    /* cursor.current_key.pop_back(); not needed:
-      this node will be removed from stack and
-      current_key resized to the nodes keypos
-    */
-    return nullptr;
-  }
-
-  template <typename Cursor>
-  const offset_t* prev(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    uint8_t min = 0, max = back.branch_key;
-    char iprev = -1;
-    for (char i = 0; i < size; i++) {
-      if (keys[i] >= min && keys[i] < max) {
-        min = back.branch_key = keys[i];
-        iprev = i;
-      }
-    }
-
-    if (iprev >= 0) {
-      cursor._changed_branch_key();
-      return &links[iprev];
-    }
-    cursor.current_key.resize(back.keypos + back.prefix);
-    // null_key might come
-    return nullptr;
-  }
-
-  static bsize_t nodesize(bsize_t s) {
-    return sizeof(_ArrayBranch) + s * sizeof(offset_t);
-  }
-
-  bsize_t nodesize() const { return nodesize(size); }
-};
-
-/* A sparse Array Branch
- */
-template <typename BlockHeader>
-struct _SparseBranch {
-  using bsize_t = typename BlockHeader::bsize_t;
-  using offset_t = typename BlockHeader::offset_t;
-  typedef _SparseArray<offset_t> SparseArray;
-
-  SparseArray trie;
-
-  bsize_t count() const { return trie.count(); }
-
-  template <typename Cursor>
-  const offset_t* find(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    back.branch_key = cursor.rest_key[0];
-    if (trie.get(back.branch_key)) {
-      cursor._advance_key(1);
-      return &trie[back.branch_key];
-    }
-    back.cmp = Cursor::Transition::NOT_SAME;
-    return nullptr;
-  }
-
-  template <typename Cursor>
-  const offset_t* first(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    back.branch_key = trie.bits.first();
-    cursor.current_key.push_back(back.branch_key);
-    return &trie.values[0];
-  }
-
-  template <typename Cursor>
-  const offset_t* last(Cursor& cursor) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    back.branch_key = trie.bits.last();
-    cursor.current_key.push_back(back.branch_key);
-    return &trie.values[trie.count() - 1];
-  }
-
-  template <typename Cursor, typename F>
-  const offset_t* step(Cursor& cursor, F&& move) const {
-    typename Cursor::Transition& back = cursor.stack.back();
-    bool exists = trie.get(back.branch_key);
-    int sresult = move(back.branch_key);
-    if (sresult != -1) {
-      back.branch_key = sresult;
-      cursor._changed_branch_key();
-      return &trie[sresult];
-    }
-    if (exists) cursor.current_key.pop_back();
-    return nullptr;
-  }
-
-  template <typename Cursor>
-  const offset_t* next(Cursor& cursor) const {
-    return step(cursor, [this](int key) -> int { return trie.bits.next(key); });
-  }
-
-  template <typename Cursor>
-  const offset_t* prev(Cursor& cursor) const {
-    return step(cursor, [this](int key) -> int { return trie.bits.prev(key); });
-  }
-
-  static constexpr bsize_t nodesize(bsize_t s) { return SparseArray::space(s); }
-
-  bsize_t nodesize() const { return nodesize(trie.count()); }
-};
-
 // A leaf of the trie (a rest key and the value)
 template <typename BlockHeader>
 struct _Leaf {
@@ -352,11 +198,28 @@ struct _Leaf {
     back.cmp = 0;
   }
 
+  uint8_t* pvalue() { return key_value + align(key_size); }
+
   Slice value() const {
     return Slice((char*)key_value + align(key_size), value_size);
   }
 
   Slice key() const { return Slice((char*)key_value, key_size); }
+
+  bsize_t fill(const Slice& value) {
+    key_size = 0;
+    value_size = value.size();
+    memcpy(key_value, value.data(), value_size);
+    return nodesize();
+  }
+
+  bsize_t fill(const Slice& key, const Slice& value) {
+    key_size = key.size();
+    value_size = value.size();
+    memcpy(key_value, key.data(), key_size);
+    memcpy(pvalue(), value.data(), value_size);
+    return nodesize();
+  }
 
   static bsize_t nodesize(bsize_t ksize, size_t vsize) {
     bsize_t tmp = sizeof(_Leaf) + align(ksize) + align(vsize);
@@ -365,7 +228,7 @@ struct _Leaf {
                : sizeof(_Leaf) + align(ksize) + sizeof(offset_t);
   }
 
-  uint16_t nodesize() const { return nodesize(key_size, value_size); }
+  bsize_t nodesize() const { return nodesize(key_size, value_size); }
 };
 
 template <typename BlockHeader>
@@ -387,8 +250,12 @@ struct _LeafNode : public BlockHeader {
     return (Leaf*)&data[(uint64_t)ptr & (uint64_t)~1];
   }
 
+  offset_t olink(const Leaf* leaf) const { return (uint8_t*)leaf - data + 1; }
+
   template <typename Storage>
   static ptr alloc(bsize_t size, Storage& storage) {
+    static_assert(std::is_class<Storage>::value,
+                  "Storage must be a class type");
     return storage.alloc(size + sizeof(LeafNode));
   }
 };
@@ -405,76 +272,183 @@ void step_(Cursor& cursor, const Leaf* leaf) {
 
 inline bool isleaf(uint64_t offset) { return offset & 1 == 1; };
 
-inline void setleaf(uint64_t& offset) { offset |= 1; }
+inline uint64_t setleaf(uint64_t offset) { return offset + 1; }
 
-/* the metadata of a every block */
 template <typename BlockHeader>
-struct _BranchNode : public BlockHeader {
+struct _LowerBranchNode : public BlockHeader {
+  static const uint8_t MASK = 0b00011111;
   using bsize_t = typename BlockHeader::bsize_t;
   using offset_t = typename BlockHeader::offset_t;
   using hash_t = typename BlockHeader::hash_t;
-  typedef _Compressed<BlockHeader> Compressed;
-  typedef _ArrayBranch<BlockHeader> ArrayBranch;
-  typedef _SparseBranch<BlockHeader> SparseBranch;
-  typedef _Leaf<BlockHeader> Leaf;
-  typedef _BranchNode<BlockHeader> BranchNode;
-  typedef _LeafNode<BlockHeader> LeafNode;
-  typedef typename BlockHeader::template Pointer<BranchNode> ptr;
+  using LeafNode = _LeafNode<BlockHeader>;
   using leaf_ptr = typename LeafNode::ptr;
+  using BlockHeader::bits;
+  typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
+  typedef _Leaf<BlockHeader> Leaf;
+
+  hash_t hash;
+  offset_t leaves;      // link to the associated leaf block
+  bsize_t leaves_used;  // space used in leaves
+  bsize_t leaves_free;  // free holes in leaves
+  offset_t links[0];
+
+  typedef typename BlockHeader::template Pointer<LowerBranchNode> ptr;
+
+  static uint8_t lower(uint8_t key) { return key & MASK; }
+
+  bool isset(uint8_t key) const { return bits::isset(bits, lower(key)); }
+  void set(uint8_t key) { return bits::set(bits, lower(key)); }
+  int count() const { return bits::count(BlockHeader::bits); }
+  int index(uint8_t key) const { return bits::index(bits, lower(key)); }
+  int first() const { return bits::first(bits); }
+  int last() const { return bits::last(bits); }
+  int next(uint8_t key) const { return bits::next(bits, lower(key)); }
+  int prev(uint8_t key) const { return bits::prev(bits, lower(key)); }
+
+  offset_t* link(uint8_t key) { return &links[index(key)]; }
+
+  template <typename Cursor>
+  bool find(Cursor& cursor) const {
+    typename Cursor::Transition& back = cursor.stack.back();
+    if (!isset(back.branch_key)) {
+      back.cmp = back.NOT_FOUND;
+      return false;
+    }
+    cursor._advance_key(1);
+    int index_ = index(back.branch_key);
+    return back.follow_link(cursor, index_, find_<Cursor, Leaf>);
+  }
+
+  template <typename Cursor>
+  bool first(Cursor& cursor) const {
+    typename Cursor::Transition& back = cursor.stack.back();
+    int key = first();
+    assert(key >= 0);
+    back.branch_key = (back.branch_key & ~MASK) | key;
+    cursor.current_key.push_back(back.branch_key);
+    return back.follow_link(cursor, index(key), step_<Cursor, Leaf>);
+  }
+
+  template <typename Cursor>
+  bool last(Cursor& cursor) const {
+    typename Cursor::Transition& back = cursor.stack.back();
+    int key = last();
+    assert(key >= 0);
+    back.branch_key = (back.branch_key & ~MASK) | key;
+    cursor.current_key.push_back(back.branch_key);
+    return back.follow_link(cursor, index(key), step_<Cursor, Leaf>);
+  }
+
+  template <typename Cursor>
+  bool next(Cursor& cursor) const {
+    typename Cursor::Transition& back = cursor.stack.back();
+    int key = next(back.branch_key);
+    if (key < 0) return false;
+    back.branch_key = (back.branch_key & ~MASK) | key;
+    cursor.current_key.push_back(back.branch_key);
+    return back.follow_link(cursor, index(key), step_<Cursor, Leaf>);
+  }
+
+  template <typename Cursor>
+  bool prev(Cursor& cursor) const {
+    typename Cursor::Transition& back = cursor.stack.back();
+    int key = prev(back.branch_key);
+    if (key < 0) return false;
+    back.branch_key = (back.branch_key & ~MASK) | key;
+    cursor.current_key.push_back(back.branch_key);
+    return back.follow_link(cursor, index(key), step_<Cursor, Leaf>);
+  }
+
+  template <typename Storage>
+  static ptr alloc(bsize_t count, Storage& storage) {
+    ptr result =
+        storage.alloc(count * sizeof(offset_t) + sizeof(LowerBranchNode));
+    result->size = 0;
+    result->leaves = 0;
+    result->leaves_used = 0;
+    result->leaves_free = 0;
+    return result;
+  }
+
+  void copy_leaf(leaf_ptr dest, const leaf_ptr src) {
+    if (leaves_free) {
+      bsize_t ls = 0;
+      for (int i = 0, c = count(); i < c; i++) {
+        offset_t& offset = links[i];
+        if (isleaf(offset)) {
+          const Leaf* l = src->leaf(offset);
+          memcpy(&dest->data[ls], l, l->nodesize());
+          offset = setleaf(ls);
+          ls += l->nodesize();
+        }
+      }
+      leaves_used = ls;
+      leaves_free = 0;
+      return;
+    }
+
+    memcpy(dest->data, src->data, leaves_used);
+  }
+
+  bsize_t space() const { return count() * sizeof(offset_t); }
+  bsize_t freespace() const {
+    return BlockHeader::block_size - sizeof(LowerBranchNode) - space();
+  }
+};
+
+/* the metadata of a every block */
+template <typename BlockHeader>
+struct _UpperBranchNode : public BlockHeader {
+  using bsize_t = typename BlockHeader::bsize_t;
+  using offset_t = typename BlockHeader::offset_t;
+  using hash_t = typename BlockHeader::hash_t;
+  using BlockHeader::b;
+  typedef _Compressed<BlockHeader> Compressed;
+  typedef _UpperBranchNode<BlockHeader> UpperBranchNode;
+  typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
+  typedef _Leaf<BlockHeader> Leaf;
+  typedef typename BlockHeader::template Pointer<UpperBranchNode> ptr;
+  using lbranch_ptr = typename LowerBranchNode::ptr;
 
   /*
   bit layout of bits
   struct {
     bsize_t has_compressed : 1;
     bsize_t has_null_leaf : 1;
-    bsize_t has_array : 1
-    bsize_t has_bit : 1;
-    // if the block is in a free list the free block
-    bsize_t size : 27;
   };*/
-  static const uint16_t COMPRESSED = (uint16_t)8;
-  static const uint16_t NULL_LEAF = (uint16_t)4;
-  static const uint16_t ARRAY = (uint16_t)2;
-  static const uint16_t SPARSE = (uint16_t)1;
-  static const uint16_t BITS = COMPRESSED | NULL_LEAF | ARRAY | SPARSE;
+  static const uint16_t COMPRESSED = (uint16_t)2;
+  static const uint16_t NULL_LEAF = (uint16_t)1;
+  static const uint16_t BITS = COMPRESSED | NULL_LEAF;
   static const uint16_t SPACE = ~BITS;
 
-  offset_t leaves;      // link to the associated leaf block
-  bsize_t leaves_used;  // space used in leaves
-  bsize_t leaves_free;  // free holes in leaves
+  hash_t hash;
   uint8_t data[0];
 
-  bool has_compressed() const { return BlockHeader::b.bits & COMPRESSED; }
-  bool has_null_leaf() const { return BlockHeader::b.bits & NULL_LEAF; }
-  bool has_array() const { return BlockHeader::b.bits & ARRAY; }
-  bool has_sparse() const { return BlockHeader::b.bits & SPARSE; }
+  bool has_compressed() const { return b.features & COMPRESSED; }
+  bool has_null_leaf() const { return b.features & NULL_LEAF; }
+  bool has_branch() const { return b.bits != 0; }
 
-  void set_compressed() { BlockHeader::b.bits |= COMPRESSED; }
-  void set_null_leaf() { BlockHeader::b.bits |= NULL_LEAF; }
-  void set_array() { BlockHeader::b.bits |= ARRAY; }
-  void set_sparse() { BlockHeader::b.bits |= SPARSE; }
+  void set_compressed() { b.features |= COMPRESSED; }
+  void set_null_leaf() { b.features |= NULL_LEAF; }
 
-  void clear_compressed() { BlockHeader::b.bits &= ~COMPRESSED; }
-  void clear_array() { BlockHeader::b.bits &= ~ARRAY; }
-  void clear_null_leaf() { BlockHeader::b.bits &= ~NULL_LEAF; }
+  void clear_compressed() { b.features &= ~COMPRESSED; }
+  void clear_null_leaf() { b.features &= ~NULL_LEAF; }
+
+  static uint8_t upper(uint8_t key) { return key >> 5; }
+  int count() const { return bits::count(b.bits); }
+  bool isset(uint8_t key) const { return bits::isset(b.bits, upper(key)); }
+  void set(uint8_t key) { return bits::set(b.bits, upper(key)); }
+  int index(uint8_t key) const { return bits::index(b.bits, upper(key)); }
+  int first() const { return bits::first(b.bits); }
+  int last() const { return bits::last(b.bits); }
+  int next(uint8_t key) const { return bits::next(b.bits, upper(key)); }
+  int prev(uint8_t key) const { return bits::prev(b.bits, upper(key)); }
 
   template <typename Storage>
   static ptr alloc(bsize_t size, Storage& storage) {
-    return storage.alloc(size + sizeof(BranchNode));
-  }
-
-  template <typename Storage>
-  ptr cow_replace(Storage& storage) {
-    ptr result = clone(storage);
-    storage.free(this);
+    ptr result = storage.alloc(size + sizeof(UpperBranchNode));
+    result->size = 0;
     return result;
-  }
-
-  template <typename Storage>
-  ptr clone(Storage& storage) const {
-    ptr branch = storage.alloc(BlockHeader::block_size);
-    copy(*branch, *this, BlockHeader::b.used);
-    return branch;
   }
 
   Compressed* compressed() { return (Compressed*)data; }
@@ -482,13 +456,25 @@ struct _BranchNode : public BlockHeader {
   void* end() { return (void*)&data[BlockHeader::b.used]; }
 
   // calculate the offset of a link pointer
-  bsize_t olink(offset_t* link) { return (uint8_t*)link - data; }
-
+  bsize_t olink(const offset_t* link) const { return (uint8_t*)link - data; }
   offset_t* plink(bsize_t offset) { return (offset_t*)&data[offset]; }
-
-  // usable space
+  bsize_t space() const { return b.used; }
   size_t freespace() const {
-    return BlockHeader::block_size - sizeof(BranchNode) - BlockHeader::b.used;
+    return BlockHeader::block_size - sizeof(UpperBranchNode) - space();
+  }
+
+  static bsize_t branchsize(int links) {
+    return padding(links * sizeof(offset_t), 32);
+  }
+  bsize_t branchsize() const { return branchsize(count()); }
+
+  template <typename Cursor, typename Transition>
+  lbranch_ptr resolve(Cursor& cursor, Transition& t, bsize_t ioffset,
+                      int index) const {
+    offset_t* link = (offset_t*)&data[ioffset] + index;
+    t.uolink = olink(link);
+    t.lbranch = cursor.storage.resolve(*link);
+    return t.lbranch;
   }
 
   // find the next chunk of the key and update the stack
@@ -503,42 +489,32 @@ struct _BranchNode : public BlockHeader {
       ioffset += back.compressed->nodesize();
     }
 
-    auto follow_link = [&cursor, &back](const offset_t* ptr) -> bool {
-      if (!ptr) return false;
-      return back.follow_link(cursor, ptr, find_<Cursor, Leaf>);
-    };
-
-    if (has_null_leaf()) {
-      if (cursor.rest_key.empty())
-        return follow_link((const offset_t*)&data[ioffset]);
-      ioffset += sizeof(offset_t);
+    if (has_branch()) {
+      if (cursor.rest_key.size()) {
+        back.branch_key = cursor.rest_key[0];
+        assert(b.bits);
+        if (isset(back.branch_key)) {
+          int index_ = index(back.branch_key);
+          return resolve(cursor, back, ioffset, index_)->find(cursor);
+        }
+        back.cmp = back.NOT_FOUND;
+        back.lbranch = nullptr;
+        back.leaf = nullptr;
+        return false;
+      }
+      ioffset += branchsize();
     }
 
-    if (cursor.rest_key.empty()) {
-      back.cmp = -1;
+    if (has_null_leaf() && cursor.rest_key.empty()) {
+      back.found_leaf = (Leaf*)&data[ioffset];
+      back.cmp = 0;
+      back.lbranch = nullptr;
+      back.leaf = nullptr;
       return false;
     }
 
-    assert(ioffset % sizeof(void*) == 0);
-
-    if (has_array()) {
-      back.array = (const ArrayBranch*)&data[ioffset];
-      return follow_link(back.array->find(cursor));
-    }
-
-    if (has_sparse()) {
-      back.sparse = (const SparseBranch*)&data[ioffset];
-      return follow_link(back.sparse->find(cursor));
-    }
-
-    // special case there is only one item in the trie: a leaf
-    assert(back.branch->b.used == sizeof(offset_t));
-    assert(!back.branch->has_compressed());
-    assert(!back.branch->has_array());
-    assert(!back.branch->has_sparse());
-    assert(back.branch->has_null_leaf());
-    assert(cursor.stack.size == 1);
-    return follow_link((offset_t*)back.branch->data);
+    back.cmp = 1;
+    return false;
   }
 
   template <typename Cursor>
@@ -551,20 +527,20 @@ struct _BranchNode : public BlockHeader {
       ioffset += back.compressed->step(cursor);
     }
 
-    if (has_null_leaf())
-      return back.follow_link(cursor, (const offset_t*)&data[ioffset],
-                              step_<Cursor, Leaf>);
-
-    if (has_array()) {
-      back.array = (const ArrayBranch*)&data[ioffset];
-      return back.follow_link(cursor, back.array->first(cursor),
-                              step_<Cursor, Leaf>);
+    if (has_null_leaf()) {
+      ioffset += branchsize();
+      back.found_leaf = (Leaf*)&data[ioffset];
+      back.found_leaf->step(cursor);
+      back.cmp = 0;
+      return false;
     }
 
-    assert(has_sparse());
-    back.sparse = (const SparseBranch*)&data[ioffset];
-    return back.follow_link(cursor, back.sparse->first(cursor),
-                            step_<Cursor, Leaf>);
+    assert(has_branch());
+    assert(b.bits);
+    int key = first();
+    assert(key >= 0);
+    back.branch_key = key << 5;
+    return resolve(cursor, back, ioffset, 0)->first(cursor);
   }
 
   template <typename Cursor>
@@ -577,22 +553,19 @@ struct _BranchNode : public BlockHeader {
       ioffset += back.compressed->step(cursor);
     }
 
-    if (has_null_leaf()) ioffset += sizeof(offset_t);
-
-    if (has_array()) {
-      back.array = (const ArrayBranch*)&data[ioffset];
-      return back.follow_link(cursor, back.array->last(cursor),
-                              step_<Cursor, Leaf>);
+    if (has_branch()) {
+      int key = last();
+      assert(key >= 0);
+      back.branch_key = key << 5;
+      return resolve(cursor, back, ioffset, index(back.branch_key))
+          ->last(cursor);
     }
 
-    if (has_sparse()) {
-      back.sparse = (const SparseBranch*)&data[ioffset];
-      return back.follow_link(cursor, back.sparse->last(cursor),
-                              step_<Cursor, Leaf>);
-    }
-
-    return back.follow_link(cursor, (offset_t*)back.branch->data,
-                            step_<Cursor, Leaf>);
+    assert(has_null_leaf());
+    back.found_leaf = (Leaf*)&data[ioffset];
+    back.found_leaf->step(cursor);
+    back.cmp = 0;
+    return false;
   }
 
   template <typename Cursor>
@@ -600,24 +573,14 @@ struct _BranchNode : public BlockHeader {
     typename Cursor::Transition& back = cursor.stack.back();
     uint16_t ioffset = 0;
 
-    auto follow_link = [&cursor, &back](const offset_t* ptr) -> bool {
-      if (!ptr) {
-        cursor._pop();
-        return true;
-      }
-      return back.follow_link(cursor, ptr, step_<Cursor, Leaf>);
-    };
-
     if (back.found_leaf) {
       if (back.cmp < 0) {
+        // the found leaf the next one
         cursor.current_key.resize(cursor.current_key.size() - back.suffix);
         back.found_leaf->step(cursor);
         return false;
       }
-      if (back.cmp == 0) {
-        cursor.current_key.resize(cursor.current_key.size() - back.suffix);
-        back.found_leaf = nullptr;
-      }
+      back.found_leaf = nullptr;
     }
 
     if (back.compressed) {
@@ -636,32 +599,31 @@ struct _BranchNode : public BlockHeader {
       }
     }
 
-    if (has_null_leaf()) ioffset += sizeof(offset_t);
-
-    if (has_array()) {
-      if (!back.array || back.cmp == Cursor::Transition::UNDEFINED) {
-        back.array = (const ArrayBranch*)&data[ioffset];
-        return follow_link(back.array->first(cursor));
+    if (has_branch()) {
+      assert(b.bits);
+      if (!back.lbranch) {
+        // the last cursor pos was the null leaf
+        assert(has_null_leaf());
+        back.branch_key = first() << 5;
+        return resolve(cursor, back, ioffset, 0)->first(cursor);
       }
-      return follow_link(back.array->next(cursor));
-    }
 
-    if (has_sparse()) {
-      if (!back.array || back.cmp == Cursor::Transition::UNDEFINED) {
-        back.sparse = (const SparseBranch*)&data[ioffset];
-        return follow_link(back.sparse->first(cursor));
+      back.resize_key_to_branch(cursor);
+      back.cmp = 1;
+      if (back.lbranch->next(cursor)) return true;
+      if (back.cmp == 0) return false;
+
+      // LowerBranch after end
+      int key = next(back.branch_key);
+      if (key >= 0) {
+        back.branch_key = key << 5;
+        return resolve(cursor, back, ioffset, index(back.branch_key))
+            ->first(cursor);
       }
-      return follow_link(back.sparse->next(cursor));
-    }
-
-    // only one item
-    if (back.cmp < 0) {
-      return back.follow_link(cursor, (offset_t*)back.branch->data,
-                              step_<Cursor, Leaf>);
     }
 
     cursor._pop();
-    return false;
+    return true;
   }
 
   template <typename Cursor>
@@ -670,15 +632,19 @@ struct _BranchNode : public BlockHeader {
     uint16_t ioffset = 0;
 
     if (back.found_leaf) {
+      if (!back.lbranch && back.cmp == 0) {
+        // the last cursor pos was the null leaf
+        assert(has_null_leaf());
+        cursor._pop();
+        return true;
+      }
       if (back.cmp > 0) {
         cursor.current_key.resize(cursor.current_key.size() - back.suffix);
         back.found_leaf->step(cursor);
         return false;
       }
-      if (back.cmp == 0) {
-        cursor.current_key.resize(cursor.current_key.size() - back.suffix);
-        back.found_leaf = nullptr;
-      }
+
+      back.found_leaf = nullptr;
     }
 
     if (back.compressed) {
@@ -695,157 +661,86 @@ struct _BranchNode : public BlockHeader {
       }
     }
 
-    if (!back.array) {
-      cursor._pop();
-      return true;
+    if (has_branch()) {
+      assert(b.bits);
+
+      if (back.lbranch) {
+        back.resize_key_to_branch(cursor);
+        back.cmp = -1;
+        if (back.lbranch->prev(cursor)) return true;
+        if (back.cmp == 0) return false;
+        // LowerBranch before beginning
+      }
+
+      int key = prev(back.branch_key);
+      if (key >= 0) {
+        back.branch_key = key << 5;
+        return resolve(cursor, back, ioffset, index(back.branch_key))
+            ->last(cursor);
+      }
+
+      ioffset += branchsize();
     }
 
-    bsize_t null_offset = 0;
     if (has_null_leaf()) {
-      null_offset = ioffset;
-      ioffset += sizeof(offset_t);
+      back.found_leaf = (Leaf*)&data[ioffset];
+      back.found_leaf->step(cursor);
+      back.lbranch = nullptr;
+      back.leaf = nullptr;
+      back.cmp = 0;
+      return false;
     }
 
-    auto follow_link = [&cursor, &back](const offset_t* ptr) -> bool {
-      return back.follow_link(cursor, ptr, step_<Cursor, Leaf>);
-    };
-
-    const offset_t* link = nullptr;
-    bool in_branch = false;
-    if (has_array()) {
-      back.array = (const ArrayBranch*)&data[ioffset];
-      link = back.array->prev(cursor);
-      in_branch = true;
-    }
-
-    if (has_sparse()) {
-      back.sparse = (const SparseBranch*)&data[ioffset];
-      link = back.sparse->prev(cursor);
-      in_branch = true;
-    }
-
-    if (link) return follow_link(link);
-
-    if (in_branch && has_null_leaf()) {
-      back.array = nullptr;  // the next time walk to the next node
-      return follow_link((const offset_t*)&data[null_offset]);
-    }
     cursor._pop();
     return true;
   }
 
-  template <typename OP>
-  void iterate_links(OP oper) {
+  template <typename OP, typename Storage>
+  void iterate_links(Storage& storage, OP oper) {
     bsize_t ioffset = 0;
     if (has_compressed()) ioffset = compressed()->nodesize();
 
-    if (has_null_leaf()) {
-      oper(*plink(ioffset));
-      ioffset += sizeof(offset_t);
-    }
+    bsize_t boffset = ioffset;
+    ioffset += branchsize();
 
-    if (has_array()) {
-      ArrayBranch* branch = (ArrayBranch*)&data[ioffset];
-      assert(branch->size <= ArrayBranch::COUNT);
-      for (int count = branch->size, i = 0; i < count; i++) {
-        oper(branch->links[i]);
-      }
-    } else if (has_sparse()) {
-      SparseBranch* branch = (SparseBranch*)&data[ioffset];
-      for (int count = branch->count(), i = 0; i < count; i++) {
-        oper(branch->trie.values[i]);
-      }
-    }
-  }
+    if (has_null_leaf()) oper(nullptr, *plink(ioffset));
 
-  void add_compressed(const void* data, bsize_t size) {
-    if (size) {
-      Compressed* cn = compressed();
-      cn->size = size;
-      memcpy(cn->key, data, size);
-      set_compressed();
-      BlockHeader::b.used = cn->nodesize();
-    }
-  }
-
-  bsize_t add_null_leaf() {
-    bsize_t offset = BlockHeader::b.used;
-    set_null_leaf();
-    BlockHeader::b.used += sizeof(offset_t);
-    return offset;
-  }
-
-  bsize_t add_array(uint8_t key1) {
-    set_array();
-    ArrayBranch* an = (ArrayBranch*)end();
-    an->keys[0] = key1;
-    an->size = 1;
-    BlockHeader::b.used += an->nodesize();
-    return olink(&an->links[0]);
-  }
-
-  bsize_t add_array(uint8_t key1, uint8_t key2, const offset_t& link2) {
-    set_array();
-    ArrayBranch* an = (ArrayBranch*)end();
-    an->size = 2;
-    an->keys[0] = key1;
-    an->keys[1] = key2;
-    an->links[1] = link2;
-    BlockHeader::b.used += an->nodesize();
-    return olink(&an->links[0]);
-  }
-
-  void copy_leaf(leaf_ptr dest, const leaf_ptr src) {
-    if (leaves_free) {
-      bsize_t ls = 0;
-      iterate_links([src, &dest, &ls](offset_t& offset) {
-        if (isleaf(offset)) {
-          const Leaf* l = src->leaf(offset);
-          memcpy(&dest->data[ls], l, l->nodesize());
-          offset = ls;
-          setleaf(offset);
-          ls += l->nodesize();
+    if (has_branch()) {
+      offset_t* links = (offset_t*)&data[boffset];
+      for (int count = bits::count(b.bits), i = 0; i < count; i++) {
+        lbranch_ptr lbranch = storage.resolve(links[i]);
+        for (int icount = bits::count(lbranch->bits), j = 0; j < icount; j++) {
+          oper(lbranch, lbranch->links[j]);
         }
-      });
-      leaves_used = ls;
-      leaves_free = 0;
-      return;
+      }
     }
+  }
 
-    memcpy(dest->data, src->data, leaves_used);
+  void add_compressed(const Slice& src) {
+    if (src.size()) {
+      Compressed* cn = compressed();
+      cn->size = src.size();
+      memcpy(cn->key, src.data(), cn->size);
+      set_compressed();
+      b.used = cn->nodesize();
+    }
   }
 
   void check() const {
 #if defined(DEBUG) && !defined(NDEBUG)
-    assert(BlockHeader::b.used + sizeof(BranchNode) <= BlockHeader::block_size);
+    assert(BlockHeader::b.used + sizeof(UpperBranchNode) <=
+           BlockHeader::block_size);
     bsize_t ioffset = 0;
     if (has_compressed()) {
       const Compressed* n = compressed();
       ioffset += n->nodesize();
     }
 
+    ioffset += branchsize();
+
     if (has_null_leaf()) {
-      offset_t n = *(const offset_t*)&data[ioffset];
-      assert(isleaf(n));
-      ioffset += sizeof(offset_t);
-    }
-
-    if (has_array()) {
-      const ArrayBranch* n = (const ArrayBranch*)&data[ioffset];
-      assert(n->size <= ArrayBranch::COUNT);
-      for (int i = 0; i < n->size; i++) {
-        assert(n->links[i] != 0);
-      }
-      ioffset += n->nodesize();
-    }
-
-    if (has_sparse()) {
-      const SparseBranch* n = (const SparseBranch*)&data[ioffset];
-      int c = n->count();
-      for (int i = 0; i < c; i++) {
-        assert(n->trie.values[i] != 0);
-      }
-      ioffset += n->nodesize();
+      const Leaf* leaf = (const Leaf*)&data[ioffset];
+      ioffset += leaf->nodesize();
     }
 
     assert(ioffset == BlockHeader::b.used);
@@ -872,25 +767,17 @@ struct _Dumper {
   using offset_t = typename Storage::offset_t;
   using block_ptr = typename Storage::block_ptr;
   using bsize_t = typename Storage::bsize_t;
-  typedef _BranchNode<typename Storage::BlockHeader> BranchNode;
+  typedef _UpperBranchNode<typename Storage::BlockHeader> UpperBranchNode;
+  typedef _LowerBranchNode<typename Storage::BlockHeader> LowerBranchNode;
   typedef _LeafNode<typename Storage::BlockHeader> LeafNode;
-  using branch_ptr = typename BranchNode::ptr;
+  using ubranch_ptr = typename UpperBranchNode::ptr;
+  using lbranch_ptr = typename LowerBranchNode::ptr;
   using leaf_ptr = typename LeafNode::ptr;
-  using Leaf = typename BranchNode::Leaf;
-  using Compressed = typename BranchNode::Compressed;
-  using ArrayBranch = typename BranchNode::ArrayBranch;
-  using SparseBranch = typename BranchNode::SparseBranch;
+  using Leaf = typename UpperBranchNode::Leaf;
+  using Compressed = typename UpperBranchNode::Compressed;
 
-  static void dump_leaf(std::ostream& out, offset_t offset, branch_ptr branch,
-                        Storage* storage) {
-    leaf_ptr block = storage->resolve(branch->leaves);
-
-    out << "id: " << (uint64_t)branch->leaves + offset << std::endl;
-    out << "block: " << (uint64_t)storage->resolve(branch) << std::endl;
+  static void dump_leaf(std::ostream& out, const Leaf* leaf, Storage* storage) {
     out << "type: leaf" << std::endl;
-
-    const Leaf* leaf = block->leaf(offset);
-
     out << "keysize: " << leaf->key_size << std::endl;
     out << "key: \"";
     for (int i = 0; i < leaf->key_size; i++) {
@@ -909,30 +796,70 @@ struct _Dumper {
     out << "---" << std::endl;
   }
 
-  static void dump_link(std::ostream& out, block_ptr parent, offset_t offset,
-                        Storage* storage) {
-    if (isleaf(offset)) {
-      dump_leaf(out, offset, parent, storage);
-      return;
+  static void dump_leaf(std::ostream& out, const lbranch_ptr& parent,
+                        offset_t leaves, offset_t link, Storage* storage) {
+    leaf_ptr block = storage->resolve(leaves);
+    int lspace = block->block_size - sizeof(LeafNode) - parent->leaves_used -
+                 parent->leaves_free;
+    out << "id: " << leaves + link << std::endl;
+    out << "block: " << leaves << std::endl;
+    out << "size: " << block->block_size << std::endl;
+    out << "space: " << parent->leaves_used << std::endl;
+    out << "freespace: " << lspace << std::endl;
+    out << "frag: " << parent->leaves_free << std::endl;
+    dump_leaf(out, block->leaf(link), storage);
+  }
+
+  static void dump_link(std::ostream& out, const lbranch_ptr& parent,
+                        offset_t leaves, offset_t link, Storage* storage) {
+    if (isleaf(link))
+      dump_leaf(out, parent, leaves, link, storage);
+    else
+      dump_branch(out, link, storage);
+  }
+
+  static void dump_lbranch(std::ostream& out, offset_t offset, uint8_t key,
+                           Storage* storage) {
+    lbranch_ptr block = storage->resolve(offset);
+    leaf_ptr leaf = storage->resolve(block->leaves);
+    out << "id: " << offset << std::endl;
+    out << "block: " << offset << std::endl;
+    out << "size: " << block->block_size << std::endl;
+    out << "space: " << block->space() << std::endl;
+    out << "freespace: " << block->freespace() << std::endl;
+    out << "type: lbranch" << std::endl;
+
+    using namespace bits;
+    auto lbits = block->bits;
+    out << "key: \"";
+    for (int li = first(lbits); li != -1; li = next(lbits, li)) {
+      out << "[" << bitstr(key + li) << "]";
     }
-    dump_branch(out, offset, storage);
+    out << "\"" << std::endl;
+
+    out << "children: " << std::endl;
+    int count = bits::count(lbits);
+    for (int i = 0; i < count; i++) {
+      uint64_t id = block->links[i];
+      if (isleaf(id)) id += block->leaves;
+      out << "  - " << id << std::endl;
+    }
+    out << "---" << std::endl;
+
+    for (int i = 0; i < count; i++) {
+      dump_link(out, block, block->leaves, block->links[i], storage);
+    }
   }
 
   static void dump_branch(std::ostream& out, offset_t offset,
                           Storage* storage) {
-    branch_ptr block = storage->resolve(offset);
-    leaf_ptr leaf = storage->resolve(block->leaves);
-    bsize_t lspace = leaf->block_size - sizeof(LeafNode) - block->leaves_used;
+    ubranch_ptr block = storage->resolve(offset);
     out << "id: " << offset << std::endl;
     out << "block: " << offset << std::endl;
     out << "size: " << block->block_size << std::endl;
     out << "space: " << block->b.used << std::endl;
     out << "freespace: " << block->freespace() << std::endl;
-    out << "leaf_size: " << leaf->block_size << std::endl;
-    out << "leaf_space: " << block->leaves_used << std::endl;
-    out << "leaf_free: " << lspace << std::endl;
-    out << "leaf_frag: " << block->leaves_free << std::endl;
-    out << "type: branch" << std::endl;
+    out << "type: ubranch" << std::endl;
 
     bsize_t ioffset = 0;
     if (block->has_compressed()) {
@@ -947,72 +874,40 @@ struct _Dumper {
       ioffset += n->nodesize();
     }
 
-    offset_t null_child = 0;
-    if (block->has_null_leaf()) {
-      null_child = *(const offset_t*)&block->data[ioffset];
-      assert(isleaf(null_child));
-      out << "nulllink: " << null_child + (uint64_t)block->leaves << std::endl;
-      ioffset += sizeof(offset_t);
-    }
-
-    if (block->has_array()) {
-      const ArrayBranch* n = (const ArrayBranch*)&block->data[ioffset];
-      out << "branch: array" << std::endl;
-      out << "key: \"";
-      assert(n->size > 0);
-      assert(n->size <= ArrayBranch::COUNT);
-      for (int i = 0; i < n->size; i++) {
-        out << "[" << bitstr(n->keys[i]) << "]";
-      }
-      out << "\"" << std::endl;
-      out << "children: " << std::endl;
-      for (int i = 0; i < n->size; i++) {
-        uint64_t id = n->links[i];
-        if (isleaf(n->links[i])) id += (uint64_t)block->leaves;
-        out << "  - " << id << std::endl;
-      }
-
-      out << "---" << std::endl;
-
-      if (null_child) dump_link(out, block, null_child, storage);
-
-      for (int i = 0; i < n->size; i++) {
-        dump_link(out, block, n->links[i], storage);
-      }
-      return;
-    }
-
-    if (!block->has_sparse()) {
-      // value without key
-      assert(null_child);
-      out << "---" << std::endl;
-      dump_link(out, block, null_child, storage);
-      return;
-    }
-
-    const SparseBranch* n = (const SparseBranch*)&block->data[ioffset];
-    out << "branch: trie" << std::endl;
+    using namespace bits;
+    auto ubits = block->b.bits;
+    int count = bits::count(ubits);
+    offset_t* links = (offset_t*)&block->data[ioffset];
     out << "key: \"";
-    for (auto iter = n->trie.bits.first(); iter != -1;
-         iter = n->trie.bits.next(iter)) {
-      out << "[" << bitstr(iter) << "]";
+    for (int ui = first(ubits); ui != -1; ui = next(ubits, ui)) {
+      out << "[" << (ui << 5) << "]";
     }
-
     out << "\"" << std::endl;
-    out << "children: " << std::endl;
-    for (int i = 0; i < n->count(); i++) {
-      uint64_t id = n->trie.values[i];
-      if (isleaf(n->trie.values[i])) id += (uint64_t)block->leaves;
-      out << "  - " << id << std::endl;
+
+    if (count) {
+      out << "children: " << std::endl;
+      for (int i = 0; i < count; i++) {
+        assert(!isleaf(links[i]));
+        out << "  - " << links[i] << std::endl;
+      }
     }
 
-    out << "---" << std::endl;
+    ioffset += block->branchsize();
+    if (block->has_null_leaf()) {
+      out << "nulllink: " << offset + ioffset + 1 << std::endl;
+      out << "---" << std::endl;
+      const Leaf* leaf = (const Leaf*)&block->data[ioffset];
+      out << "id: " << offset + ioffset + 1 << std::endl;
+      out << "block: " << offset << std::endl;
+      out << "size: " << block->block_size << std::endl;
+      out << "space: " << block->b.used << std::endl;
+      out << "freespace: " << block->freespace() << std::endl;
+      dump_leaf(out, leaf, storage);
+    } else
+      out << "---" << std::endl;
 
-    if (null_child) dump_link(out, block, null_child, storage);
-
-    for (int i = 0, end = n->count(); i < end; i++) {
-      assert(n->trie.values[i]);
-      dump_link(out, block, n->trie.values[i], storage);
+    for (int ui = first(ubits), i = 0; i < count; ui = next(ubits, ui)) {
+      dump_lbranch(out, links[i++], ui << 5, storage);
     }
   }
 };

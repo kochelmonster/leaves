@@ -74,22 +74,25 @@ struct _MemoryMapBlocks {
       T* operator->() { return static_cast<T*>(p); }
       const T* operator->() const { return static_cast<const T*>(p); }
       T& operator*() { return *static_cast<T*>(p); }
+      const T& operator*() const { return *static_cast<T*>(p); }
     };
+
+    struct BitsAndUsed {
+      uint8_t features;
+      uint8_t bits;
+      uint16_t used;
+    };
+
+    static_assert(sizeof(BitsAndUsed) == 4);
 
     tid_t txn_id;
     bsize_t block_size;
     union {
       bsize_t size;
       bsize_t count;
-      struct {
-        uint16_t bits;
-        uint16_t used;
-      } b;
+      bsize_t bits;
+      BitsAndUsed b;
     };
-
-    /* all BlockHeader subclasses must implement a space method
-       that returns the space used by the block (without BlockHeader)
-     */
   };
 
   struct Transaction : public BlockHeader {
@@ -98,10 +101,9 @@ struct _MemoryMapBlocks {
     typedef _MemManager<BlockHeader> MemManager;
 
     /* the size of the file, this should be always equal the
-      size of the database file. But in case of a crash during
-      an transaction, the phyiscal file size could be bigger because
-      of an alloc_new.
-    */
+       size of the database file. But in case of a crash during
+       an transaction, the phyiscal file size could be bigger because
+       of an alloc_new. */
     size_t file_size;
 
     // pointer to the active root of the trie
@@ -191,8 +193,6 @@ struct _MemoryMapFile {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
 
-  typedef std::map<offset_t, bsize_t> blocks_t;
-
   _MemoryMapFile(const char* path, size_t map_size = G) {
     init_dbfile(path, map_size);
     // transaction is active if _txn.txn_id > active_txn()->txn_id
@@ -232,7 +232,7 @@ struct _MemoryMapFile {
       start._txn.block_size = sizeof(start._buffer2);
       start._txn.txn_id = 1;
       start._txn.start_txn = start.header.active_txn;
-      start._txn.garbage.init(sizeof(start)-start._first.SIZE);
+      start._txn.garbage.init(sizeof(start) - start._first.SIZE);
       start._txn.file_size = start._txn.garbage.end_area;
 
       start._first.txn_id = 1;
@@ -260,6 +260,20 @@ struct _MemoryMapFile {
     } catch (...) {
       _mutex = new named_recursive_mutex(open_only, mname.c_str());
     }
+  }
+
+  template <typename ptr>
+  ptr cow_replace(ptr& src) {
+    ptr result = clone(src);
+    free(src);
+    return result;
+  }
+
+  template <typename ptr>
+  ptr clone(const ptr& src) {
+    ptr dest = alloc(src->block_size);
+    copy(*dest, *src, src->space());
+    return dest;
   }
 
   block_ptr alloc(bsize_t space) {
@@ -418,18 +432,24 @@ struct _MemoryMapFile {
 
   void _add_node_statistics(MemStatistics& tofill, offset_t boffset) {
     size_t size1 = 0, size2 = 0;
-    typedef _BranchNode<BlockHeader> BranchNode;
-    typename BranchNode::ptr branch = resolve(boffset);
-    tofill.add(branch->block_size, 1, branch->freespace());
-
-    if (branch->leaves) {
-      block_ptr leaf = resolve(branch->leaves);
-      tofill.add(leaf->block_size, 1,
-                 leaf->block_size - branch->leaves_used - sizeof(BlockHeader));
-    }
-
-    branch->iterate_links([&tofill, this](offset_t& offset) {
-      if (!isleaf(offset)) {
+    typedef _UpperBranchNode<BlockHeader> UpperBranchNode;
+    typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
+    typedef typename LowerBranchNode::ptr lbranch_ptr;
+    typedef typename UpperBranchNode::ptr ubranch_ptr;
+    ubranch_ptr ubranch = resolve(boffset);
+    lbranch_ptr lbranch;
+    tofill.add(ubranch->block_size, 1, ubranch->freespace());
+    ubranch->iterate_links(*this, [&lbranch, &tofill, this](
+                                      const lbranch_ptr& lb, offset_t& offset) {
+      if (lb && lb != lbranch) {
+        lbranch = lb;
+        block_ptr leaf = resolve(lb->leaves);
+        tofill.add(lb->block_size, 1, lb->freespace());
+        tofill.add(leaf->block_size, 1,
+                   leaf->block_size - lb->leaves_used - sizeof(BlockHeader));
+      }
+      
+      if (!isleaf(offset) && lb) {
         _add_node_statistics(tofill, offset);
       }
     });

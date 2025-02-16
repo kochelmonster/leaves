@@ -1,11 +1,61 @@
 #ifndef _LEAVES__BIT_HPP
 #define _LEAVES__BIT_HPP
 
+#include <boost/core/bit.hpp>
 #include <cstdint>
 
-#include "_port.hpp"
-
 namespace leaves {
+
+using boost::core::countl_zero;
+using boost::core::countr_zero;
+using boost::core::popcount;
+
+namespace bits {
+template <typename bits_t = uint64_t>
+int count(bits_t bits) {
+  return popcount(bits);
+}
+
+template <typename bits_t = uint64_t>
+bool isset(bits_t bits, int val) {
+  return bits & (((bits_t)1) << val);
+}
+
+template <typename bits_t = uint64_t>
+void set(bits_t& bits, int val) {
+  bits |= (((bits_t)1) << val);
+}
+
+template <typename bits_t = uint64_t>
+int index(bits_t bits, int val) {
+  bits_t v = bits & ((((bits_t)1) << val) - 1);
+  return popcount(v);
+}
+
+template <typename bits_t = uint64_t>
+int first(bits_t bits) {
+  return bits ? countr_zero(bits) : -1;
+}
+
+template <typename bits_t = uint64_t>
+int last(bits_t bits) {
+  return bits ? (sizeof(bits_t) * 8 - 1) - countl_zero(bits) : -1;
+}
+
+template <typename bits_t = uint64_t>
+int next(bits_t bits, int index) {
+  bits_t mask = ~(((bits_t)1 << (index + 1)) - 1);
+  bits_t v = bits & mask;
+  return (v && index < sizeof(bits) * 8 - 1) ? countr_zero(v) : -1;
+}
+
+template <typename bits_t = uint64_t>
+int prev(bits_t bits, int index) {
+  bits_t mask = ((bits_t)1 << index) - 1;
+  bits_t v = bits & mask;
+  return v ? (sizeof(bits_t) * 8 - 1) - countl_zero(v) : -1;
+}
+}  // namespace bits
 
 template <size_t N = 256>
 struct _BitField {
@@ -53,14 +103,14 @@ struct _BitField {
 
   int first() const {
     for (char i = 0; i < FIELD_COUNT; i++) {
-      if (bits[i]) return i * 64 + ctz(bits[i]);
+      if (bits[i]) return i * 64 + countr_zero(bits[i]);
     }
     return -1;
   }
 
   int last() const {
     for (int i = FIELD_COUNT - 1; i >= 0; i--) {
-      if (bits[i]) return i * 64 + (63 - clz(bits[i]));
+      if (bits[i]) return i * 64 + (63 - countl_zero(bits[i]));
     }
     return -1;
   }
@@ -72,11 +122,11 @@ struct _BitField {
     uint64_t v = bits[i] & mask;
     if (!v || bit_ == 63) {
       for (i++; i < FIELD_COUNT; i++) {
-        if (bits[i]) return i * 64 + ctz(bits[i]);
+        if (bits[i]) return i * 64 + countr_zero(bits[i]);
       }
       return -1;
     } else
-      return i * 64 + ctz(v);
+      return i * 64 + countr_zero(v);
   }
 
   int prev(int index) const {
@@ -86,11 +136,11 @@ struct _BitField {
     uint64_t v = bits[i] & mask;
     if (!v) {
       for (i--; i >= 0; i--) {
-        if (bits[i]) return i * 64 + (63 - clz(bits[i]));
+        if (bits[i]) return i * 64 + (63 - countl_zero(bits[i]));
       }
       return -1;
     } else
-      return i * 64 + 63 - clz(v);
+      return i * 64 + 63 - countl_zero(v);
   }
 };
 

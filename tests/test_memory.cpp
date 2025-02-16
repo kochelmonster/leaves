@@ -4,6 +4,8 @@
 #include <boost/test/included/unit_test.hpp>
 #include <vector>
 
+#include <map>
+
 #include "leaves/intern/_memory.hpp"
 
 using namespace leaves;
@@ -48,6 +50,9 @@ struct TestStorage {
   using tid_t = typename TestBlockHeader::tid_t;
   using MemManager = leaves::_MemManager<TestBlockHeader>;
   std::vector<char> memory;
+
+  typedef std::map<offset_t, bsize_t> blocks_t;
+  blocks_t _debug_collect_block;
 
   TestStorage() {
     mm.init(1);

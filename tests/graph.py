@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# Uses graphviz to create a svg image of a graph specified by a yaml file
+#
 # python tests/graph.py tests/cmpfiles/*
 import sys
 import yaml
@@ -10,7 +12,10 @@ MAX_VAL_SIZE = 27
 LNODE = ('"{id}" [fillcolor=darkolivegreen1 label="(({id})|({keysize}-{key})|'
          '({valuesize}-{value}))"]').replace("(", "{{").replace(")", "}}")
 
-BNODE = '"{id}" [fillcolor={color} label="(({id})|{compress}({slots}))"]'.replace(
+UBNODE = '"{id}" [fillcolor=yellow label="(({id})|{compress}({slots}))"]'.replace(
+    "(", "{{").replace(")", "}}")
+
+LBNODE = '"{id}" [fillcolor=lightblue label="(({id})|({slots}))"]'.replace(
     "(", "{{").replace(")", "}}")
 
 
@@ -33,11 +38,8 @@ class Graph:
             size = pnodes[0]["size"]
             free = pnodes[0]["freespace"]
             space = pnodes[0]["space"]
-            lsize = pnodes[0]["leaf_size"]
-            lfree = pnodes[0]["leaf_free"]
-            lspace = pnodes[0]["leaf_space"]
             add(f"subgraph cluster_Page{k} {{")
-            add(f'label = "{k}\\nsize: {size}|free: {free}|space: {space}\\nlsize: {lsize}|lfree: {lfree}|lspace: {lspace}"')
+            add(f'label = "{k}\\nsize: {size}|free: {free}|space: {space}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
@@ -61,15 +63,7 @@ class Graph:
         print("max page", max(map(int, pages.keys())))
         return "\n".join(lines)
 
-    def handle_branch(self, node):
-        branch = node.get("branch")
-        if branch == "array":
-            color = "yellow"
-        elif branch == "trie":
-            color = "lightblue"
-        else:
-            color = "pink"
-
+    def handle_ubranch(self, node):
         if node.get("compressed"):
             compress = "{" + str(node["compressed"]["size"]) + \
                 "-" + node["compressed"]["key"] + "}|"
@@ -81,12 +75,21 @@ class Graph:
         if null_link:
             children.append("")
 
-        keys = filter(bool, node.get("key", "").split("]["))
+        keys = filter(bool, node.get("key", ""). split("]["))
         for k in keys:
             children.append(k.lstrip("[").rstrip("]"))
 
         slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(children))
-        return BNODE.format(color=color, compress=compress, slots=slots, **node)
+        return UBNODE.format(compress=compress, slots=slots, **node)
+
+    def handle_lbranch(self, node):
+        children = []
+        keys = filter(bool, node.get("key", ""). split("]["))
+        for k in keys:
+            children.append(k.lstrip("[").rstrip("]"))
+
+        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(children))
+        return LBNODE.format(slots=slots, **node)
 
     def handle_leaf(self, node):
         if len(node["value"]) > MAX_VAL_SIZE:

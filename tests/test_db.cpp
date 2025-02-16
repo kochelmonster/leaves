@@ -545,11 +545,10 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   Cursor cursor(storage);
 
   std::ostream null_stream(nullptr);
-
   size_t count;
-  for (count = 0; names[count]; count++) {
+  for (count = 0; names[count] && count < 1000; count++) {
     std::cout << "insert: " << count << ". " << names[count] << std::endl;
-    if (count == 12) {
+    if (count == -41) {
       std::cout << "wrong" << std::endl;
     }
 

@@ -127,6 +127,7 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
 
   Cursor cursor(storage);
   std::cout << "insert 7: abcd*" << std::endl;
+
   cursor.find("abcd*");
   BOOST_REQUIRE(!cursor.is_valid());
   cursor.value("abcd*");

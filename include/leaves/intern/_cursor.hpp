@@ -11,66 +11,76 @@ namespace leaves {
 template <typename BlockHeader_>
 struct _Transition {
   typedef BlockHeader_ BlockHeader;
+  typedef _Transition<BlockHeader> Transition;
   using block_ptr = typename BlockHeader::ptr;
-  typedef _BranchNode<BlockHeader> BranchNode;
-  using LeafNode = typename BranchNode::LeafNode;
-  using Compressed = typename BranchNode::Compressed;
-  using ArrayBranch = typename BranchNode::ArrayBranch;
-  using SparseBranch = typename BranchNode::SparseBranch;
-  using Leaf = typename BranchNode::Leaf;
+  typedef _UpperBranchNode<BlockHeader> UpperBranchNode;
+  typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
+  using LeafNode = typename LowerBranchNode::LeafNode;
+  using Compressed = typename UpperBranchNode::Compressed;
+  using Leaf = typename UpperBranchNode::Leaf;
   using bsize_t = typename BlockHeader::bsize_t;
   using offset_t = typename BlockHeader::offset_t;
   using leaf_ptr = typename LeafNode::ptr;
-  using branch_ptr = typename BranchNode::ptr;
+  using ubranch_ptr = typename UpperBranchNode::ptr;
+  using lbranch_ptr = typename LowerBranchNode::ptr;
 
-  static const int NOT_SAME = 2;   // branch_key was not found
+  static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp
 
-  branch_ptr branch;  // the branch block referenced in this transition
-  leaf_ptr leaf;      // the final leaf block if any
-  uint16_t prefix;    // count of equal chars in stringnode
-  uint16_t suffix;    // count of equal chars in keyvaluenode
+  ubranch_ptr ubranch;  // the upper branch block referenced in this transition
+  lbranch_ptr lbranch;  // the lower branch block referenced in this transition
+  leaf_ptr leaf;        // the final leaf block if any
+
+  uint16_t prefix;  // count of equal chars in stringnode
+  uint16_t suffix;  // count of equal chars in keyvaluenode
   uint8_t branch_key;
-  bsize_t olink;  // the offset inside block that points to the output link
+
+  // the offset inside block that points to the output link
+  int uolink;  // upper branch
+  int lolink;  // lower branch
 
   const Compressed* compressed;
-  union {
-    const ArrayBranch* array;
-    const SparseBranch* sparse;
-  };
   const Leaf* found_leaf;
 
   // 1: the key to find is bigger than the found node
   // 0: the key is found
-  // -1: the key to find is smalled than the found node
-  // NOT_SAME: it is not equal but not known if -1 or 1
+  // -1: the key to find is smaller than the found node
+  // NOT_FOUND: it is not equal but not known if -1 or 1
+  // UNDEFINED: not tested
   int cmp;
 
   // position inside the key
   bsize_t keypos;
 
   bool success() const { return found_leaf && cmp == 0; }
-  offset_t* plink() { return branch->plink(olink); }
+  offset_t* uplink() { return ubranch->plink(uolink); }
+  offset_t* plink() { return &lbranch->links[lolink]; }
   void reset() {
-    branch = nullptr;
+    ubranch = nullptr;
+    lbranch = nullptr;
     leaf = nullptr;
   }
 
   template <typename Cursor, typename Caller>
-  bool follow_link(Cursor& cursor, const offset_t* link, Caller& c) {
-    if (!link) return false;
+  bool follow_link(Cursor& cursor, int index, Caller& c) {
+    offset_t link = lbranch->links[index];
     assert(link);
 
-    olink = (const uint8_t*)link - branch->data;
-    if (isleaf(*link)) {
-      leaf = cursor.storage.resolve(branch->leaves);
-      c(cursor, leaf->leaf(*link));
+    lolink = index;
+    if (isleaf(link)) {
+      leaf = cursor.storage.resolve(lbranch->leaves);
+      c(cursor, leaf->leaf(link));
       return false;
     }
 
     cursor.stack.back().cmp = 0;
-    cursor._push(*link);
+    cursor._push(link);
     return true;
+  }
+
+  template <typename Cursor>
+  void resize_key_to_branch(Cursor& cursor) {
+    cursor.current_key.resize(keypos + (compressed ? compressed->size : 0));
   }
 };
 
@@ -89,13 +99,13 @@ struct _Stack {
   void push(block_ptr block, bsize_t keypos = 0) {
     if (size == data.size()) data.resize(size * 2);
     Transition& back = data[size++];
-    back.branch = block;
+    back.ubranch = block;
+    back.lbranch = nullptr;
     back.leaf = nullptr;
     back.keypos = keypos;
     back.prefix = back.suffix = 0;
-    back.olink = 0;
+    back.uolink = back.lolink = 0;
     back.compressed = nullptr;
-    back.array = nullptr;
     back.found_leaf = nullptr;
     back.cmp = Transition::UNDEFINED;
   }
@@ -160,46 +170,41 @@ struct Inserter {
   using bsize_t = typename Cursor::bsize_t;
   using Transition = typename Cursor::Transition;
   using BlockHeader = typename Transition::BlockHeader;
-  using BranchNode = typename Transition::BranchNode;
+  using UpperBranchNode = typename Transition::UpperBranchNode;
+  using LowerBranchNode = typename Transition::LowerBranchNode;
   using LeafNode = typename Transition::LeafNode;
-  using SparseBranch = typename Transition::SparseBranch;
-  using ArrayBranch = typename Transition::ArrayBranch;
   using Compressed = typename Transition::Compressed;
   using Leaf = typename Transition::Leaf;
   using block_ptr = typename Transition::block_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
-  using branch_ptr = typename Transition::branch_ptr;
+  using ubranch_ptr = typename Transition::ubranch_ptr;
+  using lbranch_ptr = typename Transition::lbranch_ptr;
   using offset_t = typename Transition::offset_t;
 
-  static const bsize_t OFFSET_LINK2 = offsetof(ArrayBranch, links[1]);
-  static const bsize_t OFFSET_LINK1 = offsetof(ArrayBranch, links[0]);
+  typedef enum { no_null, new_null, old_null } leaftype_t;
 
   Cursor& _cursor;
   const Slice& _value;
   Transition* _back;
+  Transition _new;
 
-  offset_t _new_leaf_link;   // result of alloc or grow
-  offset_t _move_leaf_link;  // result and input of alloc
-  bool _mvalid;              // _mkey and _mvalue are valid
-  Slice _mkey;               // key and value
-  Slice _mvalue;             // of the move leaf
+  Slice _prefix;
+  Slice _old_branch_prefix;
+  offset_t _old_branch_node;
+  offset_t _new_leaf_link;
 
   Inserter(Cursor& cursor, const Slice& value)
-      : _cursor(cursor),
-        _value(value),
-        _back(&_cursor.stack.back()),
-        _mvalid(false) {}
+      : _cursor(cursor), _value(value), _back(&_cursor.stack.back()) {}
 
   Inserter(Cursor& cursor, const Slice& value, bool first)
-      : _cursor(cursor),
-        _value(value),
-        _back(&_cursor.stack.back()),
-        _mvalid(false) {}
+      : _cursor(cursor), _value(value), _back(&_cursor.stack.back()) {}
 
   block_ptr resolve(const offset_t& offset) {
     return _cursor.storage.resolve(offset);
   }
   offset_t resolve(block_ptr p) { return _cursor.storage.resolve(p); }
+  uint8_t upper(uint8_t key) const { return UpperBranchNode::upper(key); }
+  uint8_t lower(uint8_t key) const { return LowerBranchNode::lower(key); }
 
   // start inserting the new value
   void start() {
@@ -208,252 +213,107 @@ struct Inserter {
   }
 
   void _start() {
-    if (_back->cmp == 0) return change_leaf();
+    if (_back->cmp == 0)
+      return _back->lbranch ? change_leaf() : change_null_leaf();
 
     _cursor.storage._txn.leaves++;
 
-    if (_back->found_leaf) {
-      if (split_leaf()) return;
-      return extend_leaf();
-    }
+    if (_back->found_leaf) return split_leaf();
 
     bsize_t ioffset = 0;
-    if (_back->branch->has_compressed()) {
+    if (_back->ubranch->has_compressed()) {
       if (split_compressed()) return;
-      ioffset += _back->branch->compressed()->nodesize();
+      ioffset += _back->ubranch->compressed()->nodesize();
     }
-    if (_back->branch->has_null_leaf()) ioffset += sizeof(offset_t);
-    if (_back->branch->has_array()) return add_to_array(ioffset);
-    assert(_back->branch->has_sparse());
-    add_to_sparse(ioffset);
+
+    if (_back->ubranch->has_branch()) return add_to_branch(ioffset);
+
+    assert(_back->ubranch->has_null_leaf());
+    assert(_cursor.stack.size == 1);
+    _prefix = _cursor.key();
+    _old_branch_prefix = Slice();
+    _old_branch_node = setleaf(ioffset);
+    _back->found_leaf = (Leaf*)&_back->ubranch->data[ioffset];
+    create_new_branch();
+    _cursor.storage.free(_back->ubranch);
+    _new.keypos = _back->keypos;
+    *_back = _new;
+    _cursor._set_root(resolve(_back->ubranch));
   }
 
   // insert the very first value
   void first() {
     // reserve enough space for a future branch_node
-    _back->prefix = 0;
     _back->cmp = 0;
-    _back->suffix = _cursor.rest_key.size();
-    alloc(sizeof(offset_t));
-    _back->olink = _back->branch->add_null_leaf();
-    *_back->plink() = _new_leaf_link;
+    _back->prefix = _cursor.rest_key.size();
+    bsize_t space = Compressed::nodesize(_cursor.rest_key.size()) +
+                    Leaf::nodesize(0, _value.size());
+    _back->ubranch = UpperBranchNode::alloc(space, _cursor.storage);
+    _back->ubranch->add_compressed(_cursor.rest_key);
+    Leaf* leaf = (Leaf*)&_back->ubranch->data[_back->ubranch->b.used];
+    _back->found_leaf = leaf;
+    _back->ubranch->set_null_leaf();
+    _back->ubranch->b.used += leaf->fill(_value);
+
+    _cursor._advance_key(_back->prefix);
     _cursor.storage._txn.leaves++;
     _cursor.storage._txn.branches++;
+    _cursor._set_root(resolve(_back->ubranch));
   }
 
   bool split_compressed() {
-    /*
-      Split compressed node
+    assert(_back->compressed);
 
-      Before
-      ------
-        parent -> ["abcdef"][VO?][B]..[L]
-
-      Insert
-      ------
-        key = "abce"
-
-      After
-      -----
-                  new node              orignal node
-        parent -> ["abc"][BA'd'] ->     [ef][VO?][B]..[L]
-                        [  'e']..[L0]
-
-      special cases:
-      key = "" (empty)
-      key = "abc" (subkey of string)
-
-      condtion:
-      size(key) < compressed.size
-    */
-    Compressed* cn = _back->branch->compressed();
+    const Compressed* cn = _back->compressed;
     if (_back->prefix == cn->size) return false;  // no split
-
     assert(_back->prefix < cn->size);
+
+    if (_back->ubranch->txn_id != _cursor.storage._txn.txn_id) {
+      _back->ubranch = _cursor.storage.cow_replace(_back->ubranch);
+      cn = _back->compressed = _back->ubranch->compressed();
+    }
+
+    _prefix = Slice(cn->key, _back->prefix);
+    _old_branch_prefix =
+        Slice(&cn->key[_back->prefix], cn->size - _back->prefix);
+    _old_branch_node = _cursor.storage.resolve(_back->ubranch);
+
+    _new.keypos = _back->keypos;
+    create_new_branch();
+
+    *_back = _new;
+    make_stack_writable();
+    return true;
+  }
+
+  void split_leaf() {
+    const Leaf* fl = _back->found_leaf;
+    _prefix = Slice(fl->key_value, _back->suffix);
+    assert(fl->key_size >= _back->suffix);
+
+    // the new leaf prefix cuts the first suffix bytes
+    int psize = fl->key_size - _back->suffix;
+    _old_branch_prefix = Slice(fl->key_value + fl->key_size - psize, psize);
+    _old_branch_node = *_back->plink();
+
+    _new.keypos = _cursor.current_key.size() - _prefix.size();
+    create_new_branch();
     make_back_writable();
-
-    // _brack->branch may have changed in make_back_writable
-    cn = _back->branch->compressed();
-    // save the prefix of new block
-    Slice prefix(_cursor.rest_key.data() - _back->prefix, _back->prefix);
-    uint8_t key1 = cn->key[_back->prefix];
-
-    // cut compressed of original block
-    bsize_t cut_size = _back->prefix + 1;
-    bsize_t before = cn->nodesize(), after = cn->nodesize(cn->size - cut_size);
-
-    if (after) {
-      // cut the first bytes of prefix
-      assert(cn->size > cut_size);
-      cn->size -= cut_size;
-      memmove(cn->key, &cn->key[cut_size], cn->size);
-    } else
-      _back->branch->clear_compressed();
-
-    if (before != after) {
-      // compressed went smaller move everything after compressed
-      assert(before > after);
-      memmove(_back->branch->data + after, _back->branch->data + before,
-              _back->branch->b.used - before);
-      _back->branch->b.used -= (before - after);
-    }
-
-    block_ptr org = _back->branch;
-
-    // create the new branch
-    if (_cursor.rest_key.size()) {
-      uint8_t key2 = _cursor.rest_key[0];
-      _cursor._advance_key(1);
-
-      alloc(Compressed::nodesize(_back->prefix) + ArrayBranch::nodesize(2));
-      _back->branch->add_compressed(prefix.data(), prefix.size());
-      _back->olink = _back->branch->add_array(key2, key1, resolve(org));
-      *_back->plink() = _new_leaf_link;
-    } else {
-      // with empty key
-      alloc(Compressed::nodesize(_back->prefix) + ArrayBranch::nodesize(1) +
-            sizeof(offset_t));
-      _back->branch->add_compressed(prefix.data(), prefix.size());
-      _back->olink = _back->branch->add_null_leaf();
-      *_back->plink() = _new_leaf_link;
-      *_back->branch->plink(_back->branch->add_array(key1)) = resolve(org);
-    }
-
-    _cursor.storage._txn.branches++;
-    return true;
-  }
-
-  bool split_leaf() {
-    /* Split the key of leaf node
-
-      Before
-      ------
-        parent -> ["abc"][B'd']..[L("efgh")]
-
-      Insert
-      ------
-        key = "abcdegh"
-
-      After
-      -----
-                  orig node        new node
-        parent -> ["abc"][B'd'] -> ["e"][B'f']..[L("gh")]
-                                        [ 'g']..[L("h")]
-
-      special cases:
-      key = "abcd" (rest_key is empty)
-      key = "abc" (subkey of string)
-
-      condtion:
-      size(key) < compressed.size
-    */
-    assert(_back->found_leaf != nullptr);
-
-    if (_back->suffix == _back->found_leaf->key_size) return false;  // extend
-    assert(_back->suffix < _back->found_leaf->key_size);
-
-    // save the prefix (_cursor.rest_key.data()-_back->suffix is safe!)
-    Slice prefix(_cursor.rest_key.data() - _back->suffix, _back->suffix);
-    _back->suffix = 0;
-
-    // Mark the node to move and add the size to free space
-    _back->branch->leaves_free += _back->found_leaf->nodesize();
-    _mvalid = true;
-    _mkey = _back->found_leaf->key();
-    _mvalue = _back->found_leaf->value();
-    uint8_t key2 = _mkey[prefix.size()];
-    _mkey.iadvance(prefix.size() + 1);
-
-    // extend the stack
-    _back->found_leaf = nullptr;
+    *_back->plink() = resolve(_new.ubranch);
     _back->cmp = 0;
-    _cursor.stack.push(nullptr);
-    _back = &_cursor.stack.back();
-    _back->keypos = _cursor.current_key.size() - prefix.size();
-    _back->prefix = prefix.size();
-
-    // create new block
-    if (_cursor.rest_key.size()) {
-      uint8_t key1 = _cursor.rest_key[0];
-      _cursor._advance_key(1);
-      alloc(Compressed::nodesize(prefix.size()) + ArrayBranch::nodesize(2));
-      _back->branch->add_compressed(prefix.data(), prefix.size());
-      _back->olink = _back->branch->add_array(key1, key2, _move_leaf_link);
-    } else {
-      alloc(Compressed::nodesize(prefix.size()) + ArrayBranch::nodesize(1) +
-            sizeof(offset_t));
-      _back->branch->add_compressed(prefix.data(), prefix.size());
-      _back->olink = _back->branch->add_null_leaf();
-      *_back->branch->plink(_back->branch->add_array(key2)) = _move_leaf_link;
-    }
-
-    *_back->plink() = _new_leaf_link;
-    _cursor.storage._txn.branches++;
-    if (!purge_first()) make_stack_writable();
-    return true;
-  }
-
-  void extend_leaf() {
-    /* extend the key of leaf node
-
-      Before
-      ------
-      parent -> ["abc"][B'd']..[L("efgh")]
-
-      Insert
-      ------
-        key = "abcdefghjk"
-
-      After
-      -----
-                  orig node        new node
-        parent -> ["abc"][B'd'] -> ["efgh"][V][B'j']..[L("k")]
-                the former leaf with no key ^          ^the new leaf
-    */
-
-    assert(_back->found_leaf != nullptr);
-    assert(_back->suffix == _back->found_leaf->key_size);
-    assert(_cursor.rest_key.size() >= 1);
-
-    // save the prefix
-    Slice prefix(_cursor.rest_key.data() - _back->suffix, _back->suffix);
-    _back->suffix = 0;
-
-    // mark the node to move
-    _back->branch->leaves_free += _back->found_leaf->nodesize();
-    _mvalid = true;
-    _mkey = Slice();
-    _mvalue = _back->found_leaf->value();
-
-    // extend the stack
     _back->found_leaf = nullptr;
-    _back->cmp = 0;
-
-    _cursor.stack.push(nullptr);
-    _back = &_cursor.stack.back();
-    _back->keypos = _cursor.current_key.size() - prefix.size();
-    _back->prefix = prefix.size();
-
-    uint8_t key = _cursor.rest_key[0];
-    _cursor._advance_key(1);
-
-    // create new block
-    alloc(Compressed::nodesize(prefix.size()) + ArrayBranch::nodesize(1) +
-          sizeof(offset_t));
-    _back->branch->add_compressed(prefix.data(), prefix.size());
-    *_back->branch->plink(_back->branch->add_null_leaf()) = _move_leaf_link;
-    _back->olink = _back->branch->add_array(key);
-    *_back->plink() = _new_leaf_link;
-    _cursor.storage._txn.branches++;
-    if (!purge_first()) make_stack_writable();
+    _cursor.stack.size++;
+    _cursor.stack.back() = _new;
   }
 
   // change the value of leaf
   void change_leaf() {
     assert(_back->found_leaf);
+    assert(_back->lbranch);
+    assert(_cursor.rest_key.empty());
 
     make_back_writable();
-    assert(_cursor.rest_key.empty());
+
     // manipulate the key managment for grow leaf
     _cursor.rest_key =
         Slice(_cursor.rest_key.data() - _back->suffix, _back->suffix);
@@ -463,198 +323,346 @@ struct Inserter {
     *_back->plink() = _new_leaf_link;
   }
 
-  void add_to_array(bsize_t ioffset) {
+  void change_null_leaf() {
+    assert(_back->found_leaf);
+    assert(!_back->lbranch);
+    assert(!_back->leaf);
+    assert(_back->suffix == 0);
+    assert(_cursor.rest_key.empty());
+
+    bsize_t nlsize = Leaf::nodesize(0, _value.size()),
+            olsize = _back->found_leaf->nodesize();
+
+    if (olsize == nlsize) {
+      make_back_writable();
+    } else {
+      ubranch_ptr ub = UpperBranchNode::alloc(
+          _back->ubranch->b.used + nlsize - olsize, _cursor.storage);
+      copy(*ub, *_back->ubranch, _back->ubranch->b.used - olsize);
+      ub->b.used -= olsize;
+      ub->b.used += nlsize;
+      _cursor.storage.free(_back->ubranch);
+      _back->ubranch = ub;
+      make_stack_writable();
+    }
+
+    bsize_t ioffset = _back->ubranch->branchsize();
+    if (_back->ubranch->has_compressed()) {
+      _back->compressed = _back->ubranch->compressed();
+      ioffset += _back->compressed->nodesize();
+    }
+    Leaf* leaf = (Leaf*)&_back->ubranch->data[ioffset];
+    leaf->fill(_value);
+    _back->found_leaf = leaf;
+  }
+
+  void add_to_branch(bsize_t ioffset) {
     if (_cursor.rest_key.empty()) {
-      add_null_leaf(ioffset);
+      // add null leaf
+      assert(!_back->ubranch->has_null_leaf());
+      bsize_t size = Leaf::nodesize(0, _value.size());
+      bsize_t ioffset = _back->ubranch->branchsize();
+      if (_back->ubranch->has_compressed()) {
+        assert(_back->compressed);
+        ioffset += _back->compressed->nodesize();
+      }
+
+      if (_back->ubranch->freespace() < size) {
+        ubranch_ptr unew = UpperBranchNode::alloc(_back->ubranch->b.used + size,
+                                                  _cursor.storage);
+        copy(*unew, *_back->ubranch, _back->ubranch->b.used);
+        _cursor.storage.free(_back->ubranch);
+        _back->ubranch = unew;
+        make_stack_writable();
+      } else
+        make_back_writable();
+
+      Leaf* leaf = (Leaf*)&_back->ubranch->data[ioffset];
+      _back->found_leaf = leaf;
+      _back->ubranch->b.used += leaf->fill(_value);
+      _back->ubranch->set_null_leaf();
+      _back->cmp = 0;
       return;
     }
 
-    assert(_back->array);
     assert(_back->suffix == 0);
     assert(_back->branch_key == (uint8_t)_cursor.rest_key[0]);
 
     uint8_t nkey = _cursor.rest_key[0];
     _cursor._advance_key(1);
 
-    ArrayBranch* n = (ArrayBranch*)&_back->branch->data[ioffset];
-    if (n->size < ArrayBranch::COUNT) {
-      _back->branch->b.used += alloc_branch(sizeof(offset_t));
+    if (_back->lbranch) {
+      // the upperkey already exists!
+      assert(_back->ubranch->isset(nkey));
+      assert(!(_back->lbranch->isset(nkey)));
+      make_back_writable();
 
-      // _back->branch may have changed!
-      n = (ArrayBranch*)&_back->branch->data[ioffset];
-      n->keys[n->size] = _back->branch_key = nkey;
-      n->links[n->size] = _new_leaf_link;
-      _back->olink = _back->branch->olink(&n->links[n->size]);
-      n->size++;
-    } else {
-      // change ArrayBranch to Trie branch
-      const bsize_t MAX_ARRAY =
-          sizeof(ArrayBranch) + ArrayBranch::COUNT * sizeof(offset_t);
-      union {
-        SparseBranch tmp;
-        char buffer[SparseBranch::nodesize(256)];
-      };
-
-      tmp.trie.init();
-
-      _back->branch->b.used +=
-          alloc_branch(tmp.nodesize(ArrayBranch::COUNT + 1) - MAX_ARRAY);
-
-      // _block may have changed
-      n = (ArrayBranch*)&_back->branch->data[ioffset];
-      for (int i = 0; i < n->size; i++) {
-        tmp.trie.bits.set(n->keys[i]);
+      int count = _back->lbranch->count();
+      if (_back->lbranch->freespace() < sizeof(offset_t) ||
+          _back->lbranch->txn_id != _cursor.storage._txn.txn_id) {
+        lbranch_ptr olb = LowerBranchNode::alloc(count + 1, _cursor.storage);
+        copy(*olb, *_back->lbranch, count * sizeof(offset_t));
+        _cursor.storage.free(_back->lbranch);
+        _back->lbranch = olb;
+        *_back->uplink() = resolve(olb);
       }
-      tmp.trie.bits.set(nkey);
+      assert(_back->lbranch->freespace() >= sizeof(offset_t));
+      int index = _back->lbranch->index(nkey);
+      memmove(&_back->lbranch->links[index + 1], &_back->lbranch->links[index],
+              sizeof(offset_t) * (count - index));
 
-      for (int i = 0; i < n->size; i++) {
-        tmp.trie.values[tmp.trie.bits.index(n->keys[i])] = n->links[i];
-      }
-
-      int index = tmp.trie.bits.index(nkey);
-      // tmp.trie.values[index] = _new_leaf_link;  <- gcc "optimize" this line
-      // away
-      memcpy(n, &tmp, tmp.nodesize());
-
-      /*
-         The next line is a bit weird:
-         Original the above commented line was used, but
-         it crashed if compiled under gcc 13.3.0 with the -O2 flag.
-         After some debugging, it turns out that -O2 optimation
-         removed the comment statement.
-         Therefore the optimizer had to be outfoxed.
-      */
-      SparseBranch* sn = (SparseBranch*)n;
-      _back->olink = _back->branch->olink(&sn->trie.values[index]);
+      grow_leaf();
+      _back->lolink = index;
       *_back->plink() = _new_leaf_link;
-      _back->branch->clear_array();
-      _back->branch->set_sparse();
-    }
-  }
-
-  void add_to_sparse(bsize_t ioffset) {
-    if (_cursor.rest_key.empty()) {
-      add_null_leaf(ioffset);
+      _back->lbranch->set(nkey);
       return;
     }
 
-    assert(_back->branch_key == (uint8_t)_cursor.rest_key[0]);
-
-    SparseBranch* n = (SparseBranch*)&_back->branch->data[ioffset];
-    assert(!n->trie.get(_back->branch_key));
-
-    uint8_t c = _cursor.rest_key[0];
-    _cursor._advance_key(1);
-    _back->branch->b.used += alloc_branch(sizeof(offset_t));
-    n = (SparseBranch*)&_back->branch->data[ioffset];
-    int index = n->trie.insert(c, _new_leaf_link);
-    _back->olink = _back->branch->olink(&n->trie.values[index]);
-  }
-
-  void add_null_leaf(bsize_t ioffset) {
-    _back->branch->b.used += alloc_branch(sizeof(offset_t));
-
-    assert(!_back->branch->has_null_leaf());
-    assert(_back->branch->has_array() || _back->branch->has_sparse());
-
-    memmove(&_back->branch->data[ioffset + sizeof(offset_t)],
-            &_back->branch->data[ioffset], _back->branch->b.used - ioffset);
-
-    _back->branch->set_null_leaf();
-    _back->olink = ioffset;
-    *_back->plink() = _new_leaf_link;
-  }
-
-  bool purge_first() {
-    // purge the first block if is a non canonic block
-    // it is recognized by "used == sizeof(offset_t)""
-    Transition& front = _cursor.stack.front();
-    if (_cursor.stack.size == 2 && front.branch->b.used == sizeof(offset_t)) {
-      _cursor.storage.free(front.leaf);
-      _cursor.storage.free(front.branch);
-      front = *_back;
-      _cursor.storage._txn.root = _cursor.root = resolve(_back->branch);
-      _cursor.stack.size = 1;
-      assert(_cursor.storage._txn.branches > 0);
-      _cursor.storage._txn.branches--;
-      return true;
+    // new upper key and new lower key
+    int count = _back->ubranch->count();
+    if ((count + 1) * sizeof(offset_t) >= _back->ubranch->branchsize() ||
+        _back->ubranch->txn_id != _cursor.storage._txn.txn_id) {
+      bsize_t nbsize = UpperBranchNode::branchsize(count + 1),
+              obsize = _back->ubranch->branchsize();
+      ubranch_ptr unew = UpperBranchNode::alloc(
+          _back->ubranch->b.used - obsize + nbsize, _cursor.storage);
+      bsize_t size = ioffset + obsize;
+      copy(*unew, *_back->ubranch, size);
+      memmove(&unew->data[ioffset + nbsize], &_back->ubranch->data[size],
+              _back->ubranch->b.used - size);
+      unew->b.used += nbsize - obsize;
+      _cursor.storage.free(_back->ubranch);
+      _back->ubranch = unew;
     }
-    return false;
+
+    make_stack_writable();
+
+    int index = _back->ubranch->index(nkey);
+    offset_t* links = (offset_t*)&_back->ubranch->data[ioffset];
+    memmove(&links[index + 1], &links[index],
+            sizeof(offset_t) * (count - index));
+    _back->ubranch->set(nkey);
+    _back->uolink = _back->ubranch->olink(&links[index]);
+
+    _back->lbranch = LowerBranchNode::alloc(1, _cursor.storage);
+    _back->lbranch->set(nkey);
+    _back->leaf =
+        LeafNode::alloc(Leaf::nodesize(_cursor.rest_key.size(), _value.size()),
+                        _cursor.storage);
+    Leaf* leaf = _back->leaf->leaf(1);
+    _back->lbranch->leaves_used = leaf->fill(_cursor.rest_key, _value);
+    *_back->uplink() = resolve(_back->lbranch);
+    _back->lbranch->leaves = resolve(_back->leaf);
+    _back->lbranch->links[0] = 1;
+    _back->lolink = 0;
+    _back->found_leaf = leaf;
+    _back->cmp = 0;
+    _cursor._advance_key(_cursor.rest_key.size());
   }
 
   // add a leaf to the _back->branch
   offset_t add_leaf(const Slice& key, const Slice& value) {
     // TODO: Big Value handling
-    offset_t pos = _back->branch->leaves_used;
-    setleaf(pos);
-
-    Leaf* l = _back->leaf->leaf(pos);
-    l->key_size = key.size();
-    l->value_size = value.size();
-    memcpy(l->key_value, key.data(), l->key_size);
-    memcpy(l->key_value + align(l->key_size), value.data(), l->value_size);
-    _back->branch->leaves_used += l->nodesize();
-
-    assert(_back->branch->leaves_used + sizeof(LeafNode) <=
+    offset_t pos = setleaf(_back->lbranch->leaves_used);
+    _back->lbranch->leaves_used += _back->leaf->leaf(pos)->fill(key, value);
+    assert(_back->lbranch->leaves_used + sizeof(LeafNode) <=
            _back->leaf->block_size);
     return pos;
   }
 
   // alloc a new branch with at least size capacity and addtionally
   // create the leafs for _value and _mvalue in the new branch
-  void alloc(bsize_t size) {
-    _back->branch = BranchNode::alloc(size, _cursor.storage);
+  void create_new_branch() {
+    // Calculate UpperBranch size;
+    bsize_t size = Compressed::nodesize(_prefix.size());
 
-    bsize_t leaf_size = Leaf::nodesize(_cursor.rest_key.size(), _value.size());
-    if (_mvalid) leaf_size += Leaf::nodesize(_mkey.size(), _mvalue.size());
+    leaftype_t lt = no_null;
+    if (_old_branch_prefix.empty()) {
+      // only possible if _old_branch_node is a leaf
+      assert(isleaf(_old_branch_node));
+      assert(_back->found_leaf);
+      size += UpperBranchNode::branchsize(1) +
+              Leaf::nodesize(0, _back->found_leaf->value_size);
+      lt = old_null;
+    } else if (_cursor.rest_key.empty()) {
+      size += UpperBranchNode::branchsize(1) + Leaf::nodesize(0, _value.size());
+      lt = new_null;
+    } else {
+      size += UpperBranchNode::branchsize(2);
+    }
 
-    _back->branch->size = 0;
-    _back->leaf = LeafNode::alloc(leaf_size, _cursor.storage);
-    _back->branch->leaves = resolve(_back->leaf);
-    _back->branch->leaves_free = 0;
-    _back->branch->leaves_used = 0;
-
-    _new_leaf_link = add_leaf(_cursor.rest_key, _value);
-    _back->found_leaf = _back->leaf->leaf(_new_leaf_link);
-    _back->cmp = 0;
-    _cursor._advance_key(_cursor.rest_key.size());
-    if (_cursor.stack.size > 1)
-      *_cursor.stack.data[_cursor.stack.size - 2].plink() =
-          resolve(_back->branch);
+    // create the new branch
+    _new.ubranch = UpperBranchNode::alloc(size, _cursor.storage);
+    _new.leaf = nullptr;
+    _new.prefix = _prefix.size();
+    _cursor.storage._txn.branches++;
+    _new.ubranch->add_compressed(_prefix);
+    bsize_t ioffset = _new.ubranch->space();
+    if (lt == no_null)
+      create_double_lbranch(ioffset);
     else
-      _cursor.storage._txn.root = _cursor.root = resolve(_back->branch);
-
-    if (_mvalid) _move_leaf_link = add_leaf(_mkey, _mvalue);
+      create_single_lbranch(ioffset, lt);
   }
 
-  // Alloc space for a branch and create new leaf
-  bsize_t alloc_branch(bsize_t space) {
-    if (_back->branch->freespace() < space) {
-      branch_ptr org = _back->branch;
-      _back->branch = BranchNode::alloc(space + org->b.used, _cursor.storage);
-      copy(*_back->branch, *org, org->b.used);
-      _cursor.storage.free(org);
-      make_stack_writable();
-    } else
-      make_back_writable();
+  void create_single_lbranch(bsize_t ioffset, leaftype_t lt) {
+    Leaf* leaf;
+    _new.uolink = ioffset;
+    _new.lolink = 0;
 
-    assert(_back->branch->freespace() >= space);
-    grow_leaf();
-    return space;
+    if (lt == new_null) {
+      assert(_old_branch_prefix.size());
+      assert(_cursor.rest_key.empty());
+      offset_t* links = (offset_t*)&_new.ubranch->data[ioffset];
+      uint8_t key = _old_branch_prefix[0];
+      _new.ubranch->set(key);
+      _old_branch_prefix.iadvance(1);
+      links[0] = create_lbranch_old(key);
+      ioffset += _new.ubranch->branchsize();
+      leaf = (Leaf*)&_new.ubranch->data[ioffset];
+      leaf->fill(_value);
+      _new.found_leaf = leaf;
+      _new.suffix = 0;
+      _new.cmp = 0;
+    } else {
+      assert(lt == old_null);
+      assert(_old_branch_prefix.empty());
+      uint8_t key = _cursor.rest_key[0];
+      _new.ubranch->set(key);
+      _cursor._advance_key(1);
+      *_new.uplink() = create_lbranch_new(key);
+      ioffset += _new.ubranch->branchsize();
+      leaf = (Leaf*)&_new.ubranch->data[ioffset];
+      leaf->fill(_back->found_leaf->value());
+    }
+    _new.ubranch->b.used = ioffset + leaf->nodesize();
+    _new.ubranch->set_null_leaf();
+  }
+
+  void create_double_lbranch(bsize_t ioffset) {
+    offset_t* links = (offset_t*)&_new.ubranch->data[ioffset];
+
+    assert(_old_branch_prefix.size());
+    assert(_cursor.rest_key.size());
+
+    uint8_t old_key = _old_branch_prefix[0];
+    uint8_t new_key = _cursor.rest_key[0];
+    _old_branch_prefix.iadvance(1);
+    _cursor._advance_key(1);
+
+    assert(old_key != new_key);
+
+    if (upper(old_key) == upper(new_key)) {
+      _new.ubranch->set(old_key);
+      _new.uolink = _new.ubranch->olink(&links[0]);
+      *_new.uplink() = create_lbranch(old_key, new_key);
+      _new.ubranch->b.used += _new.ubranch->branchsize();
+    } else {
+      _new.ubranch->set(old_key);
+      _new.ubranch->set(new_key);
+      links[_new.ubranch->index(old_key)] = create_lbranch_old(old_key);
+      _new.uolink = _new.ubranch->olink(&links[_new.ubranch->index(new_key)]);
+      *_new.uplink() = create_lbranch_new(new_key);
+      _new.ubranch->b.used += _new.ubranch->branchsize();
+    }
+  }
+
+  offset_t create_lbranch(uint8_t old_key, uint8_t new_key) {
+    _new.lbranch = LowerBranchNode::alloc(2, _cursor.storage);
+    _new.lbranch->set(old_key);
+    _new.lbranch->set(new_key);
+
+    bsize_t size = Leaf::nodesize(_cursor.rest_key.size(), _value.size());
+    if (isleaf(_old_branch_node)) {
+      _new.leaf = move_old_branch_leaf(_new.lbranch, old_key, size);
+    } else {
+      _new.leaf = LeafNode::alloc(size, _cursor.storage);
+      *_new.lbranch->link(old_key) = modify_old_branch();
+    }
+
+    _new.lbranch->leaves = resolve(_new.leaf);
+    *_new.lbranch->link(new_key) = add_new();
+    return resolve(_new.lbranch);
+  }
+
+  offset_t create_lbranch_old(uint8_t old_key) {
+    lbranch_ptr lbranch = LowerBranchNode::alloc(1, _cursor.storage);
+    lbranch->set(old_key);
+    if (isleaf(_old_branch_node)) {
+      lbranch->leaves = resolve(move_old_branch_leaf(lbranch, old_key));
+    } else {
+      *lbranch->link(old_key) = modify_old_branch();
+    }
+    return resolve(lbranch);
+  }
+
+  offset_t modify_old_branch() {
+    ubranch_ptr ub = _cursor.storage.resolve(_old_branch_node);
+    assert(ub->has_compressed());
+    Compressed* c = ub->compressed();
+    assert(c->size > _old_branch_prefix.size());
+    bsize_t ns = Compressed::nodesize(_old_branch_prefix.size()),
+            ons = c->nodesize();
+
+    c->size = _old_branch_prefix.size();
+    memcpy(c->key, _old_branch_prefix.data(), c->size);
+
+    if (ons != ns) {
+      memmove(ub->data + ns, ub->data + ons, ub->b.used - ons);
+      ub->b.used -= ons - ns;
+      if (!ns) {
+        ub->clear_compressed();
+        return _old_branch_node;
+      }
+    }
+    return _old_branch_node;
+  }
+
+  leaf_ptr move_old_branch_leaf(lbranch_ptr& lbranch, uint8_t old_key,
+                                bsize_t extra = 0) {
+    assert(_back->leaf);
+    assert(isleaf(_old_branch_node));
+    Leaf* old_leaf = _back->leaf->leaf(_old_branch_node);
+    bsize_t size =
+        Leaf::nodesize(_old_branch_prefix.size(), old_leaf->value_size);
+    leaf_ptr leaf = LeafNode::alloc(size + extra, _cursor.storage);
+    *lbranch->link(old_key) = 1;
+    lbranch->leaves_used = size;
+    leaf->leaf(0)->fill(_old_branch_prefix, old_leaf->value());
+    return leaf;
+  }
+
+  offset_t create_lbranch_new(uint8_t new_key) {
+    bsize_t size = Leaf::nodesize(_cursor.rest_key.size(), _value.size());
+    _new.leaf = LeafNode::alloc(size, _cursor.storage);
+    _new.lbranch = LowerBranchNode::alloc(1, _cursor.storage);
+    _new.lbranch->leaves = resolve(_new.leaf);
+    _new.lbranch->set(new_key);
+    _new.lbranch->links[0] = add_new();
+    return resolve(_new.lbranch);
+  }
+
+  offset_t add_new() {
+    Leaf* leaf = _new.leaf->leaf(_new.lbranch->leaves_used);
+    _new.lbranch->leaves_used += leaf->fill(_cursor.rest_key, _value);
+    _new.found_leaf = leaf;
+    _new.suffix = _cursor.rest_key.size();
+    _new.cmp = 0;
+    _cursor._advance_key(_new.suffix);
+    return _new.leaf->olink(_new.found_leaf);
   }
 
   // grow the leaf and replace found_leaf with value
   void grow_leaf() {
-    if (!_back->leaf) _back->leaf = resolve(_back->branch->leaves);
+    if (!_back->leaf) _back->leaf = resolve(_back->lbranch->leaves);
 
-    auto space = _back->branch->leaves_used +
+    auto space = _back->lbranch->leaves_used +
                  Leaf::nodesize(_cursor.rest_key.size(), _value.size());
     if (_back->leaf->block_size < sizeof(LeafNode) + space) {
       leaf_ptr nleaf =
-          LeafNode::alloc(space - _back->branch->leaves_free, _cursor.storage);
-      _back->branch->copy_leaf(nleaf, _back->leaf);
+          LeafNode::alloc(space - _back->lbranch->leaves_free, _cursor.storage);
+      _back->lbranch->copy_leaf(nleaf, _back->leaf);
       _cursor.storage.free(_back->leaf);
-      _back->branch->leaves = resolve(nleaf);
+      _back->lbranch->leaves = resolve(nleaf);
       _back->leaf = nleaf;
     }
 
@@ -668,8 +676,8 @@ struct Inserter {
   void make_back_writable() {
     if (!Cursor::is_transactional) return;
 
-    if (_back->branch->txn_id != _cursor.storage._txn.txn_id) {
-      _back->branch = _back->branch->cow_replace(_cursor.storage);
+    if (_back->ubranch->txn_id != _cursor.storage._txn.txn_id) {
+      _back->ubranch = _cursor.storage.cow_replace(_back->ubranch);
       make_stack_writable();
     }
   }
@@ -681,18 +689,24 @@ struct Inserter {
     int i = _cursor.stack.size - 2;
     for (; i >= 0; i--) {
       Transition& t = _cursor.stack.data[i];
-      if (t.branch->txn_id != _cursor.storage._txn.txn_id) {
-        t.branch = t.branch->cow_replace(_cursor.storage);
-        *t.plink() = resolve(_cursor.stack.data[i + 1].branch);
+      if (t.lbranch->txn_id != _cursor.storage._txn.txn_id) {
+        t.lbranch = _cursor.storage.cow_replace(t.lbranch);
+        *t.plink() = resolve(_cursor.stack.data[i + 1].ubranch);
       } else {
-        *t.plink() = resolve(_cursor.stack.data[i + 1].branch);
+        *t.plink() = resolve(_cursor.stack.data[i + 1].ubranch);
+      }
+
+      if (t.ubranch->txn_id != _cursor.storage._txn.txn_id) {
+        t.ubranch = _cursor.storage.cow_replace(t.ubranch);
+        *t.uplink() = resolve(t.lbranch);
+      } else {
+        *t.uplink() = resolve(t.lbranch);
         break;
       }
     }
 
     if (i < 0) {
-      _cursor.storage._txn.root = _cursor.root =
-          resolve(_cursor.stack.front().branch);
+      _cursor._set_root(resolve(_cursor.stack.front().ubranch));
     }
   }
 
@@ -702,7 +716,7 @@ struct Inserter {
       Transition& t = _cursor.stack.data[i];
       assert(t.cmp == 0);
       assert(t.found_leaf == nullptr || i == _cursor.stack.size - 1);
-      t.branch->check();
+      t.ubranch->check();
     }
 #endif
   }
@@ -719,7 +733,8 @@ struct _Cursor {
   const static bool is_transactional = Storage::is_transactional;
   typedef _Stack<BlockHeader> Stack;
   using Transition = typename Stack::Transition;
-  using branch_ptr = typename Transition::branch_ptr;
+  using ubranch_ptr = typename Transition::ubranch_ptr;
+  using lbranch_ptr = typename Transition::lbranch_ptr;
 
   struct Transaction {
     txn_ptr txn;
@@ -767,7 +782,7 @@ struct _Cursor {
     rest_key = Slice();
     current_key.clear();
     _push(root);
-    while (stack.back().branch->first(*this));
+    while (stack.back().ubranch->first(*this));
   }
 
   void last() {
@@ -777,16 +792,16 @@ struct _Cursor {
     rest_key = Slice();
     current_key.clear();
     _push(root);
-    while (stack.back().branch->last(*this));
+    while (stack.back().ubranch->last(*this));
   }
 
   void next() {
     rest_key.iadvance(rest_key.size());
     while (stack.size) {
       auto old = stack.size;
-      if (!stack.back().branch->next(*this)) break;
+      if (!stack.back().ubranch->next(*this)) break;
       if (old < stack.size) {
-        while (stack.back().branch->first(*this));
+        while (stack.back().ubranch->first(*this));
         break;
       }
     }
@@ -797,9 +812,9 @@ struct _Cursor {
     auto old = stack.size;
     while (stack.size) {
       auto old = stack.size;
-      if (!stack.back().branch->prev(*this)) break;
+      if (!stack.back().ubranch->prev(*this)) break;
       if (old < stack.size) {
-        while (stack.back().branch->last(*this));
+        while (stack.back().ubranch->last(*this));
         break;
       }
     }
@@ -855,6 +870,8 @@ struct _Cursor {
 
   /* Helpers */
 
+  void _set_root(offset_t offset) { storage._txn.root = root = offset; }
+
   void _advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
     rest_key.iadvance(size);
@@ -909,7 +926,6 @@ struct _Cursor {
     Transition& back = stack.back();
     back.found_leaf = nullptr;
     back.compressed = nullptr;
-    back.array = nullptr;
     back.prefix = back.suffix = 0;
     back.cmp = Transition::UNDEFINED;
     return false;
@@ -921,9 +937,9 @@ struct _Cursor {
       _push(root);
     }
 
-    assert(storage.resolve(stack.front().branch) == root);
+    assert(storage.resolve(stack.front().ubranch) == root);
     while (true) {
-      if (!stack.back().branch->find(*this)) break;
+      if (!stack.back().ubranch->find(*this)) break;
     }
   }
 
@@ -939,9 +955,9 @@ struct _Cursor {
   }
 
   void _check_trie(offset_t obranch) {
-    branch_ptr branch = storage.resolve(obranch);
+    ubranch_ptr branch = storage.resolve(obranch);
     branch->check();
-    branch->iterate_links([this](offset_t& offset) {
+    branch->iterate_links(storage, [this](lbranch_ptr lb, offset_t& offset) {
       if (!isleaf(offset)) {
         _check_trie(offset);
       }
