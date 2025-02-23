@@ -165,17 +165,6 @@ struct _MemoryMapFile {
     offset_t prepared_txn;
   };
 
-  struct _FileStart {
-    union {
-      FileHeader header;
-      char _buffer1[padding(sizeof(FileHeader), MIN_BLOCK)];
-    };
-    union {
-      Transaction _txn;
-      char _buffer2[BLOCK_SIZES[assign_block(Transaction::space(2))]];
-    };
-  };
-
   named_recursive_mutex* _mutex;
   file_mapping _file;
   mapped_region _region;
@@ -184,7 +173,7 @@ struct _MemoryMapFile {
     // the current transaction used with enough extra space
     // for all GarbageSlots;
     Transaction _txn;
-    char _buffer[sizeof(Transaction) + Transaction::MemManager::EXTRA_SPACE];
+    char _txn_buffer[sizeof(Transaction) + Transaction::MemManager::EXTRA_SPACE];
   };
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
@@ -217,23 +206,30 @@ struct _MemoryMapFile {
 
     if (!std::filesystem::is_regular_file(path)) {
       named_recursive_mutex::remove(mname.c_str());
-      _FileStart start;
-      memset(&start, 0, sizeof(start));
-      strcpy(start.header.signature, SIGNATURE);
-      start.header.db_version = 0;
-      start.header.active_txn = start.header.prepared_txn =
-          puint8(&start._txn) - puint8(&start);
-
-      // manually setup the first transaction
-      start._txn.block_size = sizeof(start._buffer2);
-      start._txn.txn_id = 1;
-      start._txn.start_txn = start.header.active_txn;
-      start._txn.file_size = start._txn.garbage.init(sizeof(start));
 
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
-      fhead.write((const char*)&start, sizeof(start));
+      fhead.put('l');
       fhead.close();
-      std::filesystem::resize_file(path, start._txn.file_size);
+      std::filesystem::resize_file(path, AREA_SIZE);
+     
+      _file = file_mapping(path, read_write);
+      _region = mapped_region(_file, read_write, 0, map_size);
+      _db = (FileHeader*)_region.get_address();
+      
+      memset(_db, 0, sizeof(FileHeader));
+      strcpy(_db->signature, SIGNATURE);
+      _db->db_version = 0;
+      
+      _txn.garbage.init(sizeof(FileHeader));
+      _txn.txn_id = 1;
+      _txn.file_size = AREA_SIZE;
+      _txn.root = _txn.mem_root = 0;
+      _txn.leaves = _txn.branches = 0;
+      _txn.start_txn = _txn.next_txn = 0;
+      txn_ptr new_txn = _txn.clone(*this);
+      new_txn->count = 0;
+      _db->active_txn = _db->prepared_txn = resolve(new_txn);
+      _region.flush();
     } else {
       std::ifstream fin(path);
       char signature[sizeof(SIGNATURE)];
@@ -241,12 +237,14 @@ struct _MemoryMapFile {
       if (strcmp(signature, SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
       }
+
+      _file = file_mapping(path, read_write);
+      _region = mapped_region(_file, read_write, 0, map_size);
+      _db = (FileHeader*)_region.get_address();
     }
 
-    _file = file_mapping(path, read_write);
-    _region = mapped_region(_file, read_write, 0, map_size);
-    _db = (FileHeader*)_region.get_address();
     assert(((uint64_t)_db & 7) == 0);
+
     try {
       _mutex = new named_recursive_mutex(create_only, mname.c_str());
       sanitize_transactions();

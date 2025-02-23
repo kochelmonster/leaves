@@ -121,8 +121,6 @@ struct _GarbageSlot {
     } else if (istart >= GarbageContainer::BLOCK_COUNT) {
       ostart = front->next;
       istart = 0;
-      // the very first GarbageContainer has block_size 0
-      front->block_size = GarbageContainer::SIZE;
       storage.free(front);
     }
     return result;
@@ -246,31 +244,19 @@ struct _MemManager {
   }
 
   // init the memory, header is a reserve memory space
-  size_t init(size_t header) {
+  void init(size_t header) {
     header = padding(header, MIN_BLOCK);
-    offset_t end_free = padding(header, PAGE_SIZE);
+    next_free = padding(header, PAGE_SIZE);
     slots.init();
     slots.insert(0, Slot{.next_free = header,
-                         .end_free = end_free,
+                         .end_free = next_free,
                          .ostart = 0,
                          .oend = 0,
                          .istart = 0,
                          .iend = 0,
                          .count = 0});
-
-    int six = assign_block(GarbageContainer::SIZE);
-    slots.insert(six, Slot{.next_free = 0,
-                           .end_free = 0,
-                           .ostart = end_free,
-                           .oend = end_free,
-                           .istart = 0,
-                           .iend = 0,
-                           .count = 0});
-
-    next_free = end_free + GarbageContainer::SIZE;
-    assert(next_free % PAGE_SIZE == 0);
-    allocation_end = padding(end_free, AREA_SIZE);
-    return allocation_end;
+    allocation_end = AREA_SIZE;
+    assert(allocation_end == padding(next_free, AREA_SIZE));
   }
 
   template <typename Storage>

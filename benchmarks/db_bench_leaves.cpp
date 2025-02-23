@@ -15,7 +15,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-// #define BINARY_KEY
+#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:

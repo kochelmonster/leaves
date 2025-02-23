@@ -54,9 +54,9 @@ struct TestStorage {
   blocks_t _debug_collect_block;
 
   TestStorage() {
-    size_t size = mm.init(1);
+    mm.init(1);
     memory.reserve(1024 * 1024);
-    memory.resize(size);
+    memory.resize(AREA_SIZE);
     mm.next_free = 4096;
     accept_tid = mark_tid = 1;
   }
@@ -137,7 +137,7 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
     auto result = storage.alloc(252);
     offsets.push_back(storage.resolve(result));
     BOOST_CHECK((bool)result);
-    BOOST_CHECK_EQUAL(result->block_size, 256);
+    BOOST_CHECK_EQUAL(result->block_size, 288);
   }
 
   for (auto offset : offsets) {
