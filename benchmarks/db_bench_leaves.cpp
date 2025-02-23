@@ -15,7 +15,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-#define BINARY_KEY
+// #define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -92,6 +92,8 @@ static bool FLAGS_compression = true;
 
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
+
+// typedef leaves::_Dumper<leaves::DBMMap> Dumper;
 
 #ifdef UNDEF
 namespace leaves {
@@ -436,6 +438,9 @@ class Benchmark {
 
         size += nsize;
 
+        std::cout << std::endl
+                  << "file size: " << txn->file_size << " B" << std::endl;
+#if 0 
         size_t spare = txn->garbage.end_area - txn->garbage.next_free +
                        txn->garbage.end4k - txn->garbage.next4k;
 
@@ -447,7 +452,7 @@ class Benchmark {
                   << "difference: "
                   << (int)size + (int)spare + 64 - (int)txn->file_size
                   << std::endl;
-
+#endif
         std::cout << "leaves: " << txn->leaves
                   << "  branches: " << txn->branches << std::endl;
       }
@@ -528,11 +533,15 @@ class Benchmark {
         cursor.find(mkey);
         cursor.value(mval);
         FinishedSingleOp();
+
+        /*cursor.check();
+        char path[100];
+        snprintf(path, sizeof(path), "errors/%016d.yaml", i+j);
+        std::ofstream out(path);
+        auto root = db_->_txn.root;
+        Dumper::dump_branch(out, root, db_);*/
       }
       cursor.commit();
-      // cursor.check();
-      // std::ofstream out("errors/last.yaml");
-      // leaves::dump_db(out, db_);
     }
 
 #ifdef __DEBUG

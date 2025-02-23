@@ -157,7 +157,7 @@ struct _MemoryMapFile {
   using mem_ptr = typename MemManager::ptr;
   static const bool is_transactional = true;
   typedef _MemoryMapFile<Headers> MemoryMapFile;
-
+  
   struct FileHeader {
     char signature[SIGNATURE_SIZE];
     uint16_t db_version;
@@ -168,15 +168,11 @@ struct _MemoryMapFile {
   struct _FileStart {
     union {
       FileHeader header;
-      char _buffer1[padding(sizeof(FileHeader), 32)];
+      char _buffer1[padding(sizeof(FileHeader), MIN_BLOCK)];
     };
     union {
       Transaction _txn;
-      char _buffer2[padding(Transaction::space(1), 32)];
-    };
-    union {
-      typename MemManager::GarbageContainer _first;
-      char _buffer3[MemManager::GarbageContainer::SIZE];
+      char _buffer2[BLOCK_SIZES[assign_block(Transaction::space(2))]];
     };
   };
 
@@ -232,15 +228,12 @@ struct _MemoryMapFile {
       start._txn.block_size = sizeof(start._buffer2);
       start._txn.txn_id = 1;
       start._txn.start_txn = start.header.active_txn;
-      start._txn.garbage.init(sizeof(start) - start._first.SIZE);
-      start._txn.file_size = start._txn.garbage.end_area;
-
-      start._first.txn_id = 1;
-      start._first.block_size = start._first.SIZE;
+      start._txn.file_size = start._txn.garbage.init(sizeof(start));
 
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.write((const char*)&start, sizeof(start));
       fhead.close();
+      std::filesystem::resize_file(path, start._txn.file_size);
     } else {
       std::ifstream fin(path);
       char signature[sizeof(SIGNATURE)];
@@ -314,13 +307,10 @@ struct _MemoryMapFile {
     garbage_block.tid = _txn.txn_id;
   }
 
-  offset_t alloc_area(bsize_t size) {
-    offset_t result = _txn.file_size;
-    _txn.file_size += size;
-    if (_txn.file_size > _region.get_size()) throw std::bad_alloc();
-
-    std::filesystem::resize_file(filename(), _txn.file_size);
-    return result;
+  void extend_file(size_t size) {
+    _txn.file_size = size;
+    if (size > _region.get_size()) throw std::bad_alloc();
+    std::filesystem::resize_file(filename(), size);
   }
 
   template <typename T>

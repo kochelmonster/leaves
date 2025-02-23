@@ -653,17 +653,25 @@ struct Inserter {
 
   // grow the leaf and replace found_leaf with value
   void grow_leaf() {
-    if (!_back->leaf) _back->leaf = resolve(_back->lbranch->leaves);
-
     auto space = _back->lbranch->leaves_used +
                  Leaf::nodesize(_cursor.rest_key.size(), _value.size());
-    if (_back->leaf->block_size < sizeof(LeafNode) + space) {
-      leaf_ptr nleaf =
-          LeafNode::alloc(space - _back->lbranch->leaves_free, _cursor.storage);
-      _back->lbranch->copy_leaf(nleaf, _back->leaf);
-      _cursor.storage.free(_back->leaf);
-      _back->lbranch->leaves = resolve(nleaf);
-      _back->leaf = nleaf;
+
+    if (_back->lbranch->leaves) {
+      if (!_back->leaf) _back->leaf = resolve(_back->lbranch->leaves);
+      if (_back->leaf->block_size < sizeof(LeafNode) + space) {
+        leaf_ptr nleaf = LeafNode::alloc(space - _back->lbranch->leaves_free,
+                                         _cursor.storage);
+        _back->lbranch->copy_leaf(nleaf, _back->leaf);
+        _cursor.storage.free(_back->leaf);
+        _back->lbranch->leaves = resolve(nleaf);
+        _back->leaf = nleaf;
+      }
+    }
+    else {
+      assert(_back->lbranch->leaves_free == 0);
+      assert(_back->lbranch->leaves_used == 0);
+      _back->leaf = LeafNode::alloc(space, _cursor.storage);
+      _back->lbranch->leaves = resolve(_back->leaf);
     }
 
     _new_leaf_link = add_leaf(_cursor.rest_key, _value);
@@ -924,6 +932,8 @@ struct _Cursor {
     stack.clear(i);
 
     Transition& back = stack.back();
+    back.leaf = nullptr;
+    back.lbranch = nullptr;
     back.found_leaf = nullptr;
     back.compressed = nullptr;
     back.prefix = back.suffix = 0;
@@ -958,7 +968,7 @@ struct _Cursor {
     ubranch_ptr branch = storage.resolve(obranch);
     branch->check();
     branch->iterate_links(storage, [this](lbranch_ptr lb, offset_t& offset) {
-      if (!isleaf(offset)) {
+      if (lb && !isleaf(offset)) {
         _check_trie(offset);
       }
     });

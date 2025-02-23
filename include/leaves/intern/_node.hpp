@@ -573,6 +573,8 @@ struct _UpperBranchNode : public BlockHeader {
     typename Cursor::Transition& back = cursor.stack.back();
     uint16_t ioffset = 0;
 
+    // TODO: start with if (back->lbranch)
+
     if (back.found_leaf) {
       if (back.cmp < 0) {
         // the found leaf the next one

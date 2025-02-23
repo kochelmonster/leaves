@@ -20,7 +20,6 @@ target_sources(core INTERFACE
     include/leaves/intern/_bits.hpp
     include/leaves/intern/_memory.hpp
     include/leaves/intern/_mmap.hpp
-    include/leaves/intern/_port.hpp
     include/leaves/intern/_cursor.hpp
 )
 
@@ -60,17 +59,17 @@ endif (LEAVES_GCOV)
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
-    include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp include/intern/_port.hpp)
+    include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC test)
 
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
-    include/intern/_memory.hpp include/intern/_bits.hpp include/intern/_port.hpp)
+    include/intern/_memory.hpp include/intern/_bits.hpp)
 target_link_libraries(test_memory PUBLIC test)
 
 add_executable(test_bits tests/test_bits.cpp)
 target_sources(test_memory INTERFACE
-    include/intern/_bits.hpp include/intern/_port.hpp)
+    include/intern/_bits.hpp)
 target_link_libraries(test_bits PUBLIC test)
 
 add_executable(test_trie tests/test_trie.cpp)
@@ -117,7 +116,7 @@ target_sources(lbench INTERFACE
     "leveldb/util/testutil.h")
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
-target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest 
+target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
 target_compile_options(db_bench_leaves PUBLIC 
      -g -march=corei7 -O2)
