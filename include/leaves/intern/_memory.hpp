@@ -46,14 +46,6 @@ const size_t T = 1024 * G;
 const static size_t PAGE_SIZE = 4 * K;
 const static size_t AREA_SIZE = 1 * M;
 
-typedef enum {
-  LEAF = 0,
-  LOWER_BRANCH = 1,
-  UPPER_BRANCH = 2,
-  TRANSACTION = 3,
-  GARBAGE = 4,
-  END = 5
-} NodeType;
 
 // One page inside the garbage queue
 template <typename BlockHeader>

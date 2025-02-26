@@ -108,7 +108,7 @@ add_subdirectory("leveldb/third_party/benchmark")
 add_library(lbench INTERFACE)
 target_include_directories(lbench INTERFACE leveldb)
 target_compile_definitions(lbench INTERFACE NDEBUG)
-#target_compile_definitions(lbench INTERFACE DEBUG)
+# target_compile_definitions(lbench INTERFACE DEBUG)
 target_sources(lbench INTERFACE 
     "leveldb/util/histogram.cc"
     "leveldb/util/histogram.h"

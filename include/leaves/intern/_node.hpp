@@ -390,6 +390,25 @@ struct _LowerBranchNode : public BlockHeader {
     memcpy(dest->data, src->data, leaves_used);
   }
 
+  template <typename Storage>
+  void check(Storage& storage) const {
+#if defined(DEBUG) && !defined(NDEBUG)
+    bsize_t used = 0;
+    leaf_ptr leaf = storage.resolve(leaves);
+    int c = count();
+    for (int i = 0; i < c; i++) {
+      offset_t offset = links[i];
+      if (isleaf(offset)) {
+        const Leaf* l = leaf->leaf(offset);
+        used += l->nodesize();
+      }
+    }
+
+    assert(used + leaves_free == leaves_used);
+#endif
+  }
+
+
   bsize_t space() const { return count() * sizeof(offset_t); }
   bsize_t freespace() const {
     return BlockHeader::block_size - sizeof(LowerBranchNode) - space();
@@ -584,8 +603,7 @@ struct _UpperBranchNode : public BlockHeader {
       }
       back.found_leaf = nullptr;
     }
-
-    if (back.compressed) {
+    else if (back.compressed) {
       ioffset += back.compressed->nodesize();
       if (back.prefix != back.compressed->size) {
         assert(back.prefix < back.compressed->size);
@@ -648,8 +666,7 @@ struct _UpperBranchNode : public BlockHeader {
 
       back.found_leaf = nullptr;
     }
-
-    if (back.compressed) {
+    else if (back.compressed) {
       ioffset += back.compressed->nodesize();
       if (back.prefix != back.compressed->size) {
         if (back.cmp < 0) {

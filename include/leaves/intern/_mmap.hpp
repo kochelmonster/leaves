@@ -65,6 +65,7 @@ struct _MemoryMapBlocks {
 
     template <typename T>
     struct Pointer : public ptr {
+      typedef T base_t;
       static_assert(std::is_base_of<BlockHeader, T>::value,
                     "T must derive from BlockHeader");
 
@@ -157,7 +158,7 @@ struct _MemoryMapFile {
   using mem_ptr = typename MemManager::ptr;
   static const bool is_transactional = true;
   typedef _MemoryMapFile<Headers> MemoryMapFile;
-  
+
   struct FileHeader {
     char signature[SIGNATURE_SIZE];
     uint16_t db_version;
@@ -173,7 +174,8 @@ struct _MemoryMapFile {
     // the current transaction used with enough extra space
     // for all GarbageSlots;
     Transaction _txn;
-    char _txn_buffer[sizeof(Transaction) + Transaction::MemManager::EXTRA_SPACE];
+    char
+        _txn_buffer[sizeof(Transaction) + Transaction::MemManager::EXTRA_SPACE];
   };
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
@@ -211,15 +213,15 @@ struct _MemoryMapFile {
       fhead.put('l');
       fhead.close();
       std::filesystem::resize_file(path, AREA_SIZE);
-     
+
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _db = (FileHeader*)_region.get_address();
-      
+
       memset(_db, 0, sizeof(FileHeader));
       strcpy(_db->signature, SIGNATURE);
       _db->db_version = 0;
-      
+
       _txn.garbage.init(sizeof(FileHeader));
       _txn.txn_id = 1;
       _txn.file_size = AREA_SIZE;
@@ -397,7 +399,11 @@ struct _MemoryMapFile {
 
   void end_transaction() { _mutex->unlock(); }
 
-  void garbage_statistics(MemStatistics& tofill) {
+  struct Statistics {
+    MemStatistics garbage, ubranch, lbranch, leaves, transactions;
+  };
+
+  void _garbage_statistics(MemStatistics& tofill) {
     txn_ptr txn = active_txn();
     const int garbage = assign_block(MemManager::GarbageContainer::SIZE);
     for (auto iter = txn->garbage.slots.begin();
@@ -418,7 +424,7 @@ struct _MemoryMapFile {
     }
   }
 
-  void _add_node_statistics(MemStatistics& tofill, offset_t boffset) {
+  void _add_node_statistics(Statistics& stat, offset_t boffset) {
     size_t size1 = 0, size2 = 0;
     typedef _UpperBranchNode<BlockHeader> UpperBranchNode;
     typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
@@ -426,28 +432,30 @@ struct _MemoryMapFile {
     typedef typename UpperBranchNode::ptr ubranch_ptr;
     ubranch_ptr ubranch = resolve(boffset);
     lbranch_ptr lbranch;
-    tofill.add(ubranch->block_size, 1, ubranch->freespace());
-    ubranch->iterate_links(*this, [&lbranch, &tofill, this](
-                                      const lbranch_ptr& lb, offset_t& offset) {
+    stat.ubranch.add(ubranch->block_size, 1, ubranch->freespace());
+    ubranch->iterate_links(*this, [&lbranch, &stat, this](const lbranch_ptr& lb,
+                                                          offset_t& offset) {
       if (lb && lb != lbranch) {
         lbranch = lb;
         block_ptr leaf = resolve(lb->leaves);
-        tofill.add(lb->block_size, 1, lb->freespace());
-        tofill.add(leaf->block_size, 1,
-                   leaf->block_size - lb->leaves_used - sizeof(BlockHeader));
+        stat.lbranch.add(lb->block_size, 1, lb->freespace());
+        stat.leaves.add(
+            leaf->block_size, 1,
+            leaf->block_size - lb->leaves_used - sizeof(BlockHeader));
       }
-      
+
       if (!isleaf(offset) && lb) {
-        _add_node_statistics(tofill, offset);
+        _add_node_statistics(stat, offset);
       }
     });
   }
 
-  void node_statistics(MemStatistics& tofill) {
-    _add_node_statistics(tofill, active_txn()->root);
+  void statistics(Statistics& stat) {
+    _garbage_statistics(stat.garbage);
+    _add_node_statistics(stat, active_txn()->root);
 
-    iter_transactions([this, &tofill](txn_ptr txn) -> bool {
-      tofill.add(
+    iter_transactions([this, &stat](txn_ptr txn) -> bool {
+      stat.transactions.add(
           txn->block_size, 1,
           txn->block_size - txn->garbage.extra_space() - sizeof(Transaction));
       offset_t offset = resolve(txn);

@@ -287,7 +287,11 @@ struct Inserter {
   }
 
   void split_leaf() {
+    assert(_back->found_leaf);
+    assert(_back->lbranch);
+
     const Leaf* fl = _back->found_leaf;
+
     _prefix = Slice(fl->key_value, _back->suffix);
     assert(fl->key_size >= _back->suffix);
 
@@ -297,10 +301,12 @@ struct Inserter {
     _old_branch_node = *_back->plink();
 
     _new.keypos = _cursor.current_key.size() - _prefix.size();
+    
     create_new_branch();
     make_back_writable();
     *_back->plink() = resolve(_new.ubranch);
     _back->cmp = 0;
+    _back->lbranch->leaves_free += fl->nodesize();
     _back->found_leaf = nullptr;
     _cursor.stack.size++;
     _cursor.stack.back() = _new;
@@ -318,8 +324,9 @@ struct Inserter {
     _cursor.rest_key =
         Slice(_cursor.rest_key.data() - _back->suffix, _back->suffix);
     _cursor.current_key.resize(_cursor.current_key.size() - _back->suffix);
-
+    bsize_t ns = _back->found_leaf->nodesize();
     grow_leaf();
+    _back->lbranch->leaves_free += ns;
     *_back->plink() = _new_leaf_link;
   }
 
@@ -407,11 +414,12 @@ struct Inserter {
         *_back->uplink() = resolve(olb);
       }
       assert(_back->lbranch->freespace() >= sizeof(offset_t));
+      grow_leaf();
+
       int index = _back->lbranch->index(nkey);
       memmove(&_back->lbranch->links[index + 1], &_back->lbranch->links[index],
               sizeof(offset_t) * (count - index));
-
-      grow_leaf();
+      
       _back->lolink = index;
       *_back->plink() = _new_leaf_link;
       _back->lbranch->set(nkey);
@@ -724,7 +732,9 @@ struct Inserter {
       Transition& t = _cursor.stack.data[i];
       assert(t.cmp == 0);
       assert(t.found_leaf == nullptr || i == _cursor.stack.size - 1);
+      assert(t.lbranch || t.ubranch->has_null_leaf());
       t.ubranch->check();
+      if (t.lbranch) t.lbranch->check(_cursor.storage);
     }
 #endif
   }

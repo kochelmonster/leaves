@@ -44,7 +44,9 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE_EQUAL(db._db->signature, SIGNATURE);
   }
 
-  { DBMMap db(dbFilePath.c_str()); }
+  {
+    DBMMap db(dbFilePath.c_str());
+  }
 
   // Change the first byte of the file to 0
   std::fstream file(dbFilePath,
@@ -155,7 +157,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   size_t file_size;
 
   {
-    { DBMMap db(dbFilePath.c_str()); }
+    {
+      DBMMap db(dbFilePath.c_str());
+    }
     DBMMap db(dbFilePath.c_str());
 
     BOOST_REQUIRE(db.active_txn()->txn_id == 1);

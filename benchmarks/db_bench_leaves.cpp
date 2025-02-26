@@ -15,7 +15,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-#define BINARY_KEY
+//#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -93,7 +93,7 @@ static bool FLAGS_compression = true;
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
 
-// typedef leaves::_Dumper<leaves::DBMMap> Dumper;
+
 
 #ifdef UNDEF
 namespace leaves {
@@ -370,7 +370,7 @@ class Benchmark {
       if (name == Slice("fillseq")) {
         Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("fillbatch")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 1000);
       } else if (name == Slice("fillrandom")) {
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
       } else if (name == Slice("overwrite")) {
@@ -413,9 +413,9 @@ class Benchmark {
         size_t size = 0;
         size_t counts = 0;
         std::cout << "GARBAGE" << std::endl;
-        leaves::MemStatistics garbage;
-        db_->garbage_statistics(garbage);
-        for (auto slot : garbage.slots) {
+        leaves::DBMMap::Statistics stat;
+        db_->statistics(stat);
+        for (auto slot : stat.garbage.slots) {
           std::cout << "Slot: " << slot.block_size << ": " << slot.count
                     << std::endl;
           size += slot.block_size * slot.count;
@@ -425,10 +425,8 @@ class Benchmark {
         std::cout << "CHECK Garbage: " << size << "(" << counts << ")" << std::endl;
 
         std::cout << "NODES" << std::endl;
-        leaves::MemStatistics nodes;
-        db_->node_statistics(nodes);
         size_t nsize = 0;
-        for (auto slot : nodes.slots) {
+        for (auto slot : stat.ubranch.slots) {
           std::cout << "Slot: " << slot.block_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
           nsize += slot.block_size * slot.count;
@@ -526,6 +524,11 @@ class Benchmark {
         mkey = leaves::Slice(key);
         // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
 #endif
+        
+        /*int iter = i + j;
+        if (iter == 37) {
+          int p = 0;
+        }*/
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
@@ -539,6 +542,7 @@ class Benchmark {
         snprintf(path, sizeof(path), "errors/%016d.yaml", i+j);
         std::ofstream out(path);
         auto root = db_->_txn.root;
+        typedef leaves::_Dumper<leaves::DBMMap> Dumper;
         Dumper::dump_branch(out, root, db_);*/
       }
       cursor.commit();
