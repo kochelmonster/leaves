@@ -5,3 +5,4 @@ waf
 .gcov
 graphs
 leveldb
+tmp
