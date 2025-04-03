@@ -95,7 +95,7 @@ different ends and starts of the queue.
 
 template <typename Traits>
 struct _GarbageSlot {
-    using BlockHeader = typename Traits::BlockHeader;
+  using BlockHeader = typename Traits::BlockHeader;
   using offset_e = typename Traits::offset_e;
   using uint16_e = typename Traits::uint16_e;
   using uint64_e = typename Traits::uint64_e;
@@ -211,14 +211,14 @@ struct _MemManager {
   typedef _GarbageSlot<Traits> Slot;
   using GarbageContainer = typename Slot::GarbageContainer;
 
-  static constexpr uint16_t BLOCK_COUNT =
+  static constexpr uint16_t COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  static constexpr uint16_t PAGE_ID = BLOCK_COUNT - 1;
+  static constexpr uint16_t PAGE_ID = COUNT - 1;
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
 
   offset_e allocation_end;
   offset_e next_free;
-  Slot slots[BLOCK_COUNT];
+  Slot slots[COUNT];
 
   // init the memory, header is a reserve memory space
   void init(uint16_t header) {
@@ -231,7 +231,7 @@ struct _MemManager {
 
   static constexpr int assign_slot(uint16_t size) {
     assert(size > 0);
-    return binary_search(&BLOCK_SIZES[0], &BLOCK_SIZES[BLOCK_COUNT], size);
+    return binary_search(&BLOCK_SIZES[0], &BLOCK_SIZES[COUNT], size);
   }
 
   template <typename Storage>
@@ -306,8 +306,7 @@ template <typename Traits>
 struct _MemStatistics {
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static const uint16_t SIZE = 4096;
-  static const uint16_t BLOCK_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static const uint16_t COUNT = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
   struct Slot {
     size_t block_size;
@@ -315,7 +314,7 @@ struct _MemStatistics {
     size_t free;
   };
 
-  Slot slots[BLOCK_COUNT];
+  Slot slots[COUNT];
 
   _MemStatistics() { memset(slots, 0, sizeof(slots)); }
 

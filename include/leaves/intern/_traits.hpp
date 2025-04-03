@@ -1,11 +1,14 @@
 #ifndef _LEAVES__TRAITS_HPP
 #define _LEAVES__MMAP_HPP
 
+#include "./_util.hpp"
+
 namespace leaves {
 
 template <typename BlockHeader>
 struct SimplePointer {
   struct ptr {
+    static constexpr NodeTypes type = TRIE;
     ptr(const ptr& src) : p(src.p) {}
     ptr(void* src = nullptr) : p((BlockHeader*)src) {}
 
@@ -22,11 +25,14 @@ struct SimplePointer {
     bool operator==(const ptr& other) const { return p == other.p; }
     bool operator!=(const ptr& other) const { return p != other.p; }
     bool operator!=(const void* other) const { return p != other; }
+    void* link(uint16_t offset) { return (char*)p + offset; }
+    void reset() { p = nullptr; }
     BlockHeader* p;
   };
 
-  template <typename T>
+  template <typename T, NodeTypes t=TRIE>
   struct Pointer : public ptr {
+    static constexpr NodeTypes type = t;
     Pointer(void* src = nullptr) : ptr(src) {}
     Pointer(const ptr& src) : ptr(src) {}
     T* operator->() { return static_cast<T*>(ptr::p); }

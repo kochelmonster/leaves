@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE(std::filesystem::exists(dbFilePath));
 
     // Check if the active head is not null after initialization
-    const DBMMap::txn_ptr head = db.active_txn();
+    const DBMMap::txn_ptr head = db.txn();
     BOOST_REQUIRE(head != nullptr);
 
     BOOST_REQUIRE_EQUAL(db._db->db_version, 0);
@@ -67,7 +67,7 @@ BOOST_AUTO_TEST_CASE(test_double_open) {
   DBMMap db1(dbFilePath.c_str());
   DBMMap db2(dbFilePath.c_str());
 
-  BOOST_CHECK_EQUAL(db1.active_txn()->txn_id, db2.active_txn()->txn_id);
+  BOOST_CHECK_EQUAL(db1.txn()->txn_id, db2.txn()->txn_id);
 }
 
 struct Transaction {
@@ -81,7 +81,26 @@ struct Transaction {
 };
 
 using BlockHeader = DBMMap::BlockHeader;
-using offset_t = DBMMap::offset_t;
+using block_ptr = DBMMap::block_ptr;
+
+BOOST_AUTO_TEST_CASE(test_mutex_recovery) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap db(dbFilePath.c_str());
+  db._db->file_locker = 0xFFFFFFFF;
+  db._db->file_mutex.lock();
+  db.save_lock(db._db->file_mutex, db._db->file_locker, 0);
+  BOOST_CHECK_EQUAL(db._db->file_locker, db._pid);
+}
+
+BOOST_AUTO_TEST_CASE(test_sanitize_mutext) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap db(dbFilePath.c_str());
+  db._db->processes[2] = 0xFFFFFFFF;
+  auto first = db.sanitize_processes();
+  BOOST_CHECK(!first);
+}
 
 BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   DirPreparation prep;
@@ -89,10 +108,10 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap db(dbFilePath.c_str());
 
-  auto txn = db.active_txn();
+  auto txn = db.txn();
   txn->count++;
 
-  BlockHeader::ptr block1, block2, block3, block4;
+  block_ptr block1, block2, block3, block4;
 
   {
     Transaction trans(db);
@@ -114,7 +133,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
     BOOST_CHECK(block2 != block3);
   }
 
-  BOOST_CHECK(txn->txn_id != db.active_txn()->txn_id);
+  BOOST_CHECK(txn->txn_id != db.txn()->txn_id);
 
   txn->count--;
 
@@ -125,23 +144,38 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   }
 }
 
+BOOST_AUTO_TEST_CASE(test_extend) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap db(dbFilePath.c_str());
+  {
+    Transaction trans(db);
+    int count = AREA_SIZE/PAGE_SIZE;
+    for(int i = 0; i < count; i++) {
+      db.alloc(PAGE_SIZE);
+    }
+  }
+
+  BOOST_CHECK_EQUAL(db.txn()->file_size, 2*AREA_SIZE);
+}
+
 BOOST_AUTO_TEST_CASE(test_rollback) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap db(dbFilePath.c_str());
 
   db.start_transaction(true);
-  auto block1 = db.alloc(8123);
+  auto block1 = db.alloc(1123);
   db.prepare_commit();
   db.rollback();
 
   db.start_transaction();
-  auto block2 = db.alloc(8123);
+  auto block2 = db.alloc(1123);
   db.prepare_commit();
   db.commit();
 
   db.start_transaction();
-  auto block3 = db.alloc(8123);
+  auto block3 = db.alloc(1123);
   db.prepare_commit();
   db.commit();
 
@@ -153,7 +187,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   DirPreparation prep;
   // Create a temporary file path
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  std::vector<DBMMap::offset_t> block_offsets;
+  std::vector<offset_t> block_offsets;
   size_t file_size;
 
   {
@@ -162,20 +196,19 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     }
     DBMMap db(dbFilePath.c_str());
 
-    BOOST_REQUIRE(db.active_txn()->txn_id == 1);
+    BOOST_REQUIRE(db.txn()->txn_id == 1);
 
     {
       Transaction trans(db);
 
       for (int i = 0; i < 64; i++) {
-        BlockHeader::ptr block = db.alloc(4 * K - sizeof(BlockHeader));
-        BOOST_REQUIRE(block->block_size == 4 * K);
+        block_ptr block = db.alloc(4 * K - sizeof(BlockHeader));
         block_offsets.push_back(db.resolve(block));
       }
       file_size = db._txn.file_size;
     }
 
-    DBMMap::txn_ptr txn = db.active_txn();
+    DBMMap::txn_ptr txn = db.txn();
     BOOST_REQUIRE(txn->txn_id == 2);
     BOOST_REQUIRE(file_size == db._txn.file_size);
   }
@@ -183,20 +216,20 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   {
     // free the first page page (txn=2)
     DBMMap db(dbFilePath.c_str());
-    BOOST_REQUIRE(db.active_txn()->file_size == file_size);
+    BOOST_REQUIRE(db.txn()->file_size == file_size);
 
     {
       Transaction trans(db);
 
       for (offset_t bo : block_offsets) {
-        BlockHeader::ptr block = db.resolve(bo);
+        block_ptr block = db.resolve(bo);
         BOOST_REQUIRE(db.resolve(block) == bo);
         db.free(block);
       }
       // file_size = db._txn.file_size;
     }
 
-    DBMMap::txn_ptr txn = db.active_txn();
+    DBMMap::txn_ptr txn = db.txn();
     BOOST_REQUIRE(txn->txn_id == 3);
   }
 
@@ -210,19 +243,19 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   {
     // free the first page page (txn=2)
     DBMMap db(dbFilePath.c_str());
-    BOOST_REQUIRE(db.active_txn()->file_size == file_size);
+    BOOST_REQUIRE(db.txn()->file_size == file_size);
 
     {
       Transaction trans(db);
       for (offset_t bo : block_offsets) {
-        BlockHeader::ptr block = db.alloc(4 * K - sizeof(BlockHeader));
+        block_ptr block = db.alloc(4 * K - sizeof(BlockHeader));
         offset_t offset = db.resolve(block);
         BOOST_REQUIRE(db.resolve(block) == bo);
       }
       // file_size = db._txn.file_size;
     }
 
-    DBMMap::txn_ptr txn = db.active_txn();
+    DBMMap::txn_ptr txn = db.txn();
     BOOST_REQUIRE(txn->txn_id == 5);
   }
 }
@@ -245,8 +278,8 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       BOOST_REQUIRE(pool.free_end == block_offsets[0].offset());
     }
 
-    BOOST_REQUIRE(db.active_txn()->txn_id == 4);
-    auto &pool = db.active_txn()->pools[0];
+    BOOST_REQUIRE(db.txn()->txn_id == 4);
+    auto &pool = db.txn()->pools[0];
     BOOST_REQUIRE(pool.last_free_start == 0);
     BOOST_REQUIRE(pool.last_free_end == 0);
     BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
@@ -281,8 +314,8 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       db.free_cursor(cursor_id);
     }
 
-    BOOST_REQUIRE(db.active_txn()->txn_id == 5);
-    auto &pool = db.active_txn()->pools[0];
+    BOOST_REQUIRE(db.txn()->txn_id == 5);
+    auto &pool = db.txn()->pools[0];
     BOOST_REQUIRE(pool.last_free_start == block_offsets[2].offset());
     BOOST_REQUIRE(pool.last_free_end == block_offsets[2].offset());
     BOOST_REQUIRE(pool.free_start == block_offsets[1].offset());
@@ -314,8 +347,8 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       BOOST_REQUIRE(pool.free_end == block_offsets[2].offset());
     }
 
-    BOOST_REQUIRE(db.active_txn()->txn_id == 6);
-    auto &pool = db.active_txn()->pools[0];
+    BOOST_REQUIRE(db.txn()->txn_id == 6);
+    auto &pool = db.txn()->pools[0];
     BOOST_REQUIRE(pool.last_free_start == 0);
     BOOST_REQUIRE(pool.last_free_end == 0);
     BOOST_REQUIRE(pool.free_start == block_offsets[0].offset());

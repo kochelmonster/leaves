@@ -33,14 +33,14 @@ typedef leaves::_Dumper<DBMMap> Dumper;
 
 inline void dump_graph(const char* output, DBMMap& storage) {
   std::ofstream out(output);
-  auto root = storage.active_txn()->root;
-  Dumper::dump_branch(out, root, &storage);
+  auto root = storage.txn()->root;
+  Dumper::dump_link(out, root, &storage);
 }
 
 inline void compare_graph(const char* input, DBMMap& storage) {
   std::stringstream cstr;
-  auto root = storage.active_txn()->root;
-  Dumper::dump_branch(cstr, root, &storage);
+  auto root = storage.txn()->root;
+  Dumper::dump_link(cstr, root, &storage);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),

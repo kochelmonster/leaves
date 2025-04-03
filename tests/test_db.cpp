@@ -567,7 +567,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
            << ".yaml";
       std::ofstream out(cstr.str().c_str());
       auto root = storage._txn.root;
-      Dumper::dump_branch(out, root, &storage);
+      Dumper::dump_link(out, root, &storage);
     }
     if (count % 20 == 0 && count > 0) {
       cursor.commit();
@@ -578,8 +578,8 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  auto root = storage.active_txn()->root;
-  Dumper::dump_branch(out, root, &storage);
+  auto root = storage.txn()->root;
+  Dumper::dump_link(out, root, &storage);
     
   std::cout << "start test: " << count << std::endl;
   for (int i = 0; i < 100; i++) {

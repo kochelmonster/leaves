@@ -63,6 +63,9 @@ class Slice {
   }
 
   bool empty() const { return _size == 0; }
+
+  operator bool() const { return _size != 0; }
+  void reset() { _size = 0; }
 };
 
 typedef uint64_t tid_t;
@@ -139,7 +142,7 @@ struct _Offset {
   uint64_t offset() const {
     return _Offset((_offset & PAGE_MASK) & ~TYPE_MASK);
   }
-  NodeTypes type() const { return _offset & TYPE_MASK; }
+  NodeTypes type() const { return (NodeTypes)(_offset & TYPE_MASK); }
   const _Offset& type(NodeTypes type) {
     _offset &= ~TYPE_MASK;
     _offset |= type;
@@ -185,10 +188,9 @@ const static uint32_t ALIGN = sizeof(void*);
 constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
 template <typename Block>
-void copy(Block& dst, const Block& src, size_t space = 0) {
-  size_t base_size = sizeof(typename Block::Base), src_size = sizeof(Block);
-  memcpy((char*)&dst + base_size, (char*)&src + base_size,
-         space + src_size - base_size);
+void copy(Block& dst, const Block& src) {
+  uint16_t base_size = sizeof(typename Block::Base), src_size = src.size();
+  memcpy((char*)&dst + base_size, (char*)&src + base_size, src_size - base_size);
 }
 
 }  // namespace leaves

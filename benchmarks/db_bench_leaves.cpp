@@ -408,7 +408,7 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
-        auto txn = db_->active_txn();
+        auto txn = db_->txn();
 
         size_t size = 0;
         size_t counts = 0;

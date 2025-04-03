@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include "./_cursor.hpp"
 #include "./_exception.hpp"
 #include "./_memory.hpp"
 #include "./_traits.hpp"
@@ -57,6 +58,7 @@ struct _MemoryMapBlocks {
                                              1056, 2088, PAGE_SIZE};
 
   struct BlockHeader {
+    typedef BlockHeader Base;
     tid_e txn_id;
     uint8_t slot_id;
     uint8_t free_idx;
@@ -64,11 +66,10 @@ struct _MemoryMapBlocks {
 
   typedef SimplePointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
-  template <typename T>
-  using Pointer = typename Pointers::template Pointer<T>;
+  template <typename T, NodeTypes type = TRIE>
+  using Pointer = typename Pointers::template Pointer<T, type>;
 
   struct _Transaction : public BlockHeader {
-    typedef BlockHeader Base;
     typedef _MemManager<_MemoryMapBlocks> MemManager;
 
     /* the size of the file, this should be always equal the
@@ -106,6 +107,8 @@ struct _MemoryMapBlocks {
     static constexpr auto SLOT_ID =
         MemManager::assign_slot(sizeof(_Transaction));
 
+    uint16_t size() const { return sizeof(Transaction); }
+
     template <typename Storage>
     static ptr alloc(Storage& storage) {
       return storage.alloc_slot(SLOT_ID);
@@ -120,8 +123,9 @@ struct _MemoryMapBlocks {
   };
 };
 
-template <typename Traits>
+template <typename Traits_>
 struct _MemoryMapFile {
+  typedef Traits_ Traits;
   using BlockHeader = typename Traits::BlockHeader;
   using Transaction = typename Traits::Transaction;
   using MemManager = typename Transaction::MemManager;
@@ -274,7 +278,7 @@ struct _MemoryMapFile {
     // locker does not exist anymore
     locker = 0;
     while (!mutex.try_lock()) mutex.unlock();
-    mutex.unlock(); // one more unlock
+    mutex.unlock();  // one more unlock
   }
 
   void save_lock(interprocess_mutex& mutex, pid_type& locker, int secs = 10) {
@@ -285,17 +289,17 @@ struct _MemoryMapFile {
   }
 
   template <typename ptr>
-  ptr cow_replace(ptr& src) {
-    ptr result = clone(src);
-    free(src);
-    return result;
+  ptr clone(const ptr& src) {
+    ptr dest = alloc_slot(src->slot_id);
+    copy(*dest, *src);
+    return dest;
   }
 
   template <typename ptr>
-  ptr clone(const ptr& src) {
-    ptr dest = alloc(src->block_size);
-    copy(*dest, *src, src->space());
-    return dest;
+  ptr cow(ptr& src) {
+    auto result = clone(src);
+    free(src);
+    return result;
   }
 
   block_ptr alloc(uint16_t space) {
@@ -324,8 +328,9 @@ struct _MemoryMapFile {
     return block_ptr((char*)_db + (uint64_t)offset);
   }
 
-  offset_t resolve(const block_ptr& p) const {
-    return (uint64_t)p - (uint64_t)_db;
+  template <typename Pointer>
+  offset_t resolve(const Pointer& p) const {
+    return offset_t((uint64_t)p - (uint64_t)_db).type(p.type);
   }
 
   template <typename T>
@@ -373,7 +378,7 @@ struct _MemoryMapFile {
     std::filesystem::resize_file(filename(), txn->file_size);
   }
 
-  txn_ptr active_txn() { return resolve(_db->active_txn); }
+  txn_ptr txn() { return resolve(_db->active_txn); }
 
   bool start_transaction(bool wait = false) {
     if (_db->txn_locker == _pid) throw TransactionActive();
@@ -386,7 +391,7 @@ struct _MemoryMapFile {
     _db->txn_locker = _pid;
 
     // find a free transaction and the oldest used transaction
-    txn_ptr active = active_txn();
+    txn_ptr active = txn();
     copy(_txn, *active);
     _txn.txn_id = active->txn_id + 1;
     _txn.next_txn = _txn.start_txn = 0;
@@ -449,12 +454,11 @@ struct _MemoryMapFile {
   };
 
   void _garbage_statistics(MemStatistics& tofill) {
-    txn_ptr txn = active_txn();
-    const int garbage = assign_slot(MemManager::GarbageContainer::SIZE);
-    for (auto iter = txn->garbage.slots.begin();
-         iter != txn->garbage.slots.end(); ++iter) {
-      auto slot = *iter;
-
+    txn_ptr txn_ = txn();
+    const int garbage =
+        MemManager::assign_slot(MemManager::GarbageContainer::SIZE);
+    for (int i = 0; i < MemManager::COUNT; i++) {
+      auto slot = txn_->garbage.slots[i];
       // collect bocks
       offset_t o = slot.ostart;
       size_t count = 0;
@@ -465,7 +469,7 @@ struct _MemoryMapFile {
         o = gc->next;
       }
       tofill.add(BLOCK_SIZES[garbage], count);
-      tofill.add(BLOCK_SIZES[iter.index], slot.count);
+      tofill.add(BLOCK_SIZES[i], slot.count);
     }
   }
   /*
@@ -496,9 +500,8 @@ struct _MemoryMapFile {
     // _node_statistics(stat, active_txn()->root);
 
     iter_transactions([this, &stat](txn_ptr txn) -> bool {
-      stat.transactions.add(
-          txn->block_size, 1,
-          txn->block_size - txn->garbage.extra_space() - sizeof(Transaction));
+      uint16_t bsize = BLOCK_SIZES[txn->slot_id];
+      stat.transactions.add(bsize, 1, bsize - sizeof(Transaction));
       offset_t offset = resolve(txn);
       return false;
     });
@@ -506,7 +509,7 @@ struct _MemoryMapFile {
 };
 
 typedef _MemoryMapFile<_MemoryMapBlocks> DBMMap;
-// typedef _Cursor<DBMMap> Cursor;
+typedef _Cursor<DBMMap> Cursor;
 
 }  // namespace leaves
 

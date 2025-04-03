@@ -1,4 +1,4 @@
-#ifndef _LEAVES__CURSOR_HPP
+#ifndef _LEAVES_CURSOR_HPP
 #define _LEAVES_CURSOR_HPP
 
 #include <vector>
@@ -7,123 +7,6 @@
 #include "_node.hpp"
 
 namespace leaves {
-
-template <typename BlockHeader_>
-struct _Transition {
-  typedef BlockHeader_ BlockHeader;
-  typedef _Transition<BlockHeader> Transition;
-  using block_ptr = typename BlockHeader::ptr;
-  typedef _UpperBranchNode<BlockHeader> UpperBranchNode;
-  typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
-  using LeafNode = typename LowerBranchNode::LeafNode;
-  using Compressed = typename UpperBranchNode::Compressed;
-  using Leaf = typename UpperBranchNode::Leaf;
-  using bsize_t = typename BlockHeader::bsize_t;
-  using offset_t = typename BlockHeader::offset_t;
-  using leaf_ptr = typename LeafNode::ptr;
-  using ubranch_ptr = typename UpperBranchNode::ptr;
-  using lbranch_ptr = typename LowerBranchNode::ptr;
-
-  static const int NOT_FOUND = 2;  // branch_key was not found
-  static const int UNDEFINED = 3;  // initial state of cmp
-
-  ubranch_ptr ubranch;  // the upper branch block referenced in this transition
-  lbranch_ptr lbranch;  // the lower branch block referenced in this transition
-  leaf_ptr leaf;        // the final leaf block if any
-
-  uint16_t prefix;  // count of equal chars in stringnode
-  uint16_t suffix;  // count of equal chars in keyvaluenode
-  uint8_t branch_key;
-
-  // the offset inside block that points to the output link
-  int uolink;  // upper branch
-  int lolink;  // lower branch
-
-  const Compressed* compressed;
-  const Leaf* found_leaf;
-
-  // 1: the key to find is bigger than the found node
-  // 0: the key is found
-  // -1: the key to find is smaller than the found node
-  // NOT_FOUND: it is not equal but not known if -1 or 1
-  // UNDEFINED: not tested
-  int cmp;
-
-  // position inside the key
-  bsize_t keypos;
-
-  bool success() const { return found_leaf && cmp == 0; }
-  offset_t* uplink() { return ubranch->plink(uolink); }
-  offset_t* plink() { return &lbranch->links[lolink]; }
-  void reset() {
-    ubranch = nullptr;
-    lbranch = nullptr;
-    leaf = nullptr;
-  }
-
-  template <typename Cursor, typename Caller>
-  bool follow_link(Cursor& cursor, int index, Caller& c) {
-    offset_t link = lbranch->links[index];
-    assert(link);
-
-    lolink = index;
-    if (isleaf(link)) {
-      leaf = cursor.storage.resolve(lbranch->leaves);
-      c(cursor, leaf->leaf(link));
-      return false;
-    }
-
-    cursor.stack.back().cmp = 0;
-    cursor._push(link);
-    return true;
-  }
-
-  template <typename Cursor>
-  void resize_key_to_branch(Cursor& cursor) {
-    cursor.current_key.resize(keypos + (compressed ? compressed->size : 0));
-  }
-};
-
-template <typename BlockHeader>
-struct _Stack {
-  using block_ptr = typename BlockHeader::ptr;
-  using bsize_t = typename BlockHeader::bsize_t;
-  typedef _Stack<BlockHeader> Stack;
-  typedef _Transition<BlockHeader> Transition;
-  typedef std::vector<Transition> stack_v;
-  stack_v data;
-  size_t size;
-
-  _Stack() : size(0) { data.resize(100); }
-
-  void push(block_ptr block, bsize_t keypos = 0) {
-    if (size == data.size()) data.resize(size * 2);
-    Transition& back = data[size++];
-    back.ubranch = block;
-    back.lbranch = nullptr;
-    back.leaf = nullptr;
-    back.keypos = keypos;
-    back.prefix = back.suffix = 0;
-    back.uolink = back.lolink = 0;
-    back.compressed = nullptr;
-    back.found_leaf = nullptr;
-    back.cmp = Transition::UNDEFINED;
-  }
-
-  Transition& front() { return data[0]; }
-  Transition& back() { return data[size - 1]; }
-  Transition& parent() {
-    assert(size > 1);
-    return data[size - 2];
-  }
-  const Transition& back() const { return data[size - 1]; }
-  void clear(int size_ = 0) {
-    for (int i = size_; i < size; i++) {
-      data[i].reset();
-    }
-    size = size_;
-  }
-};
 
 // A very simple implementation of strimg
 struct KeyString {
@@ -165,620 +48,471 @@ struct KeyString {
   }
 };
 
-template <typename Cursor>
-struct Inserter {
-  using bsize_t = typename Cursor::bsize_t;
-  using Transition = typename Cursor::Transition;
-  using BlockHeader = typename Transition::BlockHeader;
-  using UpperBranchNode = typename Transition::UpperBranchNode;
-  using LowerBranchNode = typename Transition::LowerBranchNode;
-  using LeafNode = typename Transition::LeafNode;
-  using Compressed = typename Transition::Compressed;
-  using Leaf = typename Transition::Leaf;
-  using block_ptr = typename Transition::block_ptr;
-  using leaf_ptr = typename Transition::leaf_ptr;
-  using ubranch_ptr = typename Transition::ubranch_ptr;
-  using lbranch_ptr = typename Transition::lbranch_ptr;
-  using offset_t = typename Transition::offset_t;
+template <typename Cursor_>
+struct _Transition {
+  typedef Cursor_ Cursor;
+  using Traits = typename Cursor::Traits;
+  typedef _Transition<Cursor> Transition;
+  typedef _TrieNode<Traits> TrieNode;
+  typedef _LeafNode<Traits> LeafNode;
+  using block_ptr = typename Traits::ptr;
+  using offset_e = typename Traits::offset_e;
+  using trie_ptr = typename Traits::Pointer<TrieNode>;
+  using leaf_ptr = typename Traits::Pointer<LeafNode>;
 
-  typedef enum { no_null, new_null, old_null } leaftype_t;
+  static const int NOT_FOUND = 2;  // branch_key was not found
+  static const int UNDEFINED = 3;  // initial state of cmp
 
-  Cursor& _cursor;
-  const Slice& _value;
-  Transition* _back;
-  Transition _new;
+  Cursor* cursor;
 
-  Slice _prefix;
-  Slice _old_branch_prefix;
-  offset_t _old_branch_node;
-  offset_t _new_leaf_link;
+  block_ptr block;
+  trie_ptr& trie;
+  leaf_ptr& leaf;
 
-  Inserter(Cursor& cursor, const Slice& value)
-      : _cursor(cursor), _value(value), _back(&_cursor.stack.back()) {}
+  uint16_t prefix;     // count of equal chars in compressed node
+  uint16_t keypos;     // position inside the key
+  uint8_t branch_key;  // The char branching the
 
-  Inserter(Cursor& cursor, const Slice& value, bool first)
-      : _cursor(cursor), _value(value), _back(&_cursor.stack.back()) {}
+  // 1: the key to find is bigger than the found node
+  // 0: the key is found
+  // -1: the key to find is smaller than the found node
+  // NOT_FOUND: it is not equal but not known if -1 or 1
+  // UNDEFINED: not tested
+  int cmp;
 
-  block_ptr resolve(const offset_t& offset) {
-    return _cursor.storage.resolve(offset);
-  }
-  offset_t resolve(block_ptr p) { return _cursor.storage.resolve(p); }
-  uint8_t upper(uint8_t key) const { return UpperBranchNode::upper(key); }
-  uint8_t lower(uint8_t key) const { return LowerBranchNode::lower(key); }
+  offset_t offset;
+  uint16_t link_offset;
 
-  // start inserting the new value
-  void start() {
-    _start();
-    check_stack();
+  offset_e* link() {
+    assert(link_offset != 0xFFFF);
+    return (offset_e*)(trie.link(link_offset));
   }
 
-  void _start() {
-    if (_back->cmp == 0)
-      return _back->lbranch ? change_leaf() : change_null_leaf();
+  _Transition() : trie(*(trie_ptr*)&block), leaf(*(leaf_ptr*)&block) {}
 
-    _cursor.storage._txn.leaves++;
+  bool is_leaf() const { return offset.type() == LEAF; }
+  bool is_trie() const { return offset.type() == TRIE; }
 
-    if (_back->found_leaf) return split_leaf();
+  bool success() const { return cmp == 0 && is_leaf(); }
 
-    bsize_t ioffset = 0;
-    if (_back->ubranch->has_compressed()) {
-      if (split_compressed()) return;
-      ioffset += _back->ubranch->compressed()->nodesize();
+  bool init(Cursor* cursor_, offset_t offset_, uint16_t keypos_ = 0) {
+    cursor = cursor_;
+    keypos = keypos_;
+    prefix = 0;
+    cmp = Transition::UNDEFINED;
+    offset = offset_;
+    link_offset = 0xFFFF;
+    block = resolve(offset);
+    return true;  // the caller shall set the trie root
+  }
+
+  block_ptr resolve(offset_t offset) { return cursor->storage.resolve(offset); }
+
+  void replace(offset_t offset_) {
+    offset = offset_;
+    if (!is_root())
+      *parent().update() = offset_;
+    else
+      cursor->set_root(offset_);
+  }
+
+  offset_e* update() {
+    if (block->txn_id == cursor->txn_id()) return link();
+
+    if (is_trie())
+      offset = cursor->storage.resolve(cursor->storage.cow(trie));
+    else
+      offset = cursor->storage.resolve(cursor->storage.cow(leaf));
+    if (!is_root())
+      *parent().update() = offset;
+    else
+      cursor->set_root(offset);
+
+    return link();
+  }
+
+  void advance_key(uint16_t count) { cursor->advance_key(count); }
+
+  void append_key(const uint8_t* data, size_t size) {
+    cursor->current_key.append((const char*)data, size);
+  }
+
+  void resize_key(size_t size) { cursor->current_key.resize(size); }
+
+  Transition& push(const offset_e* lnk) {
+    link_offset = (char*)lnk - (char*)block;
+    cursor->push(*lnk);
+    return cursor->stack.back();
+  }
+
+  Transition& push(offset_e lnk) {
+    cursor->push(lnk);
+    return cursor->stack.back();
+  }
+
+  void pop() { cursor->pop(); }
+
+  void reset() {
+    block.reset();
+    cmp = UNDEFINED;
+  }
+
+  Slice& key() { return cursor->rest_key; }
+
+  KeyString& current_key() { return cursor->current_key; }
+
+  void find() {
+    if (is_leaf()) {
+      LeafNode& leaf_ = *leaf;
+      prefix = get_prefix(key().data(), (char*)leaf_.data, key().size(),
+                          leaf_.key_size, cmp);
+      advance_key(prefix);
+      return;
     }
 
-    if (_back->ubranch->has_branch()) return add_to_branch(ioffset);
+    TrieNode& trie_ = *trie;
+    prefix = get_prefix(key().data(), (char*)trie_.compressed(), key().size(),
+                        trie_._compressed_len, cmp);
+    advance_key(prefix);
+    if (prefix < trie_._compressed_len) return;
 
-    assert(_back->ubranch->has_null_leaf());
-    assert(_cursor.stack.size == 1);
-    _prefix = _cursor.key();
-    _old_branch_prefix = Slice();
-    _old_branch_node = setleaf(ioffset);
-    _back->found_leaf = (Leaf*)&_back->ubranch->data[ioffset];
-    create_new_branch();
-    _cursor.storage.free(_back->ubranch);
-    _new.keypos = _back->keypos;
-    *_back = _new;
-    _cursor._set_root(resolve(_back->ubranch));
+    if (key().empty()) {
+      if (trie_.has_null()) {
+        push(trie_.offset(TrieNode::NONE));
+        child().find();
+      } else
+        cmp = -1;
+      return;
+    }
+
+    branch_key = key()[0];
+    if (!trie_.isset(branch_key)) {
+      cmp = NOT_FOUND;
+      return;
+    }
+    cmp = 0;
+    push(trie_.offset(branch_key));
+    child().find();
+  }
+
+  void leaf_step() {
+    assert(is_leaf());
+    LeafNode& leaf_ = *leaf;
+    resize_key(keypos);
+    append_key(leaf_.data, leaf_.key_size);
+    cmp = 0;
+  }
+
+  Transition& child() {
+    assert(this - &cursor->stack.data[0] < cursor->stack.size - 1);
+    return this[1];
+  }
+
+  Transition& parent() {
+    assert(this - &cursor->stack.data[0] > 0);
+    return this[-1];
+  }
+
+  bool is_root() const { return this - &cursor->stack.data[0] == 0; }
+
+  void first() {
+    if (is_leaf()) return leaf_step();
+    TrieNode& trie_ = *trie;
+    append_key(trie_.compressed(), trie_._compressed_len);
+    cmp = 0;
+    push(trie_.array()).first();
+  }
+
+  bool next() {
+    if (is_leaf()) {
+      if (cmp < 0) {
+        leaf_step();
+        return true;
+      }
+      return false;
+    }
+
+    TrieNode& trie_ = *trie;
+    if (cmp == 0) {
+      link_offset += sizeof(offset_e);
+      offset_e* lnk = link();
+      if (lnk >= trie_.array() + trie_.count()) return false;
+      push(lnk).first();
+      return true;
+    }
+
+    resize_key(keypos);
+    if (prefix < trie_._compressed_len) {
+      if (cmp > 0) return false;
+      assert(cmp < 0);
+      first();
+      return true;
+    }
+    append_key(trie_.compressed(), trie_._compressed_len);
+    int next_ = trie_.next(branch_key);
+    if (next_ == TrieNode::OUT_OF_RANGE) return false;
+    push(trie_.offset(next_)).first();
+    branch_key = (uint8_t)next_;
+    return true;
+  }
+
+  bool prev() {
+    if (is_leaf()) {
+      if (cmp > 0) {
+        leaf_step();
+        return true;
+      }
+      return false;
+    }
+
+    TrieNode& trie_ = *trie;
+    if (cmp == 0) {
+      link_offset -= sizeof(offset_e);
+      offset_e* lnk = link();
+      if (lnk < trie_.array()) return false;
+      push(lnk).last();
+      branch_key = current_key()[child().keypos];
+      return true;
+    }
+
+    resize_key(keypos);
+    if (prefix < trie_._compressed_len) {
+      if (cmp < 0) return false;
+      assert(cmp > 0);
+      last();
+      return true;
+    }
+    append_key(trie_.compressed(), trie_._compressed_len);
+    int prev_ = trie_.prev(branch_key);
+    if (prev_ == TrieNode::OUT_OF_RANGE) return false;
+    push(trie_.offset(prev_)).last();
+    branch_key = (uint8_t)prev_;
+    return true;
+  }
+
+  void last() {
+    if (is_leaf()) return leaf_step();
+    TrieNode& trie_ = *trie;
+    append_key(trie_.compressed(), trie_._compressed_len);
+    cmp = 0;
+    push(trie_.array() + trie_.count() - 1).last();
+  }
+};
+
+template <typename Cursor>
+struct _Stack {
+  typedef _Stack<Cursor> Stack;
+  typedef _Transition<Cursor> Transition;
+  typedef std::vector<Transition> stack_v;
+  stack_v data;
+  size_t size;
+
+  _Stack() : size(0) { data.resize(100); }
+
+  void push(Cursor* cursor, offset_t offset, uint16_t keypos = 0) {
+    if (size == data.size()) data.resize(size * 2);
+    data[size].init(cursor, offset, keypos);
+    size++;
+  }
+
+  Transition& front() { return data[0]; }
+  Transition& back() { return data[size - 1]; }
+  const Transition& back() const { return data[size - 1]; }
+
+  Transition& parent() {
+    assert(size > 1);
+    return data[size - 2];
+  }
+
+  void clear(int size_ = 0) {
+    for (int i = size_; i < size; i++) {
+      data[i].reset();
+    }
+    size = size_;
+  }
+};
+
+template <typename Transition>
+struct _Inserter {
+  typedef _Inserter<Transition> Inserter;
+  using TrieNode = typename Transition::TrieNode;
+  using LeafNode = typename Transition::LeafNode;
+  using block_ptr = typename Transition::block_ptr;
+  using trie_ptr = typename Transition::trie_ptr;
+  using leaf_ptr = typename Transition::leaf_ptr;
+  using offset_e = typename Transition::offset_e;
+
+  const Slice& value;
+  Transition* back;
+
+  _Inserter(Transition* back_, const Slice& value_)
+      : value(value_), back(back_) {}
+
+  _Inserter(Transition* back_, const Slice& value_, bool first)
+      : value(value_), back(back_) {}
+
+  tid_t txn_id() const { return back->cursor->storage.prepared_txn->txn_id; }
+
+  template <typename T>
+  offset_t resolve(T ptr) {
+    return back->cursor->storage.resolve(ptr);
+  }
+
+  block_ptr alloc(uint16_t size) { return back->cursor->storage.alloc(size); }
+
+  void free(block_ptr& block) { back->cursor->storage.free(block); }
+
+  void start() {
+    if (back->is_leaf()) return change_leaf();
+    if (split_compressed()) return;
+    add_to_array();
   }
 
   // insert the very first value
   void first() {
-    // reserve enough space for a future branch_node
-    _back->cmp = 0;
-    _back->prefix = _cursor.rest_key.size();
-    bsize_t space = Compressed::nodesize(_cursor.rest_key.size()) +
-                    Leaf::nodesize(0, _value.size());
-    _back->ubranch = UpperBranchNode::alloc(space, _cursor.storage);
-    _back->ubranch->add_compressed(_cursor.rest_key);
-    Leaf* leaf = (Leaf*)&_back->ubranch->data[_back->ubranch->b.used];
-    _back->found_leaf = leaf;
-    _back->ubranch->set_null_leaf();
-    _back->ubranch->b.used += leaf->fill(_value);
+    Slice bkey = back->key();
+    back->prefix = std::min(bkey.size(), (size_t)10);
+    if (back->prefix > 1) back->prefix--;  // keep one for trie
 
-    _cursor._advance_key(_back->prefix);
-    _cursor.storage._txn.leaves++;
-    _cursor.storage._txn.branches++;
-    _cursor._set_root(resolve(_back->ubranch));
+    back->trie = alloc(TrieNode::size(back->prefix, 1));
+    back->offset = resolve(back->trie);
+    back->link_offset = back->trie->create(
+        Slice(bkey.data(), back->prefix),
+        (bkey.size() > back->prefix ? (back->branch_key = bkey[back->prefix])
+                                    : TrieNode::NONE));
+    back->cursor->set_root(back->offset);
+    back->advance_key(back->prefix);
+    create_leaf();
   }
 
   bool split_compressed() {
-    assert(_back->compressed);
+    if (back->is_trie() && back->prefix == back->trie->_compressed_len)
+      return false;  // no split
 
-    const Compressed* cn = _back->compressed;
-    if (_back->prefix == cn->size) return false;  // no split
-    assert(_back->prefix < cn->size);
+    /*
+    Operation:
 
-    if (_back->ubranch->txn_id != _cursor.storage._txn.txn_id) {
-      _back->ubranch = _cursor.storage.cow_replace(_back->ubranch);
-      cn = _back->compressed = _back->ubranch->compressed();
-    }
+      Before:
+        parent -> [abcd] -> children
 
-    _prefix = Slice(cn->key, _back->prefix);
-    _old_branch_prefix =
-        Slice(&cn->key[_back->prefix], cn->size - _back->prefix);
-    _old_branch_node = _cursor.storage.resolve(_back->ubranch);
+      Insert: [abef]
 
-    _new.keypos = _back->keypos;
-    create_new_branch();
+      After:
+        parent -> [ab] -> [cd] -> children
+                       -> [ef] -> table with new value
+    */
 
-    *_back = _new;
-    make_stack_writable();
+    assert(back->prefix < back->trie->_compressed_len);
+
+    auto otrie = back->trie;
+
+    // copy the original trie node with second part of compressed
+    // to a new page
+    uint8_t prefix_len = otrie->_compressed_len - back->prefix;
+    trie_ptr child_trie = alloc(TrieNode::size(prefix_len, otrie->count()));
+    child_trie->create(*otrie,
+                       Slice(&otrie->compressed()[back->prefix], prefix_len));
+
+    // replace the original trie node with a two branch trie node
+    // and the first part of compressed
+    int key =
+        back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE;
+    back->trie = alloc(TrieNode::size(back->prefix, 2));
+    back->link_offset = back->trie->create(
+        Slice(back->trie->compressed(), back->prefix),
+        otrie->compressed()[back->prefix], resolve(child_trie), key);
+    free(otrie);
+    back->replace(resolve(back->trie));
+    create_leaf();
     return true;
   }
 
-  void split_leaf() {
-    assert(_back->found_leaf);
-    assert(_back->lbranch);
+  void create_leaf() {
+    assert(back->key().size() < 255);
+    const Slice& bkey = back->key();
+    leaf_ptr leaf = fill_leaf(bkey);
+    Transition& bottom = back->push(resolve(leaf));
+    bottom.cmp = 0;
+    bottom.prefix = bkey.size();
+    bottom.advance_key(bottom.prefix);
+    *back->link() = bottom.offset;
+  }
 
-    const Leaf* fl = _back->found_leaf;
+  leaf_ptr fill_leaf(const Slice& key) {
+    leaf_ptr leaf = alloc(LeafNode::size(key, value));
+    leaf->key_size = key.size();
+    leaf->value_size = value.size();
+    // TODO: big value handling
+    memcpy(leaf->data, key.data(), key.size());
+    memcpy(leaf->vdata(), value.data(), value.size());
+    return leaf;
+  }
 
-    _prefix = Slice(fl->key_value, _back->suffix);
-    assert(fl->key_size >= _back->suffix);
+  const uint16_t MAX_SIZE = TrieNode::MAX_SIZE;
 
-    // the new leaf prefix cuts the first suffix bytes
-    int psize = fl->key_size - _back->suffix;
-    _old_branch_prefix = Slice(fl->key_value + fl->key_size - psize, psize);
-    _old_branch_node = *_back->plink();
+  void add_to_array() {
+    int key = back->key() ? back->branch_key : TrieNode::NONE;
+    key = back->trie->prev(key);
+    if (key == TrieNode::OUT_OF_RANGE) key = back->trie->next(TrieNode::NONE);
+    assert(key != TrieNode::OUT_OF_RANGE);
 
-    _new.keypos = _cursor.current_key.size() - _prefix.size();
-    
-    create_new_branch();
-    make_back_writable();
-    *_back->plink() = resolve(_new.ubranch);
-    _back->cmp = 0;
-    _back->lbranch->leaves_free += fl->nodesize();
-    _back->found_leaf = nullptr;
-    _cursor.stack.size++;
-    _cursor.stack.back() = _new;
+    trie_ptr otrie = back->trie;
+    back->trie = alloc(std::min((uint16_t)(otrie->size() + 2 * sizeof(offset_e)),
+                                (uint16_t)MAX_SIZE));
+    back->link_offset = back->trie->create(
+        *otrie, back->key() ? back->branch_key : TrieNode::NONE);
+
+    free(otrie);
+    create_leaf();
   }
 
   // change the value of leaf
   void change_leaf() {
-    assert(_back->found_leaf);
-    assert(_back->lbranch);
-    assert(_cursor.rest_key.empty());
+    assert(back->is_leaf());
+    leaf_ptr oleaf = back->leaf;
 
-    make_back_writable();
-
-    // manipulate the key managment for grow leaf
-    _cursor.rest_key =
-        Slice(_cursor.rest_key.data() - _back->suffix, _back->suffix);
-    _cursor.current_key.resize(_cursor.current_key.size() - _back->suffix);
-    bsize_t ns = _back->found_leaf->nodesize();
-    grow_leaf();
-    _back->lbranch->leaves_free += ns;
-    *_back->plink() = _new_leaf_link;
-  }
-
-  void change_null_leaf() {
-    assert(_back->found_leaf);
-    assert(!_back->lbranch);
-    assert(!_back->leaf);
-    assert(_back->suffix == 0);
-    assert(_cursor.rest_key.empty());
-
-    bsize_t nlsize = Leaf::nodesize(0, _value.size()),
-            olsize = _back->found_leaf->nodesize();
-
-    if (olsize == nlsize) {
-      make_back_writable();
-    } else {
-      ubranch_ptr ub = UpperBranchNode::alloc(
-          _back->ubranch->b.used + nlsize - olsize, _cursor.storage);
-      copy(*ub, *_back->ubranch, _back->ubranch->b.used - olsize);
-      ub->b.used -= olsize;
-      ub->b.used += nlsize;
-      _cursor.storage.free(_back->ubranch);
-      _back->ubranch = ub;
-      make_stack_writable();
-    }
-
-    bsize_t ioffset = _back->ubranch->branchsize();
-    if (_back->ubranch->has_compressed()) {
-      _back->compressed = _back->ubranch->compressed();
-      ioffset += _back->compressed->nodesize();
-    }
-    Leaf* leaf = (Leaf*)&_back->ubranch->data[ioffset];
-    leaf->fill(_value);
-    _back->found_leaf = leaf;
-  }
-
-  void add_to_branch(bsize_t ioffset) {
-    if (_cursor.rest_key.empty()) {
-      // add null leaf
-      assert(!_back->ubranch->has_null_leaf());
-      bsize_t size = Leaf::nodesize(0, _value.size());
-      bsize_t ioffset = _back->ubranch->branchsize();
-      if (_back->ubranch->has_compressed()) {
-        assert(_back->compressed);
-        ioffset += _back->compressed->nodesize();
-      }
-
-      if (_back->ubranch->freespace() < size) {
-        ubranch_ptr unew = UpperBranchNode::alloc(_back->ubranch->b.used + size,
-                                                  _cursor.storage);
-        copy(*unew, *_back->ubranch, _back->ubranch->b.used);
-        _cursor.storage.free(_back->ubranch);
-        _back->ubranch = unew;
-        make_stack_writable();
-      } else
-        make_back_writable();
-
-      Leaf* leaf = (Leaf*)&_back->ubranch->data[ioffset];
-      _back->found_leaf = leaf;
-      _back->ubranch->b.used += leaf->fill(_value);
-      _back->ubranch->set_null_leaf();
-      _back->cmp = 0;
+    if (back->cmp == 0) {
+      assert(back->prefix == back->leaf->key_size);
+      assert(back->key().empty());
+      back->leaf = fill_leaf(oleaf->key());
+      back->replace(resolve(back->leaf));
+      free(oleaf);
       return;
     }
+    leaf_ptr copy = alloc(
+        LeafNode::size(Slice(nullptr, oleaf->key_size - back->prefix), value));
+    copy->key_size = oleaf->key_size - back->prefix;
+    copy->value_size = oleaf->value_size;
+    memcpy(copy->data, oleaf->data + back->prefix,
+           copy->key_size + copy->vsize());
 
-    assert(_back->suffix == 0);
-    assert(_back->branch_key == (uint8_t)_cursor.rest_key[0]);
+    int bkey = !copy->key_size ? TrieNode::NONE : copy->data[0];
 
-    uint8_t nkey = _cursor.rest_key[0];
-    _cursor._advance_key(1);
+    back->trie = alloc(TrieNode::size(back->prefix, 2));
+    back->link_offset = back->trie->create(
+        Slice(oleaf->data, back->prefix), bkey, resolve(copy),
+        back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
 
-    if (_back->lbranch) {
-      // the upperkey already exists!
-      assert(_back->ubranch->isset(nkey));
-      assert(!(_back->lbranch->isset(nkey)));
-      make_back_writable();
-
-      int count = _back->lbranch->count();
-      if (_back->lbranch->freespace() < sizeof(offset_t) ||
-          _back->lbranch->txn_id != _cursor.storage._txn.txn_id) {
-        lbranch_ptr olb = LowerBranchNode::alloc(count + 1, _cursor.storage);
-        copy(*olb, *_back->lbranch, count * sizeof(offset_t));
-        _cursor.storage.free(_back->lbranch);
-        _back->lbranch = olb;
-        *_back->uplink() = resolve(olb);
-      }
-      assert(_back->lbranch->freespace() >= sizeof(offset_t));
-      grow_leaf();
-
-      int index = _back->lbranch->index(nkey);
-      memmove(&_back->lbranch->links[index + 1], &_back->lbranch->links[index],
-              sizeof(offset_t) * (count - index));
-      
-      _back->lolink = index;
-      *_back->plink() = _new_leaf_link;
-      _back->lbranch->set(nkey);
-      return;
-    }
-
-    // new upper key and new lower key
-    int count = _back->ubranch->count();
-    if ((count + 1) * sizeof(offset_t) >= _back->ubranch->branchsize() ||
-        _back->ubranch->txn_id != _cursor.storage._txn.txn_id) {
-      bsize_t nbsize = UpperBranchNode::branchsize(count + 1),
-              obsize = _back->ubranch->branchsize();
-      ubranch_ptr unew = UpperBranchNode::alloc(
-          _back->ubranch->b.used - obsize + nbsize, _cursor.storage);
-      bsize_t size = ioffset + obsize;
-      copy(*unew, *_back->ubranch, size);
-      memmove(&unew->data[ioffset + nbsize], &_back->ubranch->data[size],
-              _back->ubranch->b.used - size);
-      unew->b.used += nbsize - obsize;
-      _cursor.storage.free(_back->ubranch);
-      _back->ubranch = unew;
-    }
-
-    make_stack_writable();
-
-    int index = _back->ubranch->index(nkey);
-    offset_t* links = (offset_t*)&_back->ubranch->data[ioffset];
-    memmove(&links[index + 1], &links[index],
-            sizeof(offset_t) * (count - index));
-    _back->ubranch->set(nkey);
-    _back->uolink = _back->ubranch->olink(&links[index]);
-
-    _back->lbranch = LowerBranchNode::alloc(1, _cursor.storage);
-    _back->lbranch->set(nkey);
-    _back->leaf =
-        LeafNode::alloc(Leaf::nodesize(_cursor.rest_key.size(), _value.size()),
-                        _cursor.storage);
-    Leaf* leaf = _back->leaf->leaf(1);
-    _back->lbranch->leaves_used = leaf->fill(_cursor.rest_key, _value);
-    *_back->uplink() = resolve(_back->lbranch);
-    _back->lbranch->leaves = resolve(_back->leaf);
-    _back->lbranch->links[0] = 1;
-    _back->lolink = 0;
-    _back->found_leaf = leaf;
-    _back->cmp = 0;
-    _cursor._advance_key(_cursor.rest_key.size());
-  }
-
-  // add a leaf to the _back->branch
-  offset_t add_leaf(const Slice& key, const Slice& value) {
-    // TODO: Big Value handling
-    offset_t pos = setleaf(_back->lbranch->leaves_used);
-    _back->lbranch->leaves_used += _back->leaf->leaf(pos)->fill(key, value);
-    assert(_back->lbranch->leaves_used + sizeof(LeafNode) <=
-           _back->leaf->block_size);
-    return pos;
-  }
-
-  // alloc a new branch with at least size capacity and addtionally
-  // create the leafs for _value and _mvalue in the new branch
-  void create_new_branch() {
-    // Calculate UpperBranch size;
-    bsize_t size = Compressed::nodesize(_prefix.size());
-
-    leaftype_t lt = no_null;
-    if (_old_branch_prefix.empty()) {
-      // only possible if _old_branch_node is a leaf
-      assert(isleaf(_old_branch_node));
-      assert(_back->found_leaf);
-      size += UpperBranchNode::branchsize(1) +
-              Leaf::nodesize(0, _back->found_leaf->value_size);
-      lt = old_null;
-    } else if (_cursor.rest_key.empty()) {
-      size += UpperBranchNode::branchsize(1) + Leaf::nodesize(0, _value.size());
-      lt = new_null;
-    } else {
-      size += UpperBranchNode::branchsize(2);
-    }
-
-    // create the new branch
-    _new.ubranch = UpperBranchNode::alloc(size, _cursor.storage);
-    _new.leaf = nullptr;
-    _new.prefix = _prefix.size();
-    _cursor.storage._txn.branches++;
-    _new.ubranch->add_compressed(_prefix);
-    bsize_t ioffset = _new.ubranch->space();
-    if (lt == no_null)
-      create_double_lbranch(ioffset);
-    else
-      create_single_lbranch(ioffset, lt);
-  }
-
-  void create_single_lbranch(bsize_t ioffset, leaftype_t lt) {
-    Leaf* leaf;
-    _new.uolink = ioffset;
-    _new.lolink = 0;
-
-    if (lt == new_null) {
-      assert(_old_branch_prefix.size());
-      assert(_cursor.rest_key.empty());
-      offset_t* links = (offset_t*)&_new.ubranch->data[ioffset];
-      uint8_t key = _old_branch_prefix[0];
-      _new.ubranch->set(key);
-      _old_branch_prefix.iadvance(1);
-      links[0] = create_lbranch_old(key);
-      ioffset += _new.ubranch->branchsize();
-      leaf = (Leaf*)&_new.ubranch->data[ioffset];
-      leaf->fill(_value);
-      _new.found_leaf = leaf;
-      _new.suffix = 0;
-      _new.cmp = 0;
-    } else {
-      assert(lt == old_null);
-      assert(_old_branch_prefix.empty());
-      uint8_t key = _cursor.rest_key[0];
-      _new.ubranch->set(key);
-      _cursor._advance_key(1);
-      *_new.uplink() = create_lbranch_new(key);
-      ioffset += _new.ubranch->branchsize();
-      leaf = (Leaf*)&_new.ubranch->data[ioffset];
-      leaf->fill(_back->found_leaf->value());
-    }
-    _new.ubranch->b.used = ioffset + leaf->nodesize();
-    _new.ubranch->set_null_leaf();
-  }
-
-  void create_double_lbranch(bsize_t ioffset) {
-    offset_t* links = (offset_t*)&_new.ubranch->data[ioffset];
-
-    assert(_old_branch_prefix.size());
-    assert(_cursor.rest_key.size());
-
-    uint8_t old_key = _old_branch_prefix[0];
-    uint8_t new_key = _cursor.rest_key[0];
-    _old_branch_prefix.iadvance(1);
-    _cursor._advance_key(1);
-
-    assert(old_key != new_key);
-
-    if (upper(old_key) == upper(new_key)) {
-      _new.ubranch->set(old_key);
-      _new.uolink = _new.ubranch->olink(&links[0]);
-      *_new.uplink() = create_lbranch(old_key, new_key);
-      _new.ubranch->b.used += _new.ubranch->branchsize();
-    } else {
-      _new.ubranch->set(old_key);
-      _new.ubranch->set(new_key);
-      links[_new.ubranch->index(old_key)] = create_lbranch_old(old_key);
-      _new.uolink = _new.ubranch->olink(&links[_new.ubranch->index(new_key)]);
-      *_new.uplink() = create_lbranch_new(new_key);
-      _new.ubranch->b.used += _new.ubranch->branchsize();
-    }
-  }
-
-  offset_t create_lbranch(uint8_t old_key, uint8_t new_key) {
-    _new.lbranch = LowerBranchNode::alloc(2, _cursor.storage);
-    _new.lbranch->set(old_key);
-    _new.lbranch->set(new_key);
-
-    bsize_t size = Leaf::nodesize(_cursor.rest_key.size(), _value.size());
-    if (isleaf(_old_branch_node)) {
-      _new.leaf = move_old_branch_leaf(_new.lbranch, old_key, size);
-    } else {
-      _new.leaf = LeafNode::alloc(size, _cursor.storage);
-      *_new.lbranch->link(old_key) = modify_old_branch();
-    }
-
-    _new.lbranch->leaves = resolve(_new.leaf);
-    *_new.lbranch->link(new_key) = add_new();
-    return resolve(_new.lbranch);
-  }
-
-  offset_t create_lbranch_old(uint8_t old_key) {
-    lbranch_ptr lbranch = LowerBranchNode::alloc(1, _cursor.storage);
-    lbranch->set(old_key);
-    if (isleaf(_old_branch_node)) {
-      lbranch->leaves = resolve(move_old_branch_leaf(lbranch, old_key));
-    } else {
-      *lbranch->link(old_key) = modify_old_branch();
-    }
-    return resolve(lbranch);
-  }
-
-  offset_t modify_old_branch() {
-    ubranch_ptr ub = _cursor.storage.resolve(_old_branch_node);
-    assert(ub->has_compressed());
-    Compressed* c = ub->compressed();
-    assert(c->size > _old_branch_prefix.size());
-    bsize_t ns = Compressed::nodesize(_old_branch_prefix.size()),
-            ons = c->nodesize();
-
-    c->size = _old_branch_prefix.size();
-    memcpy(c->key, _old_branch_prefix.data(), c->size);
-
-    if (ons != ns) {
-      memmove(ub->data + ns, ub->data + ons, ub->b.used - ons);
-      ub->b.used -= ons - ns;
-      if (!ns) {
-        ub->clear_compressed();
-        return _old_branch_node;
-      }
-    }
-    return _old_branch_node;
-  }
-
-  leaf_ptr move_old_branch_leaf(lbranch_ptr& lbranch, uint8_t old_key,
-                                bsize_t extra = 0) {
-    assert(_back->leaf);
-    assert(isleaf(_old_branch_node));
-    Leaf* old_leaf = _back->leaf->leaf(_old_branch_node);
-    bsize_t size =
-        Leaf::nodesize(_old_branch_prefix.size(), old_leaf->value_size);
-    leaf_ptr leaf = LeafNode::alloc(size + extra, _cursor.storage);
-    *lbranch->link(old_key) = 1;
-    lbranch->leaves_used = size;
-    leaf->leaf(0)->fill(_old_branch_prefix, old_leaf->value());
-    return leaf;
-  }
-
-  offset_t create_lbranch_new(uint8_t new_key) {
-    bsize_t size = Leaf::nodesize(_cursor.rest_key.size(), _value.size());
-    _new.leaf = LeafNode::alloc(size, _cursor.storage);
-    _new.lbranch = LowerBranchNode::alloc(1, _cursor.storage);
-    _new.lbranch->leaves = resolve(_new.leaf);
-    _new.lbranch->set(new_key);
-    _new.lbranch->links[0] = add_new();
-    return resolve(_new.lbranch);
-  }
-
-  offset_t add_new() {
-    Leaf* leaf = _new.leaf->leaf(_new.lbranch->leaves_used);
-    _new.lbranch->leaves_used += leaf->fill(_cursor.rest_key, _value);
-    _new.found_leaf = leaf;
-    _new.suffix = _cursor.rest_key.size();
-    _new.cmp = 0;
-    _cursor._advance_key(_new.suffix);
-    return _new.leaf->olink(_new.found_leaf);
-  }
-
-  // grow the leaf and replace found_leaf with value
-  void grow_leaf() {
-    auto space = _back->lbranch->leaves_used +
-                 Leaf::nodesize(_cursor.rest_key.size(), _value.size());
-
-    if (_back->lbranch->leaves) {
-      if (!_back->leaf) _back->leaf = resolve(_back->lbranch->leaves);
-      if (_back->leaf->block_size < sizeof(LeafNode) + space) {
-        leaf_ptr nleaf = LeafNode::alloc(space - _back->lbranch->leaves_free,
-                                         _cursor.storage);
-        _back->lbranch->copy_leaf(nleaf, _back->leaf);
-        _cursor.storage.free(_back->leaf);
-        _back->lbranch->leaves = resolve(nleaf);
-        _back->leaf = nleaf;
-      }
-    }
-    else {
-      assert(_back->lbranch->leaves_free == 0);
-      assert(_back->lbranch->leaves_used == 0);
-      _back->leaf = LeafNode::alloc(space, _cursor.storage);
-      _back->lbranch->leaves = resolve(_back->leaf);
-    }
-
-    _new_leaf_link = add_leaf(_cursor.rest_key, _value);
-    _cursor._advance_key(_cursor.rest_key.size());
-    _back->found_leaf = _back->leaf->leaf(_new_leaf_link);
-    _back->cmp = 0;
-  }
-
-  // make back and the stack writable
-  void make_back_writable() {
-    if (!Cursor::is_transactional) return;
-
-    if (_back->ubranch->txn_id != _cursor.storage._txn.txn_id) {
-      _back->ubranch = _cursor.storage.cow_replace(_back->ubranch);
-      make_stack_writable();
-    }
-  }
-
-  // make the stack without back writeable
-  void make_stack_writable() {
-    if (!Cursor::is_transactional) return;
-
-    int i = _cursor.stack.size - 2;
-    for (; i >= 0; i--) {
-      Transition& t = _cursor.stack.data[i];
-      if (t.lbranch->txn_id != _cursor.storage._txn.txn_id) {
-        t.lbranch = _cursor.storage.cow_replace(t.lbranch);
-        *t.plink() = resolve(_cursor.stack.data[i + 1].ubranch);
-      } else {
-        *t.plink() = resolve(_cursor.stack.data[i + 1].ubranch);
-      }
-
-      if (t.ubranch->txn_id != _cursor.storage._txn.txn_id) {
-        t.ubranch = _cursor.storage.cow_replace(t.ubranch);
-        *t.uplink() = resolve(t.lbranch);
-      } else {
-        *t.uplink() = resolve(t.lbranch);
-        break;
-      }
-    }
-
-    if (i < 0) {
-      _cursor._set_root(resolve(_cursor.stack.front().ubranch));
-    }
-  }
-
-  void check_stack() {
-#if defined(DEBUG) && !defined(NDEBUG)
-    for (size_t i = 0; i < _cursor.stack.size; i++) {
-      Transition& t = _cursor.stack.data[i];
-      assert(t.cmp == 0);
-      assert(t.found_leaf == nullptr || i == _cursor.stack.size - 1);
-      assert(t.lbranch || t.ubranch->has_null_leaf());
-      t.ubranch->check();
-      if (t.lbranch) t.lbranch->check(_cursor.storage);
-    }
-#endif
+    free(oleaf);
+    back->replace(resolve(back->trie));
+    create_leaf();
   }
 };
 
 // A cursor to
-template <typename Storage>
+template <typename Storage_>
 struct _Cursor {
-  using BlockHeader = typename Storage::BlockHeader;
-  using block_ptr = typename Storage::block_ptr;
-  using offset_t = typename Storage::offset_t;
-  using bsize_t = typename Storage::bsize_t;
-  using txn_ptr = typename Storage::txn_ptr;
-  const static bool is_transactional = Storage::is_transactional;
-  typedef _Stack<BlockHeader> Stack;
+  typedef Storage_ Storage;
+  using Traits = typename Storage::Traits;
+  typedef _Cursor<Storage> Cursor;
+  typedef _Stack<Cursor> Stack;
   using Transition = typename Stack::Transition;
-  using ubranch_ptr = typename Transition::ubranch_ptr;
-  using lbranch_ptr = typename Transition::lbranch_ptr;
-
-  struct Transaction {
-    txn_ptr txn;
-
-    Transaction() : txn(nullptr) {}
-    ~Transaction() {
-      if (txn) txn->count--;
-    }
-
-    void operator=(txn_ptr txn_) {
-      if (txn) txn->count--;
-      txn = txn_;
-      txn->count++;
-    }
-
-    void reset() {
-      if (txn) txn->count--;
-      txn = nullptr;
-    }
-
-    txn_ptr operator->() { return txn; }
-  };
 
   _Cursor(Storage& storage_) : storage(storage_), transaction_active(false) {
     root = 0;
   }
+
+  tid_t txn_id() const { return storage.txn()->txn_id; }
 
   // return true if the cursor is on a valid position
   bool is_valid() const {
@@ -787,54 +521,45 @@ struct _Cursor {
   }
 
   void find(const Slice& key) {
-    _update();
+    update();
     rest_key = key;
-    if (stack.size && _keep_stack()) return;
+    if (stack.size && keep_stack()) return;
     _find();
   }
 
   void first() {
-    _update();
+    update();
     stack.clear(0);
     if (!root) return;
-    rest_key = Slice();
+    rest_key.reset();
     current_key.clear();
-    _push(root);
-    while (stack.back().ubranch->first(*this));
+    push(root);
+    stack.back().first();
   }
 
   void last() {
-    _update();
+    update();
     stack.clear(0);
     if (!root) return;
-    rest_key = Slice();
+    rest_key.reset();
     current_key.clear();
-    _push(root);
-    while (stack.back().ubranch->last(*this));
+    push(root);
+    stack.back().last();
   }
 
   void next() {
-    rest_key.iadvance(rest_key.size());
+    rest_key.reset();
     while (stack.size) {
-      auto old = stack.size;
-      if (!stack.back().ubranch->next(*this)) break;
-      if (old < stack.size) {
-        while (stack.back().ubranch->first(*this));
-        break;
-      }
+      if (stack.back().next()) return;
+      pop();
     }
   }
 
   void prev() {
-    rest_key.iadvance(rest_key.size());
-    auto old = stack.size;
+    rest_key.reset();
     while (stack.size) {
-      auto old = stack.size;
-      if (!stack.back().ubranch->prev(*this)) break;
-      if (old < stack.size) {
-        while (stack.back().ubranch->last(*this));
-        break;
-      }
+      if (stack.back().prev()) return;
+      pop();
     }
   }
 
@@ -846,21 +571,21 @@ struct _Cursor {
 
     if (!stack.size) {
       if (!root) {
-        stack.push(nullptr);
-        Inserter(*this, value, true).first();
+        push(offset_t());
+        _Inserter(&stack.back(), value).first();
         return;
       }
       throw NoValidPosition();
     }
 
-    Inserter(*this, value).start();
+    int ssize = stack.size;
+    _Inserter(&stack.back(), value).start();
   }
 
   Slice value() const {
     const Transition& back = stack.back();
-    if (back.cmp) return Slice();
-    assert(back.found_leaf);
-    return back.found_leaf->value();
+    if (back.cmp || !back.is_leaf()) return Slice();
+    return back.leaf->value();
   }
 
   Slice key() const { return current_key; }
@@ -872,7 +597,7 @@ struct _Cursor {
       storage.commit();
       transaction_active = false;
       auto root_ = root;
-      _update();
+      update();
       assert(root_ == root);
     }
   }
@@ -888,36 +613,22 @@ struct _Cursor {
 
   /* Helpers */
 
-  void _set_root(offset_t offset) { storage._txn.root = root = offset; }
+  void set_root(offset_t offset) { storage._txn.root = root = offset; }
 
-  void _advance_key(size_t size) {
+  void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
     rest_key.iadvance(size);
   }
 
-  void _push(const offset_t& ptr) {
-    stack.push(storage.resolve(ptr), current_key.size());
-  }
+  void push(offset_t ptr) { stack.push(this, ptr, current_key.size()); }
 
-  void _pop() {
+  void pop() {
     assert(stack.size > 0);
     current_key.resize(stack.back().keypos);
     stack.size--;
   }
 
-  void _changed_branch_key() {
-    // used in move operations
-    Transition& back = stack.back();
-    bsize_t bpos = back.keypos + back.prefix;
-    if (current_key.size() == bpos) {
-      current_key.push_back(back.branch_key);
-    } else {
-      assert(current_key.size() == bpos + 1);
-      current_key.back() = back.branch_key;
-    }
-  }
-
-  bool _keep_stack() {
+  bool keep_stack() {
     assert(stack.size > 0);
 
     int cmp;
@@ -930,62 +641,38 @@ struct _Cursor {
     }
 
     int i = 0;
-    int keep = 0;
     for (; i < stack.size; i++) {
       Transition& item = stack.data[i];
-      if (item.keypos > same) break;
-      keep = item.keypos;
+      if (item.keypos >= same) break;
     }
 
-    rest_key.iadvance(keep);
-    current_key.resize(keep);
     stack.clear(i);
+    if (!stack.size) return false;
 
     Transition& back = stack.back();
-    back.leaf = nullptr;
-    back.lbranch = nullptr;
-    back.found_leaf = nullptr;
-    back.compressed = nullptr;
-    back.prefix = back.suffix = 0;
+    back.prefix = 0;
     back.cmp = Transition::UNDEFINED;
+    rest_key.iadvance(back.keypos);
+    current_key.resize(back.keypos);
     return false;
   }
+
   void _find() {
     if (!stack.size) {
       if (!root) return;  // empty db
       current_key.clear();
-      _push(root);
+      push(root);
     }
-
-    assert(storage.resolve(stack.front().ubranch) == root);
-    while (true) {
-      if (!stack.back().ubranch->find(*this)) break;
-    }
+    stack.back().find();
   }
 
-  void _update() {
+  void update() {
     if (!transaction_active) {
-      txn = storage.active_txn();
-      root = txn->root;
+      root = storage.txn()->root;
     }
-  }
-
-  void check() {
-    if (root) _check_trie(root);
-  }
-
-  void _check_trie(offset_t obranch) {
-    ubranch_ptr branch = storage.resolve(obranch);
-    branch->check();
-    branch->iterate_links(storage, [this](lbranch_ptr lb, offset_t& offset) {
-      if (lb && !isleaf(offset)) {
-        _check_trie(offset);
-      }
-    });
   }
 
   Storage& storage;
-  Transaction txn;
   offset_t root;
   Stack stack;
   Slice rest_key;
