@@ -58,7 +58,7 @@ struct _Transition {
   using block_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
-  using leaf_ptr = typename Traits::Pointer<LeafNode>;
+  using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp

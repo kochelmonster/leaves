@@ -1,523 +1,394 @@
-#define BOOST_TEST_MODULE ModifyTest
-//#define GENERATE
+#define BOOST_TEST_DYN_LINK
+#define BOOST_TEST_MODULE BitTest
 
-#include <cstdio>
-#include <string>
 #include <boost/test/included/unit_test.hpp>
-#include "test.hpp"
 
+#ifndef TESTING
+#error "TESTING must be defined"
+#endif
 
-using namespace std;
+#include "leaves/intern/_node.hpp"
 
-void test_insert_first(Storage& storage) {
-  check_graph("empty", storage);
-  insert(storage, Slice("abcdefg"), "first");
+using namespace leaves;
+using namespace leaves::bits;
+
+struct TestTraits {
+  typedef offset_t offset_e;
+  typedef uint32_t uint32_e;
+  typedef uint16_t uint16_e;
+
+  struct BlockHeader {
+    typedef BlockHeader Base;
+  };
+};
+
+typedef _TrieNode<TestTraits> TrieNode;
+static const int OOR = TrieNode::OUT_OF_RANGE;
+
+void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
+  char buffer1[PAGE_SIZE], buffer2[PAGE_SIZE];
+  TrieNode& trie1 = *(TrieNode*)buffer1;
+  TrieNode& trie2 = *(TrieNode*)buffer2;
+  uint16_t offset;
+
+  offset = trie1.create(prefix, 130);
+  *(offset_t*)((char*)&trie1 + offset) = 130;
+  BOOST_CHECK(trie1.isset(130));
+  BOOST_CHECK_EQUAL(*trie1.offset(130), 130);
+  BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
+  BOOST_CHECK_EQUAL(offset, *offsets++);
+
+  offset = trie2.create(trie1, 5);
+  *(offset_t*)((char*)&trie2 + offset) = 5;
+  BOOST_CHECK(trie2.isset(130));
+  BOOST_CHECK(trie2.isset(5));
+  BOOST_CHECK_EQUAL(*trie2.offset(5), 5);
+  BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
+  BOOST_CHECK_EQUAL(offset, *offsets++);
+
+  offset = trie1.create(trie2, 70);
+  *(offset_t*)((char*)&trie1 + offset) = 70;
+  BOOST_CHECK(trie1.isset(130));
+  BOOST_CHECK(trie1.isset(5));
+  BOOST_CHECK(trie1.isset(70));
+  BOOST_CHECK_EQUAL(*trie1.offset(70), 70);
+  BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
+  BOOST_CHECK_EQUAL(offset, *offsets++);
+
+  offset = trie2.create(trie1, 7);
+  *(offset_t*)((char*)&trie2 + offset) = 7;
+  BOOST_CHECK(trie2.isset(130));
+  BOOST_CHECK(trie2.isset(5));
+  BOOST_CHECK(trie2.isset(70));
+  BOOST_CHECK(trie2.isset(7));
+  BOOST_CHECK_EQUAL(*trie2.offset(7), 7);
+  BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
+  BOOST_CHECK_EQUAL(offset, *offsets++);
+
+  BOOST_CHECK_EQUAL(trie2.count(), 4);
+
+  BOOST_CHECK_EQUAL(trie2.offset(TrieNode::NONE), nullptr);
+
+  offset = trie1.create(trie2, TrieNode::NONE);
+  *(offset_t*)((char*)&trie1 + offset) = 0;
+  BOOST_CHECK(trie1.isset(130));
+  BOOST_CHECK(trie1.isset(5));
+  BOOST_CHECK(trie1.isset(70));
+  BOOST_CHECK(trie1.isset(7));
+  BOOST_CHECK_EQUAL(*trie1.offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
+  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(trie1.count(), 5);
+
+  BOOST_CHECK(trie1.has_null());
+  BOOST_CHECK(trie1.isset(5));
+  BOOST_CHECK(trie1.isset(70));
+  BOOST_CHECK(trie1.isset(130));
+  BOOST_CHECK(!trie1.isset(6));
+  BOOST_CHECK(!trie1.isset(71));
+  BOOST_CHECK(!trie1.isset(131));
+  BOOST_CHECK_EQUAL(trie1.offset(250), nullptr);
+
+  offset_t* trie_offsets = trie1.array();
+  BOOST_CHECK_EQUAL(*trie_offsets, 0);
+  BOOST_CHECK_EQUAL(*(trie_offsets + 1), 5);
+  BOOST_CHECK_EQUAL(*(trie_offsets + 2), 7);
+  BOOST_CHECK_EQUAL(*(trie_offsets + 3), 70);
+  BOOST_CHECK_EQUAL(*(trie_offsets + 4), 130);
+  BOOST_CHECK(*trie1.offset(5) == 5);
+  BOOST_CHECK(*trie1.offset(70) == 70);
+  BOOST_CHECK(*trie1.offset(130) == 130);
+
+  offset = trie2.create(trie1, 250);
+  *(offset_t*)((char*)&trie2 + offset) = 250;
+  BOOST_CHECK_EQUAL(*trie2.offset(250), 250);
+  BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
+  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(trie2.count(), 6);
 }
 
-void test_divide_compressed(Storage& storage) {
-  insert(storage, Slice("abhij"), "divide_compressed");
+BOOST_AUTO_TEST_CASE(test_set_and_get) {
+  //                     130, 5, 70, 7, NONE, 240
+  uint16_t sizes1[] = {24, 32, 48, 56, 64, 72};
+  uint16_t offsets1[] = {16, 16, 32, 32, 24, 64};
+  set_and_get(Slice(), sizes1, offsets1);
+
+  uint16_t sizes2[] = {24, 40, 48, 56, 64, 80};
+  uint16_t offsets2[] = {16, 24, 32, 32, 24, 72};
+  set_and_get(Slice("1234"), sizes2, offsets2);
 }
 
-void test_divide_compressed_value(Storage& storage) {
-  insert(storage, Slice("ab"), "divide_compressed_value");
+BOOST_AUTO_TEST_CASE(test_create) {
+  char buffer[PAGE_SIZE];
+  TrieNode& trie = *(TrieNode*)buffer;
+  Slice prefix("123456");
+
+  uint16_t offset = trie.create(prefix, 130);
+  *(offset_t*)((char*)&trie + offset) = 130;
+  BOOST_CHECK_EQUAL(*trie.offset(130), 130);
+  BOOST_CHECK_EQUAL(trie.size(), 24);
+
+  offset = trie.create(prefix, TrieNode::NONE);
+  *(offset_t*)((char*)&trie + offset) = 0;
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(trie.size(), 24);
+
+  offset = trie.create(prefix, 5, 5, TrieNode::NONE);
+  *(offset_t*)((char*)&trie + offset) = 0;
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(*trie.offset(5), 5);
+  BOOST_CHECK_EQUAL(trie.size(), 32);
+  BOOST_CHECK_EQUAL(offset, 16);
+
+  offset = trie.create(prefix, TrieNode::NONE, 0, 5);
+  *(offset_t*)((char*)&trie + offset) = 5;
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(*trie.offset(5), 5);
+  BOOST_CHECK_EQUAL(trie.size(), 32);
+  BOOST_CHECK_EQUAL(offset, 24);
+
+  char buffer1[PAGE_SIZE];
+  TrieNode& trie1 = *(TrieNode*)buffer1;
+  trie1.create(trie, Slice("123"));
+  BOOST_CHECK(Slice(trie1.compressed(), trie1._compressed_len) == Slice("123"));
+  BOOST_CHECK_EQUAL(*trie1.offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(*trie1.offset(5), 5);
 }
 
-void test_add_value_node(Storage& storage) {
-  insert(storage, Slice("ab"), "value_to_trie");
-}
+void create_trie(TrieNode* fill, int size, int* values) {
+  char buffer[PAGE_SIZE];
+  TrieNode* tmp = (TrieNode*)buffer;
+  Slice prefix;
 
-void test_insert_index(Storage& storage) {
-  insert(storage, "abd", "insert_index_abd");
-}
-
-void test_insert_grow(Storage& storage) {
-  insert(storage, "aba", "insert_index_a");
-  insert(storage, "abb", "insert_index_b");
-  insert(storage, "abe", "insert_index_e");
-  insert(storage, "abf", "insert_index_f");
-  insert(storage, "abg", "insert_index_g");
-  insert(storage, "abi", "insert_index_i");
-  insert(storage, "abj", "insert_index_j");
-  insert(storage, "abk", "insert_index_k");
-  insert(storage, "abl", "insert_index_l");
-  insert(storage, "abm", "insert_index_m");
-  insert(storage, "abn", "insert_index_n");
-  insert(storage, "abo", "insert_index_o");
-  insert(storage, "ab`", "insert_index_60");
-}
-
-BOOST_AUTO_TEST_SUITE(ModifyNullNode)
-
-BOOST_AUTO_TEST_CASE(insert) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-}
-
-BOOST_AUTO_TEST_SUITE_END()
-
-
-BOOST_AUTO_TEST_SUITE(ModifyCompressedNode)
-
-BOOST_AUTO_TEST_CASE(trie_divide) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-}
-
-BOOST_AUTO_TEST_CASE(value_divide) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed_value(storage);
-}
-
-BOOST_AUTO_TEST_CASE(very_big) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-
-  std::string key;
-  for(int i = 0; i < 20; i++) {
-    key.append("abcdefghijklmn");
+  uint16_t offset = fill->create(prefix, values[0]);
+  *(offset_t*)((char*)fill + offset) = 0;
+  for (int i = 1; i < size; i++) {
+    memcpy(tmp, fill, fill->size());
+    offset = fill->create(*tmp, values[i]);
+    *(offset_t*)((char*)fill + offset) = 0;
   }
-  insert(storage, Slice(key), "very_big");
 }
 
-BOOST_AUTO_TEST_SUITE_END()
+BOOST_AUTO_TEST_CASE(test_prev) {
+  char buffer[PAGE_SIZE];
+  TrieNode& trie = *(TrieNode*)buffer;
+  int values[] = {5, 70, 130};
+  create_trie(&trie, 3, values);
 
-BOOST_AUTO_TEST_SUITE(ModifyValueNode)
-
-BOOST_AUTO_TEST_CASE(replace_value) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-
-  Slice key("abcdefg");
-  Trace trace(storage);
-  // std::cout << "insert " << test_name << std::endl;
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-
-  std::string value;
-  for(int i = 0; i < 20; i++) {
-    value.append("abcdefghijklmn");
-  }
-  trace.set_value(value);
-
-  trace.find(key);
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), value);
-
-  trace.set_value(key);
+  BOOST_CHECK_EQUAL(trie.next(TrieNode::NONE), 5);
+  BOOST_CHECK_EQUAL(trie.next(1), 5);
+  BOOST_CHECK_EQUAL(trie.next(4), 5);
+  BOOST_CHECK_EQUAL(trie.next(5), 70);
+  BOOST_CHECK_EQUAL(trie.next(6), 70);
+  BOOST_CHECK_EQUAL(trie.next(69), 70);
+  BOOST_CHECK_EQUAL(trie.next(70), 130);
+  BOOST_CHECK_EQUAL(trie.next(71), 130);
+  BOOST_CHECK_EQUAL(trie.next(129), 130);
+  BOOST_CHECK_EQUAL(trie.next(130), OOR);
+  BOOST_CHECK_EQUAL(trie.next(131), OOR);
 }
 
-BOOST_AUTO_TEST_CASE(remove_intermediate) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed_value(storage);
+BOOST_AUTO_TEST_CASE(test_next) {
+  char buffer[PAGE_SIZE];
+  TrieNode& trie = *(TrieNode*)buffer;
+  int values[] = {5, 70, 130};
+  create_trie(&trie, 3, values);
 
-  Trace trace(storage);
-  Slice key("ab");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
-  check_graph("remove_intermediate", storage);
+  BOOST_CHECK_EQUAL(trie.prev(TrieNode::NONE), OOR);
+  BOOST_CHECK_EQUAL(trie.prev(1), OOR);
+  BOOST_CHECK_EQUAL(trie.prev(4), OOR);
+  BOOST_CHECK_EQUAL(trie.prev(5), OOR);
+  BOOST_CHECK_EQUAL(trie.prev(6), 5);
+  BOOST_CHECK_EQUAL(trie.prev(69), 5);
+  BOOST_CHECK_EQUAL(trie.prev(70), 5);
+  BOOST_CHECK_EQUAL(trie.prev(71), 70);
+  BOOST_CHECK_EQUAL(trie.prev(129), 70);
+  BOOST_CHECK_EQUAL(trie.prev(130), 70);
+  BOOST_CHECK_EQUAL(trie.prev(131), 130);
+  BOOST_CHECK_EQUAL(trie.prev(255), 130);
 }
 
-BOOST_AUTO_TEST_CASE(remove_until_intermediate) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed_value(storage);
-
-  Trace trace(storage);
-  Slice key("abcdefg");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
-  check_graph("remove_until_intermediate", storage);
+BOOST_AUTO_TEST_CASE(test_count) {
+  char buffer[PAGE_SIZE];
+  TrieNode& trie = *(TrieNode*)buffer;
+  int values[] = {5, 70, 130};
+  create_trie(&trie, 3, values);
+  BOOST_CHECK_EQUAL(trie.count(), 3);
 }
 
-
-BOOST_AUTO_TEST_SUITE_END()
-
-BOOST_AUTO_TEST_SUITE(ModifyTrieNode)
-
-BOOST_AUTO_TEST_CASE(add_value_node) {
-  // add a value to trie
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  test_add_value_node(storage);
-
-  Trace trace(storage);
-  Slice key("abhij");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), key.string());
+void test_add(TrieNode& trie, uint8_t branch) {
+  char buffer[PAGE_SIZE];
+  TrieNode* tmp = (TrieNode*)buffer;
+  uint16_t offset = tmp->create(trie, branch);
+  *(offset_t*)((char*)tmp + offset) = branch;
+  memcpy(&trie, tmp, tmp->size());
+  BOOST_CHECK_EQUAL(*trie.offset(branch), branch);
 }
 
-BOOST_AUTO_TEST_CASE(insert_index) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  test_insert_index(storage);
+BOOST_AUTO_TEST_CASE(test_many_branches) {
+  char buffer[PAGE_SIZE];
+  TrieNode& trie = *(TrieNode*)buffer;
+  Slice prefix;
+  uint16_t offset = trie.create(prefix, 'a');
+  *(offset_t*)((char*)&trie + offset) = 'a';
+  test_add(trie, 'b');
+  test_add(trie, 'c');
+  test_add(trie, 'd');
+  test_add(trie, 'e');
+  test_add(trie, 'f');
+  test_add(trie, 'g');
+  test_add(trie, 'h');
+  test_add(trie, 'i');
+  test_add(trie, 'j');
+  test_add(trie, 'k');
+  test_add(trie, 'l');
+  test_add(trie, 'm');
+  test_add(trie, 'n');
+  test_add(trie, 'o');
+  test_add(trie, 'p');
+  test_add(trie, 'A');
 }
 
-BOOST_AUTO_TEST_CASE(insert_grow_lower) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  test_insert_index(storage);
-  test_insert_grow(storage);
+#if 0
+BOOST_AUTO_TEST_CASE(test_clear) {
+  char buffer[PAGE_SIZE];
+  TrieNode& trie = *(TrieNode*)buffer;
+
+  trie.init();
+  *trie.add(5) = 5;
+  *trie.add(70) = 70;
+  *trie.add(130) = 130;
+
+  BOOST_CHECK_EQUAL(trie.count(), 3);
+  trie.remove(70);
+  BOOST_CHECK(trie.isset(5));
+  BOOST_CHECK(!trie.isset(70));
+  BOOST_CHECK(trie.isset(130));
+  BOOST_CHECK_EQUAL(trie.count(), 2);
+  BOOST_CHECK_EQUAL(*trie.offset(5), 5);
+  BOOST_CHECK_EQUAL(*trie.offset(130), 130);
+
+  *trie.add(TrieNode::NONE) = 0;
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
+  trie.remove(TrieNode::NONE);
+  BOOST_CHECK_EQUAL(trie.offset(TrieNode::NONE), nullptr);
+
+  BOOST_CHECK_EQUAL(trie.size(), 32);
+  trie.remove(250);
+  BOOST_CHECK_EQUAL(trie.size(), 32);
+  trie.remove(6);
+  BOOST_CHECK_EQUAL(trie.size(), 32);
+
+  trie.remove(5);
+  BOOST_CHECK(!trie.isset(5));
+  BOOST_CHECK_EQUAL(trie.offset(5), nullptr);
+  BOOST_CHECK_EQUAL(trie.count(), 1);
+  BOOST_CHECK_EQUAL(trie.size(), 24);
+}
+#endif
+
+BOOST_AUTO_TEST_CASE(test_index_bit) {
+  uint64_t test = 0b1001;
+
+  BOOST_CHECK_EQUAL(index(test, 0), 0);
+  BOOST_CHECK_EQUAL(index(test, 3), 1);
+  BOOST_CHECK_EQUAL(index(test, 2), 1);
 }
 
-BOOST_AUTO_TEST_CASE(insert_grow_upper) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  insert(storage, Slice("abp"), "insert_index_p");
-  insert(storage, Slice("ab0"), "insert_index_0");
+BOOST_AUTO_TEST_CASE(test_first_bit) {
+  uint64_t test1 = 0b1000;  // Bit at position 3
+  uint64_t test2 = 0b0;     // No bits set
+  uint64_t test3 = 0b1;     // First bit set
+
+  BOOST_CHECK_EQUAL(first(test1), 3);
+  BOOST_CHECK_EQUAL(first(test2), -1);
+  BOOST_CHECK_EQUAL(first(test3), 0);
 }
 
-BOOST_AUTO_TEST_CASE(shrink_lower) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  test_insert_index(storage);
-  insert(storage, "aba", "insert_index_a");
-  insert(storage, "abb", "insert_index_b");
+BOOST_AUTO_TEST_CASE(test_last_bit) {
+  uint64_t test1 = 0b1000;  // Bit at position 3
+  uint64_t test2 = 0b0;     // No bits set
+  uint64_t test3 = 0b1001;  // Bits at position 0 and 3
 
-  Trace trace(storage);
-  Slice key("abcdefg");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
-  check_graph("removed_abcdefg", storage);
+  BOOST_CHECK_EQUAL(last(test1), 3);
+  BOOST_CHECK_EQUAL(last(test2), -1);
+  BOOST_CHECK_EQUAL(last(test3), 3);
 }
 
-BOOST_AUTO_TEST_CASE(remove_trie) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
+BOOST_AUTO_TEST_CASE(test_next_bit) {
+  uint64_t test1 = 0b1011;  // Bits at positions 0, 1, and 3
 
-  Trace trace(storage);
-  Slice key("abcdefg");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
-  check_graph("removed_trie", storage);
+  BOOST_CHECK_EQUAL(next(test1, 0), 1);   // Next after position 0
+  BOOST_CHECK_EQUAL(next(test1, 1), 3);   // Next after position 1
+  BOOST_CHECK_EQUAL(next(test1, 3), -1);  // No next bit
+
+  uint64_t test2 = 0b0;  // No bits set
+  BOOST_CHECK_EQUAL(next(test2, 0), -1);
 }
 
-BOOST_AUTO_TEST_CASE(remove_lower) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  insert(storage, Slice("abp"), "insert_index_p");
-  insert(storage, Slice("ab0"), "insert_index_0");
+BOOST_AUTO_TEST_CASE(test_prev_bit) {
+  uint64_t test1 = 0b1011;  // Bits at positions 0, 1, and 3
 
-  Trace trace(storage);
-  Slice key("abp");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
-  check_graph("removed_abp", storage);
+  BOOST_CHECK_EQUAL(prev(test1, 4), 3);   // Previous from position 4
+  BOOST_CHECK_EQUAL(prev(test1, 3), 1);   // Previous from position 3
+  BOOST_CHECK_EQUAL(prev(test1, 1), 0);   // Previous from position 1
+  BOOST_CHECK_EQUAL(prev(test1, 0), -1);  // No previous bit
+
+  uint64_t test2 = 0b0;  // No bits set
+  BOOST_CHECK_EQUAL(prev(test2, 4), -1);
 }
 
-BOOST_AUTO_TEST_CASE(keep_lower) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  test_insert_first(storage);
-  test_divide_compressed(storage);
-  insert(storage, Slice("abp"), "insert_index_p");
-  insert(storage, Slice("ab0"), "insert_index_0");
-  insert(storage, Slice("abpqrs"), "insert_index_abpqrs");
+// Test with different bit widths
+BOOST_AUTO_TEST_CASE(test_different_bit_widths) {
+  uint32_t test32 = 0b1000;
+  uint16_t test16 = 0b1000;
+  uint8_t test8 = 0b1000;
 
-  Trace trace(storage);
-  Slice key("abp");
-  trace.find(key);
-  BOOST_REQUIRE(trace.valid());
-  trace.remove();
-  check_graph("removed_abp_intermediate", storage);
+  BOOST_CHECK_EQUAL(first<uint32_t>(test32), 3);
+  BOOST_CHECK_EQUAL(first<uint16_t>(test16), 3);
+  BOOST_CHECK_EQUAL(first<uint8_t>(test8), 3);
+
+  BOOST_CHECK_EQUAL(last<uint32_t>(test32), 3);
+  BOOST_CHECK_EQUAL(last<uint16_t>(test16), 3);
+  BOOST_CHECK_EQUAL(last<uint8_t>(test8), 3);
 }
 
-BOOST_AUTO_TEST_SUITE_END()
+BOOST_AUTO_TEST_CASE(test_count_uint64) {
+  // Test empty bits
+  BOOST_CHECK_EQUAL(count<uint64_t>(0), 0);
 
+  // Test single bit
+  BOOST_CHECK_EQUAL(count<uint64_t>(1), 1);
+  BOOST_CHECK_EQUAL(count<uint64_t>(0x8000000000000000), 1);
 
-void fill_db(Storage& storage) {
-  insert(storage, Slice("abc"), "fill_abc");
-  insert(storage, Slice("abc123"), "fill_abc123");
-  insert(storage, Slice("abc323"), "fill_abc323");
-  insert(storage, Slice("abc523"), "fill_abc523");
-  insert(storage, Slice("abc723"), "fill_abc723");
-  insert(storage, Slice("abcA23"), "fill_abcA23");
-  insert(storage, Slice("bcd1234"), "fill_bcd1234");
-  insert(storage, Slice("bcd1235"), "fill_bcd1235");
+  // Test multiple bits
+  BOOST_CHECK_EQUAL(count<uint64_t>(0x3), 2);  // 0b11
+  BOOST_CHECK_EQUAL(count<uint64_t>(0xF), 4);  // 0b1111
+
+  // Test alternating bits
+  BOOST_CHECK_EQUAL(count<uint64_t>(0x5555555555555555), 32);  // 101010...
+  BOOST_CHECK_EQUAL(count<uint64_t>(0xAAAAAAAAAAAAAAAA), 32);  // 010101...
+
+  // Test all bits set
+  BOOST_CHECK_EQUAL(count<uint64_t>(0xFFFFFFFFFFFFFFFF), 64);
 }
 
-
-BOOST_AUTO_TEST_SUITE(MoveForward)
-
-BOOST_AUTO_TEST_CASE(move_forward_empty) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  Trace trace(storage);
-
-  trace.first();
-  BOOST_REQUIRE(!trace.valid());
-
-  trace.next();
-  BOOST_REQUIRE(!trace.valid());
+BOOST_AUTO_TEST_CASE(test_count_uint32) {
+  // Similar tests for 32-bit integers
+  BOOST_CHECK_EQUAL(count<uint32_t>(0), 0);
+  BOOST_CHECK_EQUAL(count<uint32_t>(1), 1);
+  BOOST_CHECK_EQUAL(count<uint32_t>(0x80000000), 1);
+  BOOST_CHECK_EQUAL(count<uint32_t>(0xFFFFFFFF), 32);
 }
 
-BOOST_AUTO_TEST_CASE(move_forward) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  fill_db(storage);
-
-  Trace trace(storage);
-
-  trace.first();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc323"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc323"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc523"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc523"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc723"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc723"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
-
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
-
-  trace.next();
-  BOOST_REQUIRE(!trace.valid());
-
-  // jump into intermediate value
-  trace.find(Slice("abc"));
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
-
-  // jump into unknown trie value
-  trace.find(Slice("abc2"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc2"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc323"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc323"));
-
-  // jump into trievalue with empty key
-  trace.find(Slice("bcd123"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd123"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
-
-  // jump before compressed
-  trace.find(Slice("aba"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
-
-  // jump after compressed
-  trace.find(Slice("abd"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
-
-  // jump before compressed
-  trace.find(Slice("aa"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
-
-  // jump after compressed
-  trace.find(Slice("ac"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("a"));
-  trace.next();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
+BOOST_AUTO_TEST_CASE(test_count_uint16) {
+  // Tests for 16-bit integers
+  BOOST_CHECK_EQUAL(count<uint16_t>(0), 0);
+  BOOST_CHECK_EQUAL(count<uint16_t>(0xFFFF), 16);
 }
 
-
-BOOST_AUTO_TEST_CASE(move_backward) {
-  Preparation p;
-  Storage storage(TEST_FILE);
-  fill_db(storage);
-
-  Trace trace(storage);
-
-  trace.last();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1234"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1234"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc723"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc723"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc523"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc523"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc323"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc323"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
-
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
-
-  trace.prev();
-  BOOST_REQUIRE(!trace.valid());
-
-  // jump into intermediate value
-  trace.find(Slice("abc"));
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc"));
-  trace.prev();
-  BOOST_REQUIRE(!trace.valid());
-
-  // jump into unknown trie value
-  trace.find(Slice("abc2"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc2"));
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abc123"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abc123"));
-
-  // jump into trievalue with empty key
-  trace.find(Slice("bcd123"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd123"));
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
-
-  // jump before compressed
-  trace.find(Slice("bcd122"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
-
-  // jump after compressed
-  trace.find(Slice("bcd124"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
-
-  // jump before compressed
-  trace.find(Slice("ba"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("abcA23"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("abcA23"));
-
-  // jump after compressed
-  trace.find(Slice("bd"));
-  BOOST_REQUIRE(!trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("b"));
-  trace.prev();
-  BOOST_REQUIRE(trace.valid());
-  BOOST_REQUIRE_EQUAL(trace.get_value().string(), string("bcd1235"));
-  BOOST_REQUIRE_EQUAL(trace.current_key, string("bcd1235"));
+BOOST_AUTO_TEST_CASE(test_count_uint8) {
+  // Tests for 8-bit integers
+  BOOST_CHECK_EQUAL(count<uint8_t>(0), 0);
+  BOOST_CHECK_EQUAL(count<uint8_t>(0xFF), 8);
 }
-
-BOOST_AUTO_TEST_CASE(move_backward_empty) {
-  Preparation p;
-  Storage storage(TEST_FILE, SEGMENT_SIZE);
-  Trace trace(storage);
-
-  trace.last();
-  BOOST_REQUIRE(!trace.valid());
-
-  trace.prev();
-  BOOST_REQUIRE(!trace.valid());
-}
-
-BOOST_AUTO_TEST_SUITE_END()

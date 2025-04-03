@@ -22,7 +22,6 @@ struct _TrieNode : public Traits::BlockHeader {
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
-  using tid_e = typename Traits::tid_e;
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;
@@ -376,7 +375,7 @@ struct _Dumper {
   using offset_e = typename Traits::offset_e;
   using uint16_e = typename Traits::uint16_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
-  using leaf_ptr = typename Traits::Pointer<LeafNode>;
+  using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
 
@@ -389,7 +388,7 @@ struct _Dumper {
     out << "freespace: " << BLOCK_SIZES[leaf->slot_id] - size << std::endl;
     out << "size: " << size << std::endl;
     out << "txn: " << leaf->txn_id << std::endl;
-    out << "keysize: " << leaf->key_size << std::endl;
+    out << "keysize: " << (uint16_t)leaf->key_size << std::endl;
     out << "key: \"";
     for (int i = 0; i < leaf->key_size; i++) {
       out << "[" << bitstr(leaf->data[i]) << "]";

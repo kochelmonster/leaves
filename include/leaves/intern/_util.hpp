@@ -79,7 +79,7 @@ struct _Offset {
   typedef _Offset<BaseType> OffsetType;
   BaseType _offset;
 
-  const uint64_t TYPE_MASK = 0x3;
+  static const uint64_t TYPE_MASK = 0x3;
 
   constexpr _Offset(uint64_t src = 0) : _offset(src) {}
 

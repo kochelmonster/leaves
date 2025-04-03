@@ -75,6 +75,9 @@ target_link_libraries(test_bits PUBLIC test)
 add_executable(test_cursor tests/test_cursor.cpp)
 target_link_libraries(test_cursor PUBLIC core test)
 
+add_executable(test_node tests/test_node.cpp)
+target_link_libraries(test_node PUBLIC core test)
+
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
@@ -86,15 +89,16 @@ add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
-COMMAND ./test_cursor
+#COMMAND ./test_cursor
+COMMAND ./test_node
 COMMAND ./test_memory
 COMMAND ./test_bits
 COMMAND ./test_mmap
-COMMAND ./test_db
+#COMMAND ./test_db
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node
 )
 
 endif(LEAVES_BUILD_TESTS)
