@@ -20,7 +20,7 @@ class LeavesException : public std::exception {};
 
 class TransactionActive : public LeavesException {};
 
-class NoTransactionFree : public LeavesException {};
+class NoProcess : public LeavesException {};
 
 class NoValidPosition : public LeavesException {};
 

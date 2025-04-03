@@ -65,6 +65,90 @@ class Slice {
   bool empty() const { return _size == 0; }
 };
 
+typedef uint64_t tid_t;
+typedef enum { TRIE = 0, LEAF = 1, BURST = 2 } NodeTypes;
+
+static const uint32_t PAGE_SIZE = 4 * 1024;
+static const size_t PAGE_MASK = (((size_t)PAGE_SIZE) - 1);
+
+template <typename BaseType>
+struct _Offset {
+  typedef _Offset<BaseType> OffsetType;
+  BaseType _offset;
+
+  const uint64_t TYPE_MASK = 0x3;
+
+  constexpr _Offset(uint64_t src = 0) : _offset(src) {}
+
+  template <typename T>
+  bool operator==(T other) const {
+    return _offset == other;
+  }
+  template <typename T>
+  bool operator!=(T other) const {
+    return _offset != other;
+  }
+
+  template <typename T>
+  bool operator<=(T other) const {
+    return _offset <= other;
+  }
+
+  template <typename T>
+  bool operator<(T other) const {
+    return _offset < other;
+  }
+
+  template <typename T>
+  bool operator>=(T other) const {
+    return _offset >= other;
+  }
+
+  bool operator==(const _Offset& src) const { return _offset == src._offset; }
+  bool operator!=(const _Offset& src) const { return _offset != src._offset; }
+  bool operator<(const _Offset& src) const { return _offset < src._offset; }
+  bool operator>(const _Offset& src) const { return _offset > src._offset; }
+  bool operator<=(const _Offset& src) const { return _offset <= src._offset; }
+  bool operator>=(const _Offset& src) const { return _offset >= src._offset; }
+
+  const _Offset& operator=(const _Offset& src) {
+    _offset = src._offset;
+    return *this;
+  }
+  template <typename T>
+  const _Offset& operator=(T src) {
+    _offset = src;
+    return *this;
+  }
+  template <typename T>
+  const _Offset& operator+=(T add) {
+    _offset += add;
+    return *this;
+  }
+  template <typename T>
+  _Offset operator+(T src) {
+    return _Offset(_offset + src);
+  }
+  template <typename T>
+  _Offset operator-(T src) {
+    return _Offset(_offset - src);
+  }
+
+  operator uint64_t() const { return _offset & ~TYPE_MASK; }
+  _Offset page() const { return _Offset(_offset & ~PAGE_MASK); }
+  uint64_t offset() const {
+    return _Offset((_offset & PAGE_MASK) & ~TYPE_MASK);
+  }
+  NodeTypes type() const { return _offset & TYPE_MASK; }
+  const _Offset& type(NodeTypes type) {
+    _offset &= ~TYPE_MASK;
+    _offset |= type;
+    return *this;
+  }
+};
+
+typedef _Offset<uint64_t> offset_t;
+
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {
   size_t i = 0;
@@ -105,7 +189,6 @@ void copy(Block& dst, const Block& src, size_t space = 0) {
   size_t base_size = sizeof(typename Block::Base), src_size = sizeof(Block);
   memcpy((char*)&dst + base_size, (char*)&src + base_size,
          space + src_size - base_size);
-  dst.size = src.size;
 }
 
 }  // namespace leaves

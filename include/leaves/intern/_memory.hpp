@@ -43,29 +43,44 @@ const size_t M = 1024 * K;
 const size_t G = 1024 * M;
 const size_t T = 1024 * G;
 
-const static size_t PAGE_SIZE = 4 * K;
 const static size_t AREA_SIZE = 1 * M;
 
+constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
+                                 uint16_t value) {
+  const uint16_t *mid = first, *start = first;
+  while (first < last) {
+    mid = first + (last - first) / 2;
+    if (*mid == value) return mid - start;
+    if (*mid < value)
+      first = mid + 1;
+    else
+      last = mid;
+  }
+  return first - start;
+}
 
 // One page inside the garbage queue
-template <typename BlockHeader>
-struct _GarbageContainer : public BlockHeader {
-  static const size_t SIZE = 4096;
-  typedef BlockHeader Base;
-  typedef typename BlockHeader::template Pointer<_GarbageContainer> ptr;
-  using offset_t = typename BlockHeader::offset_t;
-  using tid_t = typename BlockHeader::tid_t;
+template <typename Traits>
+struct _GarbageContainer : public Traits::BlockHeader {
+  using offset_e = typename Traits::offset_e;
+  using tid_e = typename Traits::tid_e;
+  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  static const uint16_t SIZE = 4096;
+  static const uint16_t SLOT_ID =
+      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]) - 1;
+  typedef typename Traits::BlockHeader Base;
+  typedef typename Traits::template Pointer<_GarbageContainer> ptr;
 
   struct FreeBlock {
-    offset_t link;  // link to the page
-    tid_t tid;      // the transaction that freed the page
+    offset_e link;  // link to the page
+    tid_e txn_id;   // the transaction that freed the page
   };
 
-  static const size_t BLOCK_COUNT =
-      (SIZE - sizeof(offset_t) - sizeof(Base)) / sizeof(FreeBlock);
+  static const size_t COUNT =
+      (SIZE - sizeof(offset_e) - sizeof(Base)) / sizeof(FreeBlock);
 
-  offset_t next;
-  FreeBlock blocks[BLOCK_COUNT];
+  offset_e next;
+  FreeBlock blocks[COUNT];
 };
 
 /*
@@ -78,39 +93,41 @@ Each Transaction has its own GarbageSlot pointing to
 different ends and starts of the queue.
 */
 
-template <typename BlockHeader>
+template <typename Traits>
 struct _GarbageSlot {
-  using block_ptr = typename BlockHeader::ptr;
-  using offset_t = typename BlockHeader::offset_t;
-  using bsize_t = typename BlockHeader::bsize_t;
-  typedef _GarbageSlot<BlockHeader> GarbageSlot;
-  typedef _GarbageContainer<BlockHeader> GarbageContainer;
+    using BlockHeader = typename Traits::BlockHeader;
+  using offset_e = typename Traits::offset_e;
+  using uint16_e = typename Traits::uint16_e;
+  using uint64_e = typename Traits::uint64_e;
+  using ptr = typename Traits::ptr;
+  typedef _GarbageSlot<Traits> GarbageSlot;
+  typedef _GarbageContainer<Traits> GarbageContainer;
   using garb_ptr = typename GarbageContainer::ptr;
 
   template <typename Storage>
-  block_ptr pop(Storage& storage) {
+  ptr pop(Storage& storage) {
     if (count == 0) return nullptr;
 
     assert(!(ostart == oend && istart == iend));
 
-    garb_ptr front = storage.resolve(ostart);
+    garb_ptr front(storage.resolve(ostart));
     if (!storage.template may_recycle(front->blocks[istart])) return nullptr;
 
     assert(front->blocks[istart].link != 0);
-    block_ptr result = storage.resolve(front->blocks[istart].link);
+    ptr result = storage.resolve(front->blocks[istart].link);
     count--;
     istart++;
 
     if (ostart == oend && istart >= iend) {
       assert(count == 0);
-      if (result->block_size != GarbageContainer::SIZE) {
+      if (result->slot_id != GarbageContainer::SLOT_ID) {
         istart = iend = 0;
         ostart = oend = 0;
         storage.free(front);
       } else {
         istart = iend = 0;
       }
-    } else if (istart >= GarbageContainer::BLOCK_COUNT) {
+    } else if (istart >= GarbageContainer::COUNT) {
       ostart = front->next;
       istart = 0;
       storage.free(front);
@@ -119,16 +136,16 @@ struct _GarbageSlot {
   }
 
   template <typename Storage>
-  void push(const block_ptr& block, Storage& storage) {
+  void push(ptr& block, Storage& storage) {
     garb_ptr back;
 
     assert(oend != 1);  // locked
 
     if (oend) {
       back = storage.resolve(oend);
-      if (iend >= GarbageContainer::BLOCK_COUNT) {
-        garb_ptr new_back = storage.alloc(GarbageContainer::SIZE);
-        assert(new_back->block_size == GarbageContainer::SIZE);
+      if (iend >= GarbageContainer::COUNT) {
+        garb_ptr new_back = storage.alloc_slot(GarbageContainer::SLOT_ID);
+        assert(new_back->slot_id == GarbageContainer::SLOT_ID);
         oend = back->next = storage.resolve(new_back);
         iend = 0;
         back = new_back;
@@ -138,10 +155,11 @@ struct _GarbageSlot {
       assert(istart == 0);
       assert(iend == 0);
       assert(count == 0);
-      back = storage.alloc(GarbageContainer::SIZE);
+      back = storage.alloc_slot(GarbageContainer::SLOT_ID);
       oend = ostart = storage.resolve(back);
     }
     back->blocks[iend].link = storage.resolve(block);
+    block->free_idx = iend;
     assert(back->blocks[iend].link != 0);
     storage.template mark_for_recycle(back->blocks[iend]);
     iend++;
@@ -163,7 +181,7 @@ struct _GarbageSlot {
         break;
       }
 
-      for (; index < GarbageContainer::BLOCK_COUNT; index++)
+      for (; index < GarbageContainer::COUNT; index++)
         call(container->blocks[index]);
 
       index = 0;
@@ -171,88 +189,54 @@ struct _GarbageSlot {
     }
   }
 
-  offset_t set_end(offset_t next_free, bsize_t bsize) {
-    assert(next_free % 4096 == 0);
-    end_free = next_free + ((bsize < 1 * K) ? PAGE_SIZE : 8 * bsize);
-    return end_free;
-  }
-
-  offset_t next_free;  // the next in the free area
-  offset_t end_free;   // end of free area
-  offset_t ostart;     // offset of the start
-  offset_t oend;       // offset of the end
-  uint16_t istart;     // index inside the start
-  uint16_t iend;       // index inside the end
-  bsize_t count;
+  offset_e next_free;  // the next in the free area
+  offset_e end_free;   // end of free area
+  offset_e ostart;     // offset of the start
+  offset_e oend;       // offset of the end
+  uint64_e count;      // count of freed blocks
+  uint16_e istart;     // index inside the start
+  uint16_e iend;       // index inside the end
 };
 
-static constexpr size_t BLOCK_SIZES[] = {
-    64,    80,    128,   288,   512,   1024,  1536,  2048,  2560,
-    3072,  3584,  4096,  4608,  5120,  5632,  6144,  6656,  7168,
-    7680,  8192,  12288, 16384, 20480, 24576, 28672, 32768, 36864,
-    40960, 45056, 49152, 53248, 57344, 61440, 65536};
-
-static const size_t BLOCK_COUNT = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-
-static const size_t MIN_BLOCK = BLOCK_SIZES[0];
-
-inline constexpr int assign_block(size_t size) {
-  assert(size > 0);
-  if (size <= 128) {
-    if (size <= 64) return 0;
-    if (size <= 80) return 1;
-    return 2;
-  }
-  if (size <= 288) return 3;
-  if (size <= 7680) return (size - 1) / 512 + 4;
-  int result = (size - 1) / 4096 + 18;
-  return result < BLOCK_COUNT ? result : -1;
-}
-
-template <typename BlockHeader>
+template <typename Traits>
 struct _MemManager {
-  typedef BlockHeader Base;
-  using bsize_t = typename BlockHeader::bsize_t;
-  using block_ptr = typename BlockHeader::ptr;
-  using offset_t = typename BlockHeader::offset_t;
-  typedef _MemManager<BlockHeader> MemManager;
-  typedef typename BlockHeader::template Pointer<MemManager> ptr;
+  using uint32_e = typename Traits::uint32_e;
+  using offset_e = typename Traits::offset_e;
+  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  typedef typename Traits::BlockHeader BlockHeader;
+  typedef _MemManager<Traits> MemManager;
+  using ptr = typename Traits::Pointer<MemManager>;
+  using block_ptr = typename Traits::ptr;
 
-  typedef _GarbageSlot<BlockHeader> Slot;
+  typedef _GarbageSlot<Traits> Slot;
   using GarbageContainer = typename Slot::GarbageContainer;
 
-  typedef _SparseArray<Slot, padding(BLOCK_COUNT, 64)> SlotArray;
-  const static size_t EXTRA_SPACE =
-      SlotArray::space(BLOCK_COUNT) - sizeof(SlotArray);
+  static constexpr uint16_t BLOCK_COUNT =
+      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr uint16_t PAGE_ID = BLOCK_COUNT - 1;
+  static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
 
-  offset_t allocation_end;
-  offset_t next_free;
-  SlotArray slots;
-
-  // the space needed for MemManager
-  bsize_t extra_space() const { return slots.space() - sizeof(slots); }
-  constexpr static bsize_t extra_space(int slots) {
-    return SlotArray::space(slots) - sizeof(SlotArray);
-  }
+  offset_e allocation_end;
+  offset_e next_free;
+  Slot slots[BLOCK_COUNT];
 
   // init the memory, header is a reserve memory space
-  void init(size_t header) {
-    header = padding(header, MIN_BLOCK);
+  void init(uint16_t header) {
+    header = padding(header, PAGE_SIZE);
     next_free = padding(header, PAGE_SIZE);
-    slots.init();
-    slots.insert(0, Slot{.next_free = header,
-                         .end_free = next_free,
-                         .ostart = 0,
-                         .oend = 0,
-                         .istart = 0,
-                         .iend = 0,
-                         .count = 0});
+    memset(slots, 0, sizeof(slots));
     allocation_end = AREA_SIZE;
     assert(allocation_end == padding(next_free, AREA_SIZE));
   }
 
+  static constexpr int assign_slot(uint16_t size) {
+    assert(size > 0);
+    return binary_search(&BLOCK_SIZES[0], &BLOCK_SIZES[BLOCK_COUNT], size);
+  }
+
   template <typename Storage>
-  void set_next_free(offset_t next, Storage& storage) {
+  void set_next_free(offset_e next, Storage& storage) {
+    assert(next % PAGE_SIZE == 0);
     next_free = next;
     if (next_free >= allocation_end) {
       allocation_end += AREA_SIZE;
@@ -262,82 +246,68 @@ struct _MemManager {
   }
 
   template <typename Storage>
-  block_ptr alloc(bsize_t space, Storage& storage) {
-    int six = assign_block(space);
-    if (six < 0) return nullptr;
+  block_ptr alloc(uint8_t sidx, Storage& storage) {
+    uint16_t bsize = BLOCK_SIZES[sidx];
 
-    bsize_t bsize = BLOCK_SIZES[six];
-
-    _make_slot(six);
-    Slot& slot = slots[six];
+    Slot& slot = slots[sidx];
     block_ptr result = slot.pop(storage);
     if (result) {
       // Block size is maybe wrong (see the next if + rollback)
       // but the dump is right
-      result->block_size = bsize;
+      result->slot_id = sidx;
       return result;
     }
 
     if (slot.next_free + bsize > slot.end_free) {
-      assert(slot.next_free % PAGE_SIZE == 0);
-      assert(slot.end_free % PAGE_SIZE == 0);
       assert(next_free % PAGE_SIZE == 0);
       assert(slot.next_free == slot.end_free);
 
-      if (six == 1) {
-        offset_t start = next_free;
-        slot.next_free = start + 4 * MIN_BLOCK;
-        assert((slot.next_free + 48 * bsize) % PAGE_SIZE == 0);
-        set_next_free(slot.set_end(next_free, bsize), storage);
-        for (int i = 0; i < 4; i++) {
-          block_ptr p = storage.resolve(start);
-          p->block_size = MIN_BLOCK;
-          slots[0].push(p, storage);
-          start += MIN_BLOCK;
-        }
-      } else if (six == 3) {
-        block_ptr p = storage.resolve(next_free);
-        slot.next_free = next_free + MIN_BLOCK;
-        assert((slot.next_free + 14 * bsize) % PAGE_SIZE == 0);
-        set_next_free(slot.set_end(next_free, bsize), storage);
-        p->block_size = MIN_BLOCK;
-        slots[0].push(p, storage);
+      int count = PAGE_SIZE / bsize;
+      uint16_t rest_space = PAGE_SIZE - count * bsize;
+      assert(rest_space % 8 == 0);
+
+      if (slots[PAGE_ID].count > 10) {
+        block_ptr page = slots[PAGE_ID].pop(storage);
+        slot.next_free = storage.resolve(page);
       } else {
+        set_next_free(next_free + PAGE_SIZE, storage);
         slot.next_free = next_free;
-        set_next_free(slot.set_end(next_free, bsize), storage);
+      }
+      slot.end_free = slot.next_free + PAGE_SIZE - rest_space;
+
+      offset_t start = slot.end_free;
+      for (int id = sidx - 1; id >= 0 && rest_space > MIN_BLOCK_SIZE; id--) {
+        uint16_t bs = BLOCK_SIZES[id];
+        while (bs < rest_space) {
+          block_ptr p = storage.resolve(start);
+          slots[id].push(p, storage);
+          start += bs;
+          rest_space -= bs;
+        }
       }
     }
 
     result = storage.resolve(slot.next_free);
     slot.next_free += bsize;
-    result->block_size = bsize;
+    result->slot_id = sidx;
+    result->free_idx = 0;
     return result;
   }
 
   template <typename Storage>
-  bool free(const block_ptr& block, Storage& storage) {
-    auto six = assign_block(block->block_size);
-    if (six < 0) return false;
-    assert(block->block_size == BLOCK_SIZES[six]);
-    _make_slot(six);
+  bool free(block_ptr& block, Storage& storage) {
+    auto six = block->slot_id;
     slots[six].push(block, storage);
     return true;
   }
-
-  void _make_slot(int six) {
-    if (slots.get(six)) return;
-    slots.insert(six, Slot{.next_free = 0,
-                           .end_free = 0,
-                           .ostart = 0,
-                           .oend = 0,
-                           .istart = 0,
-                           .iend = 0,
-                           .count = 0});
-  }
 };
 
-struct MemStatistics {
-  const static size_t END_IDX = BLOCK_COUNT;
+template <typename Traits>
+struct _MemStatistics {
+  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  static const uint16_t SIZE = 4096;
+  static const uint16_t BLOCK_COUNT =
+      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
   struct Slot {
     size_t block_size;
@@ -345,27 +315,14 @@ struct MemStatistics {
     size_t free;
   };
 
-  typedef _SparseArray<Slot, padding(END_IDX, 64)> SlotArray;
-  union {
-    SlotArray slots;
-    char buffer[SlotArray::space(END_IDX)];
-  };
+  Slot slots[BLOCK_COUNT];
 
-  MemStatistics() { slots.init(); }
+  _MemStatistics() { memset(slots, 0, sizeof(slots)); }
 
-  void add(size_t block_size, size_t count, size_t free = 0) {
-    int six = assign_block(block_size);
-    if (six < 0) return;
-
-    if (!slots.get(six)) {
-      slots.insert(
-          six, Slot{.block_size = block_size, .count = count, .free = free});
-    } else {
-      Slot& slot = slots[six];
-      assert(slot.block_size == block_size);
-      slot.count += count;
-      slot.free += free;
-    }
+  void add(uint16_t sidx, size_t count, size_t free = 0) {
+    Slot& slot = slots[sidx];
+    slot.count += count;
+    slot.free += free;
   }
 };
 
