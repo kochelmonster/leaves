@@ -43,7 +43,7 @@ struct _MemoryMapBlocks {
   typedef uint64_t uint64_e;
   typedef tid_t tid_e;
   typedef offset_t offset_e;
-
+    
   /*
   Typical node sizes
   digits: 0-9:     104
@@ -63,6 +63,7 @@ struct _MemoryMapBlocks {
   };
 #pragma pack(0)
 
+  static constexpr bool BURST = false;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {
       _TrieNode<_MemoryMapBlocks>::size(1, 10),   // digits 0-9

@@ -1,5 +1,5 @@
 #define BOOST_TEST_DYN_LINK
-#define BOOST_TEST_MODULE BitTest
+#define BOOST_TEST_MODULE TrieNodeTest
 
 #include <boost/test/included/unit_test.hpp>
 

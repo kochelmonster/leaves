@@ -43,7 +43,7 @@ class Slice {
     int cmp = 0, size_ = size() < other.size() ? size() : other.size();
     (cmp = memcmp(data(), other.data(), size_)) ||
         (cmp = size() - other.size());
-    return cmp;
+    return (0 < cmp) - (cmp < 0);
   }
 
   char operator[](size_t index) const { return data()[index]; }

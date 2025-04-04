@@ -52,9 +52,17 @@ struct _TrieNode : public Traits::BlockHeader {
   offset_e* array() const {
     return (offset_e*)((uint8_t*)this + array_start());
   }
-  uint8_t ubit(uint8_t val) const { return (val >> 5); }
-  uint32_t lbit(uint8_t val) const { return (val & LOWER_MASK); }
+  static uint8_t ubit(uint8_t val) { return (val >> 5); }
+  static uint32_t lbit(uint8_t val) { return (val & LOWER_MASK); }
   uint16_t size() const { return array_end(); }
+
+  uint16_t calc_lower_start() const {
+    return padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+  }
+
+  uint16_t calc_array_start() const {
+    return align(lower_start() + bits::count(_upper) * sizeof(uint32_e));
+  }
 
   // estimates the max size for a trie node with a given prefix and branches
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
@@ -79,9 +87,7 @@ struct _TrieNode : public Traits::BlockHeader {
     }
 
     _array_len = 2;
-    uint16_t array_start_,
-        lower_start_ =
-            padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    uint16_t array_start_, lower_start_ = calc_lower_start();
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     if (key1 != NONE) {
@@ -204,11 +210,10 @@ struct _TrieNode : public Traits::BlockHeader {
       oidx = 0;
     }
 
-    uint16_t array_start_ =
-        align(lower_start_ + bits::count(_upper) * sizeof(uint32_e));
-    _array_offset = array_start_ / sizeof(offset_e);
     _lower_offset = lower_start_ / sizeof(uint32_e);
-
+    uint16_t array_start_ = calc_array_start();
+    _array_offset = array_start_ / sizeof(offset_e);
+    
     offset_e* array_ = (offset_e*)((char*)this + array_start_);
     memcpy(array_, src.array(), oidx * sizeof(offset_e));
     memcpy(array_ + oidx + 1, src.array() + oidx,
@@ -216,8 +221,35 @@ struct _TrieNode : public Traits::BlockHeader {
     return (char*)(array_ + oidx) - (char*)this;
   }
 
+  void create(const Slice& prefix, uint8_t upper, offset_e offsets[257]) {
+    assert(prefix.size() < 256);
+    _upper = upper;
+    _compressed_len = prefix.size();
+    memcpy(_compressed_data, prefix.data(), _compressed_len);
+    _lower_offset = calc_lower_start() / sizeof(uint32_e);
+    _array_offset = calc_array_start() / sizeof(offset_e);
+
+    uint16_t j = 0;
+    offset_e* array_ = array();
+    uint32_e* lower_ = lower();
+    memset(lower_, 0, lower_size());
+    if (offsets[0]) {
+      _array_len = TrieNode::NULL_MASK;
+      *array_++ = offsets[0];
+    }
+    else _array_len = 0;
+
+    offsets++;
+    for (int i = 0; i < 256; i++, offsets++) {
+      if (*offsets) {
+        _array_len++;
+        *array_++ = *offsets;
+        lower_[bits::index(_upper, i)] |= 1 << lbit(i);
+      }
+    }
+  }
+
   void remove(int nchar) {
-    __builtin_prefetch(array());
     if (nchar == NONE) {
       if (has_null()) {
         offset_e* a = array();
@@ -337,6 +369,7 @@ struct _LeafNode : public Traits::BlockHeader {
   uint8_t key_size;
   uint8_t data[];
   uint8_t* vdata() { return data + key_size; }
+  const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
   Slice value() const { return Slice(data + key_size, value_size); }
   uint16_t vsize() const {
@@ -344,11 +377,16 @@ struct _LeafNode : public Traits::BlockHeader {
   }
   uint16_t size() const { return align(sizeof(LeafNode) + key_size + vsize()); }
   Slice memory() { return Slice((char*)this, size()); }
-  static uint16_t size(const Slice& key, const Slice& value) {
-    if (value.size() > MAX_SIZE) {
-      return align(sizeof(LeafNode) + key.size() + sizeof(offset_e));
+
+  static uint16_t size(uint16_t key, size_t value) {
+    if (value > MAX_SIZE) {
+      return align(sizeof(LeafNode) + key + sizeof(offset_e));
     }
-    return align(sizeof(LeafNode) + key.size() + value.size());
+    return align(sizeof(LeafNode) + key + value);
+  }
+
+  static uint16_t size(const Slice& key, const Slice& value) {
+    return size(key.size(), value.size());
   }
 };
 

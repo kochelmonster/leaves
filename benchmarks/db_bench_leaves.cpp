@@ -535,11 +535,11 @@ class Benchmark {
         mkey = leaves::Slice(key);
         // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
 #endif
-
+        /*
         int iter = i + j;
-        if (iter == 21794) {
+        if (iter == 2) {
           int p = 0;
-        }
+        }*/
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
@@ -548,13 +548,13 @@ class Benchmark {
         cursor.value(mval);
         FinishedSingleOp();
 
-        /*cursor.check();
+        /*
         char path[100];
         snprintf(path, sizeof(path), "errors/%016d.yaml", i+j);
         std::ofstream out(path);
         auto root = db_->_txn.root;
         typedef leaves::_Dumper<leaves::DBMMap> Dumper;
-        Dumper::dump_branch(out, root, db_);*/
+        Dumper::dump_link(out, root, db_);*/
       }
       cursor.commit();
     }
