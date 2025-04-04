@@ -139,8 +139,6 @@ struct _GarbageSlot {
   void push(ptr& block, Storage& storage) {
     garb_ptr back;
 
-    assert(oend != 1);  // locked
-
     if (oend) {
       back = storage.resolve(oend);
       if (iend >= GarbageContainer::COUNT) {
@@ -157,6 +155,34 @@ struct _GarbageSlot {
       assert(count == 0);
       back = storage.alloc_slot(GarbageContainer::SLOT_ID);
       oend = ostart = storage.resolve(back);
+    }
+    back->blocks[iend].link = storage.resolve(block);
+    block->free_idx = iend;
+    assert(back->blocks[iend].link != 0);
+    storage.template mark_for_recycle(back->blocks[iend]);
+    iend++;
+    count++;
+  }
+
+  template <typename Storage>
+  void push_or_use(ptr& block, Storage& storage) {
+    assert(GarbageContainer::SLOT_ID == block->slot_id);
+    garb_ptr back;
+
+    if (oend) {
+      back = storage.resolve(oend);
+      if (iend >= GarbageContainer::COUNT) {
+        oend = back->next = storage.resolve(block);
+        iend = 0;
+        return;
+      }
+    } else {
+      assert(ostart == 0);
+      assert(istart == 0);
+      assert(iend == 0);
+      assert(count == 0);
+      oend = ostart = storage.resolve(block);
+      return;
     }
     back->blocks[iend].link = storage.resolve(block);
     block->free_idx = iend;
@@ -215,6 +241,7 @@ struct _MemManager {
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
   static constexpr uint16_t PAGE_ID = COUNT - 1;
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
+  static constexpr uint16_t SLOT_ALLOC_SIZE = 4 * PAGE_SIZE;
 
   offset_e allocation_end;
   offset_e next_free;
@@ -235,14 +262,22 @@ struct _MemManager {
   }
 
   template <typename Storage>
-  void set_next_free(offset_e next, Storage& storage) {
-    assert(next % PAGE_SIZE == 0);
-    next_free = next;
-    if (next_free >= allocation_end) {
-      allocation_end += AREA_SIZE;
-      assert(allocation_end > next_free);
-      storage.extend_file(allocation_end);
+  offset_e alloc_space(uint64_t space, Storage& storage) {
+    assert(space % PAGE_SIZE == 0);
+    assert(space < AREA_SIZE);
+    if (next_free + space >= allocation_end) {
+      // put free space to page garbage
+      for (; next_free < allocation_end; next_free += PAGE_SIZE) {
+        block_ptr page = storage.resolve(next_free);
+        page->slot_id = PAGE_ID;
+        slots[PAGE_ID].push_or_use(page, storage);
+      }
+      next_free = storage.alloc_space(AREA_SIZE);
+      allocation_end = next_free + AREA_SIZE;
     }
+    offset_e result = next_free;
+    next_free += space;
+    return result;
   }
 
   template <typename Storage>
@@ -262,18 +297,26 @@ struct _MemManager {
       assert(next_free % PAGE_SIZE == 0);
       assert(slot.next_free == slot.end_free);
 
-      int count = PAGE_SIZE / bsize;
-      uint16_t rest_space = PAGE_SIZE - count * bsize;
-      assert(rest_space % 8 == 0);
+      int count;
+      uint16_t rest_space;
 
       if (slots[PAGE_ID].count > 10) {
         block_ptr page = slots[PAGE_ID].pop(storage);
+        if (!page) goto alloc_more;
+
         slot.next_free = storage.resolve(page);
+        count = PAGE_SIZE / bsize;
+        rest_space = PAGE_SIZE - count * bsize;
+        slot.end_free = slot.next_free + PAGE_SIZE - rest_space;
       } else {
-        set_next_free(next_free + PAGE_SIZE, storage);
-        slot.next_free = next_free;
+      alloc_more:
+        count = SLOT_ALLOC_SIZE / bsize;
+        rest_space = SLOT_ALLOC_SIZE - count * bsize;
+        slot.next_free = alloc_space(SLOT_ALLOC_SIZE, storage);
+        slot.end_free = slot.next_free + SLOT_ALLOC_SIZE - rest_space;
       }
-      slot.end_free = slot.next_free + PAGE_SIZE - rest_space;
+
+      assert(rest_space % 8 == 0);
 
       offset_t start = slot.end_free;
       for (int id = sidx - 1; id >= 0 && rest_space > MIN_BLOCK_SIZE; id--) {
@@ -320,6 +363,7 @@ struct _MemStatistics {
 
   void add(uint16_t sidx, size_t count, size_t free = 0) {
     Slot& slot = slots[sidx];
+    slot.block_size = BLOCK_SIZES[sidx];
     slot.count += count;
     slot.free += free;
   }

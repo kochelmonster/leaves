@@ -74,7 +74,11 @@ struct TestStorage {
 
   bool free(block_ptr p) { return mm.free(p, *this); }
 
-  void extend_file(size_t size) { memory.resize(size); }
+  uint64_t alloc_space(size_t size) { 
+    size_t old_size = memory.size();
+    memory.resize(old_size +  size); 
+    return old_size;
+  }
 
   template <typename T>
   bool may_recycle(const T& free_block) {

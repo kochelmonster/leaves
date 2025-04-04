@@ -12,10 +12,7 @@ MAX_VAL_SIZE = 27
 LNODE = ('"{id}" [fillcolor=darkolivegreen1 label="(({id})|({keysize}-{key})|'
          '({valuesize}-{value}))"]').replace("(", "{{").replace(")", "}}")
 
-UBNODE = '"{id}" [fillcolor=yellow label="(({id})|{compress}({slots}))"]'.replace(
-    "(", "{{").replace(")", "}}")
-
-LBNODE = '"{id}" [fillcolor=lightblue label="(({id})|({slots}))"]'.replace(
+TNODE = '"{id}" [fillcolor=yellow label="(({id})|{compress}({slots}))"]'.replace(
     "(", "{{").replace(")", "}}")
 
 
@@ -31,30 +28,25 @@ class Graph:
         pages = {}
         for n in nodes:
             self.nodes[n["id"]] = n
-            page = n["block"]
+            page = n["page"]
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
-            size = pnodes[0]["size"]
             free = pnodes[0]["freespace"]
-            space = pnodes[0]["space"]
-            add(f"subgraph cluster_Page{k} {{")
-            add(f'label = "{k}\\nsize: {size}|free: {free}|space: {space}"')
+            size = pnodes[0]["size"]
+            txn = pnodes[0]["txn"]
+            #add(f"subgraph cluster_Page{k} {{")
+            #add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
                 add(getattr(self, "handle_" + type_)(n))
-            add("}")
+            #add("}")
 
         # add connections
         for n in nodes:
             type_ = n["type"]
-            start = 0
-            null_link = n.get("nulllink")
-            if null_link:
-                add(f'"{n["id"]}":f0 -> "{null_link}"')
-                start = 1
-            for i, c in enumerate(n.get("children", ()), start=start):
+            for i, c in enumerate(n.get("children", ())):
                 add(f'"{n["id"]}":f{i} -> "{c}"')
 
         add("}")
@@ -63,34 +55,18 @@ class Graph:
         print("max page", max(map(int, pages.keys())))
         return "\n".join(lines)
 
-    def handle_ubranch(self, node):
-        if node.get("compressed"):
-            compress = "{" + str(node["compressed"]["size"]) + \
-                "-" + node["compressed"]["key"] + "}|"
-        else:
-            compress = ""
+    def handle_trie(self, node):
+        compress = "{" + str(node["compressed"]["size"]) + \
+            "-" + node["compressed"]["key"] + "}|"
 
         children = []
-        null_link = node.get("nulllink")
-        if null_link:
-            children.append("")
-
-        keys = filter(bool, node.get("key", ""). split("]["))
+        keys = filter(bool, node.get("branches", ""). split("]["))
         for k in keys:
             children.append(k.lstrip("[").rstrip("]"))
 
         slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(children))
-        return UBNODE.format(compress=compress, slots=slots, **node)
-
-    def handle_lbranch(self, node):
-        children = []
-        keys = filter(bool, node.get("key", ""). split("]["))
-        for k in keys:
-            children.append(k.lstrip("[").rstrip("]"))
-
-        slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(children))
-        return LBNODE.format(slots=slots, **node)
-
+        return TNODE.format(compress=compress, slots=slots, **node)
+    
     def handle_leaf(self, node):
         if len(node["value"]) > MAX_VAL_SIZE:
             node["value"] = node["value"][:MAX_VAL_SIZE] + "..."
@@ -105,8 +81,8 @@ def main(paths):
 
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
-            # print(Graph().make_graph(list(filter(bool, nodes))))
-            # return 0
+            #print(Graph().make_graph(list(filter(bool, nodes))))
+            #return 0
             sarge.run(
                 f"dot -Tsvg > {dest}",
                 input=Graph().make_graph(list(filter(bool, nodes))),

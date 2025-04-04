@@ -57,7 +57,7 @@ struct _TrieNode : public Traits::BlockHeader {
   uint16_t size() const { return array_end(); }
 
   // estimates the max size for a trie node with a given prefix and branches
-  static uint16_t size(uint8_t prefix, uint16_t branches) {
+  static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
     return align(padding(sizeof(TrieNode) + prefix, sizeof(uint32_e)) +
                  std::min(branches, (uint16_t)8) * sizeof(uint32_e)) +
            branches * sizeof(offset_e);

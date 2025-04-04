@@ -30,7 +30,7 @@ struct SimplePointer {
     BlockHeader* p;
   };
 
-  template <typename T, NodeTypes t=TRIE>
+  template <typename T, NodeTypes t = TRIE>
   struct Pointer : public ptr {
     static constexpr NodeTypes type = t;
     Pointer(void* src = nullptr) : ptr(src) {}

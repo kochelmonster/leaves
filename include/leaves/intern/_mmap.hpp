@@ -14,6 +14,7 @@
 #include "./_cursor.hpp"
 #include "./_exception.hpp"
 #include "./_memory.hpp"
+#include "./_node.hpp"
 #include "./_traits.hpp"
 
 using boost::interprocess::create_only;
@@ -53,16 +54,23 @@ struct _MemoryMapBlocks {
   max: 2264
   */
 
-  static constexpr uint16_t MAX_PROCESSES = 100;
-  static constexpr uint16_t BLOCK_SIZES[] = {104,  160,  568,
-                                             1056, 2088, PAGE_SIZE};
-
+#pragma pack(1)
   struct BlockHeader {
     typedef BlockHeader Base;
     tid_e txn_id;
     uint8_t slot_id;
     uint8_t free_idx;
   };
+#pragma pack(0)
+
+  static constexpr uint16_t MAX_PROCESSES = 100;
+  static constexpr uint16_t BLOCK_SIZES[] = {
+      _TrieNode<_MemoryMapBlocks>::size(1, 10),   // digits 0-9
+      _TrieNode<_MemoryMapBlocks>::size(1, 16),   // hex 0-9A-F
+      _TrieNode<_MemoryMapBlocks>::size(1, 64),   // base64
+      _TrieNode<_MemoryMapBlocks>::size(1, 127),  // utf-8
+      _TrieNode<_MemoryMapBlocks>::size(1, 256),  // binary
+      PAGE_SIZE};
 
   typedef SimplePointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
@@ -83,12 +91,6 @@ struct _MemoryMapBlocks {
 
     // pointer to the active root of the mem trie
     offset_t mem_root;
-
-    // the number of leav nodes in the database
-    size_t leaves;
-
-    // the number of branch nodes in the database
-    size_t branches;
 
     // pointer to the oldest transaction
     offset_t start_txn;
@@ -199,7 +201,6 @@ struct _MemoryMapFile {
       _txn.txn_id = 1;
       _txn.file_size = AREA_SIZE;
       _txn.root = _txn.mem_root = 0;
-      _txn.leaves = _txn.branches = 0;
       _txn.next_txn = 0;
       txn_ptr new_txn = _txn.clone(*this);
       new_txn->count = 0;
@@ -249,6 +250,9 @@ struct _MemoryMapFile {
       if (_db->txn_locker) recover_mutex(_db->txn_mutex, _db->txn_locker);
       if (_db->file_locker) recover_mutex(_db->file_mutex, _db->file_locker);
       sanitize_transactions();
+      if (std::filesystem::file_size(filename()) != txn()->file_size) {
+        std::filesystem::resize_file(filename(), txn()->file_size);
+      }
     }
   }
 
@@ -325,7 +329,11 @@ struct _MemoryMapFile {
   }
 
   block_ptr resolve(offset_t offset) const {
-    return block_ptr((char*)_db + (uint64_t)offset);
+    char* p = (char*)_db + (uint64_t)offset;
+#ifdef __GNUC__
+    __builtin_prefetch(p);
+#endif
+    return block_ptr(p);
   }
 
   template <typename Pointer>
@@ -343,12 +351,15 @@ struct _MemoryMapFile {
     garbage_block.txn_id = _txn.txn_id;
   }
 
-  void extend_file(size_t size) {
+  uint64_t alloc_space(size_t space) {
     if (_db->file_locker != _pid) save_lock(_db->file_mutex, _db->file_locker);
-
-    _txn.file_size = size;
+    assert(_txn.file_size == std::filesystem::file_size(filename()));
+    uint64_t result = _txn.file_size;
+    uint64_t size = _txn.file_size + space;
     if (size > _region.get_size()) throw std::bad_alloc();
+    _txn.file_size = size;
     std::filesystem::resize_file(filename(), size);
+    return result;
   }
 
   template <typename T>
@@ -450,7 +461,7 @@ struct _MemoryMapFile {
   }
 
   struct Statistics {
-    MemStatistics garbage, ubranch, lbranch, leaves, transactions;
+    MemStatistics garbage, branch, leaf, transaction;
   };
 
   void _garbage_statistics(MemStatistics& tofill) {
@@ -468,40 +479,41 @@ struct _MemoryMapFile {
         if (o == slot.oend) break;
         o = gc->next;
       }
-      tofill.add(BLOCK_SIZES[garbage], count);
-      tofill.add(BLOCK_SIZES[i], slot.count);
+      tofill.add(garbage, count);
+      tofill.add(i, slot.count);
     }
   }
-  /*
-    void _node_statistics(Statistics& stat, offset_t boffset) {
-      size_t size1 = 0, size2 = 0;
-      typedef _UpperBranchNode<BlockHeader> UpperBranchNode;
-      typedef _LowerBranchNode<BlockHeader> LowerBranchNode;
-      typedef typename LowerBranchNode::ptr lbranch_ptr;
-      typedef typename UpperBranchNode::ptr ubranch_ptr;
-      ubranch_ptr ubranch = resolve(boffset);
-      lbranch_ptr lbranch;
-      stat.ubranch.add(ubranch->block_size, 1, ubranch->freespace());
-      ubranch->iterate_links(*this, [&lbranch, &stat, this](const lbranch_ptr&
-    lb, offset_t& offset) { if (lb && lb != lbranch) { lbranch = lb; block_ptr
-    leaf = resolve(lb->leaves); stat.lbranch.add(lb->block_size, 1,
-    lb->freespace()); stat.leaves.add( leaf->block_size, 1, leaf->block_size -
-    lb->leaves_used - sizeof(BlockHeader));
-        }
 
-        if (!isleaf(offset) && lb) {
-          _add_node_statistics(stat, offset);
-        }
-      });
+  void _node_statistics(Statistics& stat, offset_t offset) {
+    size_t size1 = 0, size2 = 0;
+    typedef _TrieNode<Traits> TrieNode;
+    typedef _LeafNode<Traits> LeafNode;
+    using trie_ptr = typename Traits::Pointer<TrieNode>;
+    using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
+
+    if (offset.type() == TRIE) {
+      trie_ptr branch = resolve(offset);
+      stat.branch.add(branch->slot_id, 1,
+                      BLOCK_SIZES[branch->slot_id] - branch->size());
+      auto count = branch->count();
+      offset_e* array = branch->array();
+      for (int i = 0; i < count; i++) {
+        _node_statistics(stat, array[i]);
+      }
+      return;
     }
-  */
+    assert(offset.type() == LEAF);
+    leaf_ptr leaf = resolve(offset);
+    stat.leaf.add(leaf->slot_id, 1, BLOCK_SIZES[leaf->slot_id] - leaf->size());
+  }
+
   void statistics(Statistics& stat) {
     _garbage_statistics(stat.garbage);
-    // _node_statistics(stat, active_txn()->root);
+    _node_statistics(stat, txn()->root);
 
     iter_transactions([this, &stat](txn_ptr txn) -> bool {
       uint16_t bsize = BLOCK_SIZES[txn->slot_id];
-      stat.transactions.add(bsize, 1, bsize - sizeof(Transaction));
+      stat.transaction.add(txn->slot_id, 1, bsize - sizeof(Transaction));
       offset_t offset = resolve(txn);
       return false;
     });

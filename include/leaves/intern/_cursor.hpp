@@ -119,10 +119,15 @@ struct _Transition {
   offset_e* update() {
     if (block->txn_id == cursor->txn_id()) return link();
 
-    if (is_trie())
-      offset = cursor->storage.resolve(cursor->storage.cow(trie));
-    else
-      offset = cursor->storage.resolve(cursor->storage.cow(leaf));
+    if (is_trie()) {
+      trie = cursor->storage.cow(trie);
+      offset = cursor->storage.resolve(trie);
+    }
+    else {
+      leaf = cursor->storage.cow(leaf);
+      offset = cursor->storage.resolve(leaf);
+    }
+    
     if (!is_root())
       *parent().update() = offset;
     else
@@ -351,7 +356,7 @@ struct _Inserter {
   _Inserter(Transition* back_, const Slice& value_, bool first)
       : value(value_), back(back_) {}
 
-  tid_t txn_id() const { return back->cursor->storage.prepared_txn->txn_id; }
+  tid_t txn_id() const { return back->cursor->txn_id(); }
 
   template <typename T>
   offset_t resolve(T ptr) {
@@ -419,7 +424,7 @@ struct _Inserter {
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE;
     back->trie = alloc(TrieNode::size(back->prefix, 2));
     back->link_offset = back->trie->create(
-        Slice(back->trie->compressed(), back->prefix),
+        Slice(otrie->compressed(), back->prefix),
         otrie->compressed()[back->prefix], resolve(child_trie), key);
     free(otrie);
     back->replace(resolve(back->trie));
@@ -451,18 +456,13 @@ struct _Inserter {
   const uint16_t MAX_SIZE = TrieNode::MAX_SIZE;
 
   void add_to_array() {
-    int key = back->key() ? back->branch_key : TrieNode::NONE;
-    key = back->trie->prev(key);
-    if (key == TrieNode::OUT_OF_RANGE) key = back->trie->next(TrieNode::NONE);
-    assert(key != TrieNode::OUT_OF_RANGE);
-
     trie_ptr otrie = back->trie;
-    back->trie = alloc(std::min((uint16_t)(otrie->size() + 2 * sizeof(offset_e)),
-                                (uint16_t)MAX_SIZE));
+    back->trie = alloc(std::min(
+        (uint16_t)(otrie->size() + 2 * sizeof(offset_e)), (uint16_t)MAX_SIZE));
     back->link_offset = back->trie->create(
         *otrie, back->key() ? back->branch_key : TrieNode::NONE);
-
     free(otrie);
+    back->replace(resolve(back->trie));
     create_leaf();
   }
 
@@ -475,8 +475,8 @@ struct _Inserter {
       assert(back->prefix == back->leaf->key_size);
       assert(back->key().empty());
       back->leaf = fill_leaf(oleaf->key());
-      back->replace(resolve(back->leaf));
       free(oleaf);
+      back->replace(resolve(back->leaf));
       return;
     }
     leaf_ptr copy = alloc(
@@ -512,7 +512,9 @@ struct _Cursor {
     root = 0;
   }
 
-  tid_t txn_id() const { return storage.txn()->txn_id; }
+  tid_t txn_id() const {
+    return transaction_active ? storage._txn.txn_id : storage.txn()->txn_id;
+  }
 
   // return true if the cursor is on a valid position
   bool is_valid() const {

@@ -15,7 +15,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-//#define BINARY_KEY
+// #define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -92,8 +92,6 @@ static bool FLAGS_compression = true;
 
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
-
-
 
 #ifdef UNDEF
 namespace leaves {
@@ -421,23 +419,38 @@ class Benchmark {
           size += slot.block_size * slot.count;
           counts += slot.count;
         }
+        std::cout << "CHECK Garbage: " << size << "(" << counts << ")"
+                  << std::endl;
 
-        std::cout << "CHECK Garbage: " << size << "(" << counts << ")" << std::endl;
-
-        std::cout << "NODES" << std::endl;
+        std::cout << "BRANCHES" << std::endl;
         size_t nsize = 0;
-        for (auto slot : stat.ubranch.slots) {
+        for (auto slot : stat.branch.slots) {
           std::cout << "Slot: " << slot.block_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
           nsize += slot.block_size * slot.count;
         }
 
+        std::cout << "LEAVES" << std::endl;
+        for (auto slot : stat.leaf.slots) {
+          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+                    << " : " << slot.free << std::endl;
+          nsize += slot.block_size * slot.count;
+        }
         std::cout << "CHECK Nodes: " << nsize << std::endl;
+
+        nsize = 0;
+        std::cout << "TRANSACTION" << std::endl;
+        for (auto slot : stat.transaction.slots) {
+          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+                    << " : " << slot.free << std::endl;
+          nsize += slot.block_size * slot.count;
+        }
+        std::cout << "CHECK Transactions: " << nsize << std::endl;
 
         size += nsize;
 
         std::cout << std::endl
-                  << "file size: " << txn->file_size << " B" << std::endl;
+                  << "file size: " << txn->file_size / (1024*1024) << " MB" << std::endl;
 #if 0 
         size_t spare = txn->garbage.end_area - txn->garbage.next_free +
                        txn->garbage.end4k - txn->garbage.next4k;
@@ -451,8 +464,6 @@ class Benchmark {
                   << (int)size + (int)spare + 64 - (int)txn->file_size
                   << std::endl;
 #endif
-        std::cout << "leaves: " << txn->leaves
-                  << "  branches: " << txn->branches << std::endl;
       }
     }
   }
@@ -524,11 +535,11 @@ class Benchmark {
         mkey = leaves::Slice(key);
         // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
 #endif
-        
-        /*int iter = i + j;
-        if (iter == 37) {
+
+        int iter = i + j;
+        if (iter == 21794) {
           int p = 0;
-        }*/
+        }
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
