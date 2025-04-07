@@ -5,8 +5,8 @@
 
 #include "_burst.hpp"
 #include "_exception.hpp"
-#include "_node.hpp"
 #include "_inserter.hpp"
+#include "_node.hpp"
 
 namespace leaves {
 
@@ -106,7 +106,8 @@ struct _Transition {
     bool operator>(int) const { return false; }
     bool operator>=(int) const { return true; }
     operator int() const { return 0; }
-  };;
+  };
+  ;
   std::conditional_t<Traits::BURST, int, Empty> index;
 
   offset_e* link() {
@@ -123,12 +124,13 @@ struct _Transition {
   bool is_trie() const { return offset.type() == TRIE; }
   bool is_burst() const { return offset.type() == BURST; }
 
-  bool success() const { return cmp == 0 && is_leaf(); }
+  bool success() const { return cmp == 0 && (is_leaf() || is_burst()); }
 
   bool init(Cursor* cursor_, offset_t offset_, uint16_t keypos_ = 0) {
     cursor = cursor_;
     keypos = keypos_;
     prefix = 0;
+    if (Traits::BURST) index = 0;
     cmp = Transition::UNDEFINED;
     offset = offset_;
     link_offset = 0xFFFF;
@@ -149,13 +151,9 @@ struct _Transition {
   offset_e* update() {
     if (block->txn_id == cursor->txn_id()) return link();
 
-    if (is_trie()) {
-      trie = cursor->storage.cow(trie);
-      offset = cursor->storage.resolve(trie);
-    } else {
-      leaf = cursor->storage.cow(leaf);
-      offset = cursor->storage.resolve(leaf);
-    }
+    assert(is_trie());
+    trie = cursor->storage.cow(trie);
+    offset = cursor->storage.resolve(trie);
 
     if (!is_root())
       *parent().update() = offset;
@@ -196,11 +194,7 @@ struct _Transition {
   KeyString& current_key() { return cursor->current_key; }
 
   void find() {
-    if (Traits::BURST && is_burst()) {
-      burst->find(*this);
-      cmp = 0;
-      return;
-    }
+    if (Traits::BURST && is_burst()) return burst->find(*this);
 
     if (is_leaf()) {
       LeafNode& leaf_ = *leaf;
@@ -217,7 +211,7 @@ struct _Transition {
     if (prefix < trie_._compressed_len) return;
 
     if (key().empty()) {
-      if (trie_.has_null()) {
+      if (trie_.has_none()) {
         push(trie_.offset(TrieNode::NONE));
         child().find();
       } else
@@ -253,6 +247,12 @@ struct _Transition {
     return this[-1];
   }
 
+  Slice value() const {
+    if (Traits::BURST && is_burst()) return burst->value(index);
+    if (is_leaf()) return leaf->value();
+    return Slice();
+  }
+
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void first() {
@@ -280,9 +280,28 @@ struct _Transition {
 
     TrieNode& trie_ = *trie;
     if (cmp == 0) {
-      link_offset += sizeof(offset_e);
-      offset_e* lnk = link();
-      if (lnk >= trie_.array() + trie_.count()) return false;
+      offset_e* lnk;
+      if (Traits::BURST) {
+        offset_e* last = link();
+        offset_e* end = trie_.array() + trie_.count();
+        link_offset += sizeof(offset_e);
+        lnk = link();
+        while (*lnk == *last && lnk < end) {
+          link_offset += sizeof(offset_e);
+          lnk = link();
+        }
+        if (lnk >= end) return false;
+      } else {
+        link_offset += sizeof(offset_e);
+        lnk = link();
+        offset_e* end = trie_.array() + trie_.count();
+        if (lnk >= end) return false;
+#ifdef __GNUC__
+        for(offset_e* l = lnk; l < end; l++) {
+          __builtin_prefetch(resolve(*(l)));
+        }
+#endif
+      }
       push(lnk).first();
       return true;
     }
@@ -297,8 +316,23 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int next_ = trie_.next(branch_key);
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
-    push(trie_.offset(next_)).first();
+    const offset_e* next_offset = trie_.offset(next_);
     branch_key = (uint8_t)next_;
+
+    if (Traits::BURST) {
+      Transition& bottom = push(next_offset);
+      assert(bottom.is_burst());
+      cursor->rest_key = Slice(&branch_key, 1);
+      bottom.burst->find(bottom);
+      assert(bottom.cmp <= 0);
+      if (bottom.cmp) {
+        bool found = bottom.next();
+        assert(found);
+      }
+      cursor->rest_key.reset();
+    } else
+      push(next_offset).first();
+
     return true;
   }
 
@@ -319,9 +353,29 @@ struct _Transition {
 
     TrieNode& trie_ = *trie;
     if (cmp == 0) {
-      link_offset -= sizeof(offset_e);
-      offset_e* lnk = link();
-      if (lnk < trie_.array()) return false;
+      offset_e* lnk;
+      if (Traits::BURST) {
+        offset_e* last = link();
+        offset_e* begin = trie_.array();
+        link_offset -= sizeof(offset_e);
+        lnk = link();
+        while (*lnk == *last && lnk >= begin) {
+          link_offset -= sizeof(offset_e);
+          lnk = link();
+        }
+        if (lnk < begin) return false;
+      } else {
+        link_offset -= sizeof(offset_e);
+        lnk = link();
+        offset_e* begin = trie_.array();
+        if (lnk < begin) return false;
+#ifdef __GNUC__
+        for(offset_e* l = lnk; l >= begin; l--) {
+          __builtin_prefetch(resolve(*(l)));
+        }
+#endif
+      }
+
       push(lnk).last();
       branch_key = current_key()[child().keypos];
       return true;
@@ -337,8 +391,23 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int prev_ = trie_.prev(branch_key);
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
-    push(trie_.offset(prev_)).last();
+    const offset_e* prev_offset = trie_.offset(prev_);
     branch_key = (uint8_t)prev_;
+
+    if (Traits::BURST && prev_offset->type() == BURST) {
+      Transition& bottom = push(prev_offset);
+      assert(bottom.is_burst());
+      cursor->rest_key = Slice(&branch_key, 1);
+      bottom.burst->find(bottom);
+      assert(bottom.cmp <= 0);
+      if (bottom.cmp) {
+        bool found = bottom.prev();
+        assert(found);
+      }
+      cursor->rest_key.reset();
+    } else
+      push(trie_.offset(prev_)).last();
+
     return true;
   }
 
@@ -472,8 +541,7 @@ struct _Cursor {
 
   Slice value() const {
     const Transition& back = stack.back();
-    if (back.cmp || !back.is_leaf()) return Slice();
-    return back.leaf->value();
+    return back.cmp == 0 ? back.value() : Slice();
   }
 
   Slice key() const { return current_key; }

@@ -1,5 +1,5 @@
 /*
-Test the trie nodes without bursting.
+Test the the cursor with without burst table
 */
 #define BOOST_TEST_MODULE TrieTest
 #define GENERATE
@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(insert_start_short) {
   // A variant of insert_compress_extend
   Preparation p;
   DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
   cursor.find("abc");
   cursor.value(string("abc"));
   cursor.commit();
@@ -53,7 +53,7 @@ BOOST_AUTO_TEST_CASE(insert_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
   DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
   cursor.find("");
   cursor.value(string("aaa"));
   cursor.commit();
@@ -69,7 +69,7 @@ BOOST_AUTO_TEST_CASE(change_start) {
   // A variant of insert_compress_extend
   Preparation p;
   DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
   cursor.find("abc");
   cursor.value(string("aaa"));
   cursor.commit();
@@ -85,7 +85,7 @@ BOOST_AUTO_TEST_CASE(change_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
   DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
   cursor.find("");
   cursor.value(string("aaa"));
   cursor.commit();
@@ -125,7 +125,7 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
                         "abcde", "abcdef", "abcdeg", NULL};
   test_insertion(storage, "insert_big_stack", keys);
 
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
   std::cout << "insert 7: abcd*" << std::endl;
 
   cursor.find("abcd*");
@@ -198,7 +198,7 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
   Preparation p;
   DBMMap storage(TEST_FILE);
   uint16_t i;
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
   for (i = 0; i < 258; i++) {
     uint16_t key = native_to_big(i);
     Slice skey((char *)&key, sizeof(key));
@@ -281,7 +281,7 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
   DBMMap storage(TEST_FILE);
   Slice key("abcdefg");
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
 
   cursor.find(key);
   BOOST_REQUIRE(!cursor.is_valid());

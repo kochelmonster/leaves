@@ -36,7 +36,7 @@ static const char SIGNATURE[] = "larch-leaves";
 static const size_t SIGNATURE_SIZE = padding(sizeof(SIGNATURE), 8);
 
 // definition og all headers and data types
-struct _MemoryMapBlocks {
+struct _MemoryMapTraits {
   typedef uint8_t hash_t[0];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
@@ -66,11 +66,11 @@ struct _MemoryMapBlocks {
   static constexpr bool BURST = false;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {
-      _TrieNode<_MemoryMapBlocks>::size(1, 10),   // digits 0-9
-      _TrieNode<_MemoryMapBlocks>::size(1, 16),   // hex 0-9A-F
-      _TrieNode<_MemoryMapBlocks>::size(1, 64),   // base64
-      _TrieNode<_MemoryMapBlocks>::size(1, 127),  // utf-8
-      _TrieNode<_MemoryMapBlocks>::size(1, 256),  // binary
+      _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
+      _TrieNode<_MemoryMapTraits>::size(1, 16),   // hex 0-9A-F
+      _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
+      _TrieNode<_MemoryMapTraits>::size(1, 127),  // utf-8
+      _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
       PAGE_SIZE};
 
   typedef SimplePointer<BlockHeader> Pointers;
@@ -79,7 +79,7 @@ struct _MemoryMapBlocks {
   using Pointer = typename Pointers::template Pointer<T, type>;
 
   struct _Transaction : public BlockHeader {
-    typedef _MemManager<_MemoryMapBlocks> MemManager;
+    typedef _MemManager<_MemoryMapTraits> MemManager;
 
     /* the size of the file, this should be always equal the
        size of the database file. But in case of a crash during
@@ -126,6 +126,10 @@ struct _MemoryMapBlocks {
   };
 };
 
+struct _MemoryMapBurstTraits : public _MemoryMapTraits {
+  static constexpr bool BURST = true;
+};
+
 template <typename Traits_>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
@@ -142,6 +146,7 @@ struct _MemoryMapFile {
   static const bool is_transactional = true;
   typedef _MemoryMapFile<Traits> MemoryMapFile;
   typedef _MemStatistics<Traits> MemStatistics;
+  typedef _Cursor<MemoryMapFile> Cursor;
 
   struct FileHeader {
     char signature[SIGNATURE_SIZE];
@@ -503,9 +508,10 @@ struct _MemoryMapFile {
       }
       return;
     }
-    assert(offset.type() == LEAF);
-    leaf_ptr leaf = resolve(offset);
-    stat.leaf.add(leaf->slot_id, 1, BLOCK_SIZES[leaf->slot_id] - leaf->size());
+    if (!Traits::BURST || offset.type() == LEAF) {
+      leaf_ptr leaf = resolve(offset);
+      stat.leaf.add(leaf->slot_id, 1, BLOCK_SIZES[leaf->slot_id] - leaf->size());
+    }
   }
 
   void statistics(Statistics& stat) {
@@ -521,8 +527,8 @@ struct _MemoryMapFile {
   }
 };
 
-typedef _MemoryMapFile<_MemoryMapBlocks> DBMMap;
-typedef _Cursor<DBMMap> Cursor;
+typedef _MemoryMapFile<_MemoryMapTraits> DBMMap;
+typedef _MemoryMapFile<_MemoryMapBurstTraits> DBMMapBurst;
 
 }  // namespace leaves
 

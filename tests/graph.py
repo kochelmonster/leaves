@@ -15,6 +15,9 @@ LNODE = ('"{id}" [fillcolor=darkolivegreen1 label="(({id})|({keysize}-{key})|'
 TNODE = '"{id}" [fillcolor=yellow label="(({id})|{compress}({slots}))"]'.replace(
     "(", "{{").replace(")", "}}")
 
+BNODE = '"{id}" [fillcolor=lightblue label="(({id})|({count})|({sitems}))"]'.replace(
+    "(", "{{").replace(")", "}}")
+
 
 class Graph:
     def make_graph(self, nodes):
@@ -35,13 +38,13 @@ class Graph:
             free = pnodes[0]["freespace"]
             size = pnodes[0]["size"]
             txn = pnodes[0]["txn"]
-            #add(f"subgraph cluster_Page{k} {{")
-            #add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
+            # add(f"subgraph cluster_Page{k} {{")
+            # add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
                 add(getattr(self, "handle_" + type_)(n))
-            #add("}")
+            # add("}")
 
         # add connections
         for n in nodes:
@@ -66,11 +69,18 @@ class Graph:
 
         slots = "|".join(f"<f{i}> {b}" for i, b in enumerate(children))
         return TNODE.format(compress=compress, slots=slots, **node)
-    
+
     def handle_leaf(self, node):
         if len(node["value"]) > MAX_VAL_SIZE:
             node["value"] = node["value"][:MAX_VAL_SIZE] + "..."
         return LNODE.format(**node)
+
+    def handle_burst(self, node):
+        items = []
+        for i, item in enumerate(node["items"]):
+            items.append("{" + f"{i}|" +  item["key"] + "|" + item["value"][:10] + "}")
+        items = "{" + "|".join(items) + "}"
+        return BNODE.format(sitems=items, **node)
 
 
 def main(paths):
@@ -81,8 +91,8 @@ def main(paths):
 
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
-            #print(Graph().make_graph(list(filter(bool, nodes))))
-            #return 0
+            # print(Graph().make_graph(list(filter(bool, nodes))))
+            # return 0
             sarge.run(
                 f"dot -Tsvg > {dest}",
                 input=Graph().make_graph(list(filter(bool, nodes))),

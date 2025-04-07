@@ -537,12 +537,14 @@ std::string number(int number, size_t size = 0) {
   return f.str();
 }
 
+typedef DBMMapBurst Storage;
+
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
-  { DBMMap storage(TEST_FILE); }
+  { Storage storage(TEST_FILE); }
 
-  DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  Storage storage(TEST_FILE);
+  Storage::Cursor cursor(storage);
 
   std::ostream null_stream(nullptr);
   size_t count;
@@ -567,7 +569,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
            << ".yaml";
       std::ofstream out(cstr.str().c_str());
       auto root = storage._txn.root;
-      Dumper::dump_link(out, root, &storage);
+      _Dumper<Storage>::dump_link(out, root, &storage);
     }
     if (count % 20 == 0 && count > 0) {
       cursor.commit();
@@ -579,7 +581,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
   auto root = storage.txn()->root;
-  Dumper::dump_link(out, root, &storage);
+  _Dumper<Storage>::dump_link(out, root, &storage);
     
   std::cout << "start test: " << count << std::endl;
   for (int i = 0; i < 100; i++) {

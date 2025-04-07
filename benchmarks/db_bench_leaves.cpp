@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "leaves/intern/_mmap.hpp"
+#include "leaves/intern/_check.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
@@ -15,7 +16,10 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-// #define BINARY_KEY
+typedef leaves::DBMMap Storage;
+//typedef leaves::DBMMapBurst Storage;
+
+//#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -160,7 +164,7 @@ static Slice TrimSpace(Slice s) {
 
 class Benchmark {
  private:
-  leaves::DBMMap* db_;
+  Storage* db_;
   int db_num_;
   int num_;
   int reads_;
@@ -406,12 +410,14 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
+
+#ifdef STATISTICS        
         auto txn = db_->txn();
 
         size_t size = 0;
         size_t counts = 0;
         std::cout << "GARBAGE" << std::endl;
-        leaves::DBMMap::Statistics stat;
+        Storage::Statistics stat;
         db_->statistics(stat);
         for (auto slot : stat.garbage.slots) {
           std::cout << "Slot: " << slot.block_size << ": " << slot.count
@@ -450,7 +456,9 @@ class Benchmark {
         size += nsize;
 
         std::cout << std::endl
-                  << "file size: " << txn->file_size / (1024*1024) << " MB" << std::endl;
+                  << "file size: " << txn->file_size / (1024 * 1024) << " MB"
+                  << std::endl;
+#endif                  
 #if 0 
         size_t spare = txn->garbage.end_area - txn->garbage.next_free +
                        txn->garbage.end4k - txn->garbage.next4k;
@@ -485,7 +493,7 @@ class Benchmark {
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
-    db_ = new leaves::DBMMap(test_fname.c_str());
+    db_ = new Storage(test_fname.c_str());
   }
 
   void Write(bool sync, Order order, DBState state, int num_entries,
@@ -519,7 +527,7 @@ class Benchmark {
     char key[100];
     int flag = 0, rc;
 
-    leaves::Cursor cursor(*db_);
+    Storage::Cursor cursor(*db_);
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
       for (int j = 0; j < entries_per_batch; j++) {
@@ -537,10 +545,10 @@ class Benchmark {
 #endif
         /*
         int iter = i + j;
-        if (iter == 2) {
+        if (iter == 404) {
           int p = 0;
-        }*/
-
+        }
+        */
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
@@ -549,12 +557,14 @@ class Benchmark {
         FinishedSingleOp();
 
         /*
-        char path[100];
-        snprintf(path, sizeof(path), "errors/%016d.yaml", i+j);
-        std::ofstream out(path);
-        auto root = db_->_txn.root;
-        typedef leaves::_Dumper<leaves::DBMMap> Dumper;
-        Dumper::dump_link(out, root, db_);*/
+        if (iter == 403 || iter == 404) {
+          char path[100];
+          snprintf(path, sizeof(path), "errors/%016d.yaml", iter);
+          std::ofstream out(path);
+          auto root = db_->_txn.root;
+          typedef leaves::_Dumper<Storage> Dumper;
+          Dumper::dump_link(out, root, db_);
+        }*/
       }
       cursor.commit();
     }
@@ -584,7 +594,7 @@ class Benchmark {
 
   void ReadSequential() {
     leaves::Slice key, value;
-    leaves::Cursor cursor(*db_);
+    Storage::Cursor cursor(*db_);
     for (cursor.first(); cursor.is_valid(); cursor.next()) {
       key = cursor.key();
       value = cursor.value();
@@ -595,7 +605,7 @@ class Benchmark {
 
   void ReadRandom() {
     leaves::Slice key;
-    leaves::Cursor cursor(*db_);
+    Storage::Cursor cursor(*db_);
     char ckey[100];
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;

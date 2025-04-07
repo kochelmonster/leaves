@@ -96,6 +96,7 @@ COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
 COMMAND ./test_cursor
+COMMAND ./test_burst
 COMMAND ./test_node
 COMMAND ./test_memory
 COMMAND ./test_bits
@@ -104,7 +105,7 @@ COMMAND ./test_db
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_burst
 )
 
 endif(LEAVES_BUILD_TESTS)

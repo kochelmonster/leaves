@@ -1,7 +1,7 @@
 #ifndef _LEAVES_BURST_HPP
 #define _LEAVES_BURST_HPP
 
-#include "_node.hpp"
+#include "./_node.hpp"
 
 namespace leaves {
 
@@ -34,9 +34,9 @@ struct _BurstTable : public Traits::BlockHeader {
   using burst_ptr = typename Traits::Pointer<BurstTable, BURST>;
 
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static const uint16_t SLOT_ID =
+  static constexpr uint16_t SLOT_ID =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]) - 1;
-  static const uint16_t SIZE = BLOCK_SIZES[SLOT_ID];
+  static constexpr uint16_t SIZE = BLOCK_SIZES[SLOT_ID];
 
   struct BurstTraits : public Traits {
     struct BlockHeader {};
@@ -96,7 +96,7 @@ struct _BurstTable : public Traits::BlockHeader {
   bool next(Transition& back) const {
     assert(back.index >= 0);
     assert(back.index <= count);
-    if (back.cmp >= 0) {
+    if (back.cmp <= 0) {
       if (++back.index >= count) return false;
     }
     append_key(back);
@@ -107,15 +107,13 @@ struct _BurstTable : public Traits::BlockHeader {
   bool prev(Transition& back) const {
     assert(back.index >= 0);
     assert(back.index <= count);
-    if (back.cmp <= 0) {
-      if (back.index-- == 0) return false;
-    }
+    if (back.index-- == 0) return false;
     append_key(back);
     return true;
   }
 
   template <typename Transition>
-  bool find(Transition& back) const {
+  void find(Transition& back) const {
     // optimation for append
     const Item* item_ = item(count - 1);
     const Slice& key = back.key();
@@ -123,32 +121,38 @@ struct _BurstTable : public Traits::BlockHeader {
     switch (back.cmp) {
       case -1:
         back.index = count;
-        return false;
+        return;
       case 0:
         back.index = count - 1;
         back.advance_key(item_->key_size);
-        return false;
+        return;
     }
 
-    int lo = 0, hi = count - 2, cmp = -1;
+    int lo = 0, hi = count - 2;
     while (lo <= hi) {
       int pivot_ = (lo + hi) / 2;
       item_ = item(pivot_);
-      cmp = item_->compare(key);
+      int cmp = item_->compare(key);
       if (cmp < 0) {
         lo = pivot_ + 1;
       } else if (cmp > 0) {
         hi = pivot_ - 1;
       } else {
-        lo = hi = pivot_;
+        back.index = pivot_;
+        back.cmp = 0;
         back.advance_key(item_->key_size);
-        break;
+        return;
       }
     }
 
-    back.cmp = cmp;
     back.index = lo;
-    return false;
+    back.cmp = item(back.index)->compare(key);
+  }
+
+  Slice value(int index) const {
+    assert(index >= 0);
+    assert(index < count);
+    return item(index)->value();
   }
 
   bool can_insert(const Slice& key, const Slice& value) const {
@@ -161,29 +165,38 @@ struct _BurstTable : public Traits::BlockHeader {
     assert(back.index >= 0);
     assert(back.index <= count);
     if (back.cmp == 0) {
-      // remove old item
+      // change old item
       uint16_t offset = offsets[back.index];
-      uint8_t* src = (uint8_t*)resolve(offset);
-      uint8_t* dst = src + ((Item*)src)->size();
-      memmove(dst, src, offset - last_item);
-      uint16_t delta = dst - src;
+      Item* item_ = (Item*)resolve(offset);
+      int delta = value.size() - item_->vsize();
+      memmove(resolve(last_item + delta), resolve(last_item),
+              offset + item_->key_size - last_item);
+      last_item += delta;
       for (uint16_t i = 0; i < count; i++) {
-        if (offsets[i] < offset) offsets[i] += delta;
+        if (offsets[i] <= offset) offsets[i] += delta;
       }
-    } else {
-      // back.index is the next index > the key to insert
-      memmove(&offsets[back.index + 1], &offsets[back.index],
-              sizeof(uint16_t) * (count - back.index));
-    }
-    uint16_t size = Item::size(back.key(), value);
+      item_ = (Item*)resolve(offset);
+      item_->value_size = value.size();
+      memcpy(item_->vdata(), value.data(), value.size());  
+      check();
+      return;
+    } 
+
+    // back.index is the next index > the key to insert
+    memmove(&offsets[back.index + 1], &offsets[back.index],
+            sizeof(uint16_t) * (count - back.index));
+    const Slice& bkey = back.key();
+    uint16_t size = Item::size(bkey, value);
     last_item -= size;
     offsets[back.index] = last_item;
     Item* item_ = (Item*)resolve(last_item);
     // TODO: Big value handling
-    item_->key_size = back.key().size();
+    item_->key_size = bkey.size();
     item_->value_size = value.size();
-    memcpy(item_->data, back.key().data(), item_->key_size);
+    memcpy(item_->data, bkey.data(), item_->key_size);
     memcpy(item_->vdata(), value.data(), value.size());
+    count++;
+    check();
   }
 
   // copy whole page without blockheader
@@ -202,61 +215,9 @@ struct _BurstTable : public Traits::BlockHeader {
                    first->key_size, last->key_size, cmp);
     return Slice(first->data, prefix);
   }
-#if 0
-  // hybrid burst (see https://tessil.github.io/2017/06/22/hat-trie.html)
-  // prefix has to be calculated before
-  template <typename Inserter>
-  uint8_t burst(Inserter& inserter, size_t prefix) {
-    burst_ptr burst1 = inserter.alloc(PAGE_SIZE);
-    burst_ptr burst2 = inserter.alloc(PAGE_SIZE);
 
-    offset_t oburst1 = inserter.resolve(burst1),
-             oburst2 = inserter.resolve(burst2);
-
-    uint8_t split_char = item(count / 2)->key_value[prefix];
-    uint8_t last_fchar = 0xff;
-
-    const Item* first = item(0);
-    if (first->key_size > prefix) {
-      last_fchar = first->key_value[prefix];
-      burst1->add_item(0, first, prefix);
-      node->add_array();
-      array = node->array();
-      *array->add(last_fchar) = oburst1;
-    } else {
-      // null key
-      node->add_null_leaf(Slice(first->vdata(), first->value_size));
-      node->add_array();
-      array = node->array();
-    }
-
-    psize_t i = 1;
-    for (; i < count; i++) {
-      const Item* j = item(i);
-      uint8_t fchar = j->key_value[prefix];
-      if (fchar > split_char) break;
-      burst1->add_item(i, j, prefix);
-      if (last_fchar != fchar) {
-        last_fchar = fchar;
-        *array->add(fchar) = oburst1;
-      }
-    }
-    psize_t offset = i;
-    for (; i < count; i++) {
-      const Item* j = item(i);
-      uint8_t fchar = j->key_value[prefix];
-      burst2->add_item(i - offset, j, prefix);
-      if (last_fchar != fchar) {
-        last_fchar = fchar;
-        *array->add(fchar) = oburst2;
-      }
-    }
-
-    return split_char;
-  }
-#endif
   void add_item(uint16_t index, const Item* src, uint8_t prefix) {
-    assert(prefix <= src->key_size);
+    assert(prefix < src->key_size);
     uint16_t size = Item::size(src->key_size - prefix, src->vsize());
     last_item -= size;
     count = index + 1;
@@ -264,8 +225,20 @@ struct _BurstTable : public Traits::BlockHeader {
     Item* item = (Item*)resolve(last_item);
     item->key_size = src->key_size - prefix;
     item->value_size = src->value_size;
-    memcpy(item->data, src->data, item->key_size);
+    memcpy(item->data, &src->data[prefix], item->key_size);
     memcpy(item->vdata(), src->vdata(), item->vsize());
+  }
+
+  void check() const {
+#if defined(_DEBUG)    
+    assert(count > 0);
+    assert(last_item >= sizeof(uint16_t) * count + META_SIZE);
+    for (uint16_t i = 0; i < count; i++) {
+      assert(offsets[i] >= sizeof(uint16_t) * count + META_SIZE);
+      assert(offsets[i] < SIZE);
+      assert(item(i)->key_size > 0);
+    }
+#endif    
   }
 };
 #pragma pack(0)

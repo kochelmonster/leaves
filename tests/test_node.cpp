@@ -80,7 +80,7 @@ void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
   BOOST_CHECK_EQUAL(offset, *offsets++);
   BOOST_CHECK_EQUAL(trie1.count(), 5);
 
-  BOOST_CHECK(trie1.has_null());
+  BOOST_CHECK(trie1.has_none());
   BOOST_CHECK(trie1.isset(5));
   BOOST_CHECK(trie1.isset(70));
   BOOST_CHECK(trie1.isset(130));

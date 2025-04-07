@@ -72,7 +72,7 @@ struct _TrieNode : public Traits::BlockHeader {
   }
 
   Slice memory() const { return Slice((char*)this, size()); }
-  bool has_null() const { return _array_len & NULL_MASK; }
+  bool has_none() const { return _array_len & NULL_MASK; }
 
   // create a trie node with a prefix and two keys; returns a the link offset
   // for key2
@@ -213,7 +213,7 @@ struct _TrieNode : public Traits::BlockHeader {
     _lower_offset = lower_start_ / sizeof(uint32_e);
     uint16_t array_start_ = calc_array_start();
     _array_offset = array_start_ / sizeof(offset_e);
-    
+
     offset_e* array_ = (offset_e*)((char*)this + array_start_);
     memcpy(array_, src.array(), oidx * sizeof(offset_e));
     memcpy(array_ + oidx + 1, src.array() + oidx,
@@ -221,7 +221,8 @@ struct _TrieNode : public Traits::BlockHeader {
     return (char*)(array_ + oidx) - (char*)this;
   }
 
-  void create(const Slice& prefix, uint8_t upper, offset_e offsets[257]) {
+  // in offset[-1] is the none leaf
+  void create(const Slice& prefix, uint8_t upper, offset_e* offsets) {
     assert(prefix.size() < 256);
     _upper = upper;
     _compressed_len = prefix.size();
@@ -233,25 +234,25 @@ struct _TrieNode : public Traits::BlockHeader {
     offset_e* array_ = array();
     uint32_e* lower_ = lower();
     memset(lower_, 0, lower_size());
-    if (offsets[0]) {
-      _array_len = TrieNode::NULL_MASK;
-      *array_++ = offsets[0];
-    }
-    else _array_len = 0;
+    if (offsets[NONE]) {
+      _array_len = 1 | TrieNode::NULL_MASK;
+      *array_++ = offsets[NONE];
+    } else
+      _array_len = 0;
 
-    offsets++;
-    for (int i = 0; i < 256; i++, offsets++) {
-      if (*offsets) {
+    for (int i = 0; i < 256; i++) {
+      if (offsets[i]) {
         _array_len++;
-        *array_++ = *offsets;
-        lower_[bits::index(_upper, i)] |= 1 << lbit(i);
+        *array_++ = offsets[i];
+        assert((_upper & (1 << ubit(i))));
+        lower_[bits::index(_upper, ubit(i))] |= 1 << lbit(i);
       }
     }
   }
 
   void remove(int nchar) {
     if (nchar == NONE) {
-      if (has_null()) {
+      if (has_none()) {
         offset_e* a = array();
         memmove(a, a + 1, array_size() - sizeof(offset_e));
         _array_len &= ~NULL_MASK;
@@ -304,7 +305,7 @@ struct _TrieNode : public Traits::BlockHeader {
 
   // returns the link for nchar
   const offset_e* offset(int nchar) const {
-    if (nchar == NONE) return has_null() ? array() : nullptr;
+    if (nchar == NONE) return has_none() ? array() : nullptr;
 
     uint32_e* lower_ = lower();
     int lidx = bits::index(_upper, ubit(nchar));
@@ -322,7 +323,7 @@ struct _TrieNode : public Traits::BlockHeader {
 
   int _prev_lower(int nchar) const {
     int lidx = bits::prev(_upper, ubit(nchar));
-    if (lidx < 0) return has_null() ? NONE : OUT_OF_RANGE;
+    if (lidx < 0) return has_none() ? NONE : OUT_OF_RANGE;
     int lbit_idx = bits::last(lower()[bits::index(_upper, lidx)]);
     return (lidx << 5) | lbit_idx;
   }
@@ -344,9 +345,10 @@ struct _TrieNode : public Traits::BlockHeader {
     return (lidx << 5) | lbit_idx;
   }
 
-  int next(int nchar) {
+  int next(int nchar) const {
     if (nchar == NONE) {
       int lidx = bits::first(_upper);
+      if (lidx < 0) return OUT_OF_RANGE;
       return (lidx << 5) | bits::first(lower()[0]);
     }
     if (!(_upper & (1 << ubit(nchar)))) return _next_lower(nchar);
@@ -354,6 +356,11 @@ struct _TrieNode : public Traits::BlockHeader {
         lbit_idx = bits::next(lower()[lidx], lbit(nchar));
     if (lbit_idx < 0) return _next_lower(nchar);
     return (ubit(nchar) << 5) | lbit_idx;
+  }
+
+  int first() const {
+    if (has_none()) return NONE;
+    return (bits::first(_upper) << 5) | bits::first(lower()[0]);
   }
 };
 
@@ -391,115 +398,6 @@ struct _LeafNode : public Traits::BlockHeader {
 };
 
 #pragma pack(0)
-
-#ifdef DEBUG
-
-inline std::string bitstr(char bit) {
-  std::stringstream cstr;
-  if (isprint(bit) && bit != '"' && bit != '<' && bit != '>' && bit != ']' &&
-      bit != '\\' && bit != '}' && bit != '{') {
-    cstr << bit;
-  } else {
-    cstr << "0x" << std::hex << (unsigned)(unsigned char)bit << std::dec;
-  }
-  return cstr.str();
-}
-
-template <typename Storage>
-struct _Dumper {
-  using Traits = typename Storage::Traits;
-  typedef _TrieNode<Traits> TrieNode;
-  typedef _LeafNode<Traits> LeafNode;
-  using offset_e = typename Traits::offset_e;
-  using uint16_e = typename Traits::uint16_e;
-  using trie_ptr = typename Traits::Pointer<TrieNode>;
-  using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
-
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-
-  static void dump_leaf(std::ostream& out, offset_e offset, Storage* storage) {
-    leaf_ptr leaf = storage->resolve(offset);
-    uint16_t size = leaf->size();
-    out << "type: leaf" << std::endl;
-    out << "id: " << (offset._offset) << std::endl;
-    out << "page: " << offset.page() << std::endl;
-    out << "freespace: " << BLOCK_SIZES[leaf->slot_id] - size << std::endl;
-    out << "size: " << size << std::endl;
-    out << "txn: " << leaf->txn_id << std::endl;
-    out << "keysize: " << (uint16_t)leaf->key_size << std::endl;
-    out << "key: \"";
-    for (int i = 0; i < leaf->key_size; i++) {
-      out << "[" << bitstr(leaf->data[i]) << "]";
-    }
-    out << "\"" << std::endl;
-    out << "valuesize: " << leaf->value_size << std::endl;
-    out << "value: \"";
-    int delta = leaf->key_size;
-    for (size_t i = 0, end = std::min((size_t)leaf->value_size, (size_t)10);
-         i < end; i++) {
-      out << "[" << bitstr(leaf->data[i + delta]) << "]";
-    }
-    out << "\"" << std::endl;
-
-    out << "---" << std::endl;
-  }
-
-  static void dump_link(std::ostream& out, offset_t link, Storage* storage) {
-    if (link.type() == LEAF)
-      dump_leaf(out, link, storage);
-    else
-      dump_trie(out, link, storage);
-  }
-
-  static void dump_trie(std::ostream& out, offset_t offset, Storage* storage) {
-    trie_ptr trie = storage->resolve(offset);
-
-    uint16_t size = trie->size();
-    out << "type: trie" << std::endl;
-    out << "id: " << offset._offset << std::endl;
-    out << "page: " << offset.page() << std::endl;
-    out << "txn: " << trie->txn_id << std::endl;
-    out << "size: " << size << std::endl;
-    out << "freespace: " << BLOCK_SIZES[trie->slot_id] - size << std::endl;
-    out << "compressed: " << std::endl;
-    out << "  size: " << (int)trie->_compressed_len << std::endl;
-    out << "  key: \"";
-    for (int i = 0; i < trie->_compressed_len; i++) {
-      out << "[" << bitstr(trie->compressed()[i]) << "]";
-    }
-    out << "\"" << std::endl;
-
-    offset_e* start = trie->array();
-    offset_e* end = start + trie->count();
-
-    out << "branches: \"";
-    for (offset_e* iter = start; iter < end; iter++) {
-      if (iter->type() == LEAF) {
-        leaf_ptr leaf = storage->resolve(*iter);
-        if (leaf->key_size)
-          out << "[" << bitstr(leaf->data[0]) << "]";
-        else
-          out << "[]";
-      } else {
-        trie_ptr node = storage->resolve(*iter);
-        out << "[" << bitstr(node->compressed()[0]) << "]";
-      }
-    }
-    out << "\"" << std::endl;
-
-    out << "children: " << std::endl;
-    for (offset_e* iter = start; iter < end; iter++) {
-      out << "  - " << iter->_offset << std::endl;
-    }
-
-    out << "---" << std::endl;
-
-    for (offset_e* iter = start; iter < end; iter++) {
-      dump_link(out, *iter, storage);
-    }
-  }
-};
-#endif
 }  // namespace leaves
 
 #endif  // _LEAVES__NODE_HPP

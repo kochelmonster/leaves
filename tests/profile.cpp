@@ -21,7 +21,7 @@ struct Preparation {
 
 void create() {
   DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
@@ -52,7 +52,7 @@ void create() {
 
 void read() {
   DBMMap storage(TEST_FILE);
-  Cursor cursor(storage);
+  DBMMap::Cursor cursor(storage);
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
