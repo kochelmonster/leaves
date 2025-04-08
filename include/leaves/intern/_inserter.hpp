@@ -46,19 +46,13 @@ struct _Inserter {
 
   // insert the very first value
   void first() {
-    Slice bkey = back->key();
-    back->prefix = std::min(bkey.size(), (size_t)10);
-    if (back->prefix > 1) back->prefix--;  // keep one for trie
-
-    back->trie = alloc(TrieNode::size(back->prefix, 1));
-    back->offset = resolve(back->trie);
-    back->link_offset = back->trie->create(
-        Slice(bkey.data(), back->prefix),
-        (bkey.size() > back->prefix ? (back->branch_key = bkey[back->prefix])
-                                    : TrieNode::NONE));
-    back->cursor->set_root(back->offset);
+    const Slice& bkey = back->key();
+    back->leaf = fill_leaf(bkey);
+    back->offset = resolve(back->leaf);
+    back->cmp = 0;
+    back->prefix = bkey.size();
     back->advance_key(back->prefix);
-    create_leaf();
+    back->cursor->set_root(back->offset);
   }
 
   bool split_compressed() {
