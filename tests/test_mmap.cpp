@@ -156,7 +156,7 @@ BOOST_AUTO_TEST_CASE(test_extend) {
     }
   }
 
-  BOOST_CHECK_EQUAL(db.txn()->file_size, 2*AREA_SIZE);
+  BOOST_CHECK_EQUAL(db.txn()->file_size, 2*AREA_SIZE + PAGE_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(test_rollback) {

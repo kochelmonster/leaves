@@ -43,7 +43,7 @@ struct _MemoryMapTraits {
   typedef uint64_t uint64_e;
   typedef tid_t tid_e;
   typedef offset_t offset_e;
-    
+
   /*
   Typical node sizes
   digits: 0-9:     104
@@ -101,7 +101,7 @@ struct _MemoryMapTraits {
     // count of cursors accessing this transaction
     uint32_t count;
 
-    MemManager garbage;
+    MemManager mem_manager;
   };
 
   struct Transaction : public _Transaction {
@@ -124,7 +124,6 @@ struct _MemoryMapTraits {
     }
   };
 };
-
 
 template <typename Traits_>
 struct _MemoryMapFile {
@@ -174,7 +173,7 @@ struct _MemoryMapFile {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
 
-  _MemoryMapFile(const char* path, size_t map_size = 2*G) {
+  _MemoryMapFile(const char* path, size_t map_size = 2 * G) {
     _pid = current_pid();
     init_dbfile(path, map_size);
     // transaction is active if _txn.txn_id > active_txn()->txn_id
@@ -199,9 +198,9 @@ struct _MemoryMapFile {
       _region = mapped_region(_file, read_write, 0, map_size);
       _db = new (_region.get_address()) FileHeader;
 
-      _txn.garbage.init(sizeof(FileHeader));
+      _txn.mem_manager.init(sizeof(FileHeader));
       _txn.txn_id = 1;
-      _txn.file_size = AREA_SIZE;
+      _txn.file_size = _txn.mem_manager. allocation_end;
       _txn.root = _txn.mem_root = 0;
       _txn.next_txn = 0;
       txn_ptr new_txn = _txn.clone(*this);
@@ -313,7 +312,7 @@ struct _MemoryMapFile {
   }
 
   block_ptr alloc_slot(uint16_t slot) {
-    block_ptr result = _txn.garbage.alloc(slot, *this);
+    block_ptr result = _txn.mem_manager.alloc(slot, *this);
     if (!result) {
       assert(0);
       // big value handling
@@ -323,7 +322,7 @@ struct _MemoryMapFile {
   }
 
   void free(block_ptr& block) {
-    bool done = _txn.garbage.free(block, *this);
+    bool done = _txn.mem_manager.free(block, *this);
     if (!done) {
       // the key will be block_size (big endian 4byte) + transaction id (8byte
       // big endian)
@@ -478,8 +477,8 @@ struct _MemoryMapFile {
     const int garbage =
         MemManager::assign_slot(MemManager::GarbageContainer::SIZE);
     for (int i = 0; i < MemManager::COUNT; i++) {
-      auto slot = txn_->garbage.slots[i];
-      // collect bocks
+      auto slot = txn_->mem_manager.slots[i];
+      // collect blocks
       offset_t o = slot.ostart;
       size_t count = 0;
       while (true) {
@@ -494,7 +493,6 @@ struct _MemoryMapFile {
   }
 
   void _node_statistics(Statistics& stat, offset_t offset) {
-    size_t size1 = 0, size2 = 0;
     typedef _TrieNode<Traits> TrieNode;
     typedef _LeafNode<Traits> LeafNode;
     using trie_ptr = typename Traits::Pointer<TrieNode>;

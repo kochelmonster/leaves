@@ -19,7 +19,7 @@ using boost::endian::native_to_big;
 typedef leaves::DBMMap Storage;
 //typedef leaves::DBMMapBurst Storage;
 
-//#define BINARY_KEY
+#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -411,6 +411,8 @@ class Benchmark {
       if (known) {
         Stop(name);
 
+      leaves::_MemoryChecker<Storage>(*db_).check();
+
 #ifdef STATISTICS        
         auto txn = db_->txn();
 
@@ -543,12 +545,12 @@ class Benchmark {
         mkey = leaves::Slice(key);
         // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
 #endif
-        /*
+
         int iter = i + j;
-        if (iter == 404) {
+        /*if (iter == 746995) {
           int p = 0;
-        }
-        */
+        }*/
+
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
@@ -568,28 +570,6 @@ class Benchmark {
       }
       cursor.commit();
     }
-
-#ifdef __DEBUG
-
-    leaves::Statistics stats;
-    db_->statistics(stats, "all", true);
-    std::cout << std::endl;
-
-    std::cout << "size: " << stats.size << std::endl;
-    std::cout << "branches: " << stats.branches << std::endl;
-    std::cout << "leaves: " << stats.leaves << std::endl;
-    for (size_t i = 0; i < leaves::Statistics::POOL_COUNT; i++) {
-      std::cout << "pool " << i << ": " << stats.pools[i].used << " used, "
-                << stats.pools[i].freed << " freed, " << stats.pools[i].frag
-                << " frag, " << stats.pools[i].cused << " cused" << std::endl;
-    }
-
-    std::cout << "grow branch: " << leaves::_grow_branch << std::endl;
-    std::cout << "grow leaf: " << leaves::_grow_leaf << std::endl;
-
-    std::cout << std::endl;
-    std::cout << std::endl;
-#endif
   }
 
   void ReadSequential() {

@@ -5,8 +5,8 @@
 #include <map>
 #include <vector>
 
-#include "leaves/intern/_traits.hpp"
 #include "leaves/intern/_memory.hpp"
+#include "leaves/intern/_traits.hpp"
 
 using namespace leaves;
 
@@ -28,7 +28,7 @@ struct TestTraits {
 
   typedef SimplePointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
-  template <typename T, NodeTypes type=TRIE>
+  template <typename T, NodeTypes type = TRIE>
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
@@ -74,9 +74,9 @@ struct TestStorage {
 
   bool free(block_ptr p) { return mm.free(p, *this); }
 
-  uint64_t alloc_space(size_t size) { 
+  uint64_t alloc_space(size_t size) {
     size_t old_size = memory.size();
-    memory.resize(old_size +  size); 
+    memory.resize(old_size + size);
     return old_size;
   }
 
@@ -168,6 +168,43 @@ BOOST_AUTO_TEST_CASE(test_page_transform) {
   block_ptr p(storage.alloc_slot(0));
   offset_t moffset = storage.resolve(p);
   BOOST_CHECK_EQUAL(moffset, offsets[0]);
+}
+
+BOOST_AUTO_TEST_CASE(test_page_border) {
+  TestStorage storage;
+  constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
+  int delta = 0;
+
+  auto result = storage.resolve(storage.alloc_slot(3));
+  BOOST_CHECK(result % PAGE_SIZE == delta);
+  delta += BLOCK_SIZES[3];
+
+  result = storage.resolve(storage.alloc_slot(3));
+  BOOST_CHECK(result % PAGE_SIZE == delta);
+  delta += BLOCK_SIZES[3];
+
+  result = storage.resolve(storage.alloc_slot(3));
+  BOOST_CHECK(result % PAGE_SIZE == delta);
+  delta += BLOCK_SIZES[3];
+
+  // crossing the page border: the next block is beginning again at a page
+  result = storage.resolve(storage.alloc_slot(3));
+  BOOST_CHECK(result % PAGE_SIZE == 0);
+
+  // The rest of the page is used for smaller slots
+  result = storage.resolve(storage.alloc_slot(2));
+  BOOST_CHECK(result % PAGE_SIZE == delta);
+  delta += BLOCK_SIZES[2];
+
+  result = storage.resolve(storage.alloc_slot(1));
+  BOOST_CHECK(result % PAGE_SIZE == delta);
+  delta += BLOCK_SIZES[1];
+
+  result = storage.resolve(storage.alloc_slot(1));
+  BOOST_CHECK(result % PAGE_SIZE == delta);
+  delta += BLOCK_SIZES[1];
+
+  BOOST_CHECK(PAGE_SIZE - delta < BLOCK_SIZES[0]);
 }
 
 #if 0

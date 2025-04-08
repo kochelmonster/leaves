@@ -8,7 +8,7 @@ namespace leaves {
 inline std::string bitstr(char bit) {
   std::stringstream cstr;
   if (isprint(bit) && bit != '"' && bit != '<' && bit != '>' && bit != ']' &&
-      bit != '\\' && bit != '}' && bit != '{') {
+      bit != '\\' && bit != '}' && bit != '{' && bit != '|') {
     cstr << bit;
   } else {
     cstr << "0x" << std::hex << (unsigned)(unsigned char)bit << std::dec;
@@ -29,17 +29,10 @@ struct _Dumper {
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
 
   static void dump_link(std::ostream& out, offset_t link, Storage* storage) {
-    switch (link.type()) {
-      case LEAF:
-        dump_leaf(out, link, storage);
-        break;
-      case TRIE:
-        dump_trie(out, link, storage);
-        break;
-      default:
-        out << "Unknown type: " << link.type() << std::endl;
-        break;
-    }
+    if (link.type() == TRIE)
+      dump_trie(out, link, storage);
+    else
+      dump_leaf(out, link, storage);
   }
 
   static void dump_leaf(std::ostream& out, offset_e offset, Storage* storage) {
@@ -114,6 +107,136 @@ struct _Dumper {
     }
   }
 };
+
+template <typename Storage>
+struct _MemoryChecker {
+  using Traits = typename Storage::Traits;
+  static constexpr auto& BLOCK_SIZES = Storage::BLOCK_SIZES;
+  using offset_e = typename Storage::offset_e;
+  using txn_ptr = typename Storage::txn_ptr;
+  using block_ptr = typename Storage::block_ptr;
+  static constexpr uint16_t COUNT =
+      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  Storage& storage;
+  std::vector<uint64_t> pages;
+
+  static constexpr std::array<uint16_t, COUNT> generate_counts() {
+    std::array<uint16_t, COUNT> result;
+    for (int i = 0; i < COUNT; i++) {
+      uint16_t bsize = BLOCK_SIZES[i];
+      uint16_t count = PAGE_SIZE / bsize;
+      uint16_t used = count * bsize;
+      uint16_t collect = count;
+      uint16_t rest = PAGE_SIZE - used;
+      for (int id = i - 1; id >= 0 && rest > BLOCK_SIZES[0]; id--) {
+        uint16_t bs = BLOCK_SIZES[id];
+        while (bs < rest) {
+          collect++;
+          rest -= bs;
+        }
+      }
+      result[i] = collect;
+    }
+    return result;
+  }
+
+  static std::array<uint16_t, COUNT> PART_COUNT;
+
+  _MemoryChecker(Storage& storage_) : storage(storage_) {}
+
+  void check() {
+    const uint64_t ALL = ~(uint64_t)0;
+
+    txn_ptr txn_ = storage.txn();
+    pages.resize(txn_->file_size / PAGE_SIZE);
+    pages[0] = ALL;
+
+    for (uint64_t p = txn_->mem_manager.next_free;
+         p < txn_->mem_manager.allocation_end; p += PAGE_SIZE) {
+      pages[p / PAGE_SIZE] = ALL;
+    }
+
+    for (int i = 0; i < txn_->mem_manager.COUNT; i++) {
+      auto& slot = txn_->mem_manager.slots[i];
+      uint16_t size = BLOCK_SIZES[i];
+      uint64_t b = slot.next_free;
+      while (true) {
+        uint64_t pb = padding(b, PAGE_SIZE);
+        if (b + size > pb) b = pb;
+        if (b == slot.end_free) break;
+        storage.resolve(offset_t(b))->slot_id = i;
+        mark_page(b);
+        b += size;
+      }
+      // collect garbage container blocks
+      offset_t o = slot.ostart;
+      while (o) {
+        typename Storage::MemManager::Slot::garb_ptr gc = storage.resolve(o);
+        mark_page(o);
+        if (o == slot.oend) break;
+        o = gc->next;
+      }
+
+      // collect garbage blocks
+      slot.iter(storage, [this]<typename Block>(Block& block) {
+        mark_page(block.link);
+      });
+    }
+
+    mark_trie_memory(txn_->root);
+
+    storage.iter_transactions([this](txn_ptr txn) -> bool {
+      mark_page(storage.resolve(txn));
+      return false;
+    });
+
+    for (int i = 0; i < pages.size(); i++) {
+      uint64_t p = pages[i];
+      if (p != ALL) {
+        block_ptr ptr = storage.resolve(offset_t(i * PAGE_SIZE));
+        uint16_t s0 = BLOCK_SIZES[0];
+        uint16_t s1 = BLOCK_SIZES[1];
+        uint16_t size = BLOCK_SIZES[ptr->slot_id];
+        int collected = bits::count(p);
+        int needed = PART_COUNT[ptr->slot_id];
+        assert(collected == needed);
+      }
+    }
+  }
+
+  void mark_page(offset_t offset) {
+    uint16_t slot_id = storage.resolve(offset)->slot_id;
+    uint64_t addr = offset;
+    uint16_t size = BLOCK_SIZES[slot_id];
+    uint64_t page = addr / PAGE_SIZE;
+    uint16_t poff = (addr % PAGE_SIZE);
+    uint16_t part = poff / size;
+    if (poff % size) part += PAGE_SIZE / size;
+
+    assert(!(pages[page] & (1 << part)));
+    pages[page] |= (1 << part);
+  };
+
+  void mark_trie_memory(offset_e offset) {
+    typedef _TrieNode<Traits> TrieNode;
+    using trie_ptr = typename Traits::Pointer<TrieNode>;
+    mark_page(offset);
+
+    if (offset.type() == TRIE) {
+      trie_ptr branch = storage.resolve(offset);
+      auto count = branch->count();
+      offset_e* array = branch->array();
+      for (int i = 0; i < count; i++) {
+        mark_trie_memory(array[i]);
+      }
+    }
+  }
+};
+
+template <typename Storage>
+std::array<uint16_t, _MemoryChecker<Storage>::COUNT>
+    _MemoryChecker<Storage>::PART_COUNT =
+        _MemoryChecker<Storage>::generate_counts();
 
 }  // namespace leaves
 

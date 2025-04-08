@@ -1,12 +1,11 @@
 
 // #include <leaves/db.hpp>
 
-#include "leaves/intern/_mmap.hpp"
-
 #include <iostream>
 
-using namespace leaves;
+#include "leaves/intern/_mmap.hpp"
 
+using namespace leaves;
 
 #define BOOST_TEST_MODULE DBTest
 
@@ -520,7 +519,6 @@ const char* names[] = {"A's",
                        "Continent's",
                        NULL};
 
-
 template <typename content_t>
 std::string value(content_t content, size_t size = 0) {
   std::stringstream f;
@@ -541,7 +539,9 @@ typedef DBMMap Storage;
 
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
-  { Storage storage(TEST_FILE); }
+  {
+    Storage storage(TEST_FILE);
+  }
 
   Storage storage(TEST_FILE);
   Storage::Cursor cursor(storage);
@@ -576,13 +576,15 @@ BOOST_AUTO_TEST_CASE(test_strings) {
     }
   }
   cursor.commit();
+  _MemoryChecker<Storage>(storage).check();
+
   std::stringstream cstr;
   cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
   auto root = storage.txn()->root;
   _Dumper<Storage>::dump_link(out, root, &storage);
-    
+
   std::cout << "start test: " << count << std::endl;
   for (int i = 0; i < 100; i++) {
     int rand_int = rand() % count;
