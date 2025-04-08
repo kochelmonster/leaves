@@ -367,10 +367,12 @@ struct _TrieNode : public Traits::BlockHeader {
 template <typename Traits>
 struct _LeafNode : public Traits::BlockHeader {
   typedef _LeafNode<Traits> LeafNode;
+  using Base = typename Traits::BlockHeader;
   using uint16_e = typename Traits::uint16_e;
   using uint32_e = typename Traits::uint32_e;
   using offset_e = typename Traits::offset_e;
-  const static size_t MAX_SIZE = 1024;
+  const static size_t MAX_SIZE =
+      PAGE_SIZE - sizeof(Base) - sizeof(uint16_e) - sizeof(uint8_t);
 
   uint16_e value_size;
   uint8_t key_size;

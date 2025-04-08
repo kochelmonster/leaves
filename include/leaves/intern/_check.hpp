@@ -1,7 +1,6 @@
 #ifndef _LEAVES__CHECK_HPP
 #define _LEAVES__CHECK_HPP
 
-#include "_burst.hpp"
 #include "_node.hpp"
 
 namespace leaves {
@@ -22,12 +21,10 @@ struct _Dumper {
   using Traits = typename Storage::Traits;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
-  typedef _BurstTable<Traits> BurstTable;
   using offset_e = typename Traits::offset_e;
   using uint16_e = typename Traits::uint16_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
-  using burst_ptr = typename Traits::Pointer<BurstTable, BURST>;
 
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
 
@@ -35,9 +32,6 @@ struct _Dumper {
     switch (link.type()) {
       case LEAF:
         dump_leaf(out, link, storage);
-        break;
-      case BURST:
-        dump_burst(out, link, storage);
         break;
       case TRIE:
         dump_trie(out, link, storage);
@@ -72,32 +66,6 @@ struct _Dumper {
     }
     out << "\"" << std::endl;
 
-    out << "---" << std::endl;
-  }
-
-  static void dump_burst(std::ostream& out, offset_e offset, Storage* storage) {
-    burst_ptr table = storage->resolve(offset);
-    out << "type: burst" << std::endl;
-    out << "id: " << offset._offset << std::endl;
-    out << "page: " << offset.page() << std::endl;
-    out << "txn: " << table->txn_id << std::endl;
-    out << "size: " << table->SIZE << std::endl;
-    out << "freespace: " << table->freespace() << std::endl;
-    out << "count: " << table->count << std::endl;
-    out << "items: " << std::endl;
-    for (int i = 0; i < table->count; i++) {
-      auto item = table->item(i);
-      out << "  - key: \"";
-      for (int j = 0; j < item->key_size; j++) {
-        out << "[" << bitstr(item->data[j]) << "]";
-      }
-      out << "\"" << std::endl;
-      out << "    value: \"";
-      for (int j = 0; j < item->value_size; j++) {
-        out << "[" << bitstr(item->vdata()[j]) << "]";
-      }
-      out << "\"" << std::endl;
-    }
     out << "---" << std::endl;
   }
 

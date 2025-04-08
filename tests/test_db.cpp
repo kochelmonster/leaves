@@ -537,7 +537,7 @@ std::string number(int number, size_t size = 0) {
   return f.str();
 }
 
-typedef DBMMapBurst Storage;
+typedef DBMMap Storage;
 
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;

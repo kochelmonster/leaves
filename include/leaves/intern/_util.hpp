@@ -69,7 +69,7 @@ class Slice {
 };
 
 typedef uint64_t tid_t;
-typedef enum { TRIE = 0, LEAF = 1, BURST = 2 } NodeTypes;
+typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
 
 static const uint32_t PAGE_SIZE = 4 * 1024;
 static const size_t PAGE_MASK = (((size_t)PAGE_SIZE) - 1);

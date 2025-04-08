@@ -21,7 +21,6 @@ target_sources(core INTERFACE
     include/leaves/intern/_memory.hpp
     include/leaves/intern/_mmap.hpp
     include/leaves/intern/_cursor.hpp
-    include/leaves/intern/_burst.hpp
     include/leaves/intern/_node.hpp
     include/leaves/intern/_inserter.hpp
 )
@@ -81,9 +80,6 @@ target_link_libraries(test_cursor PUBLIC core test)
 add_executable(test_node tests/test_node.cpp)
 target_link_libraries(test_node PUBLIC core test)
 
-add_executable(test_burst tests/test_burst.cpp)
-target_link_libraries(test_burst PUBLIC core test)
-
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
@@ -96,7 +92,6 @@ COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
 COMMAND ./test_cursor
-COMMAND ./test_burst
 COMMAND ./test_node
 COMMAND ./test_memory
 COMMAND ./test_bits
@@ -105,7 +100,7 @@ COMMAND ./test_db
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_burst
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node
 )
 
 endif(LEAVES_BUILD_TESTS)

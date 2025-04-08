@@ -3,7 +3,6 @@
 
 #include <vector>
 
-#include "_burst.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
 #include "_node.hpp"
@@ -57,12 +56,10 @@ struct _Transition {
   typedef _Transition<Cursor> Transition;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
-  typedef _BurstTable<Traits> BurstTable;
   using block_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
-  using burst_ptr = typename Traits::Pointer<BurstTable, BURST>;
 
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp
@@ -72,7 +69,6 @@ struct _Transition {
   block_ptr block;
   trie_ptr& trie;
   leaf_ptr& leaf;
-  burst_ptr& burst;
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -108,29 +104,22 @@ struct _Transition {
     operator int() const { return 0; }
   };
   ;
-  std::conditional_t<Traits::BURST, int, Empty> index;
-
   offset_e* link() {
     assert(link_offset != 0xFFFF);
     return (offset_e*)(trie.link(link_offset));
   }
 
-  _Transition()
-      : trie(*(trie_ptr*)&block),
-        leaf(*(leaf_ptr*)&block),
-        burst(*(burst_ptr*)&block) {}
+  _Transition() : trie(*(trie_ptr*)&block), leaf(*(leaf_ptr*)&block) {}
 
   bool is_leaf() const { return offset.type() == LEAF; }
   bool is_trie() const { return offset.type() == TRIE; }
-  bool is_burst() const { return offset.type() == BURST; }
 
-  bool success() const { return cmp == 0 && (is_leaf() || is_burst()); }
+  bool success() const { return cmp == 0 && is_leaf(); }
 
   bool init(Cursor* cursor_, offset_t offset_, uint16_t keypos_ = 0) {
     cursor = cursor_;
     keypos = keypos_;
     prefix = 0;
-    if (Traits::BURST) index = 0;
     cmp = Transition::UNDEFINED;
     offset = offset_;
     link_offset = 0xFFFF;
@@ -194,8 +183,6 @@ struct _Transition {
   KeyString& current_key() { return cursor->current_key; }
 
   void find() {
-    if (Traits::BURST && is_burst()) return burst->find(*this);
-
     if (is_leaf()) {
       LeafNode& leaf_ = *leaf;
       prefix = get_prefix(key().data(), (char*)leaf_.data, key().size(),
@@ -248,7 +235,6 @@ struct _Transition {
   }
 
   Slice value() const {
-    if (Traits::BURST && is_burst()) return burst->value(index);
     if (is_leaf()) return leaf->value();
     return Slice();
   }
@@ -256,7 +242,6 @@ struct _Transition {
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void first() {
-    if (Traits::BURST && is_burst()) return burst->first(*this);
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie;
     append_key(trie_.compressed(), trie_._compressed_len);
@@ -265,11 +250,6 @@ struct _Transition {
   }
 
   bool next() {
-    if (Traits::BURST && is_burst()) {
-      resize_key(keypos);
-      if (burst->next(*this)) return true;
-      return false;
-    }
     if (is_leaf()) {
       if (cmp < 0) {
         leaf_step();
@@ -280,28 +260,15 @@ struct _Transition {
 
     TrieNode& trie_ = *trie;
     if (cmp == 0) {
-      offset_e* lnk;
-      if (Traits::BURST) {
-        offset_e* last = link();
-        offset_e* end = trie_.array() + trie_.count();
-        link_offset += sizeof(offset_e);
-        lnk = link();
-        while (*lnk == *last && lnk < end) {
-          link_offset += sizeof(offset_e);
-          lnk = link();
-        }
-        if (lnk >= end) return false;
-      } else {
-        link_offset += sizeof(offset_e);
-        lnk = link();
-        offset_e* end = trie_.array() + trie_.count();
-        if (lnk >= end) return false;
+      link_offset += sizeof(offset_e);
+      offset_e* lnk = link();
+      offset_e* end = trie_.array() + trie_.count();
+      if (lnk >= end) return false;
 #ifdef __GNUC__
-        for(offset_e* l = lnk; l < end; l++) {
-          __builtin_prefetch(resolve(*(l)));
-        }
-#endif
+      for (offset_e* l = lnk; l < end; l++) {
+        __builtin_prefetch(resolve(*(l)));
       }
+#endif
       push(lnk).first();
       return true;
     }
@@ -318,31 +285,11 @@ struct _Transition {
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
     const offset_e* next_offset = trie_.offset(next_);
     branch_key = (uint8_t)next_;
-
-    if (Traits::BURST) {
-      Transition& bottom = push(next_offset);
-      assert(bottom.is_burst());
-      cursor->rest_key = Slice(&branch_key, 1);
-      bottom.burst->find(bottom);
-      assert(bottom.cmp <= 0);
-      if (bottom.cmp) {
-        bool found = bottom.next();
-        assert(found);
-      }
-      cursor->rest_key.reset();
-    } else
-      push(next_offset).first();
-
+    push(next_offset).first();
     return true;
   }
 
   bool prev() {
-    if (Traits::BURST && is_burst()) {
-      resize_key(keypos);
-      if (burst->prev(*this)) return true;
-      return false;
-    }
-
     if (is_leaf()) {
       if (cmp > 0) {
         leaf_step();
@@ -353,28 +300,15 @@ struct _Transition {
 
     TrieNode& trie_ = *trie;
     if (cmp == 0) {
-      offset_e* lnk;
-      if (Traits::BURST) {
-        offset_e* last = link();
-        offset_e* begin = trie_.array();
-        link_offset -= sizeof(offset_e);
-        lnk = link();
-        while (*lnk == *last && lnk >= begin) {
-          link_offset -= sizeof(offset_e);
-          lnk = link();
-        }
-        if (lnk < begin) return false;
-      } else {
-        link_offset -= sizeof(offset_e);
-        lnk = link();
-        offset_e* begin = trie_.array();
-        if (lnk < begin) return false;
+      link_offset -= sizeof(offset_e);
+      offset_e* lnk = link();
+      offset_e* begin = trie_.array();
+      if (lnk < begin) return false;
 #ifdef __GNUC__
-        for(offset_e* l = lnk; l >= begin; l--) {
-          __builtin_prefetch(resolve(*(l)));
-        }
-#endif
+      for (offset_e* l = lnk; l >= begin; l--) {
+        __builtin_prefetch(resolve(*(l)));
       }
+#endif
 
       push(lnk).last();
       branch_key = current_key()[child().keypos];
@@ -393,26 +327,11 @@ struct _Transition {
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
     const offset_e* prev_offset = trie_.offset(prev_);
     branch_key = (uint8_t)prev_;
-
-    if (Traits::BURST && prev_offset->type() == BURST) {
-      Transition& bottom = push(prev_offset);
-      assert(bottom.is_burst());
-      cursor->rest_key = Slice(&branch_key, 1);
-      bottom.burst->find(bottom);
-      assert(bottom.cmp <= 0);
-      if (bottom.cmp) {
-        bool found = bottom.prev();
-        assert(found);
-      }
-      cursor->rest_key.reset();
-    } else
-      push(trie_.offset(prev_)).last();
-
+    push(trie_.offset(prev_)).last();
     return true;
   }
 
   void last() {
-    if (Traits::BURST && is_burst()) return burst->last(*this);
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie;
     append_key(trie_.compressed(), trie_._compressed_len);

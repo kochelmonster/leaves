@@ -63,7 +63,6 @@ struct _MemoryMapTraits {
   };
 #pragma pack(0)
 
-  static constexpr bool BURST = false;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
@@ -126,9 +125,6 @@ struct _MemoryMapTraits {
   };
 };
 
-struct _MemoryMapBurstTraits : public _MemoryMapTraits {
-  static constexpr bool BURST = true;
-};
 
 template <typename Traits_>
 struct _MemoryMapFile {
@@ -178,7 +174,7 @@ struct _MemoryMapFile {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
 
-  _MemoryMapFile(const char* path, size_t map_size = G) {
+  _MemoryMapFile(const char* path, size_t map_size = 2*G) {
     _pid = current_pid();
     init_dbfile(path, map_size);
     // transaction is active if _txn.txn_id > active_txn()->txn_id
@@ -508,10 +504,6 @@ struct _MemoryMapFile {
       }
       return;
     }
-    if (!Traits::BURST || offset.type() == LEAF) {
-      leaf_ptr leaf = resolve(offset);
-      stat.leaf.add(leaf->slot_id, 1, BLOCK_SIZES[leaf->slot_id] - leaf->size());
-    }
   }
 
   void statistics(Statistics& stat) {
@@ -528,7 +520,6 @@ struct _MemoryMapFile {
 };
 
 typedef _MemoryMapFile<_MemoryMapTraits> DBMMap;
-typedef _MemoryMapFile<_MemoryMapBurstTraits> DBMMapBurst;
 
 }  // namespace leaves
 

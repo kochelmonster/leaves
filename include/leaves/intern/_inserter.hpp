@@ -1,6 +1,8 @@
 #ifndef _LEAVES_INSERTER_HPP
 #define _LEAVES_INSERTER_HPP
 
+#include "./_node.hpp"
+
 namespace leaves {
 
 template <typename Transition>
@@ -9,11 +11,9 @@ struct _Inserter {
   using Traits = typename Transition::Traits;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
-  using BurstTable = typename Transition::BurstTable;
   using block_ptr = typename Transition::block_ptr;
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
-  using burst_ptr = typename Transition::burst_ptr;
   using offset_e = typename Transition::offset_e;
 
   const Slice& value;
@@ -39,7 +39,6 @@ struct _Inserter {
   void free(block_ptr& block) { back->cursor->storage.free(block); }
 
   void start() {
-    if (Traits::BURST && back->is_burst()) return add_to_burst();
     if (back->is_leaf()) return change_leaf();
     if (split_compressed()) return;
     add_to_array();
@@ -47,29 +46,19 @@ struct _Inserter {
 
   // insert the very first value
   void first() {
-    if (Traits::BURST) {
-      back->burst = alloc_slot(BurstTable::SLOT_ID);
-      back->burst->init();
-      back->burst->insert(*back, value);
-      back->cmp = 0;
-      back->offset = resolve(back->burst);
-      back->cursor->set_root(back->offset);
-      back->advance_key(back->key().size());
-    } else {
-      Slice bkey = back->key();
-      back->prefix = std::min(bkey.size(), (size_t)10);
-      if (back->prefix > 1) back->prefix--;  // keep one for trie
+    Slice bkey = back->key();
+    back->prefix = std::min(bkey.size(), (size_t)10);
+    if (back->prefix > 1) back->prefix--;  // keep one for trie
 
-      back->trie = alloc(TrieNode::size(back->prefix, 1));
-      back->offset = resolve(back->trie);
-      back->link_offset = back->trie->create(
-          Slice(bkey.data(), back->prefix),
-          (bkey.size() > back->prefix ? (back->branch_key = bkey[back->prefix])
-                                      : TrieNode::NONE));
-      back->cursor->set_root(back->offset);
-      back->advance_key(back->prefix);
-      create_leaf();
-    }
+    back->trie = alloc(TrieNode::size(back->prefix, 1));
+    back->offset = resolve(back->trie);
+    back->link_offset = back->trie->create(
+        Slice(bkey.data(), back->prefix),
+        (bkey.size() > back->prefix ? (back->branch_key = bkey[back->prefix])
+                                    : TrieNode::NONE));
+    back->cursor->set_root(back->offset);
+    back->advance_key(back->prefix);
+    create_leaf();
   }
 
   bool split_compressed() {
@@ -147,203 +136,7 @@ struct _Inserter {
     free(otrie);
     back->replace(resolve(back->trie));
     back->cmp = 0;
-    if (Traits::BURST && back->key()) {
-      offset_e* link = back->link();
-      offset_e* begin = back->trie->array();
-      offset_e* end = begin + back->trie->count();
-      assert(begin <= link);
-      assert(link < end);
-      if (link > begin && (link - 1)->type() == BURST)
-        *link = *(link - 1);
-      else if ((link + 1) < end && (link + 1)->type() == BURST)
-        *link = *(link + 1);
-      else {
-        burst_ptr p = alloc_slot(BurstTable::SLOT_ID);
-        p->init();
-        *link = resolve(p);
-        Transition& bottom = back->push(*link);
-        back = &bottom;
-        back->cmp = -1;
-        back->index = 0;
-        add_to_burst();
-        return;
-      }
-      Transition& bottom = back->push(*link);
-      back = &bottom;
-      back->find();
-      add_to_burst();
-    } else
-      create_leaf();
-  }
-
-  void add_to_burst() {
-    if (back->burst->can_insert(back->key(), value)) {
-      if (back->burst->txn_id != txn_id()) {
-        burst_ptr old = back->burst;
-        back->burst = alloc_slot(BurstTable::SLOT_ID);
-        old->copy_to(*back->burst);
-        free(old);
-        offset_e old_offset = back->offset;
-        back->replace(resolve(back->burst));
-        if (!back->is_root()) {
-          // replace also all other links to the burst table
-          Transition& parent = back->parent();
-          assert(parent.is_trie());
-          offset_e* link = parent.link();
-          offset_e* begin = parent.trie->array();
-          offset_e* end = begin + parent.trie->count();
-          assert(begin <= link);
-          assert(link < end);
-          offset_e* iter;
-          for (iter = link - 1; iter >= begin && *iter == old_offset; iter--) {
-            *iter = *link;
-          }
-          for (iter = link + 1; iter < end && *iter == old_offset; iter++) {
-            *iter = *link;
-          }
-        }
-      }
-
-      back->burst->insert(*back, value);
-      back->cmp = 0;
-      back->advance_key(back->key().size());
-      return;
-    }
-
-    if (back->cmp == 0) {
-      // drive back rest_key and current_key
-      assert(back->cursor->rest_key.empty());
-      int delta = back->cursor->current_key.size() - back->keypos;
-      back->cursor->current_key.resize(back->keypos);
-      back->cursor->rest_key =
-          Slice(back->cursor->rest_key.data() - delta, delta);
-    }
-
-    // hybrid burst (see https://tessil.github.io/2017/06/22/hat-trie.html)
-    BurstTable& src = *back->burst;
-    uint8_t upper = 0;
-    offset_e buffer[257];  // in 256 is the none leaf
-    memset(buffer, 0, sizeof(buffer));
-    offset_e* offsets = &buffer[1];  // offset[Trie::NONE(==-1)] is awailable
-
-    Slice prefix = src.prefix();
-    assert(prefix.size() < 256);
-    uint8_t psize = prefix.size();
-    uint16_t count = src.count;
-    uint16_t i = 0;
-    int split_char;
-    int last_fchar = -1;
-
-    int branch_key = back->key().size() > psize ? (uint8_t)back->key()[psize]
-                                                : TrieNode::NONE;
-
-    {
-      burst_ptr burst = alloc_slot(BurstTable::SLOT_ID);
-      BurstTable& dst = *burst;
-      dst.init();
-      offset_e odst = resolve(burst);
-
-      if (src.item(0)->key_size == psize) {
-        // none leaf
-        leaf_ptr leaf = alloc(LeafNode::size(0, value.size()));
-        leaf->key_size = 0;
-        leaf->value_size = value.size();
-        // TODO: big value handling
-        memcpy(leaf->vdata(), value.data(), value.size());
-        offsets[TrieNode::NONE] = resolve(leaf);
-        i = 1;
-      }
-
-      split_char = (uint8_t)((src.item(i)->data[psize] +
-                              src.item(count - 1)->data[psize]) /
-                             2);
-
-      for (uint16_t j = 0; i < count; i++, j++) {
-        auto item = src.item(i);
-        assert(item->key_size > psize);
-        int fchar = (uint8_t)item->data[psize];
-        if (fchar > split_char) break;
-        dst.add_item(j, src.item(i), psize);
-        if (last_fchar != fchar) {
-          last_fchar = fchar;
-          offsets[fchar] = odst;
-          upper |= 1 << TrieNode::ubit(fchar);
-        }
-      }
-      dst.check();
-      if (branch_key <= split_char) {
-        offsets[branch_key] = odst;
-        upper |= 1 << TrieNode::ubit(branch_key);
-      }
-    }
-    assert(i < count);
-    {
-      burst_ptr burst = alloc_slot(BurstTable::SLOT_ID);
-      BurstTable& dst = *burst;
-      dst.init();
-      offset_e odst = resolve(burst);
-      for (uint16_t j = 0; i < count; i++, j++) {
-        auto item = src.item(i);
-        assert(item->key_size > psize);
-        int fchar = (uint8_t)item->data[psize];
-        dst.add_item(j, src.item(i), psize);
-        if (last_fchar != fchar) {
-          last_fchar = fchar;
-          offsets[fchar] = odst;
-          upper |= 1 << TrieNode::ubit(fchar);
-        }
-      }
-      if (branch_key > split_char) {
-        offsets[branch_key] = odst;
-        upper |= 1 << TrieNode::ubit(branch_key);
-      }
-      dst.check();
-    }
-
-    free(back->burst);
-    if (prefix.empty() && !back->is_root()) {
-      add_burst_to_parent(upper, offsets);
-    } else
-      create_burst_parent(prefix, upper, offsets);
-
-    start();
-  }
-
-  void add_burst_to_parent(uint8_t upper, offset_e* offsets) {
-    Transition& parent = back->parent();
-    TrieNode& trie = *parent.trie;
-
-    upper |= trie._upper;
-    int nchar = trie.first();
-    while (nchar != TrieNode::OUT_OF_RANGE) {
-      if (!offsets[nchar]) offsets[nchar] = *trie.offset(nchar);
-      nchar = trie.next(nchar);
-    }
-
-    char buffer[TrieNode::MAX_SIZE];
-    TrieNode& new_trie = *(TrieNode*)buffer;
-    new_trie.create(Slice(trie.compressed(), trie._compressed_len), upper,
-                    offsets);
-    assert(new_trie.count() == trie.count());
-    free(parent.trie);
-    parent.trie = alloc(new_trie.size());
-    copy(*parent.trie, new_trie);
-    parent.replace(resolve(parent.trie));
-    back->offset = *parent.link();
-    back->block = back->resolve(back->offset);
-    back->find();
-  }
-
-  void create_burst_parent(const Slice& prefix, uint8_t upper,
-                           offset_e* offsets) {
-    char buffer[TrieNode::MAX_SIZE];
-    TrieNode& new_trie = *(TrieNode*)buffer;
-    new_trie.create(prefix, upper, offsets);
-    back->trie = alloc(new_trie.size());
-    copy(*back->trie, new_trie);
-    back->replace(resolve(back->trie));
-    back->find();
-    back = &back->cursor->stack.back();
+    create_leaf();
   }
 
   // change the value of leaf
