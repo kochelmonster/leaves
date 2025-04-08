@@ -84,26 +84,6 @@ struct _Transition {
   offset_t offset;
   uint16_t link_offset;
 
-  struct Empty {
-    const Empty& operator=(int) const { return *this; }
-    Empty operator+(int) const { return Empty(); }
-    Empty operator-(int) const { return Empty(); }
-    Empty& operator+=(int) { return *this; }
-    Empty& operator-=(int) { return *this; }
-    Empty& operator*=(int) { return *this; }
-    Empty operator++(int) { return Empty(); }
-    Empty operator++() { return Empty(); }
-    Empty operator--(int) { return Empty(); }
-    Empty operator--() { return Empty(); }
-    bool operator==(int) const { return true; }
-    bool operator!=(int) const { return false; }
-    bool operator<(int) const { return false; }
-    bool operator<=(int) const { return true; }
-    bool operator>(int) const { return false; }
-    bool operator>=(int) const { return true; }
-    operator int() const { return 0; }
-  };
-  ;
   offset_e* link() {
     assert(link_offset != 0xFFFF);
     return (offset_e*)(trie.link(link_offset));
@@ -264,11 +244,7 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* end = trie_.array() + trie_.count();
       if (lnk >= end) return false;
-#ifdef __GNUC__
-      for (offset_e* l = lnk; l < end; l++) {
-        __builtin_prefetch(resolve(*(l)));
-      }
-#endif
+      for (offset_e* l = lnk; l < end; l++) cursor->storage.prefetch(*l);
       push(lnk).first();
       return true;
     }
@@ -304,12 +280,7 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* begin = trie_.array();
       if (lnk < begin) return false;
-#ifdef __GNUC__
-      for (offset_e* l = lnk; l >= begin; l--) {
-        __builtin_prefetch(resolve(*(l)));
-      }
-#endif
-
+      for (offset_e* l = lnk; l >= begin; l--) cursor->storage.prefetch(*l);
       push(lnk).last();
       branch_key = current_key()[child().keypos];
       return true;

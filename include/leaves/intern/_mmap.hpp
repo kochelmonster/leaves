@@ -343,6 +343,13 @@ struct _MemoryMapFile {
     return offset_t((uint64_t)p - (uint64_t)_db).type(p.type);
   }
 
+  void prefetch(offset_t offset) const {
+    char* p = (char*)_db + (uint64_t)offset;
+#ifdef __GNUC__
+    __builtin_prefetch(p);
+#endif
+  }
+
   template <typename T>
   bool may_recycle(T& garbage_block) const {
     return garbage_block.txn_id < _start_txn_id;
