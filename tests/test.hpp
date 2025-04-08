@@ -33,15 +33,13 @@ struct Preparation {
 template <typename T>
 inline void dump_graph(const char* output, T& storage) {
   std::ofstream out(output);
-  auto root = storage.txn()->root;
-  _Dumper<T>::dump_link(out, root, &storage);
+  _Dumper<T>(storage, true).dump(out);
 }
 
 template <typename T>
 inline void compare_graph(const char* input, T& storage) {
   std::stringstream cstr;
-  auto root = storage.txn()->root;
-  _Dumper<T>::dump_link(cstr, root, &storage);
+  _Dumper<T>(storage).dump(cstr, true);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),

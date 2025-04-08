@@ -31,13 +31,13 @@ class Graph:
         pages = {}
         for n in nodes:
             self.nodes[n["id"]] = n
-            page = n["page"]
+            page = n.get("page", 0)
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
-            free = pnodes[0]["freespace"]
-            size = pnodes[0]["size"]
-            txn = pnodes[0]["txn"]
+            # free = pnodes[0]["freespace"]
+            # size = pnodes[0]["size"]
+            # txn = pnodes[0]["txn"]
             # add(f"subgraph cluster_Page{k} {{")
             # add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
             # add nodes
