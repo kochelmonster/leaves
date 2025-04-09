@@ -74,7 +74,7 @@ struct _Inserter {
 
     assert(back->prefix < back->trie->_compressed_len);
 
-    auto otrie = back->trie;
+    trie_ptr otrie = back->trie;
 
     // copy the original trie node with second part of compressed
     // to a new page

@@ -184,10 +184,11 @@ struct _TrieNode : public Traits::BlockHeader {
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     _array_len = src._array_len + 1;
+    _upper = src._upper;
     int oidx;
     if (key != NONE) {
       uint8_t bit = ubit(key);
-      _upper = src._upper | (1 << bit);
+      _upper |= (1 << bit);
       int lidx = bits::index(_upper, bit);
       if (src._upper & (1 << bit)) {
         memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
@@ -204,7 +205,6 @@ struct _TrieNode : public Traits::BlockHeader {
       for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
     } else {
       assert((src._array_len & NULL_MASK) == 0);
-      _upper = src._upper;
       _array_len |= NULL_MASK;
       memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
       oidx = 0;
@@ -219,6 +219,50 @@ struct _TrieNode : public Traits::BlockHeader {
     memcpy(array_ + oidx + 1, src.array() + oidx,
            (count() - 1 - oidx) * sizeof(offset_e));
     return (char*)(array_ + oidx) - (char*)this;
+  }
+
+  // create a new trie node without the branch of key
+  void create_remove(const TrieNode& src, int key) {
+    _compressed_len = src._compressed_len;
+    memcpy(_compressed_data, src.compressed(), _compressed_len);
+
+    uint16_t lower_start_ =
+        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
+
+    _array_len = src._array_len - 1;
+    _upper = src._upper;
+    int oidx;
+    if (key != NONE) {
+      uint8_t bit = ubit(key);
+      int lidx = bits::index(_upper, bit);
+
+      memcpy(lower_, src.lower(), bits::count(src._upper) * sizeof(uint32_e));
+      oidx = bits::count(lower_[lidx] & ((1 << lbit(key)) - 1)) +
+             bool(_array_len & NULL_MASK);
+      for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
+      
+      lower_[lidx] &= ~(1 << lbit(key));
+      if (!lower_[lidx]) {
+        _upper &= ~(1 << bit);
+        memmove(&lower_[lidx], &lower_[lidx + 1],
+               (bits::count(_upper) - lidx) * sizeof(uint32_e));
+      }
+    } else {
+      assert(src._array_len & NULL_MASK);
+      _array_len &= ~NULL_MASK;
+      memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
+      oidx = 0;
+    }
+
+    _lower_offset = lower_start_ / sizeof(uint32_e);
+    uint16_t array_start_ = calc_array_start();
+    _array_offset = array_start_ / sizeof(offset_e);
+
+    offset_e* array_ = (offset_e*)((char*)this + array_start_);
+    memcpy(array_, src.array(), oidx * sizeof(offset_e));
+    memcpy(array_ + oidx, src.array() + oidx + 1,
+           (count() - oidx) * sizeof(offset_e));
   }
 
   // in offset[-1] is the none leaf
@@ -247,53 +291,6 @@ struct _TrieNode : public Traits::BlockHeader {
         assert((_upper & (1 << ubit(i))));
         lower_[bits::index(_upper, ubit(i))] |= 1 << lbit(i);
       }
-    }
-  }
-
-  void remove(int nchar) {
-    if (nchar == NONE) {
-      if (has_none()) {
-        offset_e* a = array();
-        memmove(a, a + 1, array_size() - sizeof(offset_e));
-        _array_len &= ~NULL_MASK;
-        _array_len--;
-      }
-      return;
-    }
-
-    int lidx = bits::index(_upper, ubit(nchar));
-    if (!(_upper & (1 << ubit(nchar)))) {
-      return;  // Character not present
-    }
-
-    uint32_e* lower_ = lower();
-    __builtin_prefetch(lower_);
-    if (!(lower_[lidx] & (1 << lbit(nchar)))) {
-      return;  // Character not present
-    }
-
-    offset_e* array_ = array();
-    int oidx = bits::count(lower_[lidx] & ((1 << lbit(nchar)) - 1)) +
-               bool(_array_len & NULL_MASK);
-    for (int i = 0; i < lidx; i++) {
-      oidx += bits::count(lower_[i]);
-    }
-
-    lower_[lidx] &= ~(1 << lbit(nchar));
-    _array_len--;
-    memmove(array() + oidx, array() + oidx + 1,
-            (count() - oidx) * sizeof(offset_e));
-
-    if (lower_[lidx] == 0) {
-      _upper &= ~(1 << ubit(nchar));
-      memmove(&lower_[lidx], &lower_[lidx + 1],
-              (bits::count(_upper) - lidx) * sizeof(uint32_e));
-    }
-
-    if (align(lower_end()) < array_start()) {
-      assert(array_start() == align(lower_end()) + sizeof(offset_e));
-      _array_offset--;
-      memmove(array(), array() + 1, array_size());
     }
   }
 

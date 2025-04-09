@@ -5,6 +5,7 @@
 
 #include "_exception.hpp"
 #include "_inserter.hpp"
+#include "_deleter.hpp"
 #include "_node.hpp"
 
 namespace leaves {
@@ -425,7 +426,6 @@ struct _Cursor {
       throw NoValidPosition();
     }
 
-    int ssize = stack.size;
     _Inserter(&stack.back(), value).exec();
   }
 
@@ -436,7 +436,15 @@ struct _Cursor {
 
   Slice key() const { return current_key; }
 
-  void remove() {}
+  void remove() {
+    if (!is_valid()) throw NoValidPosition();
+    if (!transaction_active) {
+      if (!storage.start_transaction()) throw TransactionActive();
+      transaction_active = true;
+    }
+    _Deleter(&stack.back()).exec();
+  }
+
   void commit() {
     if (transaction_active) {
       storage.prepare_commit();

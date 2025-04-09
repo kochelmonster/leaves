@@ -11,11 +11,11 @@
 #include <filesystem>
 #include <fstream>
 
-#include "./_cursor.hpp"
-#include "./_exception.hpp"
-#include "./_memory.hpp"
-#include "./_node.hpp"
-#include "./_traits.hpp"
+#include "_cursor.hpp"
+#include "_exception.hpp"
+#include "_memory.hpp"
+#include "_node.hpp"
+#include "_traits.hpp"
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;

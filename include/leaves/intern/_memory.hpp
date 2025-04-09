@@ -223,7 +223,6 @@ struct _MemManager {
 
   // init the memory, header is a reserve memory space
   void init(uint16_t header) {
-    header = padding(header, PAGE_SIZE);
     next_free = padding(header, PAGE_SIZE);
     memset(slots, 0, sizeof(slots));
     allocation_end = next_free + AREA_SIZE;

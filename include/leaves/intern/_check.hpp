@@ -37,7 +37,8 @@ struct _Dumper {
 
   void dump(std::ostream& out) {
     auto root = _storage.txn()->root;
-    dump_link(out, root, _id++);
+    if (root)
+      dump_link(out, root, _id++);
   }
 
   void dump_link(std::ostream& out, offset_t link, int id) {
@@ -101,6 +102,7 @@ struct _Dumper {
     offset_e* start = trie->array();
     offset_e* end = start + trie->count();
 
+    assert(trie->count());
     out << "branches: \"";
     for (int iter = trie->first(); iter != TrieNode::OUT_OF_RANGE;
          iter = trie->next(iter)) {
