@@ -38,14 +38,14 @@ struct _Inserter {
 
   void free(block_ptr& block) { back->cursor->storage.free(block); }
 
-  void start() {
+  void exec() {
     if (back->is_leaf()) return change_leaf();
     if (split_compressed()) return;
     add_to_array();
   }
 
   // insert the very first value
-  void first() {
+  void first_exec() {
     const Slice& bkey = back->key();
     back->leaf = fill_leaf(bkey);
     back->offset = resolve(back->leaf);

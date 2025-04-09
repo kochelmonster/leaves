@@ -166,8 +166,7 @@ struct _MemoryMapFile {
   FileHeader* _db;
   pid_type _pid;
 
-  // the current transaction used with enough extra space
-  // for all GarbageSlots;
+  // the current transaction 
   Transaction _txn;
 
   // All Transactions with a tid >= _start_txn_id may not be recycled

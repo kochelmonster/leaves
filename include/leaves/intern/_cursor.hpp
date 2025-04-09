@@ -419,14 +419,14 @@ struct _Cursor {
     if (!stack.size) {
       if (!root) {
         push(offset_t());
-        _Inserter(&stack.back(), value).first();
+        _Inserter(&stack.back(), value).first_exec();
         return;
       }
       throw NoValidPosition();
     }
 
     int ssize = stack.size;
-    _Inserter(&stack.back(), value).start();
+    _Inserter(&stack.back(), value).exec();
   }
 
   Slice value() const {
