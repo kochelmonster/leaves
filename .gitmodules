@@ -1,3 +1,6 @@
 [submodule "BLAKE3"]
 	path = BLAKE3
 	url = https://github.com/BLAKE3-team/BLAKE3.git
+[submodule "leveldb"]
+	path = leveldb
+	url = https://github.com/google/leveldb.git
