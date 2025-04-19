@@ -25,6 +25,8 @@ struct TestTraits {
 typedef _TrieNode<TestTraits> TrieNode;
 static const int OOR = TrieNode::OUT_OF_RANGE;
 
+const uint16_t PAGE_SIZE = 4 * 1024;
+
 void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
   char buffer1[PAGE_SIZE], buffer2[PAGE_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;

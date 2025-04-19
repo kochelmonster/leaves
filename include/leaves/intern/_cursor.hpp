@@ -3,9 +3,9 @@
 
 #include <vector>
 
+#include "_deleter.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
-#include "_deleter.hpp"
 #include "_node.hpp"
 
 namespace leaves {
@@ -108,7 +108,7 @@ struct _Transition {
     return true;  // the caller shall set the trie root
   }
 
-  block_ptr resolve(offset_t offset) { return cursor->storage.resolve(offset); }
+  block_ptr resolve(offset_t offset) { return cursor->_db->resolve(offset); }
 
   void replace(offset_t offset_) {
     offset = offset_;
@@ -122,8 +122,8 @@ struct _Transition {
     if (block->txn_id == cursor->txn_id()) return link();
 
     assert(is_trie());
-    trie = cursor->storage.cow(trie);
-    offset = cursor->storage.resolve(trie);
+    trie = cursor->_db->cow(trie);
+    offset = cursor->_db->resolve(trie);
 
     if (!is_root())
       *parent().update() = offset;
@@ -216,8 +216,8 @@ struct _Transition {
   }
 
   Slice value() const {
-    if (is_leaf()) return leaf->value();
-    return Slice();
+    assert(is_leaf());
+    return leaf->value();
   }
 
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
@@ -245,7 +245,7 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* end = trie_.array() + trie_.count();
       if (lnk >= end) return false;
-      for (offset_e* l = lnk; l < end; l++) cursor->storage.prefetch(*l);
+      for (offset_e* l = lnk; l < end; l++) cursor->_db->prefetch(*l);
       push(lnk).first();
       return true;
     }
@@ -281,7 +281,7 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* begin = trie_.array();
       if (lnk < begin) return false;
-      for (offset_e* l = lnk; l >= begin; l--) cursor->storage.prefetch(*l);
+      for (offset_e* l = lnk; l >= begin; l--) cursor->_db->prefetch(*l);
       push(lnk).last();
       branch_key = current_key()[child().keypos];
       return true;
@@ -346,20 +346,20 @@ struct _Stack {
 };
 
 // A cursor to
-template <typename Storage_>
+template <typename DB_>
 struct _Cursor {
-  typedef Storage_ Storage;
-  using Traits = typename Storage::Traits;
-  typedef _Cursor<Storage> Cursor;
+  typedef DB_ DB;
+  using Traits = typename DB::Traits;
+  typedef _Cursor<DB> Cursor;
   typedef _Stack<Cursor> Stack;
+  typedef std::shared_ptr<DB> db_ptr;
   using Transition = typename Stack::Transition;
+  
 
-  _Cursor(Storage& storage_) : storage(storage_), transaction_active(false) {
-    root = 0;
-  }
+  _Cursor(db_ptr db) : _db(db), transaction_active(false) { update(); }
 
   tid_t txn_id() const {
-    return transaction_active ? storage._txn.txn_id : storage.txn()->txn_id;
+    return transaction_active ? _db->_wtxn.txn_id : _db->txn()->txn_id;
   }
 
   // return true if the cursor is on a valid position
@@ -413,7 +413,7 @@ struct _Cursor {
 
   void value(const Slice& value) {
     if (!transaction_active) {
-      if (!storage.start_transaction()) throw TransactionActive();
+      if (!_db->start_transaction()) throw TransactionActive();
       transaction_active = true;
     }
 
@@ -439,16 +439,19 @@ struct _Cursor {
   void remove() {
     if (!is_valid()) throw NoValidPosition();
     if (!transaction_active) {
-      if (!storage.start_transaction()) throw TransactionActive();
+      if (!_db->start_transaction()) throw TransactionActive();
       transaction_active = true;
     }
     _Deleter(&stack.back()).exec();
   }
 
+  void prepare_commit() {
+    if (transaction_active) _db->prepare_commit();
+  }
+
   void commit() {
     if (transaction_active) {
-      storage.prepare_commit();
-      storage.commit();
+      _db->commit();
       transaction_active = false;
       auto root_ = root;
       update();
@@ -458,7 +461,7 @@ struct _Cursor {
 
   void rollback() {
     if (transaction_active) {
-      storage.rollback();
+      _db->rollback();
       stack.clear();
       transaction_active = false;
       find(current_key);
@@ -467,7 +470,7 @@ struct _Cursor {
 
   /* Helpers */
 
-  void set_root(offset_t offset) { storage._txn.root = root = offset; }
+  void set_root(offset_t offset) { _db->_wtxn.root = root = offset; }
 
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
@@ -522,11 +525,11 @@ struct _Cursor {
 
   void update() {
     if (!transaction_active) {
-      root = storage.txn()->root;
+      root = _db->txn()->root;
     }
   }
 
-  Storage& storage;
+  db_ptr _db;
   offset_t root;
   Stack stack;
   Slice rest_key;

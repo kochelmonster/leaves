@@ -11,24 +11,28 @@ Test the the cursor with without burst table
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
+typedef MapStorage Storage;
+
 BOOST_AUTO_TEST_CASE(insert_one) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abc", NULL};
   test_insertion(storage, "insert_one", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_start_extend) {
   Preparation p;
-  { DBMMap storage(TEST_FILE); }
-  DBMMap storage(TEST_FILE);
+  {
+    Storage storage(TEST_FILE);
+  }
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abc", "abcd", NULL};
   test_insertion(storage, "insert_start_extend", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_start_split) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abc", "a*c", NULL};
   test_insertion(storage, "insert_start_split", keys);
 }
@@ -36,8 +40,9 @@ BOOST_AUTO_TEST_CASE(insert_start_split) {
 BOOST_AUTO_TEST_CASE(insert_start_short) {
   // A variant of insert_compress_extend
   Preparation p;
-  DBMMap storage(TEST_FILE);
-  DBMMap::Cursor cursor(storage);
+  Storage storage(TEST_FILE);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   cursor.find("abc");
   cursor.value(string("abc"));
   cursor.commit();
@@ -52,8 +57,9 @@ BOOST_AUTO_TEST_CASE(insert_start_short) {
 BOOST_AUTO_TEST_CASE(insert_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
-  DBMMap storage(TEST_FILE);
-  DBMMap::Cursor cursor(storage);
+  Storage storage(TEST_FILE);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   cursor.find("");
   cursor.value(string("aaa"));
   cursor.commit();
@@ -68,8 +74,9 @@ BOOST_AUTO_TEST_CASE(insert_start_null) {
 BOOST_AUTO_TEST_CASE(change_start) {
   // A variant of insert_compress_extend
   Preparation p;
-  DBMMap storage(TEST_FILE);
-  DBMMap::Cursor cursor(storage);
+  Storage storage(TEST_FILE);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   cursor.find("abc");
   cursor.value(string("aaa"));
   cursor.commit();
@@ -84,8 +91,9 @@ BOOST_AUTO_TEST_CASE(change_start) {
 BOOST_AUTO_TEST_CASE(change_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
-  DBMMap storage(TEST_FILE);
-  DBMMap::Cursor cursor(storage);
+  Storage storage(TEST_FILE);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   cursor.find("");
   cursor.value(string("aaa"));
   cursor.commit();
@@ -99,33 +107,34 @@ BOOST_AUTO_TEST_CASE(change_start_null) {
 
 BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abc*efghi", "ab*defghi", NULL};
   test_insertion(storage, "insert_compress_split", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compress_short) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "abc*efg", "ab", NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compress_start) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefg", "ba", NULL};
   test_insertion(storage, "insert_compress_start", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_big_stack) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"a",     "ab",     "abc",    "abcd",
                         "abcde", "abcdef", "abcdeg", NULL};
   test_insertion(storage, "insert_big_stack", keys);
 
-  DBMMap::Cursor cursor(storage);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   std::cout << "insert 7: abcd*" << std::endl;
 
   cursor.find("abcd*");
@@ -158,35 +167,35 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
 
 BOOST_AUTO_TEST_CASE(insert_leaf_split) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abc*efghi", "abc*e*ghi", NULL};
   test_insertion(storage, "insert_leaf_split", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_split_short) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abcd*fghi", "abcd*", NULL};
   test_insertion(storage, "insert_leaf_split_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_extend) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abc*efghi", "abc*efghijk", NULL};
   test_insertion(storage, "insert_leaf_extend", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_array) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", NULL};
   test_insertion(storage, "insert_array", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_trie) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "abf", "abg",
                         "abh", "abi", "abj", "abk", "abl", "abm", "abn",
                         "abo", "abp", "abA", "ab",  NULL};
@@ -196,9 +205,10 @@ BOOST_AUTO_TEST_CASE(insert_trie) {
 
 BOOST_AUTO_TEST_CASE(overflow_trie) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   uint16_t i;
-  DBMMap::Cursor cursor(storage);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   for (i = 0; i < 258; i++) {
     uint16_t key = native_to_big(i);
     Slice skey((char *)&key, sizeof(key));
@@ -218,7 +228,7 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
       uint16_t key = native_to_big(i);
       Slice cmp_key((char *)&key, sizeof(key));
       std::cout << "iter forward: " << i << std::endl;
-      BOOST_REQUIRE(cmp_key == cursor.current_key);
+      BOOST_REQUIRE(cmp_key == cursor.key());
     }
     BOOST_REQUIRE(i == 258);
 
@@ -228,7 +238,7 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
       uint16_t key = native_to_big(i);
       Slice cmp_key((char *)&key, sizeof(key));
       // std::cout << "iter backward: " << i << std::endl;
-      BOOST_REQUIRE(cmp_key == cursor.current_key);
+      BOOST_REQUIRE(cmp_key == cursor.key());
     }
     BOOST_REQUIRE(i == 0xFFFF);  // overflow to -1
   }
@@ -237,51 +247,58 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
 
 BOOST_AUTO_TEST_CASE(insert_null_leaf) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "ab", NULL};
   test_insertion(storage, "insert_null_leaf", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   const char *keys[] = {"abc", "abcdefg", NULL};
   test_insertion(storage, "insert_value", keys);
 }
 
-#ifdef WITH_REMOVE
 BOOST_AUTO_TEST_CASE(remove_trie) {
   Preparation p;
   Storage storage(TEST_FILE);
   const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
-                        "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
+                        "aI", "aJ", "aK", "aC", "al", "an", "aO", NULL};
   const char *remove[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
-                          "aI", "aJ", "aK", "aC", "aL", "aN", "aO", NULL};
+                          "aI", "aJ", "al", "an", "aO", "aK", "aC", NULL};
   test_remove(storage, "remove_trie", keys, remove);
 }
 
-BOOST_AUTO_TEST_CASE(remove_intermediate_value) {
+BOOST_AUTO_TEST_CASE(remove_none_leaf) {
   Preparation p;
   Storage storage(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
   const char *remove[] = {"ab", NULL};
-  test_remove(storage, "remove_intermediate_value", keys, remove);
+  test_remove(storage, "remove_none_leaf", keys, remove);
 }
 
-BOOST_AUTO_TEST_CASE(remove_compress_short) {
+BOOST_AUTO_TEST_CASE(remove_combine_trie) {
   Preparation p;
   Storage storage(TEST_FILE);
-  const char *keys[] = {"abcdefg", "abcefgh", "ab", NULL};
-  const char *remove[] = {"ab", NULL};
-  test_remove(storage, "remove_compress_short", keys, remove);
+  const char *keys[] = {"ab", "abcf", "abcde", "abcdf", NULL};
+  const char *remove[] = {"abcf", NULL};
+  test_remove(storage, "remove_combine_trie", keys, remove);
 }
-#endif
+
+BOOST_AUTO_TEST_CASE(remove_combine_leaf) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  const char *keys[] = {"ab", "abc", "abde", "abdf", NULL};
+  const char *remove[] = {"abdf", NULL};
+  test_remove(storage, "remove_combine_leaf", keys, remove);
+}
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
-  DBMMap storage(TEST_FILE);
+  Storage storage(TEST_FILE);
   Slice key("abcdefg");
-  DBMMap::Cursor cursor(storage);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
 
   cursor.find(key);
   BOOST_REQUIRE(!cursor.is_valid());
@@ -311,4 +328,38 @@ BOOST_AUTO_TEST_CASE(replace_value) {
 
   cursor.value(key);
   cursor.commit();
+}
+
+
+BOOST_AUTO_TEST_CASE(move_backward) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  const char *keys[] = {"abca", "abcb", "adea", "adeb", NULL};
+  test_insertion(storage, "move_backward", keys);
+
+  auto cursor = storage["test"].cursor();
+  cursor.find("ad");
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.prev();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abcb"));
+
+  cursor.find("abd");
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.prev();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abcb"));
+
+  // no extra test for this
+  try {
+    auto cursor = storage["test"].cursor();
+    cursor.value("abcb");
+    BOOST_REQUIRE(false);
+  }
+  catch (const leaves::NoValidPosition& e) {
+    // right
+  }
+  catch (...) {
+    BOOST_REQUIRE(false);
+  }
 }

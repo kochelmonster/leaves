@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <fstream>
 
-#include "leaves/intern/_mmap.hpp"
+#include "leaves/leaves.hpp"
 #include "leaves/intern/_check.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
@@ -16,10 +16,10 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-typedef leaves::DBMMap Storage;
+typedef leaves::MapStorage Storage;
 //typedef leaves::DBMMapBurst Storage;
 
-#define BINARY_KEY
+//#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -164,7 +164,7 @@ static Slice TrimSpace(Slice s) {
 
 class Benchmark {
  private:
-  Storage* db_;
+  Storage* storage_;
   int db_num_;
   int num_;
   int reads_;
@@ -326,7 +326,7 @@ class Benchmark {
   enum DBState { FRESH, EXISTING };
 
   Benchmark()
-      : db_(nullptr),
+      : storage_(nullptr),
         num_(FLAGS_num),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
         bytes_(0),
@@ -347,7 +347,7 @@ class Benchmark {
     }
   }
 
-  ~Benchmark() { delete db_; }
+  ~Benchmark() { delete storage_; }
 
   void Run() {
     PrintHeader();
@@ -411,7 +411,7 @@ class Benchmark {
       if (known) {
         Stop(name);
 
-      leaves::_MemoryChecker<Storage>(*db_).check();
+      // leaves::_MemoryChecker<Storage>(*db_).check();
 
 #ifdef STATISTICS        
         auto txn = db_->txn();
@@ -480,7 +480,7 @@ class Benchmark {
 
  private:
   void Open(bool sync) {
-    assert(db_ == nullptr);
+    assert(storage_ == nullptr);
 
     // Initialize db_
     char file_name[100], cmd[200];
@@ -495,7 +495,7 @@ class Benchmark {
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
-    db_ = new Storage(test_fname.c_str());
+    storage_ = new Storage(test_fname.c_str());
   }
 
   void Write(bool sync, Order order, DBState state, int num_entries,
@@ -506,11 +506,11 @@ class Benchmark {
         message_ = "skipping (--use_existing_db is true)";
         return;
       }
-      if (db_) {
+      if (storage_) {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
-        delete db_;
-        db_ = nullptr;
+        delete storage_;
+        storage_ = nullptr;
         system(cmd);
       }
       Open(sync);
@@ -529,7 +529,7 @@ class Benchmark {
     char key[100];
     int flag = 0, rc;
 
-    Storage::Cursor cursor(*db_);
+    auto cursor = (*storage_)["benchmark"].cursor();
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
       for (int j = 0; j < entries_per_batch; j++) {
@@ -574,7 +574,7 @@ class Benchmark {
 
   void ReadSequential() {
     leaves::Slice key, value;
-    Storage::Cursor cursor(*db_);
+    auto cursor = (*storage_)["benchmark"].cursor();
     for (cursor.first(); cursor.is_valid(); cursor.next()) {
       key = cursor.key();
       value = cursor.value();
@@ -585,7 +585,7 @@ class Benchmark {
 
   void ReadRandom() {
     leaves::Slice key;
-    Storage::Cursor cursor(*db_);
+    auto cursor = (*storage_)["benchmark"].cursor();
     char ckey[100];
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;

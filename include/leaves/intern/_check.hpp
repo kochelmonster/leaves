@@ -16,8 +16,9 @@ inline std::string bitstr(char bit) {
   return cstr.str();
 }
 
-template <typename Storage>
+template <typename Storage_>
 struct _Dumper {
+  using Storage = typename Storage_::element_type;
   using Traits = typename Storage::Traits;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
@@ -27,13 +28,14 @@ struct _Dumper {
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  static constexpr auto& PAGE_SIZE = Traits::PAGE_SIZE;
 
-  Storage& _storage;
+  const Storage& _storage;
   int _id;
   bool _simple;
 
-  _Dumper(Storage& storage, bool simple = false)
-      : _storage(storage), _id(0), _simple(simple) {}
+  _Dumper(const Storage_& storage, bool simple = false)
+      : _storage(*storage._db), _id(0), _simple(simple) {}
 
   void dump(std::ostream& out) {
     auto root = _storage.txn()->root;
@@ -55,8 +57,8 @@ struct _Dumper {
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
-      out << "id: " << (offset._offset) << std::endl;
-      out << "page: " << offset.page() << std::endl;
+      out << "id: " << offset._offset << std::endl;
+      out << "page: " << offset._offset / PAGE_SIZE << std::endl;
       out << "freespace: " << BLOCK_SIZES[leaf->slot_id] - size << std::endl;
     }
     out << "size: " << size << std::endl;
@@ -85,8 +87,8 @@ struct _Dumper {
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
-      out << "id: " << (offset._offset) << std::endl;
-      out << "page: " << offset.page() << std::endl;
+      out << "id: " << offset._offset << std::endl;
+      out << "page: " << offset._offset / PAGE_SIZE << std::endl;
       out << "freespace: " << BLOCK_SIZES[trie->slot_id] - size << std::endl;
     }
     out << "txn: " << trie->txn_id << std::endl;
@@ -138,7 +140,7 @@ struct _Dumper {
     }
   }
 };
-
+#if 0
 template <typename Storage>
 struct _MemoryChecker {
   using Traits = typename Storage::Traits;
@@ -202,7 +204,7 @@ struct _MemoryChecker {
       // collect garbage container blocks
       offset_t o = slot.ostart;
       while (o) {
-        typename Storage::MemManager::Slot::garb_ptr gc = storage.resolve(o);
+        typename Storage::MemManager::Slot::cont_ptr gc = storage.resolve(o);
         mark_page(o);
         if (o == slot.oend) break;
         o = gc->next;
@@ -268,7 +270,7 @@ template <typename Storage>
 std::array<uint16_t, _MemoryChecker<Storage>::COUNT>
     _MemoryChecker<Storage>::PART_COUNT =
         _MemoryChecker<Storage>::generate_counts();
-
+#endif
 }  // namespace leaves
 
 #endif  // _LEAVES__CHECK_HPP

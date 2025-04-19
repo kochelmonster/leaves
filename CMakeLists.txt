@@ -83,6 +83,9 @@ target_link_libraries(test_node PUBLIC core test)
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
+add_executable(test_string_insert tests/test_string_insert.cpp)
+target_link_libraries(test_string_insert PUBLIC core test)
+
 add_executable(profile tests/profile.cpp)
 target_compile_options(profile PUBLIC -O2)
 target_link_libraries(profile PUBLIC core test)
@@ -97,10 +100,11 @@ COMMAND ./test_memory
 COMMAND ./test_bits
 COMMAND ./test_mmap
 COMMAND ./test_db
+COMMAND ./test_string_insert
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert
 )
 
 endif(LEAVES_BUILD_TESTS)

@@ -6,8 +6,8 @@
 #include <random>
 #include <vector>
 
-#include "leaves/intern/_mmap.hpp"
 #include "leaves/intern/_check.hpp"
+#include "leaves/mmap.hpp"
 
 #ifndef CMPFILES
 #define CMPFILES "./"
@@ -33,7 +33,7 @@ struct Preparation {
 template <typename T>
 inline void dump_graph(const char* output, T& storage) {
   std::ofstream out(output);
-  _Dumper<T>(storage, true).dump(out);
+  _Dumper<T>(storage, false).dump(out);
 }
 
 template <typename T>
@@ -67,7 +67,8 @@ inline void check_graph(const char* name, T& storage) {
 
 #ifdef GENERATE
   std::cout << "generate graph " << name << std::endl;
-  dump_graph(path.c_str(), storage);
+  auto db = storage["test"];
+  dump_graph(path.c_str(), db);
 #else
   compare_graph(path.c_str(), storage);
 #endif
@@ -76,7 +77,8 @@ inline void check_graph(const char* name, T& storage) {
 template <typename T>
 inline void insert(T& storage, const char* test_name, const Slice& key,
                    const Slice& value) {
-  typename T::Cursor cursor(storage);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
   // std::cout << "insert " << test_name << std::endl;
   cursor.find(key);
   BOOST_REQUIRE(!cursor.is_valid());
@@ -86,7 +88,7 @@ inline void insert(T& storage, const char* test_name, const Slice& key,
   cursor.commit();
   check_graph(test_name, storage);
   BOOST_REQUIRE(cursor.is_valid());
-  BOOST_REQUIRE_EQUAL(cursor.current_key, key.string());
+  BOOST_REQUIRE_EQUAL(cursor.key(), key.string());
 }
 
 template <typename T>
@@ -99,7 +101,6 @@ using std::string;
 typedef std::vector<string> strings_t;
 typedef std::vector<int> ints_t;
 
-
 void cmp_value(const Slice& value, const std::string& find) {
   BOOST_REQUIRE_EQUAL(value.string().substr(0, find.size()), find);
 }
@@ -109,7 +110,8 @@ template <typename T>
 inline void test_movement(T& storage, strings_t& strings) {
   std::sort(strings.begin(), strings.end());
 
-  typename T::Cursor cursor(storage);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
 
   std::cout << std::endl
             << "iter forward" << std::endl
@@ -119,7 +121,7 @@ inline void test_movement(T& storage, strings_t& strings) {
   for (; i != strings.end(); i++, cursor.next()) {
     std::cout << "find \"" << *i << "\"";
     BOOST_REQUIRE(cursor.is_valid());
-    BOOST_REQUIRE_EQUAL(cursor.current_key, *i);
+    BOOST_REQUIRE_EQUAL(cursor.key(), *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(i == strings.end());
@@ -133,7 +135,7 @@ inline void test_movement(T& storage, strings_t& strings) {
        i++, cursor.prev()) {
     std::cout << "find \"" << *i << "\"";
     BOOST_REQUIRE(cursor.is_valid());
-    BOOST_REQUIRE_EQUAL(cursor.current_key, *i);
+    BOOST_REQUIRE_EQUAL(cursor.key(), *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(!cursor.is_valid());
@@ -151,25 +153,25 @@ inline void test_movement(T& storage, strings_t& strings) {
     std::cout << "find \"" << find << "\"";
     cursor.find(find);
     BOOST_REQUIRE(cursor.is_valid());
-    BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+    BOOST_REQUIRE_EQUAL(cursor.key(), find);
     cmp_value(cursor.value(), find);
 
     if (*i > 0) {
       cursor.prev();
       BOOST_REQUIRE(cursor.is_valid());
-      BOOST_REQUIRE_EQUAL(cursor.current_key, strings[*i - 1]);
+      BOOST_REQUIRE_EQUAL(cursor.key(), strings[*i - 1]);
       cmp_value(cursor.value(), strings[*i - 1]);
     }
 
     if (*i < (int)strings.size() - 1) {
       cursor.find(find);
       BOOST_REQUIRE(cursor.is_valid());
-      BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+      BOOST_REQUIRE_EQUAL(cursor.key(), find);
       cmp_value(cursor.value(), find);
 
       cursor.next();
       BOOST_REQUIRE(cursor.is_valid());
-      BOOST_REQUIRE_EQUAL(cursor.current_key, strings[*i + 1]);
+      BOOST_REQUIRE_EQUAL(cursor.key(), strings[*i + 1]);
       cmp_value(cursor.value(), strings[*i + 1]);
     }
 
@@ -180,9 +182,9 @@ inline void test_movement(T& storage, strings_t& strings) {
     BOOST_REQUIRE(!cursor.is_valid());
     cursor.prev();
     find = strings[*i];
-    std::string cmp1(cursor.current_key.data(), cursor.current_key.size());
+    std::string cmp1(cursor.key().data(), cursor.key().size());
     std::cout << "before cmp " << cmp1 << " == " << find << std::endl;
-    BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+    BOOST_REQUIRE_EQUAL(cursor.key(), find);
     cmp_value(cursor.value(), find);
 
     // set cursor before find in a non valid position
@@ -192,10 +194,10 @@ inline void test_movement(T& storage, strings_t& strings) {
     BOOST_REQUIRE(!cursor.is_valid());
     cursor.next();
     find = strings[*i];
-    cmp1.assign(cursor.current_key.data(), cursor.current_key.size());
+    cmp1.assign(cursor.key().data(), cursor.key().size());
     std::cout << "after cmp " << cmp1 << " == " << find << std::endl;
 
-    BOOST_REQUIRE_EQUAL(cursor.current_key, find);
+    BOOST_REQUIRE_EQUAL(cursor.key(), find);
     cmp_value(cursor.value(), find);
 
     std::cout << "ok" << std::endl;
@@ -215,8 +217,8 @@ inline void test_movement(T& storage, strings_t& strings) {
 #endif
 
 template <typename T>
-inline void test_insertion(T& storage, const char* title,
-                           const char* keys[], int value_fill=0) {
+inline void test_insertion(T& storage, const char* title, const char* keys[],
+                           int value_fill = 0) {
   strings_t strings;
   std::cout << "==========================================" << std::endl
             << "Test: " << title << std::endl
@@ -247,7 +249,8 @@ inline void test_remove(T& storage, const char* title, const char* keys[],
             << "==========================================" << std::endl;
   std::cout << "insert keys" << std::endl << "-----------" << std::endl;
 
-  typename T::Cursor cursor(storage);
+  auto db = storage["test"];
+  auto cursor = db.cursor();
 
   for (int i = 0; keys[i]; i++) {
     std::cout << "insert " << keys[i] << std::endl;
@@ -256,6 +259,7 @@ inline void test_remove(T& storage, const char* title, const char* keys[],
     cursor.value(keys[i]);
     strings.push_back(keys[i]);
   }
+  cursor.commit();
 
   std::string name(title);
   name += "_begin";
@@ -266,6 +270,7 @@ inline void test_remove(T& storage, const char* title, const char* keys[],
     cursor.find(to_remove[i]);
     BOOST_REQUIRE(cursor.is_valid());
     cursor.remove();
+    cursor.commit();
 
     std::stringstream cstr;
     cstr << title << "_remove_" << i << "_" << to_remove[i];

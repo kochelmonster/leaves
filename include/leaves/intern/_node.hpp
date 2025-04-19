@@ -241,12 +241,12 @@ struct _TrieNode : public Traits::BlockHeader {
       oidx = bits::count(lower_[lidx] & ((1 << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
       for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
-      
+
       lower_[lidx] &= ~(1 << lbit(key));
       if (!lower_[lidx]) {
         _upper &= ~(1 << bit);
         memmove(&lower_[lidx], &lower_[lidx + 1],
-               (bits::count(_upper) - lidx) * sizeof(uint32_e));
+                (bits::count(_upper) - lidx) * sizeof(uint32_e));
       }
     } else {
       assert(src._array_len & NULL_MASK);
@@ -368,8 +368,10 @@ struct _LeafNode : public Traits::BlockHeader {
   using uint16_e = typename Traits::uint16_e;
   using uint32_e = typename Traits::uint32_e;
   using offset_e = typename Traits::offset_e;
-  const static size_t MAX_SIZE =
-      PAGE_SIZE - sizeof(Base) - sizeof(uint16_e) - sizeof(uint8_t);
+  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  static constexpr auto BS_COUNT = Traits::BLOCK_SIZES_COUNT;
+  const static size_t MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1] - sizeof(Base) -
+                                 sizeof(uint16_e) - sizeof(uint8_t);
 
   uint16_e value_size;
   uint8_t key_size;

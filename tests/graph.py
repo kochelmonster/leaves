@@ -55,7 +55,7 @@ class Graph:
         add("}")
         add("")
 
-        print("max page", max(map(int, pages.keys())))
+        # print("max page", max(map(int, pages.keys())))
         return "\n".join(lines)
 
     def handle_trie(self, node):

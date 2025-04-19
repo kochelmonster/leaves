@@ -8,6 +8,9 @@
 
 namespace leaves {
 
+typedef uint64_t tid_t;
+typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
+
 class Slice {
  private:
   size_t _size;
@@ -68,12 +71,6 @@ class Slice {
   void reset() { _size = 0; }
 };
 
-typedef uint64_t tid_t;
-typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
-
-static const uint32_t PAGE_SIZE = 4 * 1024;
-static const size_t PAGE_MASK = (((size_t)PAGE_SIZE) - 1);
-
 template <typename BaseType>
 struct _Offset {
   typedef _Offset<BaseType> OffsetType;
@@ -118,30 +115,30 @@ struct _Offset {
     _offset = src._offset;
     return *this;
   }
+
   template <typename T>
   const _Offset& operator=(T src) {
     _offset = src;
     return *this;
   }
+
   template <typename T>
   const _Offset& operator+=(T add) {
     _offset += add;
     return *this;
   }
+
   template <typename T>
   _Offset operator+(T src) {
     return _Offset(_offset + src);
   }
+
   template <typename T>
   _Offset operator-(T src) {
     return _Offset(_offset - src);
   }
 
   operator uint64_t() const { return _offset & ~TYPE_MASK; }
-  _Offset page() const { return _Offset(_offset & ~PAGE_MASK); }
-  uint64_t offset() const {
-    return _Offset((_offset & PAGE_MASK) & ~TYPE_MASK);
-  }
   NodeTypes type() const { return (NodeTypes)(_offset & TYPE_MASK); }
   const _Offset& type(NodeTypes type) {
     _offset &= ~TYPE_MASK;
@@ -190,7 +187,8 @@ constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 template <typename Block>
 void copy(Block& dst, const Block& src) {
   uint16_t base_size = sizeof(typename Block::Base), src_size = src.size();
-  memcpy((char*)&dst + base_size, (char*)&src + base_size, src_size - base_size);
+  memcpy((char*)&dst + base_size, (char*)&src + base_size,
+         src_size - base_size);
 }
 
 }  // namespace leaves

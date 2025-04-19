@@ -1,7 +1,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
-#include "leaves/intern/_mmap.hpp"
+#include "leaves/leaves.hpp"
 
 #define TEST_FILE "test.lvs"
 
@@ -20,8 +20,8 @@ struct Preparation {
 };
 
 void create() {
-  DBMMap storage(TEST_FILE);
-  DBMMap::Cursor cursor(storage);
+  MapStorage storage(TEST_FILE);
+  auto cursor = storage["test"].cursor();
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
@@ -51,8 +51,8 @@ void create() {
 }
 
 void read() {
-  DBMMap storage(TEST_FILE);
-  DBMMap::Cursor cursor(storage);
+  MapStorage storage(TEST_FILE);
+  auto cursor = storage["test"].cursor();
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);

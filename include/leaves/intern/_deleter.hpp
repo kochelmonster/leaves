@@ -22,19 +22,19 @@ struct _Deleter {
 
   template <typename T>
   offset_t resolve(T ptr) {
-    return back->cursor->storage.resolve(ptr);
+    return back->cursor->_db->resolve(ptr);
   }
 
   block_ptr resolve(offset_t offset) {
-    return back->cursor->storage.resolve(offset);
+    return back->cursor->_db->resolve(offset);
   }
 
-  block_ptr alloc(uint16_t size) { return back->cursor->storage.alloc(size); }
+  block_ptr alloc(uint16_t size) { return back->cursor->_db->alloc(size); }
   block_ptr alloc_slot(uint16_t size) {
-    return back->cursor->storage.alloc_slot(size);
+    return back->cursor->_db->alloc_slot(size);
   }
 
-  void free(block_ptr& block) { back->cursor->storage.free(block); }
+  void free(block_ptr& block) { back->cursor->_db->free(block); }
 
   void exec() {
     assert(back->success());

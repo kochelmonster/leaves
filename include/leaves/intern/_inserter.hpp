@@ -29,14 +29,16 @@ struct _Inserter {
 
   template <typename T>
   offset_t resolve(T ptr) {
-    return back->cursor->storage.resolve(ptr);
-  }
-  block_ptr alloc(uint16_t size) { return back->cursor->storage.alloc(size); }
-  block_ptr alloc_slot(uint16_t size) {
-    return back->cursor->storage.alloc_slot(size);
+    return back->cursor->_db->resolve(ptr);
   }
 
-  void free(block_ptr& block) { back->cursor->storage.free(block); }
+  block_ptr alloc(uint16_t size) { return back->cursor->_db->alloc(size); }
+  
+  block_ptr alloc_slot(uint16_t size) {
+    return back->cursor->_db->alloc_slot(size);
+  }
+
+  void free(block_ptr& block) { back->cursor->_db->free(block); }
 
   void exec() {
     if (back->is_leaf()) return change_leaf();

@@ -10,7 +10,7 @@ struct SimplePointer {
   struct ptr {
     static constexpr NodeTypes type = TRIE;
     ptr(const ptr& src) : p(src.p) {}
-    ptr(void* src = nullptr) : p((BlockHeader*)src) {}
+    ptr(void* src = nullptr) : p((void*)src) {}
 
     operator char*() { return (char*)p; }
     operator const uint8_t*() const { return (uint8_t*)p; }
@@ -19,15 +19,15 @@ struct SimplePointer {
     operator bool() const { return p != nullptr; }
     operator bool() { return p != nullptr; }
 
-    BlockHeader* operator->() { return p; }
-    const BlockHeader* operator->() const { return p; }
+    BlockHeader* operator->() { return (BlockHeader*)p; }
+    const BlockHeader* operator->() const { return (const BlockHeader*)p; }
 
     bool operator==(const ptr& other) const { return p == other.p; }
     bool operator!=(const ptr& other) const { return p != other.p; }
     bool operator!=(const void* other) const { return p != other; }
     void* link(uint16_t offset) { return (char*)p + offset; }
     void reset() { p = nullptr; }
-    BlockHeader* p;
+    void* p;
   };
 
   template <typename T, NodeTypes t = TRIE>
