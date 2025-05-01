@@ -13,6 +13,7 @@ struct SimplePointer {
     ptr(void* src = nullptr) : p((void*)src) {}
 
     operator char*() { return (char*)p; }
+    operator const char*() const { return (char*)p; }
     operator const uint8_t*() const { return (uint8_t*)p; }
     operator uint64_t() const { return (uint64_t)p; }
     operator uint64_t() { return (uint64_t)p; }
@@ -27,6 +28,7 @@ struct SimplePointer {
     bool operator!=(const void* other) const { return p != other; }
     void* link(uint16_t offset) { return (char*)p + offset; }
     void reset() { p = nullptr; }
+
     void* p;
   };
 
@@ -35,6 +37,11 @@ struct SimplePointer {
     static constexpr NodeTypes type = t;
     Pointer(void* src = nullptr) : ptr(src) {}
     Pointer(const ptr& src) : ptr(src) {}
+    const ptr& operator=(const ptr& src) {
+      ptr::p = src.p;
+      return src;
+    }
+
     T* operator->() { return static_cast<T*>(ptr::p); }
     const T* operator->() const { return static_cast<const T*>(ptr::p); }
     T& operator*() { return *static_cast<T*>(ptr::p); }

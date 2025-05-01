@@ -12,20 +12,20 @@ using namespace leaves;
 
 struct TestTraits {
   typedef offset_t offset_e;
-  typedef tid_t tid_e;
   typedef uint16_t uint16_e;
   typedef uint32_t uint32_e;
   typedef uint64_t uint64_e;
 
-  static constexpr size_t PAGE_SIZE = 4 * K;
-  static constexpr size_t AREA_SIZE =
-      4 * PAGE_SIZE;  // size of newly allocated areas
+  static constexpr size_t BLOCK_SIZE = 4 * K;
+
+  // size of newly allocated areas
+  static constexpr size_t PAGE_SIZE = 4 * BLOCK_SIZE;
   static constexpr uint16_t BLOCK_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
   struct BlockHeader {
-    tid_e txn_id;
+    tid_t txn_id;
     uint8_t slot_id;
     uint8_t free_idx;
   };
@@ -36,7 +36,7 @@ struct TestTraits {
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
-constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
+constexpr size_t PAGE_SIZE = TestTraits::PAGE_SIZE;
 
 struct TestStorage {
   typedef TestTraits Traits;
@@ -45,19 +45,15 @@ struct TestStorage {
   using offset_e = typename TestTraits::offset_e;
   using uint32_e = typename TestTraits::uint32_e;
   using uint16_e = typename TestTraits::uint16_e;
-  using tid_e = typename TestTraits::tid_e;
   using MemManager = typename leaves::_MemManager<TestTraits>;
 
   std::vector<char> memory;
 
-  typedef std::map<offset_t, uint32_e> blocks_t;
-  blocks_t _debug_collect_block;
-
   TestStorage() {
     accept_tid = mark_tid = 0;
     memory.reserve(1024 * 1024);
-    memory.resize(AREA_SIZE);
-    mm.init(sizeof(void*), AREA_SIZE, *this);
+    memory.resize(PAGE_SIZE);
+    mm.init(sizeof(void*), PAGE_SIZE);
     accept_tid = mark_tid = 1;
   }
 
@@ -65,10 +61,12 @@ struct TestStorage {
   tid_t accept_tid;
   tid_t mark_tid;
 
-  block_ptr resolve(offset_t offset) { return block_ptr(&memory[offset]); }
+  block_ptr resolve(offset_t offset, Access access = READ) {
+    return block_ptr(&memory[offset]);
+  }
 
   offset_t resolve(const block_ptr& p) {
-    return offset_t((const char*)(const void*)p - (char*)&memory[0]);
+    return offset_t((const char*)p - (char*)&memory[0]);
   }
 
   block_ptr alloc(uint16_t space) { return alloc_slot(mm.assign_slot(space)); }
@@ -81,10 +79,10 @@ struct TestStorage {
 
   void free(block_ptr p) { mm.free(p, *this); }
 
-  AreaSlice alloc_area(size_t size) {
+  AreaSlice alloc_page() {
     size_t old_size = memory.size();
-    memory.resize(old_size + size);
-    return AreaSlice{old_size, size};
+    memory.resize(old_size + PAGE_SIZE);
+    return AreaSlice{old_size, PAGE_SIZE};
   }
 
   template <typename T>
@@ -98,7 +96,7 @@ struct TestStorage {
 };
 
 struct TestTraitsBig : public TestTraits {
-  static constexpr size_t AREA_SIZE = 1 * M;
+  static constexpr size_t PAGE_SIZE = 1 * M;
 };
 
 struct TestStorageBig : public TestStorage {
@@ -170,30 +168,34 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
 }
 
-constexpr auto PAGE_SIZE = TestTraits::PAGE_SIZE;
+constexpr auto BLOCK_SIZE = TestTraits::BLOCK_SIZE;
 
 BOOST_AUTO_TEST_CASE(test_page_border) {
   TestStorage storage;
   constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
-  
+
+  uint16_t bsize = BLOCK_SIZES[3];
   offset_t delta = storage.resolve(storage.alloc_slot(3));
-  delta += BLOCK_SIZES[3];
+  delta += bsize;
+
+  BOOST_CHECK_EQUAL(storage.mm.left_over_start, storage.mm.left_over_end);
+
+  while (delta + bsize < storage.mm.allocation_end) {
+    auto result = storage.resolve(storage.alloc_slot(3));
+    BOOST_CHECK(result == delta);
+    delta += bsize;
+  }
 
   auto result = storage.resolve(storage.alloc_slot(3));
-  BOOST_CHECK(result == delta);
-  delta += BLOCK_SIZES[3];
-
-  result = storage.resolve(storage.alloc_slot(3));
-  BOOST_CHECK(result == delta);
-  delta += BLOCK_SIZES[3];
-
-  auto count_before = storage.mm.slots[0].count;
-
-  result = storage.resolve(storage.alloc_slot(3));
-  // A new page is allocated for slots and 
+  // A new page is allocated for slots and
   // the rest is used with min blocks
   BOOST_CHECK(result != delta);
-  BOOST_CHECK(count_before < storage.mm.slots[0].count);
+  BOOST_CHECK(storage.mm.left_over_start < storage.mm.left_over_end);
+
+  auto old = storage.mm.left_over_start;
+  result = storage.resolve(storage.alloc_slot(1));
+  BOOST_CHECK(result == old);
+  BOOST_CHECK(result < storage.mm.left_over_start);
 }
 
 BOOST_AUTO_TEST_CASE(test_areamanager) {
@@ -202,7 +204,7 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
 
   typedef TestTraits::Pointer<AreaRegister> ptr;
 
-  AreaSlice as1 = storage.alloc_area(AREA_SIZE);
+  AreaSlice as1 = storage.alloc_page();
   am.put(as1, storage);
   BOOST_CHECK_EQUAL(am.start, as1.offset);
   BOOST_CHECK_EQUAL(am.end, as1.offset);
@@ -210,20 +212,20 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
 
   // Test AreaManager::put
   for (int i = 1; i < AreaRegister::COUNT; i++) {
-    AreaSlice as = storage.alloc_area(AREA_SIZE);
+    AreaSlice as = storage.alloc_page();
     am.put(as, storage);
     ptr ar = storage.resolve(am.start);
     BOOST_CHECK_EQUAL(ar->last_index, i);
   }
 
-  AreaSlice as2 = storage.alloc_area(AREA_SIZE);
+  AreaSlice as2 = storage.alloc_page();
   am.put(as2, storage);
   ptr ar = storage.resolve(am.start);
   BOOST_CHECK_EQUAL(am.start, as1.offset);
   BOOST_CHECK_EQUAL(am.end, as2.offset);
 
   AreaManager am1 = {.start = 0, .end = 0};
-  AreaSlice as3 = storage.alloc_area(AREA_SIZE);
+  AreaSlice as3 = storage.alloc_page();
   am1.put(as3, storage);
   BOOST_CHECK_EQUAL(am1.start, as3.offset);
   BOOST_CHECK_EQUAL(am1.end, as3.offset);
@@ -232,17 +234,17 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
   BOOST_CHECK_EQUAL(am1.start, as3.offset);
   BOOST_CHECK_EQUAL(am1.end, am.end);
 
-  AreaSlice r = am1.get(AREA_SIZE, storage);
+  AreaSlice r = am1.get(PAGE_SIZE, storage);
   BOOST_CHECK_EQUAL(r.offset, as3.offset);
   BOOST_CHECK_EQUAL(am1.start, am.start);
 
   ar = storage.resolve(am1.start);
   int li = ar->last_index;
-  r = am1.get(AREA_SIZE, storage);
+  r = am1.get(PAGE_SIZE, storage);
   BOOST_CHECK_EQUAL(ar->last_index, li - 1);
   BOOST_CHECK_EQUAL(ar->areas[ar->last_index + 1].offset, r.offset);
 
-  r = am1.get(2 * AREA_SIZE, storage);
+  r = am1.get(2 * PAGE_SIZE, storage);
   BOOST_CHECK_EQUAL(r.offset, 0);
 }
 

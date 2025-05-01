@@ -1,10 +1,22 @@
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 
+#include <boost/endian/arithmetic.hpp>
+
+#include "_check.hpp"
 #include "_cursor.hpp"
+#include "_hash.hpp"
 #include "_memory.hpp"
 
+#define DEBUG_MEM
+
 namespace leaves {
+
+struct AreaPointer {
+  // position of the last allocated area in the area register
+  offset_t olast;  // the offset of the last area register
+  int16_t ilast;   // the index inside the register
+};
 
 template <typename Traits_>
 struct _TransactionBase : public Traits_::BlockHeader {
@@ -24,12 +36,12 @@ struct _TransactionBase : public Traits_::BlockHeader {
   // pointer ot the next higher transaction
   offset_t next_txn;
 
+  // The last used areas
+  AreaPointer last_area;
+  AreaPointer last_big_area;
+
   // count of cursors accessing this transaction
   uint32_t count;
-
-  // position of the last allocated area in the area register
-  offset_t olast_area;
-  uint16_t ilast_area;
 
   MemManager mem_manager;
 };
@@ -72,17 +84,43 @@ struct _DB {
   using txn_ptr = typename Transaction::ptr;
   using block_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
-  using tid_e = typename Traits::tid_e;
+  typedef _DB<Storage> DB;
+
+  struct ValueTraits : public Storage::Traits {
+    typedef std::shared_ptr<DB> db_ptr;
+    typedef ::Hasher Hasher;
+    constexpr static bool tactive = false;
+    static void set_root(DB& db, offset_t offset) { db._wtxn.root = offset; }
+    static offset_t get_root(DB& db) { return db.txn()->root; }
+  };
+
+  struct MemoryTraits : public Storage::Traits {
+    typedef DB* db_ptr;
+    typedef ::NullHasher Hasher;
+    typedef uint8_t hash_t[0];
+    constexpr static bool tactive = true;
+    static void set_root(DB& db, offset_t offset) {
+      db._wtxn.mem_root = offset;
+    }
+    static offset_t get_root(DB& db) { return db.txn()->mem_root; }
+  };
+
+  struct BigSizeKey {
+    boost::endian::big_uint64_t first;
+    uint64_t second;
+  };
 
   static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr uint16_t BLOCK_SIZES_COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
   static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[BLOCK_SIZES_COUNT - 1];
+  static constexpr uint64_t SIZE_BIT = uint64_t(1) << 63;
 
-  typedef _DB<Storage> DB;
-  typedef _Cursor<DB> Cursor;
+  typedef _Cursor<DB, ValueTraits> Cursor;
+  typedef _Cursor<DB, MemoryTraits> MemCursor;
   typedef _MemManager<Traits> MemManager;
+  typedef DB db_type;
 
   static_assert(
       sizeof(_Transaction<Traits>) == sizeof(_TransactionBase<Traits>),
@@ -92,7 +130,8 @@ struct _DB {
     offset_t read_txn;
     offset_t prepared_txn;
     Mutex txn_lock;
-    AreaManager areas;
+    AreaManager areas;      // areas for normal allocation
+    AreaManager big_areas;  // areas only for big allocation
   };
   static_assert(sizeof(Header) + sizeof(Transaction) < PAGE_SIZE,
                 "DB Header too big");
@@ -102,17 +141,27 @@ struct _DB {
   Storage& _storage;
   Transaction _wtxn;
   header_ptr _header;
+  MemCursor _mem_cursor;
+  uint16_t _index;
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
 
-  _DB(Storage& storage, offset_t header)
-      : _storage(storage), _header(storage.resolve(header)) {}
+  _DB(Storage& storage, offset_t header, uint16_t index)
+      : _storage(storage),
+        _header(storage.resolve(header)),
+        _mem_cursor(this),
+        _index(index) {
+    _wtxn.txn_id = 0;
+  }
 
-  _DB(Storage& storage, offset_t* header) : _storage(storage) { init(header); }
+  _DB(Storage& storage, offset_t* header, uint16_t index)
+      : _storage(storage), _mem_cursor(this), _index(index) {
+    init(header);
+  }
 
   void init(offset_t* header) {
-    auto area = _storage.get_area(Traits::AREA_SIZE);
+    auto area = _storage.get_area(Traits::PAGE_SIZE);
 
     *header = area.offset + sizeof(AreaRegister);
     _header = _storage.resolve(*header);
@@ -126,8 +175,8 @@ struct _DB {
     txn_ptr txn = resolve(_header->read_txn);
     memset((void*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
-    txn->olast_area = area.offset;
-    txn->ilast_area = 0;
+    txn->last_area.olast = _header->areas.start;
+    txn->last_area.ilast = 0;
     txn->txn_id = 1;
     txn->slot_id = Transaction::SLOT_ID;
     txn->root = txn->mem_root = 0;
@@ -135,14 +184,17 @@ struct _DB {
     txn->count = 0;
     txn->start_txn = _header->read_txn;
     txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
-                          area.end(), *this);
+                          area.end());
     _wtxn.txn_id = 0;
-    _storage.flush();
+    flush();
   }
 
+  Slice name() const { return Slice(_storage._memory->dbs[_index].name); }
+
   template <typename T>
-  typename Traits::Pointer<T> resolve(offset_t offset) const {
-    return _storage.resolve(offset);
+  typename Traits::Pointer<T> resolve(offset_t offset,
+                                      Access access = READ) const {
+    return _storage.resolve(offset, access);
   }
 
   template <typename T>
@@ -169,55 +221,195 @@ struct _DB {
     return result;
   }
 
-  Cursor cursor() { return Cursor(*this); }
-
   block_ptr alloc(uint16_t space) {
     assert(space <= BLOCK_SIZES[BLOCK_SIZES_COUNT - 1]);
     return alloc_slot(MemManager::assign_slot(space));
   }
 
   block_ptr alloc_slot(uint16_t slot) {
-    assert(_wtxn.txn_id);
+    assert(transaction_active());
     return _wtxn.alloc_slot(slot, *this);
   }
 
   void free(block_ptr& block) {
-    assert(_wtxn.txn_id);
+    assert(transaction_active());
     _wtxn.mem_manager.free(block, *this);
+  }
+
+  void _add_to_bigmem(offset_t offset, size_t size) {
+    assert(size % MAX_BLOCK_SIZE == 0);
+#ifdef DEBUG_MEM
+    std::stringstream cstr;
+    cstr << offset._offset << "-" << size;
+#endif
+
+    BigSizeKey bkey;
+    bkey.first = offset;
+    bkey.second = size;
+    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+    assert(!_mem_cursor.is_valid());
+
+#ifdef DEBUG_MEM
+    _mem_cursor.value(cstr.str());
+#else
+    _mem_cursor.value(Slice());
+#endif
+
+    bkey.first = size | SIZE_BIT;
+    bkey.second = offset;
+    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+    assert(!_mem_cursor.is_valid());
+#ifdef DEBUG_MEM
+    _mem_cursor.value(cstr.str());
+#else
+    _mem_cursor.value(Slice());
+#endif
+  }
+
+  void _remove_from_bigmem(offset_t offset, size_t size) {
+    BigSizeKey bkey;
+    bkey.first = size | SIZE_BIT;
+    bkey.second = offset;
+    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+    assert(_mem_cursor.is_valid());
+    _mem_cursor.remove();
+
+    bkey.first = offset;
+    bkey.second = size;
+    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+    assert(_mem_cursor.is_valid());
+    _mem_cursor.remove();
+  }
+
+  AreaSlice alloc_big(uint64_t size) {
+    assert(_wtxn.txn_id);
+
+    size = padding(size, MAX_BLOCK_SIZE);
+    uint64_t found_size;
+    offset_t found_offset;
+
+    // find from big memory storage
+    BigSizeKey bkey;
+    bkey.first = size | SIZE_BIT;
+    bkey.second = 0;
+    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+    _mem_cursor.next();
+
+    if (_mem_cursor.is_valid()) {
+      BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
+      found_size = found->first & ~SIZE_BIT;
+      found_offset = found->second;
+
+      // remove the block from bit memory storage
+      assert(found_size >= size);
+      _mem_cursor.remove();
+
+      // remove from offset list
+      bkey.first = found_offset;
+      bkey.second = found_size;
+      _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+      assert(_mem_cursor.is_valid());
+      _mem_cursor.remove();
+    } else {
+      if (!_wtxn.last_big_area.olast) {
+        if (!_header->big_areas.start) {
+          auto area =
+              _storage.get_area(padding(size + AreaRegister::SIZE, PAGE_SIZE));
+          _header->big_areas.put(area, *this);
+          flush();
+        }
+        _wtxn.last_big_area.olast = _header->big_areas.start;
+        _wtxn.last_big_area.ilast = -1;
+      }
+      uint64_t psize = padding(size, PAGE_SIZE);
+      while (true) {
+        auto slice = alloc_area(psize, _header->big_areas, _wtxn.last_big_area);
+        if (slice.size < size) {
+          // area too small left over area block
+          _add_to_bigmem(slice.offset, slice.size);
+          continue;
+        }
+        found_size = slice.size;
+        found_offset = slice.offset;
+        break;
+      }
+    }
+
+    uint64_t delta = found_size - size;
+    if (delta >= MAX_BLOCK_SIZE) {
+      // enough space left -> reuse the rest
+      _add_to_bigmem(found_offset + size, delta);
+      found_size -= delta;
+    }
+
+    return AreaSlice{found_offset, found_size};
+  }
+
+  void free_big(offset_e offset, size_t size) {
+    assert(_wtxn.txn_id);
+    size = padding(size, MAX_BLOCK_SIZE);
+
+    BigSizeKey bkey;
+    bkey.first = offset;
+    bkey.second = size;
+    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
+    assert(!_mem_cursor.is_valid());
+
+    _mem_cursor.prev();
+    if (_mem_cursor.is_valid()) {
+      BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
+      if (found->first + found->second == offset) {
+        offset = found->first;
+        size += found->second;
+        _remove_from_bigmem((uint64_t)found->first, found->second);
+      } else
+        _mem_cursor.next();
+    } else
+      _mem_cursor.first();
+
+    if (_mem_cursor.is_valid()) {
+      BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
+      uint64_t foffset = found->first;
+      if (found->first == offset + size) {
+        size += found->second;
+        _remove_from_bigmem((uint64_t)found->first, found->second);
+      }
+    }
+
+    _add_to_bigmem(offset, size);
   }
 
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
-  AreaSlice alloc_area(uint64_t min_size) {
-#if 0
-    cursor = find_bigvalue(big_endina(min_size));
-    cursor.next()
-    if (big_to_native(cursor.key()) > min_size)
+  AreaSlice alloc_page() {
+    return alloc_area(PAGE_SIZE, _header->areas, _wtxn.last_area);
+  }
 
-#endif
+  AreaSlice alloc_area(uint64_t min_size, AreaManager& manager,
+                       AreaPointer& pointer) {
     assert(_wtxn.txn_id);
-    auto result = get_next_area();
+    auto result = get_next_area(pointer);
     if (!result) {
-      assert(_wtxn.olast_area == _header->areas.end);
-      std::scoped_lock lock(_storage._memory->file_lock);
+      assert(pointer.olast == manager.end);
+      std::scoped_lock lock(_storage.file_lock());
       auto area = _storage.get_area(min_size);
-      _header->areas.put(area, _storage);
-      _storage.flush();
-      result = get_next_area();
+      manager.put(area, _storage);
+      flush();
+      result = get_next_area(pointer);
     }
     assert(result);
     return result;
   }
 
-  AreaSlice get_next_area() {
+  AreaSlice get_next_area(AreaPointer& pointer) {
     typedef typename Traits::template Pointer<AreaRegister> ptr;
-    ptr ar = resolve(_wtxn.olast_area);
-    if (ar->last_index > _wtxn.ilast_area) return ar->areas[++_wtxn.ilast_area];
+    ptr ar = resolve(pointer.olast);
+    if (ar->last_index > pointer.ilast) return ar->areas[++pointer.ilast];
 
     if (ar->next) {
-      _wtxn.olast_area = ar->next;
-      _wtxn.ilast_area = 0;
-      ar = resolve(_wtxn.olast_area);
+      pointer.olast = ar->next;
+      pointer.ilast = 0;
+      ar = resolve(pointer.olast);
       return ar->areas[0];
     }
 
@@ -243,7 +435,9 @@ struct _DB {
     });
   }
 
-  block_ptr resolve(offset_t offset) const { return _storage.resolve(offset); }
+  block_ptr resolve(offset_t offset, Access access = READ) const {
+    return _storage.resolve(offset, access);
+  }
 
   template <typename Pointer>
   offset_t resolve(const Pointer& p) const {
@@ -251,6 +445,8 @@ struct _DB {
   }
 
   txn_ptr txn() const { return resolve(_header->read_txn); }
+
+  bool transaction_active() const { return _wtxn.txn_id != 0; }
 
   bool start_transaction(bool wait = false) {
     if (_wtxn.txn_id) return false;
@@ -269,7 +465,7 @@ struct _DB {
     _start_txn_id = active->txn_id;
 
     _storage.prefetch(&_wtxn.mem_manager);
-    for(int i = 0; i < MemManager::COUNT; i++) {
+    for (int i = 0; i < MemManager::COUNT; i++) {
       _storage.prefetch(&_wtxn.mem_manager.slots[i]);
     }
 
@@ -285,12 +481,13 @@ struct _DB {
     });
 
     active->count--;
+    _mem_cursor.root = _wtxn.mem_root;
     return true;
   }
 
   void rollback() {
     _header->prepared_txn = _header->read_txn;
-    _storage.flush();
+    flush();
     end_transaction();
   }
 
@@ -304,13 +501,13 @@ struct _DB {
     txn_ptr active = resolve(_header->read_txn);
     active->next_txn = _header->prepared_txn;
 
-    _storage.flush();
+    flush();
   }
 
   void commit() {
     prepare_commit();
     _header->read_txn = _header->prepared_txn;
-    _storage.flush();
+    flush();
     end_transaction();
   }
 
@@ -318,6 +515,8 @@ struct _DB {
     _wtxn.txn_id = 0;
     _header->txn_lock.unlock();
   }
+
+  void flush(bool async = true) { _storage.flush(async); }
 
   typedef _MemStatistics<Traits> MemStatistics;
 
@@ -375,6 +574,8 @@ struct _DB {
       return false;
     });
   }
+
+  const db_type& dump_storage() const { return *this; }
 };
 
 }  // namespace leaves

@@ -4,5 +4,4 @@ waf
 .lock*
 .gcov
 graphs
-leveldb
 tmp

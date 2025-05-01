@@ -68,7 +68,6 @@ struct AreaSlice {
 template <typename Traits>
 struct _BlockContainer : public Traits::BlockHeader {
   using offset_e = typename Traits::offset_e;
-  using tid_e = typename Traits::tid_e;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr uint16_t SLOT_ID = Traits::BLOCK_SIZES_COUNT - 1;
   static const uint16_t SIZE = 4 * K;
@@ -77,7 +76,7 @@ struct _BlockContainer : public Traits::BlockHeader {
 
   struct BlockItem {
     offset_e link;  // link to the page
-    tid_e txn_id;   // the transaction that freed the page
+    tid_t txn_id;   // the transaction that freed the page
   };
 
   static const size_t COUNT =
@@ -114,11 +113,11 @@ struct _GarbageSlot {
 
     assert(!(ostart == oend && istart == iend));
 
-    cont_ptr front(resolver.resolve(ostart));
+    cont_ptr front(resolver.resolve(ostart, WRITE));
     if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
 
     assert(front->blocks[istart].link != 0);
-    ptr result = resolver.resolve(front->blocks[istart].link);
+    ptr result = resolver.resolve(front->blocks[istart].link, WRITE);
 
     count--;
     istart++;
@@ -145,7 +144,7 @@ struct _GarbageSlot {
     cont_ptr back;
 
     if (oend) {
-      back = resolver.resolve(oend);
+      back = resolver.resolve(oend, WRITE);
       if (iend >= BlockContainer::COUNT) {
         cont_ptr new_back = resolver.alloc_slot(BlockContainer::SLOT_ID);
         assert(new_back->slot_id == BlockContainer::SLOT_ID);
@@ -192,20 +191,17 @@ struct _GarbageSlot {
     }
   }
 
-  offset_e next_free;  // the next in the free area
-  offset_e end_free;   // end of free area
-  offset_e ostart;     // offset of the start
-  offset_e oend;       // offset of the end
-  uint64_e count;      // count of freed blocks
-  uint16_e istart;     // index inside the start
-  uint16_e iend;       // index inside the end
+  offset_e ostart;  // offset of the start
+  offset_e oend;    // offset of the end
+  uint64_e count;   // count of freed blocks
+  uint16_e istart;  // index inside the start
+  uint16_e iend;    // index inside the end
 };
 
 template <typename Traits>
 struct _MemManager {
   using uint32_e = typename Traits::uint32_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
   static constexpr auto COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
@@ -220,26 +216,20 @@ struct _MemManager {
   static constexpr uint16_t PAGE_ID = COUNT - 1;
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
   static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[COUNT - 1];
-  static_assert(AREA_SIZE % PAGE_SIZE == 0,
-                "AREA_SIZE must be divisible by SLOT_ALLOC_SIZE");
 
   offset_e allocation_end;
-  offset_e next_free;
+  offset_e allocation_start;
+  offset_e left_over_start;
+  offset_e left_over_end;
   Slot slots[COUNT];
 
   // init the memory, header is a reserve memory space
-  template <typename Resolver>
-  void init(offset_t header, offset_t alloction_end_, Resolver& resolver) {
+  void init(offset_t header, offset_t alloction_end_) {
     memset(slots, 0, sizeof(slots));
+    allocation_start = header;
     allocation_end = alloction_end_;
+    left_over_end = left_over_start = 0;
     assert(allocation_end % PAGE_SIZE == 0);
-
-    // the first crucked block is assigned to min slot
-    slots[0].next_free = header;
-    slots[0].end_free = padding(header + MIN_BLOCK_SIZE, PAGE_SIZE);;
-    assert(slots[0].end_free - slots[0].next_free <= PAGE_SIZE);
-    next_free = slots[0].end_free;
-    assert((allocation_end - next_free) % PAGE_SIZE == 0);
   }
 
   static constexpr int assign_slot(uint16_t size) {
@@ -260,31 +250,34 @@ struct _MemManager {
       return result;
     }
 
-    assert(next_free % PAGE_SIZE == 0);
-    while (slot.next_free + bsize > slot.end_free) {
-      while (slot.next_free + MIN_BLOCK_SIZE < slot.end_free) {
-        block_ptr block = resolver.resolve(slot.next_free);
-        slots[0].push(block, resolver);
-        slot.next_free += MIN_BLOCK_SIZE;
-      }
-
-      if (next_free < allocation_end) {
-        slot.next_free = next_free;
-        next_free = slot.end_free = next_free + PAGE_SIZE;
-        assert(slot.end_free <= allocation_end);
-        continue;
-      }
-      assert(next_free == allocation_end);
-      auto area = resolver.alloc_area(AREA_SIZE);
-      slot.next_free = area.offset;
-      next_free = slot.end_free = area.offset + PAGE_SIZE;
-      allocation_end = area.end();
-      assert((allocation_end - next_free) % PAGE_SIZE == 0);
-      assert(allocation_end > next_free);
+    if (left_over_start + bsize <= left_over_end) {
+      result = resolver.resolve(left_over_start, WRITE);
+      left_over_start += bsize;
+      result->slot_id = sidx;
+      result->free_idx = 0;
+      return result;
     }
 
-    result = resolver.resolve(slot.next_free);
-    slot.next_free += bsize;
+    offset_t page_border = std::min(padding(allocation_start + 1, PAGE_SIZE),
+                                    (uint64_t)allocation_end);
+    if (allocation_start + bsize > page_border) {
+      if (allocation_end - allocation_start > left_over_end - left_over_start) {
+        // the smaller left_over is thrown away
+        left_over_start = allocation_start;
+        left_over_end = page_border;
+        allocation_start = page_border;
+      }
+
+      if (allocation_start + bsize > allocation_end) {
+        auto area = resolver.alloc_page();
+        allocation_start = area.offset;
+        allocation_end = area.end();
+        assert(allocation_end % PAGE_SIZE == 0);
+      }
+    }
+
+    result = resolver.resolve(allocation_start, WRITE);
+    allocation_start += bsize;
     result->slot_id = sidx;
     result->free_idx = 0;
     return result;
@@ -321,7 +314,7 @@ struct _MemStatistics {
 };
 
 /*
-  New space from the resolver is allocated in memory chunks of AREA_SIZE.
+  New space from the resolver is allocated in memory chunks of PAGE_SIZE.
   These chunks are called areas.
   Every database keeps track of their allocate areas and gives them
   back to resolver for reuse once the database is deleted.
@@ -348,11 +341,13 @@ struct AreaRegister {
 
   AreaSlice areas[COUNT];  // in areas[0] is the date of itself
   offset_t next;
-  uint64_t last_index;  // last_index of areas (== count-1)
+  int64_t last_index;  // last_index of areas (== count-1)
 
-  void init(const AreaSlice me) {
+  void init(AreaSlice me) {
     next = 0;
     last_index = 0;
+    me.offset += SIZE;
+    me.size -= SIZE;
     areas[0] = me;
   }
 };
@@ -365,8 +360,9 @@ struct AreaManager {
   template <typename Resolver>
   void merge(AreaManager* other, Resolver& resolver) {
     // insert the register list of other in my list
+    if (!other->start) return;
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
-    ptr tmp = resolver.resolve(end);
+    ptr tmp = resolver.resolve(end, WRITE);
     tmp->next = other->start;
     end = other->end;
     if (!start) start = end;
@@ -375,16 +371,16 @@ struct AreaManager {
 
   template <typename Resolver>
   AreaSlice get(size_t min_size, Resolver& resolver) {
-    // min_size can also be a multiple of AREA_SIZE
-    assert(min_size >= Resolver::Traits::AREA_SIZE);
-    assert(min_size % Resolver::Traits::AREA_SIZE == 0);
+    // min_size can also be a multiple of PAGE_SIZE
+    assert(min_size >= Resolver::Traits::PAGE_SIZE);
+    assert(min_size % Resolver::Traits::PAGE_SIZE == 0);
 
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
 
     // iterate through the structure to find an area that is big enough
     offset_t oiter = start;
     while (oiter) {
-      ptr ar = resolver.resolve(oiter);
+      ptr ar = resolver.resolve(oiter, WRITE);
 
       for (int i = ar->last_index; i >= 1; i--) {
         auto& block = ar->areas[i];
@@ -397,10 +393,12 @@ struct AreaManager {
         }
       }
 
-      if (ar->last_index == 0 && ar->areas[0].size >= min_size) {
+      if (ar->last_index == 0 &&
+          ar->areas[0].size + AreaRegister::SIZE >= min_size) {
         start = ar->next;
         if (start == 0) end = 0;
-        return ar->areas[0];
+        return AreaSlice{ar->areas[0].offset - AreaRegister::SIZE,
+                         ar->areas[0].size + AreaRegister::SIZE};
       }
 
       oiter = ar->next;
@@ -414,17 +412,17 @@ struct AreaManager {
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
 
     assert(area.size > sizeof(AreaRegister));
-    assert(area.size >= Resolver::Traits::AREA_SIZE);
+    assert(area.size >= Resolver::Traits::PAGE_SIZE);
     if (!end) {
       // the first area
       assert(start == 0);
-      ptr ar = resolver.resolve(area.offset);
+      ptr ar = resolver.resolve(area.offset, WRITE);
       ar->init(area);
       start = end = area.offset;
       return;
     }
 
-    ptr ar = resolver.resolve(end);
+    ptr ar = resolver.resolve(end, WRITE);
     if (ar->last_index < AreaRegister::COUNT - 1) {
       ar->areas[++ar->last_index] = area;
       return;
@@ -432,7 +430,7 @@ struct AreaManager {
 
     // the last register is full -> make this register to
     end = ar->next = area.offset;
-    ar = resolver.resolve(area.offset);
+    ar = resolver.resolve(area.offset, WRITE);
     ar->init(area);
   }
 };

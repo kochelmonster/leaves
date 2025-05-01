@@ -268,9 +268,21 @@ inline void test_remove(T& storage, const char* title, const char* keys[],
   for (int i = 0; to_remove[i]; i++) {
     std::cout << "remove " << to_remove[i] << std::endl;
     cursor.find(to_remove[i]);
+    cursor.next();
+    std::string next;
+    if (cursor.is_valid()) next = cursor.key().string();
+
+    cursor.find(to_remove[i]);
     BOOST_REQUIRE(cursor.is_valid());
     cursor.remove();
     cursor.commit();
+
+    // the position is on the next item after the removed one
+    if (next.size()) {
+      BOOST_CHECK(cursor.is_valid());
+      BOOST_CHECK_EQUAL(cursor.key().string(), next);
+    } else
+      BOOST_CHECK(!cursor.is_valid());
 
     std::stringstream cstr;
     cstr << title << "_remove_" << i << "_" << to_remove[i];

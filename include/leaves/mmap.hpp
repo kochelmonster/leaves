@@ -52,7 +52,7 @@ class MapStorage {
   typedef TCursor<IMapStorage::DB::Cursor> Cursor;
   class DB {
    public:
-    typedef IMapStorage::DB element_type;
+    typedef IMapStorage::DB db_type;
 
     DB(IMapStorage::db_ptr db) : _db(db) {}
 
@@ -63,10 +63,13 @@ class MapStorage {
     }
     void prepare_commit() { _db->prepare_commit(); }
     void commit() { _db->commit(); }
+    Slice name() const { return _db->name(); }
 
    private:
     IMapStorage::db_ptr _db;
-    
+
+    const db_type& dump_storage() const { return *_db; }
+
     template <typename T>
     friend class _Dumper;
   };
@@ -79,6 +82,8 @@ class MapStorage {
   void list_dbs(std::vector<std::string>& result) {
     return _storage.list_dbs(result);
   }
+  Slice filename() const { return Slice(_storage.filename()); }
+  size_t file_size() const { return _storage._memory->file_size; }
 
  private:
   IMapStorage _storage;

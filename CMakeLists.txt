@@ -12,6 +12,27 @@ option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
 file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
+include(CheckCXXCompilerFlag)
+
+check_cxx_compiler_flag("-mpopcnt" COMPILER_SUPPORTS_POPCNT)
+if (COMPILER_SUPPORTS_POPCNT)
+    add_compile_options(-mpopcnt)
+endif()
+
+check_cxx_compiler_flag("-mbmi" COMPILER_SUPPORTS_BMI)
+if (COMPILER_SUPPORTS_BMI)
+    add_compile_options(-mbmi)
+endif()
+
+
+check_cxx_compiler_flag("-mlzcnt" COMPILER_SUPPORTS_LZCNT)
+if (COMPILER_SUPPORTS_LZCNT)
+    add_compile_options(-mlzcnt)
+endif()
+
+
+add_subdirectory("BLAKE3/c")
+
 add_library(core INTERFACE)
 target_sources(core INTERFACE 
     # include/leaves.hpp
@@ -28,8 +49,7 @@ target_sources(core INTERFACE
 target_include_directories(core
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            )
-target_include_directories(core INTERFACE src)
-
+target_include_directories(core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c)
 
 if (LEAVES_BUILD_TESTS)
 
@@ -57,7 +77,6 @@ else (LEAVES_GCOV)
 target_compile_options(test INTERFACE -g)
 target_compile_definitions(test INTERFACE DEBUG)
 endif (LEAVES_GCOV)
-
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
@@ -90,6 +109,10 @@ add_executable(profile tests/profile.cpp)
 target_compile_options(profile PUBLIC -O2)
 target_link_libraries(profile PUBLIC core test)
 
+add_executable(test_bigvalues tests/test_bigvalues.cpp)
+target_compile_options(test_bigvalues PUBLIC -O2)
+target_link_libraries(test_bigvalues PUBLIC core test blake3)
+
 add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
@@ -116,8 +139,8 @@ add_subdirectory("leveldb/third_party/benchmark")
 
 add_library(lbench INTERFACE)
 target_include_directories(lbench INTERFACE leveldb)
-target_compile_definitions(lbench INTERFACE NDEBUG)
-# target_compile_definitions(lbench INTERFACE DEBUG)
+# target_compile_definitions(lbench INTERFACE NDEBUG)
+target_compile_definitions(lbench INTERFACE DEBUG)
 target_sources(lbench INTERFACE 
     "leveldb/util/histogram.cc"
     "leveldb/util/histogram.h"
@@ -127,13 +150,13 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
-target_compile_options(db_bench_leaves PUBLIC 
-     -g -march=corei7 -O2)
+target_compile_options(db_bench_leaves PUBLIC -g -march=native)
+ #-O2)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
     benchmark leveldb lmdb pthread)
-target_compile_options(db_bench_mdb PUBLIC -O2)
+target_compile_options(db_bench_mdb PUBLIC -march=native -O2)
 target_compile_options(db_bench_mdb PUBLIC -g)
 
 endif (LEAVES_BUILD_BENCHMARKS) 

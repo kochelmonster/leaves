@@ -42,7 +42,6 @@ struct _MemoryMapTraits {
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
-  typedef tid_t tid_e;
   typedef offset_t offset_e;
 
   /*
@@ -58,14 +57,13 @@ struct _MemoryMapTraits {
 #pragma pack(1)
   struct BlockHeader {
     typedef BlockHeader Base;
-    tid_e txn_id;
+    tid_t txn_id;
     uint8_t slot_id;
     uint8_t free_idx;
   };
 #pragma pack(0)
 
-  static constexpr size_t AREA_SIZE = 1 * M;   // size of newly allocated areas
-  static constexpr size_t PAGE_SIZE = 16 * K;  // not OS PAGE_SIZE
+  static constexpr size_t PAGE_SIZE = 1 * M;  // not OS PAGE_SIZE
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
@@ -89,7 +87,7 @@ struct _MemoryMapFile {
   typedef _MemoryMapFile<Traits_> MemoryMapFile;
   using block_ptr = typename Traits::ptr;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
-  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
+  static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
   static const bool is_transactional = true;
   typedef _DB<MemoryMapFile> DB;
   typedef std::shared_ptr<DB> db_ptr;
@@ -146,8 +144,10 @@ struct _MemoryMapFile {
     uint16_t db_count;
     DBEntry dbs[0];
 
-    FileHeader(uint16_t db_count_) : db_count(db_count_) {
+    FileHeader(uint16_t db_count_) {
+      memset(this, 0, sizeof(FileHeader));
       strcpy(signature, SIGNATURE);
+      db_count = db_count_;
       db_version = 0;
       memset(processes, 0, sizeof(processes));
       memset(dbs, 0, sizeof(DBEntry) * db_count);
@@ -174,12 +174,15 @@ struct _MemoryMapFile {
 
   const char* filename() const { return _file.get_name(); }
 
+  Mutex& file_lock() { return _memory->file_lock; }
+
   void init_dbfile(const char* path, size_t map_size, uint16_t db_count) {
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
       fhead.close();
-      uint64_t fsize = padding(sizeof(FileHeader), 4 * K);
+      uint64_t fsize =
+          padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
       std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
@@ -194,7 +197,6 @@ struct _MemoryMapFile {
       if (strcmp(signature, SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
       }
-
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();
@@ -227,7 +229,7 @@ struct _MemoryMapFile {
     }
   }
 
-  void flush() { _region.flush(); }
+  void flush(bool async = true) { _region.flush(0, 0, async); }
 
   void sanitize() {
     sanitize_processes();
@@ -253,11 +255,9 @@ struct _MemoryMapFile {
     return free_count == MAX_PROCESSES;  // the first to open the db
   }
 
-  block_ptr resolve(offset_t offset) const {
+  block_ptr resolve(offset_t offset, Access access = READ) const {
     char* p = (char*)_memory + (uint64_t)offset;
-#ifdef __GNUC__
-    __builtin_prefetch(p);
-#endif
+    prefetch(p, access);
     return block_ptr(p);
   }
 
@@ -266,17 +266,19 @@ struct _MemoryMapFile {
     return offset_t((uint64_t)p - (uint64_t)_memory).type(p.type);
   }
 
-  void prefetch(offset_t offset) const {
-    prefetch((char*)_memory + (uint64_t)offset);
+  void prefetch(offset_t offset, Access access = READ) const {
+    prefetch((char*)_memory + (uint64_t)offset, access);
   }
 
-  void prefetch(void* mem) const { leaves::prefetch(mem); }
+  void prefetch(void* mem, Access access = READ) const {
+    leaves::prefetch(mem, access);
+  }
 
   AreaSlice get_area(uint64_t size) {
     auto result = _memory->areas.get(size, *this);
     if (!result) {
       result.offset = _memory->file_size;
-      _memory->file_size = padding(_memory->file_size + size, AREA_SIZE);
+      _memory->file_size = padding(_memory->file_size + size, PAGE_SIZE);
       result.size = _memory->file_size - result.offset;
       std::filesystem::resize_file(filename(), _memory->file_size);
     }
@@ -300,7 +302,7 @@ struct _MemoryMapFile {
       if (_memory->dbs[i].offset) {
         if (!strcmp(_memory->dbs[i].name, name)) {
           if (_dbs[i].expired()) {
-            db_ptr tmp = std::make_shared<DB>(*this, _memory->dbs[i].offset);
+            db_ptr tmp = std::make_shared<DB>(*this, _memory->dbs[i].offset, i);
             _dbs[i] = tmp;
             return _dbs[i].lock();
           }
@@ -312,7 +314,7 @@ struct _MemoryMapFile {
 
     if (free < 0) throw LeavesException();
     strcpy(_memory->dbs[free].name, name);
-    db_ptr tmp = std::make_shared<DB>(*this, &_memory->dbs[free].offset);
+    db_ptr tmp = std::make_shared<DB>(*this, &_memory->dbs[free].offset, free);
     _dbs[free] = tmp;
     return _dbs[free].lock();
   }
@@ -323,8 +325,9 @@ struct _MemoryMapFile {
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
         if (_dbs[i].use_count()) throw TransactionActive();
-        DB tmp(*this, _memory->dbs[i].offset);
+        DB tmp(*this, _memory->dbs[i].offset, i);
         _memory->areas.merge(&tmp._header->areas, *this);
+        _memory->areas.merge(&tmp._header->big_areas, *this);
         _memory->dbs[i].offset = 0;
         flush();
         return;

@@ -1,7 +1,7 @@
 /*
 Test the the cursor with without burst table
 */
-#define BOOST_TEST_MODULE TrieTest
+#define BOOST_TEST_MODULE CursorTest
 #define GENERATE
 
 #include <boost/endian/conversion.hpp>
@@ -12,6 +12,40 @@ using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
 typedef MapStorage Storage;
+
+BOOST_AUTO_TEST_CASE(insert_bigkeys) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  auto cursor = storage["test"].cursor();
+
+  std::string value(5000, '0');
+  cursor.find("abc");
+  BOOST_CHECK(!cursor.is_valid());
+  cursor.value(value);
+  cursor.commit();
+
+  cursor.find("abcdef");
+  BOOST_CHECK(!cursor.is_valid());
+  cursor.value(value);
+  cursor.commit();
+
+  check_graph("big_value", storage);
+
+  cursor.find("abc");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice(value));
+  const char *recycled_pointer = cursor.value().data();
+
+  value = std::string(5001, '1');
+  cursor.value(value);
+  cursor.commit();
+
+  cursor.find("abce");
+  cursor.value(value);
+  cursor.commit();
+  // the new pointer is the recycled one from the last replacement action
+  BOOST_CHECK(cursor.value().data() == recycled_pointer);
+}
 
 BOOST_AUTO_TEST_CASE(insert_one) {
   Preparation p;
@@ -330,7 +364,6 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   cursor.commit();
 }
 
-
 BOOST_AUTO_TEST_CASE(move_backward) {
   Preparation p;
   Storage storage(TEST_FILE);
@@ -355,11 +388,9 @@ BOOST_AUTO_TEST_CASE(move_backward) {
     auto cursor = storage["test"].cursor();
     cursor.value("abcb");
     BOOST_REQUIRE(false);
-  }
-  catch (const leaves::NoValidPosition& e) {
+  } catch (const leaves::NoValidPosition &e) {
     // right
-  }
-  catch (...) {
+  } catch (...) {
     BOOST_REQUIRE(false);
   }
 }

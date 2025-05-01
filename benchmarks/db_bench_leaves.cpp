@@ -7,8 +7,8 @@
 #include <cstdlib>
 #include <fstream>
 
-#include "leaves/leaves.hpp"
 #include "leaves/intern/_check.hpp"
+#include "leaves/leaves.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
@@ -17,9 +17,9 @@ using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
 typedef leaves::MapStorage Storage;
-//typedef leaves::DBMMapBurst Storage;
+// typedef leaves::DBMMapBurst Storage;
 
-//#define BINARY_KEY
+// #define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -411,9 +411,11 @@ class Benchmark {
       if (known) {
         Stop(name);
 
-      // leaves::_MemoryChecker<Storage>(*db_).check();
+        std::cout << "File size: " << storage_->file_size() / (1024 * 1024)
+                  << " MB" << std::endl;
+        // leaves::_MemoryChecker<Storage>(*db_).check();
 
-#ifdef STATISTICS        
+#ifdef STATISTICS
         auto txn = db_->txn();
 
         size_t size = 0;
@@ -460,7 +462,7 @@ class Benchmark {
         std::cout << std::endl
                   << "file size: " << txn->file_size / (1024 * 1024) << " MB"
                   << std::endl;
-#endif                  
+#endif
 #if 0 
         size_t spare = txn->garbage.end_area - txn->garbage.next_free +
                        txn->garbage.end4k - txn->garbage.next4k;
@@ -491,7 +493,7 @@ class Benchmark {
                   test_dir.c_str(), db_num_);
 
     sprintf(cmd, "mkdir -p %s", file_name);
-    system(cmd);
+    int r = system(cmd);
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
@@ -511,7 +513,7 @@ class Benchmark {
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
         delete storage_;
         storage_ = nullptr;
-        system(cmd);
+        int r = system(cmd);
       }
       Open(sync);
       Start();  // Do not count time taken to destroy/open
@@ -547,9 +549,9 @@ class Benchmark {
 #endif
 
         int iter = i + j;
-        /*if (iter == 746995) {
+        if (iter == 10) {
           int p = 0;
-        }*/
+        }
 
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);

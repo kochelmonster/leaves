@@ -12,7 +12,7 @@ namespace leaves {
 
 // A very simple implementation of strimg
 struct KeyString {
-  static const size_t MAX_SIZE = 512;
+  static const size_t MAX_SIZE = 256;
   typedef uint32_t bsize_t;
 
   const char* data() const { return _data; }
@@ -66,10 +66,17 @@ struct _Transition {
   static const int UNDEFINED = 3;  // initial state of cmp
 
   Cursor* cursor;
-
   block_ptr block;
-  trie_ptr& trie;
-  leaf_ptr& leaf;
+
+  trie_ptr& trie() const {
+    return *(trie_ptr*)&block;
+  }
+
+  leaf_ptr& leaf() const {
+    return *(leaf_ptr*)&block;
+  }
+
+  block_ptr big_value;  // pointer to a big value if available
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -87,10 +94,10 @@ struct _Transition {
 
   offset_e* link() {
     assert(link_offset != 0xFFFF);
-    return (offset_e*)(trie.link(link_offset));
+    return (offset_e*)(trie().link(link_offset));
   }
 
-  _Transition() : trie(*(trie_ptr*)&block), leaf(*(leaf_ptr*)&block) {}
+  //_Transition() : trie(*(trie_ptr*)&block), leaf(*(leaf_ptr*)&block) {}
 
   bool is_leaf() const { return offset.type() == LEAF; }
   bool is_trie() const { return offset.type() == TRIE; }
@@ -122,8 +129,8 @@ struct _Transition {
     if (block->txn_id == cursor->txn_id()) return link();
 
     assert(is_trie());
-    trie = cursor->_db->cow(trie);
-    offset = cursor->_db->resolve(trie);
+    trie() = cursor->_db->cow(trie());
+    offset = cursor->_db->resolve(trie());
 
     if (!is_root())
       *parent().update() = offset;
@@ -156,23 +163,53 @@ struct _Transition {
 
   void reset() {
     block.reset();
+    big_value.reset();
     cmp = UNDEFINED;
   }
 
   Slice& key() { return cursor->rest_key; }
 
+  Slice big_key() const {
+    assert(big_value);
+    assert(leaf()->is_big());
+    return Slice((const char*)big_value, leaf()->big()->key_size);
+  }
+
+  Slice value() const {
+    assert(is_leaf());
+    if (big_value) {
+      assert(leaf()->is_big());
+      auto bv = leaf()->big();
+      return Slice(((const char*)big_value) + bv->key_size, bv->value_size);
+    }
+    return leaf()->value();
+  }
+
   KeyString& current_key() { return cursor->current_key; }
+
+  Transition& child() {
+    assert(this - &cursor->stack.data[0] < cursor->stack.size - 1);
+    return this[1];
+  }
+
+  Transition& parent() {
+    assert(this - &cursor->stack.data[0] > 0);
+    return this[-1];
+  }
+
+  bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void find() {
     if (is_leaf()) {
-      LeafNode& leaf_ = *leaf;
+      LeafNode& leaf_ = *leaf();
       prefix = get_prefix(key().data(), (char*)leaf_.data, key().size(),
                           leaf_.key_size, cmp);
       advance_key(prefix);
+      if (!cmp && leaf()->is_big()) big_value = resolve(leaf()->big()->offset);
       return;
     }
 
-    TrieNode& trie_ = *trie;
+    TrieNode& trie_ = *trie();
     prefix = get_prefix(key().data(), (char*)trie_.compressed(), key().size(),
                         trie_._compressed_len, cmp);
     advance_key(prefix);
@@ -199,32 +236,17 @@ struct _Transition {
 
   void leaf_step() {
     assert(is_leaf());
-    LeafNode& leaf_ = *leaf;
+    LeafNode& leaf_ = *leaf();
     resize_key(keypos);
     append_key(leaf_.data, leaf_.key_size);
+    prefix = leaf_.key_size;
     cmp = 0;
+    if (leaf()->is_big()) big_value = resolve(leaf()->big()->offset);
   }
-
-  Transition& child() {
-    assert(this - &cursor->stack.data[0] < cursor->stack.size - 1);
-    return this[1];
-  }
-
-  Transition& parent() {
-    assert(this - &cursor->stack.data[0] > 0);
-    return this[-1];
-  }
-
-  Slice value() const {
-    assert(is_leaf());
-    return leaf->value();
-  }
-
-  bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void first() {
     if (is_leaf()) return leaf_step();
-    TrieNode& trie_ = *trie;
+    TrieNode& trie_ = *trie();
     append_key(trie_.compressed(), trie_._compressed_len);
     cmp = 0;
     push(trie_.array()).first();
@@ -239,7 +261,7 @@ struct _Transition {
       return false;
     }
 
-    TrieNode& trie_ = *trie;
+    TrieNode& trie_ = *trie();
     if (cmp == 0) {
       link_offset += sizeof(offset_e);
       offset_e* lnk = link();
@@ -275,7 +297,7 @@ struct _Transition {
       return false;
     }
 
-    TrieNode& trie_ = *trie;
+    TrieNode& trie_ = *trie();
     if (cmp == 0) {
       link_offset -= sizeof(offset_e);
       offset_e* lnk = link();
@@ -305,7 +327,7 @@ struct _Transition {
 
   void last() {
     if (is_leaf()) return leaf_step();
-    TrieNode& trie_ = *trie;
+    TrieNode& trie_ = *trie();
     append_key(trie_.compressed(), trie_._compressed_len);
     cmp = 0;
     push(trie_.array() + trie_.count() - 1).last();
@@ -346,17 +368,20 @@ struct _Stack {
 };
 
 // A cursor to
-template <typename DB_>
+template <typename DB_, typename Traits_>
 struct _Cursor {
   typedef DB_ DB;
-  using Traits = typename DB::Traits;
-  typedef _Cursor<DB> Cursor;
+  typedef Traits_ Traits;
+  typedef _Cursor<DB, Traits_> Cursor;
   typedef _Stack<Cursor> Stack;
-  typedef std::shared_ptr<DB> db_ptr;
+  using db_ptr = typename Traits::db_ptr;
   using Transition = typename Stack::Transition;
-  
+  using Hasher = typename Traits::Hasher;
+  using hash_t = typename Hasher::hash_t;
 
-  _Cursor(db_ptr db) : _db(db), transaction_active(false) { update(); }
+  _Cursor(db_ptr db) : _db(db), transaction_active(Traits::tactive) {
+    update();
+  }
 
   tid_t txn_id() const {
     return transaction_active ? _db->_wtxn.txn_id : _db->txn()->txn_id;
@@ -364,13 +389,32 @@ struct _Cursor {
 
   // return true if the cursor is on a valid position
   bool is_valid() const {
-    if (stack.size) return stack.back().success();
-    return false;
+    return stack.size ? stack.back().success() : false;
   }
 
   void find(const Slice& key) {
     update();
     rest_key = key;
+    big_key.reset();
+
+    if (sizeof(hash_t)) {
+      // handling of big keys -> cut them an hash the rest
+      if (key.size() >= KeyString::MAX_SIZE) {
+        hash_t hash;
+        Hasher hasher;
+        hasher.update(key.data(), key.size());
+        hasher.finalize(hash);
+        char buffer[KeyString::MAX_SIZE];
+        memcpy(buffer, key.data(), KeyString::MAX_SIZE - sizeof(hash));
+        memcpy(buffer + KeyString::MAX_SIZE - sizeof(hash), hash, sizeof(hash));
+        big_key = key;
+        rest_key = Slice(buffer, KeyString::MAX_SIZE);
+      }
+    } else {
+      if (key.size() >= KeyString::MAX_SIZE)
+        throw WrongValue("Key is too long");
+    }
+
     if (stack.size && keep_stack()) return;
     _find();
   }
@@ -412,7 +456,7 @@ struct _Cursor {
   }
 
   void value(const Slice& value) {
-    if (!transaction_active) {
+    if (!Traits::tactive && !transaction_active) {
       if (!_db->start_transaction()) throw TransactionActive();
       transaction_active = true;
     }
@@ -431,14 +475,25 @@ struct _Cursor {
 
   Slice value() const {
     const Transition& back = stack.back();
-    return back.cmp == 0 ? back.value() : Slice();
+    return back.cmp == 0 && back.is_leaf() ? back.value() : Slice();
   }
 
-  Slice key() const { return current_key; }
+  Slice key() const {
+    if (sizeof(hash_t) && current_key.size() == KeyString::MAX_SIZE) {
+      // big key value
+      const Transition& back = stack.back();
+      if (back.cmp == 0 && back.is_leaf()) {
+        assert(back.leaf()->is_big());
+        assert(back.leaf()->big()->key_size);
+        return back.big_key();
+      }
+    }
+    return current_key;
+  }
 
   void remove() {
     if (!is_valid()) throw NoValidPosition();
-    if (!transaction_active) {
+    if (!Traits::tactive && !transaction_active) {
       if (!_db->start_transaction()) throw TransactionActive();
       transaction_active = true;
     }
@@ -446,11 +501,11 @@ struct _Cursor {
   }
 
   void prepare_commit() {
-    if (transaction_active) _db->prepare_commit();
+    if (!Traits::tactive && transaction_active) _db->prepare_commit();
   }
 
   void commit() {
-    if (transaction_active) {
+    if (!Traits::tactive && transaction_active) {
       _db->commit();
       transaction_active = false;
       auto root_ = root;
@@ -460,7 +515,7 @@ struct _Cursor {
   }
 
   void rollback() {
-    if (transaction_active) {
+    if (!Traits::tactive && transaction_active) {
       _db->rollback();
       stack.clear();
       transaction_active = false;
@@ -470,7 +525,10 @@ struct _Cursor {
 
   /* Helpers */
 
-  void set_root(offset_t offset) { _db->_wtxn.root = root = offset; }
+  void set_root(offset_t offset) {
+    Traits::set_root(*_db, offset);
+    root = offset;
+  }
 
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
@@ -524,14 +582,13 @@ struct _Cursor {
   }
 
   void update() {
-    if (!transaction_active) {
-      root = _db->txn()->root;
-    }
+    if (!Traits::tactive && !transaction_active) root = Traits::get_root(*_db);
   }
 
   db_ptr _db;
   offset_t root;
   Stack stack;
+  Slice big_key;
   Slice rest_key;
   KeyString current_key;
   bool transaction_active;

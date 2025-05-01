@@ -2,6 +2,7 @@
 #define _LEAVES__UTIL_HPP
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -10,6 +11,7 @@ namespace leaves {
 
 typedef uint64_t tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
+typedef enum { READ = 0, WRITE = 1} Access;
 
 class Slice {
  private:
@@ -167,7 +169,7 @@ inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
   }
 
   if (i < limit) {
-    cmp = str1[i] > str2[i] ? 1 : -1;
+    cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
   } else if (size1 > limit)
     cmp = 1;
   else if (size2 > limit)

@@ -19,6 +19,7 @@ parent node) This makes the implmentation of many operations easier.
 template <typename Traits>
 struct _TrieNode : public Traits::BlockHeader {
   typedef _TrieNode<Traits> TrieNode;
+  using hash_t = typename Traits::hash_t;
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
@@ -27,6 +28,7 @@ struct _TrieNode : public Traits::BlockHeader {
   uint8_t _lower_offset;
   uint8_t _array_offset;
   uint16_e _array_len;  // 256 (chars) + 1 (NULL)
+  hash_t hash;
   uint8_t _compressed_data[];
 
   const static uint16_e NULL_MASK = 0x8000;
@@ -71,7 +73,6 @@ struct _TrieNode : public Traits::BlockHeader {
            branches * sizeof(offset_e);
   }
 
-  Slice memory() const { return Slice((char*)this, size()); }
   bool has_none() const { return _array_len & NULL_MASK; }
 
   // create a trie node with a prefix and two keys; returns a the link offset
@@ -364,33 +365,69 @@ struct _TrieNode : public Traits::BlockHeader {
 template <typename Traits>
 struct _LeafNode : public Traits::BlockHeader {
   typedef _LeafNode<Traits> LeafNode;
+
   using Base = typename Traits::BlockHeader;
+  using hash_t = typename Traits::hash_t;
   using uint16_e = typename Traits::uint16_e;
   using uint32_e = typename Traits::uint32_e;
+  using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr auto BS_COUNT = Traits::BLOCK_SIZES_COUNT;
-  const static size_t MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1] - sizeof(Base) -
-                                 sizeof(uint16_e) - sizeof(uint8_t);
+  static constexpr auto MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1];
+  static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
 
-  uint16_e value_size;
+  struct BigValue {
+    uint64_e key_size;
+    uint64_e value_size;
+    offset_e offset;
+
+    size_t size() const { return key_size + value_size; }
+  };
+
+  static constexpr auto BIG_VALUE = BIG_VALUE_FLAG | sizeof(BigValue);
+
   uint8_t key_size;
+  uint16_e value_size;
+  hash_t hash;
   uint8_t data[];
   uint8_t* vdata() { return data + key_size; }
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
   Slice value() const { return Slice(data + key_size, value_size); }
-  uint16_t vsize() const {
-    return value_size > MAX_SIZE ? sizeof(offset_e) : value_size;
+  uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
+  uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
+
+  BigValue* set(const Slice& key, const Slice& value, const Slice& big_key) {
+    key_size = key.size();
+    memcpy(data, key.data(), key.size());
+    if (big_key || key.size() + value.size() + sizeof(LeafNode) > MAX_SIZE) {
+      value_size = BIG_VALUE;
+      auto bv = big();
+      bv->key_size = big_key.size();
+      bv->value_size = value.size();
+      return bv;
+    } 
+    value_size = value.size();
+    memcpy(vdata(), value.data(), value.size());
+    return nullptr;
   }
-  uint16_t size() const { return align(sizeof(LeafNode) + key_size + vsize()); }
+
   Slice memory() { return Slice((char*)this, size()); }
 
+  bool is_big() const {
+    return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
+  }
+
+  BigValue* big() {
+    assert(is_big());
+    return (BigValue*)vdata();
+  }
+
   static uint16_t size(uint16_t key, size_t value) {
-    if (value > MAX_SIZE) {
-      return align(sizeof(LeafNode) + key + sizeof(offset_e));
-    }
-    return align(sizeof(LeafNode) + key + value);
+    size_t size = sizeof(LeafNode) + key + value;
+    if (size > MAX_SIZE) return sizeof(LeafNode) + key + sizeof(BigValue);
+    return size;
   }
 
   static uint16_t size(const Slice& key, const Slice& value) {

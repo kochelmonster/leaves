@@ -1,6 +1,8 @@
 #ifndef _LEAVES__CHECK_HPP
 #define _LEAVES__CHECK_HPP
 
+#include <sstream>
+
 #include "_node.hpp"
 
 namespace leaves {
@@ -16,9 +18,9 @@ inline std::string bitstr(char bit) {
   return cstr.str();
 }
 
-template <typename Storage_>
+template <typename Container>
 struct _Dumper {
-  using Storage = typename Storage_::element_type;
+  using Storage = typename Container::db_type;
   using Traits = typename Storage::Traits;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
@@ -33,14 +35,23 @@ struct _Dumper {
   const Storage& _storage;
   int _id;
   bool _simple;
+  bool _show_mem;
 
-  _Dumper(const Storage_& storage, bool simple = false)
-      : _storage(*storage._db), _id(0), _simple(simple) {}
+  _Dumper(const Container& container, bool simple = false,
+          bool show_mem = false)
+      : _storage(container.dump_storage()),
+        _id(0),
+        _simple(simple),
+        _show_mem(show_mem) {}
 
   void dump(std::ostream& out) {
-    auto root = _storage.txn()->root;
-    if (root)
-      dump_link(out, root, _id++);
+    offset_t root;
+    if (_storage.transaction_active())
+      root = _show_mem ? _storage._wtxn.mem_root : _storage._wtxn.root;
+    else
+      root = _show_mem ? _storage.txn()->mem_root : _storage.txn()->root;
+
+    if (root) dump_link(out, root, _id++);
   }
 
   void dump_link(std::ostream& out, offset_t link, int id) {
@@ -69,14 +80,22 @@ struct _Dumper {
       out << "[" << bitstr(leaf->data[i]) << "]";
     }
     out << "\"" << std::endl;
-    out << "valuesize: " << leaf->value_size << std::endl;
-    out << "value: \"";
-    int delta = leaf->key_size;
-    for (size_t i = 0, end = std::min((size_t)leaf->value_size, (size_t)10);
-         i < end; i++) {
-      out << "[" << bitstr(leaf->data[i + delta]) << "]";
+    if (!leaf->is_big()) {
+      out << "valuesize: " << leaf->value_size << std::endl;
+      out << "value: \"";
+      int delta = leaf->key_size;
+      for (size_t i = 0, end = std::min((size_t)leaf->value_size, (size_t)30);
+           i < end; i++) {
+        // out << "[" << bitstr(leaf->data[i + delta]) << "]";
+        out << bitstr(leaf->data[i + delta]);
+      }
+      out << "\"" << std::endl;
+    } else {
+      auto bv = leaf->big();
+      out << "valuesize: " << bv->value_size << std::endl;
+      out << "value: \"" << bv->offset._offset << "\"" << std::endl;
     }
-    out << "\"" << std::endl;
+    
     out << "---" << std::endl;
   }
 
@@ -121,8 +140,7 @@ struct _Dumper {
       for (offset_e* iter = start; iter < end; iter++) {
         out << "  - " << _id++ << std::endl;
       }
-    }
-    else {
+    } else {
       for (offset_e* iter = start; iter < end; iter++) {
         out << "  - " << iter->_offset << std::endl;
         _id++;

@@ -13,6 +13,7 @@ using namespace leaves;
 using namespace leaves::bits;
 
 struct TestTraits {
+  typedef uint8_t hash_t[0];
   typedef offset_t offset_e;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;

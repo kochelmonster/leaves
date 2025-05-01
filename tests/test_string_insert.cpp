@@ -570,7 +570,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
       cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
            << ".yaml";
       std::ofstream out(cstr.str().c_str());
-      _Dumper(db).dump(out);
+      _Dumper(db, false, false).dump(out);
     }
     if (count % 20 == 0 && count > 0) {
       cursor.commit();
