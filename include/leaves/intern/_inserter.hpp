@@ -162,10 +162,8 @@ struct _Inserter {
     leaf_ptr leaf = alloc(LeafNode::size(key, value));
     auto bv = leaf->set(key, value);
     if (bv) {
-      const Slice& bkey = back->cursor->big_key;
       block_ptr ptr = alloc_big(bv->size());
-      memcpy((char*)ptr, bkey.data(), bkey.size());
-      memcpy((char*)ptr + bkey.size(), value.data(), value.size());
+      memcpy((char*)ptr, value.data(), value.size());
       bv->offset = resolve(ptr);
     }
     return leaf;

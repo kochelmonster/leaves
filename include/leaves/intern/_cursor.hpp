@@ -10,46 +10,6 @@
 
 namespace leaves {
 
-// A very simple implementation of strimg
-struct KeyString {
-  static const size_t MAX_SIZE = 1024;
-  typedef uint32_t bsize_t;
-
-  const char* data() const { return _data; }
-  bsize_t size() const { return _size; }
-
-  void resize(bsize_t size) { _size = size; }
-  char& back() { return _data[_size - 1]; }
-  void pop_back() { _size--; }
-  void push_back(char b) { _data[_size++] = b; }
-  void clear() { _size = 0; }
-  void append(const char* data, size_t size) {
-    memcpy(&_data[_size], data, size);
-    _size += size;
-  }
-  char operator[](bsize_t idx) { return _data[idx]; }
-  operator Slice() const { return Slice(_data, _size); }
-  template <typename T>
-  bool operator==(T& other) const {
-    return _size == other.size() && memcmp(_data, other.data(), _size) == 0;
-  }
-
-  KeyString() : _size(0) {}
-
-  bsize_t _size;
-  char _data[MAX_SIZE];
-
-  friend std::ostream& operator<<(std::ostream& os,
-                                  const leaves::KeyString& ks) {
-    // Define how to print the object here
-    char data[leaves::KeyString::MAX_SIZE];
-    memcpy(data, ks.data(), ks.size());
-    data[ks.size()] = 0;
-    os << data;
-    return os;
-  }
-};
-
 template <typename Cursor_>
 struct _Transition {
   typedef Cursor_ Cursor;
@@ -165,12 +125,6 @@ struct _Transition {
 
   Slice& key() { return cursor->rest_key; }
 
-  Slice big_key() const {
-    assert(big_value);
-    assert(leaf()->is_big());
-    return Slice((const char*)big_value, leaf()->big()->key_size);
-  }
-
   Slice value() const {
     assert(is_leaf());
     if (big_value) {
@@ -181,7 +135,7 @@ struct _Transition {
     return leaf()->value();
   }
 
-  KeyString& current_key() { return cursor->current_key; }
+  std::string& current_key() { return cursor->current_key; }
 
   Transition& child() {
     assert(this - &cursor->stack.data[0] < cursor->stack.size - 1);
@@ -377,6 +331,7 @@ struct _Cursor {
 
   _Cursor(db_ptr db) : _db(db), transaction_active(Traits::tactive) {
     update();
+    current_key.reserve(128);
   }
 
   tid_t txn_id() const {
@@ -389,10 +344,6 @@ struct _Cursor {
   void find(const Slice& key) {
     update();
     rest_key = key;
-    big_key.reset();
-
-    if (key.size() >= KeyString::MAX_SIZE) throw WrongValue("Key is too long");
-
     if (stack.size && keep_stack()) return;
     _find();
   }
@@ -555,9 +506,8 @@ struct _Cursor {
   db_ptr _db;
   offset_t root;
   Stack stack;
-  Slice big_key;
   Slice rest_key;
-  KeyString current_key;
+  std::string current_key;
   bool transaction_active;
 };
 
