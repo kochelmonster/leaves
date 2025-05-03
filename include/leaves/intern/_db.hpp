@@ -8,7 +8,7 @@
 #include "_hash.hpp"
 #include "_memory.hpp"
 
-#define DEBUG_MEM
+// #define DEBUG_MEM
 
 namespace leaves {
 

@@ -56,13 +56,31 @@ struct _Inserter {
 
   // insert the very first value
   void first_exec() {
+    Transition* front = back;
+
     const Slice& bkey = back->key();
+    if (bkey.size() > 255) {
+      trie_ptr trie = alloc(TrieNode::size(255, 1));
+      back->offset = resolve(trie);
+      back->cursor->set_root(back->offset);
+      back->block = trie;
+      fill_bigkey(*back);
+      create_bigkey();
+      back = &back->push(offset_t());
+    }
+
+    assert(bkey.size() <= 255);
     back->leaf() = fill_leaf(bkey);
+    if (back->leaf()->is_big())
+      back->big_value = resolve(back->leaf()->big()->offset);
     back->offset = resolve(back->leaf());
     back->cmp = 0;
     back->prefix = bkey.size();
     back->advance_key(back->prefix);
-    back->cursor->set_root(back->offset);
+    if (front == back)
+      back->cursor->set_root(back->offset);
+    else
+      *back->parent().link() = back->offset;
   }
 
   bool split_compressed() {
@@ -107,8 +125,29 @@ struct _Inserter {
     return true;
   }
 
+  void fill_bigkey(Transition& trans) {
+    assert(trans.key().size() > 255);
+    Slice prefix = trans.key().slice(255);
+    trans.branch_key = trans.key()[prefix.size()];
+    trans.link_offset = trans.trie()->create(prefix, trans.branch_key);
+    trans.prefix = prefix.size();  
+    trans.cmp = 0;
+    trans.advance_key(trans.prefix);
+  }
+
+  void create_bigkey() {
+    Slice& key = back->key();
+    while(key.size() > 255) {
+      trie_ptr trie = alloc(TrieNode::size(255, 1));
+      Transition& bottom = back->push(resolve(trie));
+      fill_bigkey(bottom);
+      *back->link() = bottom.offset;
+      back = &bottom;
+    }
+  }
+
   void create_leaf() {
-    assert(back->key().size() < 255);
+    create_bigkey();
     const Slice& bkey = back->key();
     leaf_ptr leaf = fill_leaf(bkey);
     Transition& bottom = back->push(resolve(leaf));
@@ -121,7 +160,7 @@ struct _Inserter {
 
   leaf_ptr fill_leaf(const Slice& key) {
     leaf_ptr leaf = alloc(LeafNode::size(key, value));
-    auto bv = leaf->set(key, value, back->cursor->big_key);
+    auto bv = leaf->set(key, value);
     if (bv) {
       const Slice& bkey = back->cursor->big_key;
       block_ptr ptr = alloc_big(bv->size());

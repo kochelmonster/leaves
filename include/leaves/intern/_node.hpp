@@ -378,11 +378,9 @@ struct _LeafNode : public Traits::BlockHeader {
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
 
   struct BigValue {
-    uint64_e key_size;
     uint64_e value_size;
     offset_e offset;
-
-    size_t size() const { return key_size + value_size; }
+    size_t size() const { return value_size; }
   };
 
   static constexpr auto BIG_VALUE = BIG_VALUE_FLAG | sizeof(BigValue);
@@ -398,13 +396,12 @@ struct _LeafNode : public Traits::BlockHeader {
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
-  BigValue* set(const Slice& key, const Slice& value, const Slice& big_key) {
+  BigValue* set(const Slice& key, const Slice& value) {
     key_size = key.size();
     memcpy(data, key.data(), key.size());
-    if (big_key || key.size() + value.size() + sizeof(LeafNode) > MAX_SIZE) {
+    if (key.size() + value.size() + sizeof(LeafNode) > MAX_SIZE) {
       value_size = BIG_VALUE;
       auto bv = big();
-      bv->key_size = big_key.size();
       bv->value_size = value.size();
       return bv;
     } 

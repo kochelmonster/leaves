@@ -119,9 +119,9 @@ inline void test_movement(T& storage, strings_t& strings) {
   cursor.first();
   strings_t::iterator i = strings.begin();
   for (; i != strings.end(); i++, cursor.next()) {
-    std::cout << "find \"" << *i << "\"";
+    std::cout << "find \"" << i->substr(0, 20) << "\"";
     BOOST_REQUIRE(cursor.is_valid());
-    BOOST_REQUIRE_EQUAL(cursor.key(), *i);
+    BOOST_REQUIRE_EQUAL(cursor.key(), Slice(*i));
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(i == strings.end());
@@ -133,7 +133,7 @@ inline void test_movement(T& storage, strings_t& strings) {
   cursor.last();
   for (strings_t::reverse_iterator i = strings.rbegin(); i != strings.rend();
        i++, cursor.prev()) {
-    std::cout << "find \"" << *i << "\"";
+    std::cout << "find \"" << i->substr(0, 20) << "\"";
     BOOST_REQUIRE(cursor.is_valid());
     BOOST_REQUIRE_EQUAL(cursor.key(), *i);
     std::cout << " ok" << std::endl;
@@ -149,8 +149,9 @@ inline void test_movement(T& storage, strings_t& strings) {
 
   for (ints_t::iterator i = indexes.begin(); i != indexes.end(); i++) {
     std::string find(strings[*i]);
-
-    std::cout << "find \"" << find << "\"";
+    
+    std::cout << "find \"" << find.substr(0, 20) << "\"";
+    
     cursor.find(find);
     BOOST_REQUIRE(cursor.is_valid());
     BOOST_REQUIRE_EQUAL(cursor.key(), find);
@@ -183,7 +184,8 @@ inline void test_movement(T& storage, strings_t& strings) {
     cursor.prev();
     find = strings[*i];
     std::string cmp1(cursor.key().data(), cursor.key().size());
-    std::cout << "before cmp " << cmp1 << " == " << find << std::endl;
+    std::cout << "before cmp " << cmp1 << " == " << find.substr(0, 20)
+              << std::endl;
     BOOST_REQUIRE_EQUAL(cursor.key(), find);
     cmp_value(cursor.value(), find);
 
@@ -195,7 +197,8 @@ inline void test_movement(T& storage, strings_t& strings) {
     cursor.next();
     find = strings[*i];
     cmp1.assign(cursor.key().data(), cursor.key().size());
-    std::cout << "after cmp " << cmp1 << " == " << find << std::endl;
+    std::cout << "after cmp " << cmp1.substr(0, 20)
+              << " == " << find.substr(0, 20) << std::endl;
 
     BOOST_REQUIRE_EQUAL(cursor.key(), find);
     cmp_value(cursor.value(), find);
@@ -218,7 +221,7 @@ inline void test_movement(T& storage, strings_t& strings) {
 
 template <typename T>
 inline void test_insertion(T& storage, const char* title, const char* keys[],
-                           int value_fill = 0) {
+                           int value_fill = 0, int key_fill = 0) {
   strings_t strings;
   std::cout << "==========================================" << std::endl
             << "Test: " << title << std::endl
@@ -230,10 +233,12 @@ inline void test_insertion(T& storage, const char* title, const char* keys[],
     std::cout << "insert " << i << ": " << keys[i] << std::endl;
     std::string test_name(cstr.str());
     test_name.resize(30);
-    std::string value(keys[i]);
+    std::string key(keys[i]);
+    key.append(key_fill, '0');
+    std::string value(key);
     value.append(value_fill, '-');
-    insert(storage, test_name.c_str(), keys[i], Slice(value));
-    strings.push_back(keys[i]);
+    insert(storage, test_name.c_str(), Slice(key), Slice(value));
+    strings.push_back(key);
   }
 #ifdef MOVEMENT
   test_movement(storage, strings);

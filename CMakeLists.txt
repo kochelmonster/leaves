@@ -109,10 +109,6 @@ add_executable(profile tests/profile.cpp)
 target_compile_options(profile PUBLIC -O2)
 target_link_libraries(profile PUBLIC core test)
 
-add_executable(test_bigvalues tests/test_bigvalues.cpp)
-target_compile_options(test_bigvalues PUBLIC -O2)
-target_link_libraries(test_bigvalues PUBLIC core test blake3)
-
 add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
@@ -139,8 +135,8 @@ add_subdirectory("leveldb/third_party/benchmark")
 
 add_library(lbench INTERFACE)
 target_include_directories(lbench INTERFACE leveldb)
-# target_compile_definitions(lbench INTERFACE NDEBUG)
-target_compile_definitions(lbench INTERFACE DEBUG)
+target_compile_definitions(lbench INTERFACE NDEBUG)
+# target_compile_definitions(lbench INTERFACE DEBUG)
 target_sources(lbench INTERFACE 
     "leveldb/util/histogram.cc"
     "leveldb/util/histogram.h"
@@ -150,8 +146,7 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
-target_compile_options(db_bench_leaves PUBLIC -g -march=native)
- #-O2)
+target_compile_options(db_bench_leaves PUBLIC -g -march=native -O2)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 

@@ -12,7 +12,7 @@ namespace leaves {
 
 // A very simple implementation of strimg
 struct KeyString {
-  static const size_t MAX_SIZE = 256;
+  static const size_t MAX_SIZE = 1024;
   typedef uint32_t bsize_t;
 
   const char* data() const { return _data; }
@@ -68,13 +68,9 @@ struct _Transition {
   Cursor* cursor;
   block_ptr block;
 
-  trie_ptr& trie() const {
-    return *(trie_ptr*)&block;
-  }
+  trie_ptr& trie() const { return *(trie_ptr*)&block; }
 
-  leaf_ptr& leaf() const {
-    return *(leaf_ptr*)&block;
-  }
+  leaf_ptr& leaf() const { return *(leaf_ptr*)&block; }
 
   block_ptr big_value;  // pointer to a big value if available
 
@@ -180,7 +176,7 @@ struct _Transition {
     if (big_value) {
       assert(leaf()->is_big());
       auto bv = leaf()->big();
-      return Slice(((const char*)big_value) + bv->key_size, bv->value_size);
+      return Slice(((const char*)big_value), bv->value_size);
     }
     return leaf()->value();
   }
@@ -388,32 +384,14 @@ struct _Cursor {
   }
 
   // return true if the cursor is on a valid position
-  bool is_valid() const {
-    return stack.size ? stack.back().success() : false;
-  }
+  bool is_valid() const { return stack.size ? stack.back().success() : false; }
 
   void find(const Slice& key) {
     update();
     rest_key = key;
     big_key.reset();
 
-    if (sizeof(hash_t)) {
-      // handling of big keys -> cut them an hash the rest
-      if (key.size() >= KeyString::MAX_SIZE) {
-        hash_t hash;
-        Hasher hasher;
-        hasher.update(key.data(), key.size());
-        hasher.finalize(hash);
-        char buffer[KeyString::MAX_SIZE];
-        memcpy(buffer, key.data(), KeyString::MAX_SIZE - sizeof(hash));
-        memcpy(buffer + KeyString::MAX_SIZE - sizeof(hash), hash, sizeof(hash));
-        big_key = key;
-        rest_key = Slice(buffer, KeyString::MAX_SIZE);
-      }
-    } else {
-      if (key.size() >= KeyString::MAX_SIZE)
-        throw WrongValue("Key is too long");
-    }
+    if (key.size() >= KeyString::MAX_SIZE) throw WrongValue("Key is too long");
 
     if (stack.size && keep_stack()) return;
     _find();
@@ -478,18 +456,7 @@ struct _Cursor {
     return back.cmp == 0 && back.is_leaf() ? back.value() : Slice();
   }
 
-  Slice key() const {
-    if (sizeof(hash_t) && current_key.size() == KeyString::MAX_SIZE) {
-      // big key value
-      const Transition& back = stack.back();
-      if (back.cmp == 0 && back.is_leaf()) {
-        assert(back.leaf()->is_big());
-        assert(back.leaf()->big()->key_size);
-        return back.big_key();
-      }
-    }
-    return current_key;
-  }
+  Slice key() const { return current_key; }
 
   void remove() {
     if (!is_valid()) throw NoValidPosition();

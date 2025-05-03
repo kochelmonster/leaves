@@ -6,6 +6,7 @@ Test the the cursor with without burst table
 
 #include <boost/endian/conversion.hpp>
 
+#include "blake3.h"
 #include "test.hpp"
 
 using boost::endian::big_to_native;
@@ -14,6 +15,14 @@ using boost::endian::native_to_big;
 typedef MapStorage Storage;
 
 BOOST_AUTO_TEST_CASE(insert_bigkeys) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  const char *keys[] = {"a",     "ab",     "abc",    "abcd",
+                        "abcde", "abcdef", "abcdeg", NULL};
+  test_insertion(storage, "insert_big_keys", keys, 0, 530);
+}
+
+BOOST_AUTO_TEST_CASE(insert_bigvalues) {
   Preparation p;
   Storage storage(TEST_FILE);
   auto cursor = storage["test"].cursor();
