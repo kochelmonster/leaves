@@ -89,7 +89,7 @@ struct _DB {
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::Hasher Hasher;
-    constexpr static bool tactive = false;
+    constexpr static bool transactional = true;
     static void set_root(DB& db, offset_t offset) { db._wtxn.root = offset; }
     static offset_t get_root(DB& db) { return db.txn()->root; }
   };
@@ -98,7 +98,7 @@ struct _DB {
     typedef DB* db_ptr;
     typedef ::NullHasher Hasher;
     typedef uint8_t hash_t[0];
-    constexpr static bool tactive = true;
+    constexpr static bool transactional = false;
     static void set_root(DB& db, offset_t offset) {
       db._wtxn.mem_root = offset;
     }
@@ -195,6 +195,15 @@ struct _DB {
   typename Traits::Pointer<T> resolve(offset_t offset,
                                       Access access = READ) const {
     return _storage.resolve(offset, access);
+  }
+
+  block_ptr resolve(offset_t offset, Access access = READ) const {
+    return _storage.resolve(offset, access);
+  }
+
+  template <typename Pointer>
+  offset_t resolve(const Pointer& p) const {
+    return _storage.resolve(p);
   }
 
   template <typename T>
@@ -313,6 +322,7 @@ struct _DB {
     } else {
       if (!_wtxn.last_big_area.olast) {
         if (!_header->big_areas.start) {
+          std::scoped_lock lock(_storage.file_lock());
           auto area =
               _storage.get_area(padding(size + AreaRegister::SIZE, PAGE_SIZE));
           _header->big_areas.put(area, *this);
@@ -433,15 +443,6 @@ struct _DB {
       txn->count = 0;
       return false;
     });
-  }
-
-  block_ptr resolve(offset_t offset, Access access = READ) const {
-    return _storage.resolve(offset, access);
-  }
-
-  template <typename Pointer>
-  offset_t resolve(const Pointer& p) const {
-    return _storage.resolve(p);
   }
 
   txn_ptr txn() const { return resolve(_header->read_txn); }

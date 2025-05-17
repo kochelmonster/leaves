@@ -113,9 +113,9 @@ struct _Dumper {
     out << "txn: " << trie->txn_id << std::endl;
     out << "size: " << size << std::endl;
     out << "compressed: " << std::endl;
-    out << "  size: " << (int)trie->_compressed_len << std::endl;
+    out << "  size: " << (int)trie->len() << std::endl;
     out << "  key: \"";
-    for (int i = 0; i < trie->_compressed_len; i++) {
+    for (int i = 0; i < trie->len(); i++) {
       out << "[" << bitstr(trie->compressed()[i]) << "]";
     }
     out << "\"" << std::endl;
