@@ -84,7 +84,7 @@ struct _Inserter {
   }
 
   bool split_compressed() {
-    if (back->is_trie() && back->prefix == back->trie()->_compressed_len)
+    if (back->is_trie() && back->prefix == back->trie()->len())
       return false;  // no split
 
     /*
@@ -100,13 +100,13 @@ struct _Inserter {
                        -> [ef] -> table with new value
     */
 
-    assert(back->prefix < back->trie()->_compressed_len);
+    assert(back->prefix < back->trie()->len());
 
     trie_ptr otrie = back->trie();
 
     // copy the original trie node with second part of compressed
     // to a new page
-    uint8_t prefix_len = otrie->_compressed_len - back->prefix;
+    uint8_t prefix_len = otrie->len() - back->prefix;
     trie_ptr child_trie = alloc(TrieNode::size(prefix_len, otrie->count()));
     child_trie->create(*otrie,
                        Slice(&otrie->compressed()[back->prefix], prefix_len));

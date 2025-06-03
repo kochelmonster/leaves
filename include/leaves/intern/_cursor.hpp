@@ -161,9 +161,9 @@ struct _Transition {
 
     TrieNode& trie_ = *trie();
     prefix = get_prefix(key().data(), (char*)trie_.compressed(), key().size(),
-                        trie_._compressed_len, cmp);
+                        trie_.len(), cmp);
     advance_key(prefix);
-    if (prefix < trie_._compressed_len) return;
+    if (prefix < trie_.len()) return;
 
     if (key().empty()) {
       if (trie_.has_none()) {

@@ -153,7 +153,7 @@ BOOST_AUTO_TEST_CASE(test_create) {
   char buffer1[PAGE_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;
   trie1.create(trie, Slice("123"));
-  BOOST_CHECK(Slice(trie1.compressed(), trie1._compressed_len) == Slice("123"));
+  BOOST_CHECK(Slice(trie1.compressed(), trie1.len()) == Slice("123"));
   BOOST_CHECK_EQUAL(*trie1.offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(*trie1.offset(5), 5);
 }

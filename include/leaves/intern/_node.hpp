@@ -40,6 +40,7 @@ struct _TrieNode : public Traits::BlockHeader {
       257 * sizeof(offset_e);
   const static uint8_t LOWER_MASK = 0b00011111;
 
+  uint8_t len() const { return _compressed_len; }
   int count() const { return (_array_len & ~NULL_MASK); }
   const uint8_t* compressed() const { return _compressed_data; }
   uint16_t lower_size() const { return bits::count(_upper) * sizeof(uint32_e); }
@@ -267,9 +268,9 @@ struct _TrieNode : public Traits::BlockHeader {
   }
 
   // in offset[-1] is the none leaf
-  void create(const Slice& prefix, uint8_t upper, offset_e* offsets) {
+  void create(const Slice& prefix, offset_e* offsets) {
     assert(prefix.size() < 256);
-    _upper = upper;
+    _upper = 0;
     _compressed_len = prefix.size();
     memcpy(_compressed_data, prefix.data(), _compressed_len);
     _lower_offset = calc_lower_start() / sizeof(uint32_e);
@@ -289,7 +290,7 @@ struct _TrieNode : public Traits::BlockHeader {
       if (offsets[i]) {
         _array_len++;
         *array_++ = offsets[i];
-        assert((_upper & (1 << ubit(i))));
+        _upper |= (1 << ubit(i));
         lower_[bits::index(_upper, ubit(i))] |= 1 << lbit(i);
       }
     }

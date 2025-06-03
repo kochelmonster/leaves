@@ -7,6 +7,7 @@
 
 namespace leaves {
 namespace Replication {
+namespace Replication {
 
 template <typename Traits>
 void calc_hash(typename Traits::offset_e offset, tid_t txn_id,
@@ -40,6 +41,60 @@ void calc_hash(typename Traits::offset_e offset, tid_t txn_id,
     phasher.update(trie->hash, sizeof(trie->hash));
   }
 }
+
+typedef std::vector<uint8_t> buffer_t;
+
+template <typename Cursor_>
+struct _QueryBuilder {
+  struct Traits {
+    struct BlockHeader {
+      hash_t hash;
+    };
+    typedef char[0] offset_t;
+  };
+
+  typedef Cursor_ Cursor;
+  using db_ptr = typename Cursor::db_ptr;
+  using TrieNode = typename Cursor::Transition::TrieNode
+
+      typedef _TrieNode<Traits>
+          TTrieNode;
+
+  struct TransferChunk {
+    boost::endian::big_int16_t size;
+    boost::endian::big_int16_t path_size;
+    uint8_t data[];
+    TTrieNode* trie() const { return (TTrieNode*)&data[path_size]; }
+  }
+
+  QueryBuilder(db_ptr db)
+      : _cursor(db) {
+  }
+
+  void receive(buffer_t&& buffer) {
+    size_t size = buffer.size();
+    size_t pos = 0;
+    while (pos < size) {
+      TransferChunk* chunk = (TransferChunk*)&buffer[pos];
+      assert(size >= pos + chunk->size);
+      _cursor.find(Slice(chunk->data, chunk->path_size));
+      assert(_cursor.stack.back().is_trie());
+      auto mtrie = _cursor.stack.back().trie();
+      auto ptrie = chunk->trie();
+
+      Slice mprefix(mtrie->compressed(), mtrie->len()),
+          pprefix(ptrie->compressed(), ptrie->len());
+
+      auto prefix = get_prefix(mprefix.data(), pprefix.data(), mprefix.size(),
+                               pprefix.size(), cmp);
+      
+      if (prefix)                               
+    }
+  }
+
+  buffer_t _query_buffer;
+  Cursor _cursor;
+};
 
 struct _MemoryMapReplicationTraits : public _MemoryMapReplicationTraits {
   typedef _ReplicationTraits::hash_t hash_t;
@@ -139,7 +194,89 @@ struct _RDB {
         return HANDLE_ERROR;
     }
   }
+    WAITING,
+    FAILED,
+    RECEIVING,
+  } state_t;
 
+  std::vector<offset_e*> children_v;
+
+  state_t _state;
+  tid_t _last_tid;
+  db_ptr _db;
+  Cursor _cursor;
+  boost::endian::big_uint16_t idx;
+
+  std::vector<uint8_t> send_buffer;
+
+  _RDB(db_ptr db, uint16_t idx_)
+      : _db(db), _state(WAITING), _last_tid(0), _cursor(db), idx(idx_) {}
+
+  Slice name() const { return _db.name(); }
+
+  void start() { _tmp_cursor = _db->_storage->_make(_tmp_name)->cursor(); }
+
+  void cancel() { _state = WAITING; }
+
+  command_t execute() {
+    _handle_receive();
+    switch (_state) {
+      case WAITING:
+        if (_last_tid != _db->tid) {
+          _last_tid = _db->tid;
+          _state = RECEIVING;
+          start();
+          return _send_start_message();
+        }
+        break;
+
+      case RECEIVING:
+        return handle_receive_buffer();
+
+      case ERROR:
+        return HANDLE_ERROR;
+    }
+  }
+
+  void reset_error() { _state = WAITING; }
+
+  command_t handle_receive_buffer() {
+    if (receiver.execute()) {
+      if (receiver.error) {
+        send_reset();
+        _state = IN_ERROR;
+        return HANDLE_ERROR;
+      }
+      switch (receiver.type()) {
+        case MERKLE:
+          return compare_merkle();
+
+        case DATA:
+          return add_data();
+
+        case BIG:
+          return add_big_data();
+
+        default:
+          assert(0);
+      }
+    }
+    return RECEIVE;
+  }
+
+  void receive(const Message* msg) {
+    switch (msg->type) {
+      case MSG_MERKLE:
+        _handle_merke_msg(msg);
+        break;
+
+      case MSG_DATA:
+        _handle_data_msg(msg);
+
+      case MSG_BIG:
+        _handle_big_msg(msg);
+    }
+  }
   void reset_error() { _state = WAITING; }
 
   command_t handle_receive_buffer() {
@@ -209,12 +346,45 @@ struct _RDB {
     size_t sb_size = send_buffer.size();
     send_buffer.resize(sb_size + size);
     return send_buffer.data();
+  void _send_start_message() {
+    size_t size = send_buffer.size();
+    Slice name_ = name();
+    send_buffer.resize(size + sizeof(StartMessage) + name_.size());
+    StartMessage* sm = (StartMessage*)send_buffer.data() + size;
+    sm->type = MSG_START;
+    sm->size = sizeof(StartMessage) + name_.size();
+    memcpy(sm->name, name_.data(), name_.size());
+    _send_merkle_trie(Slice());
+  }
+
+  void _send_merkle_trie(const Slice& path) {
+    _cursor.find(path);
+    assert(_cursor.stack.back().prefix == 0);
+
+    size_t size = send_buffer.size();
+    Message* msg = (Message*)_extend_send_buffer(sizeof(Message) + path.size());
+    msg->type = MSG_MERKLE : msg->idx = idx;
+    memcpy(msg->path, path.data(), path.size());
+    auto bsize = _fill_merkle_buffer(_cursor->stack.back().offset, 64 * K,
+                                     std::vector<offset_t> children);
+    msg = (Message*)send_buffer.data() + size;
+    msg->size = bsize;
+  }
+
+  char* _extend_send_buffer(size_t size) {
+    size_t sb_size = send_buffer.size();
+    send_buffer.resize(sb_size + size);
+    return send_buffer.data();
   }
 
   uint32_t _fill_merkle_buffer(offset_t offset, uint32_t space_left,
                                children_v children) {
+  uint32_t _fill_merkle_buffer(offset_t offset, uint32_t space_left,
+                               children_v children) {
     if (offset.type() == LEAF) {
       if (sizeof(LeafNode) > space_left) return 0;
+      LeafNode* dst = _extend_send_buffer(sizeof(LeafNode));
+      leaf_ptr src = _db->resolve(offset);
       LeafNode* dst = _extend_send_buffer(sizeof(LeafNode));
       leaf_ptr src = _db->resolve(offset);
       dst->key_size = 0;
@@ -223,13 +393,19 @@ struct _RDB {
       return sizeof(LeafNode);
     }
 
+
     assert(offset.type() == TRIE);
+    trie_ptr src = _db->resolve(offset);
+    uint16_t size = src->size();
     trie_ptr src = _db->resolve(offset);
     uint16_t size = src->size();
     if (size > space_left) return 0;
     TrieNode* dst = (TrieNode*)_extend_send_buffer(size);
+    TrieNode* dst = (TrieNode*)_extend_send_buffer(size);
     memcpy(dst, (void*)src, size);
 
+    offset_e* begin = dst->array();
+    children.insert(children.begin(), begin, begin + dst->count());
     offset_e* begin = dst->array();
     children.insert(children.begin(), begin, begin + dst->count());
 

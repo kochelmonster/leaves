@@ -197,6 +197,15 @@ struct _DB {
     return _storage.resolve(offset, access);
   }
 
+  block_ptr resolve(offset_t offset, Access access = READ) const {
+    return _storage.resolve(offset, access);
+  }
+
+  template <typename Pointer>
+  offset_t resolve(const Pointer& p) const {
+    return _storage.resolve(p);
+  }
+
   template <typename T>
   bool may_recycle(T& garbage_block) const {
     return garbage_block.txn_id < _start_txn_id;
@@ -313,6 +322,7 @@ struct _DB {
     } else {
       if (!_wtxn.last_big_area.olast) {
         if (!_header->big_areas.start) {
+          std::scoped_lock lock(_storage.file_lock());
           auto area =
               _storage.get_area(padding(size + AreaRegister::SIZE, PAGE_SIZE));
           _header->big_areas.put(area, *this);
@@ -433,15 +443,6 @@ struct _DB {
       txn->count = 0;
       return false;
     });
-  }
-
-  block_ptr resolve(offset_t offset, Access access = READ) const {
-    return _storage.resolve(offset, access);
-  }
-
-  template <typename Pointer>
-  offset_t resolve(const Pointer& p) const {
-    return _storage.resolve(p);
   }
 
   txn_ptr txn() const { return resolve(_header->read_txn); }

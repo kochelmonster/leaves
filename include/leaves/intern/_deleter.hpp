@@ -76,12 +76,12 @@ struct _Deleter {
     offset_e* child_left = go_next ? begin : begin + 1;
 
     uint8_t buffer[256];
-    uint8_t len = parent.trie()->_compressed_len;
+    uint8_t len = parent.trie()->len();
     memcpy(buffer, parent.trie()->compressed(), len);
     if (child_left->type() == TRIE) {
       trie_ptr child = resolve(*child_left);
-      memcpy(buffer + len, child->compressed(), child->_compressed_len);
-      len += child->_compressed_len;
+      memcpy(buffer + len, child->compressed(), child->len());
+      len += child->len();
       parent.trie() = alloc(TrieNode::size(len, child->count()));
       parent.trie()->create(*child, Slice(buffer, len));
       free(child);
