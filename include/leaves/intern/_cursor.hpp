@@ -21,7 +21,7 @@ struct _Transition {
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
-
+  
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp
 
@@ -328,20 +328,25 @@ struct _Cursor {
   using Transition = typename Stack::Transition;
   using Hasher = typename Traits::Hasher;
   using hash_t = typename Hasher::hash_t;
+  
+  static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 
-  _Cursor(db_ptr db) : _db(db), transaction_active(Traits::tactive) {
+  _Cursor(db_ptr db) : _db(db), transaction_active(false) {
     update();
     current_key.reserve(128);
   }
 
   tid_t txn_id() const {
-    return transaction_active ? _db->_wtxn.txn_id : _db->txn()->txn_id;
+    return !Traits::transactional || transaction_active ? _db->_wtxn.txn_id : _db->txn()->txn_id;
   }
 
   // return true if the cursor is on a valid position
   bool is_valid() const { return stack.size ? stack.back().success() : false; }
 
   void find(const Slice& key) {
+    if (key.size() > MAX_KEY_SIZE)
+      throw KeyTooBig();
+
     update();
     rest_key = key;
     if (stack.size && keep_stack()) return;
@@ -385,7 +390,7 @@ struct _Cursor {
   }
 
   void value(const Slice& value) {
-    if (!Traits::tactive && !transaction_active) {
+    if (Traits::transactional && !transaction_active) {
       if (!_db->start_transaction()) throw TransactionActive();
       transaction_active = true;
     }
@@ -411,7 +416,7 @@ struct _Cursor {
 
   void remove() {
     if (!is_valid()) throw NoValidPosition();
-    if (!Traits::tactive && !transaction_active) {
+    if (Traits::transactional && !transaction_active) {
       if (!_db->start_transaction()) throw TransactionActive();
       transaction_active = true;
     }
@@ -419,11 +424,11 @@ struct _Cursor {
   }
 
   void prepare_commit() {
-    if (!Traits::tactive && transaction_active) _db->prepare_commit();
+    if (Traits::transactional && transaction_active) _db->prepare_commit();
   }
 
   void commit() {
-    if (!Traits::tactive && transaction_active) {
+    if (Traits::transactional && transaction_active) {
       _db->commit();
       transaction_active = false;
       auto root_ = root;
@@ -433,7 +438,7 @@ struct _Cursor {
   }
 
   void rollback() {
-    if (!Traits::tactive && transaction_active) {
+    if (Traits::transactional && transaction_active) {
       _db->rollback();
       stack.clear();
       transaction_active = false;
@@ -500,7 +505,7 @@ struct _Cursor {
   }
 
   void update() {
-    if (!Traits::tactive && !transaction_active) root = Traits::get_root(*_db);
+    if (Traits::transactional && !transaction_active) root = Traits::get_root(*_db);
   }
 
   db_ptr _db;

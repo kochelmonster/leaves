@@ -150,6 +150,8 @@ struct _GarbageSlot {
         assert(new_back->slot_id == BlockContainer::SLOT_ID);
         oend = back->next = resolver.resolve(new_back);
         iend = 0;
+
+        //resolver.make_dirty(back);
         back = new_back;
       }
     } else {
@@ -164,6 +166,8 @@ struct _GarbageSlot {
     block->free_idx = iend;
     assert(back->blocks[iend].link != 0);
     resolver.template mark_for_recycle(back->blocks[iend]);
+    //resolver.make_dirty(back);
+
     iend++;
     count++;
   }

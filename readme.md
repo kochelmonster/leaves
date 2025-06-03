@@ -38,3 +38,9 @@ for(auto iter = fcursor.being(); iter != fcursor.end(); iter++) {
         iter.use();
 }
 
+
+
+TransferTrie:
+ Ein continuierlicher Speicher
+ Ein Query Trie 
+

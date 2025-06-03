@@ -342,6 +342,7 @@ struct TestTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
+  static constexpr size_t MAX_KEY_SIZE = 256;
   static constexpr size_t PAGE_SIZE = 8 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {100, 4 * K};

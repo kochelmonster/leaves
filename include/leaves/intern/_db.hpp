@@ -89,7 +89,7 @@ struct _DB {
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::Hasher Hasher;
-    constexpr static bool tactive = false;
+    constexpr static bool transactional = true;
     static void set_root(DB& db, offset_t offset) { db._wtxn.root = offset; }
     static offset_t get_root(DB& db) { return db.txn()->root; }
   };
@@ -98,7 +98,7 @@ struct _DB {
     typedef DB* db_ptr;
     typedef ::NullHasher Hasher;
     typedef uint8_t hash_t[0];
-    constexpr static bool tactive = true;
+    constexpr static bool transactional = false;
     static void set_root(DB& db, offset_t offset) {
       db._wtxn.mem_root = offset;
     }

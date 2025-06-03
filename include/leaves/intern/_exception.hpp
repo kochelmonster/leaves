@@ -26,7 +26,7 @@ class NoValidPosition : public LeavesException {};
 
 class NotImplemented : public LeavesException {};
 
-class KeyToBig : public LeavesException {};
+class KeyTooBig : public LeavesException {};
 
 class WrongValue : public LeavesException {
  private:

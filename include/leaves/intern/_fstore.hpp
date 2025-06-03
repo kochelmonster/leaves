@@ -1,15 +1,13 @@
-#ifndef _LEAVES__MMAP_HPP
-#define _LEAVES__MMAP_HPP
+#ifndef _LEAVES__FSTORE_HPP
+#define _LEAVES__FSTORE_HPP
 
 #include <algorithm>
-#include <boost/interprocess/file_mapping.hpp>
-#include <boost/interprocess/managed_external_buffer.hpp>
-#include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/process/v2/pid.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <fcntl.h>
 
 #include "_db.hpp"
 #include "_exception.hpp"
@@ -18,15 +16,7 @@
 #include "_port.hpp"
 #include "_traits.hpp"
 
-using boost::interprocess::create_only;
-using boost::interprocess::create_only_t;
-using boost::interprocess::file_mapping;
 using boost::interprocess::interprocess_mutex;
-using boost::interprocess::mapped_region;
-using boost::interprocess::open_only;
-using boost::interprocess::open_only_t;
-using boost::interprocess::read_only;
-using boost::interprocess::read_write;
 using boost::process::v2::all_pids;
 using boost::process::v2::current_pid;
 using boost::process::v2::pid_type;
@@ -37,7 +27,7 @@ static const char SIGNATURE[] = "larch-leaves";
 static const size_t SIGNATURE_SIZE = padding(sizeof(SIGNATURE), 8);
 
 // definition og all headers and data types
-struct _MemoryMapTraits {
+struct _StoreTraits {
   typedef uint8_t hash_t[0];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
@@ -63,34 +53,63 @@ struct _MemoryMapTraits {
   };
 #pragma pack(0)
 
-  static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t PAGE_SIZE = 1 * M;  // not OS PAGE_SIZE
-  static constexpr uint16_t MAX_PROCESSES = 100;
+  static constexpr size_t PAGE_SIZE = 64 * K;  // not OS PAGE_SIZE
   static constexpr uint16_t BLOCK_SIZES[] = {
-      _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
-      _TrieNode<_MemoryMapTraits>::size(1, 16),   // hex 0-9A-F
-      _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
-      _TrieNode<_MemoryMapTraits>::size(1, 127),  // utf-8
-      _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
+      _TrieNode<_StoreTraits>::size(1, 10),   // digits 0-9
+      _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
+      _TrieNode<_StoreTraits>::size(1, 64),   // base64
+      _TrieNode<_StoreTraits>::size(1, 127),  // utf-8
+      _TrieNode<_StoreTraits>::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
-  typedef SimplePointer<BlockHeader> Pointers;
+  typedef SmartPointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
-template <typename Traits_>
-struct _MemoryMapFile {
+struct _FileTraits {
+  int _file;
+  void open(const char* path) {
+    _file = ::open(path, O_RDWR | O_CREAT | O_DIRECT, S_IRUSR | S_IWUSR);
+    if (_file == -1) {
+      throw std::runtime_error("Failed to open file");
+    }
+  }
+  void close() {
+    if (::close(_file) == -1) {
+      throw std::runtime_error("Failed to close file");
+    }
+  }
+  void write(offset_t offset, const void* ptr, size_t size) {
+    if (lseek(_file, offset, SEEK_SET) == -1) {
+      throw std::runtime_error("Failed to seek to offset");
+    }
+    if (::write(_file, ptr, size) != static_cast<ssize_t>(size)) {
+      throw std::runtime_error("Failed to write data");
+    }
+  }
+  void read(offset_t offset, void* ptr, size_t size) {
+    if (lseek(_file, offset, SEEK_SET) == -1) {
+      throw std::runtime_error("Failed to seek to offset");
+    }
+    if (::read(_file, ptr, size) != static_cast<ssize_t>(size)) {
+      throw std::runtime_error("Failed to read data");
+    }
+  }
+};
+
+
+template <typename Traits_, typename Opers_>
+struct _CacheStore : public Opers_ {
   typedef Traits_ Traits;
-  typedef _MemoryMapFile<Traits_> MemoryMapFile;
+  typedef _CacheStore<Traits_> File;
   using block_ptr = typename Traits::ptr;
-  static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
   static const bool is_transactional = true;
-  typedef _DB<MemoryMapFile> DB;
+  typedef _DB<_CacheStore> DB;
   typedef std::shared_ptr<DB> db_ptr;
   typedef std::weak_ptr<DB> wdb_ptr;
 
@@ -141,7 +160,6 @@ struct _MemoryMapFile {
     size_t file_size;
     Mutex file_lock;
     AreaManager areas;
-    pid_type processes[MAX_PROCESSES];
     uint16_t db_count;
     DBEntry dbs[0];
 
@@ -150,49 +168,36 @@ struct _MemoryMapFile {
       strcpy(signature, SIGNATURE);
       db_count = db_count_;
       db_version = 0;
-      memset(processes, 0, sizeof(processes));
       memset(dbs, 0, sizeof(DBEntry) * db_count);
     }
   };
 
-  file_mapping _file;
-  mapped_region _region;
   FileHeader* _memory;
-  pid_type _pid;
   std::vector<wdb_ptr> _dbs;
 
-  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
-                 uint16_t db_count = 48) {
-    _pid = current_pid();
-    init_dbfile(path, map_size, db_count);
+  _CacheStore(const char* path, uint16_t db_count = 48) {
+    init_dbfile(path, db_count);
     _dbs.resize(db_count);
   }
 
-  ~_MemoryMapFile() {
-    remove_pid();
-    _region.flush();
+  ~_CacheStore() {
   }
 
   const char* filename() const { return _file.get_name(); }
 
   Mutex& file_lock() { return _memory->file_lock; }
 
-  void init_dbfile(const char* path, size_t map_size, uint16_t db_count) {
+  void init_dbfile(const char* path, uint16_t db_count) {
     if (!std::filesystem::is_regular_file(path)) {
-      std::ofstream fhead(path, std::ios::out | std::ios::binary);
-      fhead.put('l');
-      fhead.close();
       uint64_t fsize =
           padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
-      std::filesystem::resize_file(path, fsize);
-      _file = file_mapping(path, read_write);
-      _region = mapped_region(_file, read_write, 0, map_size);
-      _memory = new (_region.get_address()) FileHeader(db_count);
-      _memory->file_size = fsize;
-      new (&_memory->file_lock) Mutex;
-      _region.flush();
+      open(path);
+      char* buffer = new buffer[fsize];
+      _memory = new (buffer()) FileHeader(db_count);
+      fh->file_size = fsize;
+      write(0, buffer, fsize);
     } else {
-      std::ifstream fin(path);
+      open(path)
       char signature[sizeof(SIGNATURE)];
       fin.read(signature, sizeof(signature));
       if (strcmp(signature, SIGNATURE)) {
@@ -207,29 +212,9 @@ struct _MemoryMapFile {
 
     assert(((uint64_t)_memory & 7) == 0);
     sanitize();
-    set_pid();
   }
 
-  void set_pid() {
-    std::scoped_lock lock(_memory->file_lock);
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-      if (!_memory->processes[i]) {
-        _memory->processes[i] = _pid;
-        return;
-      }
-    }
-    throw NoProcess();
-  }
-
-  void remove_pid() {
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-      if (_memory->processes[i] == _pid) {
-        _memory->processes[i] = 0;
-        return;
-      }
-    }
-  }
-
+  
   void flush(bool async = true) { _region.flush(0, 0, async); }
 
   void sanitize() {
@@ -257,6 +242,7 @@ struct _MemoryMapFile {
   }
 
   block_ptr resolve(offset_t offset, Access access = READ) const {
+    used = cache.get[offset / PAGE_SIZE];
     char* p = (char*)_memory + (uint64_t)offset;
     prefetch(p, access);
     return block_ptr(p);
@@ -264,7 +250,7 @@ struct _MemoryMapFile {
 
   template <typename Pointer>
   offset_t resolve(const Pointer& p) const {
-    return offset_t((uint64_t)p - (uint64_t)_memory).type(p.type);
+    return p->_iref.offset.type(p.type);
   }
 
   void prefetch(offset_t offset, Access access = READ) const {
@@ -295,7 +281,7 @@ struct _MemoryMapFile {
   db_ptr operator[](const char* name) { return make(name); }
 
   db_ptr make(const char* name) {
-    if (strlen(name) > sizeof(DBEntry::name)) throw KeyTooBig();
+    if (strlen(name) > sizeof(DBEntry::name)) throw KeyToBig();
 
     std::scoped_lock lock(_memory->file_lock);
     int free = -1;
@@ -340,4 +326,4 @@ struct _MemoryMapFile {
 
 }  // namespace leaves
 
-#endif  // _LEAVES__MMAP_HPP
+#endif  // _LEAVES__FSTORE_HPP

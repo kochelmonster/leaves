@@ -1,0 +1,59 @@
+./db_bench_mdb --benchmarks=fillseq --wmap
+fillseq      :       0.222 micros/op;  498.4 MB/s
+
+./db_bench_mdb --benchmarks=fillrandom --wmap
+fillrandom   :       0.893 micros/op;  123.8 MB/s
+
+
+bitonly-nodes
+-------------
+./db_bench_leaves --benchmarks=fillseq
+fillseq      :       0.196 micros/op;  565.0 MB/s
+
+./db_bench_leaves --benchmarks=fillrandom
+fillrandom   :       0.683 micros/op;  162.0 MB/s
+
+
+burst-paging
+------------
+./db_bench_leaves --benchmarks=fillseq
+fillseq      :       0.320 micros/op;  346.1 MB/s
+
+./db_bench_leaves --benchmarks=fillrandom
+fillrandom   :       1.024 micros/op;  108.0 MB/s
+
+
+bitonly-nodes-Sum TrieNode
+-------------
+./db_bench_leaves --benchmarks=fillseq
+fillseq      :       0.193 micros/op;  573.0 MB/s
+file size: 145 MB
+
+./db_bench_leaves --benchmarks=fillrandom
+fillrandom   :       0.450 micros/op;  245.8 MB/s
+file size: 97 MB
+
+
+
+bitonly-nodes-Sum TrieNode / Burst
+-------------
+./db_bench_leaves --benchmarks=fillseq
+fillseq      :       0.193 micros/op;  540.0 MB/s 
+file_size: 203 MB
+
+./db_bench_leaves --benchmarks=fillrandom
+fillrandom   :       0.450 micros/op;  173.5 MB/s
+file_size: 94 MB
+
+
+
+
+bitonly-nodes-Sum TrieNode / MultiDB (prefetched)
+-------------
+./db_bench_leaves --benchmarks=fillseq
+fillseq      :       0.181 micros/op;  609.7 MB/s     
+File size: 145 MB
+
+./db_bench_leaves --benchmarks=fillrandom
+fillrandom   :       0.415 micros/op;  266.4 MB/s     
+File size: 97 MB
