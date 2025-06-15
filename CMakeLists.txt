@@ -3,6 +3,20 @@ cmake_policy(SET CMP0076 NEW)
 
 project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 
+find_package(Boost 1.80 REQUIRED)
+if (TARGET Boost::process)
+    set(HAVE_BOOST_PROCESS TRUE)
+else()
+    set(HAVE_BOOST_PROCESS FALSE)
+endif()
+
+if(Boost_FOUND)
+    message(STATUS "Found Boost version ${Boost_VERSION}")
+    include_directories(${Boost_INCLUDE_DIRS})
+else()
+    message(FATAL_ERROR "Boost >= 1.80 not found")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -10,7 +24,6 @@ option(LEAVES_GCOV "Add gconv support for tests" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
-file(GLOB LEAVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/.cpp)
 
 include(CheckCXXCompilerFlag)
 
@@ -46,6 +59,11 @@ target_sources(core INTERFACE
     include/leaves/intern/_inserter.hpp
 )
 
+if (HAVE_BOOST_PROCESS)
+    target_link_libraries(core INTERFACE Boost::process)
+endif()
+
+target_include_directories(core INTERFACE ${Boost_INCLUDE_DIRS})
 target_include_directories(core
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            )
@@ -59,7 +77,7 @@ target_include_directories(test
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            )
 target_include_directories(test INTERFACE src)
-
+target_link_libraries(test INTERFACE core)
 target_compile_options(test INTERFACE -g)
 target_compile_definitions(test INTERFACE 
     DEBUG 
@@ -129,9 +147,7 @@ DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_strin
 endif(LEAVES_BUILD_TESTS)
 
 if (LEAVES_BUILD_BENCHMARKS) 
-
-add_subdirectory("leveldb/third_party/googletest")
-add_subdirectory("leveldb/third_party/benchmark")
+add_subdirectory("leveldb")
 
 add_library(lbench INTERFACE)
 target_include_directories(lbench INTERFACE leveldb)

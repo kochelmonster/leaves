@@ -26,10 +26,10 @@ struct TestTraits {
 typedef _TrieNode<TestTraits> TrieNode;
 static const int OOR = TrieNode::OUT_OF_RANGE;
 
-const uint16_t PAGE_SIZE = 4 * 1024;
+const uint16_t AREA_SIZE = 4 * 1024;
 
 void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
-  char buffer1[PAGE_SIZE], buffer2[PAGE_SIZE];
+  char buffer1[AREA_SIZE], buffer2[AREA_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;
   TrieNode& trie2 = *(TrieNode*)buffer2;
   uint16_t offset;
@@ -122,7 +122,7 @@ BOOST_AUTO_TEST_CASE(test_set_and_get) {
 }
 
 BOOST_AUTO_TEST_CASE(test_create) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
   Slice prefix("123456");
 
@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE(test_create) {
   BOOST_CHECK_EQUAL(trie.size(), 32);
   BOOST_CHECK_EQUAL(offset, 24);
 
-  char buffer1[PAGE_SIZE];
+  char buffer1[AREA_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;
   trie1.create(trie, Slice("123"));
   BOOST_CHECK(Slice(trie1.compressed(), trie1.len()) == Slice("123"));
@@ -159,7 +159,7 @@ BOOST_AUTO_TEST_CASE(test_create) {
 }
 
 void create_trie(TrieNode* fill, int size, int* values) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode* tmp = (TrieNode*)buffer;
   Slice prefix;
 
@@ -173,7 +173,7 @@ void create_trie(TrieNode* fill, int size, int* values) {
 }
 
 BOOST_AUTO_TEST_CASE(test_prev) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
   int values[] = {5, 70, 130};
   create_trie(&trie, 3, values);
@@ -192,7 +192,7 @@ BOOST_AUTO_TEST_CASE(test_prev) {
 }
 
 BOOST_AUTO_TEST_CASE(test_next) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
   int values[] = {5, 70, 130};
   create_trie(&trie, 3, values);
@@ -212,7 +212,7 @@ BOOST_AUTO_TEST_CASE(test_next) {
 }
 
 BOOST_AUTO_TEST_CASE(test_count) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
   int values[] = {5, 70, 130};
   create_trie(&trie, 3, values);
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(test_count) {
 }
 
 void test_add(TrieNode& trie, uint8_t branch) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode* tmp = (TrieNode*)buffer;
   uint16_t offset = tmp->create(trie, branch);
   *(offset_t*)((char*)tmp + offset) = branch;
@@ -229,7 +229,7 @@ void test_add(TrieNode& trie, uint8_t branch) {
 }
 
 BOOST_AUTO_TEST_CASE(test_many_branches) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
   Slice prefix;
   uint16_t offset = trie.create(prefix, 'a');
@@ -254,7 +254,7 @@ BOOST_AUTO_TEST_CASE(test_many_branches) {
 
 #if 0
 BOOST_AUTO_TEST_CASE(test_clear) {
-  char buffer[PAGE_SIZE];
+  char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
 
   trie.init();

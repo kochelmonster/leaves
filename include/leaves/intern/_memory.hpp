@@ -206,7 +206,7 @@ template <typename Traits>
 struct _MemManager {
   using uint32_e = typename Traits::uint32_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   typedef typename Traits::BlockHeader BlockHeader;
@@ -233,7 +233,7 @@ struct _MemManager {
     allocation_start = header;
     allocation_end = alloction_end_;
     left_over_end = left_over_start = 0;
-    assert(allocation_end % PAGE_SIZE == 0);
+    assert(allocation_end % AREA_SIZE == 0);
   }
 
   static constexpr int assign_slot(uint16_t size) {
@@ -262,7 +262,7 @@ struct _MemManager {
       return result;
     }
 
-    offset_t page_border = std::min(padding(allocation_start + 1, PAGE_SIZE),
+    offset_t page_border = std::min(padding(allocation_start + 1, AREA_SIZE),
                                     (uint64_t)allocation_end);
     if (allocation_start + bsize > page_border) {
       if (allocation_end - allocation_start > left_over_end - left_over_start) {
@@ -276,7 +276,7 @@ struct _MemManager {
         auto area = resolver.alloc_page();
         allocation_start = area.offset;
         allocation_end = area.end();
-        assert(allocation_end % PAGE_SIZE == 0);
+        assert(allocation_end % AREA_SIZE == 0);
       }
     }
 
@@ -318,7 +318,7 @@ struct _MemStatistics {
 };
 
 /*
-  New space from the resolver is allocated in memory chunks of PAGE_SIZE.
+  New space from the resolver is allocated in memory chunks of AREA_SIZE.
   These chunks are called areas.
   Every database keeps track of their allocate areas and gives them
   back to resolver for reuse once the database is deleted.
@@ -375,9 +375,9 @@ struct AreaManager {
 
   template <typename Resolver>
   AreaSlice get(size_t min_size, Resolver& resolver) {
-    // min_size can also be a multiple of PAGE_SIZE
-    assert(min_size >= Resolver::Traits::PAGE_SIZE);
-    assert(min_size % Resolver::Traits::PAGE_SIZE == 0);
+    // min_size can also be a multiple of AREA_SIZE
+    assert(min_size >= Resolver::Traits::AREA_SIZE);
+    assert(min_size % Resolver::Traits::AREA_SIZE == 0);
 
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
 
@@ -416,7 +416,7 @@ struct AreaManager {
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
 
     assert(area.size > sizeof(AreaRegister));
-    assert(area.size >= Resolver::Traits::PAGE_SIZE);
+    assert(area.size >= Resolver::Traits::AREA_SIZE);
     if (!end) {
       // the first area
       assert(start == 0);

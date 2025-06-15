@@ -19,7 +19,7 @@ struct TestTraits {
   static constexpr size_t BLOCK_SIZE = 4 * K;
 
   // size of newly allocated areas
-  static constexpr size_t PAGE_SIZE = 4 * BLOCK_SIZE;
+  static constexpr size_t AREA_SIZE = 4 * BLOCK_SIZE;
   static constexpr uint16_t BLOCK_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
@@ -36,7 +36,7 @@ struct TestTraits {
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
-constexpr size_t PAGE_SIZE = TestTraits::PAGE_SIZE;
+constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
 
 struct TestStorage {
   typedef TestTraits Traits;
@@ -52,8 +52,8 @@ struct TestStorage {
   TestStorage() {
     accept_tid = mark_tid = 0;
     memory.reserve(1024 * 1024);
-    memory.resize(PAGE_SIZE);
-    mm.init(sizeof(void*), PAGE_SIZE);
+    memory.resize(AREA_SIZE);
+    mm.init(sizeof(void*), AREA_SIZE);
     accept_tid = mark_tid = 1;
   }
 
@@ -81,8 +81,8 @@ struct TestStorage {
 
   AreaSlice alloc_page() {
     size_t old_size = memory.size();
-    memory.resize(old_size + PAGE_SIZE);
-    return AreaSlice{old_size, PAGE_SIZE};
+    memory.resize(old_size + AREA_SIZE);
+    return AreaSlice{old_size, AREA_SIZE};
   }
 
   template <typename T>
@@ -96,7 +96,7 @@ struct TestStorage {
 };
 
 struct TestTraitsBig : public TestTraits {
-  static constexpr size_t PAGE_SIZE = 1 * M;
+  static constexpr size_t AREA_SIZE = 1 * M;
 };
 
 struct TestStorageBig : public TestStorage {
@@ -234,17 +234,17 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
   BOOST_CHECK_EQUAL(am1.start, as3.offset);
   BOOST_CHECK_EQUAL(am1.end, am.end);
 
-  AreaSlice r = am1.get(PAGE_SIZE, storage);
+  AreaSlice r = am1.get(AREA_SIZE, storage);
   BOOST_CHECK_EQUAL(r.offset, as3.offset);
   BOOST_CHECK_EQUAL(am1.start, am.start);
 
   ar = storage.resolve(am1.start);
   int li = ar->last_index;
-  r = am1.get(PAGE_SIZE, storage);
+  r = am1.get(AREA_SIZE, storage);
   BOOST_CHECK_EQUAL(ar->last_index, li - 1);
   BOOST_CHECK_EQUAL(ar->areas[ar->last_index + 1].offset, r.offset);
 
-  r = am1.get(2 * PAGE_SIZE, storage);
+  r = am1.get(2 * AREA_SIZE, storage);
   BOOST_CHECK_EQUAL(r.offset, 0);
 }
 

@@ -88,18 +88,18 @@ BOOST_AUTO_TEST_CASE(test_extend) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.make("test");
-  const size_t PAGE_SIZE = DBMMap::Traits::PAGE_SIZE;
+  const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
   const size_t BLOCK_SIZE =
       DBMMap::Traits::BLOCK_SIZES[DBMMap::Traits::BLOCK_SIZES_COUNT - 1];
   {
     Transaction trans(db);
-    int count = PAGE_SIZE / BLOCK_SIZE;
+    int count = AREA_SIZE / BLOCK_SIZE;
     for (int i = 0; i < count; i++) {
       db->alloc(BLOCK_SIZE);
     }
   }
 
-  BOOST_CHECK_EQUAL(storage._memory->file_size, 2 * PAGE_SIZE);
+  BOOST_CHECK_EQUAL(storage._memory->file_size, 2 * AREA_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(test_rollback) {
@@ -343,7 +343,7 @@ struct TestTraits {
   typedef offset_t offset_e;
 
   static constexpr size_t MAX_KEY_SIZE = 256;
-  static constexpr size_t PAGE_SIZE = 8 * K;
+  static constexpr size_t AREA_SIZE = 8 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {100, 4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
@@ -372,7 +372,7 @@ struct TestStorage {
   typedef _DB<TestStorage> DB;
   typedef std::shared_ptr<DB> db_ptr;
 
-  static constexpr size_t PAGE_SIZE = Traits::PAGE_SIZE;
+  static constexpr size_t AREA_SIZE = Traits::AREA_SIZE;
 
   struct Mutex {
     void recover() {}
@@ -390,7 +390,7 @@ struct TestStorage {
 
   TestStorage() {
     memory.reserve(8 * 1024 * 1024);
-    memory.resize(PAGE_SIZE);
+    memory.resize(AREA_SIZE);
     db = std::make_shared<DB>(*this, &db_offset, 0);
   }
 
@@ -409,7 +409,7 @@ struct TestStorage {
     auto result = areas.get(size, *this);
     if (!result) {
       size_t old_size = memory.size();
-      size_t next_size = padding(old_size + size, PAGE_SIZE);
+      size_t next_size = padding(old_size + size, AREA_SIZE);
       memory.resize(next_size);
       return AreaSlice{old_size, next_size - old_size};
     }
@@ -430,9 +430,9 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_page();
     if (i != AreaRegister::COUNT - 1)
-      BOOST_CHECK_EQUAL(slice.size, storage.PAGE_SIZE);
+      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE);
     else
-      BOOST_CHECK_EQUAL(slice.size, storage.PAGE_SIZE / 2);
+      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE / 2);
   }
   storage.db->rollback();
 
@@ -452,9 +452,9 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_page();
     if (i != AreaRegister::COUNT - 1)
-      BOOST_CHECK_EQUAL(slice.size, storage.PAGE_SIZE);
+      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE);
     else
-      BOOST_CHECK_EQUAL(slice.size, storage.PAGE_SIZE / 2);
+      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE / 2);
   }
   storage.db->commit();
 
@@ -469,8 +469,8 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
                     storage.db->_header->big_areas.end);
   storage.db->start_transaction();
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
-    auto slice = storage.db->alloc_big(storage.PAGE_SIZE);
-    BOOST_CHECK_EQUAL(slice.size, storage.PAGE_SIZE);
+    auto slice = storage.db->alloc_big(storage.AREA_SIZE);
+    BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE);
   }
   storage.db->rollback();
 
@@ -484,7 +484,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
   BOOST_CHECK(storage.db->_header->big_areas.start);
 
   storage.db->start_transaction();
-  storage.db->alloc_big(5 * storage.PAGE_SIZE);
+  storage.db->alloc_big(5 * storage.AREA_SIZE);
   storage.db->commit();
 
   BOOST_CHECK_EQUAL(storage.db->txn()->last_big_area.olast, ar->next);

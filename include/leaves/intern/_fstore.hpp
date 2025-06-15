@@ -53,7 +53,7 @@ struct _StoreTraits {
   };
 #pragma pack(0)
 
-  static constexpr size_t PAGE_SIZE = 64 * K;  // not OS PAGE_SIZE
+  static constexpr size_t AREA_SIZE = 64 * K;  // not OS AREA_SIZE
   static constexpr uint16_t BLOCK_SIZES[] = {
       _TrieNode<_StoreTraits>::size(1, 10),   // digits 0-9
       _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
@@ -107,7 +107,7 @@ struct _CacheStore : public Opers_ {
   typedef Traits_ Traits;
   typedef _CacheStore<Traits_> File;
   using block_ptr = typename Traits::ptr;
-  static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static const bool is_transactional = true;
   typedef _DB<_CacheStore> DB;
   typedef std::shared_ptr<DB> db_ptr;
@@ -242,7 +242,7 @@ struct _CacheStore : public Opers_ {
   }
 
   block_ptr resolve(offset_t offset, Access access = READ) const {
-    used = cache.get[offset / PAGE_SIZE];
+    used = cache.get[offset / AREA_SIZE];
     char* p = (char*)_memory + (uint64_t)offset;
     prefetch(p, access);
     return block_ptr(p);
@@ -265,7 +265,7 @@ struct _CacheStore : public Opers_ {
     auto result = _memory->areas.get(size, *this);
     if (!result) {
       result.offset = _memory->file_size;
-      _memory->file_size = padding(_memory->file_size + size, PAGE_SIZE);
+      _memory->file_size = padding(_memory->file_size + size, AREA_SIZE);
       result.size = _memory->file_size - result.offset;
       std::filesystem::resize_file(filename(), _memory->file_size);
     }

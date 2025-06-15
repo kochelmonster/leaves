@@ -30,7 +30,7 @@ struct _Dumper {
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr auto& PAGE_SIZE = Traits::PAGE_SIZE;
+  static constexpr auto& AREA_SIZE = Traits::AREA_SIZE;
 
   const Storage& _storage;
   int _id;
@@ -69,7 +69,7 @@ struct _Dumper {
       out << "id: " << id << std::endl;
     } else {
       out << "id: " << offset._offset << std::endl;
-      out << "page: " << offset._offset / PAGE_SIZE << std::endl;
+      out << "page: " << offset._offset / AREA_SIZE << std::endl;
       out << "freespace: " << BLOCK_SIZES[leaf->slot_id] - size << std::endl;
     }
     out << "size: " << size << std::endl;
@@ -107,7 +107,7 @@ struct _Dumper {
       out << "id: " << id << std::endl;
     } else {
       out << "id: " << offset._offset << std::endl;
-      out << "page: " << offset._offset / PAGE_SIZE << std::endl;
+      out << "page: " << offset._offset / AREA_SIZE << std::endl;
       out << "freespace: " << BLOCK_SIZES[trie->slot_id] - size << std::endl;
     }
     out << "txn: " << trie->txn_id << std::endl;
@@ -175,10 +175,10 @@ struct _MemoryChecker {
     std::array<uint16_t, COUNT> result;
     for (int i = 0; i < COUNT; i++) {
       uint16_t bsize = BLOCK_SIZES[i];
-      uint16_t count = PAGE_SIZE / bsize;
+      uint16_t count = AREA_SIZE / bsize;
       uint16_t used = count * bsize;
       uint16_t collect = count;
-      uint16_t rest = PAGE_SIZE - used;
+      uint16_t rest = AREA_SIZE - used;
       for (int id = i - 1; id >= 0 && rest > BLOCK_SIZES[0]; id--) {
         uint16_t bs = BLOCK_SIZES[id];
         while (bs < rest) {
@@ -199,12 +199,12 @@ struct _MemoryChecker {
     const uint64_t ALL = ~(uint64_t)0;
 
     txn_ptr txn_ = storage.txn();
-    pages.resize(txn_->file_size / PAGE_SIZE);
+    pages.resize(txn_->file_size / AREA_SIZE);
     pages[0] = ALL;
 
     for (uint64_t p = txn_->mem_manager.next_free;
-         p < txn_->mem_manager.allocation_end; p += PAGE_SIZE) {
-      pages[p / PAGE_SIZE] = ALL;
+         p < txn_->mem_manager.allocation_end; p += AREA_SIZE) {
+      pages[p / AREA_SIZE] = ALL;
     }
 
     for (int i = 0; i < txn_->mem_manager.COUNT; i++) {
@@ -212,7 +212,7 @@ struct _MemoryChecker {
       uint16_t size = BLOCK_SIZES[i];
       uint64_t b = slot.next_free;
       while (true) {
-        uint64_t pb = padding(b, PAGE_SIZE);
+        uint64_t pb = padding(b, AREA_SIZE);
         if (b + size > pb) b = pb;
         if (b == slot.end_free) break;
         storage.resolve(offset_t(b))->slot_id = i;
@@ -244,7 +244,7 @@ struct _MemoryChecker {
     for (int i = 0; i < pages.size(); i++) {
       uint64_t p = pages[i];
       if (p != ALL) {
-        block_ptr ptr = storage.resolve(offset_t(i * PAGE_SIZE));
+        block_ptr ptr = storage.resolve(offset_t(i * AREA_SIZE));
         uint16_t s0 = BLOCK_SIZES[0];
         uint16_t s1 = BLOCK_SIZES[1];
         uint16_t size = BLOCK_SIZES[ptr->slot_id];
@@ -259,10 +259,10 @@ struct _MemoryChecker {
     uint16_t slot_id = storage.resolve(offset)->slot_id;
     uint64_t addr = offset;
     uint16_t size = BLOCK_SIZES[slot_id];
-    uint64_t page = addr / PAGE_SIZE;
-    uint16_t poff = (addr % PAGE_SIZE);
+    uint64_t page = addr / AREA_SIZE;
+    uint16_t poff = (addr % AREA_SIZE);
     uint16_t part = poff / size;
-    if (poff % size) part += PAGE_SIZE / size;
+    if (poff % size) part += AREA_SIZE / size;
 
     assert(!(pages[page] & (1 << part)));
     pages[page] |= (1 << part);

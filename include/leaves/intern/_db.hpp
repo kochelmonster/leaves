@@ -110,7 +110,7 @@ struct _DB {
     uint64_t second;
   };
 
-  static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr uint16_t BLOCK_SIZES_COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
@@ -133,7 +133,7 @@ struct _DB {
     AreaManager areas;      // areas for normal allocation
     AreaManager big_areas;  // areas only for big allocation
   };
-  static_assert(sizeof(Header) + sizeof(Transaction) < PAGE_SIZE,
+  static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
 
   using header_ptr = typename Traits::Pointer<Header>;
@@ -161,7 +161,7 @@ struct _DB {
   }
 
   void init(offset_t* header) {
-    auto area = _storage.get_area(Traits::PAGE_SIZE);
+    auto area = _storage.get_area(Traits::AREA_SIZE);
 
     *header = area.offset + sizeof(AreaRegister);
     _header = _storage.resolve(*header);
@@ -324,14 +324,14 @@ struct _DB {
         if (!_header->big_areas.start) {
           std::scoped_lock lock(_storage.file_lock());
           auto area =
-              _storage.get_area(padding(size + AreaRegister::SIZE, PAGE_SIZE));
+              _storage.get_area(padding(size + AreaRegister::SIZE, AREA_SIZE));
           _header->big_areas.put(area, *this);
           flush();
         }
         _wtxn.last_big_area.olast = _header->big_areas.start;
         _wtxn.last_big_area.ilast = -1;
       }
-      uint64_t psize = padding(size, PAGE_SIZE);
+      uint64_t psize = padding(size, AREA_SIZE);
       while (true) {
         auto slice = alloc_area(psize, _header->big_areas, _wtxn.last_big_area);
         if (slice.size < size) {
@@ -392,7 +392,7 @@ struct _DB {
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
   AreaSlice alloc_page() {
-    return alloc_area(PAGE_SIZE, _header->areas, _wtxn.last_area);
+    return alloc_area(AREA_SIZE, _header->areas, _wtxn.last_area);
   }
 
   AreaSlice alloc_area(uint64_t min_size, AreaManager& manager,

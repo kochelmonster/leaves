@@ -64,7 +64,7 @@ struct _MemoryMapTraits {
 #pragma pack(0)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t PAGE_SIZE = 1 * M;  // not OS PAGE_SIZE
+  static constexpr size_t AREA_SIZE = 1 * M;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
@@ -88,7 +88,7 @@ struct _MemoryMapFile {
   typedef _MemoryMapFile<Traits_> MemoryMapFile;
   using block_ptr = typename Traits::ptr;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
-  static constexpr auto PAGE_SIZE = Traits::PAGE_SIZE;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static const bool is_transactional = true;
   typedef _DB<MemoryMapFile> DB;
   typedef std::shared_ptr<DB> db_ptr;
@@ -279,7 +279,7 @@ struct _MemoryMapFile {
     auto result = _memory->areas.get(size, *this);
     if (!result) {
       result.offset = _memory->file_size;
-      _memory->file_size = padding(_memory->file_size + size, PAGE_SIZE);
+      _memory->file_size = padding(_memory->file_size + size, AREA_SIZE);
       result.size = _memory->file_size - result.offset;
       std::filesystem::resize_file(filename(), _memory->file_size);
     }
