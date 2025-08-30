@@ -405,6 +405,8 @@ struct TestStorage {
     return offset_t((const char*)p - (char*)&memory[0]).type(p.type);
   }
 
+  void make_dirty(block_ptr& block) { }
+
   AreaSlice get_area(uint64_t size) {
     auto result = areas.get(size, *this);
     if (!result) {

@@ -2,6 +2,7 @@
 #define _LEAVES__UTIL_HPP
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -150,6 +151,69 @@ struct _Offset {
 };
 
 typedef _Offset<uint64_t> offset_t;
+
+struct AreaSlice {
+  offset_t offset;
+  std::atomic<uint64_t> size;
+
+  // Copy assignment operator needed because std::atomic isn't copyable by
+  // default
+  AreaSlice& operator=(const AreaSlice& other) {
+    offset = other.offset;
+    size.store(other.size.load(std::memory_order_acquire),
+               std::memory_order_release);
+    return *this;
+  }
+
+  AreaSlice(offset_t offset_ = 0, uint64_t size_ = 0)
+      : offset(offset_), size(size_) {}
+  AreaSlice(const AreaSlice& other)
+      : offset(other.offset),
+        size(other.size.load(std::memory_order_acquire)) {}
+
+  // Helper methods for dirty bit (last bit of size) - now atomic
+  bool is_dirty() const { return size.load(std::memory_order_acquire) & 1; }
+
+  void set_dirty() {
+    uint64_t current = size.load(std::memory_order_relaxed);
+    while (!size.compare_exchange_weak(current, current | 1,
+                                       std::memory_order_release,
+                                       std::memory_order_relaxed)) {
+      // Retry if CAS failed
+    }
+  }
+
+  bool clear_dirty() {
+    uint64_t current = size.load(std::memory_order_relaxed);
+    uint64_t new_value;
+    do {
+      if (!(current & 1)) {
+        return false;  // Already clean
+      }
+      new_value = current & ~1ULL;
+    } while (!size.compare_exchange_weak(current, new_value,
+                                         std::memory_order_release,
+                                         std::memory_order_relaxed));
+    return true;  // Successfully cleared
+  }
+
+  uint64_t get_size() const {
+    return size.load(std::memory_order_acquire) & ~1ULL;
+  }
+
+  void set_size(uint64_t new_size) {
+    uint64_t current = size.load(std::memory_order_relaxed);
+    uint64_t new_value;
+    do {
+      new_value = (current & 1) | (new_size & ~1ULL);
+    } while (!size.compare_exchange_weak(current, new_value,
+                                         std::memory_order_release,
+                                         std::memory_order_relaxed));
+  }
+
+  operator bool() const { return get_size(); }
+  offset_t end() const { return offset + get_size(); }
+};
 
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {

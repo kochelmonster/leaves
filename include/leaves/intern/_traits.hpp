@@ -1,6 +1,8 @@
 #ifndef _LEAVES__TRAITS_HPP
 #define _LEAVES__MMAP_HPP
 
+#include <atomic>
+
 #include "./_util.hpp"
 
 namespace leaves {
@@ -49,50 +51,64 @@ struct SimplePointer {
   };
 };
 
+struct AreaSlice;
+
 template <typename BlockHeader>
 struct SmartPointer {
-  struct _IPtr {
-    void* p;
-    uint64_t offset;
-    uint32_t size;
-    uint32_t ref;
+  struct _AreaPtr {
+    // the definition of area the pointer points to
+    std::atomic<uint32_t> ref;
+    uint64_t _offset;
+    uint32_t _size;
+    char p[];
   };
 
+  // A Pointer to a Block inside an area.
   struct ptr {
     static constexpr NodeTypes type = TRIE;
-    ptr(const ptr& src) : _iref(src._iref) { if (_iref) _iref->ref++; }
+    ptr(_AreaPtr* first) : _iref(first) {
+      assert(_iref);
+      _iref->ref++;
+    }
+    ptr(const ptr& src) : _iref(src._iref), _offset(src._offset) {
+      assert(_iref); 
+      _iref->ref++;
+    }
     ~ptr() {
       if (_iref != nullptr) {
-        _iref->ref--;
+        if (--_iref->ref) {
+          delete _iref;
+        }
       }
     }
-    operator char*() { return (char*)_iref->p; }
-    operator const char*() const { return (char*)_iref->p; }
-    operator const uint8_t*() const { return (uint8_t*)_iref->p; }
-    operator uint64_t() const { return (uint64_t)_iref->p; }
-    operator uint64_t() { return (uint64_t)_iref->p; }
+    operator char*() { return (char*)_iref->p + _offset; }
+    operator const char*() const { return (const char*)_iref->p + _offset; }
+    operator const uint8_t*() const { return (uint8_t*)_iref->p + _offset; }
+    operator uint64_t() const { return (uint64_t)_iref->p + _offset; }
+    operator uint64_t() { return (uint64_t)_iref->p + _offset; }
     operator bool() const { return _iref != nullptr; }
     operator bool() { return _iref != nullptr; }
 
-    BlockHeader* operator->() { return (BlockHeader*)_iref->p; }
+    BlockHeader* operator->() { return (BlockHeader*)(char*)*this; }
     const BlockHeader* operator->() const {
-      return (const BlockHeader*)_iref->p;
+      return (const BlockHeader*)(const char*)*this;;
     }
-
     bool operator==(const ptr& other) const {
-      return _iref->p == other._iref->p;
+      return _iref->p == other._iref->p && _offset == other._offset;
     }
-    bool operator!=(const ptr& other) const {
-      return _iref->p != other._iref->p;
-    }
-    bool operator!=(const void* other) const { return _iref->p != other; }
-    void* link(uint16_t offset) { return (char*)_iref->p + offset; }
+    bool operator!=(const ptr& other) const { return !(_iref == other); }
+    bool operator!=(const void* other) const { return (char*)*this != other; }
+    void* link(uint16_t offset) { return (char*)_iref->p + _offset + offset; }
     void reset() {
       _iref->ref--;
       _iref = nullptr;
     }
+    AreaSlice* area() { return (AreaSlice*)_iref->p; }
+    uint64_t offset() const { return _iref->_offset; }
+    uint32_t size() const { return _iref->_size; }
 
-    _IPtr* _iref;
+    _AreaPtr* _iref;
+    uint32_t _offset = 0;  // offset in the area pointing to the BlockHeader
   };
 
   template <typename T, NodeTypes t = TRIE>
@@ -107,10 +123,10 @@ struct SmartPointer {
       return src;
     }
 
-    T* operator->() { return static_cast<T*>(ptr::_iref->p); }
-    const T* operator->() const { return static_cast<const T*>(ptr::_iref->p); }
-    T& operator*() { return *static_cast<T*>(ptr::_iref->p); }
-    const T& operator*() const { return *static_cast<T*>(ptr::_iref->p); }
+    T* operator->() { return static_cast<T*>((char*)*this); }
+    const T* operator->() const { return static_cast<const T*>((const char*)*this); }
+    T& operator*() { return *static_cast<T*>((char*)*this); }
+    const T& operator*() const { return *static_cast<const T*>((const char*)*this); }
   };
 };
 

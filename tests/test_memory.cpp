@@ -93,7 +93,10 @@ struct TestStorage {
   void mark_for_recycle(T& free_block) {
     free_block.txn_id = mark_tid;
   }
+
+  void make_dirty(block_ptr& block) {}
 };
+
 
 struct TestTraitsBig : public TestTraits {
   static constexpr size_t AREA_SIZE = 1 * M;

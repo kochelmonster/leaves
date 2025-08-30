@@ -64,6 +64,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   block_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
     block_ptr result = mem_manager.alloc(slot, resolver);
     result->txn_id = txn_id;
+    resolver.make_dirty(result);
     return result;
   }
 
@@ -216,6 +217,10 @@ struct _DB {
     garbage_block.txn_id = _wtxn.txn_id;
   }
 
+  void make_dirty(block_ptr& block) {
+    _storage.make_dirty(block);
+  }
+
   template <typename ptr>
   ptr clone(const ptr& src) {
     ptr dest = alloc_slot(src->slot_id);
@@ -334,12 +339,12 @@ struct _DB {
       uint64_t psize = padding(size, AREA_SIZE);
       while (true) {
         auto slice = alloc_area(psize, _header->big_areas, _wtxn.last_big_area);
-        if (slice.size < size) {
+        if (slice.get_size() < size) {
           // area too small left over area block
-          _add_to_bigmem(slice.offset, slice.size);
+          _add_to_bigmem(slice.offset, slice.get_size());
           continue;
         }
-        found_size = slice.size;
+        found_size = slice.get_size();
         found_offset = slice.offset;
         break;
       }
@@ -501,6 +506,8 @@ struct _DB {
     assert(_wtxn.start_txn);
     txn_ptr active = resolve(_header->read_txn);
     active->next_txn = _header->prepared_txn;
+    make_dirty(active);
+    make_dirty(prepared);
 
     flush();
   }

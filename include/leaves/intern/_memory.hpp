@@ -30,6 +30,7 @@ merge(append a list of free blocks to another one)
 #define _LEAVES__MEMORY_HPP
 
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 
@@ -56,13 +57,6 @@ constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
   }
   return first - start;
 }
-
-struct AreaSlice {
-  offset_t offset;
-  uint64_t size;
-  operator bool() const { return size; }
-  offset_t end() const { return offset + size; }
-};
 
 // A 4K Structure to register memory blocks.
 template <typename Traits>
@@ -151,7 +145,7 @@ struct _GarbageSlot {
         oend = back->next = resolver.resolve(new_back);
         iend = 0;
 
-        //resolver.make_dirty(back);
+        resolver.make_dirty(back);
         back = new_back;
       }
     } else {
@@ -166,7 +160,7 @@ struct _GarbageSlot {
     block->free_idx = iend;
     assert(back->blocks[iend].link != 0);
     resolver.template mark_for_recycle(back->blocks[iend]);
-    //resolver.make_dirty(back);
+    resolver.make_dirty(back);
 
     iend++;
     count++;
@@ -351,7 +345,7 @@ struct AreaRegister {
     next = 0;
     last_index = 0;
     me.offset += SIZE;
-    me.size -= SIZE;
+    me.set_size(me.get_size() - SIZE);
     areas[0] = me;
   }
 };
@@ -388,35 +382,35 @@ struct AreaManager {
 
       for (int i = ar->last_index; i >= 1; i--) {
         auto& block = ar->areas[i];
-        if (block.size >= min_size) {
+        if (block.get_size() >= min_size) {
           AreaSlice result = block;
-          block.size = 0;
-          while (ar->last_index && !ar->areas[ar->last_index].size)
+          block.set_size(0);
+          while (ar->last_index && !ar->areas[ar->last_index].get_size())
             ar->last_index--;
           return result;
         }
       }
 
       if (ar->last_index == 0 &&
-          ar->areas[0].size + AreaRegister::SIZE >= min_size) {
+          ar->areas[0].get_size() + AreaRegister::SIZE >= min_size) {
         start = ar->next;
         if (start == 0) end = 0;
         return AreaSlice{ar->areas[0].offset - AreaRegister::SIZE,
-                         ar->areas[0].size + AreaRegister::SIZE};
+                         ar->areas[0].get_size() + AreaRegister::SIZE};
       }
 
       oiter = ar->next;
     }
 
-    return AreaSlice{.offset = 0, .size = 0};
+    return AreaSlice();
   }
 
   template <typename Resolver>
   void put(AreaSlice& area, Resolver& resolver) {
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
 
-    assert(area.size > sizeof(AreaRegister));
-    assert(area.size >= Resolver::Traits::AREA_SIZE);
+    assert(area.get_size() > sizeof(AreaRegister));
+    assert(area.get_size() >= Resolver::Traits::AREA_SIZE);
     if (!end) {
       // the first area
       assert(start == 0);

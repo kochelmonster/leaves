@@ -101,6 +101,13 @@ target_sources(test_mmap INTERFACE
     include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC test)
 
+if (0)
+add_executable(test_fstore tests/test_fstore.cpp)
+target_sources(test_fstore INTERFACE
+    include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+target_link_libraries(test_fstore PUBLIC test)
+endif()
+
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
     include/intern/_memory.hpp include/intern/_bits.hpp)

@@ -17,6 +17,7 @@
 #include "_node.hpp"
 #include "_port.hpp"
 #include "_traits.hpp"
+#include "_util.hpp"
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
@@ -267,6 +268,8 @@ struct _MemoryMapFile {
     return offset_t((uint64_t)p - (uint64_t)_memory).type(p.type);
   }
 
+  void make_dirty(block_ptr& block) { }
+
   void prefetch(offset_t offset, Access access = READ) const {
     prefetch((char*)_memory + (uint64_t)offset, access);
   }
@@ -280,7 +283,7 @@ struct _MemoryMapFile {
     if (!result) {
       result.offset = _memory->file_size;
       _memory->file_size = padding(_memory->file_size + size, AREA_SIZE);
-      result.size = _memory->file_size - result.offset;
+      result.set_size(_memory->file_size - result.offset);
       std::filesystem::resize_file(filename(), _memory->file_size);
     }
     return result;

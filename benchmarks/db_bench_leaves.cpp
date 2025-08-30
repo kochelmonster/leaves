@@ -35,12 +35,12 @@ typedef leaves::MapStorage Storage;
 //   readseq100K   -- read N/1000 100K values in sequential order in async mode
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
-static const char* FLAGS_benchmarks1 =
+static const char* FLAGS_benchmarks =
     "fillseq,"
     "fillseqsync,"
     "fillrandsync,"
     "fillrandom,"
-    //"overwrite,"
+    "overwrite,"
     "readrandom,"
     "readseq,"
     "fillrand100K,"
@@ -48,7 +48,7 @@ static const char* FLAGS_benchmarks1 =
     "readseq100K,"
     "readrand100K,";
 
-static const char* FLAGS_benchmarks =
+static const char* FLAGS_benchmarks1 =
     "fillseq,"
     "fillseqsync,"
     "fillrandsync,"
