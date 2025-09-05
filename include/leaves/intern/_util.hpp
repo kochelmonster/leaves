@@ -153,66 +153,91 @@ struct _Offset {
 typedef _Offset<uint64_t> offset_t;
 
 struct AreaSlice {
-  offset_t offset;
-  std::atomic<uint64_t> size;
+  std::atomic<uint64_t> offset;
+  uint32_t size;
+  std::atomic<uint32_t> ref;
 
   // Copy assignment operator needed because std::atomic isn't copyable by
   // default
   AreaSlice& operator=(const AreaSlice& other) {
-    offset = other.offset;
-    size.store(other.size.load(std::memory_order_acquire),
-               std::memory_order_release);
+    offset.store(other.offset.load(std::memory_order_acquire),
+                 std::memory_order_release);
+    size = other.size;
+    ref.store(other.ref.load(std::memory_order_acquire),
+              std::memory_order_release);
     return *this;
   }
 
-  AreaSlice(offset_t offset_ = 0, uint64_t size_ = 0)
-      : offset(offset_), size(size_) {}
+  AreaSlice(uint64_t offset_ = 0, uint32_t size_ = 0, uint32_t ref_ = 0)
+      : offset(offset_), size(size_), ref(ref_) {}
   AreaSlice(const AreaSlice& other)
-      : offset(other.offset),
-        size(other.size.load(std::memory_order_acquire)) {}
+      : offset(other.offset.load(std::memory_order_acquire)),
+        size(other.size),
+        ref(other.ref.load(std::memory_order_acquire)) {}
 
-  // Helper methods for dirty bit (last bit of size) - now atomic
-  bool is_dirty() const { return size.load(std::memory_order_acquire) & 1; }
+  // Helper methods for dirty bit (first bit of offset) - atomic
+  bool is_dirty() const { return offset.load(std::memory_order_acquire) & 1; }
 
   void set_dirty() {
-    uint64_t current = size.load(std::memory_order_relaxed);
-    while (!size.compare_exchange_weak(current, current | 1,
-                                       std::memory_order_release,
-                                       std::memory_order_relaxed)) {
+    uint64_t current = offset.load(std::memory_order_relaxed);
+    while (!offset.compare_exchange_weak(current, current | 1,
+                                         std::memory_order_release,
+                                         std::memory_order_relaxed)) {
       // Retry if CAS failed
     }
   }
 
   bool clear_dirty() {
-    uint64_t current = size.load(std::memory_order_relaxed);
+    uint64_t current = offset.load(std::memory_order_relaxed);
     uint64_t new_value;
     do {
       if (!(current & 1)) {
         return false;  // Already clean
       }
       new_value = current & ~1ULL;
-    } while (!size.compare_exchange_weak(current, new_value,
-                                         std::memory_order_release,
-                                         std::memory_order_relaxed));
+    } while (!offset.compare_exchange_weak(current, new_value,
+                                           std::memory_order_release,
+                                           std::memory_order_relaxed));
     return true;  // Successfully cleared
   }
 
-  uint64_t get_size() const {
-    return size.load(std::memory_order_acquire) & ~1ULL;
+  uint64_t get_offset() const {
+    return offset.load(std::memory_order_acquire) & ~1ULL;
   }
 
-  void set_size(uint64_t new_size) {
-    uint64_t current = size.load(std::memory_order_relaxed);
+  void set_offset(uint64_t new_offset) {
+    uint64_t current = offset.load(std::memory_order_relaxed);
     uint64_t new_value;
     do {
-      new_value = (current & 1) | (new_size & ~1ULL);
-    } while (!size.compare_exchange_weak(current, new_value,
-                                         std::memory_order_release,
-                                         std::memory_order_relaxed));
+      new_value = (current & 1) | (new_offset & ~1ULL);
+    } while (!offset.compare_exchange_weak(current, new_value,
+                                           std::memory_order_release,
+                                           std::memory_order_relaxed));
+  }
+
+  uint32_t get_size() const {
+    return size;
+  }
+
+  void set_size(uint32_t new_size) {
+    size = new_size;
+  }
+
+  // Reference counting methods - atomic
+  uint32_t inc_ref() {
+    return ref.fetch_add(1, std::memory_order_acq_rel) + 1;
+  }
+
+  uint32_t dec_ref() {
+    return ref.fetch_sub(1, std::memory_order_acq_rel) - 1;
+  }
+
+  uint32_t get_ref() const {
+    return ref.load(std::memory_order_acquire);
   }
 
   operator bool() const { return get_size(); }
-  offset_t end() const { return offset + get_size(); }
+  uint64_t end() const { return get_offset() + get_size(); }
 };
 
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,

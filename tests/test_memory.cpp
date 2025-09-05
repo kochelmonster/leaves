@@ -209,8 +209,8 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
 
   AreaSlice as1 = storage.alloc_page();
   am.put(as1, storage);
-  BOOST_CHECK_EQUAL(am.start, as1.offset);
-  BOOST_CHECK_EQUAL(am.end, as1.offset);
+  BOOST_CHECK_EQUAL(am.start, as1.get_offset());
+  BOOST_CHECK_EQUAL(am.end, as1.get_offset());
   int count = AreaRegister::COUNT;
 
   // Test AreaManager::put
@@ -224,21 +224,21 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
   AreaSlice as2 = storage.alloc_page();
   am.put(as2, storage);
   ptr ar = storage.resolve(am.start);
-  BOOST_CHECK_EQUAL(am.start, as1.offset);
-  BOOST_CHECK_EQUAL(am.end, as2.offset);
+  BOOST_CHECK_EQUAL(am.start, as1.get_offset());
+  BOOST_CHECK_EQUAL(am.end, as2.get_offset());
 
   AreaManager am1 = {.start = 0, .end = 0};
   AreaSlice as3 = storage.alloc_page();
   am1.put(as3, storage);
-  BOOST_CHECK_EQUAL(am1.start, as3.offset);
-  BOOST_CHECK_EQUAL(am1.end, as3.offset);
+  BOOST_CHECK_EQUAL(am1.start, as3.get_offset());
+  BOOST_CHECK_EQUAL(am1.end, as3.get_offset() + as3.get_size());
 
   am1.merge(&am, storage);
-  BOOST_CHECK_EQUAL(am1.start, as3.offset);
+  BOOST_CHECK_EQUAL(am1.start, as3.get_offset());
   BOOST_CHECK_EQUAL(am1.end, am.end);
 
   AreaSlice r = am1.get(AREA_SIZE, storage);
-  BOOST_CHECK_EQUAL(r.offset, as3.offset);
+  BOOST_CHECK_EQUAL(r.get_offset(), as3.get_offset());
   BOOST_CHECK_EQUAL(am1.start, am.start);
 
   ar = storage.resolve(am1.start);

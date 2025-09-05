@@ -281,9 +281,9 @@ struct _MemoryMapFile {
   AreaSlice get_area(uint64_t size) {
     auto result = _memory->areas.get(size, *this);
     if (!result) {
-      result.offset = _memory->file_size;
+      result.set_offset(_memory->file_size);
       _memory->file_size = padding(_memory->file_size + size, AREA_SIZE);
-      result.set_size(_memory->file_size - result.offset);
+      result.set_size(_memory->file_size - result.get_offset());
       std::filesystem::resize_file(filename(), _memory->file_size);
     }
     return result;

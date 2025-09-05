@@ -268,7 +268,7 @@ struct _MemManager {
 
       if (allocation_start + bsize > allocation_end) {
         auto area = resolver.alloc_page();
-        allocation_start = area.offset;
+        allocation_start = area.get_offset();
         allocation_end = area.end();
         assert(allocation_end % AREA_SIZE == 0);
       }
@@ -317,9 +317,9 @@ struct _MemStatistics {
   Every database keeps track of their allocate areas and gives them
   back to resolver for reuse once the database is deleted.
 
-  The datastructure to track the areas is a hybrid of a list and a table.
+  The data structure to track the areas is a hybrid of a list and a table.
   Certain areas spend their first 4K bytes for a area register (an array).
-  If the register is full the next area becommes a new area register and
+  If the register is full the next area becomes a new area register and
   the old register points to the new one.
 
     Area 1(Register1)
@@ -344,7 +344,7 @@ struct AreaRegister {
   void init(AreaSlice me) {
     next = 0;
     last_index = 0;
-    me.offset += SIZE;
+    me.set_offset(me.get_offset() + SIZE);
     me.set_size(me.get_size() - SIZE);
     areas[0] = me;
   }
@@ -352,18 +352,25 @@ struct AreaRegister {
 
 // Manages allocation Areas from Resolver
 struct AreaManager {
-  offset_t start;
-  offset_t end;
+  offset_t start; // the offset of the first area register
+  offset_t end;   // the offset of the last area register
 
   template <typename Resolver>
   void merge(AreaManager* other, Resolver& resolver) {
     // insert the register list of other in my list
     if (!other->start) return;
     typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
-    ptr tmp = resolver.resolve(end, WRITE);
-    tmp->next = other->start;
-    end = other->end;
-    if (!start) start = end;
+    if (!start) {
+      assert(!end);
+      start = other->start;
+      end = other->end;
+    }
+    else {
+      assert(end);
+      ptr tmp = resolver.resolve(end, WRITE);
+      tmp->next = other->start;
+      end = other->end;
+    }
     assert(((ptr)resolver.resolve(end))->next == 0);
   }
 
@@ -384,17 +391,18 @@ struct AreaManager {
         auto& block = ar->areas[i];
         if (block.get_size() >= min_size) {
           AreaSlice result = block;
-          block.set_size(0);
+          block.set_size(0);  // result has still original size!
           while (ar->last_index && !ar->areas[ar->last_index].get_size())
             ar->last_index--;
           return result;
         }
       }
 
-      if (ar->last_index == 0 &&
-          ar->areas[0].get_size() + AreaRegister::SIZE >= min_size) {
+      assert(ar->last_index == 0);
+      if (ar->areas[0].get_size() + AreaRegister::SIZE >= min_size) {
         start = ar->next;
         if (start == 0) end = 0;
+        // regain the space used for AreaRegister
         return AreaSlice{ar->areas[0].offset - AreaRegister::SIZE,
                          ar->areas[0].get_size() + AreaRegister::SIZE};
       }
@@ -414,9 +422,9 @@ struct AreaManager {
     if (!end) {
       // the first area
       assert(start == 0);
-      ptr ar = resolver.resolve(area.offset, WRITE);
+      ptr ar = resolver.resolve(area.get_offset(), WRITE);
       ar->init(area);
-      start = end = area.offset;
+      start = end = area.get_offset();
       return;
     }
 
@@ -426,9 +434,9 @@ struct AreaManager {
       return;
     }
 
-    // the last register is full -> make this register to
-    end = ar->next = area.offset;
-    ar = resolver.resolve(area.offset, WRITE);
+    // the last register is full -> the area becomes a new register
+    end = ar->next = area.get_offset();
+    ar = resolver.resolve(area.get_offset(), WRITE);
     ar->init(area);
   }
 };

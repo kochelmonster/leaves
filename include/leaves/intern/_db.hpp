@@ -299,7 +299,7 @@ struct _DB {
     assert(_wtxn.txn_id);
 
     size = padding(size, MAX_BLOCK_SIZE);
-    uint64_t found_size;
+    uint32_t found_size;
     offset_t found_offset;
 
     // find from big memory storage
@@ -341,16 +341,16 @@ struct _DB {
         auto slice = alloc_area(psize, _header->big_areas, _wtxn.last_big_area);
         if (slice.get_size() < size) {
           // area too small left over area block
-          _add_to_bigmem(slice.offset, slice.get_size());
+          _add_to_bigmem(slice.get_offset(), slice.get_size());
           continue;
         }
         found_size = slice.get_size();
-        found_offset = slice.offset;
+        found_offset = slice.get_offset();
         break;
       }
     }
 
-    uint64_t delta = found_size - size;
+    uint32_t delta = found_size - size;
     if (delta >= MAX_BLOCK_SIZE) {
       // enough space left -> reuse the rest
       _add_to_bigmem(found_offset + size, delta);

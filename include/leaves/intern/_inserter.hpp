@@ -36,7 +36,7 @@ struct _Inserter {
   block_ptr alloc_big(size_t size) {
     auto db = back->cursor->_db;
     auto slice = db->alloc_big(size);
-    return db->resolve(slice.offset);
+    return resolve(offset_t(slice.get_offset()));
   }
 
   void free_big(leaf_ptr& leaf) {

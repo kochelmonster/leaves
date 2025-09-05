@@ -319,14 +319,14 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
     }
 
     for (int i = 0; i < 10; i += 2) {
-      db->free_big(slices[i].offset, slices[i].size);
+      db->free_big(slices[i].get_offset(), slices[i].get_size());
       // dump(db, "freea_", i);
       check_memtrie_count(db, 4 + i);
     }
 
     int item_count = 12;
     for (int i = 1; i < 10; i += 2) {
-      db->free_big(slices[i].offset, slices[i].size);
+      db->free_big(slices[i].get_offset(), slices[i].get_size());
       check_memtrie_count(db, 11 - i);
       // dump(db, "freeb_", i);
     }
@@ -410,8 +410,8 @@ struct TestStorage {
   AreaSlice get_area(uint64_t size) {
     auto result = areas.get(size, *this);
     if (!result) {
-      size_t old_size = memory.size();
-      size_t next_size = padding(old_size + size, AREA_SIZE);
+      uint32_t old_size = memory.size();
+      uint32_t next_size = padding(old_size + size, AREA_SIZE);
       memory.resize(next_size);
       return AreaSlice{old_size, next_size - old_size};
     }
