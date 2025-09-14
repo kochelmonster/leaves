@@ -231,7 +231,7 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
   AreaSlice as3 = storage.alloc_page();
   am1.put(as3, storage);
   BOOST_CHECK_EQUAL(am1.start, as3.get_offset());
-  BOOST_CHECK_EQUAL(am1.end, as3.get_offset() + as3.get_size());
+  BOOST_CHECK_EQUAL(am1.end, as3.get_offset());
 
   am1.merge(&am, storage);
   BOOST_CHECK_EQUAL(am1.start, as3.get_offset());

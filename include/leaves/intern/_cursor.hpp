@@ -21,7 +21,7 @@ struct _Transition {
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
-  
+
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp
 
@@ -150,6 +150,7 @@ struct _Transition {
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void find() {
+    // find the next node
     if (is_leaf()) {
       LeafNode& leaf_ = *leaf();
       prefix = get_prefix(key().data(), (char*)leaf_.data, key().size(),
@@ -328,7 +329,7 @@ struct _Cursor {
   using Transition = typename Stack::Transition;
   using Hasher = typename Traits::Hasher;
   using hash_t = typename Hasher::hash_t;
-  
+
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 
   _Cursor(db_ptr db) : _db(db), transaction_active(false) {
@@ -337,15 +338,15 @@ struct _Cursor {
   }
 
   tid_t txn_id() const {
-    return !Traits::transactional || transaction_active ? _db->_wtxn.txn_id : _db->txn()->txn_id;
+    return !Traits::transactional || transaction_active ? _db->_wtxn.txn_id
+                                                        : _db->txn()->txn_id;
   }
 
   // return true if the cursor is on a valid position
   bool is_valid() const { return stack.size ? stack.back().success() : false; }
 
   void find(const Slice& key) {
-    if (key.size() > MAX_KEY_SIZE)
-      throw KeyTooBig();
+    if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
 
     update();
     rest_key = key;
@@ -467,6 +468,8 @@ struct _Cursor {
   }
 
   bool keep_stack() {
+    // Don't start from the very start. Try to start as deep in the stack as
+    // possible
     assert(stack.size > 0);
 
     int cmp;
@@ -505,7 +508,8 @@ struct _Cursor {
   }
 
   void update() {
-    if (Traits::transactional && !transaction_active) root = Traits::get_root(*_db);
+    if (Traits::transactional && !transaction_active)
+      root = Traits::get_root(*_db);
   }
 
   db_ptr _db;

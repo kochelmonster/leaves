@@ -44,3 +44,9 @@ TransferTrie:
  Ein continuierlicher Speicher
  Ein Query Trie 
 
+
+
+#codebase Analyse the inserter and check if there can be more optimations by using pipelining , branch prediction and datalocality.
+Would it speed up  insertion if it is split in a two phase mode: 
+Analsyse-Mode to see what has to be changed
+Execution-Mode to do the changes?

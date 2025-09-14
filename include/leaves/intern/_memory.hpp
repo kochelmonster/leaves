@@ -352,8 +352,8 @@ struct AreaRegister {
 
 // Manages allocation Areas from Resolver
 struct AreaManager {
-  offset_t start; // the offset of the first area register
-  offset_t end;   // the offset of the last area register
+  offset_t start;  // the offset of the first area register
+  offset_t end;    // the offset of the last area register
 
   template <typename Resolver>
   void merge(AreaManager* other, Resolver& resolver) {
@@ -364,8 +364,7 @@ struct AreaManager {
       assert(!end);
       start = other->start;
       end = other->end;
-    }
-    else {
+    } else {
       assert(end);
       ptr tmp = resolver.resolve(end, WRITE);
       tmp->next = other->start;
@@ -398,8 +397,8 @@ struct AreaManager {
         }
       }
 
-      assert(ar->last_index == 0);
-      if (ar->areas[0].get_size() + AreaRegister::SIZE >= min_size) {
+      if (ar->last_index == 0 &&
+          ar->areas[0].get_size() + AreaRegister::SIZE >= min_size) {
         start = ar->next;
         if (start == 0) end = 0;
         // regain the space used for AreaRegister

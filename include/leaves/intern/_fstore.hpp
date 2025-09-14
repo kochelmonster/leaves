@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <atomic>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
-#include <boost/lockfree/queue.hpp>
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/indexed_by.hpp>
 #include <boost/multi_index/member.hpp>
@@ -20,6 +19,8 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <queue>
 #include <thread>
 
 #include "_db.hpp"
@@ -76,7 +77,6 @@ struct _StoreTraits {
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  static constexpr uint16_t MAX_PROCESSES = 100;
   typedef SmartPointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
   template <typename T, NodeTypes type = TRIE>
@@ -146,7 +146,7 @@ struct _FileOperations : CacheBase {
   };
 
   std::string _filepath;
-  std::fstream _file;
+  mutable std::fstream _file;
   FileHeader* _header;
 
   void open(const char* path) {
@@ -168,7 +168,7 @@ struct _FileOperations : CacheBase {
     }
   }
 
-  void write(offset_t offset, const void* ptr, size_t size) {
+  void write(offset_t offset, const void* ptr, size_t size) const {
     if (!_file.is_open()) {
       throw std::runtime_error("File not open");
     }
@@ -183,7 +183,7 @@ struct _FileOperations : CacheBase {
     _file.flush();
   }
 
-  void read(offset_t offset, void* ptr, size_t size) {
+  void read(offset_t offset, void* ptr, size_t size) const {
     if (!_file.is_open()) {
       throw std::runtime_error("File not open");
     }
@@ -197,7 +197,7 @@ struct _FileOperations : CacheBase {
     }
   }
 
-  void resize(size_t new_size) {
+  void resize(size_t new_size) const {
     if (!_file.is_open()) {
       throw std::runtime_error("File not open");
     }
@@ -232,67 +232,76 @@ struct _CacheStore : public Opers_ {
   typedef std::shared_ptr<DB> db_ptr;
   typedef std::weak_ptr<DB> wdb_ptr;
   typedef std::vector<char> area_chunk_t;
+  using Opers_::_header;
+  using Opers_::write;
+  using Opers_::read;
+  using Opers_::resize;
+  using CacheBase::DBEntry;
 
   struct LRUCache {
+    using area_mem_t = typename Traits::Pointers::_AreaPtr;
     struct Entry {
       offset_t key;
-      area_chunk_t value;
+      block_ptr block; // holds reference to area via ptr refcount
     };
     // Use using-declarations for multi_index components
     typedef multi_index_container<
         Entry, indexed_by<hashed_unique<member<Entry, offset_t, &Entry::key>>,
                           sequenced<>>>
         container_t;
-    container_t _data;
+  container_t _data;
 
-    LRUCache(size_t capacity = 10 * M) : _capacity(capacity) {}
+  LRUCache(size_t capacity = 10 * M) : _capacity(capacity) {}
 
-    bool get(const offset_t&& key, area_chunk_t* value) {
+  bool get(offset_t key, block_ptr& out) {
       auto& idx = _data.template get<0>();
       auto it = idx.find(key);
       if (it == idx.end()) return false;
-      *value = &it->value;
-      _data.relocate(_data.end(),
-                     _data.template project<1>(it));  // move to back (MRU)
+      out = it->block;
+      // Move accessed entry to the back of the sequenced index (MRU)
+      auto& seq = _data.template get<1>();
+      seq.relocate(seq.end(), seq.iterator_to(*it));
       return true;
     }
 
-    void put(const offset_t&& key, area_chunk_t&& value) {
+  void put(offset_t key, const block_ptr& block) {
       auto& idx = _data.template get<0>();
       auto it = idx.find(key);
       assert(it == idx.end());
-      _data.push_back({key, std::move(value)});
-      _size += _data.back().value.size();
+      _data.insert(Entry{key, block}); // inserts at end of sequenced index
+      _size += block.size();
       prune();
     }
 
-    void prune() {
-      while (_size > _capacity) {
-        auto& value = _data.front().value;
-        AreaSlice* slice = (AreaSlice*)value.data();
+  void prune() {
+      auto& seq = _data.template get<1>();
+      while (_size > _capacity && !seq.empty()) {
+        auto& entry = const_cast<Entry&>(seq.front());
+        AreaSlice* slice = entry.block.area();
         if (slice->is_dirty()) break;
-        _size -= value.size();
-        _data.pop_front();
+        _size -= entry.block.size();
+        seq.pop_front();
       }
     }
 
-    size_t size() const { return _data.size(); }
+  size_t size() const { return _data.size(); }
 
-    size_t _size = 0;
+  size_t _size = 0;
     size_t _capacity;
   };
 
   std::vector<wdb_ptr> _dbs;  // databases
-  LRUCache _cache;
+  mutable LRUCache _cache;
 
-  // Handling for dirty areas
+  // Handling for dirty areas - using mutex-protected queue for thread safety
+  std::queue<block_ptr> dirty_areas;
+  std::mutex dirty_areas_mutex;
   std::thread dirty_processor_thread;
   std::atomic<bool> should_stop;
   std::mutex dirty_mutex;
   std::condition_variable dirty_cv;
-  boost::lockfree::queue<block_ptr> dirty_areas;
 
-  _CacheStore(uint16_t db_count = 48) : dirty_areas(0), should_stop(false) {
+  _CacheStore(uint16_t db_count = 48) : should_stop(false) {
     _dbs.resize(db_count);
 
     // Start the dirty area processor thread
@@ -314,17 +323,33 @@ struct _CacheStore : public Opers_ {
   void flush(bool async = true) {}
 
   block_ptr resolve(offset_t offset, Access access = READ) const {
-    area_chunk_t* chunk;
-    offset_t adjusted_offset = offset - (offset % AREA_SIZE);
-    if (_cache.get(adjusted_offset, chunk)) {
-      AreaSlice* slice = (AreaSlice*)chunk->data();
-      assert(slice->offset == adjusted_offset);
-      return block_ptr(chunk->data() + (offset - adjusted_offset));
+    using area_mem_t = typename Traits::Pointers::_AreaPtr;
+    block_ptr cached;
+    offset_t area_offset = offset - (offset % AREA_SIZE);
+    if (_cache.get(area_offset, cached)) {
+      AreaSlice* slice = cached.area();
+      assert(slice->offset == area_offset);
+      block_ptr result = cached; // increments refcount
+      result._offset = static_cast<uint32_t>(offset - area_offset);
+      return result;
     }
 
-    char* p = (char*)_header + (uint64_t)offset;
-    prefetch(p, access);
-    return block_ptr(p);
+    AreaSlice area_header;
+    read(area_offset, &area_header, sizeof(area_header));
+    // Allocate area memory: [_AreaPtr][area bytes]
+    size_t total = sizeof(area_mem_t) + area_header.get_size();
+    void* raw = ::operator new(total);
+    area_mem_t* aptr = new (raw) area_mem_t();
+    aptr->ref.store(0);
+    aptr->_offset = area_offset;
+    aptr->_size = area_header.get_size();
+    // Read full area into p[] starting with AreaSlice header
+    read(area_offset, aptr->p, aptr->_size);
+
+    block_ptr result(aptr);
+    result._offset = static_cast<uint32_t>(offset - area_offset);
+    _cache.put(area_offset, result);
+    return result;
   }
 
   template <typename Pointer>
@@ -333,27 +358,27 @@ struct _CacheStore : public Opers_ {
   }
 
   void make_dirty(block_ptr& block) {
-    block->area()->set_dirty();
-    dirty_areas.push(block);
+    block.area()->set_dirty();
+    {
+      std::lock_guard<std::mutex> lock(dirty_areas_mutex);
+      dirty_areas.push(block);
+    }
 
     // Notify the dirty processor thread
     dirty_cv.notify_one();
   }
-
-  void prefetch(offset_t offset, Access access = READ) const {
-    prefetch((char*)_header + (uint64_t)offset, access);
-  }
-
-  void prefetch(void* mem, Access access = READ) const {
-    leaves::prefetch(mem, access);
-  }
-
+  
   AreaSlice get_area(uint64_t size) {
-    auto result = _header->areas.get(size, *this);
+    // Ensure size is at least one area and aligned to AREA_SIZE
+    assert(size);
+    const uint64_t aligned = padding(size, AREA_SIZE);
+    auto result = _header->areas.get(aligned, *this);
     if (!result) {
-      result.offset = _header->file_size;
-      _header->file_size = padding(_header->file_size + size, AREA_SIZE);
-      result.set_size(_header->file_size - result.offset);
+      // Start each new area on an AREA_SIZE boundary
+      const uint64_t start = padding(_header->file_size, AREA_SIZE);
+      result.set_offset(start);
+      result.set_size(aligned);
+      _header->file_size = padding(start + aligned, AREA_SIZE);
       resize(_header->file_size);
     }
     return result;
@@ -366,6 +391,7 @@ struct _CacheStore : public Opers_ {
     while (!should_stop.load()) {
       // Wait for notification or stop signal
       dirty_cv.wait(lock, [this]() {
+        std::lock_guard<std::mutex> queue_lock(dirty_areas_mutex);
         return should_stop.load() || !dirty_areas.empty();
       });
 
@@ -374,12 +400,22 @@ struct _CacheStore : public Opers_ {
       }
 
       // Process all dirty areas in the queue
-      block_ptr block;
-      while (dirty_areas.pop(block)) {
+      while (true) {
+        std::optional<block_ptr> opt_block;
+        {
+          std::lock_guard<std::mutex> queue_lock(dirty_areas_mutex);
+          if (dirty_areas.empty()) break;
+          opt_block = dirty_areas.front();
+          dirty_areas.pop();
+        }
+        
         // Atomically check and clear the dirty bit
-        if (block->area()->clear_dirty()) {
-          // Successfully cleared dirty bit, now write the block
-          this->write(block.offset(), block.area(), block.size());
+        if (opt_block) {
+          auto& block = opt_block.value();
+          if (block.area()->clear_dirty()) {
+            // Successfully cleared dirty bit, now write the block
+            write(block.offset(), block.area(), block.size());
+          }
         }
       }
     }
@@ -394,7 +430,7 @@ struct _CacheStore : public Opers_ {
   db_ptr operator[](const char* name) { return make(name); }
 
   db_ptr make(const char* name) {
-    if (strlen(name) > sizeof(DBEntry::name)) throw KeyToBig();
+    if (strlen(name) > sizeof(CacheBase::DBEntry::name)) throw KeyTooBig();
 
     std::scoped_lock lock(_header->file_lock);
     int free = -1;
@@ -439,30 +475,30 @@ struct _CacheStore : public Opers_ {
 
 struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
-  using MAX_PROCESSES = _StoreTraits::MAX_PROCESSES;
+
+  size_t _header_size;
 
   _FileStore(const char* path, uint16_t db_count = 48) : base_t(db_count) {
+    _header_size =
+        padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
     init_dbfile(path, db_count);
   }
 
   ~_FileStore() { delete[] (char*)_header; }
 
   void init_dbfile(const char* path, uint16_t db_count) {
-    uint64_t fsize =
-        padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
-    char* buffer = new char[fsize];
+    char* buffer = new char[_header_size];
     if (!std::filesystem::is_regular_file(path)) {
       open(path);
       _header = new (buffer) FileHeader(db_count);
-      _header->file_size = fsize;
-      write(0, buffer, fsize);
+      _header->file_size = _header_size;
+      write(0, buffer, _header_size);
     } else {
       open(path);
-      read(0, buffer, fsize);
+      read(0, buffer, _header_size);
       _header = (FileHeader*)buffer;
 
-      char signature[sizeof(SIGNATURE)];
-      if (strcmp(signature, SIGNATURE)) {
+      if (strcmp(_header->signature, SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
       }
       if (db_count && _header->db_count != db_count)
@@ -474,27 +510,9 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   }
 
   void sanitize() {
-    sanitize_processes();
     std::scoped_lock lock(_header->file_lock);
     if (std::filesystem::file_size(filename()) != _header->file_size)
       std::filesystem::resize_file(filename(), _header->file_size);
-  }
-
-  bool sanitize_processes() {
-    auto ap = all_pids();
-    std::sort(ap.begin(), ap.end());
-
-    int free_count = 0;
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-      if (_header->processes[i]) {
-        if (!std::binary_search(ap.begin(), ap.end(), _header->processes[i])) {
-          _header->processes[i] = 0;
-          free_count++;
-        }
-      } else
-        free_count++;
-    }
-    return free_count == MAX_PROCESSES;  // the first to open the db
   }
 };
 
