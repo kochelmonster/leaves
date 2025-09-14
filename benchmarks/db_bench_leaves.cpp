@@ -410,12 +410,10 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
-
+#ifdef STATISTICS
         std::cout << "File size: " << storage_->file_size() / (1024 * 1024)
                   << " MB" << std::endl;
         // leaves::_MemoryChecker<Storage>(*db_).check();
-
-#ifdef STATISTICS
         auto txn = db_->txn();
 
         size_t size = 0;
