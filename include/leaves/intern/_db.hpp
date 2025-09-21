@@ -164,7 +164,7 @@ struct _DB {
   void init(offset_t* header) {
     auto area = _storage.get_area(Traits::AREA_SIZE);
 
-    *header = area.offset + sizeof(AreaRegister);
+    *header = area.get_offset() + sizeof(AreaRegister);
     _header = _storage.resolve(*header);
     memset((void*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex;
@@ -190,7 +190,7 @@ struct _DB {
     flush();
   }
 
-  Slice name() const { return Slice(_storage._memory->dbs[_index].name); }
+  Slice name() const { return _storage.db_name(_index); }
 
   template <typename T>
   typename Traits::Pointer<T> resolve(offset_t offset,
@@ -217,9 +217,7 @@ struct _DB {
     garbage_block.txn_id = _wtxn.txn_id;
   }
 
-  void make_dirty(block_ptr& block) {
-    _storage.make_dirty(block);
-  }
+  void make_dirty(block_ptr& block) { _storage.make_dirty(block); }
 
   template <typename ptr>
   ptr clone(const ptr& src) {
@@ -420,7 +418,6 @@ struct _DB {
     typedef typename Traits::template Pointer<AreaRegister> ptr;
     ptr ar = resolve(pointer.olast);
     if (ar->last_index > pointer.ilast) return ar->areas[++pointer.ilast];
-
     if (ar->next) {
       pointer.olast = ar->next;
       pointer.ilast = 0;

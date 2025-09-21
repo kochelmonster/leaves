@@ -1,22 +1,19 @@
-#ifndef _LEAVES_MMAP_HPP
-#define _LEAVES_MMAP_HPP
+#ifndef _LEAVES_FSTORE_HPP
+#define _LEAVES_FSTORE_HPP
 
 #include "cursor.hpp"
-#include "intern/_mmap.hpp"
+#include "intern/_fstore.hpp"
 
 namespace leaves {
 
-class MapStorage {
- private:
-  typedef _MemoryMapFile<_MemoryMapTraits> IMapStorage;
-  
+class FileStorage {
  public:
-  typedef TCursor<IMapStorage::DB::Cursor> Cursor;
+  typedef TCursor<_FileStore::DB::Cursor> Cursor;
   class DB {
    public:
-    typedef IMapStorage::DB db_type;
+    typedef _FileStore::DB db_type;
 
-    DB(IMapStorage::db_ptr db) : _db(db) {}
+    DB(_FileStore::db_ptr db) : _db(db) {}
 
     Cursor cursor() { return Cursor(_db); }
 
@@ -28,7 +25,7 @@ class MapStorage {
     Slice name() const { return _db->name(); }
 
    private:
-    IMapStorage::db_ptr _db;
+    _FileStore::db_ptr _db;
 
     const db_type& dump_storage() const { return *_db; }
 
@@ -36,8 +33,8 @@ class MapStorage {
     friend class _Dumper;
   };
 
-  MapStorage(const char* path, size_t map_size = 2 * G, uint16_t db_count = 48)
-      : _storage(path, map_size, db_count) {}
+  FileStorage(const char* path, uint16_t db_count = 48)
+      : _storage(path, db_count) {}
 
   DB operator[](const char* name) { return DB(_storage.make(name)); }
   void remove_db(const char* name) { _storage.remove_db(name); }
@@ -45,13 +42,13 @@ class MapStorage {
     return _storage.list_dbs(result);
   }
   Slice filename() const { return Slice(_storage.filename()); }
-  size_t file_size() const { return _storage._memory->file_size; }
+  size_t file_size() const { return _storage._header->file_size; }
 
  private:
-  IMapStorage _storage;
+  _FileStore _storage;
 };
 
 
 }  // namespace leaves
 
-#endif  // _LEAVES_MMAP_HPP
+#endif  // _LEAVES_FSTORE_HPP

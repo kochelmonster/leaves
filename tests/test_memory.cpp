@@ -245,10 +245,10 @@ BOOST_AUTO_TEST_CASE(test_areamanager) {
   int li = ar->last_index;
   r = am1.get(AREA_SIZE, storage);
   BOOST_CHECK_EQUAL(ar->last_index, li - 1);
-  BOOST_CHECK_EQUAL(ar->areas[ar->last_index + 1].offset, r.offset);
+  BOOST_CHECK_EQUAL(ar->areas[ar->last_index + 1].get_offset(), r.get_offset());
 
   r = am1.get(2 * AREA_SIZE, storage);
-  BOOST_CHECK_EQUAL(r.offset, 0);
+  BOOST_CHECK_EQUAL(r.get_offset(), 0);
 }
 
 #if 0

@@ -1,5 +1,5 @@
-#ifndef _LEAVES_CURSOR_HPP
-#define _LEAVES_CURSOR_HPP
+#ifndef _LEAVES_ICURSOR_HPP
+#define _LEAVES_ICURSOR_HPP
 
 #include <vector>
 
@@ -522,4 +522,4 @@ struct _Cursor {
 
 }  // namespace leaves
 
-#endif  // _LEAVES_CURSOR_HPP
+#endif  // _LEAVES_ICURSOR_HPP

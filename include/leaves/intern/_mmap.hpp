@@ -1,5 +1,5 @@
-#ifndef _LEAVES__MMAP_HPP
-#define _LEAVES__MMAP_HPP
+#ifndef _LEAVES__IMMAP_HPP
+#define _LEAVES__IMMAP_HPP
 
 #include <algorithm>
 #include <boost/interprocess/file_mapping.hpp>
@@ -34,8 +34,8 @@ using boost::process::v2::pid_type;
 
 namespace leaves {
 
-static const char SIGNATURE[] = "larch-leaves";
-static const size_t SIGNATURE_SIZE = padding(sizeof(SIGNATURE), 8);
+static const char MMAP_SIGNATURE[] = "larch-leaves";
+static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 
 // definition og all headers and data types
 struct _MemoryMapTraits {
@@ -137,7 +137,7 @@ struct _MemoryMapFile {
   };
 
   struct FileHeader {
-    char signature[SIGNATURE_SIZE];
+    char signature[MMAP_SIGNATURE_SIZE];
     uint16_t db_version;
     size_t file_size;
     Mutex file_lock;
@@ -148,7 +148,7 @@ struct _MemoryMapFile {
 
     FileHeader(uint16_t db_count_) {
       memset(this, 0, sizeof(FileHeader));
-      strcpy(signature, SIGNATURE);
+      strcpy(signature, MMAP_SIGNATURE);
       db_count = db_count_;
       db_version = 0;
       memset(processes, 0, sizeof(processes));
@@ -194,9 +194,9 @@ struct _MemoryMapFile {
       _region.flush();
     } else {
       std::ifstream fin(path);
-      char signature[sizeof(SIGNATURE)];
+      char signature[sizeof(MMAP_SIGNATURE)];
       fin.read(signature, sizeof(signature));
-      if (strcmp(signature, SIGNATURE)) {
+      if (strcmp(signature, MMAP_SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
       }
       _file = file_mapping(path, read_write);
@@ -295,6 +295,8 @@ struct _MemoryMapFile {
     }
   }
 
+  Slice db_name(int index) const { return Slice(_memory->dbs[index].name); }
+
   db_ptr operator[](const char* name) { return make(name); }
 
   db_ptr make(const char* name) {
@@ -343,4 +345,4 @@ struct _MemoryMapFile {
 
 }  // namespace leaves
 
-#endif  // _LEAVES__MMAP_HPP
+#endif  // _LEAVES__IMMAP_HPP

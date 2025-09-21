@@ -40,7 +40,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
 
     // Check if the header is properly initialized
     BOOST_REQUIRE(db._header != nullptr);
-    BOOST_REQUIRE_EQUAL(std::string(db._header->signature), std::string(SIGNATURE));
+    BOOST_REQUIRE_EQUAL(std::string(db._header->signature), std::string(FSTORE_SIGNATURE));
     BOOST_REQUIRE_EQUAL(db._header->db_version, 0);
     BOOST_REQUIRE_EQUAL(db._header->db_count, 48);  // default db_count
     BOOST_REQUIRE_GE(db._header->file_size, db._header_size);
@@ -50,7 +50,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
     // Test reopening existing file
     DBFileStore db(dbFilePath.c_str());
     BOOST_REQUIRE(db._header != nullptr);
-    BOOST_REQUIRE_EQUAL(std::string(db._header->signature), std::string(SIGNATURE));
+    BOOST_REQUIRE_EQUAL(std::string(db._header->signature), std::string(FSTORE_SIGNATURE));
   }
 
   // Change the signature to test wrong filetype error
@@ -120,10 +120,10 @@ BOOST_AUTO_TEST_CASE(test_sanitize) {
 }
 
 BOOST_AUTO_TEST_CASE(test_signature_constants) {
-  // Test that SIGNATURE constant is correct
-  BOOST_CHECK_EQUAL(std::string(SIGNATURE), "larch-leaves");
-  BOOST_CHECK_GT(SIGNATURE_SIZE, 0);
-  BOOST_CHECK_GE(SIGNATURE_SIZE, sizeof(SIGNATURE));
+  // Test that FSTORE_SIGNATURE constant is correct
+  BOOST_CHECK_EQUAL(std::string(FSTORE_SIGNATURE), "larch-leaves");
+  BOOST_CHECK_GT(FSTORE_SIGNATURE_SIZE, 0);
+  BOOST_CHECK_GE(FSTORE_SIGNATURE_SIZE, sizeof(FSTORE_SIGNATURE));
 }
 
 BOOST_AUTO_TEST_CASE(test_file_header_structure) {
@@ -132,7 +132,7 @@ BOOST_AUTO_TEST_CASE(test_file_header_structure) {
   DBFileStore db(dbFilePath.c_str(), 10);  // Custom db_count
 
   // Verify FileHeader structure
-  BOOST_CHECK_EQUAL(std::string(db._header->signature), std::string(SIGNATURE));
+  BOOST_CHECK_EQUAL(std::string(db._header->signature), std::string(FSTORE_SIGNATURE));
   BOOST_CHECK_EQUAL(db._header->db_version, 0);
   BOOST_CHECK_EQUAL(db._header->db_count, 10);
   BOOST_CHECK_GT(db._header->file_size, 0);
@@ -166,7 +166,7 @@ BOOST_AUTO_TEST_CASE(test_dirty_processor_thread) {
   DBFileStore db(dbFilePath.c_str());
 
   // Test that the dirty processor thread is running
-  BOOST_CHECK(db.dirty_processor_thread.joinable());
+  BOOST_CHECK(db._dirty_processor_thread.joinable());
   
   // Test basic cache functionality
   BOOST_CHECK_GT(db._cache._capacity, 0);

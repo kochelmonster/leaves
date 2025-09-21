@@ -163,34 +163,34 @@ inline std::size_t hash_value(const _Offset<BaseType>& o) noexcept {
 }
 
 struct AreaSlice {
-  std::atomic<uint64_t> offset;
-  uint32_t size;
-  std::atomic<uint32_t> ref;
+  std::atomic<uint64_t> _offset;
+  uint32_t _size;
+  std::atomic<uint32_t> _ref;
 
   // Copy assignment operator needed because std::atomic isn't copyable by
   // default
   AreaSlice& operator=(const AreaSlice& other) {
-    offset.store(other.offset.load(std::memory_order_acquire),
+    _offset.store(other._offset.load(std::memory_order_acquire),
                  std::memory_order_release);
-    size = other.size;
-    ref.store(other.ref.load(std::memory_order_acquire),
+    _size = other._size;
+    _ref.store(other._ref.load(std::memory_order_acquire),
               std::memory_order_release);
     return *this;
   }
 
   AreaSlice(uint64_t offset_ = 0, uint32_t size_ = 0, uint32_t ref_ = 0)
-      : offset(offset_), size(size_), ref(ref_) {}
+      : _offset(offset_), _size(size_), _ref(ref_) {}
   AreaSlice(const AreaSlice& other)
-      : offset(other.offset.load(std::memory_order_acquire)),
-        size(other.size),
-        ref(other.ref.load(std::memory_order_acquire)) {}
+      : _offset(other._offset.load(std::memory_order_acquire)),
+        _size(other._size),
+        _ref(other._ref.load(std::memory_order_acquire)) {}
 
   // Helper methods for dirty bit (first bit of offset) - atomic
-  bool is_dirty() const { return offset.load(std::memory_order_acquire) & 1; }
+  bool is_dirty() const { return _offset.load(std::memory_order_acquire) & 1; }
 
   void set_dirty() {
-    uint64_t current = offset.load(std::memory_order_relaxed);
-    while (!offset.compare_exchange_weak(current, current | 1,
+    uint64_t current = _offset.load(std::memory_order_relaxed);
+    while (!_offset.compare_exchange_weak(current, current | 1,
                                          std::memory_order_release,
                                          std::memory_order_relaxed)) {
       // Retry if CAS failed
@@ -198,52 +198,52 @@ struct AreaSlice {
   }
 
   bool clear_dirty() {
-    uint64_t current = offset.load(std::memory_order_relaxed);
+    uint64_t current = _offset.load(std::memory_order_relaxed);
     uint64_t new_value;
     do {
       if (!(current & 1)) {
         return false;  // Already clean
       }
       new_value = current & ~1ULL;
-    } while (!offset.compare_exchange_weak(current, new_value,
+    } while (!_offset.compare_exchange_weak(current, new_value,
                                            std::memory_order_release,
                                            std::memory_order_relaxed));
     return true;  // Successfully cleared
   }
 
   uint64_t get_offset() const {
-    return offset.load(std::memory_order_acquire) & ~1ULL;
+    return _offset.load(std::memory_order_acquire) & ~1ULL;
   }
 
   void set_offset(uint64_t new_offset) {
-    uint64_t current = offset.load(std::memory_order_relaxed);
+    uint64_t current = _offset.load(std::memory_order_relaxed);
     uint64_t new_value;
     do {
       new_value = (current & 1) | (new_offset & ~1ULL);
-    } while (!offset.compare_exchange_weak(current, new_value,
+    } while (!_offset.compare_exchange_weak(current, new_value,
                                            std::memory_order_release,
                                            std::memory_order_relaxed));
   }
 
   uint32_t get_size() const {
-    return size;
+    return _size;
   }
 
   void set_size(uint32_t new_size) {
-    size = new_size;
+    _size = new_size;
   }
 
   // Reference counting methods - atomic
   uint32_t inc_ref() {
-    return ref.fetch_add(1, std::memory_order_acq_rel) + 1;
+    return _ref.fetch_add(1, std::memory_order_acq_rel) + 1;
   }
 
   uint32_t dec_ref() {
-    return ref.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    return _ref.fetch_sub(1, std::memory_order_acq_rel) - 1;
   }
 
   uint32_t get_ref() const {
-    return ref.load(std::memory_order_acquire);
+    return _ref.load(std::memory_order_acquire);
   }
 
   operator bool() const { return get_size(); }

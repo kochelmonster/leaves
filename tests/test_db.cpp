@@ -310,7 +310,7 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
 
     for (int i = 0; i < 10; i++) {
       auto slice = db->alloc_big(10 * K);
-      BOOST_CHECK_EQUAL(slice.size, 12 * K);
+      BOOST_CHECK_EQUAL(slice.get_size(), 12 * K);
       slices.push_back(slice);
 
       // one offset and one size item
@@ -405,7 +405,7 @@ struct TestStorage {
     return offset_t((const char*)p - (char*)&memory[0]).type(p.type);
   }
 
-  void make_dirty(block_ptr& block) { }
+  void make_dirty(block_ptr& block) {}
 
   AreaSlice get_area(uint64_t size) {
     auto result = areas.get(size, *this);
@@ -432,9 +432,9 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_page();
     if (i != AreaRegister::COUNT - 1)
-      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE);
+      BOOST_CHECK_EQUAL(slice.get_size(), storage.AREA_SIZE);
     else
-      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE / 2);
+      BOOST_CHECK_EQUAL(slice.get_size(), storage.AREA_SIZE / 2);
   }
   storage.db->rollback();
 
@@ -454,9 +454,9 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_page();
     if (i != AreaRegister::COUNT - 1)
-      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE);
+      BOOST_CHECK_EQUAL(slice.get_size(), storage.AREA_SIZE);
     else
-      BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE / 2);
+      BOOST_CHECK_EQUAL(slice.get_size(), storage.AREA_SIZE / 2);
   }
   storage.db->commit();
 
@@ -472,7 +472,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
   storage.db->start_transaction();
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
-    BOOST_CHECK_EQUAL(slice.size, storage.AREA_SIZE);
+    BOOST_CHECK_EQUAL(slice.get_size(), storage.AREA_SIZE);
   }
   storage.db->rollback();
 

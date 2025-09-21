@@ -1,0 +1,49 @@
+#ifndef _LEAVES_CURSOR_HPP
+#define _LEAVES_CURSOR_HPP
+
+#include "intern/_util.hpp"
+#include "intern/_cursor.hpp"
+
+namespace leaves {
+
+template <typename CursorImpl>
+class TCursor {
+ public:
+  template <typename DB>
+  TCursor(DB db) : _cursor(db) {}
+
+  tid_t txn_id() const { return _cursor.txn_id(); }
+
+  // return true if the cursor is on a valid position
+  bool is_valid() const { return _cursor.is_valid(); }
+
+  void find(const Slice& key) { _cursor.find(key); }
+
+  void first() { _cursor.first(); }
+
+  void last() { _cursor.last(); }
+
+  void next() { _cursor.next(); }
+
+  void prev() { _cursor.prev(); }
+
+  void value(const Slice& value) { _cursor.value(value); }
+
+  Slice value() const { return _cursor.value(); }
+
+  Slice key() const { return _cursor.key(); }
+
+  void remove() { _cursor.remove(); }
+
+  void prepare_commit() { _cursor.prepare_commit(); }
+
+  void commit() { _cursor.commit(); }
+
+  void rollback() { _cursor.rollback(); }
+
+ private:
+  CursorImpl _cursor;
+};
+}
+
+#endif // _LEAVES_CURSOR_HPP

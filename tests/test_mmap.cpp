@@ -42,7 +42,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE(db._memory != nullptr);
     BOOST_REQUIRE_EQUAL(db._memory->file_size, 4 * K);
     BOOST_REQUIRE_EQUAL(db._memory->db_version, 0);
-    BOOST_REQUIRE_EQUAL(db._memory->signature, SIGNATURE);
+    BOOST_REQUIRE_EQUAL(db._memory->signature, MMAP_SIGNATURE);
   }
 
   {
