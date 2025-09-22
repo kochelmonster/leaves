@@ -81,7 +81,8 @@
         "format": "cpp",
         "shared_mutex": "cpp",
         "stdfloat": "cpp",
-        "filesystem": "cpp"
+        "filesystem": "cpp",
+        "expected": "cpp"
     },
     "cmake.configureOnOpen": true,
     "C_Cpp.default.compilerPath": "/usr/bin/g++"

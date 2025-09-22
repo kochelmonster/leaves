@@ -88,6 +88,7 @@ struct _MemoryMapFile {
   typedef Traits_ Traits;
   typedef _MemoryMapFile<Traits_> MemoryMapFile;
   using block_ptr = typename Traits::ptr;
+  using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static const bool is_transactional = true;
@@ -141,7 +142,7 @@ struct _MemoryMapFile {
     uint16_t db_version;
     size_t file_size;
     Mutex file_lock;
-    AreaManager areas;
+    AreaPool area_pool;           // pool for both single and multi areas
     pid_type processes[MAX_PROCESSES];
     uint16_t db_count;
     DBEntry dbs[0];
@@ -151,6 +152,7 @@ struct _MemoryMapFile {
       strcpy(signature, MMAP_SIGNATURE);
       db_count = db_count_;
       db_version = 0;
+      area_pool.init();
       memset(processes, 0, sizeof(processes));
       memset(dbs, 0, sizeof(DBEntry) * db_count);
     }
@@ -165,8 +167,8 @@ struct _MemoryMapFile {
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
                  uint16_t db_count = 48) {
     _pid = current_pid();
-    init_dbfile(path, map_size, db_count);
     _dbs.resize(db_count);
+    init_dbfile(path, map_size, db_count);
   }
 
   ~_MemoryMapFile() {
@@ -234,10 +236,21 @@ struct _MemoryMapFile {
   void flush(bool async = true) { _region.flush(0, 0, async); }
 
   void sanitize() {
-    sanitize_processes();
+    if (sanitize_processes())
+      sanitize_dbs();
     std::scoped_lock lock(_memory->file_lock);
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);
+  }
+
+  void sanitize_dbs() {
+    std::scoped_lock lock(_memory->file_lock);
+    for (uint16_t i = 0; i < _memory->db_count; i++) {
+      if (_memory->dbs[i].offset) {
+        assert(_dbs[i].expired());
+        _DB(*this, _memory->dbs[i].offset, i).sanitize();
+      }
+    }
   }
 
   bool sanitize_processes() {
@@ -278,15 +291,47 @@ struct _MemoryMapFile {
     leaves::prefetch(mem, access);
   }
 
-  AreaSlice get_area(uint64_t size) {
-    auto result = _memory->areas.get(size, *this);
+  area_ptr alloc_single_area() {
+    auto result = _memory->area_pool.alloc_single_area(*this);
     if (!result) {
-      result.set_offset(_memory->file_size);
-      _memory->file_size = padding(_memory->file_size + size, AREA_SIZE);
-      result.set_size(_memory->file_size - result.get_offset());
+      // Extend storage with new area
+      offset_t new_offset = _memory->file_size;
+      _memory->file_size = _memory->file_size + AREA_SIZE;
       std::filesystem::resize_file(filename(), _memory->file_size);
+      
+      // Create Area in the new memory location
+      auto area = area_ptr(resolve(new_offset, WRITE));
+      area->init(new_offset, AREA_SIZE, 0);
+      return area;
     }
-    return result;
+    return result;  // Return Area* directly
+  }
+
+  area_ptr alloc_multi_area(uint64_t size) {
+    // Ensure size is multiple of AREA_SIZE
+    size = padding(size, AREA_SIZE);
+    
+    auto result = _memory->area_pool.alloc_multi_area(size, *this);
+    if (!result) {
+      // Extend storage with new area
+      offset_t new_offset = _memory->file_size;
+      _memory->file_size = _memory->file_size + size;
+      std::filesystem::resize_file(filename(), _memory->file_size);
+      
+      // Create Area in the new memory location
+      auto area = area_ptr(resolve(new_offset, WRITE));
+      area->init(new_offset, size, 0);
+      return area;
+    }
+    return result;  // Return Area* directly
+  }
+
+  void return_single_areas(AreaList& areas) {
+    _memory->area_pool.return_single_areas(areas, *this);
+  }
+
+  void return_multi_areas(AreaList& areas) {
+    _memory->area_pool.return_multi_areas(areas, *this);
   }
 
   void list_dbs(std::vector<std::string>& result) {
@@ -332,8 +377,11 @@ struct _MemoryMapFile {
       if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
         if (_dbs[i].use_count()) throw TransactionActive();
         DB tmp(*this, _memory->dbs[i].offset, i);
-        _memory->areas.merge(&tmp._header->areas, *this);
-        _memory->areas.merge(&tmp._header->big_areas, *this);
+        
+        // Merge the DB's area lists back into storage
+        _memory->area_pool.single_areas.move(tmp._header->single_areas, *this);
+        _memory->area_pool.multi_areas.move(tmp._header->multi_areas, *this);
+        
         _memory->dbs[i].offset = 0;
         flush();
         return;

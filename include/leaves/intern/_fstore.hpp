@@ -134,7 +134,7 @@ struct _FileOperations : CacheBase {
     uint16_t db_version;
     size_t file_size;
     Mutex file_lock;
-    AreaManager areas;
+    AreaPool area_pool;  // pool for both single and multi areas
     uint16_t db_count;
     DBEntry dbs[0];
 
@@ -143,6 +143,7 @@ struct _FileOperations : CacheBase {
       strcpy(signature, FSTORE_SIGNATURE);
       db_count = db_count_;
       db_version = 0;
+      area_pool.init();
       memset(dbs, 0, sizeof(DBEntry) * db_count);
     }
   };
@@ -227,6 +228,7 @@ struct _CacheStore : public Opers_ {
   typedef Traits_ Traits;
   typedef _CacheStore<Traits_, Opers_> Self;
   using block_ptr = typename Traits::ptr;
+  using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static const bool is_transactional = true;
   typedef Opers_ Operations;
@@ -388,22 +390,51 @@ struct _CacheStore : public Opers_ {
     _dirty_cv.notify_one();
   }
 
-  AreaSlice get_area(uint64_t size) {
-    // Ensure size is at least one area and aligned to AREA_SIZE
-    assert(size);
-    const uint64_t aligned = padding(size, AREA_SIZE);
-    auto result = _header->areas.get(aligned, *this);
+  area_ptr alloc_single_area() {
+    auto result = _header->area_pool.alloc_single_area(*this);
     if (!result) {
-      // Start each new area on an AREA_SIZE boundary
-      const uint64_t start = padding(_header->file_size, AREA_SIZE);
-      result.set_offset(start);
-      result.set_size(aligned);
-      _header->file_size = padding(start + aligned, AREA_SIZE);
+      // Extend storage with new area
+      const uint64_t start = _header->file_size;
+      _header->file_size = start + AREA_SIZE;
       resize(_header->file_size);
-      write(start, &result, sizeof(result));
       save_header();
+      
+      // Create Area in the new memory location
+      auto area = area_ptr(resolve(start, WRITE));
+      area->init(start, AREA_SIZE, 0);
+      return area;
     }
-    return result;
+    return result;  // Return Area* directly
+  }
+
+  area_ptr alloc_multi_area(uint64_t size) {
+    // Ensure size is multiple of AREA_SIZE
+    const uint64_t aligned = padding(size, AREA_SIZE);
+
+    auto result = _header->area_pool.alloc_multi_area(aligned, *this);
+    if (!result) {
+      // Extend storage with new area
+      const uint64_t start = _header->file_size;
+      _header->file_size = start + aligned;
+      resize(_header->file_size);
+      save_header();
+      
+      // Create Area in the new memory location
+      auto area = area_ptr(resolve(start, WRITE));
+      area->init(start, aligned, 0);
+      return area;
+    }
+    return result;  // Return Area* directly
+  }
+
+  void return_single_areas(AreaList& areas) {
+    _header->area_pool.return_single_areas(areas, *this);
+    save_header();
+  }
+
+  void return_multi_areas(AreaList& areas) {
+    _header->area_pool.return_multi_areas(areas, *this);
+    save_header();
   }
 
   void save_header() { write(0, _header, _header_size); }
@@ -491,8 +522,9 @@ struct _CacheStore : public Opers_ {
       if (_header->dbs[i].offset && !strcmp(_header->dbs[i].name, name)) {
         if (_dbs[i].use_count()) throw TransactionActive();
         DB tmp(*this, _header->dbs[i].offset, i);
-        _header->areas.merge(&tmp._header->areas, *this);
-        _header->areas.merge(&tmp._header->big_areas, *this);
+        // Merge the DB's area lists back into storage
+        _header->area_pool.single_areas.move(tmp._header->single_areas, *this);
+        _header->area_pool.multi_areas.move(tmp._header->multi_areas, *this);
         _header->dbs[i].offset = 0;
         flush();
         return;
@@ -536,8 +568,24 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
 
   void sanitize() {
     std::scoped_lock lock(_header->file_lock);
+    sanitize_dbs();
     if (std::filesystem::file_size(filename()) != _header->file_size)
       std::filesystem::resize_file(filename(), _header->file_size);
+  }
+
+  void sanitize_dbs() {
+    for (uint16_t i = 0; i < _header->db_count; i++) {
+      if (_header->dbs[i].offset) {
+        assert(_dbs[i].expired());
+        _DB(*this, _header->dbs[i].offset, i).sanitize();
+      }
+    }
+  }
+
+  // Compatibility method for tests
+  AreaSlice get_area(size_t size) {
+    auto area_ptr = alloc_multi_area(size);
+    return *area_ptr;  // Convert Area* to AreaSlice
   }
 };
 

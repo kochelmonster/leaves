@@ -48,11 +48,15 @@ struct TestStorage {
   using MemManager = typename leaves::_MemManager<TestTraits>;
 
   std::vector<char> memory;
+  AreaList single_areas;
+  AreaList multi_areas;
 
   TestStorage() {
     accept_tid = mark_tid = 0;
     memory.reserve(1024 * 1024);
     memory.resize(AREA_SIZE);
+    single_areas.init();
+    multi_areas.init();
     mm.init(sizeof(void*), AREA_SIZE);
     accept_tid = mark_tid = 1;
   }
@@ -79,10 +83,31 @@ struct TestStorage {
 
   void free(block_ptr p) { mm.free(p, *this); }
 
-  AreaSlice alloc_page() {
-    size_t old_size = memory.size();
-    memory.resize(old_size + AREA_SIZE);
-    return AreaSlice{old_size, AREA_SIZE};
+  AreaSlice alloc_single_area() {
+    auto result = single_areas.pop(*this);
+    if (!result) {
+      size_t old_size = memory.size();
+      memory.resize(old_size + AREA_SIZE);
+      AreaSlice new_area;
+      new_area.set_offset(old_size);
+      new_area.set_size(AREA_SIZE);
+      return new_area;
+    }
+    return *result;  // Convert Area* to AreaSlice
+  }
+
+  AreaSlice alloc_multi_area(uint64_t size) {
+    size = padding(size, AREA_SIZE);
+    auto result = multi_areas.find_and_remove(size, *this);
+    if (!result) {
+      size_t old_size = memory.size();
+      memory.resize(old_size + size);
+      AreaSlice new_area;
+      new_area.set_offset(old_size);
+      new_area.set_size(size);
+      return new_area;
+    }
+    return *result;  // Convert Area* to AreaSlice
   }
 
   template <typename T>
@@ -96,7 +121,6 @@ struct TestStorage {
 
   void make_dirty(block_ptr& block) {}
 };
-
 
 struct TestTraitsBig : public TestTraits {
   static constexpr size_t AREA_SIZE = 1 * M;
@@ -201,54 +225,60 @@ BOOST_AUTO_TEST_CASE(test_page_border) {
   BOOST_CHECK(result < storage.mm.left_over_start);
 }
 
-BOOST_AUTO_TEST_CASE(test_areamanager) {
+BOOST_AUTO_TEST_CASE(test_arealist) {
   TestStorage storage;
-  AreaManager am = {.start = 0, .end = 0};
+  AreaList areas;
+  areas.init();
 
-  typedef TestTraits::Pointer<AreaRegister> ptr;
+  // Test empty list
+  BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
+  auto result = areas.pop(storage);
+  BOOST_CHECK(!result);
 
-  AreaSlice as1 = storage.alloc_page();
-  am.put(as1, storage);
-  BOOST_CHECK_EQUAL(am.start, as1.get_offset());
-  BOOST_CHECK_EQUAL(am.end, as1.get_offset());
-  int count = AreaRegister::COUNT;
+  // Test push and pop single area
+  AreaSlice area1 = storage.alloc_single_area();
+  areas.push(area1, storage);
+  BOOST_CHECK_EQUAL(areas.get_head(), area1.get_offset());
 
-  // Test AreaManager::put
-  for (int i = 1; i < AreaRegister::COUNT; i++) {
-    AreaSlice as = storage.alloc_page();
-    am.put(as, storage);
-    ptr ar = storage.resolve(am.start);
-    BOOST_CHECK_EQUAL(ar->last_index, i);
-  }
+  auto popped = areas.pop(storage);
+  BOOST_CHECK(popped);
+  BOOST_CHECK_EQUAL(popped->get_offset(), area1.get_offset());
+  BOOST_CHECK_EQUAL(popped->get_size(), area1.get_size());
+  BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
 
-  AreaSlice as2 = storage.alloc_page();
-  am.put(as2, storage);
-  ptr ar = storage.resolve(am.start);
-  BOOST_CHECK_EQUAL(am.start, as1.get_offset());
-  BOOST_CHECK_EQUAL(am.end, as2.get_offset());
+  // Test multiple areas
+  AreaSlice area2 = storage.alloc_single_area();
+  AreaSlice area3 = storage.alloc_single_area();
 
-  AreaManager am1 = {.start = 0, .end = 0};
-  AreaSlice as3 = storage.alloc_page();
-  am1.put(as3, storage);
-  BOOST_CHECK_EQUAL(am1.start, as3.get_offset());
-  BOOST_CHECK_EQUAL(am1.end, as3.get_offset());
+  areas.push(area2, storage);
+  areas.push(area3, storage);
 
-  am1.merge(&am, storage);
-  BOOST_CHECK_EQUAL(am1.start, as3.get_offset());
-  BOOST_CHECK_EQUAL(am1.end, am.end);
+  // Should pop in LIFO order
+  auto pop1 = areas.pop(storage);
+  BOOST_CHECK_EQUAL(pop1->get_offset(), area3.get_offset());
 
-  AreaSlice r = am1.get(AREA_SIZE, storage);
-  BOOST_CHECK_EQUAL(r.get_offset(), as3.get_offset());
-  BOOST_CHECK_EQUAL(am1.start, am.start);
+  auto pop2 = areas.pop(storage);
+  BOOST_CHECK_EQUAL(pop2->get_offset(), area2.get_offset());
 
-  ar = storage.resolve(am1.start);
-  int li = ar->last_index;
-  r = am1.get(AREA_SIZE, storage);
-  BOOST_CHECK_EQUAL(ar->last_index, li - 1);
-  BOOST_CHECK_EQUAL(ar->areas[ar->last_index + 1].get_offset(), r.get_offset());
+  BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
 
-  r = am1.get(2 * AREA_SIZE, storage);
-  BOOST_CHECK_EQUAL(r.get_offset(), 0);
+  // Test find_and_remove with different sizes
+  AreaSlice small_area{1000, AREA_SIZE};
+  AreaSlice big_area{2000, 2 * AREA_SIZE};
+
+  areas.push(small_area, storage);
+  areas.push(big_area, storage);
+
+  // Find exact size match
+  auto found = areas.find_and_remove(2 * AREA_SIZE, storage);
+  BOOST_CHECK(found);
+  BOOST_CHECK_EQUAL(found->get_offset(), big_area.get_offset());
+
+  // Should still have small area
+
+  auto remaining = areas.pop(storage);
+  BOOST_CHECK(remaining);
+  BOOST_CHECK_EQUAL(remaining->get_offset(), small_area.get_offset());
 }
 
 #if 0

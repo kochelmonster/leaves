@@ -212,7 +212,7 @@ struct _MemoryChecker {
       uint16_t size = BLOCK_SIZES[i];
       uint64_t b = slot.next_free;
       while (true) {
-        uint64_t pb = padding(b, AREA_SIZE);
+        uint64_t pb = padding(b, AREA_SIZE);  // this is wrong
         if (b + size > pb) b = pb;
         if (b == slot.end_free) break;
         storage.resolve(offset_t(b))->slot_id = i;

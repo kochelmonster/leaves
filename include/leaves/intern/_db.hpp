@@ -12,12 +12,6 @@
 
 namespace leaves {
 
-struct AreaPointer {
-  // position of the last allocated area in the area register
-  offset_t olast;  // the offset of the last area register
-  int16_t ilast;   // the index inside the register
-};
-
 template <typename Traits_>
 struct _TransactionBase : public Traits_::BlockHeader {
   typedef Traits_ Traits;
@@ -35,10 +29,6 @@ struct _TransactionBase : public Traits_::BlockHeader {
 
   // pointer ot the next higher transaction
   offset_t next_txn;
-
-  // The last used areas
-  AreaPointer last_area;
-  AreaPointer last_big_area;
 
   // count of cursors accessing this transaction
   uint32_t count;
@@ -128,11 +118,13 @@ struct _DB {
       "Size of _Transaction must be equal to size of _TransactionBase");
 
   struct Header {
-    offset_t read_txn;
-    offset_t prepared_txn;
+    offset_t read_txn;             // the current read transaction
+    offset_t prepared_txn;         // the transaction being prepared for commit
     Mutex txn_lock;
-    AreaManager areas;      // areas for normal allocation
-    AreaManager big_areas;  // areas only for big allocation
+    AreaList single_areas;         // single AREA_SIZE areas
+    AreaList multi_areas;          // multi-AREA_SIZE areas
+    AreaList pending_single_areas; // single areas pending commit/rollback
+    AreaList pending_multi_areas;  // multi areas pending commit/rollback
   };
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
@@ -162,22 +154,22 @@ struct _DB {
   }
 
   void init(offset_t* header) {
-    auto area = _storage.get_area(Traits::AREA_SIZE);
+    auto area_ptr = _storage.alloc_single_area();
 
-    *header = area.get_offset() + sizeof(AreaRegister);
+    *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(*header);
     memset((void*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex;
-    _header->areas.put(area, *this);
+    _header->single_areas.init();
+    _header->multi_areas.init();
+    _header->pending_single_areas.init();
+    _header->pending_multi_areas.init();
 
-    assert(*header % MAX_BLOCK_SIZE == 0);
     uint16_t header_size = padding(sizeof(Header), MIN_BLOCK_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve(_header->read_txn);
     memset((void*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
-    txn->last_area.olast = _header->areas.start;
-    txn->last_area.ilast = 0;
     txn->txn_id = 1;
     txn->slot_id = Transaction::SLOT_ID;
     txn->root = txn->mem_root = 0;
@@ -185,7 +177,7 @@ struct _DB {
     txn->count = 0;
     txn->start_txn = _header->read_txn;
     txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
-                          area.end());
+                          area_ptr->end());
     _wtxn.txn_id = 0;
     flush();
   }
@@ -323,29 +315,11 @@ struct _DB {
       assert(_mem_cursor.is_valid());
       _mem_cursor.remove();
     } else {
-      if (!_wtxn.last_big_area.olast) {
-        if (!_header->big_areas.start) {
-          std::scoped_lock lock(_storage.file_lock());
-          auto area =
-              _storage.get_area(padding(size + AreaRegister::SIZE, AREA_SIZE));
-          _header->big_areas.put(area, *this);
-          flush();
-        }
-        _wtxn.last_big_area.olast = _header->big_areas.start;
-        _wtxn.last_big_area.ilast = -1;
-      }
+      // allocate new multi-area
       uint64_t psize = padding(size, AREA_SIZE);
-      while (true) {
-        auto slice = alloc_area(psize, _header->big_areas, _wtxn.last_big_area);
-        if (slice.get_size() < size) {
-          // area too small left over area block
-          _add_to_bigmem(slice.get_offset(), slice.get_size());
-          continue;
-        }
-        found_size = slice.get_size();
-        found_offset = slice.get_offset();
-        break;
-      }
+      auto slice = alloc_multi_area(psize);
+      found_size = slice.get_size();
+      found_offset = slice.get_offset();
     }
 
     uint32_t delta = found_size - size;
@@ -394,38 +368,26 @@ struct _DB {
 
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
-  AreaSlice alloc_page() {
-    return alloc_area(AREA_SIZE, _header->areas, _wtxn.last_area);
-  }
-
-  AreaSlice alloc_area(uint64_t min_size, AreaManager& manager,
-                       AreaPointer& pointer) {
+  AreaSlice alloc_single_area() {
     assert(_wtxn.txn_id);
-    auto result = get_next_area(pointer);
-    if (!result) {
-      assert(pointer.olast == manager.end);
-      std::scoped_lock lock(_storage.file_lock());
-      auto area = _storage.get_area(min_size);
-      manager.put(area, _storage);
-      flush();
-      result = get_next_area(pointer);
-    }
-    assert(result);
-    return result;
+    std::scoped_lock lock(_storage.file_lock());
+    
+    auto area_ptr = _storage.alloc_single_area();
+    _header->pending_single_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
+    flush();
+    
+    return *area_ptr;  // Convert Area* to AreaSlice for return
   }
 
-  AreaSlice get_next_area(AreaPointer& pointer) {
-    typedef typename Traits::template Pointer<AreaRegister> ptr;
-    ptr ar = resolve(pointer.olast);
-    if (ar->last_index > pointer.ilast) return ar->areas[++pointer.ilast];
-    if (ar->next) {
-      pointer.olast = ar->next;
-      pointer.ilast = 0;
-      ar = resolve(pointer.olast);
-      return ar->areas[0];
-    }
-
-    return AreaSlice{0, 0};
+  AreaSlice alloc_multi_area(uint64_t size) {
+    assert(_wtxn.txn_id);
+    std::scoped_lock lock(_storage.file_lock());
+    
+    auto area_ptr = _storage.alloc_multi_area(size);
+    _header->pending_multi_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
+    flush();
+    
+    return *area_ptr;  // Convert Area* to AreaSlice for return
   }
 
   template <typename T>
@@ -489,14 +451,18 @@ struct _DB {
   }
 
   void rollback() {
+    // Return pending areas to storage
+    return_pending_areas();
+    
     _header->prepared_txn = _header->read_txn;
     flush();
     end_transaction();
   }
 
   void prepare_commit() {
-    if (!_wtxn.txn_id) return;
-
+    // No transaction active or already prepared
+    if (!_wtxn.txn_id || _header->prepared_txn != _header->read_txn) return;
+       
     txn_ptr prepared = _wtxn.clone(*this);
     _header->prepared_txn = resolve(prepared);
 
@@ -511,6 +477,11 @@ struct _DB {
 
   void commit() {
     prepare_commit();
+    
+    // Now atomically move pending areas to committed areas
+    _header->single_areas.move(_header->pending_single_areas, _storage);
+    _header->multi_areas.move(_header->pending_multi_areas, _storage);
+    
     _header->read_txn = _header->prepared_txn;
     flush();
     end_transaction();
@@ -578,6 +549,20 @@ struct _DB {
       offset_t offset = resolve(txn);
       return false;
     });
+  }
+
+  void return_pending_areas() {
+    // Return pending areas to storage
+    _storage.return_single_areas(_header->pending_single_areas);
+    _storage.return_multi_areas(_header->pending_multi_areas);
+  }
+
+  void sanitize() {
+    // Return any pending areas from incomplete transactions back to storage
+    if (_header->prepared_txn != _header->read_txn)
+      commit();
+    return_pending_areas();
+    flush();
   }
 
   const db_type& dump_storage() const { return *this; }

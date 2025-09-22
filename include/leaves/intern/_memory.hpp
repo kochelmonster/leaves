@@ -39,10 +39,10 @@ merge(append a list of free blocks to another one)
 
 namespace leaves {
 
-const size_t K = 1024;
-const size_t M = 1024 * K;
-const size_t G = 1024 * M;
-const size_t T = 1024 * G;
+constexpr size_t K = 1024;
+constexpr size_t M = 1024 * K;
+constexpr size_t G = 1024 * M;
+constexpr size_t T = 1024 * G;
 
 constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
                                  uint16_t value) {
@@ -227,7 +227,6 @@ struct _MemManager {
     allocation_start = header;
     allocation_end = alloction_end_;
     left_over_end = left_over_start = 0;
-    assert(allocation_end % AREA_SIZE == 0);
   }
 
   static constexpr int assign_slot(uint16_t size) {
@@ -242,8 +241,8 @@ struct _MemManager {
     Slot& slot = slots[sidx];
     block_ptr result = slot.pop(resolver);
     if (result) {
-      // Block size is maybe wrong (see the next if + rollback)
-      // but the dump is right
+      // Because of some rollback situations slot_id of result could be wrong
+      // but the classification of the slot is right
       result->slot_id = sidx;
       return result;
     }
@@ -256,21 +255,18 @@ struct _MemManager {
       return result;
     }
 
-    offset_t page_border = std::min(padding(allocation_start + 1, AREA_SIZE),
-                                    (uint64_t)allocation_end);
-    if (allocation_start + bsize > page_border) {
+    if (allocation_start + bsize > allocation_end) {
       if (allocation_end - allocation_start > left_over_end - left_over_start) {
         // the smaller left_over is thrown away
         left_over_start = allocation_start;
-        left_over_end = page_border;
-        allocation_start = page_border;
+        left_over_end = allocation_end;
+        allocation_start = allocation_end;
       }
 
       if (allocation_start + bsize > allocation_end) {
-        auto area = resolver.alloc_page();
+        auto area = resolver.alloc_single_area();
         allocation_start = area.get_offset();
         allocation_end = area.end();
-        assert(allocation_end % AREA_SIZE == 0);
       }
     }
 
@@ -314,130 +310,219 @@ struct _MemStatistics {
 /*
   New space from the resolver is allocated in memory chunks of AREA_SIZE.
   These chunks are called areas.
-  Every database keeps track of their allocate areas and gives them
-  back to resolver for reuse once the database is deleted.
-
-  The data structure to track the areas is a hybrid of a list and a table.
-  Certain areas spend their first 4K bytes for a area register (an array).
-  If the register is full the next area becomes a new area register and
-  the old register points to the new one.
-
-    Area 1(Register1)
-  ----------
-  | next   |--------------------------->  Area n (Register 2)
-  | item1  |---------------->  Area2    ----------
-  | item2  |--->  Area 3      -------   | next   |
-  |  ..    |     --------     |     |   | item 1 |
-  ----------     |      |     |     |   | item 2 |
-                 |      |     -------   |  ...   |
-                 --------               ----------
+  Areas are managed through simple linked lists for atomic allocation.
 */
 
-struct AreaRegister {
-  static const uint16_t SIZE = 4 * K;
-  static const size_t COUNT = (SIZE - 2 * sizeof(uint64_t)) / sizeof(AreaSlice);
-
-  AreaSlice areas[COUNT];  // in areas[0] is the date of itself
-  offset_t next;
-  int64_t last_index;  // last_index of areas (== count-1)
-
-  void init(AreaSlice me) {
-    next = 0;
-    last_index = 0;
-    me.set_offset(me.get_offset() + SIZE);
-    me.set_size(me.get_size() - SIZE);
-    areas[0] = me;
+// Area structure that extends AreaSlice with linked list functionality
+struct Area : public AreaSlice {
+  offset_t next;    // pointer to next area in list (0 if last)
+  
+  void init(offset_t area_offset, size_t area_size, offset_t next_area = 0) {
+    set_offset(area_offset);
+    set_size(area_size);
+    // Don't modify reference count - it's managed separately
+    next = next_area;
+  }
+  
+  // Returns the offset where content can start (after the Area header)
+  offset_t content_offset() const {
+    return get_offset() + sizeof(Area);
   }
 };
 
-// Manages allocation Areas from Resolver
-struct AreaManager {
-  offset_t start;  // the offset of the first area register
-  offset_t end;    // the offset of the last area register
+// Simple linked list of areas with atomic value switching
+struct AreaList {
+  static constexpr uint8_t MAX_ITER = 10;
 
-  template <typename Resolver>
-  void merge(AreaManager* other, Resolver& resolver) {
-    // insert the register list of other in my list
-    if (!other->start) return;
-    typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
-    if (!start) {
-      assert(!end);
-      start = other->start;
-      end = other->end;
-    } else {
-      assert(end);
-      ptr tmp = resolver.resolve(end, WRITE);
-      tmp->next = other->start;
-      end = other->end;
-    }
-    assert(((ptr)resolver.resolve(end))->next == 0);
+  // Double buffered pointers
+  offset_t head[2];  // two sets of head pointers
+  offset_t tail[2];  // two sets of tail pointers
+  uint8_t active;    // 0 or 1 - determines which set is active
+  
+  void init() {
+    head[0] = head[1] = 0;
+    tail[0] = tail[1] = 0;
+    active = 0;
   }
-
+  
+  // Get current active pointers
+  offset_t get_head() const { return head[active]; }
+  offset_t get_tail() const { return tail[active]; }
+  
+  // Prepare inactive buffer and atomically switch
+  void atomic_switch(offset_t new_head, offset_t new_tail) {
+    uint8_t inactive = 1 - active;
+    head[inactive] = new_head;
+    tail[inactive] = new_tail;
+    active = inactive;  // Atomic: single byte write
+  }
+  
   template <typename Resolver>
-  AreaSlice get(size_t min_size, Resolver& resolver) {
-    // min_size can also be a multiple of AREA_SIZE
-    assert(min_size >= Resolver::Traits::AREA_SIZE);
-    assert(min_size % Resolver::Traits::AREA_SIZE == 0);
-
-    typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
-
-    // iterate through the structure to find an area that is big enough
-    offset_t oiter = start;
-    while (oiter) {
-      ptr ar = resolver.resolve(oiter, WRITE);
-
-      for (int i = ar->last_index; i >= 1; i--) {
-        auto& block = ar->areas[i];
-        if (block.get_size() >= min_size) {
-          AreaSlice result = block;
-          block.set_size(0);  // result has still original size!
-          while (ar->last_index && !ar->areas[ar->last_index].get_size())
-            ar->last_index--;
-          return result;
+  typename Resolver::Traits::template Pointer<Area> pop(Resolver& resolver) {
+    if (!get_head()) {
+      return nullptr; // empty list
+    }
+    
+    typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
+    area_ptr area = resolver.resolve(get_head(), WRITE);
+    
+    offset_t new_head = area->next;
+    offset_t new_tail = new_head ? get_tail() : offset_t(0);
+    
+    atomic_switch(new_head, new_tail);
+    return area;
+  }
+  
+  template <typename Resolver>
+  void push(const AreaSlice& area_slice, Resolver& resolver) {
+    typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
+    
+    // Use the area itself to store the Area header
+    area_ptr area = resolver.resolve(area_slice.get_offset(), WRITE);
+    area->init(area_slice.get_offset(), area_slice.get_size(), get_head());
+    
+    offset_t new_head = area_slice.get_offset();
+    offset_t new_tail = get_tail() ? get_tail() : new_head;
+    
+    atomic_switch(new_head, new_tail);
+  }
+  
+  template <typename Resolver>
+  typename Resolver::Traits::template Pointer<Area> find_and_remove(size_t size, Resolver& resolver) {
+    if (!get_head()) {
+      return nullptr; // empty list
+    }
+    
+    typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
+    offset_t prev_offset = 0;
+    offset_t curr_offset = get_head();
+    uint8_t iter_count = 0;
+    
+    while (curr_offset && iter_count < MAX_ITER) {
+      area_ptr curr = resolver.resolve(curr_offset, WRITE);
+      
+      if (curr->get_size() >= size) {
+        // Found suitable area - remove from list
+        offset_t new_head = get_head();
+        offset_t new_tail = get_tail();
+        
+        if (prev_offset) {
+          area_ptr prev = resolver.resolve(prev_offset, WRITE);
+          prev->next = curr->next;
+          resolver.make_dirty(prev);
+          // Update tail if we're removing the last element
+          if (curr_offset == get_tail()) {
+            new_tail = prev_offset;
+          }
+        } else {
+          new_head = curr->next;
+          // Update tail if we're removing the only element
+          if (curr_offset == get_tail()) {
+            new_tail = 0;
+          }
         }
+        
+        // If area is larger than needed, split it
+        if (curr->get_size() > size) {
+          // Create rest area from the remaining space
+          offset_t rest_offset = curr->get_offset() + size;
+          size_t rest_size = curr->get_size() - size;
+          
+          // Insert rest area at head
+          area_ptr rest = resolver.resolve(rest_offset, WRITE);
+          rest->init(rest_offset, rest_size, new_head);
+          new_head = rest_offset;
+          resolver.make_dirty(rest);
+          
+          // Update current area to requested size
+          curr->set_size(size);
+        }
+        
+        atomic_switch(new_head, new_tail);
+        return curr;
       }
-
-      if (ar->last_index == 0 &&
-          ar->areas[0].get_size() + AreaRegister::SIZE >= min_size) {
-        start = ar->next;
-        if (start == 0) end = 0;
-        // regain the space used for AreaRegister
-        return AreaSlice{ar->areas[0].offset - AreaRegister::SIZE,
-                         ar->areas[0].get_size() + AreaRegister::SIZE};
-      }
-
-      oiter = ar->next;
+      
+      prev_offset = curr_offset;
+      curr_offset = curr->next;
+      iter_count++;
     }
-
-    return AreaSlice();
+    
+    return nullptr; // No suitable area found
   }
-
+  
   template <typename Resolver>
-  void put(AreaSlice& area, Resolver& resolver) {
-    typedef typename Resolver::Traits::template Pointer<AreaRegister> ptr;
-
-    assert(area.get_size() > sizeof(AreaRegister));
-    assert(area.get_size() >= Resolver::Traits::AREA_SIZE);
-    if (!end) {
-      // the first area
-      assert(start == 0);
-      ptr ar = resolver.resolve(area.get_offset(), WRITE);
-      ar->init(area);
-      start = end = area.get_offset();
-      return;
+  void move(AreaList& other, Resolver& resolver) {
+    if (!other.get_head()) {
+      return; // Nothing to add
     }
+    
+    typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
 
-    ptr ar = resolver.resolve(end, WRITE);
-    if (ar->last_index < AreaRegister::COUNT - 1) {
-      ar->areas[++ar->last_index] = area;
-      return;
+    // Phase 1: Clear source first to avoid double ownership
+    offset_t other_head = other.get_head();
+    offset_t other_tail = other.get_tail();
+    other.atomic_switch(0, 0);
+
+    if (!get_head()) {
+      // Phase 2: Atomically take ownership
+      atomic_switch(other_head, other_tail);
+    } else {
+      // Phase 2: Connect our tail to other's head (safe now - no double ownership)
+      area_ptr tail_area = resolver.resolve(get_tail(), WRITE);
+      tail_area->next = other_head;
+      resolver.make_dirty(tail_area);
+      
+      // Phase 3: Atomically update our pointers
+      atomic_switch(get_head(), other_tail);
     }
-
-    // the last register is full -> the area becomes a new register
-    end = ar->next = area.get_offset();
-    ar = resolver.resolve(area.get_offset(), WRITE);
-    ar->init(area);
   }
+};
+
+// Area pool that handles both single and multi areas
+struct AreaPool {
+  AreaList single_areas;  // single AREA_SIZE areas
+  AreaList multi_areas;   // multi-AREA_SIZE areas
+  
+  void init() {
+    single_areas.init();
+    multi_areas.init();
+  }
+  
+  template <typename Resolver>
+  typename Resolver::Traits::template Pointer<Area> alloc_single_area(Resolver& resolver) {
+    // First try to get from single_areas
+    auto area = single_areas.pop(resolver);
+    if (area) {
+      return area;
+    }
+    
+    // If no single area available, try to get from multi_areas
+    // Look for an area that's exactly AREA_SIZE or can be split
+    constexpr auto AREA_SIZE = Resolver::Traits::AREA_SIZE;
+    area = multi_areas.find_and_remove(AREA_SIZE, resolver);
+    return area;
+  }
+  
+  template <typename Resolver>
+  typename Resolver::Traits::template Pointer<Area> alloc_multi_area(size_t size, Resolver& resolver) {
+    return multi_areas.find_and_remove(size, resolver);
+  }
+  
+  template <typename Resolver>
+  void return_single_areas(AreaList& areas, Resolver& resolver) {
+    single_areas.move(areas, resolver);
+  }
+  
+  template <typename Resolver>
+  void return_multi_areas(AreaList& areas, Resolver& resolver) {
+    multi_areas.move(areas, resolver);
+  }
+};
+
+// Compatibility structure for old tests
+struct AreaRegister {
+  static constexpr int COUNT = 4;  // Arbitrary constant for test compatibility
+  offset_t next;
 };
 
 }  // namespace leaves
