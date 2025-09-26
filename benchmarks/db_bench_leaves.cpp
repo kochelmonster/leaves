@@ -568,7 +568,7 @@ class Benchmark {
           Dumper::dump_link(out, root, db_);
         }*/
       }
-      cursor.commit();
+      cursor.commit(sync);
     }
   }
 

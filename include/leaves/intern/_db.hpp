@@ -413,10 +413,12 @@ struct _DB {
 
   bool transaction_active() const { return _wtxn.txn_id != 0; }
 
-  bool start_transaction(bool wait = false) {
+  // Start a write transaction. If nonblocking is true, this will return false
+  // immediately when the txn_lock cannot be acquired.
+  bool start_transaction(bool nonblocking = false) {
     if (_wtxn.txn_id) return false;
 
-    if (!wait)
+    if (!nonblocking)
       _header->txn_lock.lock();
     else if (!_header->txn_lock.try_lock())
       return false;
@@ -459,7 +461,7 @@ struct _DB {
     end_transaction();
   }
 
-  void prepare_commit() {
+  void prepare_commit(bool sync = false) {
     // No transaction active or already prepared
     if (!_wtxn.txn_id || _header->prepared_txn != _header->read_txn) return;
        
@@ -472,18 +474,18 @@ struct _DB {
     make_dirty(active);
     make_dirty(prepared);
 
-    flush();
+    flush(!sync);
   }
 
-  void commit() {
-    prepare_commit();
+  void commit(bool sync = false) {
+    prepare_commit(sync);
     
     // Now atomically move pending areas to committed areas
     _header->single_areas.move(_header->pending_single_areas, _storage);
     _header->multi_areas.move(_header->pending_multi_areas, _storage);
     
     _header->read_txn = _header->prepared_txn;
-    flush();
+    flush(!sync);
     end_transaction();
   }
 

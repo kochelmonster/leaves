@@ -35,9 +35,9 @@ class TCursor {
 
   void remove() { _cursor.remove(); }
 
-  void prepare_commit() { _cursor.prepare_commit(); }
+  void prepare_commit(bool sync = false) { _cursor.prepare_commit(sync); }
 
-  void commit() { _cursor.commit(); }
+  void commit(bool sync = false) { _cursor.commit(sync); }
 
   void rollback() { _cursor.rollback(); }
 

@@ -424,13 +424,13 @@ struct _Cursor {
     _Deleter(&stack.back()).exec();
   }
 
-  void prepare_commit() {
-    if (Traits::transactional && transaction_active) _db->prepare_commit();
+  void prepare_commit(bool sync = false) {
+    if (Traits::transactional && transaction_active) _db->prepare_commit(sync);
   }
 
-  void commit() {
+  void commit(bool sync = false) {
     if (Traits::transactional && transaction_active) {
-      _db->commit();
+      _db->commit(sync);
       transaction_active = false;
       auto root_ = root;
       update();

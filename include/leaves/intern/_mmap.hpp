@@ -5,7 +5,7 @@
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
-#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/process/v2/pid.hpp>
 #include <cstdint>
 #include <filesystem>
@@ -22,7 +22,6 @@
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
 using boost::interprocess::file_mapping;
-using boost::interprocess::interprocess_mutex;
 using boost::interprocess::mapped_region;
 using boost::interprocess::open_only;
 using boost::interprocess::open_only_t;
@@ -97,24 +96,21 @@ struct _MemoryMapFile {
   typedef std::weak_ptr<DB> wdb_ptr;
 
   struct Mutex {
-    interprocess_mutex mutex;
-    pid_type owner;
+    // Backward-compatible wrapper exposing a RobustMutex as `mutex`
+    leaves::RobustMutex mutex;
+    pid_type owner{0};
+
+    Mutex(const char* name = "") : mutex(name) {}
 
     void recover() {
-      auto ap = all_pids();
-      for (const auto& pid : ap) {
-        if (pid == owner) return;
-      }
-      // locker does not exist anymore
+      mutex.recover();
       owner = 0;
-      while (!mutex.try_lock()) mutex.unlock();
-      mutex.unlock();  // one more unlock
     }
 
+    // lock with optional timeout (compat for tests)
     template <typename Time = std::chrono::seconds>
     void lock(Time t = Time(10)) {
       while (!mutex.try_lock_for(t)) recover();
-
       owner = current_pid();
     }
 
@@ -142,18 +138,22 @@ struct _MemoryMapFile {
     uint16_t db_version;
     size_t file_size;
     Mutex file_lock;
-    AreaPool area_pool;           // pool for both single and multi areas
+    AreaPool area_pool;  // pool for both single and multi areas
     pid_type processes[MAX_PROCESSES];
     uint16_t db_count;
     DBEntry dbs[0];
 
-    FileHeader(uint16_t db_count_) {
-      memset(this, 0, sizeof(FileHeader));
+    FileHeader(uint16_t db_count_, const char* name)
+        : db_version(0),
+          file_size(0),
+          file_lock(name),
+          processes{},
+          db_count(db_count_) {
+      // Set signature and initialize pools/arrays
+      memset(signature, 0, sizeof(signature));
       strcpy(signature, MMAP_SIGNATURE);
-      db_count = db_count_;
-      db_version = 0;
       area_pool.init();
-      memset(processes, 0, sizeof(processes));
+      // processes[] already zero-initialized via aggregate init
       memset(dbs, 0, sizeof(DBEntry) * db_count);
     }
   };
@@ -190,9 +190,8 @@ struct _MemoryMapFile {
       std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
-      _memory = new (_region.get_address()) FileHeader(db_count);
+      _memory = new (_region.get_address()) FileHeader(db_count, path);
       _memory->file_size = fsize;
-      new (&_memory->file_lock) Mutex;
       _region.flush();
     } else {
       std::ifstream fin(path);
@@ -214,7 +213,9 @@ struct _MemoryMapFile {
   }
 
   void set_pid() {
-    std::scoped_lock lock(_memory->file_lock);
+    boost::interprocess::file_lock flock(filename());
+    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+        flock_guard(flock);
     for (int i = 0; i < MAX_PROCESSES; i++) {
       if (!_memory->processes[i]) {
         _memory->processes[i] = _pid;
@@ -225,6 +226,9 @@ struct _MemoryMapFile {
   }
 
   void remove_pid() {
+    boost::interprocess::file_lock flock(filename());
+    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+        flock_guard(flock);
     for (int i = 0; i < MAX_PROCESSES; i++) {
       if (_memory->processes[i] == _pid) {
         _memory->processes[i] = 0;
@@ -236,15 +240,20 @@ struct _MemoryMapFile {
   void flush(bool async = true) { _region.flush(0, 0, async); }
 
   void sanitize() {
-    if (sanitize_processes())
-      sanitize_dbs();
-    std::scoped_lock lock(_memory->file_lock);
+    // Coordinate sanitization across processes with an OS file lock that is
+    // automatically released if a process crashes.
+    boost::interprocess::file_lock flock(filename());
+    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+        flock_guard(flock);
+
+    if (sanitize_processes()) sanitize_dbs();
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);
+    
+    assert(_region.get_size() >= _memory->file_size);
   }
 
   void sanitize_dbs() {
-    std::scoped_lock lock(_memory->file_lock);
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset) {
         assert(_dbs[i].expired());
@@ -281,7 +290,7 @@ struct _MemoryMapFile {
     return offset_t((uint64_t)p - (uint64_t)_memory).type(p.type);
   }
 
-  void make_dirty(block_ptr& block) { }
+  void make_dirty(block_ptr& block) {}
 
   void prefetch(offset_t offset, Access access = READ) const {
     prefetch((char*)_memory + (uint64_t)offset, access);
@@ -295,10 +304,15 @@ struct _MemoryMapFile {
     auto result = _memory->area_pool.alloc_single_area(*this);
     if (!result) {
       // Extend storage with new area
+      boost::interprocess::file_lock flock(filename());
+      boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+          flock_guard(flock);
+
       offset_t new_offset = _memory->file_size;
       _memory->file_size = _memory->file_size + AREA_SIZE;
       std::filesystem::resize_file(filename(), _memory->file_size);
-      
+      assert(_memory->file_size <= _region.get_size());
+
       // Create Area in the new memory location
       auto area = area_ptr(resolve(new_offset, WRITE));
       area->init(new_offset, AREA_SIZE, 0);
@@ -310,14 +324,19 @@ struct _MemoryMapFile {
   area_ptr alloc_multi_area(uint64_t size) {
     // Ensure size is multiple of AREA_SIZE
     size = padding(size, AREA_SIZE);
-    
+
     auto result = _memory->area_pool.alloc_multi_area(size, *this);
     if (!result) {
       // Extend storage with new area
+      boost::interprocess::file_lock flock(filename());
+      boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+          flock_guard(flock);
+
       offset_t new_offset = _memory->file_size;
       _memory->file_size = _memory->file_size + size;
       std::filesystem::resize_file(filename(), _memory->file_size);
-      
+      assert(_memory->file_size <= _region.get_size());
+
       // Create Area in the new memory location
       auto area = area_ptr(resolve(new_offset, WRITE));
       area->init(new_offset, size, 0);
@@ -345,9 +364,11 @@ struct _MemoryMapFile {
   db_ptr operator[](const char* name) { return make(name); }
 
   db_ptr make(const char* name) {
-    if (strlen(name) > sizeof(DBEntry::name)) throw KeyTooBig();
+    if (strlen(name) >= sizeof(DBEntry::name)) throw KeyTooBig();
 
-    std::scoped_lock lock(_memory->file_lock);
+    boost::interprocess::file_lock flock(filename());
+    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+        flock_guard(flock);
     int free = -1;
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset) {
@@ -371,17 +392,19 @@ struct _MemoryMapFile {
   }
 
   void remove_db(const char* name) {
-    std::scoped_lock lock(_memory->file_lock);
+    boost::interprocess::file_lock flock(filename());
+    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+        flock_guard(flock);
 
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
         if (_dbs[i].use_count()) throw TransactionActive();
         DB tmp(*this, _memory->dbs[i].offset, i);
-        
+
         // Merge the DB's area lists back into storage
         _memory->area_pool.single_areas.move(tmp._header->single_areas, *this);
         _memory->area_pool.multi_areas.move(tmp._header->multi_areas, *this);
-        
+
         _memory->dbs[i].offset = 0;
         flush();
         return;

@@ -330,6 +330,8 @@ struct Area : public AreaSlice {
   }
 };
 
+static_assert(alignof(Area) >= alignof(void*), "Area alignment must be pointer-aligned");
+
 // Simple linked list of areas with atomic value switching
 struct AreaList {
   static constexpr uint8_t MAX_ITER = 10;
