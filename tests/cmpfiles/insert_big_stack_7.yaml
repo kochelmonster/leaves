@@ -1,0 +1,172 @@
+type: trie
+id: 16896
+page: 0
+freespace: 96
+txn: 9
+size: 40
+compressed: 
+  size: 1
+  key: "[a]"
+branches: "[][b]"
+children: 
+  - 10033
+  - 16760
+---
+type: leaf
+id: 10033
+page: 0
+freespace: 122
+size: 14
+txn: 3
+keysize: 0
+key: ""
+valuesize: 1
+value: "a"
+---
+type: trie
+id: 16760
+page: 0
+freespace: 96
+txn: 9
+size: 40
+compressed: 
+  size: 1
+  key: "[b]"
+branches: "[][c]"
+children: 
+  - 15105
+  - 10168
+---
+type: leaf
+id: 15105
+page: 0
+freespace: 121
+size: 15
+txn: 4
+keysize: 0
+key: ""
+valuesize: 2
+value: "ab"
+---
+type: trie
+id: 10168
+page: 0
+freespace: 96
+txn: 9
+size: 40
+compressed: 
+  size: 1
+  key: "[c]"
+branches: "[][d]"
+children: 
+  - 5233
+  - 17168
+---
+type: leaf
+id: 5233
+page: 0
+freespace: 120
+size: 16
+txn: 5
+keysize: 0
+key: ""
+valuesize: 3
+value: "abc"
+---
+type: trie
+id: 17168
+page: 0
+freespace: 80
+txn: 9
+size: 56
+compressed: 
+  size: 1
+  key: "[d]"
+branches: "[][*][e]"
+children: 
+  - 14401
+  - 17033
+  - 18120
+---
+type: leaf
+id: 14401
+page: 0
+freespace: 119
+size: 17
+txn: 6
+keysize: 0
+key: ""
+valuesize: 4
+value: "abcd"
+---
+type: leaf
+id: 17033
+page: 0
+freespace: 117
+size: 19
+txn: 9
+keysize: 1
+key: "[*]"
+valuesize: 5
+value: "abcd*"
+---
+type: trie
+id: 18120
+page: 0
+freespace: 72
+txn: 9
+size: 64
+compressed: 
+  size: 1
+  key: "[e]"
+branches: "[][*][f][g]"
+children: 
+  - 15513
+  - 18257
+  - 17713
+  - 17985
+---
+type: leaf
+id: 15513
+page: 0
+freespace: 118
+size: 18
+txn: 7
+keysize: 0
+key: ""
+valuesize: 5
+value: "abcde"
+---
+type: leaf
+id: 18257
+page: 0
+freespace: 116
+size: 20
+txn: 9
+keysize: 1
+key: "[*]"
+valuesize: 6
+value: "abcde*"
+---
+type: leaf
+id: 17713
+page: 0
+freespace: 116
+size: 20
+txn: 7
+keysize: 1
+key: "[f]"
+valuesize: 6
+value: "abcdef"
+---
+type: leaf
+id: 17985
+page: 0
+freespace: 116
+size: 20
+txn: 8
+keysize: 1
+key: "[g]"
+valuesize: 6
+value: "abcdeg"
+---

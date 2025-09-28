@@ -1,0 +1,11 @@
+type: leaf
+id: 5233
+page: 0
+freespace: 115
+size: 21
+txn: 2
+keysize: 4
+key: "[a][b][c][a]"
+valuesize: 4
+value: "abca"
+---

@@ -1,0 +1,36 @@
+type: trie
+id: 10168
+page: 0
+freespace: 96
+txn: 3
+size: 40
+compressed: 
+  size: 0
+  key: ""
+branches: "[a][b]"
+children: 
+  - 10033
+  - 14401
+---
+type: leaf
+id: 10033
+page: 0
+freespace: 109
+size: 27
+txn: 3
+keysize: 7
+key: "[a][b][c][d][e][f][g]"
+valuesize: 7
+value: "abcdefg"
+---
+type: leaf
+id: 14401
+page: 0
+freespace: 119
+size: 17
+txn: 3
+keysize: 2
+key: "[b][a]"
+valuesize: 2
+value: "ba"
+---

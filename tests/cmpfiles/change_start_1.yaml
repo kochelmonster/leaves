@@ -1,0 +1,11 @@
+type: leaf
+id: 10033
+page: 0
+freespace: 117
+size: 19
+txn: 3
+keysize: 3
+key: "[a][b][c]"
+valuesize: 3
+value: "bbb"
+---

@@ -1,0 +1,36 @@
+type: trie
+id: 12320
+page: 0
+freespace: 96
+txn: 16
+size: 40
+compressed: 
+  size: 1
+  key: "[a]"
+branches: "[C][K]"
+children: 
+  - 12729
+  - 12457
+---
+type: leaf
+id: 12729
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[C]"
+valuesize: 2
+value: "aC"
+---
+type: leaf
+id: 12457
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[K]"
+valuesize: 2
+value: "aK"
+---

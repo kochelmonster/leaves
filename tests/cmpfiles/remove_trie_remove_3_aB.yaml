@@ -1,0 +1,156 @@
+type: trie
+id: 5504
+page: 0
+freespace: 8
+txn: 6
+size: 128
+compressed: 
+  size: 1
+  key: "[a]"
+branches: "[C][D][E][F][G][H][I][J][K][O][l][n]"
+children: 
+  - 12729
+  - 10553
+  - 10825
+  - 11097
+  - 11369
+  - 11641
+  - 11913
+  - 12185
+  - 12457
+  - 17785
+  - 13049
+  - 17465
+---
+type: leaf
+id: 12729
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[C]"
+valuesize: 2
+value: "aC"
+---
+type: leaf
+id: 10553
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[D]"
+valuesize: 2
+value: "aD"
+---
+type: leaf
+id: 10825
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[E]"
+valuesize: 2
+value: "aE"
+---
+type: leaf
+id: 11097
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[F]"
+valuesize: 2
+value: "aF"
+---
+type: leaf
+id: 11369
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[G]"
+valuesize: 2
+value: "aG"
+---
+type: leaf
+id: 11641
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[H]"
+valuesize: 2
+value: "aH"
+---
+type: leaf
+id: 11913
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[I]"
+valuesize: 2
+value: "aI"
+---
+type: leaf
+id: 12185
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[J]"
+valuesize: 2
+value: "aJ"
+---
+type: leaf
+id: 12457
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[K]"
+valuesize: 2
+value: "aK"
+---
+type: leaf
+id: 17785
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[O]"
+valuesize: 2
+value: "aO"
+---
+type: leaf
+id: 13049
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[l]"
+valuesize: 2
+value: "al"
+---
+type: leaf
+id: 17465
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 1
+key: "[n]"
+valuesize: 2
+value: "an"
+---

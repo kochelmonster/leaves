@@ -1,0 +1,11 @@
+type: leaf
+id: 5233
+page: 0
+freespace: 105
+size: 31
+txn: 2
+keysize: 9
+key: "[a][b][c][d][e][f][g][h][i]"
+valuesize: 9
+value: "abcdefghi"
+---

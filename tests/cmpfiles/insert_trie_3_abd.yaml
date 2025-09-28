@@ -1,0 +1,60 @@
+type: trie
+id: 5232
+page: 0
+freespace: 80
+txn: 5
+size: 56
+compressed: 
+  size: 2
+  key: "[a][b]"
+branches: "[a][b][c][d]"
+children: 
+  - 10033
+  - 14401
+  - 15241
+  - 15945
+---
+type: leaf
+id: 10033
+page: 0
+freespace: 119
+size: 17
+txn: 3
+keysize: 1
+key: "[a]"
+valuesize: 3
+value: "aba"
+---
+type: leaf
+id: 14401
+page: 0
+freespace: 119
+size: 17
+txn: 3
+keysize: 1
+key: "[b]"
+valuesize: 3
+value: "abb"
+---
+type: leaf
+id: 15241
+page: 0
+freespace: 119
+size: 17
+txn: 4
+keysize: 1
+key: "[c]"
+valuesize: 3
+value: "abc"
+---
+type: leaf
+id: 15945
+page: 0
+freespace: 119
+size: 17
+txn: 5
+keysize: 1
+key: "[d]"
+valuesize: 3
+value: "abd"
+---

@@ -1,4 +1,4 @@
-#define GENERATE
+// #define GENERATE
 
 #include <algorithm>
 #include <boost/test/included/unit_test.hpp>

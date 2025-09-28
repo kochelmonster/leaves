@@ -1,0 +1,11 @@
+type: leaf
+id: 5233
+page: 0
+freespace: 120
+size: 16
+txn: 2
+keysize: 0
+key: ""
+valuesize: 3
+value: "aaa"
+---

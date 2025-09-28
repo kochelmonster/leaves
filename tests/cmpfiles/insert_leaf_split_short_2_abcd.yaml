@@ -1,0 +1,61 @@
+type: trie
+id: 15376
+page: 0
+freespace: 88
+txn: 4
+size: 48
+compressed: 
+  size: 4
+  key: "[a][b][c][d]"
+branches: "[*][e]"
+children: 
+  - 15240
+  - 10033
+---
+type: trie
+id: 15240
+page: 0
+freespace: 96
+txn: 4
+size: 40
+compressed: 
+  size: 1
+  key: "[*]"
+branches: "[][f]"
+children: 
+  - 15513
+  - 15105
+---
+type: leaf
+id: 15513
+page: 0
+freespace: 118
+size: 18
+txn: 4
+keysize: 0
+key: ""
+valuesize: 5
+value: "abcd*"
+---
+type: leaf
+id: 15105
+page: 0
+freespace: 110
+size: 26
+txn: 4
+keysize: 4
+key: "[f][g][h][i]"
+valuesize: 9
+value: "abcd*fghi"
+---
+type: leaf
+id: 10033
+page: 0
+freespace: 109
+size: 27
+txn: 3
+keysize: 5
+key: "[e][f][g][h][i]"
+valuesize: 9
+value: "abcdefghi"
+---
