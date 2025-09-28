@@ -82,9 +82,9 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_fstore",
-            "_args": [
+            "args": [
                 "-t",
-                "test_areamanager"
+                "test_make_dirty_pushes_and_flushes_once"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
