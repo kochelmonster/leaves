@@ -43,7 +43,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE_EQUAL(std::string(db._header->signature), std::string(FSTORE_SIGNATURE));
     BOOST_REQUIRE_EQUAL(db._header->db_version, 0);
     BOOST_REQUIRE_EQUAL(db._header->db_count, 48);  // default db_count
-    BOOST_REQUIRE_GE(db._header->file_size, db._header_size);
+    BOOST_REQUIRE_GE(db._header->file_size, db.calc_header_size());
   }
 
   {
@@ -92,7 +92,7 @@ BOOST_AUTO_TEST_CASE(test_file_operations) {
   size_t test_size = strlen(test_data) + 1;
   
   // Write data at offset beyond header
-  uint64_t write_offset = db._header_size;
+  uint64_t write_offset = db.calc_header_size();
   db.write(write_offset, test_data, test_size);
   
   // Read data back
@@ -140,7 +140,7 @@ BOOST_AUTO_TEST_CASE(test_file_header_structure) {
   // Verify header size calculation
   size_t expected_header_size = padding(sizeof(DBFileStore::FileHeader) + 
                                       sizeof(DBFileStore::DBEntry) * 10, 4 * K);
-  BOOST_CHECK_EQUAL(db._header_size, expected_header_size);
+  BOOST_CHECK_EQUAL(db.calc_header_size(), expected_header_size);
 }
 
 BOOST_AUTO_TEST_CASE(test_concurrent_access) {
@@ -166,7 +166,7 @@ BOOST_AUTO_TEST_CASE(test_dirty_processor_thread) {
   DBFileStore db(dbFilePath.c_str());
 
   // Test that the dirty processor thread is running
-  BOOST_CHECK(db._dirty_processor_thread.joinable());
+  BOOST_CHECK(db._write_back_thread.joinable());
   
   // Test basic cache functionality
   BOOST_CHECK_GT(db._cache._capacity, 0);
@@ -236,6 +236,7 @@ BOOST_AUTO_TEST_CASE(test_get_area_alignment_and_growth) {
   DBFileStore db(dbFilePath.c_str());
 
   uint64_t initial = db._header->file_size;
+  size_t header_size = db.calc_header_size();
   auto a1 = db.get_area(1024);
   BOOST_CHECK(a1);
   BOOST_CHECK_EQUAL(a1.get_offset() % DBFileStore::AREA_SIZE, 0);
@@ -264,7 +265,7 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
   size_t payload_off = sizeof(AreaSlice) + 128;
   std::memcpy(buf.data() + payload_off, &pattern, sizeof(pattern));
 
-  db.write(base, buf.data(), buf.size());
+  db.write(base + db.calc_header_size(), buf.data(), buf.size());
 
   // Resolve a pointer inside the payload and verify
   auto ptr = db.resolve(base + payload_off, READ);
@@ -292,10 +293,10 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
   // Write a valid area buffer so resolve can read it
   std::vector<char> buf(area.get_size());
   std::memcpy(buf.data(), &area, sizeof(AreaSlice));
-  db.write(base, buf.data(), buf.size());
+  db.write(base + db.calc_header_size(), buf.data(), buf.size());
 
   // Resolve a location to get a block_ptr
-  auto blk = db.resolve(base + sizeof(AreaSlice), WRITE);
+  auto blk = db.resolve(base, WRITE);   
   BOOST_REQUIRE(blk);
 
   // Mark dirty twice; internal queue should accept both, but clear_dirty ensures only first triggers write

@@ -206,7 +206,7 @@ struct AreaSlice {
       }
       new_value = current & ~1ULL;
     } while (!_offset.compare_exchange_weak(current, new_value,
-                                           std::memory_order_release,
+                                           std::memory_order_acq_rel,
                                            std::memory_order_relaxed));
     return true;  // Successfully cleared
   }
