@@ -400,12 +400,14 @@ struct _Cursor {
       if (!root) {
         push(offset_t());
         _Inserter(&stack.back(), value).first_exec();
+        _db->flush();
         return;
       }
       throw NoValidPosition();
     }
 
     _Inserter(&stack.back(), value).exec();
+    _db->flush();
   }
 
   Slice value() const {

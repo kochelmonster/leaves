@@ -154,13 +154,6 @@ struct _Offset {
 
 typedef _Offset<uint64_t> offset_t;
 
-// Enable Boost and other hashing utilities to hash _Offset keys via ADL
-// This avoids specializing boost::hash by providing a free hash_value function.
-template <typename BaseType>
-inline std::size_t hash_value(const _Offset<BaseType>& o) noexcept {
-  // Use the masked numeric value (type bits cleared via operator uint64_t())
-  return std::hash<uint64_t>{}(static_cast<uint64_t>(o));
-}
 
 struct AreaSlice {
   std::atomic<uint64_t> _offset;

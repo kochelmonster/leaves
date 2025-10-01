@@ -267,6 +267,8 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
 
   db.write(base + db.calc_header_size(), buf.data(), buf.size());
 
+  db._cache._data.clear(); // Clear cache to force read from file
+
   // Resolve a pointer inside the payload and verify
   auto ptr = db.resolve(base + payload_off, READ);
   BOOST_REQUIRE(ptr);

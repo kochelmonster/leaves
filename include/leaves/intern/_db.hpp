@@ -72,9 +72,11 @@ struct _DB {
   using Traits = typename Storage::Traits;
   typedef _Transaction<Traits> Transaction;
   using Mutex = typename Storage::Mutex;
+  using area_ptr = typename Storage::area_ptr;
   using txn_ptr = typename Transaction::ptr;
   using block_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
+  
   typedef _DB<Storage> DB;
 
   struct ValueTraits : public Storage::Traits {
@@ -318,8 +320,8 @@ struct _DB {
       // allocate new multi-area
       uint64_t psize = padding(size, AREA_SIZE);
       auto slice = alloc_multi_area(psize);
-      found_size = slice.get_size();
-      found_offset = slice.get_offset();
+      found_size = slice->get_size();
+      found_offset = slice->get_offset();
     }
 
     uint32_t delta = found_size - size;
@@ -368,7 +370,8 @@ struct _DB {
 
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
-  AreaSlice alloc_single_area() {
+  
+  area_ptr alloc_single_area() {
     assert(_wtxn.txn_id);
     std::scoped_lock lock(_storage.file_lock());
     
@@ -376,10 +379,10 @@ struct _DB {
     _header->pending_single_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
     flush();
     
-    return *area_ptr;  // Convert Area* to AreaSlice for return
+    return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
-  AreaSlice alloc_multi_area(uint64_t size) {
+  area_ptr alloc_multi_area(uint64_t size) {
     assert(_wtxn.txn_id);
     std::scoped_lock lock(_storage.file_lock());
     
@@ -387,7 +390,7 @@ struct _DB {
     _header->pending_multi_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
     flush();
     
-    return *area_ptr;  // Convert Area* to AreaSlice for return
+    return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
   template <typename T>
@@ -478,13 +481,14 @@ struct _DB {
   }
 
   void commit(bool sync = false) {
+    if (!_wtxn.txn_id) return;
     prepare_commit(sync);
     
     // Now atomically move pending areas to committed areas
     _header->single_areas.move(_header->pending_single_areas, _storage);
     _header->multi_areas.move(_header->pending_multi_areas, _storage);
-    
     _header->read_txn = _header->prepared_txn;
+    make_dirty(_header);
     flush(!sync);
     end_transaction();
   }

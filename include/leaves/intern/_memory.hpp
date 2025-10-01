@@ -265,8 +265,8 @@ struct _MemManager {
 
       if (allocation_start + bsize > allocation_end) {
         auto area = resolver.alloc_single_area();
-        allocation_start = area.get_offset();
-        allocation_end = area.end();
+        allocation_start = area->content_offset();
+        allocation_end = area->end();
       }
     }
 

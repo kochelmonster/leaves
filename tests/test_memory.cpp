@@ -47,6 +47,7 @@ struct TestStorage {
   using uint16_e = typename TestTraits::uint16_e;
   using MemManager = typename leaves::_MemManager<TestTraits>;
 
+  using area_ptr = typename TestTraits::template Pointer<Area>;
   std::vector<char> memory;
   AreaList single_areas;
   AreaList multi_areas;
@@ -83,31 +84,43 @@ struct TestStorage {
 
   void free(block_ptr p) { mm.free(p, *this); }
 
-  AreaSlice alloc_single_area() {
+  area_ptr alloc_single_area() {
     auto result = single_areas.pop(*this);
     if (!result) {
       size_t old_size = memory.size();
       memory.resize(old_size + AREA_SIZE);
-      AreaSlice new_area;
-      new_area.set_offset(old_size);
-      new_area.set_size(AREA_SIZE);
-      return new_area;
+      
+      // Create a new Area and initialize it
+      Area* area = new Area();
+      area->set_offset(old_size);
+      area->set_size(AREA_SIZE);
+      area->_ref.store(0);
+      
+      // Wrap in area_ptr
+      return area_ptr(area);
     }
-    return *result;  // Convert Area* to AreaSlice
+    
+    return result;
   }
 
-  AreaSlice alloc_multi_area(uint64_t size) {
+  area_ptr alloc_multi_area(uint64_t size) {
     size = padding(size, AREA_SIZE);
     auto result = multi_areas.find_and_remove(size, *this);
     if (!result) {
       size_t old_size = memory.size();
       memory.resize(old_size + size);
-      AreaSlice new_area;
-      new_area.set_offset(old_size);
-      new_area.set_size(size);
-      return new_area;
+      
+      // Create a new Area and initialize it
+      Area* area = new Area();
+      area->set_offset(old_size);
+      area->set_size(size);
+      area->_ref.store(0);
+      
+      // Wrap in area_ptr
+      return area_ptr(area);
     }
-    return *result;  // Convert Area* to AreaSlice
+    
+    return result;
   }
 
   template <typename T>
@@ -236,35 +249,40 @@ BOOST_AUTO_TEST_CASE(test_arealist) {
   BOOST_CHECK(!result);
 
   // Test push and pop single area
-  AreaSlice area1 = storage.alloc_single_area();
-  areas.push(area1, storage);
-  BOOST_CHECK_EQUAL(areas.get_head(), area1.get_offset());
+  auto area1 = storage.alloc_single_area();
+  areas.push(*area1, storage);
+  BOOST_CHECK_EQUAL(areas.get_head(), area1->get_offset());
 
   auto popped = areas.pop(storage);
   BOOST_CHECK(popped);
-  BOOST_CHECK_EQUAL(popped->get_offset(), area1.get_offset());
-  BOOST_CHECK_EQUAL(popped->get_size(), area1.get_size());
+  BOOST_CHECK_EQUAL(popped->get_offset(), area1->get_offset());
+  BOOST_CHECK_EQUAL(popped->get_size(), area1->get_size());
   BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
 
   // Test multiple areas
-  AreaSlice area2 = storage.alloc_single_area();
-  AreaSlice area3 = storage.alloc_single_area();
+  auto area2 = storage.alloc_single_area();
+  auto area3 = storage.alloc_single_area();
 
-  areas.push(area2, storage);
-  areas.push(area3, storage);
+  areas.push(*area2, storage);
+  areas.push(*area3, storage);
 
   // Should pop in LIFO order
   auto pop1 = areas.pop(storage);
-  BOOST_CHECK_EQUAL(pop1->get_offset(), area3.get_offset());
+  BOOST_CHECK_EQUAL(pop1->get_offset(), area3->get_offset());
 
   auto pop2 = areas.pop(storage);
-  BOOST_CHECK_EQUAL(pop2->get_offset(), area2.get_offset());
+  BOOST_CHECK_EQUAL(pop2->get_offset(), area2->get_offset());
 
   BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
 
   // Test find_and_remove with different sizes
-  AreaSlice small_area{1000, AREA_SIZE};
-  AreaSlice big_area{2000, 2 * AREA_SIZE};
+  Area small_area;
+  small_area.set_offset(1000);
+  small_area.set_size(AREA_SIZE);
+  
+  Area big_area;
+  big_area.set_offset(2000);
+  big_area.set_size(2 * AREA_SIZE);
 
   areas.push(small_area, storage);
   areas.push(big_area, storage);
@@ -275,7 +293,6 @@ BOOST_AUTO_TEST_CASE(test_arealist) {
   BOOST_CHECK_EQUAL(found->get_offset(), big_area.get_offset());
 
   // Should still have small area
-
   auto remaining = areas.pop(storage);
   BOOST_CHECK(remaining);
   BOOST_CHECK_EQUAL(remaining->get_offset(), small_area.get_offset());
