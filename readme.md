@@ -50,3 +50,8 @@ TransferTrie:
 Would it speed up  insertion if it is split in a two phase mode: 
 Analsyse-Mode to see what has to be changed
 Execution-Mode to do the changes?
+
+
+flush(async) -> flush(sync, force)  // force wg, mmap
+
+

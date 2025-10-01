@@ -19,7 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
+#include <unordered_map>
 #include <thread>
 
 #include "_db.hpp"
@@ -416,7 +416,8 @@ struct _CacheStore : public Opers_ {
   }
 
   // Handling for dirty areas - using mutex-protected queue for thread safety
-  std::queue<block_ptr> _dirty_areas;
+  std::unordered_map<uint64_t, block_ptr> _pending_dirty_areas;
+  std::unordered_map<uint64_t, block_ptr> _dirty_areas;
   std::mutex _dirty_areas_mutex;
   std::thread _write_back_thread;
   std::atomic<bool> _should_stop;
@@ -432,7 +433,7 @@ struct _CacheStore : public Opers_ {
   }
 
   // must be called in the subclasses' destructor
-  void deinit() {
+  void destroy() {
     // Stop the _write_back_thread
     _should_stop.store(true, std::memory_order_release);
     if (_write_back_thread.joinable()) {
@@ -448,29 +449,14 @@ struct _CacheStore : public Opers_ {
   }
 
   void start_write_back_thread() {
-    // Use a mutex to protect thread creation
-    static std::mutex thread_creation_mutex;
-    std::lock_guard<std::mutex> lock(thread_creation_mutex);
-
-    if (!_write_back_thread.joinable()) {
-      // Make sure the stop flag is cleared before starting the thread
-      _should_stop.store(false, std::memory_order_release);
-
-      // Initialize mutex-protected resources
-      {
-        std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
-        while (!_dirty_areas.empty()) {
-          _dirty_areas.pop();
-        }
-      }
-
-      _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
-    }
+    _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
   }
 
   void flush(bool sync = false, bool force = false) {
+    std::lock_guard<std::mutex> lock(_dirty_mutex);
+    _dirty_areas.insert(_pending_dirty_areas.begin(), _pending_dirty_areas.end());
+    _pending_dirty_areas.clear();
     if (sync) {
-      std::lock_guard<std::mutex> lock(_dirty_mutex);
       write_dirty_blocks(calc_header_size(), true);
     } else {
       _dirty_cv.notify_one();
@@ -535,11 +521,13 @@ struct _CacheStore : public Opers_ {
                 << " as dirty" << std::endl;
     }
 
-    block.area()->set_dirty();
+    _pending_dirty_areas[block.area()->get_offset()] = block;
+
+    /* block.area()->set_dirty();
     {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
       _dirty_areas.push(block);
-    }
+    }*/
 
     {
       std::lock_guard<std::mutex> debug_lock(_debug_mutex);
@@ -604,32 +592,28 @@ struct _CacheStore : public Opers_ {
       {
         std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
         if (_dirty_areas.empty()) break;
-        block = _dirty_areas.front();
-        _dirty_areas.pop();
+        auto it = _dirty_areas.begin();
+        block = it->second;
+        _dirty_areas.erase(it);
       }
 
-      // Atomically check and clear the dirty bit
-      if (block) {
-        if (block.area()->clear_dirty()) {
-          // Successfully cleared dirty bit, now write the block
+      assert(block);
+      const auto& area = block.area();
 
-          {
-            std::lock_guard<std::mutex> debug_lock(_debug_mutex);
-            std::cerr << "Writing dirty block at offset "
-                      << block.area()->get_offset() << ", size "
-                      << block.area()->get_size() << std::endl;
-          }
-
-          write(header_size + block.area()->get_offset(), block.area(),
-                block.area()->get_size());
-          if (debug) {
-            debug_check_cache();
-          }
-        }
+      {
+        std::lock_guard<std::mutex> debug_lock(_debug_mutex);
+        std::cerr << "Writing dirty block at offset " << area->get_offset()
+                  << ", size " << area->get_size() << std::endl;
       }
+
+      // Write the block to disk
+      write(header_size + area->get_offset(), area, area->get_size());
+      if (debug)
+        debug_check_cache();
     }
 
     if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {
+      // Write the header
       write(0, _header, header_size);
     }
   }
@@ -731,7 +715,7 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   }
 
   ~_FileStore() {
-    deinit();
+    destroy();
     delete[] (char*)_header;
   }
 

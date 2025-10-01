@@ -44,6 +44,9 @@ class FileStorage {
   Slice filename() const { return Slice(_storage.filename()); }
   size_t file_size() const { return _storage._header->file_size; }
 
+  void debug_reset() { _storage.debug_reset(); }
+  void debug_check_cache() const { _storage.debug_check_cache(); }
+
  private:
   _FileStore _storage;
 };

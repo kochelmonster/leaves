@@ -84,7 +84,7 @@
             "program": "${workspaceFolder}/build/test_fstore",
             "args": [
                 "-t",
-                "test_make_dirty_pushes_and_flushes_once"
+                "test_resolve_reads_back_data_and_caches"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
@@ -109,9 +109,9 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_file_storage",
-            "_args": [
+            "args": [
                 "-t",
-                "test_areamanager"
+                "test_file_storage_random_5000"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
@@ -154,6 +154,48 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) test_map_storage",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_map_storage",
+            "args": [
+                "-t",
+                "test_map_storage_random_insert_and_read"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "Attach to test_fstore",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "${workspaceFolder}/build/test_fstore",
+            "processId": "${command:pickProcess}",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
                     "ignoreFailures": true
                 }
             ]
