@@ -486,7 +486,7 @@ struct TestStorage {
     return *area_ptr;  // Convert Area* to AreaSlice
   }
 
-  void flush(bool async = true) {}
+  void flush(bool sync = false, bool force = false) {}
   void prefetch(offset_t offset, Access access = READ) const {}
   void prefetch(void* mem, Access access = READ) const {}
 };

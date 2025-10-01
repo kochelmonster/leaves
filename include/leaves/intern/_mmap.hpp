@@ -237,7 +237,9 @@ struct _MemoryMapFile {
     }
   }
 
-  void flush(bool async = true) { _region.flush(0, 0, async); }
+  void flush(bool sync = false, bool force = false) {
+    if (force) _region.flush(0, 0, !sync);
+  }
 
   void sanitize() {
     // Coordinate sanitization across processes with an OS file lock that is
@@ -249,7 +251,7 @@ struct _MemoryMapFile {
     if (sanitize_processes()) sanitize_dbs();
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);
-    
+
     assert(_region.get_size() >= _memory->file_size);
   }
 

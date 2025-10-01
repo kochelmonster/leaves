@@ -133,6 +133,7 @@ struct TestStorage {
   }
 
   void make_dirty(block_ptr& block) {}
+  void flush(bool sync = false, bool force = false) {}
 };
 
 struct TestTraitsBig : public TestTraits {

@@ -127,6 +127,16 @@ target_link_libraries(test_node PUBLIC core test)
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
+add_executable(test_map_storage tests/test_map_storage.cpp)
+target_sources(test_map_storage INTERFACE
+    include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+target_link_libraries(test_map_storage PUBLIC core test)
+
+add_executable(test_file_storage tests/test_file_storage.cpp)
+target_sources(test_file_storage INTERFACE
+    include/fstore.hpp include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+target_link_libraries(test_file_storage PUBLIC core test)
+
 add_executable(test_string_insert tests/test_string_insert.cpp)
 target_link_libraries(test_string_insert PUBLIC core test)
 

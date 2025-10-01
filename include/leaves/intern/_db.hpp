@@ -477,7 +477,7 @@ struct _DB {
     make_dirty(active);
     make_dirty(prepared);
 
-    flush(!sync);
+    flush(sync, true);
   }
 
   void commit(bool sync = false) {
@@ -489,7 +489,7 @@ struct _DB {
     _header->multi_areas.move(_header->pending_multi_areas, _storage);
     _header->read_txn = _header->prepared_txn;
     make_dirty(_header);
-    flush(!sync);
+    flush(sync, true);
     end_transaction();
   }
 
@@ -498,7 +498,7 @@ struct _DB {
     _header->txn_lock.unlock();
   }
 
-  void flush(bool async = true) { _storage.flush(async); }
+  void flush(bool sync = false, bool force = false) { _storage.flush(sync, force); }
 
   typedef _MemStatistics<Traits> MemStatistics;
 

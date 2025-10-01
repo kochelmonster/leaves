@@ -468,8 +468,8 @@ struct _CacheStore : public Opers_ {
     }
   }
 
-  void flush(bool async = true) {
-    if (!async) {
+  void flush(bool sync = false, bool force = false) {
+    if (sync) {
       std::lock_guard<std::mutex> lock(_dirty_mutex);
       write_dirty_blocks(calc_header_size(), true);
     } else {
@@ -713,7 +713,7 @@ struct _CacheStore : public Opers_ {
         _header->area_pool.single_areas.move(tmp._header->single_areas, *this);
         _header->area_pool.multi_areas.move(tmp._header->multi_areas, *this);
         _header->dbs[i].offset = 0;
-        flush();
+        flush(true, true);
         return;
       }
     }
