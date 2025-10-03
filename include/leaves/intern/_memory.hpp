@@ -382,6 +382,7 @@ struct AreaList {
     // Use the area itself to store the Area header
     area_ptr area = resolver.resolve(area_slice.get_offset(), WRITE);
     area->init(area_slice.get_offset(), area_slice.get_size(), get_head());
+    resolver.make_dirty(area);
     
     offset_t new_head = area_slice.get_offset();
     offset_t new_tail = get_tail() ? get_tail() : new_head;
@@ -438,6 +439,7 @@ struct AreaList {
           
           // Update current area to requested size
           curr->set_size(size);
+          resolver.make_dirty(curr);
         }
         
         atomic_switch(new_head, new_tail);
