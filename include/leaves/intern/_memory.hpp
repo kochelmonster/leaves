@@ -161,6 +161,7 @@ struct _GarbageSlot {
     assert(back->blocks[iend].link != 0);
     resolver.template mark_for_recycle(back->blocks[iend]);
     resolver.make_dirty(back);
+    resolver.make_dirty(block);
 
     iend++;
     count++;

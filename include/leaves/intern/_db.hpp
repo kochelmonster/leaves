@@ -181,6 +181,7 @@ struct _DB {
     txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
                           area_ptr->end());
     _wtxn.txn_id = 0;
+    make_dirty(_header);
     flush();
   }
 
@@ -377,8 +378,6 @@ struct _DB {
     
     auto area_ptr = _storage.alloc_single_area();
     _header->pending_single_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
-    flush();
-    
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -388,8 +387,6 @@ struct _DB {
     
     auto area_ptr = _storage.alloc_multi_area(size);
     _header->pending_multi_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
-    flush();
-    
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 

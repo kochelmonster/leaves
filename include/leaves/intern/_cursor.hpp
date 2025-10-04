@@ -82,7 +82,10 @@ struct _Transition {
   }
 
   offset_e* update() {
-    if (block->txn_id == cursor->txn_id()) return link();
+    if (block->txn_id == cursor->txn_id()) {
+      cursor->_db->make_dirty(block);
+      return link();
+    }
 
     assert(is_trie());
     trie() = cursor->_db->cow(trie());
