@@ -415,7 +415,7 @@ struct _CacheStore : public Opers_ {
     _cache._size = 0;
   }
 
-  // Handling for dirty areas - using mutex-protected queue for thread safety
+  // Handling for dirty areas - using mutex-protected map for thread safety
   std::unordered_map<uint64_t, block_ptr> _pending_dirty_areas;
   std::unordered_map<uint64_t, block_ptr> _dirty_areas;
   std::mutex _dirty_areas_mutex;
@@ -424,8 +424,6 @@ struct _CacheStore : public Opers_ {
   std::mutex _dirty_mutex;
   std::condition_variable _dirty_cv;
   std::atomic<bool> _header_dirty{false};
-
-  std::mutex _debug_mutex;
 
   _CacheStore(uint16_t db_count = 48, size_t capacity = 10 * M)
       : _cache(capacity), _should_stop(false) {
@@ -449,16 +447,20 @@ struct _CacheStore : public Opers_ {
   }
 
   void start_write_back_thread() {
-    _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
+    // _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
   }
 
   void flush(bool sync = false, bool force = false) {
-    std::lock_guard<std::mutex> lock(_dirty_mutex);
-    _dirty_areas.insert(_pending_dirty_areas.begin(), _pending_dirty_areas.end());
-    _pending_dirty_areas.clear();
+    {
+      std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
+      _dirty_areas.insert(_pending_dirty_areas.begin(), _pending_dirty_areas.end());
+      _pending_dirty_areas.clear();
+    }
+
     if (sync) {
-      write_dirty_blocks(calc_header_size(), true);
+      write_dirty_blocks(calc_header_size());
     } else {
+      std::lock_guard<std::mutex> lock(_dirty_mutex);
       _dirty_cv.notify_one();
     }
   }
@@ -515,12 +517,6 @@ struct _CacheStore : public Opers_ {
   }
 
   void make_dirty(block_ptr& block) {
-    {
-      std::lock_guard<std::mutex> debug_lock(_debug_mutex);
-      std::cerr << "++Marking block at offset " << block.area()->get_offset()
-                << " as dirty" << std::endl;
-    }
-
     _pending_dirty_areas[block.area()->get_offset()] = block;
 
     /* block.area()->set_dirty();
@@ -528,12 +524,6 @@ struct _CacheStore : public Opers_ {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
       _dirty_areas.push(block);
     }*/
-
-    {
-      std::lock_guard<std::mutex> debug_lock(_debug_mutex);
-      std::cerr << "--Marking block at offset " << block.area()->get_offset()
-                << " as dirty" << std::endl;
-    }
   }
 
   // Mark the file header as dirty; background loop will flush it
@@ -585,8 +575,8 @@ struct _CacheStore : public Opers_ {
   }
 
   // Process all dirty blocks from the queue and write them to storage
-  void write_dirty_blocks(size_t header_size, bool debug = false) {
-    // Process all dirty areas in the queue
+  void write_dirty_blocks(size_t header_size) {
+    // Process all dirty areas in the set
     while (true) {
       block_ptr block;
       {
@@ -600,16 +590,8 @@ struct _CacheStore : public Opers_ {
       assert(block);
       const auto& area = block.area();
 
-      {
-        std::lock_guard<std::mutex> debug_lock(_debug_mutex);
-        std::cerr << "Writing dirty block at offset " << area->get_offset()
-                  << ", size " << area->get_size() << std::endl;
-      }
-
       // Write the block to disk
       write(header_size + area->get_offset(), area, area->get_size());
-      if (debug)
-        debug_check_cache();
     }
 
     if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {

@@ -106,6 +106,7 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
       BOOST_REQUIRE(!cursor.is_valid()); // Should not exist yet
       
       // std::cout << "insert " << inserted << std::endl;
+
       // Use the string as both key and value for simplicity
       cursor.value(test_string);
       BOOST_REQUIRE(cursor.is_valid());
@@ -117,14 +118,9 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
         BOOST_TEST_MESSAGE("Inserted " << inserted << " entries");
       }
     }
-    std::cerr << "sync commit-------------------------------------------------" << std::endl;
-    cursor.commit(true);
+    cursor.commit();
 
-    storage.debug_reset();
-
-    std::cerr << "++Final check after commit" << std::endl;
     check(cursor, test_strings, inserted);
-    std::cerr << "--Final check after commit" << std::endl;
         
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -176,9 +172,7 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
     
     BOOST_REQUIRE_EQUAL(found, NUM_ENTRIES);
   }
-
-  return;
-  
+ 
   // Add a half-second sleep between phases
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   
