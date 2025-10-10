@@ -48,15 +48,6 @@ struct _StoreTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-  /*
-  Typical node sizes
-  digits: 0-9:     104
-  hex:    0-9A-F   160
-  base64: 64       564
-  utf-8:  127      1056
-  binary: 256      2088
-  max: 2264
-  */
 
 #pragma pack(1)
   struct BlockHeader {
@@ -69,7 +60,7 @@ struct _StoreTraits {
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 64 * K;  // not OS AREA_SIZE
-  static constexpr uint16_t BLOCK_SIZES[] = {
+  static constexpr uint16_t BLOCK_SIZES[] = { // Typical node sizes
       _TrieNode<_StoreTraits>::size(1, 10),   // digits 0-9
       _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
       _TrieNode<_StoreTraits>::size(1, 64),   // base64

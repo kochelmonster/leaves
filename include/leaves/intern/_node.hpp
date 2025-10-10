@@ -23,7 +23,7 @@ struct _TrieNode : public Traits::BlockHeader {
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr uint16_t MAX_BRANCH_COUNT = 256;  // 256 (chars) + 1 (NULL)
+  static constexpr uint16_t MAX_BRANCH_COUNT = 257;  // 256 (chars) + 1 (NULL)
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;

@@ -178,44 +178,14 @@ struct AreaSlice {
         _size(other._size),
         _ref(other._ref.load(std::memory_order_acquire)) {}
 
-  // Helper methods for dirty bit (first bit of offset) - atomic
-  bool is_dirty() const { return _offset.load(std::memory_order_acquire) & 1; }
-
-  void set_dirty() {
-    uint64_t current = _offset.load(std::memory_order_relaxed);
-    while (!_offset.compare_exchange_weak(current, current | 1,
-                                         std::memory_order_release,
-                                         std::memory_order_relaxed)) {
-      // Retry if CAS failed
-    }
-  }
-
-  bool clear_dirty() {
-    uint64_t current = _offset.load(std::memory_order_relaxed);
-    uint64_t new_value;
-    do {
-      if (!(current & 1)) {
-        return false;  // Already clean
-      }
-      new_value = current & ~1ULL;
-    } while (!_offset.compare_exchange_weak(current, new_value,
-                                           std::memory_order_acq_rel,
-                                           std::memory_order_relaxed));
-    return true;  // Successfully cleared
-  }
+  // No more dirty bit methods - removed
 
   uint64_t get_offset() const {
-    return _offset.load(std::memory_order_acquire) & ~1ULL;
+    return _offset.load(std::memory_order_acquire);
   }
 
   void set_offset(uint64_t new_offset) {
-    uint64_t current = _offset.load(std::memory_order_relaxed);
-    uint64_t new_value;
-    do {
-      new_value = (current & 1) | (new_offset & ~1ULL);
-    } while (!_offset.compare_exchange_weak(current, new_value,
-                                           std::memory_order_release,
-                                           std::memory_order_relaxed));
+    _offset.store(new_offset, std::memory_order_release);
   }
 
   uint32_t get_size() const {
