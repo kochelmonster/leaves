@@ -1,6 +1,8 @@
 #ifndef _LEAVES__FSTORE_HPP
 #define _LEAVES__FSTORE_HPP
 
+#include <iostream>
+
 #include <fcntl.h>
 
 #include <algorithm>
@@ -138,6 +140,8 @@ struct _FileOperations : CacheBase {
   // Protect concurrent read/write/resize operations on the same fstream
   mutable std::mutex _io_mutex;
 
+  size_t file_size() const { return _header->file_size; }
+
   size_t calc_header_size() const {
     return leaves::padding(
         sizeof(FileHeader) + sizeof(DBEntry) * _header->db_count, 4 * K);
@@ -254,7 +258,7 @@ struct _CacheStore : public Opers_ {
         container_t;
     container_t _data;
 
-    LRUCache(size_t capacity = 10 * M) : _capacity(capacity) {
+    LRUCache(size_t capacity = 500 * M) : _capacity(capacity) {
       _data.reserve(_capacity / AREA_SIZE);
     }
 
@@ -289,7 +293,7 @@ struct _CacheStore : public Opers_ {
              ++it, ++scanned) {
           auto& entry = const_cast<Entry&>(*it);
           AreaSlice* slice = entry.block.area();
-          if (!slice->is_dirty()) {
+          if (slice->get_ref() == 1) {
             _size -= slice->get_size();
             seq.erase(it);
             evicted = true;
@@ -447,20 +451,21 @@ struct _CacheStore : public Opers_ {
   }
 
   void start_write_back_thread() {
-    // _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
+    _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
   }
 
   void flush(bool sync = false, bool force = false) {
+    bool has_pending = false;
     {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
+      has_pending = !_pending_dirty_areas.empty();
       _dirty_areas.insert(_pending_dirty_areas.begin(), _pending_dirty_areas.end());
       _pending_dirty_areas.clear();
     }
 
     if (sync) {
       write_dirty_blocks(calc_header_size());
-    } else {
-      std::lock_guard<std::mutex> lock(_dirty_mutex);
+    } else if (has_pending) {
       _dirty_cv.notify_one();
     }
   }
@@ -518,12 +523,6 @@ struct _CacheStore : public Opers_ {
 
   void make_dirty(block_ptr& block) {
     _pending_dirty_areas[block.area()->get_offset()] = block;
-
-    /* block.area()->set_dirty();
-    {
-      std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
-      _dirty_areas.push(block);
-    }*/
   }
 
   // Mark the file header as dirty; background loop will flush it

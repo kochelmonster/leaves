@@ -9,6 +9,8 @@
 
 #include "leaves/intern/_check.hpp"
 #include "leaves/leaves.hpp"
+#include "leaves/fstore.hpp"
+#include "leaves/mmap.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
@@ -16,10 +18,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-typedef leaves::MapStorage Storage;
-// typedef leaves::DBMMapBurst Storage;
-
-// #define BINARY_KEY
+//#define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -62,6 +61,9 @@ static bool FLAGS_writemap = false;
 
 // don't explicitly sync meta data
 static bool FLAGS_metasync = false;
+
+// Use FileStorage instead of MapStorage
+static bool FLAGS_use_file_storage = false;
 
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
@@ -119,7 +121,7 @@ namespace leveldb {
 namespace {
 class RandomGenerator {
  private:
-  std::string data_;
+  std::vector<char> data_;
   int pos_;
 
  public:
@@ -133,7 +135,7 @@ class RandomGenerator {
       // Add a short fragment that is as compressible as specified
       // by FLAGS_compression_ratio.
       test::CompressibleString(&rnd, FLAGS_compression_ratio, 100, &piece);
-      data_.append(piece);
+      data_.insert(data_.end(), piece.begin(), piece.end());
     }
     pos_ = 0;
   }
@@ -164,7 +166,10 @@ static Slice TrimSpace(Slice s) {
 
 class Benchmark {
  private:
-  Storage* storage_;
+  // Storage pointers - only one will be non-null based on configuration
+  leaves::FileStorage* file_storage_;
+  leaves::MapStorage* map_storage_;
+  bool using_file_storage_;
   int db_num_;
   int num_;
   int reads_;
@@ -183,17 +188,19 @@ class Benchmark {
   void PrintHeader() {
     const int kKeySize = 16;
     PrintEnvironment();
-    std::fprintf(stdout, "Keys:       %d bytes each\n", kKeySize);
+    std::fprintf(stdout, "Storage:     %s\n", 
+                using_file_storage_ ? "FileStorage" : "MapStorage");
+    std::fprintf(stdout, "Keys:        %d bytes each\n", kKeySize);
     std::fprintf(
-        stdout, "Values:     %d bytes each (%d bytes after compression)\n",
+        stdout, "Values:      %d bytes each (%d bytes after compression)\n",
         FLAGS_value_size,
         static_cast<int>(FLAGS_value_size * FLAGS_compression_ratio + 0.5));
-    std::fprintf(stdout, "Entries:    %d\n", num_);
-    std::fprintf(stdout, "RawSize:    %.1f MB (estimated)\n",
+    std::fprintf(stdout, "Entries:     %d\n", num_);
+    std::fprintf(stdout, "RawSize:     %.1f MB (estimated)\n",
                  ((static_cast<int64_t>(kKeySize + FLAGS_value_size) * num_) /
                   1048576.0));
     std::fprintf(
-        stdout, "FileSize:   %.1f MB (estimated)\n",
+        stdout, "FileSize:    %.1f MB (estimated)\n",
         (((kKeySize + FLAGS_value_size * FLAGS_compression_ratio) * num_) /
          1048576.0));
     PrintWarnings();
@@ -293,7 +300,7 @@ class Benchmark {
     }
   }
 
-  void Stop(const Slice& name) {
+  void Stop(const leveldb::Slice& name) {
     double finish = Env::Default()->NowMicros() * 1e-6;
 
     // Pretend at least one op was done in case we are running a benchmark
@@ -326,28 +333,39 @@ class Benchmark {
   enum DBState { FRESH, EXISTING };
 
   Benchmark()
-      : storage_(nullptr),
+      : file_storage_(nullptr),
+        map_storage_(nullptr),
+        using_file_storage_(FLAGS_use_file_storage),
         num_(FLAGS_num),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
         bytes_(0),
         rand_(301) {
     std::vector<std::string> files;
     std::string test_dir;
-    Env::Default()->GetTestDirectory(&test_dir);
-    Env::Default()->GetChildren(test_dir.c_str(), &files);
+    leveldb::Env::Default()->GetTestDirectory(&test_dir);
+    leveldb::Env::Default()->GetChildren(test_dir.c_str(), &files);
     if (!FLAGS_use_existing_db) {
       for (int i = 0; i < files.size(); i++) {
-        if (Slice(files[i]).starts_with("dbbench_leaves")) {
+        if (leveldb::Slice(files[i]).starts_with("dbbench_leaves")) {
           std::string file_name(test_dir);
           file_name += "/";
           file_name += files[i];
-          Env::Default()->RemoveFile(file_name.c_str());
+          leveldb::Env::Default()->RemoveFile(file_name.c_str());
         }
       }
     }
   }
 
-  ~Benchmark() { delete storage_; }
+  ~Benchmark() { 
+    if (file_storage_) {
+      delete file_storage_;
+      file_storage_ = nullptr;
+    }
+    if (map_storage_) {
+      delete map_storage_;
+      map_storage_ = nullptr;
+    }
+  }
 
   void Run() {
     PrintHeader();
@@ -411,8 +429,13 @@ class Benchmark {
       if (known) {
         Stop(name);
 #ifdef STATISTICS
-        std::cout << "File size: " << storage_->file_size() / (1024 * 1024)
-                  << " MB" << std::endl;
+        if (using_file_storage_ && file_storage_) {
+          std::cout << "File size: " << file_storage_->file_size() / (1024 * 1024)
+                    << " MB" << std::endl;
+        } else if (map_storage_) {
+          std::cout << "File size: " << map_storage_->file_size() / (1024 * 1024)
+                    << " MB" << std::endl;
+        }
         // leaves::_MemoryChecker<Storage>(*db_).check();
         auto txn = db_->txn();
 
@@ -480,13 +503,13 @@ class Benchmark {
 
  private:
   void Open(bool sync) {
-    assert(storage_ == nullptr);
+    assert(file_storage_ == nullptr && map_storage_ == nullptr);
 
     // Initialize db_
     char file_name[100], cmd[200];
     db_num_++;
     std::string test_dir;
-    Env::Default()->GetTestDirectory(&test_dir);
+    leveldb::Env::Default()->GetTestDirectory(&test_dir);
     std::snprintf(file_name, sizeof(file_name), "%s/dbbench_mdb-%d",
                   test_dir.c_str(), db_num_);
 
@@ -495,7 +518,45 @@ class Benchmark {
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
-    storage_ = new Storage(test_fname.c_str());
+    
+    if (using_file_storage_) {
+      file_storage_ = new leaves::FileStorage(test_fname.c_str());
+    } else {
+      map_storage_ = new leaves::MapStorage(test_fname.c_str());
+    }
+  }
+
+  // Template method for writing operations
+  template<typename StorageType>
+  void WriteImpl(StorageType& storage, bool sync, Order order, int num_entries, 
+                int value_size, int entries_per_batch) {
+    leaves::Slice mkey, mval;
+    char key[100];
+    
+    auto cursor = storage["benchmark"].cursor();
+    // Write to database
+    for (int i = 0; i < num_entries; i += entries_per_batch) {
+      for (int j = 0; j < entries_per_batch; j++) {
+        const int k = (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
+
+#ifdef BINARY_KEY
+        *(uint64_t*)key = native_to_big(k);
+        mkey = leaves::Slice(key, sizeof(uint64_t));
+#else
+        snprintf(key, sizeof(key), "%016d", k);
+        mkey = leaves::Slice(key);
+#endif
+        int iter = i + j;
+        
+        bytes_ += value_size + mkey.size();
+        mval = gen_.Generate(value_size);
+
+        cursor.find(mkey);
+        cursor.value(mval);
+        FinishedSingleOp();
+      }
+      cursor.commit(sync);
+    }
   }
 
   void Write(bool sync, Order order, DBState state, int num_entries,
@@ -506,13 +567,24 @@ class Benchmark {
         message_ = "skipping (--use_existing_db is true)";
         return;
       }
-      if (storage_) {
+      
+      // Clean up existing storage if any
+      if (file_storage_ || map_storage_) {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
-        delete storage_;
-        storage_ = nullptr;
+        
+        if (file_storage_) {
+          delete file_storage_;
+          file_storage_ = nullptr;
+        }
+        if (map_storage_) {
+          delete map_storage_;
+          map_storage_ = nullptr; 
+        }
+        
         int r = system(cmd);
       }
+      
       Open(sync);
       Start();  // Do not count time taken to destroy/open
     }
@@ -523,58 +595,26 @@ class Benchmark {
       message_ = msg;
     }
 
-    std::ostream null_stream(nullptr);
-
-    leaves::Slice mkey, mval;
-    char key[100];
-    int flag = 0, rc;
-
-    auto cursor = (*storage_)["benchmark"].cursor();
-    // Write to database
-    for (int i = 0; i < num_entries; i += entries_per_batch) {
-      for (int j = 0; j < entries_per_batch; j++) {
-        const int k =
-            (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
-
-#ifdef BINARY_KEY
-        *(uint64_t*)key = native_to_big(k);
-        mkey = leaves::Slice(key, sizeof(uint64_t));
-        // printf("insert %i\n", k);
-#else
-        snprintf(key, sizeof(key), "%016d", k);
-        mkey = leaves::Slice(key);
-        // printf("insert %i = (%i+%i) = %s\n", k, i, j, key);
-#endif
-
-        int iter = i + j;
-        if (iter == 10) {
-          int p = 0;
-        }
-
-        bytes_ += value_size + mkey.size();
-        mval = gen_.Generate(value_size);
-
-        cursor.find(mkey);
-        cursor.value(mval);
-        FinishedSingleOp();
-
-        /*
-        if (iter == 403 || iter == 404) {
-          char path[100];
-          snprintf(path, sizeof(path), "errors/%016d.yaml", iter);
-          std::ofstream out(path);
-          auto root = db_->_txn.root;
-          typedef leaves::_Dumper<Storage> Dumper;
-          Dumper::dump_link(out, root, db_);
-        }*/
+    // Call the appropriate template implementation based on storage type
+    if (using_file_storage_) {
+      if (!file_storage_) {
+        throw std::runtime_error("File storage pointer is null");
       }
-      cursor.commit(sync);
+      WriteImpl(*file_storage_, sync, order, num_entries, value_size, entries_per_batch);
+    } else {
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
+      }
+      WriteImpl(*map_storage_, sync, order, num_entries, value_size, entries_per_batch);
     }
   }
 
-  void ReadSequential() {
+  // Template method for sequential reading
+  template<typename StorageType>
+  void ReadSequentialImpl(StorageType& storage) {
     leaves::Slice key, value;
-    auto cursor = (*storage_)["benchmark"].cursor();
+    
+    auto cursor = storage["benchmark"].cursor();
     for (cursor.first(); cursor.is_valid(); cursor.next()) {
       key = cursor.key();
       value = cursor.value();
@@ -583,19 +623,52 @@ class Benchmark {
     }
   }
 
-  void ReadRandom() {
+  void ReadSequential() {
+    // Call the appropriate template implementation based on storage type
+    if (using_file_storage_) {
+      if (!file_storage_) {
+        throw std::runtime_error("File storage pointer is null");
+      }
+      ReadSequentialImpl(*file_storage_);
+    } else {
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
+      }
+      ReadSequentialImpl(*map_storage_);
+    }
+  }
+
+  // Template method for random reading
+  template<typename StorageType>
+  void ReadRandomImpl(StorageType& storage) {
     leaves::Slice key;
-    auto cursor = (*storage_)["benchmark"].cursor();
     char ckey[100];
+    
+    auto cursor = storage["benchmark"].cursor();
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
       snprintf(ckey, sizeof(ckey), "%016d", k);
 
       cursor.find(ckey);
       if (cursor.is_valid()) {
-        bytes_ += key.size() + cursor.value().size();
+        bytes_ += cursor.key().size() + cursor.value().size();
       }
       FinishedSingleOp();
+    }
+  }
+
+  void ReadRandom() {
+    // Call the appropriate template implementation based on storage type
+    if (using_file_storage_) {
+      if (!file_storage_) {
+        throw std::runtime_error("File storage pointer is null");
+      }
+      ReadRandomImpl(*file_storage_);
+    } else {
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
+      }
+      ReadRandomImpl(*map_storage_);
     }
   }
 };
@@ -625,6 +698,10 @@ int main(int argc, char** argv) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {
       FLAGS_page_size = n;
+    } else if (sscanf(argv[i], "--use_file_storage=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_use_file_storage = (n == 1) ? true : false;
+      std::fprintf(stderr, "Using %s for storage\n", FLAGS_use_file_storage ? "FileStorage" : "MapStorage");
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;

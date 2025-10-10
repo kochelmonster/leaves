@@ -42,7 +42,7 @@ class FileStorage {
     return _storage.list_dbs(result);
   }
   Slice filename() const { return Slice(_storage.filename()); }
-  size_t file_size() const { return _storage._header->file_size; }
+  size_t file_size() const { return _storage.file_size(); }
 
   void debug_reset() { _storage.debug_reset(); }
   void debug_check_cache() const { _storage.debug_check_cache(); }

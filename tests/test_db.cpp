@@ -426,6 +426,7 @@ struct TestStorage {
   }
 
   Mutex& file_lock() { return mutex; }
+  size_t file_size() const { return memory.size(); }
 
   block_ptr resolve(offset_t offset, Access access = READ) {
     return block_ptr(&memory[offset]);

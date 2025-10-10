@@ -17,7 +17,7 @@ else()
     message(FATAL_ERROR "Boost >= 1.80 not found")
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(LEAVES_GCOV "Add gconv support for tests" ON)
@@ -180,6 +180,9 @@ add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
 target_compile_options(db_bench_leaves PUBLIC -g -march=native -O2 -funroll-loops -flto)
+
+# Removed optimized version since optimizations are now in the main implementation
+# target_compile_options(db_bench_leaves PUBLIC -g -march=native)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
