@@ -103,6 +103,7 @@ struct _Inserter {
     assert(back->prefix < back->trie()->len());
 
     trie_ptr otrie = back->trie();
+    assert(otrie->count() < otrie->MAX_BRANCH_COUNT);
 
     // copy the original trie node with second part of compressed
     // to a new page

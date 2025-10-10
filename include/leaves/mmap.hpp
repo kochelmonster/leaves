@@ -45,7 +45,7 @@ class MapStorage {
     return _storage.list_dbs(result);
   }
   Slice filename() const { return Slice(_storage.filename()); }
-  size_t file_size() const { return _storage._memory->file_size; }
+  size_t file_size() const { return _storage.file_size(); }
 
  private:
   IMapStorage _storage;

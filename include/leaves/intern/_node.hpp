@@ -23,11 +23,12 @@ struct _TrieNode : public Traits::BlockHeader {
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
+  static constexpr uint16_t MAX_BRANCH_COUNT = 256;  // 256 (chars) + 1 (NULL)
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;
   uint8_t _array_offset;
-  uint16_e _array_len;  // 256 (chars) + 1 (NULL)
+  uint16_e _array_len;  // < MAX_BRANCH_COUNT
   hash_t hash;
   uint8_t _compressed_data[];
 
@@ -35,7 +36,7 @@ struct _TrieNode : public Traits::BlockHeader {
   const static int NONE = -1;
   const static int OUT_OF_RANGE = -2;
   const static uint16_t MAX_SIZE =
-      align(padding(sizeof(TrieNode) + 256, sizeof(uint32_e)) +
+      align(padding(sizeof(TrieNode) + MAX_BRANCH_COUNT, sizeof(uint32_e)) +
             8 * sizeof(uint32_e)) +
       257 * sizeof(offset_e);
   const static uint8_t LOWER_MASK = 0b00011111;
@@ -405,7 +406,7 @@ struct _LeafNode : public Traits::BlockHeader {
       auto bv = big();
       bv->value_size = value.size();
       return bv;
-    } 
+    }
     value_size = value.size();
     memcpy(vdata(), value.data(), value.size());
     return nullptr;

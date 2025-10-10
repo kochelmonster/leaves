@@ -119,6 +119,7 @@ struct _GarbageSlot {
     if (ostart == oend && istart >= iend) {
       assert(count == 0);
       if (result->slot_id != BlockContainer::SLOT_ID) {
+        // This is not the BlockCointainer slot
         istart = iend = 0;
         ostart = oend = 0;
         resolver.free(front);
@@ -144,7 +145,6 @@ struct _GarbageSlot {
         assert(new_back->slot_id == BlockContainer::SLOT_ID);
         oend = back->next = resolver.resolve(new_back);
         iend = 0;
-
         resolver.make_dirty(back);
         back = new_back;
       }
@@ -237,6 +237,7 @@ struct _MemManager {
 
   template <typename Resolver>
   block_ptr alloc(uint8_t sidx, Resolver& resolver) {
+    assert(sidx < COUNT);
     uint16_t bsize = BLOCK_SIZES[sidx];
 
     Slot& slot = slots[sidx];

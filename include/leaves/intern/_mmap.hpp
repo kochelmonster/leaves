@@ -44,15 +44,6 @@ struct _MemoryMapTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-  /*
-  Typical node sizes
-  digits: 0-9:     104
-  hex:    0-9A-F   160
-  base64: 64       564
-  utf-8:  127      1056
-  binary: 256      2088
-  max: 2264
-  */
 
 #pragma pack(1)
   struct BlockHeader {
@@ -63,9 +54,20 @@ struct _MemoryMapTraits {
   };
 #pragma pack(0)
 
+
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 1 * M;
   static constexpr uint16_t MAX_PROCESSES = 100;
+
+  /*
+  Typical node sizes
+  digits: 0-9:     104
+  hex:    0-9A-F   160
+  base64: 64       564
+  utf-8:  127      1056
+  binary: 256      2088
+  max: 2264
+  */
   static constexpr uint16_t BLOCK_SIZES[] = {
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
       _TrieNode<_MemoryMapTraits>::size(1, 16),   // hex 0-9A-F
@@ -179,6 +181,8 @@ struct _MemoryMapFile {
   const char* filename() const { return _file.get_name(); }
 
   Mutex& file_lock() { return _memory->file_lock; }
+
+  size_t file_size() const { return _memory->file_size; }
 
   void init_dbfile(const char* path, size_t map_size, uint16_t db_count) {
     if (!std::filesystem::is_regular_file(path)) {

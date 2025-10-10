@@ -378,6 +378,7 @@ struct _DB {
     
     auto area_ptr = _storage.alloc_single_area();
     _header->pending_single_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
+    make_dirty(_header);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -387,6 +388,7 @@ struct _DB {
     
     auto area_ptr = _storage.alloc_multi_area(size);
     _header->pending_multi_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
+    make_dirty(_header);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -471,6 +473,7 @@ struct _DB {
     assert(_wtxn.start_txn);
     txn_ptr active = resolve(_header->read_txn);
     active->next_txn = _header->prepared_txn;
+    make_dirty(_header);
     make_dirty(active);
     make_dirty(prepared);
 

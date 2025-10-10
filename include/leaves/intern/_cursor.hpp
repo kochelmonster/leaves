@@ -68,6 +68,7 @@ struct _Transition {
     offset = offset_;
     link_offset = 0xFFFF;
     block = resolve(offset);
+    assert(offset <= cursor->_db->_storage.file_size());
     return true;  // the caller shall set the trie root
   }
 
@@ -90,6 +91,7 @@ struct _Transition {
     assert(is_trie());
     trie() = cursor->_db->cow(trie());
     offset = cursor->_db->resolve(trie());
+    assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
 
     if (!is_root())
       *parent().update() = offset;
@@ -164,6 +166,7 @@ struct _Transition {
     }
 
     TrieNode& trie_ = *trie();
+    assert(trie_.count() < trie_.MAX_BRANCH_COUNT);
     prefix = get_prefix(key().data(), (char*)trie_.compressed(), key().size(),
                         trie_.len(), cmp);
     advance_key(prefix);
