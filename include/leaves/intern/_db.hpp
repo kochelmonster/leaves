@@ -76,7 +76,7 @@ struct _DB {
   using txn_ptr = typename Transaction::ptr;
   using block_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
-  
+
   typedef _DB<Storage> DB;
 
   struct ValueTraits : public Storage::Traits {
@@ -120,13 +120,13 @@ struct _DB {
       "Size of _Transaction must be equal to size of _TransactionBase");
 
   struct Header {
-    offset_t read_txn;             // the current read transaction
-    offset_t prepared_txn;         // the transaction being prepared for commit
+    offset_t read_txn;      // the current read transaction
+    offset_t prepared_txn;  // the transaction being prepared for commit
     Mutex txn_lock;
-    AreaList single_areas;         // single AREA_SIZE areas
-    AreaList multi_areas;          // multi-AREA_SIZE areas
-    AreaList pending_single_areas; // single areas pending commit/rollback
-    AreaList pending_multi_areas;  // multi areas pending commit/rollback
+    AreaList single_areas;          // single AREA_SIZE areas
+    AreaList multi_areas;           // multi-AREA_SIZE areas
+    AreaList pending_single_areas;  // single areas pending commit/rollback
+    AreaList pending_multi_areas;   // multi areas pending commit/rollback
   };
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
@@ -321,8 +321,8 @@ struct _DB {
       // allocate new multi-area
       uint64_t psize = padding(size, AREA_SIZE);
       auto slice = alloc_multi_area(psize);
-      found_size = slice->get_size();
-      found_offset = slice->get_offset();
+      found_size = slice->size();
+      found_offset = slice->offset();
     }
 
     uint32_t delta = found_size - size;
@@ -371,13 +371,13 @@ struct _DB {
 
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
-  
   area_ptr alloc_single_area() {
     assert(_wtxn.txn_id);
     std::scoped_lock lock(_storage.file_lock());
-    
+
     auto area_ptr = _storage.alloc_single_area();
-    _header->pending_single_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
+    _header->pending_single_areas.push(
+        *area_ptr, _storage);  // Convert Area* to AreaSlice for push
     make_dirty(_header);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
@@ -385,9 +385,10 @@ struct _DB {
   area_ptr alloc_multi_area(uint64_t size) {
     assert(_wtxn.txn_id);
     std::scoped_lock lock(_storage.file_lock());
-    
+
     auto area_ptr = _storage.alloc_multi_area(size);
-    _header->pending_multi_areas.push(*area_ptr, _storage);  // Convert Area* to AreaSlice for push
+    _header->pending_multi_areas.push(
+        *area_ptr, _storage);  // Convert Area* to AreaSlice for push
     make_dirty(_header);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
@@ -457,7 +458,7 @@ struct _DB {
   void rollback() {
     // Return pending areas to storage
     return_pending_areas();
-    
+
     _header->prepared_txn = _header->read_txn;
     flush();
     end_transaction();
@@ -466,7 +467,7 @@ struct _DB {
   void prepare_commit(bool sync = false) {
     // No transaction active or already prepared
     if (!_wtxn.txn_id || _header->prepared_txn != _header->read_txn) return;
-       
+
     txn_ptr prepared = _wtxn.clone(*this);
     _header->prepared_txn = resolve(prepared);
 
@@ -483,7 +484,7 @@ struct _DB {
   void commit(bool sync = false) {
     if (!_wtxn.txn_id) return;
     prepare_commit(sync);
-    
+
     // Now atomically move pending areas to committed areas
     _header->single_areas.move(_header->pending_single_areas, _storage);
     _header->multi_areas.move(_header->pending_multi_areas, _storage);
@@ -498,7 +499,9 @@ struct _DB {
     _header->txn_lock.unlock();
   }
 
-  void flush(bool sync = false, bool force = false) { _storage.flush(sync, force); }
+  void flush(bool sync = false, bool force = false) {
+    _storage.flush(sync, force);
+  }
 
   typedef _MemStatistics<Traits> MemStatistics;
 
@@ -565,8 +568,7 @@ struct _DB {
 
   void sanitize() {
     // Return any pending areas from incomplete transactions back to storage
-    if (_header->prepared_txn != _header->read_txn)
-      commit();
+    if (_header->prepared_txn != _header->read_txn) commit();
     return_pending_areas();
     flush();
   }

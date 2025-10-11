@@ -29,7 +29,6 @@ struct TestTraits {
     uint8_t slot_id;
     uint8_t free_idx;
   };
-
   typedef SimplePointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
   template <typename T, NodeTypes type = TRIE>
@@ -89,17 +88,17 @@ struct TestStorage {
     if (!result) {
       size_t old_size = memory.size();
       memory.resize(old_size + AREA_SIZE);
-      
+
       // Create a new Area and initialize it
       Area* area = new Area();
-      area->set_offset(old_size);
-      area->set_size(AREA_SIZE);
+      area->offset(old_size);
+      area->size(AREA_SIZE);
       area->_ref.store(0);
-      
+
       // Wrap in area_ptr
       return area_ptr(area);
     }
-    
+
     return result;
   }
 
@@ -109,17 +108,17 @@ struct TestStorage {
     if (!result) {
       size_t old_size = memory.size();
       memory.resize(old_size + size);
-      
+
       // Create a new Area and initialize it
       Area* area = new Area();
-      area->set_offset(old_size);
-      area->set_size(size);
+      area->offset(old_size);
+      area->size(size);
       area->_ref.store(0);
-      
+
       // Wrap in area_ptr
       return area_ptr(area);
     }
-    
+
     return result;
   }
 
@@ -245,19 +244,19 @@ BOOST_AUTO_TEST_CASE(test_arealist) {
   areas.init();
 
   // Test empty list
-  BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
+  BOOST_CHECK_EQUAL(areas.get_head(), 0);
   auto result = areas.pop(storage);
   BOOST_CHECK(!result);
 
   // Test push and pop single area
   auto area1 = storage.alloc_single_area();
   areas.push(*area1, storage);
-  BOOST_CHECK_EQUAL(areas.get_head(), area1->get_offset());
+  BOOST_CHECK_EQUAL(areas.get_head(), area1->offset());
 
   auto popped = areas.pop(storage);
   BOOST_CHECK(popped);
-  BOOST_CHECK_EQUAL(popped->get_offset(), area1->get_offset());
-  BOOST_CHECK_EQUAL(popped->get_size(), area1->get_size());
+  BOOST_CHECK_EQUAL(popped->offset(), area1->offset());
+  BOOST_CHECK_EQUAL(popped->size(), area1->size());
   BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
 
   // Test multiple areas
@@ -269,21 +268,21 @@ BOOST_AUTO_TEST_CASE(test_arealist) {
 
   // Should pop in LIFO order
   auto pop1 = areas.pop(storage);
-  BOOST_CHECK_EQUAL(pop1->get_offset(), area3->get_offset());
+  BOOST_CHECK_EQUAL(pop1->offset(), area3->offset());
 
   auto pop2 = areas.pop(storage);
-  BOOST_CHECK_EQUAL(pop2->get_offset(), area2->get_offset());
+  BOOST_CHECK_EQUAL(pop2->offset(), area2->offset());
 
   BOOST_CHECK_EQUAL(areas.get_head(), offset_t(0));
 
   // Test find_and_remove with different sizes
   Area small_area;
-  small_area.set_offset(1000);
-  small_area.set_size(AREA_SIZE);
-  
+  small_area.offset(1000);
+  small_area.size(AREA_SIZE);
+
   Area big_area;
-  big_area.set_offset(2000);
-  big_area.set_size(2 * AREA_SIZE);
+  big_area.offset(2000);
+  big_area.size(2 * AREA_SIZE);
 
   areas.push(small_area, storage);
   areas.push(big_area, storage);
@@ -291,12 +290,12 @@ BOOST_AUTO_TEST_CASE(test_arealist) {
   // Find exact size match
   auto found = areas.find_and_remove(2 * AREA_SIZE, storage);
   BOOST_CHECK(found);
-  BOOST_CHECK_EQUAL(found->get_offset(), big_area.get_offset());
+  BOOST_CHECK_EQUAL(found->offset(), big_area.offset());
 
   // Should still have small area
   auto remaining = areas.pop(storage);
   BOOST_CHECK(remaining);
-  BOOST_CHECK_EQUAL(remaining->get_offset(), small_area.get_offset());
+  BOOST_CHECK_EQUAL(remaining->offset(), small_area.offset());
 }
 
 #if 0

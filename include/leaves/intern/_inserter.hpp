@@ -36,7 +36,7 @@ struct _Inserter {
   block_ptr alloc_big(size_t size) {
     auto db = back->cursor->_db;
     auto slice = db->alloc_big(size);
-    return resolve(offset_t(slice.get_offset()));
+    return resolve(offset_t(slice.offset()));
   }
 
   void free_big(leaf_ptr& leaf) {
@@ -131,14 +131,14 @@ struct _Inserter {
     Slice prefix = trans.key().slice(255);
     trans.branch_key = trans.key()[prefix.size()];
     trans.link_offset = trans.trie()->create(prefix, trans.branch_key);
-    trans.prefix = prefix.size();  
+    trans.prefix = prefix.size();
     trans.cmp = 0;
     trans.advance_key(trans.prefix);
   }
 
   void create_bigkey() {
     Slice& key = back->key();
-    while(key.size() > 255) {
+    while (key.size() > 255) {
       trie_ptr trie = alloc(TrieNode::size(255, 1));
       Transition& bottom = back->push(resolve(trie));
       fill_bigkey(bottom);

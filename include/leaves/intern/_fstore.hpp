@@ -1,8 +1,6 @@
 #ifndef _LEAVES__FSTORE_HPP
 #define _LEAVES__FSTORE_HPP
 
-#include <iostream>
-
 #include <fcntl.h>
 
 #include <algorithm>
@@ -18,11 +16,12 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <thread>
+#include <unordered_map>
 
 #include "_db.hpp"
 #include "_exception.hpp"
@@ -48,7 +47,6 @@ struct _StoreTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-
 #pragma pack(1)
   struct BlockHeader {
     typedef BlockHeader Base;
@@ -60,12 +58,12 @@ struct _StoreTraits {
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 64 * K;  // not OS AREA_SIZE
-  static constexpr uint16_t BLOCK_SIZES[] = { // Typical node sizes
-      _TrieNode<_StoreTraits>::size(1, 10),   // digits 0-9
-      _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
-      _TrieNode<_StoreTraits>::size(1, 64),   // base64
-      _TrieNode<_StoreTraits>::size(1, 127),  // utf-8
-      _TrieNode<_StoreTraits>::size(1, 256),  // binary
+  static constexpr uint16_t BLOCK_SIZES[] = {  // Typical node sizes
+      _TrieNode<_StoreTraits>::size(1, 10),    // digits 0-9
+      _TrieNode<_StoreTraits>::size(1, 16),    // hex 0-9A-F
+      _TrieNode<_StoreTraits>::size(1, 64),    // base64
+      _TrieNode<_StoreTraits>::size(1, 127),   // utf-8
+      _TrieNode<_StoreTraits>::size(1, 256),   // binary
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
@@ -269,7 +267,7 @@ struct _CacheStore : public Opers_ {
       auto it = idx.find(key);
       assert(it == idx.end());
       _data.insert(Entry{key, block});  // inserts at end of sequenced index
-      _size += block.area()->get_size();
+      _size += block.area()->size();
       prune();
     }
 
@@ -285,7 +283,7 @@ struct _CacheStore : public Opers_ {
           auto& entry = const_cast<Entry&>(*it);
           AreaSlice* slice = entry.block.area();
           if (slice->get_ref() == 1) {
-            _size -= slice->get_size();
+            _size -= slice->size();
             seq.erase(it);
             evicted = true;
             break;
@@ -324,7 +322,7 @@ struct _CacheStore : public Opers_ {
       const AreaSlice* cached_slice = entry.block.area();
 
       // Get the size of the cached block
-      size_t size = cached_slice->get_size();
+      size_t size = cached_slice->size();
 
       // Allocate memory for on-disk data
       AreaSlice* disk_data = (AreaSlice*)::operator new(size);
@@ -450,7 +448,8 @@ struct _CacheStore : public Opers_ {
     {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
       has_pending = !_pending_dirty_areas.empty();
-      _dirty_areas.insert(_pending_dirty_areas.begin(), _pending_dirty_areas.end());
+      _dirty_areas.insert(_pending_dirty_areas.begin(),
+                          _pending_dirty_areas.end());
       _pending_dirty_areas.clear();
     }
 
@@ -468,7 +467,7 @@ struct _CacheStore : public Opers_ {
     block_ptr cached;
     if (_cache.get(area_offset, cached)) {
       AreaSlice* slice = cached.area();
-      assert(slice->get_offset() == area_offset);
+      assert(slice->offset() == area_offset);
       block_ptr result = cached;  // copy increments refcount
       result._offset = static_cast<uint32_t>(raw_offset - area_offset);
       return result;
@@ -481,8 +480,8 @@ struct _CacheStore : public Opers_ {
     read((uint64_t)read_offset, &disk_header, sizeof(disk_header));
 
     // Allocate full region (header + payload)
-    AreaSlice* slice = (AreaSlice*)::operator new(disk_header.get_size());
-    read((uint64_t)read_offset, slice, disk_header.get_size());
+    AreaSlice* slice = (AreaSlice*)::operator new(disk_header.size());
+    read((uint64_t)read_offset, slice, disk_header.size());
     slice->_ref.store(0);
 
     block_ptr result(slice);
@@ -493,13 +492,13 @@ struct _CacheStore : public Opers_ {
 
   // Resolve function for SmartPointer ptr type
   offset_t resolve(const typename Traits::ptr& p) const {
-    return offset_t(p._iref->get_offset() + p._offset).type(p.type);
+    return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
   // Resolve function for SmartPointer Pointer<T> type
   template <typename T, NodeTypes type>
   offset_t resolve(const typename Traits::template Pointer<T, type>& p) const {
-    return offset_t(p._iref->get_offset() + p._offset).type(p.type);
+    return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
   void prefetch(offset_t offset, Access access = READ) const {
@@ -513,7 +512,7 @@ struct _CacheStore : public Opers_ {
   }
 
   void make_dirty(block_ptr& block) {
-    _pending_dirty_areas[block.area()->get_offset()] = block;
+    _pending_dirty_areas[block.area()->offset()] = block;
   }
 
   // Mark the file header as dirty; background loop will flush it
@@ -581,7 +580,7 @@ struct _CacheStore : public Opers_ {
       const auto& area = block.area();
 
       // Write the block to disk
-      write(header_size + area->get_offset(), area, area->get_size());
+      write(header_size + area->offset(), area, area->size());
     }
 
     if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {

@@ -14,7 +14,7 @@ namespace leaves {
 
 typedef uint64_t tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
-typedef enum { READ = 0, WRITE = 1} Access;
+typedef enum { READ = 0, WRITE = 1 } Access;
 
 class Slice {
  private:
@@ -154,7 +154,6 @@ struct _Offset {
 
 typedef _Offset<uint64_t> offset_t;
 
-
 struct AreaSlice {
   std::atomic<uint64_t> _offset;
   uint32_t _size;
@@ -164,10 +163,10 @@ struct AreaSlice {
   // default
   AreaSlice& operator=(const AreaSlice& other) {
     _offset.store(other._offset.load(std::memory_order_acquire),
-                 std::memory_order_release);
+                  std::memory_order_release);
     _size = other._size;
     _ref.store(other._ref.load(std::memory_order_acquire),
-              std::memory_order_release);
+               std::memory_order_release);
     return *this;
   }
 
@@ -180,21 +179,15 @@ struct AreaSlice {
 
   // No more dirty bit methods - removed
 
-  uint64_t get_offset() const {
-    return _offset.load(std::memory_order_acquire);
-  }
+  uint64_t offset() const { return _offset.load(std::memory_order_acquire); }
 
-  void set_offset(uint64_t new_offset) {
+  void offset(uint64_t new_offset) {
     _offset.store(new_offset, std::memory_order_release);
   }
 
-  uint32_t get_size() const {
-    return _size;
-  }
+  uint32_t size() const { return _size; }
 
-  void set_size(uint32_t new_size) {
-    _size = new_size;
-  }
+  void size(uint32_t new_size) { _size = new_size; }
 
   // Reference counting methods - atomic
   uint32_t inc_ref() {
@@ -205,12 +198,10 @@ struct AreaSlice {
     return _ref.fetch_sub(1, std::memory_order_acq_rel) - 1;
   }
 
-  uint32_t get_ref() const {
-    return _ref.load(std::memory_order_acquire);
-  }
+  uint32_t get_ref() const { return _ref.load(std::memory_order_acquire); }
 
-  operator bool() const { return get_size(); }
-  uint64_t end() const { return get_offset() + get_size(); }
+  operator bool() const { return size(); }
+  uint64_t end() const { return offset() + size(); }
 };
 
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,

@@ -91,9 +91,9 @@ BOOST_AUTO_TEST_CASE(test_extend) {
   const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
   const size_t BLOCK_SIZE =
       DBMMap::Traits::BLOCK_SIZES[DBMMap::Traits::BLOCK_SIZES_COUNT - 1];
-  
+
   size_t initial_file_size = storage._memory->file_size;
-  
+
   {
     Transaction trans(db);
     // Allocate enough blocks to force a new area allocation
@@ -233,9 +233,9 @@ BOOST_AUTO_TEST_CASE(test_recycle_db) {
 
   auto db3 = storage.make("test3");
   size_t final_file_size = storage._memory->file_size;
-  
-  // Check that no significant additional memory was allocated (indicating recycling)
-  // Allow some small growth due to area header changes
+
+  // Check that no significant additional memory was allocated (indicating
+  // recycling) Allow some small growth due to area header changes
   const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
   BOOST_CHECK(final_file_size <= initial_file_size + AREA_SIZE);
 }
@@ -279,10 +279,10 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   for (size_t i = 0; i < offsets.size(); i++) {
     new_offsets.push_back(storage.resolve(db1->alloc(4 * K)));
   }
-  
+
   // Check that we allocated the same number of blocks (recycling working)
   BOOST_CHECK_EQUAL(offsets.size(), new_offsets.size());
-  
+
   // Check that at least some offsets are reused (indicating recycling)
   bool some_reused = false;
   for (offset_t old_offset : offsets) {
@@ -294,7 +294,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
     }
   }
   BOOST_CHECK(some_reused);
-  
+
   db1->rollback();
 }
 
@@ -337,7 +337,7 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
 
     for (int i = 0; i < 10; i++) {
       auto slice = db->alloc_big(10 * K);
-      BOOST_CHECK_EQUAL(slice.get_size(), 12 * K);
+      BOOST_CHECK_EQUAL(slice.size(), 12 * K);
       slices.push_back(slice);
 
       // one offset and one size item
@@ -346,14 +346,14 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
     }
 
     for (int i = 0; i < 10; i += 2) {
-      db->free_big(slices[i].get_offset(), slices[i].get_size());
+      db->free_big(slices[i].offset(), slices[i].size());
       // dump(db, "freea_", i);
       check_memtrie_count(db, 4 + i);
     }
 
     int item_count = 12;
     for (int i = 1; i < 10; i += 2) {
-      db->free_big(slices[i].get_offset(), slices[i].get_size());
+      db->free_big(slices[i].offset(), slices[i].size());
       check_memtrie_count(db, 11 - i);
       // dump(db, "freeb_", i);
     }
@@ -446,7 +446,7 @@ struct TestStorage {
       // Extend storage with new area
       uint32_t old_size = memory.size();
       memory.resize(old_size + AREA_SIZE);
-      
+
       // Create Area in the new memory location
       auto area = area_ptr(resolve(old_size, WRITE));
       area->init(old_size, AREA_SIZE, 0);
@@ -458,13 +458,13 @@ struct TestStorage {
   area_ptr alloc_multi_area(uint64_t size) {
     // Ensure size is multiple of AREA_SIZE
     size = padding(size, AREA_SIZE);
-    
+
     auto result = multi_areas.find_and_remove(size, *this);
     if (!result) {
       // Extend storage with new area
       uint32_t old_size = memory.size();
       memory.resize(old_size + size);
-      
+
       // Create Area in the new memory location
       auto area = area_ptr(resolve(old_size, WRITE));
       area->init(old_size, size, 0);
@@ -473,13 +473,9 @@ struct TestStorage {
     return result;
   }
 
-  void return_single_areas(AreaList& areas) {
-    single_areas.move(areas, *this);
-  }
+  void return_single_areas(AreaList& areas) { single_areas.move(areas, *this); }
 
-  void return_multi_areas(AreaList& areas) {
-    multi_areas.move(areas, *this);
-  }
+  void return_multi_areas(AreaList& areas) { multi_areas.move(areas, *this); }
 
   // Legacy compatibility method
   AreaSlice get_area(uint64_t size) {
@@ -497,29 +493,31 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
 
   BOOST_CHECK_EQUAL(storage.db->_header->single_areas.get_head(), 0);
   storage.db->start_transaction();
-  
+
   // Allocate several areas and test basic allocation
   std::vector<AreaSlice> allocated_areas;
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
     allocated_areas.push_back(slice);
     // Just check that we got a reasonable size
-    BOOST_CHECK(slice.get_size() >= storage.AREA_SIZE / 2);
+    BOOST_CHECK(slice.size() >= storage.AREA_SIZE / 2);
   }
   storage.db->rollback();
 
   // After rollback, some areas should be available for recycling
-  // The exact behavior depends on implementation details, so just check basic functionality
+  // The exact behavior depends on implementation details, so just check basic
+  // functionality
   storage.db->start_transaction();
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
-    BOOST_CHECK(slice.get_size() >= storage.AREA_SIZE / 2);
+    BOOST_CHECK(slice.size() >= storage.AREA_SIZE / 2);
   }
   storage.db->commit();
 
   // After commit, check that allocation still works
-  BOOST_CHECK(storage.db->_header->single_areas.get_head() == 0 || 
-              storage.db->_header->single_areas.get_head() != 0);  // Just verify it's valid
+  BOOST_CHECK(storage.db->_header->single_areas.get_head() == 0 ||
+              storage.db->_header->single_areas.get_head() !=
+                  0);  // Just verify it's valid
 }
 
 BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
@@ -527,23 +525,24 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
 
   BOOST_CHECK_EQUAL(storage.db->_header->multi_areas.get_head(), 0);
   storage.db->start_transaction();
-  
+
   // Allocate several big areas
   std::vector<AreaSlice> allocated_areas;
   for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
     allocated_areas.push_back(slice);
-    BOOST_CHECK(slice.get_size() >= storage.AREA_SIZE);
+    BOOST_CHECK(slice.size() >= storage.AREA_SIZE);
   }
   storage.db->rollback();
 
   // Test that area recycling works for big areas
   storage.db->start_transaction();
   auto big_slice = storage.db->alloc_big(5 * storage.AREA_SIZE);
-  BOOST_CHECK(big_slice.get_size() >= 5 * storage.AREA_SIZE);
+  BOOST_CHECK(big_slice.size() >= 5 * storage.AREA_SIZE);
   storage.db->commit();
 
   // Verify basic functionality
   BOOST_CHECK(storage.db->_header->multi_areas.get_head() == 0 ||
-              storage.db->_header->multi_areas.get_head() != 0);  // Just verify it's valid
+              storage.db->_header->multi_areas.get_head() !=
+                  0);  // Just verify it's valid
 }

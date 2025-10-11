@@ -105,9 +105,15 @@ struct SmartPointer {
     operator bool() const { return _iref != nullptr; }
     operator bool() { return _iref != nullptr; }
 
-    BlockHeader* operator->() { return reinterpret_cast<BlockHeader*>((char*)*this); }
-    const BlockHeader* operator->() const { return reinterpret_cast<const BlockHeader*>((const char*)*this); }
-    bool operator==(const ptr& other) const { return _iref == other._iref && _offset == other._offset; }
+    BlockHeader* operator->() {
+      return reinterpret_cast<BlockHeader*>((char*)*this);
+    }
+    const BlockHeader* operator->() const {
+      return reinterpret_cast<const BlockHeader*>((const char*)*this);
+    }
+    bool operator==(const ptr& other) const {
+      return _iref == other._iref && _offset == other._offset;
+    }
     bool operator!=(const ptr& other) const { return !(*this == other); }
     bool operator!=(const void* other) const { return (char*)*this != other; }
     void* link(uint16_t offset) { return (char*)_iref + _offset + offset; }
@@ -121,7 +127,7 @@ struct SmartPointer {
       _offset = 0;
     }
     AreaSlice* area() const { return _iref; }
-    uint64_t offset() const { return _iref ? _iref->get_offset() + _offset : 0; }
+    uint64_t offset() const { return _iref ? _iref->offset() + _offset : 0; }
 
     AreaSlice* _iref = nullptr;
     uint32_t _offset = 0;  // offset within area (from AreaSlice base)
@@ -130,8 +136,7 @@ struct SmartPointer {
   template <typename T, NodeTypes t = TRIE>
   struct Pointer : public ptr {
     static constexpr NodeTypes type = t;
-    Pointer(void* src = nullptr)
-        : ptr(reinterpret_cast<AreaSlice*>(src)) {}
+    Pointer(void* src = nullptr) : ptr(reinterpret_cast<AreaSlice*>(src)) {}
     Pointer(const ptr& src) : ptr(src) {}
     const ptr& operator=(const ptr& src) {
       if (ptr::_iref) ptr::_iref->dec_ref();

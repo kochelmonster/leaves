@@ -2,9 +2,9 @@
 Transaction save memory managment.
 
 If a transactions is rolled back or the machine crashes,
-the memory must return to the previous saved state, without
-any blocks lost.
-
+   area_ptr area = resolver.resolve(area_slice.offset(), WRITE);
+   area->init(area_slice.offset(), area_slice.size(), get_head());
+   offset_t new_head = area_slice.offset();
 All important operations are done in DumpSlot
 
 Constraint A:
@@ -317,22 +317,21 @@ struct _MemStatistics {
 
 // Area structure that extends AreaSlice with linked list functionality
 struct Area : public AreaSlice {
-  offset_t next;    // pointer to next area in list (0 if last)
-  
+  offset_t next;  // pointer to next area in list (0 if last)
+
   void init(offset_t area_offset, size_t area_size, offset_t next_area = 0) {
-    set_offset(area_offset);
-    set_size(area_size);
+    offset(area_offset);
+    size(area_size);
     // Don't modify reference count - it's managed separately
     next = next_area;
   }
-  
+
   // Returns the offset where content can start (after the Area header)
-  offset_t content_offset() const {
-    return get_offset() + sizeof(Area);
-  }
+  offset_t content_offset() const { return offset() + sizeof(Area); }
 };
 
-static_assert(alignof(Area) >= alignof(void*), "Area alignment must be pointer-aligned");
+static_assert(alignof(Area) >= alignof(void*),
+              "Area alignment must be pointer-aligned");
 
 // Simple linked list of areas with atomic value switching
 struct AreaList {
@@ -342,17 +341,17 @@ struct AreaList {
   offset_t head[2];  // two sets of head pointers
   offset_t tail[2];  // two sets of tail pointers
   uint8_t active;    // 0 or 1 - determines which set is active
-  
+
   void init() {
     head[0] = head[1] = 0;
     tail[0] = tail[1] = 0;
     active = 0;
   }
-  
+
   // Get current active pointers
   offset_t get_head() const { return head[active]; }
   offset_t get_tail() const { return tail[active]; }
-  
+
   // Prepare inactive buffer and atomically switch
   void atomic_switch(offset_t new_head, offset_t new_tail) {
     uint8_t inactive = 1 - active;
@@ -360,57 +359,58 @@ struct AreaList {
     tail[inactive] = new_tail;
     active = inactive;  // Atomic: single byte write
   }
-  
+
   template <typename Resolver>
   typename Resolver::Traits::template Pointer<Area> pop(Resolver& resolver) {
     if (!get_head()) {
-      return nullptr; // empty list
+      return nullptr;  // empty list
     }
-    
+
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
     area_ptr area = resolver.resolve(get_head(), WRITE);
-    
+
     offset_t new_head = area->next;
     offset_t new_tail = new_head ? get_tail() : offset_t(0);
-    
+
     atomic_switch(new_head, new_tail);
     return area;
   }
-  
+
   template <typename Resolver>
   void push(const AreaSlice& area_slice, Resolver& resolver) {
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
-    
+
     // Use the area itself to store the Area header
-    area_ptr area = resolver.resolve(area_slice.get_offset(), WRITE);
-    area->init(area_slice.get_offset(), area_slice.get_size(), get_head());
+    area_ptr area = resolver.resolve(area_slice.offset(), WRITE);
+    area->init(area_slice.offset(), area_slice.size(), get_head());
     resolver.make_dirty(area);
-    
-    offset_t new_head = area_slice.get_offset();
+
+    offset_t new_head = area_slice.offset();
     offset_t new_tail = get_tail() ? get_tail() : new_head;
-    
+
     atomic_switch(new_head, new_tail);
   }
-  
+
   template <typename Resolver>
-  typename Resolver::Traits::template Pointer<Area> find_and_remove(size_t size, Resolver& resolver) {
+  typename Resolver::Traits::template Pointer<Area> find_and_remove(
+      size_t size, Resolver& resolver) {
     if (!get_head()) {
-      return nullptr; // empty list
+      return nullptr;  // empty list
     }
-    
+
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
     offset_t prev_offset = 0;
     offset_t curr_offset = get_head();
     uint8_t iter_count = 0;
-    
+
     while (curr_offset && iter_count < MAX_ITER) {
       area_ptr curr = resolver.resolve(curr_offset, WRITE);
-      
-      if (curr->get_size() >= size) {
+
+      if (curr->size() >= size) {
         // Found suitable area - remove from list
         offset_t new_head = get_head();
         offset_t new_tail = get_tail();
-        
+
         if (prev_offset) {
           area_ptr prev = resolver.resolve(prev_offset, WRITE);
           prev->next = curr->next;
@@ -426,42 +426,42 @@ struct AreaList {
             new_tail = 0;
           }
         }
-        
+
         // If area is larger than needed, split it
-        if (curr->get_size() > size) {
+        if (curr->size() > size) {
           // Create rest area from the remaining space
-          offset_t rest_offset = curr->get_offset() + size;
-          size_t rest_size = curr->get_size() - size;
-          
+          offset_t rest_offset = curr->offset() + size;
+          size_t rest_size = curr->size() - size;
+
           // Insert rest area at head
           area_ptr rest = resolver.resolve(rest_offset, WRITE);
           rest->init(rest_offset, rest_size, new_head);
           new_head = rest_offset;
           resolver.make_dirty(rest);
-          
+
           // Update current area to requested size
-          curr->set_size(size);
+          curr->size(size);
           resolver.make_dirty(curr);
         }
-        
+
         atomic_switch(new_head, new_tail);
         return curr;
       }
-      
+
       prev_offset = curr_offset;
       curr_offset = curr->next;
       iter_count++;
     }
-    
-    return nullptr; // No suitable area found
+
+    return nullptr;  // No suitable area found
   }
-  
+
   template <typename Resolver>
   void move(AreaList& other, Resolver& resolver) {
     if (!other.get_head()) {
-      return; // Nothing to add
+      return;  // Nothing to add
     }
-    
+
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
 
     // Phase 1: Clear source first to avoid double ownership
@@ -473,11 +473,12 @@ struct AreaList {
       // Phase 2: Atomically take ownership
       atomic_switch(other_head, other_tail);
     } else {
-      // Phase 2: Connect our tail to other's head (safe now - no double ownership)
+      // Phase 2: Connect our tail to other's head (safe now - no double
+      // ownership)
       area_ptr tail_area = resolver.resolve(get_tail(), WRITE);
       tail_area->next = other_head;
       resolver.make_dirty(tail_area);
-      
+
       // Phase 3: Atomically update our pointers
       atomic_switch(get_head(), other_tail);
     }
@@ -488,37 +489,39 @@ struct AreaList {
 struct AreaPool {
   AreaList single_areas;  // single AREA_SIZE areas
   AreaList multi_areas;   // multi-AREA_SIZE areas
-  
+
   void init() {
     single_areas.init();
     multi_areas.init();
   }
-  
+
   template <typename Resolver>
-  typename Resolver::Traits::template Pointer<Area> alloc_single_area(Resolver& resolver) {
+  typename Resolver::Traits::template Pointer<Area> alloc_single_area(
+      Resolver& resolver) {
     // First try to get from single_areas
     auto area = single_areas.pop(resolver);
     if (area) {
       return area;
     }
-    
+
     // If no single area available, try to get from multi_areas
     // Look for an area that's exactly AREA_SIZE or can be split
     constexpr auto AREA_SIZE = Resolver::Traits::AREA_SIZE;
     area = multi_areas.find_and_remove(AREA_SIZE, resolver);
     return area;
   }
-  
+
   template <typename Resolver>
-  typename Resolver::Traits::template Pointer<Area> alloc_multi_area(size_t size, Resolver& resolver) {
+  typename Resolver::Traits::template Pointer<Area> alloc_multi_area(
+      size_t size, Resolver& resolver) {
     return multi_areas.find_and_remove(size, resolver);
   }
-  
+
   template <typename Resolver>
   void return_single_areas(AreaList& areas, Resolver& resolver) {
     single_areas.move(areas, resolver);
   }
-  
+
   template <typename Resolver>
   void return_multi_areas(AreaList& areas, Resolver& resolver) {
     multi_areas.move(areas, resolver);
