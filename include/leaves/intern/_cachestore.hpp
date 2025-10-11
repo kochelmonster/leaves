@@ -114,14 +114,13 @@ struct _CacheStore : public Opers_ {
   }
 
   void flush(bool sync = false, bool force = false) {
-    bool has_pending = false;
     {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
-      has_pending = !_pending_dirty_areas.empty();
       _dirty_areas.insert(_pending_dirty_areas.begin(),
                           _pending_dirty_areas.end());
-      _pending_dirty_areas.clear();
     }
+    bool has_pending = !_pending_dirty_areas.empty();
+    _pending_dirty_areas.clear();
 
     if (sync) {
       write_dirty_blocks(calc_header_size());
