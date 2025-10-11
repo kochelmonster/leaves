@@ -30,7 +30,7 @@ using boost::multi_index::member;
 using boost::multi_index::multi_index_container;
 using boost::multi_index::sequenced;
 
-struct CacheBase {
+struct _CacheBase {
   struct DBEntry {
     char name[21];
     offset_t offset;
@@ -56,7 +56,7 @@ struct _CacheStore : public Opers_ {
   using Opers_::read;
   using Opers_::resize;
   using Opers_::write;
-  using DBEntry = typename CacheBase::DBEntry;
+  using DBEntry = typename _CacheBase::DBEntry;
 
   struct LRUCache {
     struct Entry {
@@ -452,7 +452,7 @@ struct _CacheStore : public Opers_ {
   db_ptr operator[](const char* name) { return make(name); }
 
   db_ptr make(const char* name) {
-    if (strlen(name) >= sizeof(CacheBase::DBEntry::name)) throw KeyTooBig();
+    if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) throw KeyTooBig();
 
     // No locking needed since we're single-process
     int free = -1;

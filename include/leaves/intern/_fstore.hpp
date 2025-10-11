@@ -74,7 +74,7 @@ struct _StoreTraits {
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
-struct _FileOperations : CacheBase {
+struct _FileOperations : _CacheBase {
   // Simple placeholder for compatibility, no actual locking
   struct Mutex {
     // No mutex needed for single-process use
