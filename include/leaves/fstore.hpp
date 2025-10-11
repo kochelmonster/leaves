@@ -33,8 +33,8 @@ class FileStorage {
     friend class _Dumper;
   };
 
-  FileStorage(const char* path, uint16_t db_count = 48)
-      : _storage(path, db_count) {}
+  FileStorage(const char* path, uint16_t db_count = 48, size_t cache_capacity = 500 * M)
+      : _storage(path, db_count, cache_capacity) {}
 
   DB operator[](const char* name) { return DB(_storage.make(name)); }
   void remove_db(const char* name) { _storage.remove_db(name); }

@@ -3,11 +3,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <boost/multi_index/hashed_index.hpp>
-#include <boost/multi_index/indexed_by.hpp>
-#include <boost/multi_index/member.hpp>
-#include <boost/multi_index/sequenced_index.hpp>
-#include <boost/multi_index_container.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -21,14 +16,9 @@
 #include "_memory.hpp"  // for AreaSlice, SmartPointer
 #include "_port.hpp"
 #include "_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
+#include "_twoquecache.hpp"
 
 namespace leaves {
-
-using boost::multi_index::hashed_unique;
-using boost::multi_index::indexed_by;
-using boost::multi_index::member;
-using boost::multi_index::multi_index_container;
-using boost::multi_index::sequenced;
 
 struct _CacheBase {
   struct DBEntry {
@@ -58,177 +48,34 @@ struct _CacheStore : public Opers_ {
   using Opers_::write;
   using DBEntry = typename _CacheBase::DBEntry;
 
-  struct LRUCache {
-    struct Entry {
-      uint64_t key;
-      block_ptr block;  // holds reference to area via ptr refcount
-    };
-    // Use using-declarations for multi_index components
-    typedef multi_index_container<
-        Entry, indexed_by<hashed_unique<member<Entry, uint64_t, &Entry::key>>,
-                          sequenced<>>>
-        container_t;
-    container_t _data;
-
-    LRUCache(size_t capacity = 500 * M) : _capacity(capacity) {
-      _data.reserve(_capacity / AREA_SIZE);
-    }
-
-    bool get(uint64_t key, block_ptr& out) {
-      auto& idx = _data.template get<0>();
-      auto it = idx.find(key);
-      if (it == idx.end()) return false;
-      out = it->block;
-      // Move accessed entry to the back of the sequenced index (MRU)
-      auto& seq = _data.template get<1>();
-      seq.relocate(seq.end(), seq.iterator_to(*it));
-      return true;
-    }
-
-    void put(uint64_t key, const block_ptr& block) {
-      auto& idx = _data.template get<0>();
-      auto it = idx.find(key);
-      assert(it == idx.end());
-      _data.insert(Entry{key, block});  // inserts at end of sequenced index
-      _size += block.area()->size();
-      prune();
-    }
-
-    void prune() {
-      auto& seq = _data.template get<1>();
-      constexpr size_t WINDOW = 64;  // bounded scan to avoid O(n)
-      while (_size > _capacity && !seq.empty()) {
-        // Try to evict first clean entry within the window
-        bool evicted = false;
-        size_t scanned = 0;
-        for (auto it = seq.begin(); it != seq.end() && scanned < WINDOW;
-             ++it, ++scanned) {
-          auto& entry = const_cast<Entry&>(*it);
-          AreaSlice* slice = entry.block.area();
-          if (slice->get_ref() == 1) {
-            _size -= slice->size();
-            seq.erase(it);
-            evicted = true;
-            break;
-          }
-        }
-        if (!evicted) break;  // all in window dirty; stop for now
-      }
-    }
-
-    size_t size() const { return _data.size(); }
-
-    size_t _size = 0;
-    size_t _capacity;
-  };
+  // Use TwoQCache instead of LRUCache
+  using Cache = TwoQCache<uint64_t, block_ptr>;
 
   std::vector<wdb_ptr> _dbs;  // databases
-  mutable LRUCache _cache;
+  mutable Cache _cache;
+  size_t _capacity;  // Cache capacity in bytes
 
   void debug_check_cache() const {
     std::cout << "\n==== DEBUG CACHE CHECK ====\n";
-    std::cout << "Cache entries: " << _cache.size()
-              << ", Total size: " << _cache._size << " / " << _cache._capacity
-              << " bytes\n";
-
-    // Get header size once for efficiency
-    size_t header_size = calc_header_size();
-    size_t mismatches = 0;
-    size_t checked = 0;
-
-    // Iterate through all cache entries
-    const auto& seq = _cache._data.template get<1>();
-    for (const auto& entry : seq) {
-      checked++;
-      uint64_t area_offset = entry.key;
-      uint64_t read_offset = area_offset + header_size;
-      const AreaSlice* cached_slice = entry.block.area();
-
-      // Get the size of the cached block
-      size_t size = cached_slice->size();
-
-      // Allocate memory for on-disk data
-      AreaSlice* disk_data = (AreaSlice*)::operator new(size);
-
-      try {
-        // Read the block from disk
-        read(read_offset, disk_data, size);
-
-        // Compare content byte by byte (we're skipping the _ref field and dirty
-        // bit since they're in-memory only)
-        bool content_mismatch = false;
-        uint8_t* cached_bytes = (uint8_t*)cached_slice;
-        uint8_t* disk_bytes = (uint8_t*)disk_data;
-
-        // Compare bytes excluding _ref field which is memory-only
-        size_t diff_start = 0;
-        for (size_t i = 0; i < size; i++) {
-          // Skip the reference count field which is memory-only
-          if (i == offsetof(AreaSlice, _ref)) {
-            i += sizeof(std::atomic<uint32_t>) - 1;
-            continue;
-          }
-
-          // Skip the dirty bit in the offset field (lowest bit)
-          if (i == offsetof(AreaSlice, _offset) ||
-              i == offsetof(AreaSlice, _offset) + 1 ||
-              i == offsetof(AreaSlice, _offset) + 2 ||
-              i == offsetof(AreaSlice, _offset) + 3) {
-            continue;
-          }
-
-          if (cached_bytes[i] != disk_bytes[i]) {
-            if (!content_mismatch) {
-              content_mismatch = true;
-              diff_start = i;
-            }
-          }
-        }
-
-        if (content_mismatch) {
-          mismatches++;
-          std::cout << "Content mismatch at offset " << area_offset
-                    << ", diff starts at header offset " << diff_start
-                    << std::endl;
-
-          // Print a hex dump of the differing bytes (16 bytes)
-          std::cout << "  Cached: ";
-          for (size_t i = diff_start; i < diff_start + 16 && i < size; i++) {
-            printf("%02X ", cached_bytes[i]);
-          }
-          std::cout << std::endl;
-
-          std::cout << "  Disk:   ";
-          for (size_t i = diff_start; i < diff_start + 16 && i < size; i++) {
-            printf("%02X ", disk_bytes[i]);
-          }
-          std::cout << std::endl;
-        }
-
-        ::operator delete(disk_data);
-      } catch (const std::exception& e) {
-        ::operator delete(disk_data);
-        std::cerr << "Exception during cache check: " << e.what() << std::endl;
-      }
-    }
-
-    std::cout << "==== CACHE CHECK COMPLETE ====\n";
-    std::cout << "Checked " << checked << " entries, found " << mismatches
-              << " mismatches\n";
-    if (mismatches == 0) {
-      std::cout << "Cache is in sync with disk data.\n";
-    } else {
-      std::cout << "WARNING: Cache has " << mismatches
-                << " mismatches with disk data!\n";
-    }
+    std::cout << "Cache entries: " << _cache.size() << " entries\n";
+    
+    // Cannot check cache contents with the new implementation
+    // as we don't have direct access to internal structures
+    std::cout << "Cannot check cache contents with TwoQCache implementation\n";
     std::cout << "============================\n\n";
   }
 
   void debug_reset() {
-    std::cout << "Resetting cache (clearing all " << _cache.size()
-              << " entries)\n";
-    _cache._data.clear();
-    _cache._size = 0;
+    std::cout << "Resetting cache (clearing all entries)\n";
+    // Create a new cache instance
+    _cache = Cache(_capacity);
+    
+    // Also reset the dirty areas maps to avoid dangling references
+    {
+      std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
+      _pending_dirty_areas.clear();
+      _dirty_areas.clear();
+    }
   }
 
   // Handling for dirty areas - using mutex-protected map for thread safety
@@ -241,8 +88,8 @@ struct _CacheStore : public Opers_ {
   std::condition_variable _dirty_cv;
   std::atomic<bool> _header_dirty{false};
 
-  _CacheStore(uint16_t db_count = 48, size_t capacity = 10 * M)
-      : _cache(capacity), _should_stop(false) {
+  _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M)
+      : _cache(capacity), _capacity(capacity), _should_stop(false) {
     _dbs.resize(db_count);
   }
 

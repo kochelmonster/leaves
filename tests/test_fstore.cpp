@@ -176,8 +176,8 @@ BOOST_AUTO_TEST_CASE(test_dirty_processor_thread) {
   BOOST_CHECK(db._write_back_thread.joinable());
 
   // Test basic cache functionality
-  BOOST_CHECK_GT(db._cache._capacity, 0);
-  BOOST_CHECK_EQUAL(db._cache._size, 0);  // Initially empty
+  BOOST_CHECK_GT(db._capacity, 0);
+  BOOST_CHECK_EQUAL(db._cache.size(), 0);  // Initially empty
 }
 
 BOOST_AUTO_TEST_CASE(test_area_slice_functionality) {
@@ -270,7 +270,7 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
 
   db.write(base + db.calc_header_size(), buf.data(), buf.size());
 
-  db._cache._data.clear();  // Clear cache to force read from file
+  db._cache = typename decltype(db)::Cache(db._capacity);  // Clear cache to force read from file
 
   // Resolve a pointer inside the payload and verify
   auto ptr = db.resolve(base + payload_off, READ);

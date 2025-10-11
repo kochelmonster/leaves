@@ -6,8 +6,8 @@
 #include <random>
 #include <vector>
 
-#include "leaves/intern/_check.hpp"
-#include "leaves/mmap.hpp"
+#include "../include/leaves/intern/_check.hpp"
+#include "../include/leaves/mmap.hpp"
 
 #ifndef CMPFILES
 #define CMPFILES "./"

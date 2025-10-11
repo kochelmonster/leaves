@@ -1,7 +1,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
-#include "leaves/leaves.hpp"
+#include "../include/leaves/mmap.hpp"
 
 #define TEST_FILE "test.lvs"
 

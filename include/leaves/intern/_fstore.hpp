@@ -206,7 +206,7 @@ struct _FileOperations : _CacheBase {
 struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
 
-  _FileStore(const char* path, uint16_t db_count = 48, size_t capacity = 10 * M)
+  _FileStore(const char* path, uint16_t db_count = 48, size_t capacity = 500 * M)
       : base_t(db_count, capacity) {
     init_dbfile(path, db_count);
     start_write_back_thread();
