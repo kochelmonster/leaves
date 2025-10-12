@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>  // for std::memcpy
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -46,6 +47,7 @@ struct _CacheStore : public Opers_ {
   using Opers_::read;
   using Opers_::resize;
   using Opers_::write;
+  using Opers_::write_batch;  
   using DBEntry = typename _CacheBase::DBEntry;
 
   // Use TwoQCache instead of LRUCache
@@ -235,22 +237,27 @@ struct _CacheStore : public Opers_ {
   // Process all dirty blocks from the queue and write them to storage
   void write_dirty_blocks(size_t header_size) {
     // Process all dirty areas in the set
-    while (true) {
-      block_ptr block;
-      {
-        std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
-        if (_dirty_areas.empty()) break;
-        auto it = _dirty_areas.begin();
-        block = it->second;
-        _dirty_areas.erase(it);
+    // Use a batch approach for blocks with contiguous offsets
+    
+    // We'll collect blocks to write in this vector
+    std::vector<block_ptr> blocks_to_write;
+    
+    // Get all dirty blocks under a single lock to reduce lock contention
+    {
+      std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
+      blocks_to_write.reserve(_dirty_areas.size());
+      
+      // Extract all dirty blocks
+      for (auto& entry : _dirty_areas) {
+        blocks_to_write.emplace_back(entry.second);
       }
-
-      assert(block);
-      const auto& area = block.area();
-
-      // Write the block to disk
-      write(header_size + area->offset(), area, area->size());
+      
+      // Clear the dirty areas map
+      _dirty_areas.clear();
+  
     }
+
+    write_batch(blocks_to_write, header_size);
 
     if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {
       // Write the header

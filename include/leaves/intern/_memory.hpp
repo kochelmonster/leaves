@@ -118,14 +118,18 @@ struct _GarbageSlot {
 
     if (ostart == oend && istart >= iend) {
       assert(count == 0);
-      if (result->slot_id != BlockContainer::SLOT_ID) {
-        // This is not the BlockCointainer slot
-        istart = iend = 0;
-        ostart = oend = 0;
-        resolver.free(front);
-      } else {
-        istart = iend = 0;
+
+      // make the slot empty
+      istart = iend = 0;
+      ostart = oend = 0;
+      if (result->slot_id == BlockContainer::SLOT_ID) {
+        /* A new garbage to contain front. front has to be preserved for
+         * rollback 
+         */
+        cont_ptr new_front = resolver.alloc_slot(BlockContainer::SLOT_ID);
+        ostart = oend = resolver.resolve(new_front);
       }
+      resolver.free(front);
     } else if (istart >= BlockContainer::COUNT) {
       ostart = front->next;
       istart = 0;
@@ -526,12 +530,6 @@ struct AreaPool {
   void return_multi_areas(AreaList& areas, Resolver& resolver) {
     multi_areas.move(areas, resolver);
   }
-};
-
-// Compatibility structure for old tests
-struct AreaRegister {
-  static constexpr int COUNT = 4;  // Arbitrary constant for test compatibility
-  offset_t next;
 };
 
 }  // namespace leaves

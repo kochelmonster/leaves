@@ -58,7 +58,7 @@ struct _StoreTraits {
 #pragma pack(0)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t AREA_SIZE = 64 * K;  // not OS AREA_SIZE
+  static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr uint16_t BLOCK_SIZES[] = {  // Typical node sizes
       _TrieNode<_StoreTraits>::size(1, 10),    // digits 0-9
       _TrieNode<_StoreTraits>::size(1, 16),    // hex 0-9A-F
@@ -78,20 +78,10 @@ struct _FileOperations : _CacheBase {
   // Simple placeholder for compatibility, no actual locking
   struct Mutex {
     // No mutex needed for single-process use
-
     template <typename Time = std::chrono::seconds>
-    void lock(Time t = Time(10)) {
-      // No locking needed
-    }
-
-    bool try_lock() {
-      // Always succeeds since no locking is needed
-      return true;
-    }
-
-    void unlock() {
-      // No unlocking needed
-    }
+    void lock(Time t = Time(10)) {}
+    bool try_lock() { return true; }
+    void unlock() {}
   };
 
   struct FileHeader {
@@ -197,16 +187,71 @@ struct _FileOperations : _CacheBase {
     }
   }
 
+  template <typename BlockVector>
+  void write_batch(BlockVector& blocks_to_write, size_t header_size) {
+    std::sort(blocks_to_write.begin(), blocks_to_write.end(),
+              [](const auto& a, const auto& b) {
+                return a.area()->offset() < b.area()->offset();
+              });
+
+    // Process sorted blocks with batch writing for contiguous regions
+    size_t i = 0;
+    while (i < blocks_to_write.size()) {
+      const auto& start_block = blocks_to_write[i];
+      const auto& start_area = start_block.area();
+      uint64_t start_offset = start_area->offset();
+      uint64_t current_size = start_area->size();
+      size_t batch_end = i;
+
+      // Look for contiguous blocks
+      for (size_t j = i + 1; j < blocks_to_write.size(); j++) {
+        const auto& next_area = blocks_to_write[j].area();
+
+        // Check if this block is contiguous with the previous ones
+        if (next_area->offset() == start_offset + current_size) {
+          current_size += next_area->size();
+          batch_end = j;
+        } else {
+          // Not contiguous, stop here
+          break;
+        }
+      }
+
+      if (batch_end == i) {
+        // No contiguous blocks found, write the single block
+        write(header_size + start_offset, start_area, start_area->size());
+        i++;
+      } else {
+        // We have contiguous blocks, allocate a temporary buffer and copy data
+        std::vector<char> buffer(current_size);
+        char* dest = buffer.data();
+
+        // Copy all contiguous blocks to the buffer
+        for (size_t j = i; j <= batch_end; j++) {
+          const auto& area = blocks_to_write[j].area();
+          std::memcpy(dest, area, area->size());
+          dest += area->size();
+        }
+
+        // Write the entire batch at once
+        write(header_size + start_offset, buffer.data(), current_size);
+
+        // Move to the next non-contiguous block
+        i = batch_end + 1;
+      }
+    }
+  }
+
   const char* filename() const { return _filepath.c_str(); }
 
   Mutex& file_lock() { return _header->file_lock; }
 };
 
-
 struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
 
-  _FileStore(const char* path, uint16_t db_count = 48, size_t capacity = 500 * M)
+  _FileStore(const char* path, uint16_t db_count = 48,
+             size_t capacity = 500 * M)
       : base_t(db_count, capacity) {
     init_dbfile(path, db_count);
     start_write_back_thread();

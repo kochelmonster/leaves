@@ -153,7 +153,7 @@ struct _TrieNode : public Traits::BlockHeader {
   }
 
   /**
-   * @brief Creates a new TrieNode by merging data from a source node with new a
+   * @brief Creates a new TrieNode by merging data from a source node with a new
    * prefix slice.
    *
    * @param src Pointer to the source TrieNode from which data will be copied.

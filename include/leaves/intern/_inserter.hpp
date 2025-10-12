@@ -65,8 +65,8 @@ struct _Inserter {
       back->cursor->set_root(back->offset);
       back->block = trie;
       fill_bigkey(*back);
-      create_bigkey();
-      back = &back->push(offset_t());
+      create_leaf();
+      return;
     }
 
     assert(bkey.size() <= 255);
@@ -104,9 +104,9 @@ struct _Inserter {
 
     trie_ptr otrie = back->trie();
     assert(otrie->count() < otrie->MAX_BRANCH_COUNT);
-
+    
     // copy the original trie node with second part of compressed
-    // to a new page
+    // to a new slot
     uint8_t prefix_len = otrie->len() - back->prefix;
     trie_ptr child_trie = alloc(TrieNode::size(prefix_len, otrie->count()));
     child_trie->create(*otrie,

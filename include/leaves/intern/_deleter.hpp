@@ -36,23 +36,37 @@ struct _Deleter {
   void exec() {
     assert(back->success());
     assert(back->is_leaf());
-    if (back->is_root()) {
+    remove_node(back);
+  }
+
+  void remove_node(Transition* trans) {
+    if (trans->is_root()) {
       // remove the last node
-      back->cursor->set_root(offset_t());
-      free(back->block);
-      back->pop();
+      trans->cursor->set_root(offset_t());
+      free(trans->block);
+      trans->pop();
       return;
     }
 
-    Transition& parent = back->parent();
-    block_ptr block = back->block;
-    uint16_t prefix = back->prefix;
-    parent.pop();
+    Transition& parent = trans->parent();
+    block_ptr block = trans->block;
+    uint16_t prefix = trans->prefix;
+    parent.pop();  // remove trans from stack
     assert(parent.is_trie());
-    if (parent.trie()->count() > 2)
-      reduce_array(parent, prefix);
-    else
-      combine(parent);
+    switch (parent.trie()->count()) {
+      case 0:
+        assert(false);
+        break;  // should never happen
+      case 1:
+        remove_node(&parent);
+        break;  // recursively remove the only child
+      case 2:
+        combine(parent, prefix);
+        break;
+      default:
+        reduce_array(parent, prefix);
+        break;
+    }
     free(block);
   }
 
@@ -68,33 +82,43 @@ struct _Deleter {
     parent.cursor->next();
   }
 
-  void combine(Transition& parent) {
+  // Combine the parent with the only child
+  void combine(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
     offset_e* link = parent.link();
     offset_e* begin = otrie->array();
     bool go_next = link != begin;
-    offset_e* child_left = go_next ? begin : begin + 1;
+    offset_e* child_remaining = go_next ? begin : begin + 1;
+    // go_next == true means the remaining child is before otrie
+    // for positioning the cursor we have to move next
 
-    uint8_t buffer[256];
     uint8_t len = parent.trie()->len();
+    uint8_t buffer[256];  // to hold the compressed key
     memcpy(buffer, parent.trie()->compressed(), len);
-    if (child_left->type() == TRIE) {
-      trie_ptr child = resolve(*child_left);
+    if (child_remaining->type() == TRIE) {
+      trie_ptr child = resolve(*child_remaining);
+      if (len + child->len() > 255) {
+        // the compressed part is too big -> keep the parent
+        return reduce_array(parent, prefix);
+      }
+
       memcpy(buffer + len, child->compressed(), child->len());
       len += child->len();
       parent.trie() = alloc(TrieNode::size(len, child->count()));
       parent.trie()->create(*child, Slice(buffer, len));
-      free(child);
       parent.replace(resolve(parent.trie()));
-      parent.cmp = Transition::NOT_FOUND;
-      if (go_next)
-        parent.cursor->next();
-      else {
-        parent.resize_key(parent.keypos);
-        parent.first();
-      }
+      // replace trie! the type is important
+      parent.link_offset = (char*)(&parent.trie()->array()[parent.branch_key]) -
+                           (char*)parent.block;
+
+      free(child);
     } else {
-      leaf_ptr child = resolve(*child_left);
+      leaf_ptr child = resolve(*child_remaining);
+      if (len + child->key_size > 255) {
+        // the compressed part is too big -> keep the parent
+        return reduce_array(parent, prefix);
+      }
+
       memcpy(buffer + len, child->data, child->key_size);
       len += child->key_size;
       parent.leaf() = alloc(LeafNode::size(len, child->vsize()));
@@ -102,12 +126,18 @@ struct _Deleter {
       parent.leaf()->value_size = child->value_size;
       memcpy(parent.leaf()->data, buffer, len);
       memcpy(parent.leaf()->vdata(), child->vdata(), child->vsize());
-      free(child);
+      // replace leaf! the type is important
       parent.replace(resolve(parent.leaf()));
-      parent.leaf_step();
-      if (go_next) parent.cursor->next();
+      free(child);
     }
+
     free(otrie);
+    if (go_next)
+      parent.cursor->next();
+    else {
+      parent.resize_key(parent.keypos);
+      parent.first();
+    }
   }
 };
 }  // namespace leaves

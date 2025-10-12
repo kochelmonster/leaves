@@ -60,8 +60,12 @@ inline void compare_graph(const char* input, T& storage) {
 
 template <typename T>
 inline void check_graph(const char* name, T& storage) {
+  std::string truncated_name(name);
+  if (truncated_name.length() > 32) {
+    truncated_name = truncated_name.substr(0, 32);
+  }
   std::string path(CMPFILES);
-  path.append(name);
+  path.append(truncated_name);
   path.append(".yaml");
   std::replace(path.begin(), path.end(), ' ', '_');
 

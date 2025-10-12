@@ -57,6 +57,8 @@ target_sources(core INTERFACE
     include/leaves/intern/_cursor.hpp
     include/leaves/intern/_node.hpp
     include/leaves/intern/_inserter.hpp
+    include/leaves/intern/_fstore.hpp
+    include/leaves/intern/_twoquecache.hpp
 )
 
 if (HAVE_BOOST_PROCESS)
@@ -138,16 +140,17 @@ target_sources(test_file_storage INTERFACE
 target_link_libraries(test_file_storage PUBLIC core test)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
-target_link_libraries(test_string_insert PUBLIC core test)
+
+add_executable(test_twoquecache tests/test_twoquecache.cpp)
+target_link_libraries(test_file_storage PUBLIC core test)
 
 add_executable(profile tests/profile.cpp)
-target_compile_options(profile PUBLIC -O2)
-target_link_libraries(profile PUBLIC core test)
 
 add_custom_target( cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
+COMMAND ./test_twoquecache
 COMMAND ./test_cursor
 COMMAND ./test_node
 COMMAND ./test_memory
@@ -179,7 +182,7 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
-target_compile_options(db_bench_leaves PUBLIC -g -march=native -O2 -funroll-loops -flto)
+target_compile_options(db_bench_leaves PUBLIC -g -march=native -O2 -funroll-loops -flto=auto)
 
 # Removed optimized version since optimizations are now in the main implementation
 # target_compile_options(db_bench_leaves PUBLIC -g -march=native)

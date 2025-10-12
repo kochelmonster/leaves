@@ -63,6 +63,14 @@ BOOST_AUTO_TEST_CASE(insert_one) {
   test_insertion(storage, "insert_one", keys);
 }
 
+BOOST_AUTO_TEST_CASE(insert_one_big_key) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  std::string big_key(260, '0');
+  const char *keys[] = {big_key.c_str(), NULL};
+  test_insertion(storage, "insert_one_big_key", keys);
+}
+
 BOOST_AUTO_TEST_CASE(insert_start_extend) {
   Preparation p;
   {
@@ -270,7 +278,7 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
       BOOST_REQUIRE(cursor.is_valid());
       uint16_t key = native_to_big(i);
       Slice cmp_key((char *)&key, sizeof(key));
-      std::cout << "iter forward: " << i << std::endl;
+      //std::cout << "iter forward: " << i << std::endl;
       BOOST_REQUIRE(cmp_key == cursor.key());
     }
     BOOST_REQUIRE(i == 258);
@@ -335,6 +343,42 @@ BOOST_AUTO_TEST_CASE(remove_combine_leaf) {
   const char *remove[] = {"abdf", NULL};
   test_remove(storage, "remove_combine_leaf", keys, remove);
 }
+
+BOOST_AUTO_TEST_CASE(remove_bigkeys_trie) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  std::string prefix(255, '0');
+  std::string child1 = prefix + "1";
+  std::string child2 = prefix + "11";
+  std::string child3 = prefix + "12";
+  const char *keys[] = {prefix.c_str(),  child1.c_str(),  child2.c_str(), child3.c_str(), NULL};
+  const char *remove[] = {prefix.c_str(), NULL};
+  test_remove(storage, "remove_bigkeys_trie", keys, remove);
+}
+
+BOOST_AUTO_TEST_CASE(remove_bigkeys_leaf) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  std::string prefix(255, '0');
+  std::string child1 = prefix + "11111";
+  std::string child2 = prefix + "22222";
+
+  const char *keys[] = {child1.c_str(), child2.c_str(), NULL};
+  const char *remove[] = {child1.c_str(), NULL};
+  test_remove(storage, "remove_bigkeys_leaf", keys, remove);
+}
+
+BOOST_AUTO_TEST_CASE(remove_bigkeys_one) {
+  Preparation p;
+  Storage storage(TEST_FILE);
+  std::string prefix(255, '0');
+  std::string child1 = prefix + "11111";
+
+  const char *keys[] = {child1.c_str(), NULL};
+  const char *remove[] = {child1.c_str(), NULL};
+  test_remove(storage, "remove_bigkeys_one", keys, remove);
+}
+
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;

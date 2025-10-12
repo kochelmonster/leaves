@@ -244,7 +244,6 @@ struct _DB {
   }
 
   void _add_to_bigmem(offset_t offset, size_t size) {
-    assert(size % MAX_BLOCK_SIZE == 0);
 #ifdef DEBUG_MEM
     std::stringstream cstr;
     cstr << offset._offset << "-" << size;
@@ -321,8 +320,8 @@ struct _DB {
       // allocate new multi-area
       uint64_t psize = padding(size, AREA_SIZE);
       auto slice = alloc_multi_area(psize);
-      found_size = slice->size();
-      found_offset = slice->offset();
+      found_offset = slice->content_offset();
+      found_size = slice->end() - found_offset;
     }
 
     uint32_t delta = found_size - size;
@@ -348,10 +347,12 @@ struct _DB {
     _mem_cursor.prev();
     if (_mem_cursor.is_valid()) {
       BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
-      if (found->first + found->second == offset) {
-        offset = found->first;
+      uint64_t foffset = found->first;
+      if (foffset + found->second == offset) {
+        // a contiguous block: paste them together
+        offset = foffset;
         size += found->second;
-        _remove_from_bigmem((uint64_t)found->first, found->second);
+        _remove_from_bigmem(foffset, found->second);
       } else
         _mem_cursor.next();
     } else
@@ -360,9 +361,10 @@ struct _DB {
     if (_mem_cursor.is_valid()) {
       BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
       uint64_t foffset = found->first;
-      if (found->first == offset + size) {
+      if (foffset == offset + size) {
+        // a contiguous block: paste them together
         size += found->second;
-        _remove_from_bigmem((uint64_t)found->first, found->second);
+        _remove_from_bigmem(foffset, found->second);
       }
     }
 

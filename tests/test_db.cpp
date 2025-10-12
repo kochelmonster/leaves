@@ -245,8 +245,6 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
 
-  typedef typename DBMMap::Traits::template Pointer<AreaRegister> ptr;
-
   auto db1 = storage.make("test1");
 
   std::vector<offset_t> offsets;
@@ -489,6 +487,7 @@ struct TestStorage {
 };
 
 BOOST_AUTO_TEST_CASE(test_area_revolve) {
+  static constexpr int COUNT = 4;
   TestStorage storage;
 
   BOOST_CHECK_EQUAL(storage.db->_header->single_areas.get_head(), 0);
@@ -496,7 +495,7 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
 
   // Allocate several areas and test basic allocation
   std::vector<AreaSlice> allocated_areas;
-  for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
+  for (int i = 0; i < COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
     allocated_areas.push_back(slice);
     // Just check that we got a reasonable size
@@ -508,7 +507,7 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
   // The exact behavior depends on implementation details, so just check basic
   // functionality
   storage.db->start_transaction();
-  for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
+  for (int i = 0; i < COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
     BOOST_CHECK(slice.size() >= storage.AREA_SIZE / 2);
   }
@@ -521,6 +520,7 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
 }
 
 BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
+  static constexpr int COUNT = 4;
   TestStorage storage;
 
   BOOST_CHECK_EQUAL(storage.db->_header->multi_areas.get_head(), 0);
@@ -528,7 +528,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
 
   // Allocate several big areas
   std::vector<AreaSlice> allocated_areas;
-  for (int i = 0; i < AreaRegister::COUNT + 2; i++) {
+  for (int i = 0; i < COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
     allocated_areas.push_back(slice);
     BOOST_CHECK(slice.size() >= storage.AREA_SIZE);
