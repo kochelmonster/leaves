@@ -36,8 +36,8 @@ using boost::endian::native_to_big;
 //   readrandom    -- read N times in random order
 static const char* FLAGS_benchmarks =
     "fillseq,"
-    "fillseqsync,"
-    "fillrandsync,"
+//    "fillseqsync,"
+//    "fillrandsync,"
     "fillrandom,"
     "overwrite,"
     "readrandom,"
@@ -258,6 +258,12 @@ class Benchmark {
   }
 
   void Start() {
+    // CPU warmup - prevent cold start variance
+    volatile int warmup_sum = 0;
+    for (int i = 0; i < 1000; ++i) {
+      warmup_sum += i * i;
+    }
+    
     start_ = Env::Default()->NowMicros() * 1e-6;
     bytes_ = 0;
     message_.clear();
