@@ -631,6 +631,62 @@ BOOST_AUTO_TEST_CASE(test_area_list_remove_from_middle) {
   BOOST_CHECK_EQUAL(found_large->offset(), large_area.offset());
 }
 
+BOOST_AUTO_TEST_CASE(test_area_list_remove_last_element) {
+  TestStorage storage;
+  AreaList areas;
+  areas.init();
+  
+  // Create areas where only the tail meets the size requirement
+  Area tail_area, middle_area, head_area;
+  tail_area.init(1000, AREA_SIZE, 0);        // This will be tail - meets requirement
+  middle_area.init(2000, AREA_SIZE / 2, 0); // Too small - won't be found
+  head_area.init(3000, AREA_SIZE / 4, 0);   // Even smaller - won't be found
+  
+  // Push in order: tail -> middle -> head
+  areas.push(tail_area, storage);   // tail_area becomes tail
+  areas.push(middle_area, storage); // middle_area in middle  
+  areas.push(head_area, storage);   // head_area becomes head
+  
+  // Verify initial state: head=head_area, tail=tail_area
+  BOOST_CHECK_EQUAL(areas.get_head(), head_area.offset());
+  BOOST_CHECK_EQUAL(areas.get_tail(), tail_area.offset());
+  
+  // Search for AREA_SIZE - will skip head_area and middle_area (too small)
+  // and find tail_area. This tests lines 423-425: removing the tail element
+  auto removed = areas.find_and_remove(AREA_SIZE, storage);
+  BOOST_CHECK(removed);
+  BOOST_CHECK_EQUAL(removed->offset(), tail_area.offset());
+  
+  // After removing tail, new tail should be middle_area (the previous element)
+  BOOST_CHECK_EQUAL(areas.get_tail(), middle_area.offset());
+  BOOST_CHECK_EQUAL(areas.get_head(), head_area.offset()); // Head unchanged
+}
+
+BOOST_AUTO_TEST_CASE(test_area_list_remove_only_element) {
+  TestStorage storage;
+  AreaList areas;
+  areas.init();
+  
+  // Add single area - it becomes both head and tail
+  Area single_area;
+  single_area.init(1000, AREA_SIZE, 0);
+  areas.push(single_area, storage);
+  
+  // Verify it's both head and tail
+  BOOST_CHECK_EQUAL(areas.get_head(), single_area.offset());
+  BOOST_CHECK_EQUAL(areas.get_tail(), single_area.offset());
+  
+  // Remove the only element - this tests lines 428-430
+  // This should set new_tail = 0 since prev_offset is null
+  auto removed_only = areas.find_and_remove(AREA_SIZE, storage);
+  BOOST_CHECK(removed_only);
+  BOOST_CHECK_EQUAL(removed_only->offset(), single_area.offset());
+  
+  // After removing only element, both head and tail should be 0
+  BOOST_CHECK_EQUAL(areas.get_head(), 0);
+  BOOST_CHECK_EQUAL(areas.get_tail(), 0);
+}
+
 BOOST_AUTO_TEST_CASE(test_binary_search_edge_cases) {
   // Test binary search function used in assign_slot
   uint16_t sizes[] = {100, 200, 300, 400, 500};
