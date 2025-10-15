@@ -1,8 +1,8 @@
 type: trie
-id: 15376
+id: 10168
 page: 0
 freespace: 88
-txn: 4
+txn: 3
 size: 48
 compressed: 
   size: 3
@@ -24,7 +24,7 @@ compressed:
 branches: "[][j]"
 children: 
   - 15105
-  - 15513
+  - 15377
 ---
 type: leaf
 id: 15105
@@ -38,7 +38,7 @@ valuesize: 9
 value: "abc*efghi"
 ---
 type: leaf
-id: 15513
+id: 15377
 page: 0
 freespace: 110
 size: 26
