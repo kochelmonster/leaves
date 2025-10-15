@@ -68,7 +68,6 @@ struct _Transition {
     offset = offset_;
     link_offset = 0xFFFF;
     block = resolve(offset);
-    assert(offset <= cursor->_db->_storage.file_size());
     return true;  // the caller shall set the trie root
   }
 

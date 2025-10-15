@@ -64,7 +64,7 @@ struct _BlockContainer : public Traits::BlockHeader {
   using offset_e = typename Traits::offset_e;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr uint16_t SLOT_ID = Traits::BLOCK_SIZES_COUNT - 1;
-  static const uint16_t SIZE = 4 * K;
+  static constexpr uint16_t SIZE = 4 * K;
   typedef typename Traits::BlockHeader Base;
   typedef typename Traits::template Pointer<_BlockContainer> ptr;
 
@@ -73,7 +73,7 @@ struct _BlockContainer : public Traits::BlockHeader {
     tid_t txn_id;   // the transaction that freed the page
   };
 
-  static const size_t COUNT =
+  static constexpr size_t COUNT =
       (SIZE - sizeof(offset_e) - sizeof(Base)) / sizeof(BlockItem);
 
   offset_e next;
@@ -105,7 +105,10 @@ struct _GarbageSlot {
   ptr pop(Resolver& resolver) {
     if (count == 0) return nullptr;
 
+    assert(ostart);
+    assert(oend);
     assert(!(ostart == oend && istart == iend));
+    assert(istart + count > BlockContainer::COUNT || ostart == oend);
 
     cont_ptr front(resolver.resolve(ostart, WRITE));
     if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
@@ -115,23 +118,22 @@ struct _GarbageSlot {
 
     count--;
     istart++;
-
-    if (ostart == oend && istart >= iend) {
-      assert(count == 0);
-
-      // make the slot empty
-      istart = iend = 0;
-      ostart = oend = 0;
-      if (result->slot_id == BlockContainer::SLOT_ID) {
-        /* A new garbage to contain front. front has to be preserved for
-         * rollback 
-         */
-        cont_ptr new_front = resolver.alloc_slot(BlockContainer::SLOT_ID);
-        ostart = oend = resolver.resolve(new_front);
+    if (istart >= BlockContainer::COUNT) {
+      if (result->slot_id == BlockContainer::SLOT_ID && !count) {
+        // avoid possible circle if the method is called by
+        // push(BlockContainer::SLOT_ID)
+        count = 1;
+        istart--;
+        return nullptr;
       }
-      resolver.free(front);
-    } else if (istart >= BlockContainer::COUNT) {
+
       ostart = front->next;
+      if (!ostart) {
+        assert(iend == BlockContainer::COUNT);
+        assert(count == 0);
+        oend = 0;
+        iend = 0;
+      }
       istart = 0;
       resolver.free(front);
     }
@@ -147,6 +149,7 @@ struct _GarbageSlot {
       if (iend >= BlockContainer::COUNT) {
         cont_ptr new_back = resolver.alloc_slot(BlockContainer::SLOT_ID);
         assert(new_back->slot_id == BlockContainer::SLOT_ID);
+        new_back->next = 0;
         oend = back->next = resolver.resolve(new_back);
         iend = 0;
         resolver.make_dirty(back);
@@ -158,6 +161,8 @@ struct _GarbageSlot {
       assert(iend == 0);
       assert(count == 0);
       back = resolver.alloc_slot(BlockContainer::SLOT_ID);
+      assert(back->slot_id == BlockContainer::SLOT_ID);
+      back->next = 0;
       oend = ostart = resolver.resolve(back);
     }
     back->blocks[iend].link = resolver.resolve(block);
@@ -169,6 +174,8 @@ struct _GarbageSlot {
 
     iend++;
     count++;
+
+    assert(istart + count > BlockContainer::COUNT || ostart == oend);
   }
 
   template <typename Caller, typename Resolver>
@@ -227,9 +234,9 @@ struct _MemManager {
   Slot slots[COUNT];
 
   // init the memory, header is a reserve memory space
-  void init(offset_t header, offset_t alloction_end_) {
+  void init(offset_t allocation_start_, offset_t alloction_end_) {
     memset(slots, 0, sizeof(slots));
-    allocation_start = header;
+    allocation_start = allocation_start_;
     allocation_end = alloction_end_;
     left_over_end = left_over_start = 0;
   }
@@ -263,17 +270,14 @@ struct _MemManager {
 
     if (allocation_start + bsize > allocation_end) {
       if (allocation_end - allocation_start > left_over_end - left_over_start) {
-        // the smaller left_over is thrown away
+        // Save the larger remaining allocation space as left_over
         left_over_start = allocation_start;
         left_over_end = allocation_end;
-        allocation_start = allocation_end;
       }
-
-      if (allocation_start + bsize > allocation_end) {
-        auto area = resolver.alloc_single_area();
-        allocation_start = area->content_offset();
-        allocation_end = area->end();
-      }
+      // Always allocate new area since current allocation is exhausted
+      auto area = resolver.alloc_single_area();
+      allocation_start = area->content_offset();
+      allocation_end = area->end();
     }
 
     result = resolver.resolve(allocation_start, WRITE);

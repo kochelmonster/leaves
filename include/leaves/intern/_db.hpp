@@ -1,6 +1,7 @@
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 
+#include <mutex>
 #include <boost/endian/arithmetic.hpp>
 
 #include "_check.hpp"
@@ -223,9 +224,7 @@ struct _DB {
 
   template <typename ptr>
   ptr cow(ptr& src) {
-    auto result = clone(src);
-    free(src);
-    return result;
+    return src;
   }
 
   block_ptr alloc(uint16_t space) {

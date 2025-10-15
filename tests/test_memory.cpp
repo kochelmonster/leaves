@@ -204,7 +204,7 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
 
   auto result = storage.alloc(SPACE);
   BOOST_CHECK_EQUAL(storage.resolve(result), last_offset);
-  BOOST_CHECK_EQUAL(storage.mm.slots[BC].count, ccount + 2);
+  BOOST_CHECK_EQUAL(storage.mm.slots[BC].count, ccount + 1);
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
 }
 
