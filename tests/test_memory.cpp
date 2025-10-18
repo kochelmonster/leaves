@@ -707,3 +707,85 @@ BOOST_AUTO_TEST_CASE(test_binary_search_edge_cases) {
   // Value smaller than all - should return 0
   BOOST_CHECK_EQUAL(binary_search(sizes, sizes + 5, 50), 0);
 }
+
+// Test the circular reference prevention in _GarbageSlot::pop
+// This tests lines 122-128 in _memory.hpp
+BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
+  TestStorage storage;
+  
+  static const int BC = storage.mm.assign_slot(MemManager::BlockContainer::SIZE);
+  const uint16_t SPACE = 200;
+  const int COUNT = MemManager::BlockContainer::COUNT;
+  
+  // Allocate and free exactly COUNT BlockContainers to fill one container
+  std::vector<offset_t> bc_offsets;
+  for (int i = 0; i < COUNT; ++i) {
+    auto bc = storage.alloc_slot(BC);
+    bc_offsets.push_back(storage.resolve(bc));
+  }
+  
+  for (auto offset : bc_offsets) {
+    auto p = storage.resolve(offset);
+    storage.free(p);
+  }
+  
+  // Now slots[BC] has COUNT items in one container
+  BOOST_CHECK_EQUAL(storage.mm.slots[BC].count, COUNT);
+  BOOST_CHECK(storage.mm.slots[BC].ostart == storage.mm.slots[BC].oend);
+  BOOST_CHECK_EQUAL(storage.mm.slots[BC].iend, COUNT);
+  
+  // Pop all items - the last one should trigger circular prevention
+  for (int i = 0; i < COUNT - 1; ++i) {
+    auto result = storage.alloc_slot(BC);
+    BOOST_CHECK(result);
+  }
+  
+  // This allocation should trigger the circular prevention logic
+  // because we're trying to pop the last BlockContainer from the BC slot itself
+  auto result = storage.alloc_slot(BC);
+  
+  // The circular prevention should have prevented returning the last BC
+  // so we should allocate a fresh one instead
+  BOOST_CHECK(result);
+  BOOST_CHECK_EQUAL(storage.mm.slots[BC].count, 1);  // One BC still in the slot
+}
+
+// Test the empty slot cleanup logic in _GarbageSlot::pop
+// This tests lines 130-135 in _memory.hpp  
+BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_cleanup) {
+  TestStorage storage;
+  
+  const uint16_t SPACE = 200;
+  const int COUNT = MemManager::BlockContainer::COUNT;
+  int sid = storage.mm.assign_slot(SPACE);
+  
+  // Allocate and free exactly COUNT blocks to fill one container
+  std::vector<offset_t> offsets;
+  for (int i = 0; i < COUNT; ++i) {
+    auto result = storage.alloc(SPACE);
+    offsets.push_back(storage.resolve(result));
+  }
+  
+  for (auto offset : offsets) {
+    auto p = storage.resolve(offset);
+    storage.free(p);
+  }
+  
+  // Slot should have one full container
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, COUNT);
+  BOOST_CHECK(storage.mm.slots[sid].ostart == storage.mm.slots[sid].oend);
+  BOOST_CHECK(storage.mm.slots[sid].ostart != 0);
+  
+  // Pop all items - the last one should trigger cleanup
+  for (int i = 0; i < COUNT; ++i) {
+    auto result = storage.alloc(SPACE);
+    BOOST_CHECK(result);
+  }
+  
+  // After popping all items, the slot should be empty and cleaned up
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].ostart, 0);
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].oend, 0);
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].istart, 0);
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].iend, 0);
+}
