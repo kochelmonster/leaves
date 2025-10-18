@@ -323,140 +323,29 @@ struct _Stack {
   }
 };
 
-// A cursor to
+// Base cursor with stack and core navigation functionality
 template <typename DB_, typename Traits_>
-struct _Cursor {
+struct _CursorBase {
   typedef DB_ DB;
   typedef Traits_ Traits;
-  typedef _Cursor<DB, Traits_> Cursor;
-  typedef _Stack<Cursor> Stack;
+  typedef _CursorBase<DB, Traits_> CursorBase;
+  typedef _Stack<CursorBase> Stack;
   using db_ptr = typename Traits::db_ptr;
   using Transition = typename Stack::Transition;
-  using Hasher = typename Traits::Hasher;
-  using hash_t = typename Hasher::hash_t;
 
-  static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
+  db_ptr _db;
+  offset_t root;
+  Stack stack;
+  Slice rest_key;
+  std::string current_key;
 
-  _Cursor(db_ptr db) : _db(db), transaction_active(false) {
-    update();
-    current_key.reserve(128);
-  }
+  _CursorBase(db_ptr db) : _db(db) { current_key.reserve(128); }
 
-  tid_t txn_id() const {
-    return !Traits::transactional || transaction_active ? _db->_wtxn.txn_id
-                                                        : _db->txn()->txn_id;
-  }
+  virtual ~_CursorBase() {}
 
-  // return true if the cursor is on a valid position
-  bool is_valid() const { return stack.size ? stack.back().success() : false; }
+  virtual tid_t txn_id() const { return _db->txn()->txn_id; }
 
-  void find(const Slice& key) {
-    if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
-
-    update();
-    rest_key = key;
-    if (stack.size && keep_stack()) return;
-    _find();
-  }
-
-  void first() {
-    update();
-    stack.clear(0);
-    if (!root) return;
-    rest_key.reset();
-    current_key.clear();
-    push(root);
-    stack.back().first();
-  }
-
-  void last() {
-    update();
-    stack.clear(0);
-    if (!root) return;
-    rest_key.reset();
-    current_key.clear();
-    push(root);
-    stack.back().last();
-  }
-
-  void next() {
-    rest_key.reset();
-    while (stack.size) {
-      if (stack.back().next()) return;
-      pop();
-    }
-  }
-
-  void prev() {
-    rest_key.reset();
-    while (stack.size) {
-      if (stack.back().prev()) return;
-      pop();
-    }
-  }
-
-  void value(const Slice& value) {
-    if (Traits::transactional && !transaction_active) {
-      if (!_db->start_transaction()) throw TransactionActive();
-      transaction_active = true;
-    }
-
-    if (!stack.size) {
-      if (!root) {
-        push(offset_t());
-        _Inserter(&stack.back(), value).first_exec();
-        _db->flush();
-        return;
-      }
-      throw NoValidPosition();
-    }
-
-    _Inserter(&stack.back(), value).exec();
-    _db->flush();
-  }
-
-  Slice value() const {
-    const Transition& back = stack.back();
-    return back.cmp == 0 && back.is_leaf() ? back.value() : Slice();
-  }
-
-  Slice key() const { return current_key; }
-
-  void remove() {
-    if (!is_valid()) throw NoValidPosition();
-    if (Traits::transactional && !transaction_active) {
-      if (!_db->start_transaction()) throw TransactionActive();
-      transaction_active = true;
-    }
-    _Deleter(&stack.back()).exec();
-  }
-
-  void prepare_commit(bool sync = false) {
-    if (Traits::transactional && transaction_active) _db->prepare_commit(sync);
-  }
-
-  void commit(bool sync = false) {
-    if (Traits::transactional && transaction_active) {
-      _db->commit(sync);
-      transaction_active = false;
-      auto root_ = root;
-      update();
-      assert(root_ == root);
-    }
-  }
-
-  void rollback() {
-    if (Traits::transactional && transaction_active) {
-      _db->rollback();
-      stack.clear();
-      transaction_active = false;
-      find(current_key);
-    }
-  }
-
-  /* Helpers */
-
-  void set_root(offset_t offset) {
+  virtual void set_root(offset_t offset) {
     Traits::set_root(*_db, offset);
     root = offset;
   }
@@ -473,58 +362,274 @@ struct _Cursor {
     current_key.resize(stack.back().keypos);
     stack.size--;
   }
+};
+
+// Full cursor with find, transactions, and modification operations
+template <typename DB_, typename Traits_>
+struct _Cursor : public _CursorBase<DB_, Traits_> {
+  typedef DB_ DB;
+  typedef Traits_ Traits;
+  typedef _Cursor<DB, Traits_> Cursor;
+  typedef _CursorBase<DB, Traits_> CursorBase;
+  using db_ptr = typename Traits::db_ptr;
+  using Transition = typename CursorBase::Transition;
+  using Stack = typename CursorBase::Stack;
+  using Hasher = typename Traits::Hasher;
+  using hash_t = typename Hasher::hash_t;
+
+  static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
+
+  bool transaction_active;
+
+  _Cursor(db_ptr db) : CursorBase(db), transaction_active(false) { update(); }
+
+  tid_t txn_id() const override {
+    return !Traits::transactional || transaction_active
+               ? this->_db->_wtxn.txn_id
+               : this->_db->txn()->txn_id;
+  }
+
+  // return true if the cursor is on a valid position
+  bool is_valid() const {
+    return this->stack.size ? this->stack.back().success() : false;
+  }
+
+  void find(const Slice& key) {
+    if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
+
+    update();
+    this->rest_key = key;
+    if (this->stack.size && keep_stack()) return;
+    _find();
+  }
+
+  void _prepare_move() {
+    update();
+    this->stack.clear(0);
+    if (!this->root) return;
+    this->rest_key.reset();
+    this->current_key.clear();
+    this->push(this->root);
+  }
+
+  void first() {
+    _prepare_move();
+    this->stack.back().first();
+  }
+
+  void last() {
+    _prepare_move();
+    this->stack.back().last();
+  }
+
+  void next() {
+    this->rest_key.reset();
+    while (this->stack.size) {
+      if (this->stack.back().next()) return;
+      this->pop();
+    }
+  }
+
+  void prev() {
+    this->rest_key.reset();
+    while (this->stack.size) {
+      if (this->stack.back().prev()) return;
+      this->pop();
+    }
+  }
+
+  void value(const Slice& value) {
+    if (Traits::transactional && !transaction_active) {
+      if (!this->_db->start_transaction()) throw TransactionActive();
+      transaction_active = true;
+    }
+
+    if (!this->stack.size) {
+      if (!this->root) {
+        this->push(offset_t());
+        _Inserter(&this->stack.back(), value).first_exec();
+        this->_db->flush();
+        return;
+      }
+      throw NoValidPosition();
+    }
+
+    _Inserter(&this->stack.back(), value).exec();
+    this->_db->flush();
+  }
+
+  Slice value() const {
+    const Transition& back = this->stack.back();
+    return back.cmp == 0 && back.is_leaf() ? back.value() : Slice();
+  }
+
+  Slice key() const { return this->current_key; }
+
+  void remove() {
+    if (!is_valid()) throw NoValidPosition();
+    if (Traits::transactional && !transaction_active) {
+      if (!this->_db->start_transaction()) throw TransactionActive();
+      transaction_active = true;
+    }
+    _Deleter(*this).exec();
+  }
+
+  void prepare_commit(bool sync = false) {
+    if (Traits::transactional && transaction_active)
+      this->_db->prepare_commit(sync);
+  }
+
+  void commit(bool sync = false) {
+    if (Traits::transactional && transaction_active) {
+      this->_db->commit(sync);
+      transaction_active = false;
+      auto root_ = this->root;
+      update();
+      assert(root_ == this->root);
+    }
+  }
+
+  void rollback() {
+    if (Traits::transactional && transaction_active) {
+      this->_db->rollback();
+      this->stack.clear();
+      transaction_active = false;
+      find(this->current_key);
+    }
+  }
+
+  /* Helpers */
+
+  void set_root(offset_t offset) override {
+    Traits::set_root(*this->_db, offset);
+    this->root = offset;
+  }
 
   bool keep_stack() {
     // Don't start from the very start. Try to start as deep in the stack as
     // possible
-    assert(stack.size > 0);
+    assert(this->stack.size > 0);
 
     int cmp;
-    size_t same = get_prefix(rest_key.data(), current_key.data(),
-                             rest_key.size(), current_key.size(), cmp);
-    if (same == rest_key.size() && same == current_key.size()) {
+    size_t same =
+        get_prefix(this->rest_key.data(), this->current_key.data(),
+                   this->rest_key.size(), this->current_key.size(), cmp);
+    if (same == this->rest_key.size() && same == this->current_key.size()) {
       // already found
-      rest_key.iadvance(same);
+      this->rest_key.iadvance(same);
       return true;
     }
 
     int i = 0;
-    for (; i < stack.size; i++) {
-      Transition& item = stack.data[i];
+    for (; i < this->stack.size; i++) {
+      Transition& item = this->stack.data[i];
       if (item.keypos >= same) break;
     }
 
-    stack.clear(i);
-    if (!stack.size) return false;
+    this->stack.clear(i);
+    if (!this->stack.size) return false;
 
-    Transition& back = stack.back();
+    Transition& back = this->stack.back();
     back.prefix = 0;
     back.cmp = Transition::UNDEFINED;
-    rest_key.iadvance(back.keypos);
-    current_key.resize(back.keypos);
+    this->rest_key.iadvance(back.keypos);
+    this->current_key.resize(back.keypos);
     return false;
   }
 
   void _find() {
-    if (!stack.size) {
-      if (!root) return;  // empty db
-      current_key.clear();
-      push(root);
+    if (!this->stack.size) {
+      if (!this->root) return;  // empty db
+      this->current_key.clear();
+      this->push(this->root);
     }
-    stack.back().find();
+    this->stack.back().find();
   }
 
   void update() {
     if (Traits::transactional && !transaction_active)
-      root = Traits::get_root(*_db);
+      this->root = Traits::get_root(*this->_db);
+  }
+};
+
+// Node-by-node iterator for merging - no find, no transactions, just forward
+// traversal
+template <typename DB_, typename Traits_>
+struct _NodeIterator : public _CursorBase<DB_, Traits_> {
+  typedef DB_ DB;
+  typedef Traits_ Traits;
+  typedef _NodeIterator<DB, Traits_> NodeIterator;
+  typedef _CursorBase<DB, Traits_> CursorBase;
+  using db_ptr = typename Traits::db_ptr;
+  using Transition = typename CursorBase::Transition;
+
+  int stack_level;
+
+  _NodeIterator(db_ptr db, offset_t root = 0) : CursorBase(db) {
+    this->root = root ? root : Traits::get_root(*this->_db);
+    first();
   }
 
-  db_ptr _db;
-  offset_t root;
-  Stack stack;
-  Slice rest_key;
-  std::string current_key;
-  bool transaction_active;
+  void first() {
+    this->stack.clear(0);
+    if (!this->root) return;
+    this->current_key.clear();
+    this->push(this->root);
+    this->stack.back().first();
+    stack_level = 0;
+  }
+
+  bool next() {
+    if (!this->stack.size) return false;  // empty iterator
+
+    if (stack_level < this->stack.size - 1) {
+      stack_level++;  // the next node in stack
+      return true;
+    }
+
+    // We're at the last node in stack, try to advance to next leaf
+    while (this->stack.size) {
+      if (this->stack.back().next()) {
+        stack_level++;
+        return true;
+      }
+      this->pop();
+      stack_level--;
+      assert(stack_level == (int)this->stack.size - 1);
+    }
+    return false;
+  }
+
+  // skip the next subtrie
+  bool skip() {
+    if (!this->stack.size) return false;  // empty iterator
+
+    this->stack.clear(stack_level + 1);
+
+    // We're at the last node in stack, try to advance to next leaf
+    while (this->stack.size) {
+      if (this->stack.back().next()) {
+        stack_level++;
+        return true;
+      }
+      this->pop();
+      stack_level--;
+      assert(stack_level == (int)this->stack.size - 1);
+    }
+    return false;
+  }
+
+
+  Slice node_key() const {
+    if (this->stack.data[stack_level].is_leaf()) {
+      return Slice(this->current_key);
+    }
+    assert(this->current_key.size() > this->stack.data[stack_level].keypos);
+    return Slice(this->current_key.c_str(),
+                 this->stack.data[stack_level].keypos);
+  }
+
+  Transition& node() { return this->stack.data[stack_level]; }
 };
 
 }  // namespace leaves

@@ -5,9 +5,10 @@
 
 namespace leaves {
 
-template <typename Transition>
+template <typename Cursor>
 struct _Deleter {
-  typedef _Deleter<Transition> Deleter;
+  typedef _Deleter<Cursor> Deleter;
+  using Transition = typename Cursor::Transition;
   using Traits = typename Transition::Traits;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
@@ -16,22 +17,23 @@ struct _Deleter {
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
 
+  Cursor& cursor;
   Transition* back;
 
-  _Deleter(Transition* back_) : back(back_) {}
+  _Deleter(Cursor& cursor) : cursor(cursor), back(&cursor.stack.back()) {}
 
   template <typename T>
   offset_t resolve(T ptr) {
-    return back->cursor->_db->resolve(ptr);
+    return cursor._db->resolve(ptr);
   }
 
   block_ptr resolve(offset_t offset) {
-    return back->cursor->_db->resolve(offset);
+    return cursor._db->resolve(offset);
   }
 
-  block_ptr alloc(uint16_t size) { return back->cursor->_db->alloc(size); }
+  block_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
 
-  void free(block_ptr& block) { back->cursor->_db->free(block); }
+  void free(block_ptr& block) { cursor._db->free(block); }
 
   void exec() {
     assert(back->success());
@@ -42,7 +44,7 @@ struct _Deleter {
   void remove_node(Transition* trans) {
     if (trans->is_root()) {
       // remove the last node
-      trans->cursor->set_root(offset_t());
+      cursor.set_root(offset_t());
       free(trans->block);
       trans->pop();
       return;
@@ -79,7 +81,7 @@ struct _Deleter {
     free(otrie);
     parent.cmp = -1;
     if (!prefix) parent.prefix = 0;  // NONE Key -> to the first child
-    parent.cursor->next();
+    cursor.next();
   }
 
   // Combine the parent with the only child
@@ -133,7 +135,7 @@ struct _Deleter {
 
     free(otrie);
     if (go_next)
-      parent.cursor->next();
+      cursor.next();
     else {
       parent.resize_key(parent.keypos);
       parent.first();

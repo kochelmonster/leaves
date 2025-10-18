@@ -26,6 +26,9 @@ class MapStorage {
     void prepare_commit() { _db->prepare_commit(); }
     void commit() { _db->commit(); }
     Slice name() const { return _db->name(); }
+    
+    // For testing: access to internal db pointer
+    IMapStorage::db_ptr db_ptr() const { return _db; }
 
    private:
     IMapStorage::db_ptr _db;
