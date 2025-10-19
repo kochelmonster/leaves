@@ -1,13 +1,15 @@
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 
-#include <mutex>
 #include <boost/endian/arithmetic.hpp>
+#include <mutex>
+#include <thread>
 
 #include "_check.hpp"
 #include "_cursor.hpp"
 #include "_hash.hpp"
 #include "_memory.hpp"
+#include "_port.hpp"
 
 // #define DEBUG_MEM
 
@@ -32,7 +34,7 @@ struct _TransactionBase : public Traits_::BlockHeader {
   offset_t next_txn;
 
   // count of cursors accessing this transaction
-  uint32_t count;
+  std::atomic<uint32_t> refs;
 
   MemManager mem_manager;
 };
@@ -83,20 +85,20 @@ struct _DB {
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::Hasher Hasher;
-    constexpr static bool transactional = true;
-    static void set_root(DB& db, offset_t offset) { db._wtxn.root = offset; }
-    static offset_t get_root(DB& db) { return db.txn()->root; }
+    constexpr static bool TRANSACTIONAL = true;
+    static offset_t get_root(txn_ptr& txn) { return txn->root; }
+    static void set_root(txn_ptr& txn, offset_t offset) { txn->root = offset; }
   };
 
   struct MemoryTraits : public Storage::Traits {
     typedef DB* db_ptr;
     typedef ::NullHasher Hasher;
     typedef uint8_t hash_t[0];
-    constexpr static bool transactional = false;
-    static void set_root(DB& db, offset_t offset) {
-      db._wtxn.mem_root = offset;
+    constexpr static bool TRANSACTIONAL = false;
+    static offset_t get_root(txn_ptr& txn) { return txn->mem_root; }
+    static void set_root(txn_ptr& txn, offset_t offset) {
+      txn->mem_root = offset;
     }
-    static offset_t get_root(DB& db) { return db.txn()->mem_root; }
   };
 
   struct BigSizeKey {
@@ -124,8 +126,10 @@ struct _DB {
     offset_t read_txn;      // the current read transaction
     offset_t prepared_txn;  // the transaction being prepared for commit
     Mutex txn_lock;
-    AreaList single_areas;          // single AREA_SIZE areas
-    AreaList multi_areas;           // multi-AREA_SIZE areas
+    std::atomic<uint64_t>
+        txn_cursor_id;      // the id of the cursor holding the transaction
+    AreaList single_areas;  // single AREA_SIZE areas
+    AreaList multi_areas;   // multi-AREA_SIZE areas
     AreaList pending_single_areas;  // single areas pending commit/rollback
     AreaList pending_multi_areas;   // multi areas pending commit/rollback
   };
@@ -135,7 +139,8 @@ struct _DB {
   using header_ptr = typename Traits::Pointer<Header>;
 
   Storage& _storage;
-  Transaction _wtxn;
+  Transaction* _active_txn = nullptr;
+  txn_ptr _wtxn;
   header_ptr _header;
   MemCursor _mem_cursor;
   uint16_t _index;
@@ -147,9 +152,7 @@ struct _DB {
       : _storage(storage),
         _header(storage.resolve(header)),
         _mem_cursor(this),
-        _index(index) {
-    _wtxn.txn_id = 0;
-  }
+        _index(index) {}
 
   _DB(Storage& storage, offset_t* header, uint16_t index)
       : _storage(storage), _mem_cursor(this), _index(index) {
@@ -177,16 +180,22 @@ struct _DB {
     txn->slot_id = Transaction::SLOT_ID;
     txn->root = txn->mem_root = 0;
     txn->next_txn = 0;
-    txn->count = 0;
+    txn->refs.store(0);
     txn->start_txn = _header->read_txn;
     txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
                           area_ptr->end());
-    _wtxn.txn_id = 0;
     make_dirty(_header);
     flush();
   }
 
   Slice name() const { return _storage.db_name(_index); }
+
+  uint64_t new_cursor_id() {
+    if constexpr (Traits::TRANSACTIONAL) {
+      return _storage.new_cursor_id();
+    }
+    return 0;
+  }
 
   template <typename T>
   typename Traits::Pointer<T> resolve(offset_t offset,
@@ -210,7 +219,8 @@ struct _DB {
 
   template <typename T>
   void mark_for_recycle(T& garbage_block) const {
-    garbage_block.txn_id = _wtxn.txn_id;
+    assert(_active_txn);
+    garbage_block.txn_id = _active_txn->txn_id;
   }
 
   void make_dirty(block_ptr& block) { _storage.make_dirty(block); }
@@ -234,12 +244,14 @@ struct _DB {
 
   block_ptr alloc_slot(uint16_t slot) {
     assert(transaction_active());
-    return _wtxn.alloc_slot(slot, *this);
+    assert(_active_txn);
+    return _active_txn->alloc_slot(slot, *this);
   }
 
   void free(block_ptr& block) {
     assert(transaction_active());
-    _wtxn.mem_manager.free(block, *this);
+    assert(_active_txn);
+    _active_txn->mem_manager.free(block, *this);
   }
 
   void _add_to_bigmem(offset_t offset, size_t size) {
@@ -287,7 +299,7 @@ struct _DB {
   }
 
   AreaSlice alloc_big(uint64_t size) {
-    assert(_wtxn.txn_id);
+    assert(_active_txn);
 
     size = padding(size, MAX_BLOCK_SIZE);
     uint32_t found_size;
@@ -334,7 +346,7 @@ struct _DB {
   }
 
   void free_big(offset_e offset, size_t size) {
-    assert(_wtxn.txn_id);
+    assert(_active_txn);
     size = padding(size, MAX_BLOCK_SIZE);
 
     BigSizeKey bkey;
@@ -373,7 +385,7 @@ struct _DB {
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
   area_ptr alloc_single_area() {
-    assert(_wtxn.txn_id);
+    assert(_active_txn);
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_single_area();
@@ -384,7 +396,7 @@ struct _DB {
   }
 
   area_ptr alloc_multi_area(uint64_t size) {
-    assert(_wtxn.txn_id);
+    assert(_active_txn);
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_multi_area(size);
@@ -406,44 +418,50 @@ struct _DB {
     } while (txn->txn_id < end);
   }
 
-  void sanitize_transactions() {
-    iter_transactions([](txn_ptr txn) -> bool {
-      txn->count = 0;
-      return false;
-    });
-  }
-
   txn_ptr txn() const { return resolve(_header->read_txn); }
 
-  bool transaction_active() const { return _wtxn.txn_id != 0; }
+  bool transaction_active() const { return _active_txn != nullptr; }
+
+  uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
   // Start a write transaction. If nonblocking is true, this will return false
   // immediately when the txn_lock cannot be acquired.
-  bool start_transaction(bool nonblocking = false) {
-    if (_wtxn.txn_id) return false;
-
+  // May only be called by cursor
+  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
     if (!nonblocking)
       _header->txn_lock.lock();
     else if (!_header->txn_lock.try_lock())
-      return false;
+      return txn_ptr();
 
-    txn_ptr active = txn();
-    memcpy(&_wtxn, &*active, sizeof(Transaction));
-    active->count++;  // ensure the last read transaction is not freed
+    _header->txn_cursor_id.store(cursor_id);
 
-    _wtxn.txn_id = active->txn_id + 1;
-    _wtxn.next_txn = 0;
-    _start_txn_id = active->txn_id;
+    assert(!_active_txn);
 
-    _storage.prefetch(&_wtxn.mem_manager);
+    txn_ptr last_txn = txn();
+
+    Transaction tmp;  // needed to alloc the next transaction itself
+    memcpy(&tmp, &*last_txn, sizeof(Transaction));
+    _active_txn = &tmp;
+    _wtxn = tmp.clone(*this);
+    _active_txn = &*_wtxn;
+    _active_txn->refs.store(0);
+
+    // ensure last_txn is not freed
+    last_txn->refs.fetch_add(1);
+
+    _active_txn->txn_id = last_txn->txn_id + 1;
+    _active_txn->next_txn = 0;
+    _start_txn_id = last_txn->txn_id;
+
+    _storage.prefetch(&_active_txn->mem_manager);
     for (int i = 0; i < MemManager::COUNT; i++) {
-      _storage.prefetch(&_wtxn.mem_manager.slots[i]);
+      _storage.prefetch(&_active_txn->mem_manager.slots[i]);
     }
 
     // find the oldest used transaction
     iter_transactions([this](txn_ptr txn) -> bool {
-      if (txn->count) {
-        _wtxn.start_txn = resolve(txn);
+      if (txn->refs.load() > 0) {
+        _active_txn->start_txn = resolve(txn);
         _start_txn_id = txn->txn_id;
         return true;
       }
@@ -451,40 +469,44 @@ struct _DB {
       return false;
     });
 
-    active->count--;
-    _mem_cursor.root = _wtxn.mem_root;
-    return true;
+    last_txn->refs.fetch_sub(1);
+    _mem_cursor._txn = _wtxn;
+    return _wtxn;
   }
 
-  void rollback() {
+  bool rollback(uint64_t cursor_id) {
+    if (_header->txn_cursor_id.load() != cursor_id) return false;
+
     // Return pending areas to storage
     return_pending_areas();
 
     _header->prepared_txn = _header->read_txn;
     flush();
     end_transaction();
+    return true;
   }
 
-  void prepare_commit(bool sync = false) {
-    // No transaction active or already prepared
-    if (!_wtxn.txn_id || _header->prepared_txn != _header->read_txn) return;
+  bool prepare_commit(uint64_t cursor_id, bool sync = false) {
+    // Not my transaction or not started 
+    if (_header->txn_cursor_id.load() != cursor_id) return false;
 
-    txn_ptr prepared = _wtxn.clone(*this);
-    _header->prepared_txn = resolve(prepared);
+    // already prepared
+    if (_header->prepared_txn != _header->read_txn) return true;
 
-    assert(_wtxn.start_txn);
+    _header->prepared_txn = resolve(_wtxn);
+
     txn_ptr active = resolve(_header->read_txn);
     active->next_txn = _header->prepared_txn;
     make_dirty(_header);
     make_dirty(active);
-    make_dirty(prepared);
+    make_dirty(_wtxn);
 
     flush(sync, true);
+    return true;
   }
 
-  void commit(bool sync = false) {
-    if (!_wtxn.txn_id) return;
-    prepare_commit(sync);
+  bool commit(uint64_t cursor_id, bool sync = false) {
+    if (!prepare_commit(cursor_id, sync)) return false;
 
     // Now atomically move pending areas to committed areas
     _header->single_areas.move(_header->pending_single_areas, _storage);
@@ -493,10 +515,13 @@ struct _DB {
     make_dirty(_header);
     flush(sync, true);
     end_transaction();
+    return true;
   }
 
   void end_transaction() {
-    _wtxn.txn_id = 0;
+    _header->txn_cursor_id.store(0);
+    _wtxn.reset();
+    _active_txn = nullptr;
     _header->txn_lock.unlock();
   }
 
@@ -569,12 +594,18 @@ struct _DB {
 
   void sanitize() {
     // Return any pending areas from incomplete transactions back to storage
-    if (_header->prepared_txn != _header->read_txn) commit();
+    _header->txn_cursor_id.store(0);
+    iter_transactions([](txn_ptr txn) -> bool {
+      txn->refs.store(0);
+      return false;
+    });
+
+    if (_header->prepared_txn != _header->read_txn) commit(0);
     return_pending_areas();
     flush();
   }
 
-  const db_type& dump_storage() const { return *this; }
+  const db_type& dump_db() const { return *this; }
 };
 
 }  // namespace leaves

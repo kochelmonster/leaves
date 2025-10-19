@@ -1,5 +1,5 @@
 type: trie
-id: 10168
+id: 10736
 page: 0
 freespace: 96
 txn: 3
@@ -9,11 +9,11 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 10033
-  - 15240
+  - 10601
+  - 15808
 ---
 type: leaf
-id: 10033
+id: 10601
 page: 0
 freespace: 122
 size: 14
@@ -24,7 +24,7 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 15240
+id: 15808
 page: 0
 freespace: 96
 txn: 4
@@ -34,11 +34,11 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 15105
-  - 16080
+  - 15673
+  - 16648
 ---
 type: leaf
-id: 15105
+id: 15673
 page: 0
 freespace: 121
 size: 15
@@ -49,7 +49,7 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 16080
+id: 16648
 page: 0
 freespace: 96
 txn: 5
@@ -59,11 +59,11 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 5233
-  - 16488
+  - 5801
+  - 17624
 ---
 type: leaf
-id: 5233
+id: 5801
 page: 0
 freespace: 120
 size: 16
@@ -74,7 +74,7 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 16488
+id: 17624
 page: 0
 freespace: 80
 txn: 9
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][*][e]"
 children: 
-  - 14401
-  - 17033
-  - 17168
+  - 14969
+  - 18169
+  - 18304
 ---
 type: leaf
-id: 14401
+id: 14969
 page: 0
 freespace: 119
 size: 17
@@ -100,7 +100,7 @@ valuesize: 4
 value: "abcd"
 ---
 type: leaf
-id: 17033
+id: 18169
 page: 0
 freespace: 117
 size: 19
@@ -111,7 +111,7 @@ valuesize: 5
 value: "abcd*"
 ---
 type: trie
-id: 17168
+id: 18304
 page: 0
 freespace: 72
 txn: 9
@@ -121,13 +121,13 @@ compressed:
   key: "[e]"
 branches: "[][*][f][g]"
 children: 
-  - 15377
-  - 17305
-  - 16761
-  - 16897
+  - 15945
+  - 18441
+  - 17897
+  - 18033
 ---
 type: leaf
-id: 15377
+id: 15945
 page: 0
 freespace: 118
 size: 18
@@ -138,7 +138,7 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 17305
+id: 18441
 page: 0
 freespace: 116
 size: 20
@@ -149,7 +149,7 @@ valuesize: 6
 value: "abcde*"
 ---
 type: leaf
-id: 16761
+id: 17897
 page: 0
 freespace: 116
 size: 20
@@ -160,7 +160,7 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 16897
+id: 18033
 page: 0
 freespace: 116
 size: 20

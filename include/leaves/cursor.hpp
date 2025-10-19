@@ -1,8 +1,8 @@
 #ifndef _LEAVES_CURSOR_HPP
 #define _LEAVES_CURSOR_HPP
 
-#include "intern/_util.hpp"
 #include "intern/_cursor.hpp"
+#include "intern/_util.hpp"
 
 namespace leaves {
 
@@ -35,6 +35,10 @@ class TCursor {
 
   void remove() { _cursor.remove(); }
 
+  bool start_transaction(bool non_blocking = false) {
+    return _cursor.start_transaction(non_blocking);
+  }
+
   void prepare_commit(bool sync = false) { _cursor.prepare_commit(sync); }
 
   void commit(bool sync = false) { _cursor.commit(sync); }
@@ -44,6 +48,6 @@ class TCursor {
  private:
   CursorImpl _cursor;
 };
-}
+}  // namespace leaves
 
-#endif // _LEAVES_CURSOR_HPP
+#endif  // _LEAVES_CURSOR_HPP

@@ -32,8 +32,8 @@ struct DirPreparation {
 
 template <typename DB>
 struct Transaction {
-  Transaction(DB db_) : db(db_) { db->start_transaction(); }
-  ~Transaction() { db->commit(); }
+  Transaction(DB db_) : db(db_) { db->start_transaction(0); }
+  ~Transaction() { db->commit(0); }
 
   DB db;
 };
@@ -45,7 +45,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.make("test");
   auto txn = db->txn();
-  txn->count++;
+  txn->refs.fetch_add(1);
 
   block_ptr block1, block2, block3, block4;
 
@@ -62,6 +62,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
     db->free(block1);
     block2 = db->alloc(311);
     BOOST_CHECK(block1 != block2);
+    BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
   }
 
   {
@@ -70,16 +71,18 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
     block3 = db->alloc(311);
     BOOST_CHECK(block1 != block3);
     BOOST_CHECK(block2 != block3);
+    BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
   }
 
   BOOST_CHECK(txn->txn_id != db->txn()->txn_id);
 
-  txn->count--;
+  txn->refs.fetch_sub(1);
 
   {
     Transaction trans(db);
     block4 = db->alloc(311);
     BOOST_CHECK(block4 != block3);
+    BOOST_CHECK_GT(db->_start_txn_id, txn->txn_id);
   }
 }
 
@@ -114,20 +117,20 @@ BOOST_AUTO_TEST_CASE(test_rollback) {
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.make("test");
 
-  db->start_transaction(true);
+  db->start_transaction(0, true);
   auto block1 = db->alloc(1123);
-  db->prepare_commit();
-  db->rollback();
+  db->prepare_commit(0);
+  db->rollback(0);
 
-  db->start_transaction();
+  db->start_transaction(0);
   auto block2 = db->alloc(1123);
-  db->prepare_commit();
-  db->commit();
+  db->prepare_commit(0);
+  db->commit(0);
 
-  db->start_transaction();
+  db->start_transaction(0);
   auto block3 = db->alloc(1123);
-  db->prepare_commit();
-  db->commit();
+  db->prepare_commit(0);
+  db->commit(0);
 
   BOOST_CHECK(block1 == block2);
   BOOST_CHECK(block1 != block3);
@@ -139,7 +142,9 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   std::vector<offset_t> block_offsets;
   size_t file_size;
+  const size_t MAX_REF_COUNT = DBMMap::DB::MemManager::BlockContainer::COUNT;
 
+  uint32_t* refs = nullptr;
   {
     {
       DBMMap storage(dbFilePath.c_str());
@@ -148,11 +153,13 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     auto db = storage.make("test");
 
     BOOST_REQUIRE(db->txn()->txn_id == 1);
+    BOOST_REQUIRE(db->txn()->refs.load() == 0);
 
     {
+      // allocate enough blocks of 4K size to fill one garbage page
       Transaction trans(db);
 
-      for (int i = 0; i < 64; i++) {
+      for (int i = 0; i < MAX_REF_COUNT - 1; i++) {
         block_ptr block = db->alloc(4 * K - sizeof(BlockHeader));
         block_offsets.push_back(db->resolve(block));
       }
@@ -161,11 +168,13 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
 
     DBMMap::DB::txn_ptr txn = db->txn();
     BOOST_REQUIRE(txn->txn_id == 2);
+    BOOST_REQUIRE(txn->refs.load() == 0);
+    refs = (uint32_t*)&txn->refs;
     BOOST_REQUIRE(file_size == storage._memory->file_size);
   }
 
   {
-    // free the first page page (txn=2)
+    // fill the garbage page (txn=2)
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.make("test");
     BOOST_REQUIRE(storage._memory->file_size == file_size);
@@ -178,7 +187,6 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
         BOOST_REQUIRE(db->resolve(block) == bo);
         db->free(block);
       }
-      // file_size = db->_txn.file_size;
     }
 
     DBMMap::DB::txn_ptr txn = db->txn();
@@ -187,10 +195,11 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
 
   {
     // go one transaction ahead, to be able to harvest
-    // the last freed bocks;
+    // the last freed blocks;
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.make("test");
     Transaction trans(db);
+    file_size = storage._memory->file_size;
   }
 
   {
@@ -206,7 +215,6 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
         offset_t offset = db->resolve(block);
         BOOST_REQUIRE(db->resolve(block) == bo);
       }
-      // file_size = db->_txn.file_size;
     }
 
     DBMMap::DB::txn_ptr txn = db->txn();
@@ -249,11 +257,11 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
 
   std::vector<offset_t> offsets;
 
-  db1->start_transaction();
+  db1->start_transaction(0);
   // These last_area checks are no longer applicable in the new architecture
   // force the alloc of a new area
-  const uint64_t ALLOC_SIZE = db1->_wtxn.mem_manager.allocation_end + 16 * K -
-                              db1->_wtxn.mem_manager.allocation_start;
+  const uint64_t ALLOC_SIZE = db1->_wtxn->mem_manager.allocation_end + 16 * K -
+                              db1->_wtxn->mem_manager.allocation_start;
   int size = 0;
   while (size < ALLOC_SIZE) {
     offsets.push_back(storage.resolve(db1->alloc(4 * K)));
@@ -266,10 +274,10 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   // create a new area for db2
   auto db2 = storage.make("test2");
 
-  db1->rollback();
+  db1->rollback(0);
   // the new area in db1 is "orphaned" and must be recycled the next time
 
-  db1->start_transaction();
+  db1->start_transaction(0);
   // Check that we can start a new transaction
 
   // alloc again - with recycling, we should get similar allocation patterns
@@ -293,7 +301,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   }
   BOOST_CHECK(some_reused);
 
-  db1->rollback();
+  db1->rollback(0);
 }
 
 struct BigSizeKey {
@@ -367,6 +375,7 @@ struct TestTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
+  static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 256;
   static constexpr size_t AREA_SIZE = 8 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
@@ -491,7 +500,7 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
   TestStorage storage;
 
   BOOST_CHECK_EQUAL(storage.db->_header->single_areas.get_head(), 0);
-  storage.db->start_transaction();
+  storage.db->start_transaction(0);
 
   // Allocate several areas and test basic allocation
   std::vector<AreaSlice> allocated_areas;
@@ -501,17 +510,17 @@ BOOST_AUTO_TEST_CASE(test_area_revolve) {
     // Just check that we got a reasonable size
     BOOST_CHECK(slice.size() >= storage.AREA_SIZE / 2);
   }
-  storage.db->rollback();
+  storage.db->rollback(0);
 
   // After rollback, some areas should be available for recycling
   // The exact behavior depends on implementation details, so just check basic
   // functionality
-  storage.db->start_transaction();
+  storage.db->start_transaction(0);
   for (int i = 0; i < COUNT + 2; i++) {
     auto slice = storage.db->alloc_big(storage.AREA_SIZE);
     BOOST_CHECK(slice.size() >= storage.AREA_SIZE / 2);
   }
-  storage.db->commit();
+  storage.db->commit(0);
 
   // After commit, check that allocation still works
   BOOST_CHECK(storage.db->_header->single_areas.get_head() == 0 ||
@@ -524,7 +533,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
   TestStorage storage;
 
   BOOST_CHECK_EQUAL(storage.db->_header->multi_areas.get_head(), 0);
-  storage.db->start_transaction();
+  storage.db->start_transaction(0);
 
   // Allocate several big areas
   std::vector<AreaSlice> allocated_areas;
@@ -533,13 +542,13 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
     allocated_areas.push_back(slice);
     BOOST_CHECK(slice.size() >= storage.AREA_SIZE);
   }
-  storage.db->rollback();
+  storage.db->rollback(0);
 
   // Test that area recycling works for big areas
-  storage.db->start_transaction();
+  storage.db->start_transaction(0);
   auto big_slice = storage.db->alloc_big(5 * storage.AREA_SIZE);
   BOOST_CHECK(big_slice.size() >= 5 * storage.AREA_SIZE);
-  storage.db->commit();
+  storage.db->commit(0);
 
   // Verify basic functionality
   BOOST_CHECK(storage.db->_header->multi_areas.get_head() == 0 ||

@@ -56,6 +56,8 @@ static const char* FLAGS_benchmarks1 =
     "readrandom,"
     "readseq,";
 
+static int const BATCH_SIZE = 1000;
+
 // Use writable MMAP
 static bool FLAGS_writemap = false;
 
@@ -394,11 +396,11 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       if (name == Slice("fillseq")) {
-        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, 100);
+        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, BATCH_SIZE);
       } else if (name == Slice("fillbatch")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 1000);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, BATCH_SIZE);
       } else if (name == Slice("fillrandom")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, 100);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, BATCH_SIZE);
       } else if (name == Slice("overwrite")) {
         Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrandsync")) {

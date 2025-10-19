@@ -62,7 +62,7 @@ struct _Inserter {
     if (bkey.size() > 255) {
       trie_ptr trie = alloc(TrieNode::size(255, 1));
       back->offset = resolve(trie);
-      back->cursor->set_root(back->offset);
+      back->set_root(back->offset);
       back->block = trie;
       fill_bigkey(*back);
       create_leaf();
@@ -78,7 +78,7 @@ struct _Inserter {
     back->prefix = bkey.size();
     back->advance_key(back->prefix);
     if (front == back)
-      back->cursor->set_root(back->offset);
+      back->set_root(back->offset);
     else
       *back->parent().link() = back->offset;
   }

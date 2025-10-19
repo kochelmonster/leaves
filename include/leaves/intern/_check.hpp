@@ -20,8 +20,8 @@ inline std::string bitstr(char bit) {
 
 template <typename Container>
 struct _Dumper {
-  using Storage = typename Container::db_type;
-  using Traits = typename Storage::Traits;
+  using DB = typename Container::db_type;
+  using Traits = typename DB::Traits;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
   using offset_e = typename Traits::offset_e;
@@ -32,24 +32,24 @@ struct _Dumper {
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr auto& AREA_SIZE = Traits::AREA_SIZE;
 
-  const Storage& _storage;
+  const DB& _db;
   int _id;
   bool _simple;
   bool _show_mem;
 
   _Dumper(const Container& container, bool simple = false,
           bool show_mem = false)
-      : _storage(container.dump_storage()),
+      : _db(container.dump_db()),
         _id(0),
         _simple(simple),
         _show_mem(show_mem) {}
 
   void dump(std::ostream& out) {
     offset_t root;
-    if (_storage.transaction_active())
-      root = _show_mem ? _storage._wtxn.mem_root : _storage._wtxn.root;
+    if (_db.transaction_active())
+      root = _show_mem ? _db._wtxn->mem_root : _db._wtxn->root;
     else
-      root = _show_mem ? _storage.txn()->mem_root : _storage.txn()->root;
+      root = _show_mem ? _db.txn()->mem_root : _db.txn()->root;
 
     if (root) dump_link(out, root, _id++);
   }
@@ -62,7 +62,7 @@ struct _Dumper {
   }
 
   void dump_leaf(std::ostream& out, offset_e offset, int id) {
-    leaf_ptr leaf = _storage.resolve(offset);
+    leaf_ptr leaf = _db.resolve(offset);
     uint16_t size = leaf->size();
     out << "type: leaf" << std::endl;
     if (_simple) {
@@ -100,7 +100,7 @@ struct _Dumper {
   }
 
   void dump_trie(std::ostream& out, offset_t offset, int id) {
-    trie_ptr trie = _storage.resolve(offset);
+    trie_ptr trie = _db.resolve(offset);
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
     if (_simple) {

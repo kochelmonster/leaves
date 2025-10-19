@@ -44,7 +44,7 @@ struct _Deleter {
   void remove_node(Transition* trans) {
     if (trans->is_root()) {
       // remove the last node
-      cursor.set_root(offset_t());
+      trans->set_root(offset_t());
       free(trans->block);
       trans->pop();
       return;

@@ -26,6 +26,7 @@ void create() {
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
   auto start = std::chrono::high_resolution_clock::now();
+  cursor.start_transaction();
 
   for (size_t i = 0; i < COUNT; i++) {
     char key[100];
@@ -36,6 +37,7 @@ void create() {
     cursor.value(mval);
     if (i % 1000 == 0 && i > 0) {
       cursor.commit();
+      cursor.start_transaction();
     }
   }
   cursor.commit();

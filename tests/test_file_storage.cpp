@@ -243,7 +243,7 @@ BOOST_AUTO_TEST_CASE(test_file_storage_key_patterns) {
     auto db = storage["pattern_test"];
     auto cursor = db.cursor();
     
-    BOOST_REQUIRE(db.start_transaction());
+    BOOST_REQUIRE(cursor.start_transaction());
     for (const auto& key : keys) {
       cursor.find(key);
       BOOST_REQUIRE(!cursor.is_valid());
@@ -252,7 +252,6 @@ BOOST_AUTO_TEST_CASE(test_file_storage_key_patterns) {
       BOOST_REQUIRE_EQUAL(cursor.key().string(), key);
     }
     cursor.commit();
-    db.commit();
     
     // Verify all keys
     for (const auto& key : keys) {

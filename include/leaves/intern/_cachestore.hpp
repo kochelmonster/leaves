@@ -35,7 +35,6 @@ struct _CacheStore : public Opers_ {
   using block_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static const bool is_transactional = true;
   typedef Opers_ Operations;
   typedef _DB<_CacheStore> DB;
   typedef std::shared_ptr<DB> db_ptr;
@@ -89,6 +88,7 @@ struct _CacheStore : public Opers_ {
   std::mutex _dirty_mutex;
   std::condition_variable _dirty_cv;
   std::atomic<bool> _header_dirty{false};
+  std::atomic<int64_t> _last_cursor_id{0};
 
   _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M)
       : _cache(capacity), _capacity(capacity), _should_stop(false) {
@@ -113,6 +113,10 @@ struct _CacheStore : public Opers_ {
 
   void start_write_back_thread() {
     _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
+  }
+
+  uint64_t new_cursor_id() {
+    return _last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
   }
 
   void flush(bool sync = false, bool force = false) {

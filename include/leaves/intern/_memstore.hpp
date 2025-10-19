@@ -2,7 +2,6 @@
 #define _LEAVES__MEMSTORE_HPP
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -33,6 +32,7 @@ struct _MemoryTraits {
   };
 #pragma pack(0)
 
+  static constexpr bool TRANSACTIONAL = false;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
   static constexpr uint16_t BLOCK_SIZES[] = {   // Typical node sizes
@@ -61,14 +61,23 @@ struct _MemoryDB {
 
   typedef _MemoryDB<Storage> DB;
 
+  // Transaction methods become no-ops
+  struct NullTransaction {
+    tid_t txn_id = 1;
+    offset_t root{0};
+    std::atomic<uint32_t> refs{0};
+  };
+
+  typedef NullTransaction* txn_ptr;
+
   // Value traits for non-transactional operations
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::NullHasher Hasher;  // No hashing needed for memory-only
     typedef uint8_t hash_t[0];
-    constexpr static bool transactional = false;
-    static void set_root(DB& db, offset_t offset) { db._root = offset; }
-    static offset_t get_root(DB& db) { return db._root; }
+    constexpr static bool TRANSACTIONAL = false;
+    static void set_root(txn_ptr txn, offset_t offset) { txn->root = offset; }
+    static offset_t get_root(txn_ptr txn) { return txn->root; }
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -82,25 +91,17 @@ struct _MemoryDB {
   typedef DB db_type;
 
   Storage& _storage;
-  offset_t _root;
   MemManager _mem_manager;
+  NullTransaction _null_txn;
 
-  _MemoryDB(Storage& storage) : _storage(storage), _root(0) { init(); }
+  _MemoryDB(Storage& storage) : _storage(storage) { init(); }
 
   void init() {
     auto area_ptr = _storage.alloc_single_area();
     _mem_manager.init(area_ptr->content_offset(), area_ptr->end());
   }
 
-  // Transaction methods become no-ops
-  struct NullTransaction {
-    tid_t txn_id = 1;
-  };
-
-  NullTransaction _null_txn;
-
-  NullTransaction* txn() { return &_null_txn; }
-  const NullTransaction* txn() const { return &_null_txn; }
+  txn_ptr txn() { return &_null_txn; }
 
   // Area management
   area_ptr alloc_single_area() { return _storage.alloc_single_area(); }
@@ -147,12 +148,7 @@ struct _MemoryDB {
   void make_dirty(block_ptr& block) {}
   void prefetch(offset_t offset, Access access = READ) const {}
   void prefetch(void* mem, Access access = READ) const {}
-
-  // Transaction interface - simplified for memory storage
-  bool start_transaction() { return true; }
-  void commit(bool sync = false) {}
-  void rollback() {}
-
+  
   void flush(bool sync = false, bool force = false) {}
 
   // Big allocation methods - throw exceptions since memory storage doesn't
@@ -198,7 +194,6 @@ struct _MemoryStorage {
   using block_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static const bool is_transactional = false;
   typedef _MemoryDB<_MemoryStorage> DB;
   typedef std::shared_ptr<DB> db_ptr;
 

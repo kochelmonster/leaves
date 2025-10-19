@@ -56,6 +56,7 @@ struct _MemoryMapTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 1 * M;
   static constexpr uint16_t MAX_PROCESSES = 100;
+  static constexpr bool TRANSACTIONAL = true;
 
   static constexpr uint16_t BLOCK_SIZES[] = {     // Typical node sizes
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
@@ -81,7 +82,6 @@ struct _MemoryMapFile {
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static const bool is_transactional = true;
   typedef _DB<MemoryMapFile> DB;
   typedef std::shared_ptr<DB> db_ptr;
   typedef std::weak_ptr<DB> wdb_ptr;
@@ -132,6 +132,7 @@ struct _MemoryMapFile {
     AreaPool area_pool;  // pool for both single and multi areas
     pid_type processes[MAX_PROCESSES];
     uint16_t db_count;
+    std::atomic<int64_t> last_cursor_id;
     DBEntry dbs[0];
 
     FileHeader(uint16_t db_count_, const char* name)
@@ -230,6 +231,10 @@ struct _MemoryMapFile {
     }
   }
 
+  uint64_t new_cursor_id() {
+    return _memory->last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
+  }
+
   void flush(bool sync = false, bool force = false) {
     if (force) _region.flush(0, 0, !sync);
   }
@@ -241,7 +246,10 @@ struct _MemoryMapFile {
     boost::interprocess::scoped_lock<boost::interprocess::file_lock>
         flock_guard(flock);
 
-    if (sanitize_processes()) sanitize_dbs();
+    if (sanitize_processes()) {
+      sanitize_dbs();
+      _memory->last_cursor_id.store(0);
+    }
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);
 

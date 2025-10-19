@@ -7,8 +7,6 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
-// Provide hashing for custom types used in hashed containers
-#include <functional>
 
 namespace leaves {
 
@@ -73,7 +71,10 @@ class Slice {
   bool empty() const { return _size == 0; }
 
   operator bool() const { return _size != 0; }
-  void reset() { _size = 0; }
+  void reset() {
+    _size = 0;
+    _data = nullptr;
+  }
 };
 
 template <typename BaseType>

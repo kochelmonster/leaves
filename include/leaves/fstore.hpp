@@ -16,18 +16,12 @@ class FileStorage {
     DB(_FileStore::db_ptr db) : _db(db) {}
 
     Cursor cursor() { return Cursor(_db); }
-
-    bool start_transaction(bool wait = false) {
-      return _db->start_transaction(wait);
-    }
-    void prepare_commit() { _db->prepare_commit(); }
-    void commit() { _db->commit(); }
     Slice name() const { return _db->name(); }
 
    private:
     _FileStore::db_ptr _db;
 
-    const db_type& dump_storage() const { return *_db; }
+    const db_type& dump_db() const { return *_db; }
 
     template <typename T>
     friend class _Dumper;

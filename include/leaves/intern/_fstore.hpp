@@ -4,7 +4,6 @@
 #include <fcntl.h>
 
 #include <algorithm>
-#include <atomic>
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/indexed_by.hpp>
 #include <boost/multi_index/member.hpp>
@@ -57,6 +56,7 @@ struct _StoreTraits {
   };
 #pragma pack(0)
 
+  static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr uint16_t BLOCK_SIZES[] = {  // Typical node sizes

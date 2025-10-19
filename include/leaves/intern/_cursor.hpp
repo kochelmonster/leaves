@@ -1,12 +1,14 @@
 #ifndef _LEAVES_ICURSOR_HPP
 #define _LEAVES_ICURSOR_HPP
 
+#include <thread>
 #include <vector>
 
 #include "_deleter.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
 #include "_node.hpp"
+#include "_port.hpp"
 
 namespace leaves {
 
@@ -73,16 +75,24 @@ struct _Transition {
 
   block_ptr resolve(offset_t offset) { return cursor->_db->resolve(offset); }
 
+  void set_root(offset_t offset_) { Traits::set_root(cursor->_txn, offset_); }
+
   void replace(offset_t offset_) {
     offset = offset_;
     if (!is_root())
       *parent().update() = offset_;
     else
-      cursor->set_root(offset_);
+      set_root(offset);
   }
 
   offset_e* update() {
-    if (block->txn_id == cursor->txn_id()) {
+    if constexpr (!Cursor::DB::Traits::TRANSACTIONAL) {
+      cursor->_db->make_dirty(block);
+      return link();
+    }
+
+    if (block->txn_id == cursor->_txn->txn_id) {
+      assert(cursor->_db->transaction_active());
       cursor->_db->make_dirty(block);
       return link();
     }
@@ -95,7 +105,7 @@ struct _Transition {
     if (!is_root())
       *parent().update() = offset;
     else
-      cursor->set_root(offset);
+      set_root(offset);
 
     return link();
   }
@@ -331,24 +341,16 @@ struct _CursorBase {
   typedef _CursorBase<DB, Traits_> CursorBase;
   typedef _Stack<CursorBase> Stack;
   using db_ptr = typename Traits::db_ptr;
+  using txn_ptr = typename DB::txn_ptr;
   using Transition = typename Stack::Transition;
 
   db_ptr _db;
-  offset_t root;
+  txn_ptr _txn;
   Stack stack;
   Slice rest_key;
   std::string current_key;
 
   _CursorBase(db_ptr db) : _db(db) { current_key.reserve(128); }
-
-  virtual ~_CursorBase() {}
-
-  virtual tid_t txn_id() const { return _db->txn()->txn_id; }
-
-  virtual void set_root(offset_t offset) {
-    Traits::set_root(*_db, offset);
-    root = offset;
-  }
 
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
@@ -372,21 +374,34 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   typedef _Cursor<DB, Traits_> Cursor;
   typedef _CursorBase<DB, Traits_> CursorBase;
   using db_ptr = typename Traits::db_ptr;
+  using txn_ptr = typename DB::txn_ptr;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
   using Hasher = typename Traits::Hasher;
   using hash_t = typename Hasher::hash_t;
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
+  uint64_t _id{0};
+  std::string _refind_buffer;
 
-  bool transaction_active;
+  _Cursor(db_ptr db) : CursorBase(db) {
+    if constexpr (Traits::TRANSACTIONAL) {
+      _id = db->new_cursor_id();
+    }
+    update();
+  }
 
-  _Cursor(db_ptr db) : CursorBase(db), transaction_active(false) { update(); }
+  ~_Cursor() {
+    if constexpr (Traits::TRANSACTIONAL) {
+      if (this->_txn) this->_txn->refs.fetch_sub(1);
+    }
+  }
 
-  tid_t txn_id() const override {
-    return !Traits::transactional || transaction_active
-               ? this->_db->_wtxn.txn_id
-               : this->_db->txn()->txn_id;
+  bool is_transaction_active() const {
+    if constexpr (Traits::TRANSACTIONAL) {
+      return this->_db->txn_cursor_id() == _id;
+    }
+    return false;
   }
 
   // return true if the cursor is on a valid position
@@ -396,29 +411,28 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   void find(const Slice& key) {
     if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
-
-    update();
     this->rest_key = key;
     if (this->stack.size && keep_stack()) return;
     _find();
   }
 
-  void _prepare_move() {
-    update();
+  bool _prepare_move() {
     this->stack.clear(0);
-    if (!this->root) return;
+    auto root = Traits::get_root(this->_txn);
+    if (!root) return true;
     this->rest_key.reset();
     this->current_key.clear();
-    this->push(this->root);
+    this->push(root);
+    return false;
   }
 
   void first() {
-    _prepare_move();
+    if (_prepare_move()) return;
     this->stack.back().first();
   }
 
   void last() {
-    _prepare_move();
+    if (_prepare_move()) return;
     this->stack.back().last();
   }
 
@@ -439,13 +453,11 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   void value(const Slice& value) {
-    if (Traits::transactional && !transaction_active) {
-      if (!this->_db->start_transaction()) throw TransactionActive();
-      transaction_active = true;
-    }
+    bool r = start_transaction();
+    assert(r);
 
     if (!this->stack.size) {
-      if (!this->root) {
+      if (!Traits::get_root(this->_txn)) {
         this->push(offset_t());
         _Inserter(&this->stack.back(), value).first_exec();
         this->_db->flush();
@@ -466,44 +478,50 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   Slice key() const { return this->current_key; }
 
   void remove() {
+    bool r = start_transaction();
+    assert(r);
     if (!is_valid()) throw NoValidPosition();
-    if (Traits::transactional && !transaction_active) {
-      if (!this->_db->start_transaction()) throw TransactionActive();
-      transaction_active = true;
-    }
     _Deleter(*this).exec();
   }
 
-  void prepare_commit(bool sync = false) {
-    if (Traits::transactional && transaction_active)
-      this->_db->prepare_commit(sync);
+  bool start_transaction(bool non_blocking = false) {
+    if constexpr (Traits::TRANSACTIONAL) {
+      if (this->_db->txn_cursor_id() != _id) {
+        txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
+        if (!new_txn) return false;
+        assert(new_txn->refs.load() == 0);  // no one can reference it yet
+        _set_txn(new_txn);
+      }
+    }
+    return true;
   }
 
-  void commit(bool sync = false) {
-    if (Traits::transactional && transaction_active) {
-      this->_db->commit(sync);
-      transaction_active = false;
-      auto root_ = this->root;
-      update();
-      assert(root_ == this->root);
+  bool prepare_commit(bool sync = false) {
+    if constexpr (Traits::TRANSACTIONAL) {
+      return this->_db->prepare_commit(_id, sync);
     }
+    return false;
   }
 
-  void rollback() {
-    if (Traits::transactional && transaction_active) {
-      this->_db->rollback();
-      this->stack.clear();
-      transaction_active = false;
-      find(this->current_key);
+  bool commit(bool sync = false) {
+    if constexpr (Traits::TRANSACTIONAL) {
+      return this->_db->commit(_id, sync);
     }
+    return false;
+  }
+
+  bool rollback() {
+    if constexpr (Traits::TRANSACTIONAL) {
+      if (this->_db->rollback(_id)) {
+        this->stack.clear();
+        find(this->current_key);
+        return true;
+      }
+    }
+    return false;
   }
 
   /* Helpers */
-
-  void set_root(offset_t offset) override {
-    Traits::set_root(*this->_db, offset);
-    this->root = offset;
-  }
 
   bool keep_stack() {
     // Don't start from the very start. Try to start as deep in the stack as
@@ -539,16 +557,47 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   void _find() {
     if (!this->stack.size) {
-      if (!this->root) return;  // empty db
+      auto root = Traits::get_root(this->_txn);
+      if (!root) return;  // empty db
       this->current_key.clear();
-      this->push(this->root);
+      this->push(root);
     }
     this->stack.back().find();
   }
 
   void update() {
-    if (Traits::transactional && !transaction_active)
-      this->root = Traits::get_root(*this->_db);
+    if constexpr (Traits::TRANSACTIONAL) {
+      auto new_txn = this->_db->txn();
+      assert(new_txn);
+      if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
+        _set_txn(new_txn);
+      }
+    }
+  }
+
+  void _set_txn(txn_ptr& txn) {
+    if constexpr (Traits::TRANSACTIONAL) {
+      assert(txn);
+      if (this->_txn != txn) {
+        offset_t old_root;
+        if (this->_txn) {
+          this->_txn->refs.fetch_sub(1);
+          old_root = Traits::get_root(this->_txn);
+        }
+        this->_txn = txn;
+        this->_txn->refs.fetch_add(1);
+        if ((this->current_key.size() || this->rest_key.size()) &&
+            old_root != Traits::get_root(this->_txn)) {
+          // adjust to new root
+          this->stack.clear();
+          _refind_buffer.reserve(this->current_key.size() +
+                                 this->rest_key.size());
+          _refind_buffer = this->current_key;
+          _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
+          find(_refind_buffer);
+        }
+      }
+    }
   }
 };
 
@@ -564,17 +613,22 @@ struct _NodeIterator : public _CursorBase<DB_, Traits_> {
   using Transition = typename CursorBase::Transition;
 
   int stack_level;
+  offset_t root;
 
   _NodeIterator(db_ptr db, offset_t root = 0) : CursorBase(db) {
-    this->root = root ? root : Traits::get_root(*this->_db);
+    this->_txn = this->_db->txn();
+    this->_txn->refs.fetch_add(1);
+    root = root ? root : Traits::get_root(this->_txn);
     first();
   }
 
+  ~_NodeIterator() { this->_txn->refs.fetch_sub(1); }
+
   void first() {
     this->stack.clear(0);
-    if (!this->root) return;
+    if (!root) return;
     this->current_key.clear();
-    this->push(this->root);
+    this->push(root);
     this->stack.back().first();
     stack_level = 0;
   }
@@ -618,7 +672,6 @@ struct _NodeIterator : public _CursorBase<DB_, Traits_> {
     }
     return false;
   }
-
 
   Slice node_key() const {
     if (this->stack.data[stack_level].is_leaf()) {
