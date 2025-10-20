@@ -65,7 +65,7 @@ struct TestStorage {
   tid_t accept_tid;
   tid_t mark_tid;
 
-  block_ptr resolve(offset_t offset, Access access = READ) {
+  block_ptr resolve(offset_t offset, Access /* access */ = READ) {
     return block_ptr(&memory[offset]);
   }
 
@@ -131,8 +131,8 @@ struct TestStorage {
     free_block.txn_id = mark_tid;
   }
 
-  void make_dirty(block_ptr& block) {}
-  void flush(bool sync = false, bool force = false) {}
+  void make_dirty(block_ptr& /* block */) {}
+  void flush(bool /* sync */ = false, bool /* force */ = false) {}
 };
 
 struct TestTraitsBig : public TestTraits {
@@ -306,12 +306,12 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_iter) {
   
   // Allocate and free a block to have something in the garbage slot
   auto result = storage.alloc(SPACE);
-  offset_t block_offset = storage.resolve(result);
+  [[maybe_unused]] offset_t block_offset = storage.resolve(result);
   storage.free(result);
   
   // Test that iter method works and can be called without crashing
   bool iter_called = false;
-  storage.mm.slots[sid].iter(storage, [&](const auto& block_item) {
+  storage.mm.slots[sid].iter(storage, [&](const auto& /* block_item */) {
     iter_called = true;
   });
   
@@ -480,8 +480,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_pop) {
   TestStorage storage;
   using GarbageSlot = TestStorage::MemManager::Slot;
   
-  GarbageSlot empty_slot;
-  memset(&empty_slot, 0, sizeof(empty_slot));
+  GarbageSlot empty_slot = {};
   
   // Test popping from empty slot
   auto result = empty_slot.pop(storage);
@@ -494,7 +493,7 @@ BOOST_AUTO_TEST_CASE(test_mem_manager_left_over_usage) {
   // Force allocation to create left-over space
   constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
   uint16_t large_size = BLOCK_SIZES[4]; // Large block
-  uint16_t small_size = BLOCK_SIZES[0]; // Small block
+  [[maybe_unused]] uint16_t small_size = BLOCK_SIZES[0]; // Small block
   
   // Allocate large blocks until near end of area
   while (storage.mm.allocation_start + large_size < storage.mm.allocation_end) {
@@ -714,7 +713,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   TestStorage storage;
   
   static const int BC = storage.mm.assign_slot(MemManager::BlockContainer::SIZE);
-  const uint16_t SPACE = 200;
+  [[maybe_unused]] const uint16_t SPACE = 200;
   const int COUNT = MemManager::BlockContainer::COUNT;
   
   // Allocate and free exactly COUNT BlockContainers to fill one container

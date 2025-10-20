@@ -4,7 +4,7 @@
 #include <boost/endian/arithmetic.hpp>
 #include <mutex>
 
-#include "_cursor.hpp"
+#include "_cursor.hpp" 
 #include "_hash.hpp"
 #include "_memory.hpp"
 #include "_port.hpp"
@@ -163,7 +163,7 @@ struct _DB {
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(*header);
     memset((void*)_header, 0, sizeof(Header));
-    new (&_header->txn_lock) Mutex;
+    new (&_header->txn_lock) Mutex();
     _header->single_areas.init();
     _header->multi_areas.init();
     _header->pending_single_areas.init();
@@ -431,9 +431,9 @@ struct _DB {
     else if (!_header->txn_lock.try_lock())
       return txn_ptr();
 
-    _header->txn_cursor_id.store(cursor_id);
-
     assert(!_active_txn);
+    assert(_header->txn_cursor_id.load() == 0);
+    _header->txn_cursor_id.store(cursor_id);
 
     txn_ptr last_txn = txn();
 
@@ -589,7 +589,7 @@ struct _DB {
   }
 
   void sanitize() {
-    // Return any pending areas from incomplete transactions back to storage
+    new (&_header->txn_lock) Mutex();
     _header->txn_cursor_id.store(0);
     iter_transactions([](txn_ptr txn) -> bool {
       txn->refs.store(0);

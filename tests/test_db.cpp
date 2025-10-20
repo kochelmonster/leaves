@@ -144,7 +144,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   size_t file_size;
   const size_t MAX_REF_COUNT = DBMMap::DB::MemManager::BlockContainer::COUNT;
 
-  uint32_t* refs = nullptr;
+  [[maybe_unused]] uint32_t* refs = nullptr;
   {
     {
       DBMMap storage(dbFilePath.c_str());
@@ -159,7 +159,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       // allocate enough blocks of 4K size to fill one garbage page
       Transaction trans(db);
 
-      for (int i = 0; i < MAX_REF_COUNT - 1; i++) {
+      for (size_t i = 0; i < MAX_REF_COUNT - 1; i++) {
         block_ptr block = db->alloc(4 * K - sizeof(BlockHeader));
         block_offsets.push_back(db->resolve(block));
       }
@@ -212,7 +212,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
       for (offset_t bo : block_offsets) {
         block_ptr block = db->alloc(4 * K - sizeof(BlockHeader));
-        offset_t offset = db->resolve(block);
+        [[maybe_unused]] offset_t offset = db->resolve(block);
         BOOST_REQUIRE(db->resolve(block) == bo);
       }
     }
@@ -262,7 +262,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   // force the alloc of a new area
   const uint64_t ALLOC_SIZE = db1->_wtxn->mem_manager.allocation_end + 16 * K -
                               db1->_wtxn->mem_manager.allocation_start;
-  int size = 0;
+  uint64_t size = 0;
   while (size < ALLOC_SIZE) {
     offsets.push_back(storage.resolve(db1->alloc(4 * K)));
     size += 4 * K;
@@ -357,7 +357,7 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
       check_memtrie_count(db, 4 + i);
     }
 
-    int item_count = 12;
+    [[maybe_unused]] int item_count = 12;
     for (int i = 1; i < 10; i += 2) {
       db->free_big(slices[i].offset(), slices[i].size());
       check_memtrie_count(db, 11 - i);
@@ -412,7 +412,7 @@ struct TestStorage {
   struct Mutex {
     void recover() {}
     template <typename Time = std::chrono::seconds>
-    void lock(Time t = Time(10)) {}
+    void lock(Time /* t */ = Time(10)) {}
     bool try_lock() { return true; }
     void unlock() {}
   };
@@ -435,7 +435,7 @@ struct TestStorage {
   Mutex& file_lock() { return mutex; }
   size_t file_size() const { return memory.size(); }
 
-  block_ptr resolve(offset_t offset, Access access = READ) {
+  block_ptr resolve(offset_t offset, Access /* access */ = READ) {
     return block_ptr(&memory[offset]);
   }
 
@@ -444,7 +444,7 @@ struct TestStorage {
     return offset_t((const char*)p - (char*)&memory[0]).type(p.type);
   }
 
-  void make_dirty(block_ptr& block) {}
+  void make_dirty(block_ptr& /* block */) {}
 
   // New area allocation methods required by _db.hpp
   area_ptr alloc_single_area() {
@@ -490,9 +490,9 @@ struct TestStorage {
     return *area_ptr;  // Convert Area* to AreaSlice
   }
 
-  void flush(bool sync = false, bool force = false) {}
-  void prefetch(offset_t offset, Access access = READ) const {}
-  void prefetch(void* mem, Access access = READ) const {}
+  void flush(bool /* sync */ = false, bool /* force */ = false) {}
+  void prefetch(offset_t /* offset */, Access /* access */ = READ) const {}
+  void prefetch(void* /* mem */, Access /* access */ = READ) const {}
 };
 
 BOOST_AUTO_TEST_CASE(test_area_revolve) {

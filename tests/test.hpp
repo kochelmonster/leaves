@@ -39,7 +39,7 @@ inline void dump_graph(const char* output, T& storage) {
 template <typename T>
 inline void compare_graph(const char* input, T& storage) {
   std::stringstream cstr;
-  _Dumper<T>(storage).dump(cstr, true);
+  _Dumper<T>(storage, false).dump(cstr);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),
@@ -69,12 +69,12 @@ inline void check_graph(const char* name, T& storage) {
   path.append(".yaml");
   std::replace(path.begin(), path.end(), ' ', '_');
 
+  auto db = storage["test"];
 #ifdef GENERATE
   std::cout << "generate graph " << name << std::endl;
-  auto db = storage["test"];
   dump_graph(path.c_str(), db);
 #else
-  compare_graph(path.c_str(), storage);
+  compare_graph(path.c_str(), db);
 #endif
 }
 
@@ -153,9 +153,9 @@ inline void test_movement(T& storage, strings_t& strings) {
 
   for (ints_t::iterator i = indexes.begin(); i != indexes.end(); i++) {
     std::string find(strings[*i]);
-    
+
     std::cout << "find \"" << find.substr(0, 20) << "\"";
-    
+
     cursor.find(find);
     BOOST_REQUIRE(cursor.is_valid());
     BOOST_REQUIRE_EQUAL(cursor.key(), find);

@@ -2,7 +2,7 @@
 Test the the cursor with without burst table
 */
 #define BOOST_TEST_MODULE CursorTest
-#define GENERATE
+// #define GENERATE
 
 #include <boost/endian/conversion.hpp>
 

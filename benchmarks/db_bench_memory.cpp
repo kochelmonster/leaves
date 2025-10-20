@@ -76,9 +76,9 @@ class RandomGenerator {
   }
 
   leaves::Slice Generate(int len) {
-    if (pos_ + len > data_.size()) {
+    if (pos_ + len > (int)data_.size()) {
       pos_ = 0;
-      assert(len < data_.size());
+      assert(len < (int)data_.size());
     }
     pos_ += len;
     return leaves::Slice(data_.data() + pos_ - len, len);
@@ -331,7 +331,7 @@ class MemoryBenchmark {
   }
 
   void Write(Order order, DBState state, int num_entries,
-             int value_size, int entries_per_batch) {
+             int value_size, int /*entries_per_batch*/) {
     // For memory storage, FRESH means create new storage, EXISTING reuses current
     if (state == FRESH) {
       storage_ = std::make_unique<leaves::_MemoryStorage>();

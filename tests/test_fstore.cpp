@@ -239,7 +239,7 @@ BOOST_AUTO_TEST_CASE(test_get_area_alignment_and_growth) {
   DBFileStore db(dbFilePath.c_str());
 
   uint64_t initial = db._header->file_size;
-  size_t header_size = db.calc_header_size();
+  [[maybe_unused]] size_t header_size = db.calc_header_size();
   auto a1 = db.get_area(1024);
   BOOST_CHECK(a1);
   BOOST_CHECK_EQUAL(a1.offset() % DBFileStore::AREA_SIZE, 0);

@@ -35,7 +35,7 @@
 
 namespace leaves {
 
-static const char FSTORE_SIGNATURE[] = "larch-leaves";
+static const char FSTORE_SIGNATURE[] = "larch-leaves-fstore";
 static const size_t FSTORE_SIGNATURE_SIZE =
     padding(sizeof(FSTORE_SIGNATURE), 8);
 

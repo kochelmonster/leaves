@@ -78,19 +78,6 @@ BOOST_AUTO_TEST_CASE(test_double_open) {
 using BlockHeader = DBMMap::Traits::BlockHeader;
 using block_ptr = DBMMap::block_ptr;
 
-BOOST_AUTO_TEST_CASE(test_mutex_recovery) {
-  DirPreparation prep;
-  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  DBMMap db(dbFilePath.c_str());
-  db._memory->file_lock.mutex.lock();
-  db._memory->file_lock.owner = 0xFFFFFFFF;
-  {
-    db._memory->file_lock.lock(std::chrono::milliseconds(1));
-    BOOST_CHECK_EQUAL(db._memory->file_lock.owner, db._pid);
-    db._memory->file_lock.unlock();
-  }
-  BOOST_CHECK_EQUAL(db._memory->file_lock.owner, 0);
-}
 
 BOOST_AUTO_TEST_CASE(test_sanitize) {
   DirPreparation prep;

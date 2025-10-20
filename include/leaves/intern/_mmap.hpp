@@ -6,6 +6,7 @@
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/sync/file_lock.hpp>
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/process/v2/pid.hpp>
 #include <cstdint>
 #include <filesystem>
@@ -33,7 +34,7 @@ using boost::process::v2::pid_type;
 
 namespace leaves {
 
-static const char MMAP_SIGNATURE[] = "larch-leaves";
+static const char MMAP_SIGNATURE[] = "larch-leaves-mmap";
 static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 
 // definition og all headers and data types
@@ -86,38 +87,7 @@ struct _MemoryMapFile {
   typedef std::shared_ptr<DB> db_ptr;
   typedef std::weak_ptr<DB> wdb_ptr;
 
-  struct Mutex {
-    // Backward-compatible wrapper exposing a RobustMutex as `mutex`
-    leaves::RobustMutex mutex;
-    pid_type owner{0};
-
-    Mutex(const char* name = "") : mutex(name) {}
-
-    void recover() {
-      mutex.recover();
-      owner = 0;
-    }
-
-    // lock with optional timeout (compat for tests)
-    template <typename Time = std::chrono::seconds>
-    void lock(Time t = Time(10)) {
-      while (!mutex.try_lock_for(t)) recover();
-      owner = current_pid();
-    }
-
-    bool try_lock() {
-      if (mutex.try_lock()) {
-        owner = current_pid();
-        return true;
-      }
-      return false;
-    }
-
-    void unlock() {
-      owner = 0;
-      mutex.unlock();
-    }
-  };
+  using Mutex = boost::interprocess::interprocess_mutex;
 
   struct DBEntry {
     char name[21];
@@ -135,10 +105,10 @@ struct _MemoryMapFile {
     std::atomic<int64_t> last_cursor_id;
     DBEntry dbs[0];
 
-    FileHeader(uint16_t db_count_, const char* name)
+    FileHeader(uint16_t db_count_)
         : db_version(0),
           file_size(0),
-          file_lock(name),
+          file_lock(),
           processes{},
           db_count(db_count_) {
       // Set signature and initialize pools/arrays
@@ -184,7 +154,7 @@ struct _MemoryMapFile {
       std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
-      _memory = new (_region.get_address()) FileHeader(db_count, path);
+      _memory = new (_region.get_address()) FileHeader(db_count);
       _memory->file_size = fsize;
       _region.flush();
     } else {
@@ -247,6 +217,7 @@ struct _MemoryMapFile {
         flock_guard(flock);
 
     if (sanitize_processes()) {
+      new (&_memory->file_lock) Mutex();
       sanitize_dbs();
       _memory->last_cursor_id.store(0);
     }
