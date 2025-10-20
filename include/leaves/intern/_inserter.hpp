@@ -1,7 +1,9 @@
 #ifndef _LEAVES_INSERTER_HPP
 #define _LEAVES_INSERTER_HPP
 
-#include "./_node.hpp"
+#include <cstring>
+
+#include "_node.hpp"
 
 namespace leaves {
 

@@ -1,6 +1,8 @@
 #ifndef _LEAVES_DELETER_HPP
 #define _LEAVES_DELETER_HPP
 
+#include <cstring>
+
 #include "_node.hpp"
 
 namespace leaves {

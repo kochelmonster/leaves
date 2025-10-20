@@ -33,6 +33,7 @@ merge(append a list of free blocks to another one)
 #include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstring>
 
 #include "_bits.hpp"
 #include "_util.hpp"

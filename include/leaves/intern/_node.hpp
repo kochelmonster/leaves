@@ -2,8 +2,10 @@
 #ifndef _LEAVES__NODE_HPP
 #define _LEAVES__NODE_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "_bits.hpp"
 #include "_util.hpp"

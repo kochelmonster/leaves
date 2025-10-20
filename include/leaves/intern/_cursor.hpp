@@ -1,14 +1,13 @@
 #ifndef _LEAVES_ICURSOR_HPP
 #define _LEAVES_ICURSOR_HPP
 
-#include <thread>
+#include <string>
 #include <vector>
 
 #include "_deleter.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
 #include "_node.hpp"
-#include "_port.hpp"
 
 namespace leaves {
 

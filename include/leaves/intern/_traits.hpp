@@ -2,8 +2,9 @@
 #define _LEAVES__TRAITS_HPP
 
 #include <atomic>
+#include <cstdint>
 
-#include "./_util.hpp"
+#include "_util.hpp"
 
 namespace leaves {
 

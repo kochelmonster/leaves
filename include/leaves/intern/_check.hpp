@@ -2,6 +2,7 @@
 #define _LEAVES__CHECK_HPP
 
 #include <sstream>
+#include <string>
 
 #include "_node.hpp"
 

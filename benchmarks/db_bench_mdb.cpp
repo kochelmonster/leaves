@@ -27,8 +27,8 @@
 //   readrandom    -- read N times in random order
 static const char* FLAGS_benchmarks =
     "fillseq,"
-    "fillseqsync,"
-    "fillrandsync,"
+//    "fillseqsync,"
+//    "fillrandsync,"
     "fillrandom,"
     "overwrite,"
     "readrandom,"
