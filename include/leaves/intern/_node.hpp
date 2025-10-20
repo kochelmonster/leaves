@@ -177,7 +177,7 @@ struct _TrieNode : public Traits::BlockHeader {
         align(lower_start() + bcount * sizeof(uint32_e)) / sizeof(offset_e);
 
     memcpy(lower(), src.lower(), bcount * sizeof(uint32_e));
-    memcpy(array(), src.array(), count() * sizeof(offset_e));
+    memcpy((void*)array(), src.array(), count() * sizeof(offset_e));
   }
 
   uint16_t create(const TrieNode& src, int key) {
@@ -220,8 +220,8 @@ struct _TrieNode : public Traits::BlockHeader {
     _array_offset = array_start_ / sizeof(offset_e);
 
     offset_e* array_ = (offset_e*)((char*)this + array_start_);
-    memcpy(array_, src.array(), oidx * sizeof(offset_e));
-    memcpy(array_ + oidx + 1, src.array() + oidx,
+    memcpy((void*)array_, src.array(), oidx * sizeof(offset_e));
+    memcpy((void*)(array_ + oidx + 1), src.array() + oidx,
            (count() - 1 - oidx) * sizeof(offset_e));
     return (char*)(array_ + oidx) - (char*)this;
   }
@@ -265,8 +265,8 @@ struct _TrieNode : public Traits::BlockHeader {
     _array_offset = array_start_ / sizeof(offset_e);
 
     offset_e* array_ = (offset_e*)((char*)this + array_start_);
-    memcpy(array_, src.array(), oidx * sizeof(offset_e));
-    memcpy(array_ + oidx, src.array() + oidx + 1,
+    memcpy((void*)array_, src.array(), oidx * sizeof(offset_e));
+    memcpy((void*)(array_ + oidx), src.array() + oidx + 1,
            (count() - oidx) * sizeof(offset_e));
   }
 

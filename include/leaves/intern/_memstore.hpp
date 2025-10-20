@@ -121,15 +121,15 @@ struct _MemoryDB {
 
   // Methods required by _MemManager
   template <typename BlockType>
-  void mark_for_recycle(const BlockType& block) {}
+  void mark_for_recycle(const BlockType& /*block*/) {}
 
   template <typename BlockType>
-  bool may_recycle(const BlockType& block) const {
+  bool may_recycle(const BlockType& /*block*/) const {
     return true;
   }
 
   // Direct pointer/offset resolution - no storage delegation needed
-  block_ptr resolve(offset_t offset, Access access = READ) const {
+  block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {
     return block_ptr(reinterpret_cast<void*>((uint64_t)offset));
   }
   
@@ -145,19 +145,19 @@ struct _MemoryDB {
     return offset_t((uint64_t)p).type(Pointer::type);
   }
 
-  void make_dirty(block_ptr& block) {}
-  void prefetch(offset_t offset, Access access = READ) const {}
-  void prefetch(void* mem, Access access = READ) const {}
+  void make_dirty(block_ptr& /*block*/) {}
+  void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {}
+  void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}
   
-  void flush(bool sync = false, bool force = false) {}
+  void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
 
   // Big allocation methods - throw exceptions since memory storage doesn't
   // support them
-  AreaSlice alloc_big(uint64_t size) {
+  AreaSlice alloc_big(uint64_t /*size*/) {
     throw std::runtime_error("Big allocation not supported in memory storage");
   }
 
-  void free_big(offset_e offset, size_t size) {
+  void free_big(offset_e /*offset*/, size_t /*size*/) {
     throw std::runtime_error(
         "Big deallocation not supported in memory storage");
   }
@@ -228,7 +228,7 @@ struct _MemoryStorage {
     return area_ptr(area);
   }
 
-  area_ptr alloc_multi_area(uint64_t size) {
+  area_ptr alloc_multi_area(uint64_t /*size*/) {
     throw std::runtime_error(
         "Multi-area allocation not supported in memory storage - use single "
         "areas only");
@@ -238,7 +238,7 @@ struct _MemoryStorage {
   db_ptr db() { return _db; }
 
   // Compatibility methods
-  void flush(bool sync = false, bool force = false) {}
+  void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
   Mutex& file_lock() {
     static Mutex m;
     return m;

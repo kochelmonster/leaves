@@ -5,8 +5,8 @@ struct NullHasher {
   typedef uint8_t hash_t[0];
 
   NullHasher() {}
-  void update(const void* data, size_t size) {}
-  void finalize(hash_t hash) {}
+  void update(const void* /*data*/, size_t /*size*/) {}
+  void finalize(hash_t /*hash*/) {}
 };
 
 

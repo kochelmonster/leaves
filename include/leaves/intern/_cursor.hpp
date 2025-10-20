@@ -151,7 +151,7 @@ struct _Transition {
   std::string& current_key() { return cursor->current_key; }
 
   Transition& child() {
-    assert(this - &cursor->stack.data[0] < cursor->stack.size - 1);
+    assert(static_cast<size_t>(this - &cursor->stack.data[0]) < cursor->stack.size - 1);
     return this[1];
   }
 
@@ -284,7 +284,6 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int prev_ = trie_.prev(branch_key);
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
-    const offset_e* prev_offset = trie_.offset(prev_);
     branch_key = (uint8_t)prev_;
     push(trie_.offset(prev_)).last();
     return true;
@@ -324,8 +323,8 @@ struct _Stack {
     return data[size - 2];
   }
 
-  void clear(int size_ = 0) {
-    for (int i = size_; i < size; i++) {
+  void clear(size_t size_ = 0) {
+    for (size_t i = size_; i < size; i++) {
       data[i].reset();
     }
     size = size_;
@@ -452,7 +451,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   void value(const Slice& value) {
-    bool r = start_transaction();
+    [[maybe_unused]] bool r = start_transaction();
     assert(r);
 
     if (!this->stack.size) {
@@ -477,7 +476,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   Slice key() const { return this->current_key; }
 
   void remove() {
-    bool r = start_transaction();
+    [[maybe_unused]] bool r = start_transaction();
     assert(r);
     if (!is_valid()) throw NoValidPosition();
     _Deleter(*this).exec();
@@ -537,7 +536,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
       return true;
     }
 
-    int i = 0;
+    size_t i = 0;
     for (; i < this->stack.size; i++) {
       Transition& item = this->stack.data[i];
       if (item.keypos >= same) break;
@@ -635,7 +634,7 @@ struct _NodeIterator : public _CursorBase<DB_, Traits_> {
   bool next() {
     if (!this->stack.size) return false;  // empty iterator
 
-    if (stack_level < this->stack.size - 1) {
+    if (stack_level < (int)this->stack.size - 1) {
       stack_level++;  // the next node in stack
       return true;
     }

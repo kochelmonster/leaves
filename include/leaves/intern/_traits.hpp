@@ -14,6 +14,10 @@ struct SimplePointer {
     static constexpr NodeTypes type = TRIE;
     ptr(const ptr& src) : p(src.p) {}
     ptr(void* src = nullptr) : p((void*)src) {}
+    ptr& operator=(const ptr& src) {
+      p = src.p;
+      return *this;
+    }
 
     operator char*() { return (char*)p; }
     operator const char*() const { return (char*)p; }
@@ -40,6 +44,13 @@ struct SimplePointer {
     static constexpr NodeTypes type = t;
     Pointer(void* src = nullptr) : ptr(src) {}
     Pointer(const ptr& src) : ptr(src) {}
+    Pointer(const Pointer& other) : ptr(other) {}
+    
+    Pointer& operator=(const Pointer& other) {
+      ptr::operator=(other);
+      return *this;
+    }
+    
     const ptr& operator=(const ptr& src) {
       ptr::p = src.p;
       return src;
@@ -139,6 +150,13 @@ struct SmartPointer {
     static constexpr NodeTypes type = t;
     Pointer(void* src = nullptr) : ptr(reinterpret_cast<AreaSlice*>(src)) {}
     Pointer(const ptr& src) : ptr(src) {}
+    Pointer(const Pointer& other) : ptr(other) {}
+    
+    Pointer& operator=(const Pointer& other) {
+      ptr::operator=(other);
+      return *this;
+    }
+    
     const ptr& operator=(const ptr& src) {
       if (ptr::_iref) ptr::_iref->dec_ref();
       ptr::_iref = src._iref;

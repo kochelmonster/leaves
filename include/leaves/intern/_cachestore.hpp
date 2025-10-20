@@ -119,7 +119,7 @@ struct _CacheStore : public Opers_ {
     return _last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
   }
 
-  void flush(bool sync = false, bool force = false) {
+  void flush(bool sync = false, bool /*force*/ = false) {
     {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
       _dirty_areas.insert(_pending_dirty_areas.begin(),
@@ -135,14 +135,13 @@ struct _CacheStore : public Opers_ {
     }
   }
 
-  block_ptr resolve(offset_t offset, Access access = READ) const {
+  block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
     // Check cache first
     block_ptr cached;
     if (_cache.get(area_offset, cached)) {
-      AreaSlice* slice = cached.area();
-      assert(slice->offset() == area_offset);
+      assert(cached.area()->offset() == area_offset);
       block_ptr result = cached;  // copy increments refcount
       result._offset = static_cast<uint32_t>(raw_offset - area_offset);
       return result;
@@ -176,12 +175,12 @@ struct _CacheStore : public Opers_ {
     return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
-  void prefetch(offset_t offset, Access access = READ) const {
+  void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {
     // For file storage, prefetch is essentially a no-op
     // Could potentially implement with platform-specific hints
   }
 
-  void prefetch(void* mem, Access access = READ) const {
+  void prefetch(void* /*mem*/, Access /*access*/ = READ) const {
     // For file storage, prefetch is essentially a no-op
     // Could potentially implement with platform-specific hints
   }

@@ -231,7 +231,7 @@ inline void RobustMutex::destroy() {
 inline void RobustMutex::lock() {
   if (!inited_) recover();
   
-  int rc = pthread_mutex_lock(&mutex_);
+  [[maybe_unused]] int rc = pthread_mutex_lock(&mutex_);
 #ifdef PTHREAD_MUTEX_ROBUST
   if (rc == EOWNERDEAD) {
     died_.store(true, std::memory_order_release);

@@ -28,6 +28,8 @@ class Slice {
   Slice(const std::string& src) : _size(src.size()), _data(src.data()) {}
 
   Slice() : _size(0), _data(NULL) {}
+  
+  Slice(const Slice& other) : _size(other._size), _data(other._data) {}
 
   Slice slice(size_t len) const { return Slice(data(), len); }
 
@@ -85,14 +87,16 @@ struct _Offset {
   static const uint64_t TYPE_MASK = 0x3;
 
   constexpr _Offset(uint64_t src = 0) : _offset(src) {}
+ 
+  constexpr _Offset(const _Offset& other) : _offset(other._offset) {}
 
   template <typename T>
   bool operator==(T other) const {
-    return _offset == other;
+    return _offset == (BaseType)other;
   }
   template <typename T>
   bool operator!=(T other) const {
-    return _offset != other;
+    return _offset != (BaseType)other;
   }
 
   template <typename T>

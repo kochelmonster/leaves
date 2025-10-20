@@ -146,7 +146,7 @@ struct _MemoryMapFile {
       strcpy(signature, MMAP_SIGNATURE);
       area_pool.init();
       // processes[] already zero-initialized via aggregate init
-      memset(dbs, 0, sizeof(DBEntry) * db_count);
+      memset((void*)dbs, 0, sizeof(DBEntry) * db_count);
     }
   };
 
@@ -293,7 +293,7 @@ struct _MemoryMapFile {
     return offset_t((uint64_t)p - (uint64_t)_memory).type(p.type);
   }
 
-  void make_dirty(block_ptr& block) {}
+  void make_dirty(block_ptr& /*block*/) {}
 
   void prefetch(offset_t offset, Access access = READ) const {
     prefetch((char*)_memory + (uint64_t)offset, access);

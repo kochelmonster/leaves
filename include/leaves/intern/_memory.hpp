@@ -236,7 +236,7 @@ struct _MemManager {
 
   // init the memory, header is a reserve memory space
   void init(offset_t allocation_start_, offset_t alloction_end_) {
-    memset(slots, 0, sizeof(slots));
+    memset((void*)slots, 0, sizeof(slots));
     allocation_start = allocation_start_;
     allocation_end = alloction_end_;
     left_over_end = left_over_start = 0;

@@ -46,7 +46,7 @@ template <typename bits_t = uint64_t>
 int next(bits_t bits, int index) {
   bits_t mask = ~(((bits_t)1 << (index + 1)) - 1);
   bits_t v = bits & mask;
-  return (v && index < sizeof(bits_t) * 8 - 1) ? countr_zero(v) : -1;
+  return (v && index < static_cast<int>(sizeof(bits_t) * 8 - 1)) ? countr_zero(v) : -1;
 }
 
 template <typename bits_t = uint64_t>

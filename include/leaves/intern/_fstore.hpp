@@ -79,7 +79,7 @@ struct _FileOperations : _CacheBase {
   struct Mutex {
     // No mutex needed for single-process use
     template <typename Time = std::chrono::seconds>
-    void lock(Time t = Time(10)) {}
+    void lock(Time /*t*/ = Time(10)) {}
     bool try_lock() { return true; }
     void unlock() {}
   };
@@ -103,7 +103,7 @@ struct _FileOperations : _CacheBase {
       std::memset(signature, 0, sizeof(signature));
       std::strcpy(signature, FSTORE_SIGNATURE);
       area_pool.init();
-      std::memset(dbs, 0, sizeof(DBEntry) * db_count);
+      std::memset((void*)dbs, 0, sizeof(DBEntry) * db_count);
     }
   };
 

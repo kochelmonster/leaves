@@ -438,7 +438,7 @@ struct _DB {
     txn_ptr last_txn = txn();
 
     Transaction tmp;  // needed to alloc the next transaction itself
-    memcpy(&tmp, &*last_txn, sizeof(Transaction));
+    memcpy((void*)&tmp, &*last_txn, sizeof(Transaction));
     _active_txn = &tmp;
     _wtxn = tmp.clone(*this);
     _active_txn = &*_wtxn;
@@ -555,9 +555,7 @@ struct _DB {
 
   void _node_statistics(Statistics& stat, offset_t offset) {
     typedef _TrieNode<Traits> TrieNode;
-    typedef _LeafNode<Traits> LeafNode;
     using trie_ptr = typename Traits::Pointer<TrieNode>;
-    using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
     if (offset.type() == TRIE) {
       trie_ptr branch = resolve(offset);
