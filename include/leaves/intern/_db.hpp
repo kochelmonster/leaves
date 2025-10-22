@@ -3,6 +3,7 @@
 
 #include <boost/endian/arithmetic.hpp>
 #include <mutex>
+#include <memory>
 
 #include "_cursor.hpp" 
 #include "_hash.hpp"

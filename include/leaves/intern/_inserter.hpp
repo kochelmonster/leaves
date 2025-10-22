@@ -201,8 +201,13 @@ struct _Inserter {
       back->replace(resolve(back->leaf()));
       return;
     }
+
+    // replace the lead with a trie node!
+    
+    // first: copy the leaf node and cut of the new rest key by prefix
+    assert(back->prefix < oleaf->key_size);
     leaf_ptr copy =
-        alloc(LeafNode::size(oleaf->key_size - back->prefix, value.size()));
+        alloc(LeafNode::size(oleaf->key_size - back->prefix, oleaf->vsize()));
     copy->key_size = oleaf->key_size - back->prefix;
     copy->value_size = oleaf->value_size;
     memcpy(copy->data, oleaf->data + back->prefix,

@@ -247,8 +247,11 @@ struct _FileOperations : _CacheBase {
   Mutex& file_lock() { return _header->file_lock; }
 };
 
+
 struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
+  using DB = base_t::DB;
+  using db_ptr = base_t::db_ptr;
 
   _FileStore(const char* path, uint16_t db_count = 48,
              size_t capacity = 500 * M)

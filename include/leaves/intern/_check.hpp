@@ -40,7 +40,7 @@ struct _Dumper {
 
   _Dumper(const Container& container, bool simple = false,
           bool show_mem = false)
-      : _db(container.dump_db()),
+      : _db(*container._internal()),
         _id(0),
         _simple(simple),
         _show_mem(show_mem) {}

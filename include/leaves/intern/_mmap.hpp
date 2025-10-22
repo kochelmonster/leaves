@@ -75,6 +75,7 @@ struct _MemoryMapTraits {
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
+
 template <typename Traits_>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
@@ -254,6 +255,7 @@ struct _MemoryMapFile {
   }
 
   block_ptr resolve(offset_t offset, Access access = READ) const {
+    assert(offset < _memory->file_size);
     char* p = (char*)_memory + (uint64_t)offset;
     prefetch(p, access);
     return block_ptr(p);
@@ -261,7 +263,9 @@ struct _MemoryMapFile {
 
   template <typename Pointer>
   offset_t resolve(const Pointer& p) const {
-    return offset_t((uint64_t)p - (uint64_t)_memory).type(p.type);
+    uint64_t offset = (uint64_t)p - (uint64_t)_memory;
+    assert(offset < _memory->file_size);
+    return offset_t(offset).type(p.type);
   }
 
   void make_dirty(block_ptr& /*block*/) {}

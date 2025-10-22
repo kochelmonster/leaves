@@ -67,23 +67,23 @@ static double FLAGS_compression_ratio = 0.5;
 // Print histogram of operation timings
 static bool FLAGS_histogram = false;
 
-// Block cache size. Default 512 MB for high performance
-static int FLAGS_cache_size = 512 * 1024 * 1024;
+// Block cache size. Default 1GB for high performance
+static int FLAGS_cache_size = 1024 * 1024 * 1024;
 
-// Block size for SST files. Default 64KB
-static int FLAGS_block_size = 64 * 1024;
+// Block size for SST files. Default 32KB for better performance
+static int FLAGS_block_size = 32 * 1024;
 
-// Write buffer size. Default 128MB for high throughput
-static int FLAGS_write_buffer_size = 128 * 1024 * 1024;
+// Write buffer size. Default 256MB for high throughput
+static int FLAGS_write_buffer_size = 256 * 1024 * 1024;
 
 // Maximum number of write buffers
-static int FLAGS_max_write_buffer_number = 4;
+static int FLAGS_max_write_buffer_number = 6;
 
-// Target file size for level 1
-static int FLAGS_target_file_size_base = 64 * 1024 * 1024;
+// Target file size for level 1 - larger files reduce compaction
+static int FLAGS_target_file_size_base = 128 * 1024 * 1024;
 
-// Maximum number of level 0 files
-static int FLAGS_level0_file_num_compaction_trigger = 4;
+// Maximum number of level 0 files - higher to reduce compaction overhead
+static int FLAGS_level0_file_num_compaction_trigger = 8;
 
 // If true, do not destroy the existing database.  If you set this
 // flag and also specify a benchmark that wants a fresh database, that
@@ -96,23 +96,29 @@ static const char* FLAGS_db = nullptr;
 // Use bloom filter
 static bool FLAGS_bloom_bits = true;
 
-// Number of bits per key for bloom filter
-static int FLAGS_bloom_bits_per_key = 10;
+// Number of bits per key for bloom filter - higher for better false positive rate
+static int FLAGS_bloom_bits_per_key = 15;
 
 // Disable WAL for maximum write performance
 static bool FLAGS_disable_wal = false;
 
-// Use direct I/O for reads
+// Use direct I/O for reads for predictable performance
 static bool FLAGS_use_direct_reads = true;
 
 // Use direct I/O for writes
 static bool FLAGS_use_direct_io_for_flush_and_compaction = true;
 
-// Number of background threads for compaction
-static int FLAGS_max_background_compactions = 4;
+// Allow mmap reads (disabled due to incompatibility with direct reads)
+static bool FLAGS_allow_mmap_reads = false;
+
+// Allow mmap writes for better performance
+static bool FLAGS_allow_mmap_writes = false;
+
+// Number of background threads for compaction - increase for better performance
+static int FLAGS_max_background_compactions = 8;
 
 // Number of background threads for flushing
-static int FLAGS_max_background_flushes = 1;
+static int FLAGS_max_background_flushes = 2;
 
 namespace leveldb {
 
@@ -500,13 +506,38 @@ class Benchmark {
     options.max_background_compactions = FLAGS_max_background_compactions;
     options.max_background_flushes = FLAGS_max_background_flushes;
     
-    // Use LZ4 compression for speed
-    options.compression = rocksdb::kLZ4Compression;
-    options.compression_opts.level = 1;
+    // Advanced performance optimizations
+    options.level0_slowdown_writes_trigger = 16;
+    options.level0_stop_writes_trigger = 24;
+    options.max_bytes_for_level_base = 512 * 1024 * 1024; // 512MB
+    options.max_bytes_for_level_multiplier = 8;
+    
+    // Parallelism
+    options.max_subcompactions = 4;
+    options.allow_concurrent_memtable_write = true;
+    options.enable_write_thread_adaptive_yield = true;
+    
+    // Use ZSTD compression for better compression ratio and speed
+    options.compression = rocksdb::kZSTD;
+    options.compression_opts.level = 3;
+    options.compression_opts.parallel_threads = 4;
     
     // Enable direct I/O for better performance
-    options.use_direct_reads = FLAGS_use_direct_reads;
+    // Note: mmap reads and direct reads are mutually exclusive
+    if (FLAGS_allow_mmap_reads) {
+      options.use_direct_reads = false;
+    } else {
+      options.use_direct_reads = FLAGS_use_direct_reads;
+    }
     options.use_direct_io_for_flush_and_compaction = FLAGS_use_direct_io_for_flush_and_compaction;
+    
+    // Memory-mapped file options
+    options.allow_mmap_reads = FLAGS_allow_mmap_reads;
+    options.allow_mmap_writes = FLAGS_allow_mmap_writes;
+    
+    // Memory management
+    options.db_write_buffer_size = FLAGS_write_buffer_size * FLAGS_max_write_buffer_number;
+    options.arena_block_size = 32 * 1024 * 1024; // 32MB arena blocks
     
     // Optimize for point lookups
     options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(8));
@@ -518,14 +549,25 @@ class Benchmark {
     if (FLAGS_bloom_bits) {
       table_options.filter_policy = filter_policy_;
       table_options.whole_key_filtering = true;
+      table_options.optimize_filters_for_memory = true;
     }
     
-    // Use hash index for faster lookups
-    table_options.index_type = rocksdb::BlockBasedTableOptions::kHashSearch;
+    // Use hash index for faster lookups in smaller blocks
+    if (FLAGS_block_size <= 16 * 1024) {
+      table_options.index_type = rocksdb::BlockBasedTableOptions::kHashSearch;
+    } else {
+      table_options.index_type = rocksdb::BlockBasedTableOptions::kBinarySearch;
+    }
     
-    // Cache index and filter blocks
+    // Cache optimizations
     table_options.cache_index_and_filter_blocks = true;
     table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+    table_options.pin_top_level_index_and_filter = true;
+    
+    // Block-based table optimizations
+    table_options.checksum = rocksdb::kCRC32c;
+    // Note: block_align is incompatible with compression, so we don't enable it
+    table_options.enable_index_compression = false; // Keep index uncompressed for speed
     
     options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 

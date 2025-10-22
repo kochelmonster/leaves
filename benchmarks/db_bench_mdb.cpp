@@ -404,7 +404,7 @@ class Benchmark {
       env_opt = MDB_NOMETASYNC;
 
     if (FLAGS_writemap)
-      env_opt |= MDB_WRITEMAP;
+      env_opt |= MDB_WRITEMAP | MDB_MAPASYNC;
 
     rc = mdb_env_create(&db_);
     rc = mdb_env_set_mapsize(db_, FLAGS_num*FLAGS_value_size*32L);
