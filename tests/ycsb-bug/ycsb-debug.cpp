@@ -152,15 +152,15 @@ int main(int argc, char* argv[]) {
                     std::cout << "  <-- Debug breakpoint here" << std::endl;
                 }
 
-                (*cursor).find(key_slice);
-                (*cursor).value(value_slice);
+                cursor.find(key_slice);
+                cursor.value(value_slice);
                 success_count++;
                 std::cout << " ✓" << std::endl;
                 
                 // Commit every 1000 inserts
                 if ((i + 1) % COMMIT_BATCH_SIZE == 0) {
                     std::cout << "Committing batch at " << (i + 1) << " inserts..." << std::endl;
-                    (*cursor).commit();
+                    cursor.commit();
                 }
                 
             } catch (const std::exception& e) {
@@ -172,7 +172,7 @@ int main(int argc, char* argv[]) {
         // Commit any remaining transactions
         if (entries.size() % COMMIT_BATCH_SIZE != 0) {
             std::cout << "\nCommitting final batch..." << std::endl;
-            (*cursor).commit();
+            cursor.commit();
         }
         
         std::cout << "\n=== Summary ===" << std::endl;
@@ -196,9 +196,9 @@ int main(int argc, char* argv[]) {
             Slice key_slice(entry.key.c_str(), entry.key.length());
             
             try {
-                (*read_cursor).find(key_slice);
-                if ((*read_cursor).is_valid()) {
-                    Slice retrieved_value = (*read_cursor).value();
+                read_cursor.find(key_slice);
+                if (read_cursor.is_valid()) {
+                    Slice retrieved_value = read_cursor.value();
                     std::cout << "✓ Key '" << entry.key << "' found with " 
                              << retrieved_value.size() << " bytes" << std::endl;
                 } else {

@@ -66,7 +66,7 @@ std::vector<std::string> generate_random_strings(size_t count, size_t min_length
   return strings;
 }
 
-void check(leaves::FileStorage::Cursor& cursor, std::vector<std::string>& test_strings, size_t count) {
+void check(leaves::FileStorage::DB::Cursor& cursor, std::vector<std::string>& test_strings, size_t count) {
   cursor.find(""); // Reset cursor
   BOOST_REQUIRE(!cursor.is_valid()); // Should not exist
 

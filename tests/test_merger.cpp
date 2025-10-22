@@ -7,7 +7,7 @@
 using namespace leaves;
 
 typedef MapStorage Storage;
-typedef decltype(std::declval<Storage::DB>().db_ptr())::element_type InternalDB;
+typedef decltype(std::declval<Storage::DB>()._internal())::element_type InternalDB;
 typedef InternalDB::ValueTraits ValueTraits;
 typedef _NodeIterator<InternalDB, ValueTraits> NodeIter;
 
@@ -17,7 +17,7 @@ BOOST_AUTO_TEST_CASE(test_merge_iterator_empty) {
   Storage storage(TEST_FILE);
   auto db = storage["test"];
   
-  NodeIter iter(db.db_ptr(), offset_t());
+  NodeIter iter(db._internal(), offset_t());
   
   BOOST_CHECK(!iter.stack.size);
   BOOST_CHECK(!iter.next());
@@ -35,8 +35,8 @@ BOOST_AUTO_TEST_CASE(test_merge_iterator_single_leaf) {
   cursor.commit();
   
   // Get root through db
-  auto db_ptr = db.db_ptr();
-  NodeIter iter(db_ptr);
+  auto _internal = db._internal();
+  NodeIter iter(_internal);
   
   BOOST_CHECK(!!iter.stack.size);
   BOOST_CHECK(iter.node().is_leaf());
@@ -61,8 +61,8 @@ BOOST_AUTO_TEST_CASE(test_merge_iterator_multiple_values) {
   cursor.value("fruit3");
   cursor.commit();
   
-  auto db_ptr = db.db_ptr();
-  NodeIter iter(db_ptr);
+  auto _internal = db._internal();
+  NodeIter iter(_internal);
   
   std::map<std::string, std::string> found_values;
   
@@ -97,8 +97,8 @@ BOOST_AUTO_TEST_CASE(test_merge_single_value) {
   src_cursor.commit();
   
   // Use iterator to read source
-  auto src_db_ptr = src_db.db_ptr();
-  NodeIter iter(src_db_ptr);
+  auto src__internal = src_db._internal();
+  NodeIter iter(src__internal);
   
   // Insert into destination
   auto dst_cursor = dest_storage["test"].cursor();
@@ -137,8 +137,8 @@ BOOST_AUTO_TEST_CASE(test_merge_multiple_values) {
   src_cursor.commit();
   
   // Use iterator to read source
-  auto src_db_ptr = src_db.db_ptr();
-  NodeIter iter(src_db_ptr);
+  auto src__internal = src_db._internal();
+  NodeIter iter(src__internal);
   
   // Insert into destination
   auto dst_cursor = dest_storage["test"].cursor();
@@ -191,8 +191,8 @@ BOOST_AUTO_TEST_CASE(test_merge_with_existing_values) {
   dst_cursor.commit();
   
   // Merge using iterator
-  auto src_db_ptr = src_db.db_ptr();
-  NodeIter iter(src_db_ptr);
+  auto src__internal = src_db._internal();
+  NodeIter iter(src__internal);
 
   if (!!iter.stack.size) {
     do {
@@ -237,8 +237,8 @@ BOOST_AUTO_TEST_CASE(test_merge_large_dataset) {
   src_cursor.commit();
   
   // Merge using iterator
-  auto src_db_ptr = src_db.db_ptr();
-  NodeIter iter(src_db_ptr);
+  auto src__internal = src_db._internal();
+  NodeIter iter(src__internal);
 
   auto dst_cursor = dest_storage["test"].cursor();
   

@@ -348,6 +348,7 @@ struct _CursorBase {
   Slice rest_key;
   std::string current_key;
 
+  _CursorBase() = default;
   _CursorBase(db_ptr db) : _db(db) { current_key.reserve(128); }
 
   void advance_key(size_t size) {
@@ -382,6 +383,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   uint64_t _id{0};
   std::string _refind_buffer;
 
+  _Cursor() = default;
   _Cursor(db_ptr db) : CursorBase(db) {
     if constexpr (Traits::TRACKED) {
       _id = db->register_cursor(this);

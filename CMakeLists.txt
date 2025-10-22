@@ -115,6 +115,11 @@ target_sources(test_memory INTERFACE
     include/intern/_memory.hpp include/intern/_bits.hpp)
 target_link_libraries(test_memory PUBLIC test)
 
+add_executable(test_memstore tests/test_memstore.cpp)
+target_sources(test_memstore INTERFACE
+    include/leaves/intern/_memstore.hpp include/leaves/intern/_memory.hpp)
+target_link_libraries(test_memstore PUBLIC core test)
+
 add_executable(test_bits tests/test_bits.cpp)
 target_sources(test_memory INTERFACE
     include/intern/_bits.hpp)
@@ -141,12 +146,26 @@ target_link_libraries(test_file_storage PUBLIC core test)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
 
+add_executable(test_merger tests/test_merger.cpp)
+target_link_libraries(test_merger PUBLIC core test)
+
 add_executable(test_twoquecache tests/test_twoquecache.cpp)
 target_link_libraries(test_file_storage PUBLIC core test)
 
+add_executable(test_multithread tests/test_multithread.cpp)
+target_link_libraries(test_multithread PUBLIC core test pthread)
+
 add_executable(profile tests/profile.cpp)
 
-add_custom_target( cov
+# Dumper tool
+add_executable(dump-leaves tools/dump-leaves.cpp)
+target_link_libraries(dump-leaves PUBLIC core)
+
+# YCSB debug tool
+add_executable(ycsb-debug tests/ycsb-bug/ycsb-debug.cpp)
+target_link_libraries(ycsb-debug PUBLIC core)
+
+add_custom_target(cov
 COMMAND lcov -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
@@ -158,10 +177,11 @@ COMMAND ./test_bits
 COMMAND ./test_mmap
 COMMAND ./test_db
 COMMAND ./test_string_insert
+COMMAND ./test_multithread
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert test_multithread
 )
 
 endif(LEAVES_BUILD_TESTS)
@@ -182,7 +202,7 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
-target_compile_options(db_bench_leaves PUBLIC -g -march=native -O2 -funroll-loops -flto=auto)
+target_compile_options(db_bench_leaves PUBLIC -g -march=native -O3 -funroll-loops -flto=auto)
 
 # Removed optimized version since optimizations are now in the main implementation
 # target_compile_options(db_bench_leaves PUBLIC -g -march=native)
@@ -190,7 +210,39 @@ target_compile_options(db_bench_leaves PUBLIC -g -march=native -O2 -funroll-loop
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
     benchmark leveldb lmdb pthread)
-target_compile_options(db_bench_mdb PUBLIC -march=native -O2)
+target_compile_options(db_bench_mdb PUBLIC -march=native -O3)
 target_compile_options(db_bench_mdb PUBLIC -g)
+
+add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
+target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
+    benchmark leveldb pthread)
+target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
+#target_compile_options(db_bench_memory PUBLIC -g -march=native)
+
+# Check for RocksDB and add benchmark if available
+find_path(ROCKSDB_INCLUDE_DIR rocksdb/db.h)
+if(ROCKSDB_INCLUDE_DIR)
+    find_library(ROCKSDB_LIBRARY rocksdb)
+    if(ROCKSDB_LIBRARY)
+        message(STATUS "Found RocksDB: ${ROCKSDB_LIBRARY}")
+        
+        # Build histogram utility separately for db_bench_rocksdb
+        add_library(rocksdb_histogram OBJECT leveldb/util/histogram.cc)
+        target_include_directories(rocksdb_histogram PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include 
+            ${CMAKE_CURRENT_SOURCE_DIR}/leveldb)
+        
+        add_executable(db_bench_rocksdb benchmarks/db_bench_rocksdb.cpp)
+        target_compile_definitions(db_bench_rocksdb PUBLIC NDEBUG)
+        target_link_libraries(db_bench_rocksdb PUBLIC ${ROCKSDB_LIBRARY} rocksdb_histogram pthread)
+        target_compile_options(db_bench_rocksdb PUBLIC -march=native -O3 -g -flto=auto -funroll-loops -ffast-math)
+        target_include_directories(db_bench_rocksdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/leveldb)
+    else()
+        message(STATUS "RocksDB headers found but library not found")
+    endif()
+else()
+    message(STATUS "RocksDB not found - skipping db_bench_rocksdb")
+endif()
+
 
 endif (LEAVES_BUILD_BENCHMARKS) 

@@ -56,7 +56,8 @@ static const char* FLAGS_benchmarks1 =
     "readrandom,"
     "readseq,";
 
-static int const BATCH_SIZE = 1000;
+// Batch size for write operations. Default 1000
+static int FLAGS_batch_size = 1000;
 
 // Use writable MMAP
 static bool FLAGS_writemap = false;
@@ -396,11 +397,11 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       if (name == Slice("fillseq")) {
-        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, BATCH_SIZE);
+        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
       } else if (name == Slice("fillbatch")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, BATCH_SIZE);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
       } else if (name == Slice("fillrandom")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, BATCH_SIZE);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
       } else if (name == Slice("overwrite")) {
         Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, 1);
       } else if (name == Slice("fillrandsync")) {
@@ -702,6 +703,8 @@ int main(int argc, char** argv) {
       FLAGS_reads = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {
       FLAGS_value_size = n;
+    } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
+      FLAGS_batch_size = n;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {

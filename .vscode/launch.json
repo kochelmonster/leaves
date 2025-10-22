@@ -57,7 +57,7 @@
             "program": "${workspaceFolder}/build/test_memory",
             "args": [
                 "-t",
-                "test_areamanager"
+                "test_free_overflow"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
@@ -138,7 +138,7 @@
             "program": "${workspaceFolder}/build/test_db",
             "args": [
                 "-t",
-                "test_rollback"
+                "test_big_allocs"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
@@ -199,6 +199,135 @@
                     "ignoreFailures": true
                 }
             ]
-        }
+        },
+        {
+            "name": "(gdb)) test_cursor",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_cursor",
+            "MIMode": "gdb",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "args": [
+                "-t",
+                "remove_trie"
+            ],
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) db_bench_leaves",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/db_bench_leaves",
+            "args": [
+                "--benchmarks=fillrandom",
+                "--use_file_storage=0"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) db_bench_memory",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/db_bench_memory",
+            "args": [
+                "--num=200000",
+                "--benchmarks=fillseq"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) test_multithread",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_multithread",
+            "args": [
+                "-t",
+                "DeadlockResistance"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) ycsb-debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/ycsb-debug",
+            "args": [
+                "tests/ycsb-bug/ycsb.lvs",
+                "tests/ycsb-bug/leaves_debug-1.log"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "preLaunchTask": "Copy YCSB backup for debug",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
     ]
 }

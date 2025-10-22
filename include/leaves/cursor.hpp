@@ -11,6 +11,7 @@ class TCursor {
  public:
   template <typename DB>
   TCursor(DB db) : _cursor(db) {}
+  TCursor() = default;
 
   tid_t txn_id() const { return _cursor.txn_id(); }
 

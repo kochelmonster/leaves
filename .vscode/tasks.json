@@ -126,6 +126,26 @@
 			"command": "cmake --build build -j",
 			"isBackground": false,
 			"group": "build"
+		},
+		{
+			"label": "Copy YCSB backup for debug",
+			"type": "shell",
+			"command": "cp",
+			"args": [
+				"/home/michael/src/YCSB/leaves/ycsb.lvs.bak",
+				"/home/michael/src/leaves/tests/ycsb-bug/ycsb.lvs"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "silent",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
 		}
 	],
 	"version": "2.0.0"
