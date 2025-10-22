@@ -55,7 +55,7 @@ struct _MemoryMapTraits {
 #pragma pack(0)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t AREA_SIZE = 1 * M;
+  static constexpr size_t AREA_SIZE = 512 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr bool TRANSACTIONAL = true;
 
@@ -135,6 +135,11 @@ struct _MemoryMapFile {
   }
 
   ~_MemoryMapFile() {
+    for (auto& wdb : _dbs) {
+      if (auto db = wdb.lock()) {
+        db->close();
+      }
+    }
     remove_pid();
     _region.flush();
   }

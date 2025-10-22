@@ -4,6 +4,7 @@
 #include <boost/endian/arithmetic.hpp>
 #include <mutex>
 #include <memory>
+#include <unordered_set>
 
 #include "_cursor.hpp" 
 #include "_hash.hpp"
@@ -85,6 +86,7 @@ struct _DB {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::Hasher Hasher;
     constexpr static bool TRANSACTIONAL = true;
+    constexpr static bool TRACKED = true;
     static offset_t get_root(txn_ptr& txn) { return txn->root; }
     static void set_root(txn_ptr& txn, offset_t offset) { txn->root = offset; }
   };
@@ -94,6 +96,7 @@ struct _DB {
     typedef ::NullHasher Hasher;
     typedef uint8_t hash_t[0];
     constexpr static bool TRANSACTIONAL = false;
+    constexpr static bool TRACKED = false;
     static offset_t get_root(txn_ptr& txn) { return txn->mem_root; }
     static void set_root(txn_ptr& txn, offset_t offset) {
       txn->mem_root = offset;
@@ -147,6 +150,8 @@ struct _DB {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
 
+  std::unordered_set<Cursor*> _active_cursors;
+
   _DB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
         _header(storage.resolve(header)),
@@ -187,15 +192,30 @@ struct _DB {
     flush();
   }
 
-  Slice name() const { return _storage.db_name(_index); }
+  void close() {
+    std::lock_guard lock(_header->txn_lock);
+    for (auto cursor : _active_cursors) {
+      cursor->shutdown();
+    }
+    _active_cursors.clear();
+  }
 
-  uint64_t new_cursor_id() {
+  uint64_t register_cursor(Cursor* cursor) {
+    std::lock_guard lock(_header->txn_lock);
+    _active_cursors.insert(cursor);
     if constexpr (Traits::TRANSACTIONAL) {
       return _storage.new_cursor_id();
     }
     return 0;
   }
 
+  void unregister_cursor(Cursor* cursor) {
+    std::lock_guard lock(_header->txn_lock);
+    _active_cursors.erase(cursor);
+  }
+
+  Slice name() const { return _storage.db_name(_index); }
+  
   template <typename T>
   typename Traits::Pointer<T> resolve(offset_t offset,
                                       Access access = READ) const {

@@ -76,6 +76,7 @@ struct _MemoryDB {
     typedef ::NullHasher Hasher;  // No hashing needed for memory-only
     typedef uint8_t hash_t[0];
     constexpr static bool TRANSACTIONAL = false;
+    constexpr static bool TRACKED = false;
     static void set_root(txn_ptr txn, offset_t offset) { txn->root = offset; }
     static offset_t get_root(txn_ptr txn) { return txn->root; }
   };

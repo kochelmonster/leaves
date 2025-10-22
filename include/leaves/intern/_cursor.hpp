@@ -383,16 +383,33 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   std::string _refind_buffer;
 
   _Cursor(db_ptr db) : CursorBase(db) {
-    if constexpr (Traits::TRANSACTIONAL) {
-      _id = db->new_cursor_id();
+    if constexpr (Traits::TRACKED) {
+      _id = db->register_cursor(this);
     }
     update();
   }
 
   ~_Cursor() {
-    if constexpr (Traits::TRANSACTIONAL) {
-      if (this->_txn) this->_txn->refs.fetch_sub(1);
+    if (this->_db) {
+      if constexpr (Traits::TRANSACTIONAL) {  
+        if (this->_txn) this->_txn->refs.fetch_sub(1);
+        this->_db->unregister_cursor(this);
+      }
+      if constexpr (Traits::TRACKED) {
+        this->_db->unregister_cursor(this);
+      }
     }
+  }
+
+  void shutdown() {
+    if constexpr (Traits::TRANSACTIONAL) {
+      if (is_transaction_active()) {
+        if (this->_txn) this->_txn->refs.fetch_sub(1);
+      }
+    }
+    this->_txn.reset();
+    this->_db.reset();
+    // unregister is not necessary db does it
   }
 
   bool is_transaction_active() const {

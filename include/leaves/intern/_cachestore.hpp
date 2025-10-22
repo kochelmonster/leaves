@@ -97,6 +97,12 @@ struct _CacheStore : public Opers_ {
 
   // must be called in the subclasses' destructor
   void destroy() {
+    for (auto& wdb : _dbs) {
+      if (auto db = wdb.lock()) {
+        db->close();
+      }
+    }
+
     // Stop the _write_back_thread
     _should_stop.store(true, std::memory_order_release);
     if (_write_back_thread.joinable()) {
