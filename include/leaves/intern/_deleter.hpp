@@ -76,7 +76,8 @@ struct _Deleter {
 
   void reduce_array(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
-    parent.trie() = alloc(otrie->size() - sizeof(offset_e));
+    // Calculate proper size: same prefix length, one less branch
+    parent.trie() = alloc(TrieNode::size(otrie->len(), otrie->count() - 1));
     parent.trie()->create_remove(*otrie,
                                  prefix ? parent.branch_key : TrieNode::NONE);
     parent.replace(resolve(parent.trie()));

@@ -176,8 +176,7 @@ struct _Inserter {
 
   void add_to_array() {
     trie_ptr otrie = back->trie();
-    back->trie() = alloc(std::min(
-        (uint16_t)(otrie->size() + 2 * sizeof(offset_e)), (uint16_t)MAX_SIZE));
+    back->trie() = alloc(TrieNode::size(back->prefix, otrie->count() + 1));
     back->link_offset = back->trie()->create(
         *otrie, back->key() ? back->branch_key : TrieNode::NONE);
 
@@ -205,7 +204,7 @@ struct _Inserter {
     // replace the lead with a trie node!
     
     // first: copy the leaf node and cut of the new rest key by prefix
-    assert(back->prefix < oleaf->key_size);
+    assert(back->prefix <= oleaf->key_size);
     leaf_ptr copy =
         alloc(LeafNode::size(oleaf->key_size - back->prefix, oleaf->vsize()));
     copy->key_size = oleaf->key_size - back->prefix;

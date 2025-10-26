@@ -72,9 +72,10 @@ struct _TrieNode : public Traits::BlockHeader {
 
   // estimates the max size for a trie node with a given prefix and branches
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
-    return align(padding(sizeof(TrieNode) + prefix, sizeof(uint32_e)) +
-                 std::min(branches, (uint16_t)8) * sizeof(uint32_e)) +
-           branches * sizeof(offset_e);
+    uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
+    uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
+    uint16_t array_size = branches * sizeof(offset_e);
+    return align(prefix_size + lower_size + array_size);
   }
 
   bool has_none() const { return _array_len & NULL_MASK; }
@@ -196,12 +197,14 @@ struct _TrieNode : public Traits::BlockHeader {
       _upper |= (1 << bit);
       int lidx = bits::index(_upper, bit);
       if (src._upper & (1 << bit)) {
+        // _upper == src._upper
         memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
         lower_[lidx] |= 1 << lbit(key);
       } else {
+        // bits::count(_upper) == bits::count(src._upper) + 1
         memcpy(lower_, src.lower(), lidx * sizeof(uint32_e));
         memcpy(lower_ + lidx + 1, src.lower() + lidx,
-               (bits::count(_upper) - lidx - 1) * sizeof(uint32_e));
+               (bits::count(src._upper) - lidx) * sizeof(uint32_e));
         lower_[lidx] = 1 << lbit(key);
       }
 
