@@ -182,8 +182,6 @@ struct AreaSlice {
         _size(other._size),
         _ref(other._ref.load(std::memory_order_acquire)) {}
 
-  // No more dirty bit methods - removed
-
   uint64_t offset() const { return _offset.load(std::memory_order_acquire); }
 
   void offset(uint64_t new_offset) {

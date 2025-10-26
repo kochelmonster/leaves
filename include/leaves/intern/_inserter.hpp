@@ -17,12 +17,12 @@ struct _Inserter {
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
-
-  const Slice& value;
+  
   Transition* back;
+  const size_t value_size;
 
-  _Inserter(Transition* back_, const Slice& value_)
-      : value(value_), back(back_) {}
+  _Inserter(Transition* back_, size_t size)
+      : back(back_), value_size(size) {}
 
   template <typename T>
   offset_t resolve(T ptr) {
@@ -73,8 +73,6 @@ struct _Inserter {
 
     assert(bkey.size() <= 255);
     back->leaf() = fill_leaf(bkey);
-    if (back->leaf()->is_big())
-      back->big_value = resolve(back->leaf()->big()->offset);
     back->offset = resolve(back->leaf());
     back->cmp = 0;
     back->prefix = bkey.size();
@@ -154,7 +152,6 @@ struct _Inserter {
     const Slice& bkey = back->key();
     leaf_ptr leaf = fill_leaf(bkey);
     Transition& bottom = back->push(resolve(leaf));
-    if (leaf->is_big()) bottom.big_value = resolve(leaf->big()->offset);
     bottom.cmp = 0;
     bottom.prefix = bkey.size();
     bottom.advance_key(bottom.prefix);
@@ -162,11 +159,10 @@ struct _Inserter {
   }
 
   leaf_ptr fill_leaf(const Slice& key) {
-    leaf_ptr leaf = alloc(LeafNode::size(key, value));
-    auto bv = leaf->set(key, value);
+    leaf_ptr leaf = alloc(LeafNode::size(key.size(), value_size));
+    auto bv = leaf->set(key, value_size);
     if (bv) {
       block_ptr ptr = alloc_big(bv->size());
-      memcpy((char*)ptr, value.data(), value.size());
       bv->offset = resolve(ptr);
     }
     return leaf;

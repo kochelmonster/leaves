@@ -33,8 +33,6 @@ struct _Transition {
 
   leaf_ptr& leaf() const { return *(leaf_ptr*)&block; }
 
-  block_ptr big_value;  // pointer to a big value if available
-
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
   uint8_t branch_key;  // The char branching the
@@ -132,7 +130,6 @@ struct _Transition {
 
   void reset() {
     block.reset();
-    big_value.reset();
     cmp = UNDEFINED;
   }
 
@@ -140,9 +137,9 @@ struct _Transition {
 
   Slice value() const {
     assert(is_leaf());
-    if (big_value) {
-      assert(leaf()->is_big());
+    if (leaf()->is_big()) {
       auto bv = leaf()->big();
+      auto big_value = cursor->_db->resolve(bv->offset);
       return Slice(((const char*)big_value), bv->value_size);
     }
     return leaf()->value();
@@ -170,7 +167,6 @@ struct _Transition {
       prefix = get_prefix(key().data(), (char*)leaf_.data, key().size(),
                           leaf_.key_size, cmp);
       advance_key(prefix);
-      if (!cmp && leaf()->is_big()) big_value = resolve(leaf()->big()->offset);
       return;
     }
 
@@ -207,7 +203,6 @@ struct _Transition {
     append_key(leaf_.data, leaf_.key_size);
     prefix = leaf_.key_size;
     cmp = 0;
-    if (leaf()->is_big()) big_value = resolve(leaf()->big()->offset);
   }
 
   void first() {
@@ -454,21 +449,26 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     }
   }
 
-  void value(const Slice& value) {
+  void* reserve(size_t size) {
     [[maybe_unused]] bool r = start_transaction();
     assert(r);
 
     if (!this->stack.size) {
       if (!Traits::get_root(this->_txn)) {
         this->push(offset_t());
-        _Inserter(&this->stack.back(), value).first_exec();
-        this->_db->flush();
-        return;
+        _Inserter(&this->stack.back(), size).first_exec();
+        return (void*)this->stack.back().value().data();
       }
       throw NoValidPosition();
     }
 
-    _Inserter(&this->stack.back(), value).exec();
+    _Inserter(&this->stack.back(), size).exec();
+    return (void*)this->stack.back().value().data();
+  }
+
+  void value(const Slice& value) {
+    void* space = reserve(value.size());
+    memcpy(space, value.data(), value.size());
     this->_db->flush();
   }
 

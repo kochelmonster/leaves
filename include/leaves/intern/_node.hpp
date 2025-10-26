@@ -403,17 +403,16 @@ struct _LeafNode : public Traits::BlockHeader {
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
-  BigValue* set(const Slice& key, const Slice& value) {
+  BigValue* set(const Slice& key, size_t value_size_) {
     key_size = key.size();
     memcpy(data, key.data(), key.size());
-    if (key.size() + value.size() + sizeof(LeafNode) > MAX_SIZE) {
+    if (key.size() + value_size_ + sizeof(LeafNode) > MAX_SIZE) {
       value_size = BIG_VALUE;
       auto bv = big();
-      bv->value_size = value.size();
+      bv->value_size = value_size_;
       return bv;
     }
-    value_size = value.size();
-    memcpy(vdata(), value.data(), value.size());
+    value_size = value_size_;
     return nullptr;
   }
 

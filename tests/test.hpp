@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <boost/test/included/unit_test.hpp>
 #include <cstdio>
+#include <iomanip>
 #include <random>
 #include <vector>
 
@@ -78,6 +79,39 @@ inline void check_graph(const char* name, T& storage) {
 #endif
 }
 
+void cmp_value(const Slice& value, const std::string& find) {
+  std::string value_str(value.data(), std::min(find.size(), value.size()));
+  if (value_str != find) {
+    std::cerr << "\n=== VALUE MISMATCH ===" << std::endl;
+    std::cerr << "value.size()=" << value.size()
+              << " find.size()=" << find.size()
+              << " value_str.size()=" << value_str.size() << std::endl;
+    // Find first difference
+    size_t diff_pos = 0;
+    while (diff_pos < value_str.size() && diff_pos < find.size() &&
+           value_str[diff_pos] == find[diff_pos]) {
+      diff_pos++;
+    }
+    std::cerr << "First difference at position " << diff_pos << std::endl;
+    // Show 20 bytes around the difference
+    size_t start = (diff_pos > 10) ? diff_pos - 10 : 0;
+    size_t end =
+        std::min(diff_pos + 10, std::min(value_str.size(), find.size()));
+    std::cerr << "value_str[" << start << ".." << end << "]: ";
+    for (size_t i = start; i < end && i < value_str.size(); i++) {
+      std::cerr << std::hex << std::setw(2) << std::setfill('0')
+                << (int)(unsigned char)value_str[i] << " ";
+    }
+    std::cerr << std::endl << "find[" << start << ".." << end << "]:      ";
+    for (size_t i = start; i < end && i < find.size(); i++) {
+      std::cerr << std::hex << std::setw(2) << std::setfill('0')
+                << (int)(unsigned char)find[i] << " ";
+    }
+    std::cerr << std::dec << std::endl;
+  }
+  BOOST_REQUIRE_EQUAL(value_str, find);
+}
+
 template <typename T>
 inline void insert(T& storage, const char* test_name, const Slice& key,
                    const Slice& value) {
@@ -90,6 +124,8 @@ inline void insert(T& storage, const char* test_name, const Slice& key,
   cursor.value(value);
   BOOST_REQUIRE(cursor.is_valid());
   cursor.commit();
+  cmp_value(cursor.value(), value.string());
+
   check_graph(test_name, storage);
   BOOST_REQUIRE(cursor.is_valid());
   BOOST_REQUIRE_EQUAL(cursor.key(), key.string());
@@ -104,10 +140,6 @@ using std::string;
 
 typedef std::vector<string> strings_t;
 typedef std::vector<int> ints_t;
-
-void cmp_value(const Slice& value, const std::string& find) {
-  BOOST_REQUIRE_EQUAL(value.string().substr(0, find.size()), find);
-}
 
 #ifdef MOVEMENT
 template <typename T>
@@ -126,6 +158,7 @@ inline void test_movement(T& storage, strings_t& strings) {
     std::cout << "find \"" << i->substr(0, 20) << "\"";
     BOOST_REQUIRE(cursor.is_valid());
     BOOST_REQUIRE_EQUAL(cursor.key(), Slice(*i));
+    cmp_value(cursor.value(), *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(i == strings.end());
@@ -140,6 +173,7 @@ inline void test_movement(T& storage, strings_t& strings) {
     std::cout << "find \"" << i->substr(0, 20) << "\"";
     BOOST_REQUIRE(cursor.is_valid());
     BOOST_REQUIRE_EQUAL(cursor.key(), *i);
+    cmp_value(cursor.value(), *i);
     std::cout << " ok" << std::endl;
   }
   BOOST_REQUIRE(!cursor.is_valid());
