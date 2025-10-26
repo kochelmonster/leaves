@@ -99,16 +99,18 @@ BOOST_AUTO_TEST_CASE(test_extend) {
 
   {
     Transaction trans(db);
-    // Allocate enough blocks to force a new area allocation
-    // Account for area header overhead and other structures
-    int count = (AREA_SIZE * 2) / BLOCK_SIZE;  // Force multiple areas
+    // With geometric growth, the DB is initialized with ~10*AREA_SIZE already allocated
+    // We need to allocate enough to exhaust that and trigger another resize
+    // New resize will grow by max(requested, 10*AREA_SIZE, 25% of file_size)
+    // Allocate enough blocks to exceed initial capacity
+    int count = (11 * AREA_SIZE) / BLOCK_SIZE;  // Force growth beyond initial allocation
     for (int i = 0; i < count; i++) {
       db->alloc(BLOCK_SIZE);
     }
   }
 
-  // Check that file size increased (indicating area extension)
-  BOOST_CHECK(storage._memory->file_size > initial_file_size);
+  // Check that file size increased with geometric growth
+  BOOST_CHECK_GT(storage._memory->file_size, initial_file_size);
 }
 
 BOOST_AUTO_TEST_CASE(test_rollback) {

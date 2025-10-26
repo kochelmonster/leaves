@@ -75,7 +75,6 @@ struct _MemoryMapTraits {
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
-
 template <typename Traits_>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
@@ -278,48 +277,50 @@ struct _MemoryMapFile {
     leaves::prefetch(mem, access);
   }
 
+  area_ptr resize_file(uint64_t size) {
+    // Extend storage with new area - grow by at least 10*AREA_SIZE
+    boost::interprocess::file_lock flock(filename());
+    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
+        flock_guard(flock);
+
+    // Geometric growth: grow by at least 25% of current size or 10*AREA_SIZE
+    constexpr uint64_t MIN_GROWTH = 10 * AREA_SIZE;
+    uint64_t geometric_growth = _memory->file_size / 4;  // 25% growth
+    uint64_t total_growth = std::max({size, MIN_GROWTH, geometric_growth});
+    total_growth = padding(total_growth, AREA_SIZE);
+
+    offset_t new_offset = _memory->file_size;
+    _memory->file_size = _memory->file_size + total_growth;
+    std::filesystem::resize_file(filename(), _memory->file_size);
+    assert(_memory->file_size <= _region.get_size());
+
+    // Create Area for the requested size
+    auto area = area_ptr(resolve(new_offset, WRITE));
+    area->init(new_offset, size, 0);
+
+    // Add remaining space to multi_areas pool
+    if (total_growth > size) {
+      offset_t extra_offset = new_offset + size;
+      uint64_t extra_size = total_growth - size;
+      auto extra_area = area_ptr(resolve(extra_offset, WRITE));
+      extra_area->init(extra_offset, extra_size, 0);
+      _memory->area_pool.multi_areas.push(*extra_area, *this);
+    }
+
+    return area;
+  }
+
   area_ptr alloc_single_area() {
     auto result = _memory->area_pool.alloc_single_area(*this);
-    if (!result) {
-      // Extend storage with new area
-      boost::interprocess::file_lock flock(filename());
-      boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-          flock_guard(flock);
-
-      offset_t new_offset = _memory->file_size;
-      _memory->file_size = _memory->file_size + AREA_SIZE;
-      std::filesystem::resize_file(filename(), _memory->file_size);
-      assert(_memory->file_size <= _region.get_size());
-
-      // Create Area in the new memory location
-      auto area = area_ptr(resolve(new_offset, WRITE));
-      area->init(new_offset, AREA_SIZE, 0);
-      return area;
-    }
+    if (!result) return resize_file(AREA_SIZE);
     return result;  // Return Area* directly
   }
 
   area_ptr alloc_multi_area(uint64_t size) {
     // Ensure size is multiple of AREA_SIZE
     size = padding(size, AREA_SIZE);
-
     auto result = _memory->area_pool.alloc_multi_area(size, *this);
-    if (!result) {
-      // Extend storage with new area
-      boost::interprocess::file_lock flock(filename());
-      boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-          flock_guard(flock);
-
-      offset_t new_offset = _memory->file_size;
-      _memory->file_size = _memory->file_size + size;
-      std::filesystem::resize_file(filename(), _memory->file_size);
-      assert(_memory->file_size <= _region.get_size());
-
-      // Create Area in the new memory location
-      auto area = area_ptr(resolve(new_offset, WRITE));
-      area->init(new_offset, size, 0);
-      return area;
-    }
+    if (!result) return resize_file(size);
     return result;  // Return Area* directly
   }
 

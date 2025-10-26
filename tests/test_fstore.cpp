@@ -125,7 +125,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize) {
 
 BOOST_AUTO_TEST_CASE(test_signature_constants) {
   // Test that FSTORE_SIGNATURE constant is correct
-  BOOST_CHECK_EQUAL(std::string(FSTORE_SIGNATURE), "larch-leaves");
+  BOOST_CHECK_EQUAL(std::string(FSTORE_SIGNATURE), "larch-leaves-fstore");
   BOOST_CHECK_GT(FSTORE_SIGNATURE_SIZE, 0);
   BOOST_CHECK_GE(FSTORE_SIGNATURE_SIZE, sizeof(FSTORE_SIGNATURE));
 }
