@@ -1,6 +1,8 @@
 #ifndef _LEAVES_DB_HPP
 #define _LEAVES_DB_HPP
 
+#include <memory>
+
 #include "cursor.hpp"
 #include "intern/_db.hpp"
 
@@ -11,11 +13,13 @@ class TDB {
  public:
   typedef typename StorageImpl::DB db_type;
   typedef typename StorageImpl::db_ptr db_ptr;
-  typedef TCursor<typename StorageImpl::DB::Cursor> Cursor;
+  typedef std::shared_ptr<StorageImpl> storage_ptr;
+  typedef TCursor<typename StorageImpl::DB::Cursor, storage_ptr> Cursor;
 
-  TDB(db_ptr db) : _db(db) {}
+  TDB(storage_ptr storage, const char* name)
+      : _db(storage->make(name)), _storage(storage) {}
 
-  Cursor cursor() { return Cursor(_db); }
+  Cursor cursor() { return Cursor(_storage, _db); }
 
   Slice name() const { return _db->name(); }
 
@@ -23,6 +27,7 @@ class TDB {
 
  private:
   db_ptr _db;
+  storage_ptr _storage;
 };
 
 }  // namespace leaves
