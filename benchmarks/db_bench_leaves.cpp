@@ -403,7 +403,7 @@ class Benchmark {
       } else if (name == Slice("fillrandom")) {
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
       } else if (name == Slice("overwrite")) {
-        Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, 1);
+        Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, FLAGS_batch_size);
       } else if (name == Slice("fillrandsync")) {
         write_sync = true;
         Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size, 1);
