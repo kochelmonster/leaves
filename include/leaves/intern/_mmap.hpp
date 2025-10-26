@@ -135,11 +135,6 @@ struct _MemoryMapFile {
   }
 
   ~_MemoryMapFile() {
-    for (auto& wdb : _dbs) {
-      if (auto db = wdb.lock()) {
-        db->close();
-      }
-    }
     remove_pid();
     _region.flush();
   }
