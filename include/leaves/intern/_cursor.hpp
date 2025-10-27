@@ -228,7 +228,6 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* end = trie_.array() + trie_.count();
       if (lnk >= end) return false;
-      for (offset_e* l = lnk; l < end; l++) cursor->_db->prefetch(*l);
       push(lnk).first();
       return true;
     }
@@ -264,7 +263,6 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* begin = trie_.array();
       if (lnk < begin) return false;
-      for (offset_e* l = lnk; l >= begin; l--) cursor->_db->prefetch(*l);
       push(lnk).last();
       branch_key = current_key()[child().keypos];
       return true;
