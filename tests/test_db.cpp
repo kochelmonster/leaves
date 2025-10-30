@@ -154,7 +154,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.make("test");
 
-    BOOST_REQUIRE(db->txn()->txn_id == 1);
+    BOOST_REQUIRE(db->txn()->txn_id == tid_t(1));
     BOOST_REQUIRE(db->txn()->refs.load() == 0);
 
     {
@@ -169,7 +169,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     }
 
     DBMMap::DB::txn_ptr txn = db->txn();
-    BOOST_REQUIRE(txn->txn_id == 2);
+    BOOST_REQUIRE(txn->txn_id == tid_t(2));
     BOOST_REQUIRE(txn->refs.load() == 0);
     refs = (uint32_t*)&txn->refs;
     BOOST_REQUIRE(file_size == storage._memory->file_size);
@@ -192,7 +192,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     }
 
     DBMMap::DB::txn_ptr txn = db->txn();
-    BOOST_REQUIRE(txn->txn_id == 3);
+    BOOST_REQUIRE(txn->txn_id == tid_t(3));
   }
 
   {
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     }
 
     DBMMap::DB::txn_ptr txn = db->txn();
-    BOOST_REQUIRE(txn->txn_id == 5);
+    BOOST_REQUIRE(txn->txn_id == tid_t(5));
   }
 }
 
@@ -389,7 +389,6 @@ struct TestTraits {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint16_t slot_id;
-    uint16_t free_idx;
   };
 
   typedef SimplePointer<BlockHeader> Pointers;

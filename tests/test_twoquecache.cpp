@@ -9,7 +9,6 @@ using namespace leaves;
 
 struct DummyBlockHeader {
     uint32_t slot_id;
-    uint32_t free_idx;
 };
 
 // A simple SmartPointer-like class for testing

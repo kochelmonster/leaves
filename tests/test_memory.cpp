@@ -27,7 +27,6 @@ struct TestTraits {
   struct BlockHeader {
     tid_t txn_id;
     uint8_t slot_id;
-    uint8_t free_idx;
   };
   typedef SimplePointer<BlockHeader> Pointers;
   using ptr = typename Pointers::ptr;
@@ -52,13 +51,13 @@ struct TestStorage {
   AreaList multi_areas;
 
   TestStorage() {
-    accept_tid = mark_tid = 0;
+    accept_tid = mark_tid = tid_t(0);
     memory.reserve(1024 * 1024);
     memory.resize(AREA_SIZE);
     single_areas.init();
     multi_areas.init();
     mm.init(sizeof(void*), AREA_SIZE);
-    accept_tid = mark_tid = 1;
+    accept_tid = mark_tid = tid_t(1);
   }
 
   MemManager mm;
@@ -537,11 +536,11 @@ BOOST_AUTO_TEST_CASE(test_may_not_recycle_scenarios) {
   TestStorage storage;
   
   // Set up scenario where blocks can be recycled normally
-  storage.accept_tid = 10;  
+  storage.accept_tid = tid_t(10);
   
   const uint16_t SPACE = 200;
   auto block = storage.alloc(SPACE);
-  block->txn_id = 5; // Older than accept_tid, so can be recycled
+  block->txn_id = tid_t(5); // Older than accept_tid, so can be recycled
   offset_t offset = storage.resolve(block);
   storage.free(block);
   

@@ -149,6 +149,9 @@ add_executable(test_string_insert tests/test_string_insert.cpp)
 add_executable(test_merger tests/test_merger.cpp)
 target_link_libraries(test_merger PUBLIC core test)
 
+add_executable(test_serial tests/test_serial.cpp)
+target_link_libraries(test_serial PUBLIC test)
+
 add_executable(test_twoquecache tests/test_twoquecache.cpp)
 target_link_libraries(test_file_storage PUBLIC core test)
 
@@ -179,10 +182,11 @@ COMMAND ./test_db
 COMMAND ./test_string_insert
 COMMAND ./test_multithread
 COMMAND ./test_merger
+COMMAND ./test_serial
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert test_multithread test_merger test_twoquecache
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert test_multithread test_merger test_serial test_twoquecache
 )
 
 endif(LEAVES_BUILD_TESTS)
