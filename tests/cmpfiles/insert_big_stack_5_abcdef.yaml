@@ -1,22 +1,22 @@
 type: trie
-id: 10464
+id: 10408
 page: 0
 freespace: 96
 txn: 3
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 10329
-  - 15536
+  - 10281
+  - 15448
 ---
 type: leaf
-id: 10329
+id: 10281
 page: 0
-freespace: 122
-size: 14
+freespace: 119
+size: 9
 txn: 3
 keysize: 0
 key: ""
@@ -24,24 +24,24 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 15536
+id: 15448
 page: 0
 freespace: 96
 txn: 4
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 15401
-  - 16512
+  - 15321
+  - 16392
 ---
 type: leaf
-id: 15401
+id: 15321
 page: 0
-freespace: 121
-size: 15
+freespace: 118
+size: 10
 txn: 4
 keysize: 0
 key: ""
@@ -49,24 +49,24 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 16512
+id: 16392
 page: 0
 freespace: 96
 txn: 5
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 16377
-  - 17488
+  - 16265
+  - 17336
 ---
 type: leaf
-id: 16377
+id: 16265
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 5
 keysize: 0
 key: ""
@@ -74,24 +74,24 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 17488
+id: 17336
 page: 0
 freespace: 96
 txn: 6
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 17353
-  - 18464
+  - 17209
+  - 18280
 ---
 type: leaf
-id: 17353
+id: 17209
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 6
 keysize: 0
 key: ""
@@ -99,24 +99,24 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 18464
+id: 18280
 page: 0
 freespace: 96
 txn: 7
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[e]"
 branches: "[][f]"
 children: 
-  - 18329
-  - 18601
+  - 18153
+  - 18409
 ---
 type: leaf
-id: 18329
+id: 18153
 page: 0
-freespace: 118
-size: 18
+freespace: 115
+size: 13
 txn: 7
 keysize: 0
 key: ""
@@ -124,10 +124,10 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 18601
+id: 18409
 page: 0
-freespace: 116
-size: 20
+freespace: 113
+size: 15
 txn: 7
 keysize: 1
 key: "[f]"

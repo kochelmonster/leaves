@@ -1,8 +1,8 @@
 type: leaf
-id: 5529
+id: 5497
 page: 0
-freespace: 115
-size: 21
+freespace: 112
+size: 16
 txn: 2
 keysize: 4
 key: "[a][b][c][a]"

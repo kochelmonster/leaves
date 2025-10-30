@@ -1,22 +1,22 @@
 type: trie
-id: 10464
+id: 10408
 page: 0
 freespace: 88
 txn: 3
-size: 48
+size: 40
 compressed: 
   size: 3
   key: "[a][b][c]"
 branches: "[*][d]"
 children: 
-  - 14697
-  - 10329
+  - 14633
+  - 10281
 ---
 type: leaf
-id: 14697
+id: 14633
 page: 0
-freespace: 108
-size: 28
+freespace: 105
+size: 23
 txn: 3
 keysize: 6
 key: "[*][e][f][g][h][i]"
@@ -24,10 +24,10 @@ valuesize: 9
 value: "abc*efghi"
 ---
 type: leaf
-id: 10329
+id: 10281
 page: 0
-freespace: 108
-size: 28
+freespace: 105
+size: 23
 txn: 3
 keysize: 6
 key: "[d][e][f][g][h][i]"

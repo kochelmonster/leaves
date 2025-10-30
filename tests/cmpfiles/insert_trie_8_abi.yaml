@@ -1,7 +1,7 @@
 type: trie
-id: 20440
+id: 20216
 page: 0
-freespace: 40
+freespace: 32
 txn: 10
 size: 96
 compressed: 
@@ -9,21 +9,21 @@ compressed:
   key: "[a][b]"
 branches: "[a][b][c][d][e][f][g][h][i]"
 children: 
-  - 10329
-  - 14697
-  - 15537
-  - 16377
-  - 17217
-  - 18057
-  - 18897
-  - 19737
-  - 20577
+  - 10281
+  - 14633
+  - 15449
+  - 16265
+  - 17081
+  - 17897
+  - 18713
+  - 19529
+  - 20345
 ---
 type: leaf
-id: 10329
+id: 10281
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 3
 keysize: 1
 key: "[a]"
@@ -31,10 +31,10 @@ valuesize: 3
 value: "aba"
 ---
 type: leaf
-id: 14697
+id: 14633
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 3
 keysize: 1
 key: "[b]"
@@ -42,10 +42,10 @@ valuesize: 3
 value: "abb"
 ---
 type: leaf
-id: 15537
+id: 15449
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 4
 keysize: 1
 key: "[c]"
@@ -53,10 +53,10 @@ valuesize: 3
 value: "abc"
 ---
 type: leaf
-id: 16377
+id: 16265
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 5
 keysize: 1
 key: "[d]"
@@ -64,10 +64,10 @@ valuesize: 3
 value: "abd"
 ---
 type: leaf
-id: 17217
+id: 17081
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 6
 keysize: 1
 key: "[e]"
@@ -75,10 +75,10 @@ valuesize: 3
 value: "abe"
 ---
 type: leaf
-id: 18057
+id: 17897
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 7
 keysize: 1
 key: "[f]"
@@ -86,10 +86,10 @@ valuesize: 3
 value: "abf"
 ---
 type: leaf
-id: 18897
+id: 18713
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 8
 keysize: 1
 key: "[g]"
@@ -97,10 +97,10 @@ valuesize: 3
 value: "abg"
 ---
 type: leaf
-id: 19737
+id: 19529
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 9
 keysize: 1
 key: "[h]"
@@ -108,10 +108,10 @@ valuesize: 3
 value: "abh"
 ---
 type: leaf
-id: 20577
+id: 20345
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 10
 keysize: 1
 key: "[i]"

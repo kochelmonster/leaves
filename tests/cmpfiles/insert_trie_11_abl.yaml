@@ -1,7 +1,7 @@
 type: trie
-id: 23008
+id: 22712
 page: 0
-freespace: 64
+freespace: 56
 txn: 13
 size: 120
 compressed: 
@@ -9,24 +9,24 @@ compressed:
   key: "[a][b]"
 branches: "[a][b][c][d][e][f][g][h][i][j][k][l]"
 children: 
-  - 10329
-  - 14697
-  - 15537
-  - 16377
-  - 17217
-  - 18057
-  - 18897
-  - 19737
-  - 20577
-  - 21417
-  - 22305
-  - 27289
+  - 10281
+  - 14633
+  - 15449
+  - 16265
+  - 17081
+  - 17897
+  - 18713
+  - 19529
+  - 20345
+  - 21161
+  - 22025
+  - 26985
 ---
 type: leaf
-id: 10329
+id: 10281
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 3
 keysize: 1
 key: "[a]"
@@ -34,10 +34,10 @@ valuesize: 3
 value: "aba"
 ---
 type: leaf
-id: 14697
+id: 14633
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 3
 keysize: 1
 key: "[b]"
@@ -45,10 +45,10 @@ valuesize: 3
 value: "abb"
 ---
 type: leaf
-id: 15537
+id: 15449
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 4
 keysize: 1
 key: "[c]"
@@ -56,10 +56,10 @@ valuesize: 3
 value: "abc"
 ---
 type: leaf
-id: 16377
+id: 16265
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 5
 keysize: 1
 key: "[d]"
@@ -67,10 +67,10 @@ valuesize: 3
 value: "abd"
 ---
 type: leaf
-id: 17217
+id: 17081
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 6
 keysize: 1
 key: "[e]"
@@ -78,10 +78,10 @@ valuesize: 3
 value: "abe"
 ---
 type: leaf
-id: 18057
+id: 17897
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 7
 keysize: 1
 key: "[f]"
@@ -89,10 +89,10 @@ valuesize: 3
 value: "abf"
 ---
 type: leaf
-id: 18897
+id: 18713
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 8
 keysize: 1
 key: "[g]"
@@ -100,10 +100,10 @@ valuesize: 3
 value: "abg"
 ---
 type: leaf
-id: 19737
+id: 19529
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 9
 keysize: 1
 key: "[h]"
@@ -111,10 +111,10 @@ valuesize: 3
 value: "abh"
 ---
 type: leaf
-id: 20577
+id: 20345
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 10
 keysize: 1
 key: "[i]"
@@ -122,10 +122,10 @@ valuesize: 3
 value: "abi"
 ---
 type: leaf
-id: 21417
+id: 21161
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 11
 keysize: 1
 key: "[j]"
@@ -133,10 +133,10 @@ valuesize: 3
 value: "abj"
 ---
 type: leaf
-id: 22305
+id: 22025
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 12
 keysize: 1
 key: "[k]"
@@ -144,10 +144,10 @@ valuesize: 3
 value: "abk"
 ---
 type: leaf
-id: 27289
+id: 26985
 page: 0
-freespace: 119
-size: 17
+freespace: 116
+size: 12
 txn: 13
 keysize: 1
 key: "[l]"

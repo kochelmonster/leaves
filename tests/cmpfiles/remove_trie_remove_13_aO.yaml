@@ -1,22 +1,22 @@
 type: trie
-id: 11800
+id: 11640
 page: 0
 freespace: 96
 txn: 16
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[a]"
 branches: "[C][K]"
 children: 
-  - 17265
-  - 16945
+  - 17033
+  - 16729
 ---
 type: leaf
-id: 17265
+id: 17033
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[C]"
@@ -24,10 +24,10 @@ valuesize: 2
 value: "aC"
 ---
 type: leaf
-id: 16945
+id: 16729
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[K]"

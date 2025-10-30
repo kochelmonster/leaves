@@ -1,35 +1,35 @@
 type: trie
-id: 23024
+id: 22728
 page: 0
 freespace: 32
 txn: 3
-size: 152
+size: 144
 compressed: 
   size: 1
   key: "[a]"
 branches: "[A][B][C][D][E][F][G][H][I][J][K][M][O][l][n]"
 children: 
-  - 10305
-  - 10577
-  - 17265
-  - 10849
-  - 11121
-  - 11393
-  - 11665
-  - 11937
-  - 12209
-  - 12529
-  - 16945
-  - 10033
-  - 18225
-  - 17585
-  - 17905
+  - 10233
+  - 10489
+  - 17033
+  - 10745
+  - 11001
+  - 11257
+  - 11513
+  - 11769
+  - 12025
+  - 12329
+  - 16729
+  - 9977
+  - 17945
+  - 17337
+  - 17641
 ---
 type: leaf
-id: 10305
+id: 10233
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[A]"
@@ -37,10 +37,10 @@ valuesize: 2
 value: "aA"
 ---
 type: leaf
-id: 10577
+id: 10489
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[B]"
@@ -48,10 +48,10 @@ valuesize: 2
 value: "aB"
 ---
 type: leaf
-id: 17265
+id: 17033
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[C]"
@@ -59,10 +59,10 @@ valuesize: 2
 value: "aC"
 ---
 type: leaf
-id: 10849
+id: 10745
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[D]"
@@ -70,10 +70,10 @@ valuesize: 2
 value: "aD"
 ---
 type: leaf
-id: 11121
+id: 11001
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[E]"
@@ -81,10 +81,10 @@ valuesize: 2
 value: "aE"
 ---
 type: leaf
-id: 11393
+id: 11257
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[F]"
@@ -92,10 +92,10 @@ valuesize: 2
 value: "aF"
 ---
 type: leaf
-id: 11665
+id: 11513
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[G]"
@@ -103,10 +103,10 @@ valuesize: 2
 value: "aG"
 ---
 type: leaf
-id: 11937
+id: 11769
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[H]"
@@ -114,10 +114,10 @@ valuesize: 2
 value: "aH"
 ---
 type: leaf
-id: 12209
+id: 12025
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[I]"
@@ -125,10 +125,10 @@ valuesize: 2
 value: "aI"
 ---
 type: leaf
-id: 12529
+id: 12329
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[J]"
@@ -136,10 +136,10 @@ valuesize: 2
 value: "aJ"
 ---
 type: leaf
-id: 16945
+id: 16729
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[K]"
@@ -147,10 +147,10 @@ valuesize: 2
 value: "aK"
 ---
 type: leaf
-id: 10033
+id: 9977
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[M]"
@@ -158,10 +158,10 @@ valuesize: 2
 value: "aM"
 ---
 type: leaf
-id: 18225
+id: 17945
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[O]"
@@ -169,10 +169,10 @@ valuesize: 2
 value: "aO"
 ---
 type: leaf
-id: 17585
+id: 17337
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[l]"
@@ -180,10 +180,10 @@ valuesize: 2
 value: "al"
 ---
 type: leaf
-id: 17905
+id: 17641
 page: 0
-freespace: 120
-size: 16
+freespace: 117
+size: 11
 txn: 2
 keysize: 1
 key: "[n]"
