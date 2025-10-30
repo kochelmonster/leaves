@@ -178,10 +178,11 @@ COMMAND ./test_mmap
 COMMAND ./test_db
 COMMAND ./test_string_insert
 COMMAND ./test_multithread
+COMMAND ./test_merger
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert test_multithread
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_string_insert test_multithread test_merger test_twoquecache
 )
 
 endif(LEAVES_BUILD_TESTS)
