@@ -32,6 +32,9 @@ struct _TransactionBase : public Traits_::BlockHeader {
   // pointer ot the next higher transaction
   offset_t next_txn;
 
+  // number of branches for the first 32 chars
+  uint64_t branch_count[32];
+
   // count of cursors accessing this transaction
   std::atomic<uint32_t> refs;
 

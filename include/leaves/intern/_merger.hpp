@@ -34,6 +34,18 @@ struct _Merger {
   _Merger(CursorDst& dest, CursorSrc& src, Handler& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
+  void inc_branch_count(typename CursorDst::Transition& dst, int count) {
+    // Increment for each character position this node covers (prefix + branch)
+    uint16_t start_pos = dst.keypos;
+    uint16_t end_pos =
+        std::min((uint16_t)(start_pos + dst.prefix + 1),
+                 (uint16_t)(sizeof(dst.cursor->_txn->branch_count) /
+                            sizeof(dst.cursor->_txn->branch_count[0])));
+    for (uint16_t pos = start_pos; pos < end_pos; pos++) {
+      dst.cursor->_txn->branch_count[pos] += count;
+    }
+  }
+
   // Helper methods for memory management
   block_ptr alloc(uint16_t size) { return dst_cursor._db->alloc(size); }
 
@@ -189,6 +201,7 @@ struct _Merger {
       dst.replace(resolve_offset(new_trie));
       dst.block = new_trie;
       dst.link_offset = loffset;
+      inc_branch_count(dst, 2);  // Adding 2 branches
 
       if (src.is_leaf()) {
         auto& src_leaf = src.leaf();
@@ -251,6 +264,7 @@ struct _Merger {
     dst.block = new_trie;
     dst.link_offset = new_trie->create(*src_trie, key1);
     *dst.link() = child1;
+    inc_branch_count(dst, 1);  // Adding 1 branch
     for (int key = new_trie->first(); key != TrieNode::OUT_OF_RANGE;
          key = new_trie->next(key)) {
       if (key == key1) continue;
@@ -288,6 +302,7 @@ struct _Merger {
       dst.block = new_trie;
       dst.link_offset = loffset;
       *dst.link() = resolve_offset(suffix_trie);
+      inc_branch_count(dst, 1);  // Adding 1 branch
 
       auto dst_offset = suffix_trie->array();
       auto src_offset = src_trie->array();
@@ -349,6 +364,7 @@ struct _Merger {
     dst.block = new_trie;
     dst.link_offset = loffset;
     *dst.link() = resolve_offset(new_leaf);
+    inc_branch_count(dst, 1);  // Adding 1 branch
   }
 
   typename CursorDst::Transition::trie_ptr clone_plus_one(

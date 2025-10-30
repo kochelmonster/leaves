@@ -778,3 +778,69 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     }
   }
 }
+
+BOOST_AUTO_TEST_CASE(test_branch_count) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_branch_count.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.make("test");
+  
+  // Create a proper ValueTraits cursor
+  std::cerr << "Creating cursor..." << std::endl;
+  DBMMap::DB::Cursor cursor(db);
+  
+  // Insert values that will create branches at depth 0
+  std::cerr << "Inserting 'a'..." << std::endl;
+  cursor.find("a");
+  cursor.value("value_a");  // First insert - just a leaf, no branches yet
+  cursor.commit();
+  
+  // Check branch_count after first insert - should be 0 (no trie branches yet)
+  auto txn = db->txn();
+  std::cerr << "branch_count[0] = " << txn->branch_count[0] << std::endl;
+  BOOST_CHECK_EQUAL(txn->branch_count[0], 0u);
+  
+  cursor.find("b");
+  cursor.value("value_b");  // Second insert creates trie with 2 branches ('a' and 'b')
+  cursor.commit();
+  txn = db->txn();
+  BOOST_CHECK_EQUAL(txn->branch_count[0], 2u);
+  
+  cursor.find("c");
+  cursor.value("value_c");  // Creates branch 'c' at depth 0
+  cursor.commit();
+  txn = db->txn();
+  BOOST_CHECK_EQUAL(txn->branch_count[0], 3u);
+  
+  // Insert values that create branches at depth 1
+  cursor.find("aa");
+  cursor.value("value_aa");  // Splits leaf 'a' into trie with 2 branches (NONE for "a", 'a' for "aa")
+  cursor.commit();
+  txn = db->txn();
+  BOOST_CHECK_EQUAL(txn->branch_count[1], 2u);
+  
+  cursor.find("ab");
+  cursor.value("value_ab");  // Adds branch 'b' to existing trie, now 3 branches
+  cursor.commit();
+  txn = db->txn();
+  BOOST_CHECK_EQUAL(txn->branch_count[1], 3u);
+  
+  // Remove a value and check branch_count decreases
+  cursor.find("ab");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.remove();
+  cursor.commit();
+  txn = db->txn();
+  BOOST_CHECK_EQUAL(txn->branch_count[1], 2u);  // Removes 1 branch, 2 remain
+  
+  cursor.find("aa");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.remove();
+  cursor.commit();
+  txn = db->txn();
+  // After removing both children under 'a', the trie at depth 1 is removed
+  BOOST_CHECK_EQUAL(txn->branch_count[1], 0u);
+  
+  // branch_count values are correctly maintained throughout insertions and deletions
+  BOOST_CHECK_EQUAL(txn->branch_count[0], 3u);  // Still have 'a', 'b', 'c' at depth 0
+}

@@ -23,6 +23,18 @@ struct _Inserter {
 
   _Inserter(Transition* back_, size_t size) : back(back_), value_size(size) {}
 
+  void inc_branch_count(int count) {
+    // Increment for each character position this node covers (prefix + branch)
+    uint16_t start_pos = back->keypos;
+    uint16_t end_pos =
+        std::min((uint16_t)(start_pos + back->prefix + 1),
+                 (uint16_t)(sizeof(back->cursor->_txn->branch_count) /
+                            sizeof(back->cursor->_txn->branch_count[0])));
+    for (uint16_t pos = start_pos; pos < end_pos; pos++) {
+      back->cursor->_txn->branch_count[pos] += count;
+    }
+  }
+
   template <typename T>
   offset_t resolve(T ptr) {
     return back->cursor->_db->resolve(ptr);
@@ -117,6 +129,7 @@ struct _Inserter {
         otrie->compressed()[back->prefix], resolve(child_trie), key);
     free(otrie);
     back->replace(resolve(back->trie()));
+    inc_branch_count(2);  // Adding 2 branches
     create_leaf();
     return true;
   }
@@ -164,12 +177,13 @@ struct _Inserter {
 
   void add_to_array() {
     trie_ptr otrie = back->trie();
+    int key = back->key() ? back->branch_key : TrieNode::NONE;
     back->trie() = alloc(TrieNode::size(back->prefix, otrie->count() + 1));
-    back->link_offset = back->trie()->create(
-        *otrie, back->key() ? back->branch_key : TrieNode::NONE);
+    back->link_offset = back->trie()->create(*otrie, key);
 
     free(otrie);
     back->replace(resolve(back->trie()));
+    inc_branch_count(1);  // Adding 1 branch
     back->cmp = 0;
     create_leaf();
   }
@@ -196,14 +210,16 @@ struct _Inserter {
 
     leaf_ptr copy = copy_reduced_leaf(back->prefix, oleaf);
     int bkey = !copy->key_size ? TrieNode::NONE : copy->data[0];
+    int key =
+        back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE;
 
     back->trie() = alloc(TrieNode::size(back->prefix, 2));
-    back->link_offset = back->trie()->create(
-        Slice(oleaf->data, back->prefix), bkey, resolve(copy),
-        back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
+    back->link_offset = back->trie()->create(Slice(oleaf->data, back->prefix),
+                                             bkey, resolve(copy), key);
 
     free(oleaf);
     back->replace(resolve(back->trie()));
+    inc_branch_count(2);  // Adding 2 branches
     create_leaf();
   }
 

@@ -24,14 +24,24 @@ struct _Deleter {
 
   _Deleter(Cursor& cursor) : cursor(cursor), back(&cursor.stack.back()) {}
 
+  void dec_branch_count(Transition& parent, int count) {
+    // Decrement for each character position this node covers (prefix + branch)
+    uint16_t start_pos = parent.keypos;
+    uint16_t end_pos =
+        std::min((uint16_t)(start_pos + parent.prefix + 1),
+                 (uint16_t)(sizeof(cursor._txn->branch_count) /
+                            sizeof(cursor._txn->branch_count[0])));
+    for (uint16_t pos = start_pos; pos < end_pos; pos++) {
+      cursor._txn->branch_count[pos] -= count;
+    }
+  }
+
   template <typename T>
   offset_t resolve(T ptr) {
     return cursor._db->resolve(ptr);
   }
 
-  block_ptr resolve(offset_t offset) {
-    return cursor._db->resolve(offset);
-  }
+  block_ptr resolve(offset_t offset) { return cursor._db->resolve(offset); }
 
   block_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
 
@@ -76,11 +86,12 @@ struct _Deleter {
 
   void reduce_array(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
+    int key = prefix ? parent.branch_key : TrieNode::NONE;
     // Calculate proper size: same prefix length, one less branch
     parent.trie() = alloc(TrieNode::size(otrie->len(), otrie->count() - 1));
-    parent.trie()->create_remove(*otrie,
-                                 prefix ? parent.branch_key : TrieNode::NONE);
+    parent.trie()->create_remove(*otrie, key);
     parent.replace(resolve(parent.trie()));
+    dec_branch_count(parent, 1);  // Removing 1 branch
     free(otrie);
     parent.cmp = -1;
     if (!prefix) parent.prefix = 0;  // NONE Key -> to the first child
@@ -96,6 +107,9 @@ struct _Deleter {
     offset_e* child_remaining = go_next ? begin : begin + 1;
     // go_next == true means the remaining child is before otrie
     // for positioning the cursor we have to move next
+
+    // Decrement branch count for both branches being removed/combined
+    dec_branch_count(parent, 2);  // Removing 2 branches
 
     uint8_t len = parent.trie()->len();
     uint8_t buffer[256];  // to hold the compressed key

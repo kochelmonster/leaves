@@ -63,6 +63,7 @@ struct _MemoryDB {
     tid_t txn_id = tid_t(1);
     offset_t root{0};
     std::atomic<uint32_t> refs{0};
+    uint64_t branch_count[32] = {0};
   };
 
   typedef NullTransaction* txn_ptr;
