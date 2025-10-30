@@ -2,10 +2,10 @@
 #define _LEAVES__DB_HPP
 
 #include <boost/endian/arithmetic.hpp>
-#include <mutex>
 #include <memory>
+#include <mutex>
 
-#include "_cursor.hpp" 
+#include "_cursor.hpp"
 #include "_hash.hpp"
 #include "_memory.hpp"
 #include "_port.hpp"
@@ -152,7 +152,6 @@ struct _DB {
         _header(storage.resolve(header)),
         _mem_cursor(this),
         _index(index) {
-
     if (_header->prepared_txn != _header->read_txn) {
       // Recover a prepared transaction - set both _active_txn and _wtxn
       _wtxn = resolve<Transaction>(_header->prepared_txn);
@@ -182,7 +181,7 @@ struct _DB {
     txn_ptr txn = resolve(_header->read_txn);
     memset((void*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
-    txn->txn_id = 1;
+    txn->txn_id = tid_t(1);
     txn->slot_id = Transaction::SLOT_ID;
     txn->root = txn->mem_root = 0;
     txn->next_txn = 0;
@@ -194,12 +193,10 @@ struct _DB {
     flush();
   }
 
-  uint64_t new_cursor_id() {
-    return _storage.new_cursor_id();
-  }
+  uint64_t new_cursor_id() { return _storage.new_cursor_id(); }
 
   Slice name() const { return _storage.db_name(_index); }
-  
+
   template <typename T>
   typename Traits::Pointer<T> resolve(offset_t offset,
                                       Access access = READ) const {
@@ -423,7 +420,9 @@ struct _DB {
 
   txn_ptr txn() const { return resolve(_header->read_txn); }
 
-  tid_t transaction_active() const { return _active_txn ? _active_txn->txn_id : 0; }
+  tid_t transaction_active() const {
+    return _active_txn ? _active_txn->txn_id : tid_t(0);
+  }
 
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
@@ -452,7 +451,7 @@ struct _DB {
     // ensure last_txn is not freed
     last_txn->refs.fetch_add(1);
 
-    _active_txn->txn_id = last_txn->txn_id + 1;
+    _active_txn->txn_id = last_txn->txn_id + tid_t(1);
     _active_txn->next_txn = 0;
     _start_txn_id = last_txn->txn_id;
 
@@ -490,8 +489,8 @@ struct _DB {
   }
 
   tid_t prepare_commit(uint64_t cursor_id, bool sync = false) {
-    // Not my transaction or not started 
-    if (_header->txn_cursor_id.load() != cursor_id) return 0;
+    // Not my transaction or not started
+    if (_header->txn_cursor_id.load() != cursor_id) return tid_t(0);
 
     // already prepared
     if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;

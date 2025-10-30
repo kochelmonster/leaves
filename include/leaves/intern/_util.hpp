@@ -8,9 +8,11 @@
 #include <cstring>
 #include <string>
 
+#include "_serial.hpp"
+
 namespace leaves {
 
-typedef uint64_t tid_t;
+typedef tid_serial tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
 typedef enum { READ = 0, WRITE = 1 } Access;
 

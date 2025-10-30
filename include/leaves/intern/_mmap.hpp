@@ -45,14 +45,11 @@ struct _MemoryMapTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(1)
   struct BlockHeader {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
-    uint8_t free_idx;
   };
-#pragma pack(0)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;

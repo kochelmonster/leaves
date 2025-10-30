@@ -167,7 +167,6 @@ struct _GarbageSlot {
       oend = ostart = resolver.resolve(back);
     }
     back->blocks[iend].link = resolver.resolve(block);
-    block->free_idx = iend;
     assert(back->blocks[iend].link != 0);
     resolver.template mark_for_recycle(back->blocks[iend]);
     resolver.make_dirty(back);
@@ -265,7 +264,6 @@ struct _MemManager {
       result = resolver.resolve(left_over_start, WRITE);
       left_over_start += bsize;
       result->slot_id = sidx;
-      result->free_idx = 0;
       return result;
     }
 
@@ -284,7 +282,6 @@ struct _MemManager {
     result = resolver.resolve(allocation_start, WRITE);
     allocation_start += bsize;
     result->slot_id = sidx;
-    result->free_idx = 0;
     return result;
   }
 

@@ -23,14 +23,11 @@ struct _MemoryTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(1)
   struct BlockHeader {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
-    uint8_t free_idx;
   };
-#pragma pack(0)
 
   static constexpr bool TRANSACTIONAL = false;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
@@ -63,7 +60,7 @@ struct _MemoryDB {
 
   // Transaction methods become no-ops
   struct NullTransaction {
-    tid_t txn_id = 1;
+    tid_t txn_id = tid_t(1);
     offset_t root{0};
     std::atomic<uint32_t> refs{0};
   };
@@ -174,7 +171,7 @@ struct _MemoryDB {
 
   // Transaction active check
   tid_t transaction_active() const {
-    return 0;  // Memory storage doesn't use transactions
+    return tid_t(0);  // Memory storage doesn't use transactions
   }
 
   // Write transaction access for compatibility
