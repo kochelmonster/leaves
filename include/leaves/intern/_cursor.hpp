@@ -2,6 +2,7 @@
 #define _LEAVES_ICURSOR_HPP
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "_deleter.hpp"
@@ -228,7 +229,7 @@ struct _Transition {
         cursor->_db->prefetch(*(lnk + 1));
       }
       auto& child = push(lnk);
-      cursor->_db->prefetch(*lnk); 
+      cursor->_db->prefetch(*lnk);
 
       child.first();
       branch_key = current_key()[child.keypos];
@@ -271,7 +272,7 @@ struct _Transition {
         cursor->_db->prefetch(*(lnk - 1));
       }
       auto& child = push(lnk);
-      cursor->_db->prefetch(*lnk); 
+      cursor->_db->prefetch(*lnk);
 
       child.last();
       branch_key = current_key()[child.keypos];
@@ -387,6 +388,16 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   uint64_t _id{0};
   std::string _refind_buffer;
 
+  // Hash mode optimization
+  uint32_t _find_count{0};
+  uint16_t _hash_idx{0};  // Position to use for hash lookup (0 = disabled)
+  std::string _hash_key_buffer;  // Reusable buffer for hash key
+  struct StackSnapshot {
+    std::vector<Transition> transitions;
+    size_t size;
+  };
+  std::unordered_map<std::string, StackSnapshot> _hash_cache;
+
   _Cursor(db_ptr db) : CursorBase(db) {
     if constexpr (Traits::TRANSACTIONAL) {
       _id = this->_db->new_cursor_id();
@@ -416,9 +427,22 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   void find(const Slice& key) {
     if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
+
+    // Enable hash mode after 10 finds
+    if (++_find_count == 10) {
+      _enable_hash_mode();
+    }
+
     this->rest_key = key;
     if (this->stack.size && keep_stack()) return;
-    _find();
+
+    // Use hash mode if enabled and key is long enough
+    if (_hash_idx > 0 && key.size() >= _hash_idx) {
+      if (_find_with_hash(key)) return;
+      _find();
+      _save_hash_snapshot(key);
+    } else
+      _find();
   }
 
   bool _prepare_move() {
@@ -532,6 +556,78 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   /* Helpers */
+
+  void _enable_hash_mode() {
+    // Find first position with more than 1000 branches
+    if (!this->_txn) return;
+
+    for (uint16_t idx = 0; idx < sizeof(this->_txn->branch_count) /
+                                     sizeof(this->_txn->branch_count[0]);
+         idx++) {
+      if (this->_txn->branch_count[idx] > 1000) {
+        _hash_idx = idx;
+        _hash_cache.clear();
+        _hash_cache.reserve(1024);  // Reserve space for efficiency
+        return;
+      }
+    }
+  }
+
+  bool _find_with_hash(const Slice& key) {
+    // Create hash key from first _hash_idx bytes
+    _hash_key_buffer.assign(key.data(), _hash_idx);
+
+    auto it = _hash_cache.find(_hash_key_buffer);
+    if (it != _hash_cache.end()) {
+      // Restore stack from cache
+      const StackSnapshot& snapshot = it->second;
+      this->stack.clear(0);
+      this->stack.size = snapshot.size;
+      for (size_t i = 0; i < snapshot.size; i++) {
+        this->stack.data[i] = snapshot.transitions[i];
+        this->stack.data[i].cursor = this;
+      }
+
+      // Set up keys
+      this->current_key.assign(key.data(), _hash_idx);
+      this->rest_key = key;
+      this->rest_key.iadvance(_hash_idx);
+
+      // Continue find from cached position
+      if (this->stack.size > 0) {
+        this->stack.back().find();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  void _save_hash_snapshot(const Slice& key) {
+    // Find the last transition with keypos <= _hash_idx
+    size_t snapshot_size = 0;
+    for (size_t i = 0; i < this->stack.size; i++) {
+      if (this->stack.data[i].keypos <= _hash_idx) {
+        snapshot_size = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    if (snapshot_size == 0) return;
+
+    // Create hash key from first _hash_idx bytes
+    _hash_key_buffer.assign(key.data(), _hash_idx);
+
+    // Save snapshot
+    StackSnapshot& snapshot = _hash_cache[_hash_key_buffer];
+    snapshot.size = snapshot_size;
+    snapshot.transitions.resize(snapshot_size);
+    for (size_t i = 0; i < snapshot_size; i++) {
+      snapshot.transitions[i] = this->stack.data[i];
+    }
+
+    
+  }
 
   bool keep_stack() {
     // Don't start from the very start. Try to start as deep in the stack as
