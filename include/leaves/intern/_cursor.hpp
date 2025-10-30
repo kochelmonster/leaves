@@ -137,12 +137,7 @@ struct _Transition {
 
   Slice value() const {
     assert(is_leaf());
-    if (leaf()->is_big()) {
-      auto bv = leaf()->big();
-      auto big_value = cursor->_db->resolve(bv->offset);
-      return Slice(((const char*)big_value), bv->value_size);
-    }
-    return leaf()->value();
+    return leaf()->value(*cursor->_db);
   }
 
   std::string& current_key() { return cursor->current_key; }
@@ -228,7 +223,15 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* end = trie_.array() + trie_.count();
       if (lnk >= end) return false;
-      push(lnk).first();
+
+      if (lnk + 1 < end) {
+        cursor->_db->prefetch(*(lnk + 1));
+      }
+      auto& child = push(lnk);
+      cursor->_db->prefetch(*lnk); 
+
+      child.first();
+      branch_key = current_key()[child.keypos];
       return true;
     }
 
@@ -263,8 +266,15 @@ struct _Transition {
       offset_e* lnk = link();
       offset_e* begin = trie_.array();
       if (lnk < begin) return false;
-      push(lnk).last();
-      branch_key = current_key()[child().keypos];
+
+      if (lnk - 1 >= begin) {
+        cursor->_db->prefetch(*(lnk - 1));
+      }
+      auto& child = push(lnk);
+      cursor->_db->prefetch(*lnk); 
+
+      child.last();
+      branch_key = current_key()[child.keypos];
       return true;
     }
 
@@ -618,7 +628,7 @@ struct _NodeIterator : public _CursorBase<DB_, Traits_> {
   _NodeIterator(db_ptr db, offset_t root = 0) : CursorBase(db) {
     this->_txn = this->_db->txn();
     this->_txn->refs.fetch_add(1);
-    root = root ? root : Traits::get_root(this->_txn);
+    this->root = root ? root : Traits::get_root(this->_txn);
     first();
   }
 

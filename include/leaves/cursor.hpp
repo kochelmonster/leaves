@@ -57,6 +57,8 @@ class TCursor {
 
   void remove() { _cursor->remove(); }
 
+  void update() { _cursor->update(); }
+
   bool start_transaction(bool non_blocking = false) {
     return _cursor->start_transaction(non_blocking);
   }

@@ -17,12 +17,11 @@ struct _Inserter {
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
-  
+
   Transition* back;
   const size_t value_size;
 
-  _Inserter(Transition* back_, size_t size)
-      : back(back_), value_size(size) {}
+  _Inserter(Transition* back_, size_t size) : back(back_), value_size(size) {}
 
   template <typename T>
   offset_t resolve(T ptr) {
@@ -35,20 +34,16 @@ struct _Inserter {
 
   block_ptr alloc(uint16_t size) { return back->cursor->_db->alloc(size); }
 
-  block_ptr alloc_big(size_t size) {
-    auto db = back->cursor->_db;
-    auto slice = db->alloc_big(size);
-    return resolve(offset_t(slice.offset()));
-  }
-
-  void free_big(leaf_ptr& leaf) {
-    if (leaf->is_big()) {
-      auto bv = leaf->big();
-      back->cursor->_db->free_big(bv->offset, bv->size());
+  template <typename T>
+  void free(T& block) {
+    if constexpr (T::type == LEAF) {
+      if (block->is_big()) {
+        auto bv = block->big();
+        back->cursor->_db->free_big(bv->offset, bv->size());
+      }
     }
+    back->cursor->_db->free(block);
   }
-
-  void free(block_ptr& block) { back->cursor->_db->free(block); }
 
   void exec() {
     if (back->is_leaf()) return change_leaf();
@@ -104,13 +99,13 @@ struct _Inserter {
 
     trie_ptr otrie = back->trie();
     assert(otrie->count() < otrie->MAX_BRANCH_COUNT);
-    
+
     // copy the original trie node with second part of compressed
     // to a new slot
-    uint8_t prefix_len = otrie->len() - back->prefix;
-    trie_ptr child_trie = alloc(TrieNode::size(prefix_len, otrie->count()));
+    uint8_t suffix_len = otrie->len() - back->prefix;
+    trie_ptr child_trie = alloc(TrieNode::size(suffix_len, otrie->count()));
     child_trie->create(*otrie,
-                       Slice(&otrie->compressed()[back->prefix], prefix_len));
+                       Slice(&otrie->compressed()[back->prefix], suffix_len));
 
     // replace the original trie node with a two branch trie node
     // and the first part of compressed
@@ -161,10 +156,7 @@ struct _Inserter {
   leaf_ptr fill_leaf(const Slice& key) {
     leaf_ptr leaf = alloc(LeafNode::size(key.size(), value_size));
     auto bv = leaf->set(key, value_size);
-    if (bv) {
-      block_ptr ptr = alloc_big(bv->size());
-      bv->offset = resolve(ptr);
-    }
+    if (bv) bv->offset = back->cursor->_db->alloc_big(bv->size()).offset();
     return leaf;
   }
 
@@ -191,23 +183,18 @@ struct _Inserter {
       assert(back->prefix == back->leaf()->key_size);
       assert(back->key().empty());
       back->leaf() = fill_leaf(oleaf->key());
-      free_big(oleaf);
       free(oleaf);
       back->replace(resolve(back->leaf()));
       return;
     }
 
     // replace the lead with a trie node!
-    
-    // first: copy the leaf node and cut of the new rest key by prefix
-    assert(back->prefix <= oleaf->key_size);
-    leaf_ptr copy =
-        alloc(LeafNode::size(oleaf->key_size - back->prefix, oleaf->vsize()));
-    copy->key_size = oleaf->key_size - back->prefix;
-    copy->value_size = oleaf->value_size;
-    memcpy(copy->data, oleaf->data + back->prefix,
-           copy->key_size + copy->vsize());
 
+    // first: copy the leaf node and cut of the new rest key by prefix
+    // if it is a big leaf just the reference to the big value is copied
+    assert(back->prefix <= oleaf->key_size);
+
+    leaf_ptr copy = copy_reduced_leaf(back->prefix, oleaf);
     int bkey = !copy->key_size ? TrieNode::NONE : copy->data[0];
 
     back->trie() = alloc(TrieNode::size(back->prefix, 2));
@@ -218,6 +205,15 @@ struct _Inserter {
     free(oleaf);
     back->replace(resolve(back->trie()));
     create_leaf();
+  }
+
+  leaf_ptr copy_reduced_leaf(uint8_t split_pos, leaf_ptr& oleaf) {
+    leaf_ptr copy =
+        alloc(LeafNode::size(oleaf->key_size - split_pos, oleaf->vsize()));
+    copy->key_size = oleaf->key_size - split_pos;
+    copy->value_size = oleaf->value_size;
+    memcpy(copy->data, oleaf->data + split_pos, copy->key_size + copy->vsize());
+    return copy;
   }
 };
 

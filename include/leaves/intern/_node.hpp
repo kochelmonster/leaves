@@ -164,7 +164,8 @@ struct _TrieNode : public Traits::BlockHeader {
    * stored.
    *
    */
-  void create(const TrieNode& src, Slice prefix) {
+  template <typename TNode>
+  void create(const TNode& src, Slice prefix) {
     _compressed_len = prefix.size();
     memcpy(_compressed_data, prefix.data(), _compressed_len);
     _array_len = src._array_len;
@@ -181,7 +182,22 @@ struct _TrieNode : public Traits::BlockHeader {
     memcpy((void*)array(), src.array(), count() * sizeof(offset_e));
   }
 
-  uint16_t create(const TrieNode& src, int key) {
+  /**
+   * @brief Creates a new TrieNode by adding a branch to an existing node.
+   *
+   * This method copies the structure from a source node and adds a new branch
+   * for the specified key. It handles both the case where the key's upper bit
+   * already exists in the source (adding to an existing lower bitmap) and the
+   * case where a new upper bit needs to be created.
+   *
+   * @param src The source TrieNode to copy from.
+   * @param key The character key for the new branch, or NONE for a null branch.
+   * @return The byte offset within this node to the newly created array slot
+   *         for the key's link: (char*)this + offset points to the offset_e
+   * slot.
+   */
+  template <typename TNode>
+  uint16_t create(const TNode& src, int key) {
     _compressed_len = src._compressed_len;
     memcpy(_compressed_data, src.compressed(), _compressed_len);
 
@@ -273,7 +289,23 @@ struct _TrieNode : public Traits::BlockHeader {
            (count() - oidx) * sizeof(offset_e));
   }
 
-  // in offset[-1] is the none leaf
+  /**
+   * @brief Creates a TrieNode from an array of offsets for all possible byte
+   * values.
+   *
+   * This method builds a complete trie node by iterating through all 256
+   * possible byte values plus the NONE branch, creating the bitmap structure
+   * for only the branches that have non-zero offsets. This is useful for bulk
+   * creation of nodes where you have a pre-computed array of child offsets.
+   *
+   * @param prefix The compressed prefix data to store in the node.
+   * @param offsets Array of 257 offsets indexed by byte value (0-255) plus NONE
+   * at index -1. Non-zero values indicate branches to create; zero values are
+   * skipped.
+   *
+   * @note The offsets array must have NONE at index -1, accessible as
+   * offsets[NONE].
+   */
   void create(const Slice& prefix, offset_e* offsets) {
     assert(prefix.size() < 256);
     _upper = 0;
@@ -302,14 +334,102 @@ struct _TrieNode : public Traits::BlockHeader {
     }
   }
 
+  /**
+   * @brief Creates a unified TrieNode by merging children from two source
+   * nodes.
+   *
+   * This method creates a new TrieNode that contains all children present in
+   * either src or dst (or both). The caller provides arrays where child
+   * offset pointers will be stored, allowing determination of which child
+   * offsets to use or merge.
+   *
+   * @param dst Pointer to the destination source TrieNode.
+   * @param src Pointer to the source TrieNode.
+   * @param dst_child Array of offset_e pointers to be filled with child offset
+   *                  pointers from dst node (nullptr if child doesn't exist).
+   * @param src_child Array of offset_e pointers to be filled with child offset
+   *                  pointers from src node (nullptr if child doesn't exist).
+   *                  Both arrays are indexed by unified children's position
+   *                  (NONE branch at index 0 if present, followed by byte
+   *                  values 0-255 in order).
+   *
+   * @note Both src and dst must have the same compressed prefix length and
+   * content.
+   */
+  template <typename TNode1, typename TNode2>
+  void create(TNode1& dst, TNode2& src,
+              const typename TNode1::offset_e* dst_child[257],
+              const typename TNode2::offset_e* src_child[257]) {
+    assert(src._compressed_len == dst._compressed_len);
+    assert(memcmp(src._compressed_data, dst._compressed_data,
+                  src._compressed_len) == 0);
+
+    // unify the children of src and dst
+    // and fill the provenance array with the corresponding offsets
+
+    _upper = 0;
+    _compressed_len = src._compressed_len;
+    memcpy(_compressed_data, src.compressed(), _compressed_len);
+
+    uint16_t idx = 0;  // index into provenance array
+
+    // Handle NONE branch
+    bool src_has_none = src.has_none();
+    bool dst_has_none = dst.has_none();
+    if (src_has_none || dst_has_none) {
+      _array_len = 1 | TrieNode::NULL_MASK;
+      src_child[idx] = src_has_none ? src.offset(NONE) : nullptr;
+      dst_child[idx] = dst_has_none ? dst.offset(NONE) : nullptr;
+      idx++;
+    } else {
+      _array_len = 0;
+    }
+
+    // Iterate through all byte values and build _upper bitmap
+    uint8_t unified_children[256];
+    uint16_t child_count = 0;
+
+    for (int i = 0; i < 256; i++) {
+      bool src_has = src.isset(i);
+      bool dst_has = dst.isset(i);
+
+      if (src_has || dst_has) {
+        _array_len++;
+        _upper |= (1 << ubit(i));
+        unified_children[child_count++] = i;
+        src_child[idx] = src_has ? src.offset(i) : nullptr;
+        dst_child[idx] = dst_has ? dst.offset(i) : nullptr;
+        idx++;
+      }
+    }
+
+    // Now that _upper is set, calculate offsets and build lower bitmap
+    uint16_t lower_start_ = calc_lower_start();
+    _lower_offset = lower_start_ / sizeof(uint32_e);
+    _array_offset =
+        align(lower_start_ + bits::count(_upper) * sizeof(uint32_e)) /
+        sizeof(offset_e);
+
+    uint32_e* lower_ = lower();
+    memset(lower_, 0, bits::count(_upper) * sizeof(uint32_e));
+    for (uint16_t j = 0; j < child_count; j++) {
+      int i = unified_children[j];
+      int lidx = bits::index(_upper, ubit(i));
+      lower_[lidx] |= 1 << lbit(i);
+    }
+
+    assert(idx == count());
+  }
+  
   // check if the index exists
-  bool isset(uint8_t nchar) const {
+  bool isset(int nchar) const {
+    if (nchar == NONE) return has_none();
     return (_upper & (1 << ubit(nchar))) &&
            (lower()[bits::index(_upper, ubit(nchar))] & (1 << lbit(nchar)));
   }
 
   // returns the link for nchar
-  const offset_e* offset(int nchar) const {
+  offset_e* offset(int nchar) {
     if (nchar == NONE) return has_none() ? array() : nullptr;
 
     uint32_e* lower_ = lower();
@@ -403,6 +523,16 @@ struct _LeafNode : public Traits::BlockHeader {
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
+  template <typename Resolver>
+  Slice value(Resolver& resolver) const {
+    if (is_big()) {
+      auto bv = big();
+      auto big_value = resolver.resolve(bv->offset);
+      return Slice(((const char*)big_value), bv->value_size);
+    }
+    return value();
+  }
+
   BigValue* set(const Slice& key, size_t value_size_) {
     key_size = key.size();
     memcpy(data, key.data(), key.size());
@@ -422,7 +552,7 @@ struct _LeafNode : public Traits::BlockHeader {
     return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
   }
 
-  BigValue* big() {
+  BigValue* big() const {
     assert(is_big());
     return (BigValue*)vdata();
   }

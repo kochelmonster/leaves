@@ -60,7 +60,7 @@ inline void compare_graph(const char* input, T& storage) {
 }
 
 template <typename T>
-inline void check_graph(const char* name, T& storage) {
+inline void check_graph(const char* name, T& storage, const char* dbname = "test") {
   std::string truncated_name(name);
   if (truncated_name.length() > 32) {
     truncated_name = truncated_name.substr(0, 32);
@@ -70,7 +70,7 @@ inline void check_graph(const char* name, T& storage) {
   path.append(".yaml");
   std::replace(path.begin(), path.end(), ' ', '_');
 
-  auto db = storage["test"];
+  auto db = storage[dbname];
 #ifdef GENERATE
   std::cout << "generate graph " << name << std::endl;
   dump_graph(path.c_str(), db);

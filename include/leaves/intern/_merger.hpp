@@ -14,343 +14,393 @@ namespace leaves {
  *
  * Merges trie A into trie B,
  */
-template <typename CursorDst, typename CursorSrc>
+template <typename CursorDst, typename CursorSrc, typename Handler>
 struct _Merger {
-  typedef _Merger<CursorDst, CursorSrc> Merger;
+  typedef _Merger<CursorDst, CursorSrc, Handler> Merger;
   using Traits = typename CursorDst::Traits;
-  using TrieNode = typename CursorDst::TrieNode;
-  using LeafNode = typename CursorDst::LeafNode;
-  using block_ptr = typename CursorDst::block_ptr;
-  using trie_ptr = typename CursorDst::trie_ptr;
-  using leaf_ptr = typename CursorDst::leaf_ptr;
-  using offset_e = typename CursorDst::offset_e;
+  using Transition = typename CursorDst::Transition;
+  using TrieNode = typename Transition::TrieNode;
+  using LeafNode = typename Transition::LeafNode;
+  using block_ptr = typename Transition::block_ptr;
+  using trie_ptr = typename Transition::trie_ptr;
+  using leaf_ptr = typename Transition::leaf_ptr;
+  using offset_e = typename Transition::offset_e;
 
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
+  Handler& handler;
+  std::string current_key;
 
-  _Merger(CursorDst& dest, CursorSrc& src)
-      : dst_cursor(dest), src_cursor(src) {}
+  _Merger(CursorDst& dest, CursorSrc& src, Handler& handler)
+      : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
   // Helper methods for memory management
   block_ptr alloc(uint16_t size) { return dst_cursor._db->alloc(size); }
-  
-  block_ptr resolve_src(offset_t offset) { return src_cursor._db->resolve(offset); }
-  
-  block_ptr resolve_dest(offset_t offset) { return dst_cursor._db->resolve(offset); }
-  
+
+  leaf_ptr fill_leaf(const Slice& key, const Slice& src_value) {
+    leaf_ptr leaf = alloc(LeafNode::size(key.size(), src_value.size()));
+    auto bv = leaf->set(key, src_value.size());
+    if (bv) {
+      bv->offset = dst_cursor._db->alloc_big(bv->size()).offset();
+      block_ptr ptr = resolve_dst(bv->offset);
+      memcpy((char*)ptr, src_value.data(), src_value.size());
+    } else
+      memcpy(leaf->vdata(), src_value.data(), src_value.size());
+
+    return leaf;
+  }
+
   template <typename T>
-  offset_t resolve_offset(T ptr) { return dst_cursor._db->resolve(ptr); }
+  void free(T& block) {
+    if constexpr (T::type == LEAF) {
+      if (block->is_big()) {
+        auto bv = block->big();
+        dst_cursor._db->free_big(bv->offset, bv->size());
+      }
+    }
+    dst_cursor._db->free(block);
+  }
+
+  block_ptr resolve_src(offset_t offset) {
+    return src_cursor._db->resolve(offset);
+  }
+
+  block_ptr resolve_dst(offset_t offset) {
+    return dst_cursor._db->resolve(offset);
+  }
+
+  template <typename T>
+  offset_t resolve_offset(T ptr) {
+    return dst_cursor._db->resolve(ptr);
+  }
 
   void exec() {
-    src_cursor._prepare_move();
-    if (!src_cursor.stack.size) return;  // Empty source trie
+    // put root in the stack
+    if (src_cursor._prepare_move()) return;
+    current_key.clear();
+
+    // now start merge recursively down the source trie
     merge_node();
+    dst_cursor.stack.clear();  // reset dst_cursor
   }
 
   void merge_node() {
-    dst_cursor->find(src_cursor->current_key());
-
-    auto& src = src_cursor->stack.back();
+    size_t size = current_key.size();
+    auto src = src_cursor.stack.back();
     if (src.is_leaf()) {
-      Slice value = src.value();
-      dst_cursor->value(value);
-      src.pop();
-      return;
-    }
-
-    auto& strie = src.trie();
-    auto dest_key = dst_cursor->current_key();
-    auto src_key = src_cursor->current_key();
-
-    if (dest_key == src_key) {
-      // found a corrsponding node
-      auto& dest = dst_cursor->stack.back();
-
-      if (dest.is_trie()) {
-        auto& dtrie = dest.trie();
-        assert(dest.prefix <= dtrie.len());
-        if (dest.prefix < dtrie.len()) {
-          // split dest trans line in inserter + deep copy all subtries of src
-          split_and_add(dest, src);
-        } else {
-          assert(dest.prefix == dtrie.len());
-          merge_children(dest, src, 0);
-        }
-      }
-      src.pop();
-      return;
-    }
-
-    assert(dest_key.size() < src_key().size());
-    merge_children(dst_cursor.stack.back(), src, src_key().size() - dest_key().size());
-    src.pop();
-  }
-
-  // Method to merge children from src to dest
-  void merge_children(typename CursorDst::Transition& dest, typename CursorSrc::Transition& src, int key_offset) {
-    // TODO: Implement proper children merging logic
-    // This is a placeholder that would need to handle merging src children into dest
-    // taking into account the key_offset for proper positioning
-  }
-
-  void split_and_add(typename CursorDst::Transition& dest, typename CursorSrc::Transition& src) {
-    /* split the dest node in "an upper node" that has the same compressed
-    prefix as src and a lower node that contains the remaining branches. The
-    upper node has one child: the lower node. Merge the children of src that are not
-    common with the the upper node to the upper node and do a deep copy of the the src children
-    to dest. call replace on dest to cow update the dest trie.
-    finally if lower node is also a child of src (identified by its key) walk down 
-    the correspoinding child in src and continue merging from there by calling merge_node.
-     */
-    
-    trie_ptr dtrie = dest.trie();
-    trie_ptr strie = src.trie();
-    
-    assert(dest.prefix < dtrie->len());
-    
-    // Step 1: Create lower node with remaining compressed prefix
-    uint8_t prefix_len = dtrie->len() - dest.prefix;
-    trie_ptr child_trie = dst_cursor._db->alloc(TrieNode::size(prefix_len, dtrie->count()));
-    child_trie->create(*dtrie, Slice(&dtrie->compressed()[dest.prefix], prefix_len));
-    
-    // Get the key byte at the split point (identifies the lower node)
-    int lower_key = dtrie->compressed()[dest.prefix];
-    offset_t child_offset = dst_cursor._db->resolve(child_trie);
-    
-    // Step 2: Analyze src children and find if lower_key exists in src
-    int src_count = strie->count();
-    offset_e* src_array = strie->array();
-    
-    bool lower_in_src = false;
-    int lower_idx_in_src = -1;
-    
-    // Check if lower_key is among src children by iterating through src trie structure
-    // We need to examine the keys that src trie branches on
-    for (int i = 0; i < src_count; i++) {
-      // TODO: This is simplified - in practice would need to traverse src structure
-      // to determine which key each child corresponds to
-    }
-    
-    // Step 3: Create upper node in stack buffer first
-    int upper_branch_count = 1 + src_count;  // 1 for lower + all src children
-    if (lower_in_src) upper_branch_count--;   // avoid double counting
-    
-    // Use stack buffer for building the upper node
-    uint8_t buffer[TrieNode::MAX_SIZE];
-    trie_ptr upper_buffer = reinterpret_cast<trie_ptr>(buffer);
-    
-    // Start building upper node - first add lower_key
-    if (src_count > 0) {
-      // Get first src key for two-key create
-      int first_src_key = 0;  // Simplified - would need proper key extraction
-      
-      upper_buffer->create(
-          Slice(dtrie->compressed(), dest.prefix),
-          lower_key, child_offset, first_src_key);
+      auto& leaf = src.leaf();
+      auto key = leaf->key();
+      current_key.append((const char*)key.data(), key.size());
     } else {
-      // Only the lower node
-      upper_buffer->create(
-          Slice(dtrie->compressed(), dest.prefix),
-          lower_key);
-      upper_buffer->array()[0] = child_offset;
+      auto& trie = src.trie();
+      current_key.append((const char*)trie->compressed(), trie->len());
     }
-    
-    // Step 4: Add src children to the buffer node
-    offset_e* upper_array = upper_buffer->array();
-    int dest_idx = lower_in_src ? 0 : 1;  // If lower in src, it's already placed
-    
-    for (int i = 0; i < src_count; i++) {
-      if (lower_in_src && i == lower_idx_in_src) {
-        // Skip this one, it's the lower_key child
+
+    dst_cursor.find(current_key);
+
+    // Handle empty destination - deep copy entire source tree
+    if (!dst_cursor.stack.size) {
+      // Get root from source - it's the first element in the stack
+      auto root_offset = src_cursor.stack.front().offset;
+      auto new_root = deep_copy_subtree(root_offset);
+      Traits::set_root(dst_cursor._txn, new_root);
+      return;
+    }
+
+    auto dst_key = dst_cursor.current_key;
+    auto src_key = current_key;
+
+    assert(dst_key.size() <= src_key.size());
+    assert(dst_key == src_key.substr(0, dst_key.size()));
+
+    auto& dst = dst_cursor.stack.back();
+    if (dst.is_trie()) {
+      merge_trie_node(dst, src);
+    } else {
+      merge_leaf_node(dst, src);
+    }
+    current_key.resize(size);
+    src_cursor.pop();
+  }
+
+  void merge_leaf_node(typename CursorDst::Transition& dst,
+                       typename CursorSrc::Transition& src) {
+    auto& dst_leaf = dst.leaf();
+    // check if dst_leaf must split
+    assert(dst.prefix <= dst_leaf->key_size);
+    leaf_ptr new_leaf =
+        _Inserter(&dst, 0).copy_reduced_leaf(dst.prefix, dst_leaf);
+    free(dst_leaf);
+    split_trie(dst, src,
+               new_leaf->key_size ? new_leaf->data[0] : TrieNode::NONE,
+               resolve_offset(new_leaf));
+  }
+
+  void merge_trie_node(typename CursorDst::Transition& dst,
+                       typename CursorSrc::Transition& src) {
+    auto& dst_trie = dst.trie();
+    assert(dst.prefix <= dst_trie->len());
+    uint8_t suffix_len = dst_trie->len() - dst.prefix;
+
+    if (suffix_len == 0) {
+      merge_into_trie(dst, src);
+    } else {
+      trie_ptr new_trie = alloc(TrieNode::size(suffix_len, dst_trie->count()));
+      new_trie->create(*dst_trie,
+                       Slice(&dst_trie->compressed()[dst.prefix], suffix_len));
+      free(dst_trie);
+      assert(new_trie->len() > 0);
+      split_trie(dst, src, new_trie->compressed()[0], resolve_offset(new_trie));
+    }
+  }
+
+  void split_trie(typename CursorDst::Transition& dst,
+                  typename CursorSrc::Transition& src, int key1,
+                  offset_t child1) {
+    uint16_t split_pos = dst.keypos + dst.prefix;
+    assert(split_pos > src.keypos);
+    uint16_t src_split_pos = split_pos - src.keypos;
+    assert(src_split_pos < 256);
+
+    int key = split_pos < current_key.size() ? current_key[split_pos]
+                                             : TrieNode::NONE;
+
+    if (key != TrieNode::NONE || src.is_leaf()) {
+      if (key == TrieNode::NONE && key1 == TrieNode::NONE) {
+        assert(src.is_leaf());
+        assert(child1.type() == LEAF);
+        if (handler.overwrite(current_key, dst, src)) {
+          assert(key1 == TrieNode::NONE);
+          leaf_ptr old_leaf = resolve_dst(child1);
+          auto src_slice = src.leaf()->value(*src_cursor._db);
+          _Inserter(&dst, src_slice.size()).change_leaf();
+          auto& new_leaf = dst.leaf();
+          memcpy(new_leaf->vdata(), src_slice.data(), src_slice.size());
+          free(old_leaf);
+        }
+        return;
+      }
+
+      // A new trie with two branches for the old dst and the new src
+      trie_ptr new_trie = alloc(TrieNode::size(src_split_pos, 2));
+      auto loffset =
+          new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
+                           key1, child1, key);
+      dst.replace(resolve_offset(new_trie));
+      dst.block = new_trie;
+      dst.link_offset = loffset;
+
+      if (src.is_leaf()) {
+        auto& src_leaf = src.leaf();
+        assert(src_leaf->key_size >= src_split_pos);
+        uint8_t suffix_len = src_leaf->key_size - src_split_pos;
+        leaf_ptr new_leaf =
+            fill_leaf(Slice(&src_leaf->data[src_split_pos], suffix_len),
+                      src_leaf->value(*src_cursor._db));
+        *dst.link() = resolve_offset(new_leaf);
+        return;
+      }
+      auto& src_trie = src.trie();
+      assert(src_trie->len() >= src_split_pos);
+      uint8_t suffix_len = src_trie->len() - src_split_pos;
+
+      trie_ptr suffix_trie =
+          alloc(TrieNode::size(suffix_len, src_trie->count()));
+      suffix_trie->create(
+          *src_trie, Slice(&src_trie->compressed()[src_split_pos], suffix_len));
+      *dst.link() = resolve_offset(suffix_trie);
+
+      auto dst_offset = suffix_trie->array();
+      auto src_offset = src_trie->array();
+      for (int i = 0, scount = src_trie->count(); i < scount; i++) {
+        dst_offset[i] = deep_copy_subtree(src_offset[i]);
+      }
+      return;
+    }
+
+    assert(src.is_trie());
+    assert(split_pos == current_key.size());
+    // the whole prefix of the src == dst.prefix
+
+    auto src_trie = src.trie();
+    if (src_trie->isset(key1)) {
+      // copy src trie to dst and move down the branch src shares with dst
+      trie_ptr new_trie = alloc(src_trie->size());
+      memcpy((char*)new_trie, (const char*)src_trie, src_trie->size());
+      dst.replace(resolve_offset(new_trie));
+
+      auto dst_p = new_trie->offset(key1);
+      auto dst_offset = new_trie->array();
+      auto src_offset = src_trie->array();
+      for (int i = 0, count = new_trie->count(); i < count; i++) {
+        if (&dst_offset[i] == dst_p) {
+          dst_offset[i] = child1;
+          src_cursor.push(src_offset[i]);
+          dst_cursor.stack.clear();
+          merge_node();
+          continue;
+        }
+        dst_offset[i] = deep_copy_subtree(src_offset[i]);
+      }
+      return;
+    }
+
+    trie_ptr new_trie =
+        alloc(TrieNode::size(src_trie->len(), src_trie->count() + 1));
+    dst.replace(resolve_offset(new_trie));
+    dst.block = new_trie;
+    dst.link_offset = new_trie->create(*src_trie, key1);
+    *dst.link() = child1;
+    for (int key = new_trie->first(); key != TrieNode::OUT_OF_RANGE;
+         key = new_trie->next(key)) {
+      if (key == key1) continue;
+      *new_trie->offset(key) = deep_copy_subtree(*src_trie->offset(key));
+    }
+  }
+
+  void merge_into_trie(typename CursorDst::Transition& dst,
+                       typename CursorSrc::Transition& src) {
+    using SrcTrieNode = typename CursorSrc::Transition::TrieNode;
+    using DstTrieNode = typename CursorDst::Transition::TrieNode;
+    assert(dst.is_trie());
+    assert(dst.prefix == dst.trie()->len());
+    assert(current_key.size() >= dst_cursor.current_key.size());
+    assert(current_key.size() < dst_cursor.current_key.size() + 256);
+    uint8_t suffix_len = current_key.size() - dst_cursor.current_key.size();
+    auto dst_trie = dst.trie();
+
+    _Inserter inserter(&dst, 0);
+    if (src.is_leaf()) return merge_leaf_into_trie(dst, src, suffix_len);
+
+    auto& src_trie = src.trie();
+    if (suffix_len) {
+      // src prefix is longer -> split src_trie and insert the suffix part
+      uint16_t loffset;
+      trie_ptr new_trie = clone_plus_one(dst_trie, suffix_len, &loffset);
+      trie_ptr suffix_trie =
+          inserter.alloc(DstTrieNode::size(suffix_len, src_trie->count()));
+      suffix_trie->create(
+          *src_trie,
+          Slice(&src_trie->compressed()[src_trie->len() - suffix_len],
+                suffix_len));
+
+      dst.replace(resolve_offset(new_trie));
+      dst.block = new_trie;
+      dst.link_offset = loffset;
+      *dst.link() = resolve_offset(suffix_trie);
+
+      auto dst_offset = suffix_trie->array();
+      auto src_offset = src_trie->array();
+      for (int i = 0, scount = src_trie->count(); i < scount; i++) {
+        dst_offset[i] = deep_copy_subtree(src_offset[i]);
+      }
+      return;
+    }
+
+    // Merge the children of both tries
+    trie_ptr new_trie = alloc(DstTrieNode::size(
+        dst_trie->len(), dst_trie->count() + src_trie->count()));
+
+    // merge src_trie into dst_trie
+    dst.replace(resolve_offset(new_trie));
+    dst.block = new_trie;
+
+    const typename DstTrieNode::offset_e* dst_poffset[257];
+    const typename SrcTrieNode::offset_e* src_poffset[257];
+    new_trie->create(*dst_trie, *src_trie, dst_poffset, src_poffset);
+    auto array = new_trie->array();
+    for (int i = 0, count = new_trie->count(); i < count; i++) {
+      if (dst_poffset[i] && src_poffset[i]) {
+        // walk down and merge - both tries have this branch
+        array[i] = *dst_poffset[i];
+        src_cursor.push(*src_poffset[i]);
+        dst_cursor.stack.clear();
+        merge_node();
         continue;
       }
-      
-      offset_t src_child_offset = src_array[i];
-      
-      // Deep copy the src child to dest database
-      offset_t copied_offset;
-      if (src_child_offset.type() == LEAF) {
-        // Deep copy leaf
-        block_ptr src_block = src_cursor._db->resolve(src_child_offset);
-        leaf_ptr src_leaf(src_block);
-        uint16_t leaf_size = LeafNode::size(src_leaf->key_size, src_leaf->vsize());
-        leaf_ptr dest_leaf = dst_cursor._db->alloc(leaf_size);
-        
-        memcpy((void*)dest_leaf, (void*)src_leaf, leaf_size);
-        
-        // Handle big values
-        if (src_leaf->is_big()) {
-          auto src_bv = src_leaf->big();
-          block_ptr src_big_value = src_cursor._db->resolve(src_bv->offset);
-          block_ptr dest_big_value = dst_cursor._db->alloc(src_bv->size());
-          memcpy((void*)dest_big_value, (void*)src_big_value, src_bv->value_size);
-          
-          auto dest_bv = dest_leaf->big();
-          dest_bv->offset = dst_cursor._db->resolve(dest_big_value);
-        }
-        
-        copied_offset = dst_cursor._db->resolve(dest_leaf);
-      } else {
-        // Deep copy trie recursively
-        copied_offset = deep_copy_trie_recursive(src_child_offset);
+      if (dst_poffset[i]) {
+        assert(!src_poffset[i]);
+        array[i] = *dst_poffset[i];
+        continue;
       }
-      
-      upper_array[dest_idx++] = copied_offset;
+      assert(src_poffset[i]);
+      assert(!dst_poffset[i]);
+      array[i] = deep_copy_subtree(*src_poffset[i]);
     }
-    
-    // Step 5: Allocate final upper trie and copy from buffer
-    uint16_t final_size = upper_buffer->size();
-    trie_ptr final_upper = dst_cursor._db->alloc(final_size);
-    memcpy((void*)final_upper, (void*)upper_buffer, final_size);
-    
-    // Step 6: COW update - replace old dest trie with new upper trie
-    dst_cursor._db->free(dtrie);
-    offset_t upper_offset = dst_cursor._db->resolve(final_upper);
-    dest.replace(upper_offset);
-    
-    // Step 7: If lower_key is also a child of src, recursively merge
-    if (lower_in_src) {
-      // Push down to the lower node and corresponding src child
-      auto& lower_trans = dst_cursor.push(child_offset);
-      auto& src_child_trans = src_cursor.push(src_array[lower_idx_in_src]);
-      merge_node();
-      dst_cursor.pop();
-      src_cursor.pop();
-    }
+
+    free(dst_trie);
   }
-  
-  // Helper method for recursive deep copying of trie subtrees
-  offset_t deep_copy_trie_recursive(offset_t src_offset) {
-    block_ptr src_block = src_cursor._db->resolve(src_offset);
-    trie_ptr src_trie(src_block);
-    
-    uint16_t trie_size = src_trie->size();
-    trie_ptr dest_trie = dst_cursor._db->alloc(trie_size);
-    
-    // Copy the trie structure
-    memcpy((void*)dest_trie, (void*)src_trie, trie_size);
-    
-    // Recursively copy all children and update their offsets
-    offset_e* dest_array = dest_trie->array();
-    for (int i = 0; i < dest_trie->count(); i++) {
-      offset_t child_offset = src_trie->array()[i];
-      
-      if (child_offset.type() == LEAF) {
-        // Deep copy leaf
-        block_ptr child_src = src_cursor._db->resolve(child_offset);
-        leaf_ptr child_src_leaf(child_src);
-        uint16_t child_size = LeafNode::size(child_src_leaf->key_size, child_src_leaf->vsize());
-        leaf_ptr child_dest_leaf = dst_cursor._db->alloc(child_size);
-        memcpy((void*)child_dest_leaf, (void*)child_src_leaf, child_size);
-        
-        // Handle big values in child
-        if (child_src_leaf->is_big()) {
-          auto bv_src = child_src_leaf->big();
-          block_ptr big_src = src_cursor._db->resolve(bv_src->offset);
-          block_ptr big_dest = dst_cursor._db->alloc(bv_src->size());
-          memcpy((void*)big_dest, (void*)big_src, bv_src->value_size);
-          
-          auto bv_dest = child_dest_leaf->big();
-          bv_dest->offset = dst_cursor._db->resolve(big_dest);
-        }
-        
-        dest_array[i] = dst_cursor._db->resolve(child_dest_leaf);
-      } else {
-        // Recursive trie copy
-        dest_array[i] = deep_copy_trie_recursive(child_offset);
-      }
-    }
-    
-    return dst_cursor._db->resolve(dest_trie);
+
+  void merge_leaf_into_trie(typename CursorDst::Transition& dst,
+                            typename CursorSrc::Transition& src,
+                            int suffix_len) {
+    // src is a leaf -> insert into dst trie
+    uint16_t loffset;
+    trie_ptr new_trie = clone_plus_one(dst.trie(), suffix_len, &loffset);
+
+    auto& src_leaf = src.leaf();
+
+    assert(src_leaf->key_size >= suffix_len);
+    uint8_t split_pos = src_leaf->key_size - suffix_len;
+    leaf_ptr new_leaf = fill_leaf(Slice(&src_leaf->data[split_pos], suffix_len),
+                                  src_leaf->value(*src_cursor._db));
+
+    dst.replace(resolve_offset(new_trie));
+    dst.block = new_trie;
+    dst.link_offset = loffset;
+    *dst.link() = resolve_offset(new_leaf);
+  }
+
+  typename CursorDst::Transition::trie_ptr clone_plus_one(
+      typename CursorDst::Transition::trie_ptr& dst_trie, int suffix_len,
+      uint16_t* loffset) {
+    int branch_key = suffix_len ? current_key[dst_cursor.current_key.size()]
+                                : TrieNode::NONE;
+    assert(!(branch_key == TrieNode::NONE ? dst_trie->has_none()
+                                          : dst_trie->isset(branch_key)));
+    // otherwise find would have walked down
+
+    trie_ptr new_trie =
+        alloc(TrieNode::size(dst_trie->len(), dst_trie->count() + 1));
+    *loffset = new_trie->create(*dst_trie, branch_key);
+    free(dst_trie);
+    return new_trie;
   }
 
   /**
    * @brief Deep copy entire subtree from source to destination
    */
-  void deep_copy_subtree(offset_t src_offset) {
-    block_ptr src_block = resolve_src(src_offset);
-
-    if (src_offset.type() == LEAF) {
-      deep_copy_leaf(src_block);
-    } else {
-      deep_copy_trie(src_block);
-    }
+  offset_t deep_copy_subtree(offset_t src_offset) {
+    if (src_offset.type() == LEAF) return deep_copy_leaf(src_offset);
+    return deep_copy_trie(src_offset);
   }
 
   /**
    * @brief Deep copy a leaf node from source to destination
    */
-  void deep_copy_leaf(block_ptr src_block) {
-    leaf_ptr src_leaf(src_block);
-    uint16_t leaf_size = LeafNode::size(src_leaf->key_size, src_leaf->vsize());
-    leaf_ptr dest_leaf = alloc(leaf_size);
-
-    memcpy((void*)dest_leaf, (void*)src_leaf, leaf_size);
-
-    // Handle big values
-    if (src_leaf->is_big()) {
-      auto src_bv = src_leaf->big();
-      block_ptr src_big_value = resolve_src(src_bv->offset);
-      block_ptr dest_big_value = alloc(src_bv->size());
-      memcpy((void*)dest_big_value, (void*)src_big_value, src_bv->value_size);
-
-      auto dest_bv = dest_leaf->big();
-      dest_bv->offset = resolve_offset(dest_big_value);
-    }
-
-    offset_t leaf_offset = resolve_offset(dest_leaf);
-    dst_cursor->set_root(leaf_offset);
+  offset_t deep_copy_leaf(offset_t src_offset) {
+    auto src_leaf = (leaf_ptr)resolve_src(src_offset);
+    Slice src_value = src_leaf->value(*src_cursor._db);
+    leaf_ptr new_leaf = fill_leaf(src_leaf->key(), src_value);
+    return resolve_offset(new_leaf);
   }
 
   /**
    * @brief Deep copy a trie node and its subtree from source to destination
    */
-  void deep_copy_trie(block_ptr src_block) {
-    trie_ptr src_trie(src_block);
+  offset_t deep_copy_trie(offset_t src_offset) {
+    auto src_trie = (trie_ptr)resolve_src(src_offset);
     uint16_t trie_size = src_trie->size();
-    trie_ptr dest_trie = alloc(trie_size);
-
-    memcpy((void*)dest_trie, (void*)src_trie, trie_size);
+    trie_ptr dst_trie = alloc(trie_size);
+    memcpy((void*)&(*dst_trie), (void*)&(*src_trie), trie_size);
 
     // Recursively copy all children and update offsets
-    offset_e* dest_array = dest_trie->array();
-    for (int i = 0; i < dest_trie->count(); i++) {
-      offset_t child_offset = dest_trie->array()[i];
-
-      // Recursively copy child
-      block_ptr child_src = resolve_src(child_offset);
-      offset_t child_dest_offset;
-
-      if (child_offset.type() == LEAF) {
-        leaf_ptr child_src_leaf(child_src);
-        uint16_t child_size =
-            LeafNode::size(child_src_leaf->key_size, child_src_leaf->vsize());
-        leaf_ptr child_dest_leaf = alloc(child_size);
-        memcpy((void*)child_dest_leaf, (void*)child_src_leaf, child_size);
-
-        // Handle big values in child
-        if (child_src_leaf->is_big()) {
-          auto bv_src = child_src_leaf->big();
-          block_ptr big_src = resolve_src(bv_src->offset);
-          block_ptr big_dest = alloc(bv_src->size());
-          memcpy((void*)big_dest, (void*)big_src, bv_src->value_size);
-
-          auto bv_dest = child_dest_leaf->big();
-          bv_dest->offset = resolve_offset(big_dest);
-        }
-
-        child_dest_offset = resolve_offset(child_dest_leaf);
-      } else {
-        // TODO: Recursive trie copy not yet fully implemented
-        // Would need to recursively deep copy the trie structure
-        child_dest_offset = child_offset;  // placeholder
-      }
-
-      dest_array[i] = child_dest_offset;
+    auto dst_array = dst_trie->array();
+    auto src_array = src_trie->array();
+    for (int i = 0, count = dst_trie->count(); i < count; i++) {
+      dst_array[i] = deep_copy_subtree(src_array[i]);
     }
-
-    offset_t trie_offset = resolve_offset(dest_trie);
-    dst_cursor->set_root(trie_offset);
+    return resolve_offset(dst_trie);
   }
 };
 
