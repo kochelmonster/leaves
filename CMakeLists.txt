@@ -128,6 +128,9 @@ target_link_libraries(test_bits PUBLIC test)
 add_executable(test_cursor tests/test_cursor.cpp)
 target_link_libraries(test_cursor PUBLIC core test)
 
+add_executable(test_hash_mode tests/test_hash_mode.cpp)
+target_link_libraries(test_hash_mode PUBLIC core test)
+
 add_executable(test_node tests/test_node.cpp)
 target_link_libraries(test_node PUBLIC core test)
 

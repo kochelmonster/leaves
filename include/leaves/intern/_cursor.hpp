@@ -429,7 +429,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
 
     // Enable hash mode after 10 finds
-    if (++_find_count == 10) {
+    if (++_find_count == 10 && !is_transaction_active()) {
       _enable_hash_mode();
     }
 
@@ -626,7 +626,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
       snapshot.transitions[i] = this->stack.data[i];
     }
 
-    
+
   }
 
   bool keep_stack() {
@@ -677,6 +677,9 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
       assert(new_txn);
       if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
         _set_txn(new_txn);
+        _hash_idx = 0;
+        _hash_cache.clear();
+        _find_count = 0;
       }
     }
   }
