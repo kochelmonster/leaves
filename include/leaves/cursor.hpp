@@ -63,7 +63,7 @@ class TCursor {
     return _cursor->start_transaction(non_blocking);
   }
 
-  void prepare_commit(bool sync = false) { _cursor->prepare_commit(sync); }
+  tid_t prepare_commit(bool sync = false) { return _cursor->prepare_commit(sync); }
 
   void commit(bool sync = false) { _cursor->commit(sync); }
 

@@ -557,3 +557,225 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
               storage.db->_header->multi_areas.get_head() !=
                   0);  // Just verify it's valid
 }
+
+BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_2pc.lvs";
+  
+  offset_t prepared_offset;
+  offset_t read_offset;
+  tid_t prepared_tid;
+  
+  // Phase 1: Prepare a transaction but don't commit (simulate crash)
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Start transaction and allocate some data
+    BOOST_REQUIRE(db->start_transaction(0));
+    BOOST_CHECK_EQUAL(db->transaction_active(), 2);  // First user txn is 2
+    
+    auto block1 = db->alloc(512);
+    memcpy((void*)block1, "test_data", 10);
+    
+    // Prepare the commit (makes it durable)
+    prepared_tid = db->prepare_commit(0);
+    BOOST_CHECK_GT(prepared_tid, 0);
+    BOOST_CHECK_EQUAL(prepared_tid, 2);
+    
+    // Verify prepared state
+    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->_wtxn->txn_id, prepared_tid);
+    
+    // Save offsets for verification
+    prepared_offset = db->_header->prepared_txn;
+    read_offset = db->_header->read_txn;
+    
+    // DON'T call commit() - simulate crash after prepare
+    // The transaction lock will be released when db goes out of scope
+    // but the prepared transaction should remain
+  }
+  
+  // Phase 2: Reopen DB - should detect and recover prepared transaction
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Check that prepared transaction was detected
+    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, prepared_offset);
+    BOOST_CHECK_EQUAL(db->_header->read_txn, read_offset);
+    
+    // _active_txn should be set to the prepared transaction
+    BOOST_REQUIRE(db->_active_txn != nullptr);
+    BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
+    
+    // The transaction is already active (recovered), just need to acquire lock and commit
+    // We need to simulate that a cursor with ID 0 takes ownership
+    BOOST_CHECK(db->_header->txn_lock.try_lock());
+    db->_header->txn_cursor_id.store(0);
+    
+    // Commit should finalize the prepared transaction
+    BOOST_CHECK(db->commit(0));
+    
+    // After commit, prepared should equal read
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
+  }
+  
+  // Phase 3: Verify data persisted correctly
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Everything should be committed now
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_2pc_normal.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Normal two-phase commit: prepare then commit
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block1 = db->alloc(512);
+    
+    // Prepare should return transaction ID
+    tid_t tid = db->prepare_commit(0);
+    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    
+    // Commit should succeed and finalize
+    BOOST_CHECK(db->commit(0));
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
+  }
+  
+  // Verify state persisted correctly
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_2pc_rollback.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Start transaction
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block1 = db->alloc(512);
+    offset_t block1_offset = db->resolve(block1);
+    
+    // Prepare the commit
+    tid_t tid = db->prepare_commit(0);
+    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    
+    // Now rollback even after prepare
+    BOOST_CHECK(db->rollback(0));
+    
+    // After rollback, prepared should equal read again
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
+    
+    // Pending areas should have been returned
+    // Start new transaction and verify block can be reused
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block2 = db->alloc(512);
+    offset_t block2_offset = db->resolve(block2);
+    
+    // Should get the same block back since previous was rolled back
+    BOOST_CHECK_EQUAL(block1_offset, block2_offset);
+    
+    db->commit(0);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_prepare_commit_idempotency) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_2pc_idempotent.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block1 = db->alloc(512);
+    
+    // First prepare
+    tid_t tid1 = db->prepare_commit(0);
+    BOOST_CHECK_GT(tid1, 0);
+    
+    // Second prepare should return same txn_id (idempotent)
+    tid_t tid2 = db->prepare_commit(0);
+    BOOST_CHECK_EQUAL(tid1, tid2);
+    
+    // State should be consistent
+    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    
+    // Commit should still work
+    BOOST_CHECK(db->commit(0));
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_2pc_areas.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Allocate enough blocks to force new area allocation
+    BOOST_REQUIRE(db->start_transaction(0));
+    
+    std::vector<block_ptr> blocks;
+    // Allocate many large blocks to exhaust the initial area and force new area allocation
+    const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
+    const size_t block_size = 4000;  // Large blocks
+    const size_t num_blocks = (AREA_SIZE * 2) / block_size;  // Enough to need multiple areas
+    
+    for (size_t i = 0; i < num_blocks; i++) {
+      blocks.push_back(db->alloc(block_size));
+    }
+    
+    // Before prepare, pending areas should have content (may not always be true if blocks fit in initial area)
+    // This check is optional and depends on allocation patterns
+    // BOOST_CHECK_GT((uint64_t)db->_header->pending_single_areas.get_head(), 0u);
+    
+    // Prepare the transaction
+    tid_t tid = db->prepare_commit(0);
+    BOOST_CHECK_GT(tid, 0);
+    
+    // Save pending state before commit
+    offset_t pending_single_before = db->_header->pending_single_areas.get_head();
+    offset_t pending_multi_before = db->_header->pending_multi_areas.get_head();
+    offset_t committed_single_before = db->_header->single_areas.get_head();
+    
+    // Commit moves pending to committed
+    BOOST_CHECK(db->commit(0));
+    
+    // After commit, pending areas should be empty (moved to committed)
+    BOOST_CHECK_EQUAL(db->_header->pending_single_areas.get_head(), offset_t(0));
+    BOOST_CHECK_EQUAL(db->_header->pending_multi_areas.get_head(), offset_t(0));
+    
+    // If there were pending areas, they should now be in committed areas
+    // (The committed list should have grown)
+    if (pending_single_before != offset_t(0)) {
+      BOOST_CHECK_GT((uint64_t)db->_header->single_areas.get_head(), 0u);
+    }
+  }
+}

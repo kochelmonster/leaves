@@ -173,8 +173,8 @@ struct _MemoryDB {
   tid_t txn_id() const { return _null_txn.txn_id; }
 
   // Transaction active check
-  bool transaction_active() const {
-    return false;  // Memory storage doesn't use transactions
+  tid_t transaction_active() const {
+    return 0;  // Memory storage doesn't use transactions
   }
 
   // Write transaction access for compatibility

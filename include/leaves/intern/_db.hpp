@@ -151,7 +151,14 @@ struct _DB {
       : _storage(storage),
         _header(storage.resolve(header)),
         _mem_cursor(this),
-        _index(index) {}
+        _index(index) {
+
+    if (_header->prepared_txn != _header->read_txn) {
+      // Recover a prepared transaction - set both _active_txn and _wtxn
+      _wtxn = resolve<Transaction>(_header->prepared_txn);
+      _active_txn = &*_wtxn;
+    }
+  }
 
   _DB(Storage& storage, offset_t* header, uint16_t index)
       : _storage(storage), _mem_cursor(this), _index(index) {
@@ -416,7 +423,7 @@ struct _DB {
 
   txn_ptr txn() const { return resolve(_header->read_txn); }
 
-  bool transaction_active() const { return _active_txn != nullptr; }
+  tid_t transaction_active() const { return _active_txn ? _active_txn->txn_id : 0; }
 
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
@@ -482,12 +489,12 @@ struct _DB {
     return true;
   }
 
-  bool prepare_commit(uint64_t cursor_id, bool sync = false) {
+  tid_t prepare_commit(uint64_t cursor_id, bool sync = false) {
     // Not my transaction or not started 
-    if (_header->txn_cursor_id.load() != cursor_id) return false;
+    if (_header->txn_cursor_id.load() != cursor_id) return 0;
 
     // already prepared
-    if (_header->prepared_txn != _header->read_txn) return true;
+    if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
 
     _header->prepared_txn = resolve(_wtxn);
 
@@ -498,7 +505,7 @@ struct _DB {
     make_dirty(_wtxn);
 
     flush(sync, true);
-    return true;
+    return _wtxn->txn_id;
   }
 
   bool commit(uint64_t cursor_id, bool sync = false) {
@@ -594,7 +601,6 @@ struct _DB {
       return false;
     });
 
-    if (_header->prepared_txn != _header->read_txn) commit(0);
     return_pending_areas();
     flush();
   }

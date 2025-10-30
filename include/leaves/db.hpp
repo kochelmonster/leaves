@@ -25,6 +25,11 @@ class TDB {
 
   db_ptr _internal() const { return _db; }
 
+  // Transaction management methods for crash recovery
+  tid_t transaction_active() const { return _db->transaction_active(); }
+  bool commit(bool sync = true) { return _db->commit(0, sync); }
+  bool rollback() { return _db->rollback(0); }
+
  private:
   db_ptr _db;
   storage_ptr _storage;

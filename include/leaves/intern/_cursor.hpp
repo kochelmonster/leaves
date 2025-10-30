@@ -506,11 +506,11 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     return true;
   }
 
-  bool prepare_commit(bool sync = false) {
+  tid_t prepare_commit(bool sync = false) {
     if constexpr (Traits::TRANSACTIONAL) {
       return this->_db->prepare_commit(_id, sync);
     }
-    return false;
+    return 0;
   }
 
   bool commit(bool sync = false) {
