@@ -25,12 +25,11 @@ struct _Deleter {
   _Deleter(Cursor& cursor) : cursor(cursor), back(&cursor.stack.back()) {}
 
   void dec_branch_count(Transition& parent, int count) {
-    // Decrement for each character position this node covers (prefix + branch)
-    uint16_t start_pos = parent.keypos;
-    uint16_t end_pos =
-        std::min((uint16_t)(start_pos + parent.prefix + 1),
-                 (uint16_t)(sizeof(cursor._txn->branch_count) /
-                            sizeof(cursor._txn->branch_count[0])));
+    // Decrement from child's keypos (after the parent node) to end of array
+    Transition& child = parent.child();
+    uint16_t start_pos = child.keypos;
+    uint16_t end_pos = (uint16_t)(sizeof(cursor._txn->branch_count) /
+                                   sizeof(cursor._txn->branch_count[0]));
     for (uint16_t pos = start_pos; pos < end_pos; pos++) {
       cursor._txn->branch_count[pos] -= count;
     }

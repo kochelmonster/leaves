@@ -24,12 +24,11 @@ struct _Inserter {
   _Inserter(Transition* back_, size_t size) : back(back_), value_size(size) {}
 
   void inc_branch_count(int count) {
-    // Increment for each character position this node covers (prefix + branch)
-    uint16_t start_pos = back->keypos;
-    uint16_t end_pos =
-        std::min((uint16_t)(start_pos + back->prefix + 1),
-                 (uint16_t)(sizeof(back->cursor->_txn->branch_count) /
-                            sizeof(back->cursor->_txn->branch_count[0])));
+    // Increment from child's keypos (after the current node) to end of array
+    Transition& child = back->child();
+    uint16_t start_pos = child.keypos;
+    uint16_t end_pos = (uint16_t)(sizeof(back->cursor->_txn->branch_count) /
+                                   sizeof(back->cursor->_txn->branch_count[0]));
     for (uint16_t pos = start_pos; pos < end_pos; pos++) {
       back->cursor->_txn->branch_count[pos] += count;
     }

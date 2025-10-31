@@ -35,12 +35,11 @@ struct _Merger {
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
   void inc_branch_count(typename CursorDst::Transition& dst, int count) {
-    // Increment for each character position this node covers (prefix + branch)
-    uint16_t start_pos = dst.keypos;
-    uint16_t end_pos =
-        std::min((uint16_t)(start_pos + dst.prefix + 1),
-                 (uint16_t)(sizeof(dst.cursor->_txn->branch_count) /
-                            sizeof(dst.cursor->_txn->branch_count[0])));
+    // Increment from child's keypos (after the dst node) to end of array
+    typename CursorDst::Transition& child = dst.child();
+    uint16_t start_pos = child.keypos;
+    uint16_t end_pos = (uint16_t)(sizeof(dst.cursor->_txn->branch_count) /
+                                   sizeof(dst.cursor->_txn->branch_count[0]));
     for (uint16_t pos = start_pos; pos < end_pos; pos++) {
       dst.cursor->_txn->branch_count[pos] += count;
     }

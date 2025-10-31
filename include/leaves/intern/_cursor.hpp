@@ -1,14 +1,17 @@
 #ifndef _LEAVES_ICURSOR_HPP
 #define _LEAVES_ICURSOR_HPP
 
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 #include "_deleter.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
 #include "_node.hpp"
+#include "robin_hood.h"
 
 namespace leaves {
 
@@ -391,12 +394,23 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   // Hash mode optimization
   uint32_t _find_count{0};
   uint16_t _hash_idx{0};  // Position to use for hash lookup (0 = disabled)
-  std::string _hash_key_buffer;  // Reusable buffer for hash key
+  uint64_t _hash_key_buffer = 0;  // 64-bit hash key buffer
+
+  // Lightweight snapshot - only essential fields, no block_ptr
+  struct TransitionSnapshot {
+    offset_t offset;
+    uint16_t link_offset;
+    int cmp;
+    uint8_t branch_key;
+    uint16_t keypos;
+    uint16_t prefix;
+  };
+
   struct StackSnapshot {
-    std::vector<Transition> transitions;
+    std::vector<TransitionSnapshot> transitions;
     size_t size;
   };
-  std::unordered_map<std::string, StackSnapshot> _hash_cache;
+  robin_hood::unordered_flat_map<uint64_t, StackSnapshot> _hash_cache;
 
   _Cursor(db_ptr db) : CursorBase(db) {
     if constexpr (Traits::TRANSACTIONAL) {
@@ -561,39 +575,53 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     // Find first position with more than 1000 branches
     if (!this->_txn) return;
 
+    std::cerr << "branch_count: ";
     for (uint16_t idx = 0; idx < sizeof(this->_txn->branch_count) /
                                      sizeof(this->_txn->branch_count[0]);
          idx++) {
-      if (this->_txn->branch_count[idx] > 1000) {
-        _hash_idx = idx;
+      std::cerr << "[" << idx << "]=" << this->_txn->branch_count[idx] << " ";
+      if (_hash_idx == 0 && this->_txn->branch_count[idx] > 1000) {
+        _hash_idx = idx + 1;
         _hash_cache.clear();
         _hash_cache.reserve(1024);  // Reserve space for efficiency
-        return;
       }
+    }
+    std::cerr << std::endl;
+    if (_hash_idx > 0) {
+      std::cerr << "enable hash at index: " << _hash_idx << std::endl;
     }
   }
 
   bool _find_with_hash(const Slice& key) {
-    // Create hash key from first _hash_idx bytes
-    _hash_key_buffer.assign(key.data(), _hash_idx);
-
+    // Hash the first _hash_idx bytes into a uint64_t
+    uint64_t hash = 0;
+    for (uint16_t i = 0; i < _hash_idx && i < key.size(); ++i) {
+      hash = hash * 131 + static_cast<uint8_t>(key[i]);
+    }
+    _hash_key_buffer = hash;
     auto it = _hash_cache.find(_hash_key_buffer);
     if (it != _hash_cache.end()) {
-      // Restore stack from cache
+      // Restore stack from lightweight snapshot
       const StackSnapshot& snapshot = it->second;
       this->stack.clear(0);
       this->stack.size = snapshot.size;
       for (size_t i = 0; i < snapshot.size; i++) {
-        this->stack.data[i] = snapshot.transitions[i];
-        this->stack.data[i].cursor = this;
+        const TransitionSnapshot& ts = snapshot.transitions[i];
+        Transition& t = this->stack.data[i];
+        t.cursor = this;
+        t.offset = ts.offset;
+        t.block = this->_db->resolve(ts.offset);  // Reconstruct block from offset
+        t.link_offset = ts.link_offset;
+        t.cmp = ts.cmp;
+        t.branch_key = ts.branch_key;
+        t.keypos = ts.keypos;
+        t.prefix = ts.prefix;
       }
-
       // Set up keys
-      this->current_key.assign(key.data(), _hash_idx);
+      uint16_t keypos = this->stack.back().keypos;
+      this->current_key.assign(key.data(), keypos);
       this->rest_key = key;
-      this->rest_key.iadvance(_hash_idx);
-
-      // Continue find from cached position
+      this->rest_key.iadvance(keypos);
       if (this->stack.size > 0) {
         this->stack.back().find();
       }
@@ -612,21 +640,26 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
         break;
       }
     }
-
     if (snapshot_size == 0) return;
-
-    // Create hash key from first _hash_idx bytes
-    _hash_key_buffer.assign(key.data(), _hash_idx);
-
-    // Save snapshot
-    StackSnapshot& snapshot = _hash_cache[_hash_key_buffer];
+    // Hash the first _hash_idx bytes into a uint64_t
+    uint64_t hash = 0;
+    for (uint16_t i = 0; i < _hash_idx && i < key.size(); ++i) {
+      hash = hash * 131 + static_cast<uint8_t>(key[i]);
+    }
+    // Save lightweight snapshot
+    StackSnapshot& snapshot = _hash_cache[hash];
     snapshot.size = snapshot_size;
     snapshot.transitions.resize(snapshot_size);
     for (size_t i = 0; i < snapshot_size; i++) {
-      snapshot.transitions[i] = this->stack.data[i];
+      const Transition& t = this->stack.data[i];
+      TransitionSnapshot& ts = snapshot.transitions[i];
+      ts.offset = t.offset;
+      ts.link_offset = t.link_offset;
+      ts.cmp = t.cmp;
+      ts.branch_key = t.branch_key;
+      ts.keypos = t.keypos;
+      ts.prefix = t.prefix;
     }
-
-
   }
 
   bool keep_stack() {
