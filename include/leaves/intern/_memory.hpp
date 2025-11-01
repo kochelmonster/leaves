@@ -1,29 +1,33 @@
 /*
-Transaction save memory managment.
+Memory management for transactional systems.
 
-If a transactions is rolled back or the machine crashes,
-   area_ptr area = resolver.resolve(area_slice.offset(), WRITE);
-   area->init(area_slice.offset(), area_slice.size(), get_head());
-   offset_t new_head = area_slice.offset();
-All important operations are done in DumpSlot
+This module provides memory allocation and garbage collection for database systems
+that support transactions and crash recovery. The design uses atomic operations
+and careful ordering to ensure consistency across transaction boundaries.
 
-Constraint A:
-It is important that the original members of the linked list,
-may not change their "next" pointer within the transaction.
-Keep in mind, Blocks that are added to the list come from
-the trie. Their "next" pointer can be savely changed: In case
-of a rollback, they still stay in the trie and the "next"
-pointer is not used.
+Key Components:
+- AreaPool: Manages allocation of memory areas from the underlying storage
+- _MemManager: Handles block allocation/deallocation with size-based slots
+- _GarbageSlot: Maintains queues of freed blocks per transaction
+- _BlockContainer: 4K structures that store freed block metadata
 
-Some Operations and how it is ensured that "state recovery" is accomplished:
+Transaction Safety:
+The system ensures that memory operations are atomic and crash-safe through:
+1. Double-buffered pointers in AreaList for atomic list updates
+2. Transaction-aware recycling in GarbageSlot (may_recycle checks)
+3. Proper dirty marking to ensure persistence before pointer updates
 
-merge(append a list of free blocks to another one)
-    This operation breaks Constraint A: While appending the "end block"
-    will point to the "start block" of the appending list.
-    The solution is: The end of the linked list is not defined by the
-    "next" pointer of the "end block" is NULL but by the "end" pointer
-    of the DumpSlot. That means if the "end" pointer of DumpSlots points
-    to a block this block is the end of the list.
+Memory Layout:
+- Areas are allocated in AREA_SIZE chunks from the underlying resolver
+- Blocks within areas are managed by size classes defined in BLOCK_SIZES
+- Freed blocks are queued per transaction and recycled when safe
+- Block containers themselves use the largest size class slot
+
+Crash Recovery:
+- All pointer updates are atomic single-byte or pointer-sized writes
+- State is recoverable because freed blocks remain accessible until
+  transactions commit and recycling conditions are met
+- Area splitting preserves consistency by updating size before linking
 */
 
 #ifndef _LEAVES__MEMORY_HPP
