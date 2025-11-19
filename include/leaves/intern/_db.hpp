@@ -35,6 +35,10 @@ struct _TransactionBase : public Traits_::BlockHeader {
   // count of cursors accessing this transaction
   std::atomic<uint32_t> refs;
 
+  // Area tracking: tail pointers for areas allocated during this transaction
+  offset_t area_list_tail_single{0};
+  offset_t area_list_tail_multi{0};
+
   MemManager mem_manager;
 };
 
@@ -47,6 +51,8 @@ struct _Transaction : public _TransactionBase<Traits_> {
   using block_ptr = typename Traits::ptr;
   using TransactionBase::mem_manager;
   using TransactionBase::txn_id;
+  using TransactionBase::area_list_tail_single;
+  using TransactionBase::area_list_tail_multi;
 
   static constexpr auto SLOT_ID =
       MemManager::assign_slot(sizeof(TransactionBase));
@@ -127,10 +133,9 @@ struct _DB {
     Mutex txn_lock;
     std::atomic<uint64_t>
         txn_cursor_id;      // the id of the cursor holding the transaction
-    AreaList single_areas;  // single AREA_SIZE areas
-    AreaList multi_areas;   // multi-AREA_SIZE areas
-    AreaList pending_single_areas;  // single areas pending commit/rollback
-    AreaList pending_multi_areas;   // multi areas pending commit/rollback
+    offset_t area_list_head_single;  // head of single AREA_SIZE areas linked list
+    offset_t area_list_head_multi;   // head of multi-AREA_SIZE areas linked list
+    AreaPool area_pool;     // area pool for allocating areas
   };
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
@@ -171,10 +176,12 @@ struct _DB {
     _header = _storage.resolve(*header);
     memset((void*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex();
-    _header->single_areas.init();
-    _header->multi_areas.init();
-    _header->pending_single_areas.init();
-    _header->pending_multi_areas.init();
+    
+    // Initialize area lists with the first allocated area (area_ptr)
+    offset_t first_area_offset = _storage.resolve(area_ptr);
+    _header->area_list_head_single = first_area_offset;
+    _header->area_list_head_multi = 0;
+    _header->area_pool.init();
 
     uint16_t header_size = padding(sizeof(Header), MIN_BLOCK_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
@@ -187,6 +194,8 @@ struct _DB {
     txn->next_txn = 0;
     txn->refs.store(0);
     txn->start_txn = _header->read_txn;
+    txn->area_list_tail_single = first_area_offset;  // First area is also the tail
+    txn->area_list_tail_multi = 0;
     txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
                           area_ptr->end());
     make_dirty(_header);
@@ -389,9 +398,21 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_single_area();
-    _header->pending_single_areas.push(
-        *area_ptr, _storage);  // Convert Area* to AreaSlice for push
-    make_dirty(_header);
+    area_ptr->next = 0;
+    
+    // Append to transaction's area list tail
+    if (_active_txn->area_list_tail_single) {
+      auto tail = resolve<Area>(_active_txn->area_list_tail_single, READ);
+      tail->next = resolve(area_ptr);
+      make_dirty(tail);
+    } else {
+      // First area in this transaction - update head
+      _header->area_list_head_single = resolve(area_ptr);
+      make_dirty(_header);
+    }
+    _active_txn->area_list_tail_single = resolve(area_ptr);
+    
+    make_dirty(area_ptr);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -400,9 +421,21 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_multi_area(size);
-    _header->pending_multi_areas.push(
-        *area_ptr, _storage);  // Convert Area* to AreaSlice for push
-    make_dirty(_header);
+    area_ptr->next = 0;
+    
+    // Append to transaction's area list tail
+    if (_active_txn->area_list_tail_multi) {
+      auto tail = resolve<Area>(_active_txn->area_list_tail_multi, READ);
+      tail->next = resolve(area_ptr);
+      make_dirty(tail);
+    } else {
+      // First area in this transaction - update head
+      _header->area_list_head_multi = resolve(area_ptr);
+      make_dirty(_header);
+    }
+    _active_txn->area_list_tail_multi = resolve(area_ptr);
+    
+    make_dirty(area_ptr);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -447,6 +480,10 @@ struct _DB {
     _wtxn = tmp.clone(*this);
     _active_txn = &*_wtxn;
     _active_txn->refs.store(0);
+    
+    // Initialize area list tails from the last transaction
+    _active_txn->area_list_tail_single = last_txn->area_list_tail_single;
+    _active_txn->area_list_tail_multi = last_txn->area_list_tail_multi;
 
     // ensure last_txn is not freed
     last_txn->refs.fetch_add(1);
@@ -479,8 +516,10 @@ struct _DB {
   bool rollback(uint64_t cursor_id) {
     if (_header->txn_cursor_id.load() != cursor_id) return false;
 
-    // Return pending areas to storage
-    return_pending_areas();
+    // Return areas allocated during write transaction
+    txn_ptr read_txn = resolve(_header->read_txn);
+    return_areas_range(read_txn->area_list_tail_single, _wtxn->area_list_tail_single,
+                       read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
 
     _header->prepared_txn = _header->read_txn;
     flush();
@@ -510,9 +549,7 @@ struct _DB {
   bool commit(uint64_t cursor_id, bool sync = false) {
     if (!prepare_commit(cursor_id, sync)) return false;
 
-    // Now atomically move pending areas to committed areas
-    _header->single_areas.move(_header->pending_single_areas, _storage);
-    _header->multi_areas.move(_header->pending_multi_areas, _storage);
+    // Atomically switch to new transaction (area tails are preserved in transaction)
     _header->read_txn = _header->prepared_txn;
     make_dirty(_header);
     flush(sync, true);
@@ -586,10 +623,22 @@ struct _DB {
     });
   }
 
-  void return_pending_areas() {
-    // Return pending areas to storage
-    _storage.return_single_areas(_header->pending_single_areas);
-    _storage.return_multi_areas(_header->pending_multi_areas);
+  void return_areas_range(offset_t start_single, offset_t end_single,
+                          offset_t start_multi, offset_t end_multi) {
+    // Return area range [start->next ... end] to storage
+    // This is used during rollback to return areas allocated during write transaction
+    
+    if (start_single && end_single && start_single != end_single) {
+      area_ptr start_area = resolve<Area>(start_single, READ);
+      offset_t range_head = start_area->next;
+      _storage.return_single_areas(range_head, end_single);
+    }
+    
+    if (start_multi && end_multi && start_multi != end_multi) {
+      area_ptr start_area = resolve<Area>(start_multi, READ);
+      offset_t range_head = start_area->next;
+      _storage.return_multi_areas(range_head, end_multi);
+    }
   }
 
   void sanitize() {
@@ -600,7 +649,8 @@ struct _DB {
       return false;
     });
 
-    return_pending_areas();
+    // Return any uncommitted areas (after initialization, tails should be 0 or at initial state)
+    // In sanitize context, we don't have pending areas to return since we're resetting state
     flush();
   }
 

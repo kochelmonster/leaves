@@ -227,13 +227,13 @@ struct _CacheStore : public Opers_ {
     return result ? result : emplace_new_area(aligned);
   }
 
-  void return_single_areas(AreaList& areas) {
-    _header->area_pool.return_single_areas(areas, *this);
+  void return_single_areas(offset_t head, offset_t tail) {
+    _header->area_pool.return_single_areas(head, tail, *this);
     make_header_dirty();
   }
 
-  void return_multi_areas(AreaList& areas) {
-    _header->area_pool.return_multi_areas(areas, *this);
+  void return_multi_areas(offset_t head, offset_t tail) {
+    _header->area_pool.return_multi_areas(head, tail, *this);
     make_header_dirty();
   }
 
@@ -343,9 +343,16 @@ struct _CacheStore : public Opers_ {
       if (_header->dbs[i].offset && !strcmp(_header->dbs[i].name, name)) {
         if (_dbs[i].use_count()) throw TransactionActive();
         DB tmp(*this, _header->dbs[i].offset, i);
-        // Merge the DB's area lists back into storage
-        _header->area_pool.single_areas.move(tmp._header->single_areas, *this);
-        _header->area_pool.multi_areas.move(tmp._header->multi_areas, *this);
+        // Return the DB's areas back into storage using head/tail pattern
+        auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);
+        if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
+          _header->area_pool.return_single_areas(tmp._header->area_list_head_single,
+                                                 read_txn->area_list_tail_single, *this);
+        }
+        if (tmp._header->area_list_head_multi && read_txn->area_list_tail_multi) {
+          _header->area_pool.return_multi_areas(tmp._header->area_list_head_multi,
+                                                read_txn->area_list_tail_multi, *this);
+        }
         _header->dbs[i].offset = 0;
         flush(true, true);
         return;

@@ -336,8 +336,11 @@ BOOST_AUTO_TEST_CASE(test_area_list_move) {
   BOOST_CHECK_EQUAL(source_areas.get_head(), area2->offset());
   BOOST_CHECK_EQUAL(dest_areas.get_head(), offset_t(0));
   
-  // Move from source to empty destination
-  dest_areas.move(source_areas, storage);
+  // Move from source to empty destination using add()
+  offset_t source_head = source_areas.get_head();
+  offset_t source_tail = source_areas.get_tail();
+  dest_areas.add(source_head, source_tail, storage);
+  source_areas.init();  // Clear source after moving
   
   BOOST_CHECK_EQUAL(source_areas.get_head(), offset_t(0));
   BOOST_CHECK_EQUAL(dest_areas.get_head(), area2->offset());
@@ -358,7 +361,11 @@ BOOST_AUTO_TEST_CASE(test_area_list_move) {
   source_areas.push(*area3, storage);
   dest_areas.push(*area4, storage);
   
-  dest_areas.move(source_areas, storage);
+  // Move from source to non-empty destination using add()
+  source_head = source_areas.get_head();
+  source_tail = source_areas.get_tail();
+  dest_areas.add(source_head, source_tail, storage);
+  source_areas.init();  // Clear source after moving
   
   // Should be able to pop 2 items from dest
   auto pop1 = dest_areas.pop(storage);

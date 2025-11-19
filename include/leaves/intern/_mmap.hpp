@@ -321,12 +321,12 @@ struct _MemoryMapFile {
     return result;  // Return Area* directly
   }
 
-  void return_single_areas(AreaList& areas) {
-    _memory->area_pool.return_single_areas(areas, *this);
+  void return_single_areas(offset_t head, offset_t tail) {
+    _memory->area_pool.return_single_areas(head, tail, *this);
   }
 
-  void return_multi_areas(AreaList& areas) {
-    _memory->area_pool.return_multi_areas(areas, *this);
+  void return_multi_areas(offset_t head, offset_t tail) {
+    _memory->area_pool.return_multi_areas(head, tail, *this);
   }
 
   void list_dbs(std::vector<std::string>& result) {
@@ -377,9 +377,16 @@ struct _MemoryMapFile {
         if (_dbs[i].use_count()) throw TransactionActive();
         DB tmp(*this, _memory->dbs[i].offset, i);
 
-        // Merge the DB's area lists back into storage
-        _memory->area_pool.single_areas.move(tmp._header->single_areas, *this);
-        _memory->area_pool.multi_areas.move(tmp._header->multi_areas, *this);
+        // Return the DB's areas back into storage using head/tail pattern
+        auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);
+        if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
+          _memory->area_pool.return_single_areas(tmp._header->area_list_head_single,
+                                                 read_txn->area_list_tail_single, *this);
+        }
+        if (tmp._header->area_list_head_multi && read_txn->area_list_tail_multi) {
+          _memory->area_pool.return_multi_areas(tmp._header->area_list_head_multi,
+                                                read_txn->area_list_tail_multi, *this);
+        }
 
         _memory->dbs[i].offset = 0;
         flush();

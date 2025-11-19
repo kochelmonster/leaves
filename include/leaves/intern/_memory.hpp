@@ -467,29 +467,23 @@ struct AreaList {
   }
 
   template <typename Resolver>
-  void move(AreaList& other, Resolver& resolver) {
-    if (!other.get_head()) {
+  void add(offset_t other_head, offset_t other_tail, Resolver& resolver) {
+    if (!other_head) {
       return;  // Nothing to add
     }
 
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
 
-    // Phase 1: Clear source first to avoid double ownership
-    offset_t other_head = other.get_head();
-    offset_t other_tail = other.get_tail();
-    other.atomic_switch(0, 0);
-
     if (!get_head()) {
-      // Phase 2: Atomically take ownership
+      // Atomically take ownership
       atomic_switch(other_head, other_tail);
     } else {
-      // Phase 2: Connect our tail to other's head (safe now - no double
-      // ownership)
+      // Connect our tail to other's head
       area_ptr tail_area = resolver.resolve(get_tail(), WRITE);
       tail_area->next = other_head;
       resolver.make_dirty(tail_area);
 
-      // Phase 3: Atomically update our pointers
+      // Atomically update our pointers
       atomic_switch(get_head(), other_tail);
     }
   }
@@ -528,13 +522,13 @@ struct AreaPool {
   }
 
   template <typename Resolver>
-  void return_single_areas(AreaList& areas, Resolver& resolver) {
-    single_areas.move(areas, resolver);
+  void return_single_areas(offset_t head, offset_t tail, Resolver& resolver) {
+    single_areas.add(head, tail, resolver);
   }
 
   template <typename Resolver>
-  void return_multi_areas(AreaList& areas, Resolver& resolver) {
-    multi_areas.move(areas, resolver);
+  void return_multi_areas(offset_t head, offset_t tail, Resolver& resolver) {
+    multi_areas.add(head, tail, resolver);
   }
 };
 
