@@ -206,6 +206,12 @@ struct _MemoryMapFile {
     if (force) _region.flush(0, 0, !sync);
   }
 
+  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
+    if (size > 0) {
+      _region.flush(offset, size, !sync);
+    }
+  }
+
   void sanitize() {
     // Coordinate sanitization across processes with an OS file lock that is
     // automatically released if a process crashes.

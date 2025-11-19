@@ -46,7 +46,7 @@ struct _CacheStore : public Opers_ {
   using Opers_::read;
   using Opers_::resize;
   using Opers_::write;
-  using Opers_::write_batch;  
+  using Opers_::write_batch;
   using DBEntry = typename _CacheBase::DBEntry;
 
   // Use TwoQCache instead of LRUCache
@@ -133,6 +133,11 @@ struct _CacheStore : public Opers_ {
     } else if (has_pending) {
       _dirty_cv.notify_one();
     }
+  }
+
+  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
+    // Delegate to the underlying operations layer (e.g., _FileOperations)
+    Opers_::flush(ptr, offset, size, sync);
   }
 
   block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {

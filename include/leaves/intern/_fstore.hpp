@@ -242,6 +242,25 @@ struct _FileOperations : _CacheBase {
   const char* filename() const { return _filepath.c_str(); }
 
   Mutex& file_lock() { return _header->file_lock; }
+
+  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
+    if (size > 0) {
+      std::lock_guard<std::mutex> lock(_io_mutex);
+      if (!_file.is_open()) {
+        throw std::runtime_error("File not open");
+      }
+      _file.clear();
+      _file.seekp(static_cast<std::streampos>(offset));
+      if (_file.fail()) {
+        throw std::runtime_error("Failed to seek to offset for flush");
+      }
+      _file.write(static_cast<const char*>(ptr), size);
+      if (_file.fail()) {
+        throw std::runtime_error("Failed to write data during flush");
+      }
+      _file.flush();
+    }
+  }
 };
 
 
