@@ -284,7 +284,6 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
     using txn_ptr = typename BaseDB::txn_ptr;
     using Traits = typename Storage_::Traits;
     using offset_e = typename Traits::offset_e;
-    using block_ptr = typename Traits::ptr;
     using Header = LSMHeader<Storage_>;
     
     // Background thread (process-local)
@@ -369,11 +368,12 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
             }
             
             // Flush prepared_txn pointer, read_txn->next_txn, and the whole _wtxn
-            offset_t offset = this->_storage.resolve(block_ptr(&this->_header->prepared_txn));
-            this->flush(&this->_header->prepared_txn, offset, sizeof(offset_t), true);  // prepared_txn field
+            this->flush(&*this->_header, offsetof(Header, prepared_txn), 
+                       sizeof(offset_t), true);  // prepared_txn field
 
             txn_ptr read_txn = this->template resolve<Transaction>(this->_header->read_txn);
-            this->flush(&*read_txn, this->_header->read_txn, sizeof(Transaction), true);  // next_txn field
+            this->flush(&*read_txn, offsetof(Transaction, next_txn),
+                       sizeof(offset_t), true);  // next_txn field
             
             this->flush(&*this->_wtxn, 0, this->_wtxn->size(), true);  // whole transaction
         }
@@ -401,8 +401,8 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
 
         if (sync) {
             // Flush read_txn (last committed transaction)
-            auto offset = this->_storage.resolve(block_ptr(&this->_header->read_txn));
-            this->flush(&this->_header->read_txn, offset, sizeof(offset_t), true);
+            this->flush(&*this->_header, offsetof(Header, read_txn),
+                        sizeof(offset_t), true);
         }
     }
 };
