@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <type_traits>
 
 #include "_db.hpp"
 #include "_exception.hpp"
@@ -53,6 +54,7 @@ struct _MemoryMapTraits {
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;
+  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr bool TRANSACTIONAL = true;
 
@@ -72,15 +74,15 @@ struct _MemoryMapTraits {
   using Pointer = typename Pointers::template Pointer<T, type>;
 };
 
-template <typename Traits_>
+template <typename Traits_, template<typename> class DB_ = _DB>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
-  typedef _MemoryMapFile<Traits_> MemoryMapFile;
+  typedef _MemoryMapFile<Traits_, DB_> MemoryMapFile;
   using block_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  typedef _DB<MemoryMapFile> DB;
+  typedef DB_<MemoryMapFile> DB;
   typedef std::shared_ptr<DB> db_ptr;
   typedef std::weak_ptr<DB> wdb_ptr;
 

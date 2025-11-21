@@ -378,8 +378,9 @@ struct TestTraits {
   typedef offset_t offset_e;
 
   static constexpr bool TRANSACTIONAL = true;
-  static constexpr size_t MAX_KEY_SIZE = 256;
-  static constexpr size_t AREA_SIZE = 8 * K;
+  static constexpr size_t MAX_KEY_SIZE = 1 * M;
+  static constexpr size_t AREA_SIZE = 128 * K;
+  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t BLOCK_SIZES[] = {100, 4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =

@@ -20,6 +20,7 @@ struct TestTraits {
 
   // size of newly allocated areas
   static constexpr size_t AREA_SIZE = 4 * BLOCK_SIZE;
+  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t BLOCK_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);

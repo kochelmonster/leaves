@@ -145,8 +145,8 @@ struct _DB {
   typedef DB db_type;
 
   static_assert(
-      sizeof(Transaction) == sizeof(_TransactionBase<Traits>),
-      "Size of Transaction must be equal to size of _TransactionBase");
+      sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
+      "Size of Transaction must be at least size of _TransactionBase");
 
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");

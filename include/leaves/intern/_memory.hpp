@@ -63,13 +63,15 @@ constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
   return first - start;
 }
 
-// A 4K Structure to register memory blocks.
+// A configurable Structure to register memory blocks.
+// Size is determined by Traits::BLOCK_CONTAINER_SIZE (default 4K)
 template <typename Traits>
 struct _BlockContainer : public Traits::BlockHeader {
   using offset_e = typename Traits::offset_e;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr uint16_t SLOT_ID = Traits::BLOCK_SIZES_COUNT - 1;
-  static constexpr uint16_t SIZE = 4 * K;
+  static constexpr uint16_t SIZE = Traits::BLOCK_CONTAINER_SIZE;
+  static constexpr uint16_t SLOT_ID = 
+      binary_search(&BLOCK_SIZES[0], &BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT], SIZE);
   typedef typename Traits::BlockHeader Base;
   typedef typename Traits::template Pointer<_BlockContainer> ptr;
 
