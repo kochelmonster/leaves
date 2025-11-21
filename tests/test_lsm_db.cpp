@@ -77,7 +77,7 @@ BOOST_AUTO_TEST_CASE(test_segment_allocation) {
   auto segment = db->template resolve<LSMSegment>(seg_offset, WRITE);
   BOOST_CHECK(segment != nullptr);
   BOOST_CHECK(segment->parent_db == db.get());
-  BOOST_CHECK_EQUAL(segment->cursor_refs.load(), 0);
+  BOOST_CHECK_EQUAL(segment->refs.load(), 1);
   BOOST_CHECK_EQUAL(segment->next, 0);
   
   db->rollback(0);
@@ -118,13 +118,13 @@ BOOST_AUTO_TEST_CASE(test_commit_and_merge) {
   BOOST_CHECK_EQUAL(db->_wtxn->merge_phase, WRITING);
   
   db->commit(false);
-  BOOST_CHECK_EQUAL(db->_wtxn->merge_phase, COMMITTING);
+  BOOST_CHECK_EQUAL(db->txn()->merge_phase, COMMITTING);
   
   // Wait for background thread to merge
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   
   // Check that transaction was merged
-  BOOST_CHECK_EQUAL(db->_wtxn->merge_phase, COMMITTED);
+  BOOST_CHECK_EQUAL(db->txn()->merge_phase, COMMITTED);
 }
 
 BOOST_AUTO_TEST_CASE(test_sync_commit) {
@@ -144,13 +144,13 @@ BOOST_AUTO_TEST_CASE(test_sync_commit) {
   BOOST_CHECK_EQUAL(db->_wtxn->sync_commit, 0);  // Not set until commit()
   
   db->commit(true);
-  BOOST_CHECK_EQUAL(db->_wtxn->sync_commit, 1);
-  BOOST_CHECK_EQUAL(db->_wtxn->merge_phase, COMMITTING);
+  BOOST_CHECK_EQUAL(db->txn()->sync_commit, 1);
+  BOOST_CHECK_EQUAL(db->txn()->merge_phase, COMMITTING);
   
   // Wait for background thread to merge
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   
-  BOOST_CHECK_EQUAL(db->_wtxn->merge_phase, COMMITTED);
+  BOOST_CHECK_EQUAL(db->txn()->merge_phase, COMMITTED);
 }
 
 BOOST_AUTO_TEST_CASE(test_auto_commit) {
@@ -280,7 +280,7 @@ BOOST_AUTO_TEST_CASE(test_segment_init_and_reinit) {
   // Check segment was initialized
   BOOST_CHECK(segment->allocation_start != 0);
   BOOST_CHECK(segment->parent_db == db.get());
-  BOOST_CHECK_EQUAL(segment->cursor_refs.load(), 0);
+  BOOST_CHECK_EQUAL(segment->refs.load(), 1);
   
   db->rollback(0);
 }

@@ -245,9 +245,12 @@ struct _DB {
 
   void make_dirty(block_ptr& block) { _storage.make_dirty(block); }
 
-  template <typename T>
-  void flush(T* ptr, offset_t offset, size_t size, bool sync = false) {
+  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
     _storage.flush(ptr, offset, size, sync);
+  }
+
+  void flush(bool sync = false, bool force = false) {
+    _storage.flush(sync, force);
   }
 
   template <typename ptr>
@@ -580,10 +583,6 @@ struct _DB {
     _header->txn_lock.unlock();
   }
 
-  void flush(bool sync = false, bool force = false) {
-    _storage.flush(sync, force);
-  }
-
   typedef _MemStatistics<Traits> MemStatistics;
 
   struct Statistics {
@@ -667,7 +666,7 @@ struct _DB {
 
     // Return any uncommitted areas (after initialization, tails should be 0 or at initial state)
     // In sanitize context, we don't have pending areas to return since we're resetting state
-    flush();
+    flush(true, true);
   }
 
   const db_type& dump_db() const { return *this; }
