@@ -61,11 +61,10 @@ struct _LSMTransaction : public _Transaction<Traits_> {
   typedef _Transaction<Traits_> BaseTransaction;
   using Traits = Traits_;
   using ptr = typename Traits::Pointer<_LSMTransaction>;
-  using offset_e = typename Traits_::offset_e;
 
   // LSM-specific fields
-  offset_e segment_head{0};     // Head of segment linked list (oldest first)
-  offset_e current_segment{0};  // Current segment offset being written
+  offset_t segment_head{0};     // Head of segment linked list (oldest first)
+  offset_t current_segment{0};  // Current segment offset being written
   uint8_t merge_phase{WRITING};
   uint8_t sync_commit{
       0};  // 1 = committed with sync, requires sync flush after merge
@@ -80,7 +79,7 @@ struct _LSMTransaction : public _Transaction<Traits_> {
 
   // Allocate a new segment for this transaction
   template <typename DB>
-  offset_e _allocate_segment(DB* db) {
+  offset_t _allocate_segment(DB* db) {
     // Create segment resolver for this transaction
     SegmentResolver<DB> resolver(db);
 
@@ -127,7 +126,7 @@ struct _LSMTransaction : public _Transaction<Traits_> {
 
     assert(segment_block_ptr);
     // Reuse existing segment from pool (already initialized)
-    offset_e segment_offset = db->resolve(segment_block_ptr);
+    offset_t segment_offset = db->resolve(segment_block_ptr);
     auto segment_ptr =
         db->template resolve<typename DB::SegmentType>(segment_offset, WRITE);
 
@@ -147,7 +146,7 @@ struct _LSMTransaction : public _Transaction<Traits_> {
   void iter_segments(DB* db, T caller) {
     if (!segment_head) return;
 
-    offset_e seg_offset = segment_head;
+    offset_t seg_offset = segment_head;
     while (seg_offset) {
       auto segment =
           db->template resolve<typename DB::SegmentType>(seg_offset, READ);
@@ -164,7 +163,6 @@ struct Segment {
   typedef LSMDB_ LSMDB;
   typedef typename LSMDB::Traits Traits;
   typedef _MemManager<Traits> MemManager;
-  using offset_e = typename Traits::offset_e;
 
   MemManager _mem_manager;
   offset_t allocation_start{0};
@@ -249,7 +247,7 @@ struct SegmentResolver {
 };
 
 // Forward declaration for cursor
-template <typename LSMDB_>
+template <typename DB_, typename Traits_>
 struct _LSMCursor;
 
 // LSM Database - derives from base DB
@@ -261,10 +259,9 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
       BaseDB;
   typedef _LSMTransaction<typename Storage_::Traits> Transaction;
   typedef Segment<_LSMDB<Storage_>> SegmentType;
-  typedef _LSMCursor<_LSMDB<Storage_>> Cursor;
+  typedef _LSMCursor<_LSMDB<Storage_>, typename Storage_::Traits> Cursor;
   using txn_ptr = typename BaseDB::txn_ptr;
   using Traits = typename Storage_::Traits;
-  using offset_e = typename Traits::offset_e;
   using area_ptr = typename Storage_::area_ptr;
   using Header = LSMHeader<Storage_>;
 
@@ -328,11 +325,24 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
   // Override rollback - _GarbageSlot rollback handles segment cleanup
   void rollback(uint64_t cursor_id) {
     this->_wtxn->iter_segments(
-        this, [&](auto segment, offset_e seg_offset) -> bool {
+        this, [&](auto segment, offset_t seg_offset) -> bool {
           segment->refs.store(0, std::memory_order_release);
           return false;
         });
     BaseDB::rollback(cursor_id);
+  }
+
+  // Add a new segment to the given transaction (for overflow handling)
+  offset_t add_segment(txn_ptr& txn) {
+    // Allocate new segment
+    offset_t new_segment_offset = txn->_allocate_segment(this);
+    auto new_segment = this->template resolve<SegmentType>(new_segment_offset, WRITE);
+    
+    // Link new segment at the head (becomes current segment)
+    new_segment->next = txn->current_segment;
+    txn->current_segment = new_segment_offset;
+    
+    return new_segment_offset;
   }
 
   // Override prepare_commit to flush segments in sync mode
@@ -346,7 +356,7 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
     if (result && sync) {
       // Flush all segments in this transaction
       this->_wtxn->iter_segments(
-          this, [&](auto segment, offset_e seg_offset) -> bool {
+          this, [&](auto segment, offset_t seg_offset) -> bool {
             // Flush only the used portion (allocation_start to allocation_end)
             offset_t start = segment->allocation_start;
             offset_t end =
@@ -412,6 +422,9 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
     }
   }
 };
+
+
+
 
 // Background thread implementation
 template <typename Storage_>
@@ -498,7 +511,7 @@ void _LSMDB<Storage_>::_background_loop() {
 template <typename Storage_>
 void _LSMDB<Storage_>::_merge_transaction(txn_ptr& txn) {
   // Iterate through segments (oldest first from segment_head)
-  txn->iter_segments(this, [&](auto segment, offset_e seg_offset) -> bool {
+  txn->iter_segments(this, [&](auto segment, offset_t seg_offset) -> bool {
     // TODO: Implement actual merge logic using _Merger
     // For now, just advance to next segment
     return false;  // Continue to next segment
@@ -536,84 +549,6 @@ void _LSMDB<Storage_>::sanitize() {
 
   BaseDB::sanitize();
 }
-
-// LSM Cursor - extends base cursor with segment overflow handling
-template <typename LSMDB_>
-struct _LSMCursor : public _Cursor<LSMDB_, typename LSMDB_::Traits> {
-  typedef LSMDB_ LSMDB;
-  typedef typename LSMDB::Traits Traits;
-  typedef _Cursor<LSMDB, Traits> BaseCursor;
-  typedef typename LSMDB::Transaction Transaction;
-  typedef typename LSMDB::SegmentType Segment;
-  using db_ptr = typename Traits::db_ptr;
-  using offset_e = typename Traits::offset_e;
-
-  _LSMCursor(db_ptr db) : BaseCursor(db) {}
-
-  // Override reserve to handle segment overflow
-  void* reserve(size_t size) {
-    [[maybe_unused]] bool r = this->start_transaction();
-    assert(r);
-
-    if (!this->stack.size) {
-      if (!Traits::get_root(this->_txn)) {
-        this->push(offset_t());
-        _Inserter(&this->stack.back(), size).first_exec();
-        void* result = (void*)this->stack.back().value().data();
-        if (result) return result;
-
-        // First allocation failed - need new segment
-        return _allocate_new_segment_and_retry(size, true);
-      }
-      throw NoValidPosition();
-    }
-
-    _Inserter(&this->stack.back(), size).exec();
-    void* result = (void*)this->stack.back().value().data();
-    if (result) return result;
-
-    // Allocation failed - segment is full, allocate new segment
-    return _allocate_new_segment_and_retry(size, false);
-  }
-
-  void* _allocate_new_segment_and_retry(size_t size, bool is_first) {
-    // Get the LSM transaction (not base transaction)
-    auto lsm_txn = static_cast<Transaction*>(this->_txn.operator->());
-    auto lsm_db = static_cast<LSMDB*>(this->_db.get());
-
-    // Allocate new segment
-    offset_e new_segment_offset = lsm_txn->_allocate_segment(lsm_db);
-
-    // Link new segment to chain
-    if (lsm_txn->current_segment) {
-      // Link from previous segment
-      auto prev_segment =
-          lsm_db->template resolve<Segment>(lsm_txn->current_segment, WRITE);
-      prev_segment->next = new_segment_offset;
-    } else {
-      // First segment in chain
-      lsm_txn->segment_head = new_segment_offset;
-    }
-
-    // Update current segment pointer
-    lsm_txn->current_segment = new_segment_offset;
-
-    // Retry the allocation
-    if (is_first) {
-      _Inserter(&this->stack.back(), size).first_exec();
-    } else {
-      _Inserter(&this->stack.back(), size).exec();
-    }
-
-    void* result = (void*)this->stack.back().value().data();
-    if (!result) {
-      // Still failed - segment too small for this allocation
-      throw std::runtime_error("LSM segment too small for allocation");
-    }
-
-    return result;
-  }
-};
 
 }  // namespace leaves
 

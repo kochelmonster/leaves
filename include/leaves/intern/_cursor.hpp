@@ -470,12 +470,13 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
       throw NoValidPosition();
     }
 
-    _Inserter(&this->stack.back(), size).exec();
+    if (!_Inserter(&this->stack.back(), size).exec()) return nullptr;
     return (void*)this->stack.back().value().data();
   }
 
   void value(const Slice& value) {
     void* space = reserve(value.size());
+    assert(space);
     memcpy(space, value.data(), value.size());
     this->_db->flush();
   }
@@ -488,9 +489,9 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   Slice key() const { return this->current_key; }
 
   void remove() {
+    if (!is_valid()) throw NoValidPosition();
     [[maybe_unused]] bool r = start_transaction();
     assert(r);
-    if (!is_valid()) throw NoValidPosition();
     _Deleter(*this).exec();
   }
 

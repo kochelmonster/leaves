@@ -503,6 +503,7 @@ struct _LeafNode : public Traits::BlockHeader {
   static constexpr auto BS_COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr auto MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
+  static constexpr auto TOMBSTONE_FLAG = uint16_e(1) << 14;
 
   struct BigValue {
     uint64_e value_size;
@@ -520,8 +521,16 @@ struct _LeafNode : public Traits::BlockHeader {
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
   Slice value() const { return Slice(data + key_size, value_size); }
-  uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
+  uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG & ~TOMBSTONE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
+  
+  bool is_tombstone() const {
+    return (value_size & TOMBSTONE_FLAG) == TOMBSTONE_FLAG;
+  }
+  
+  void set_tombstone() {
+    value_size = TOMBSTONE_FLAG;
+  }
 
   template <typename Resolver>
   Slice value(Resolver& resolver) const {
