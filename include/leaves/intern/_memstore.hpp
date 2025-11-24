@@ -63,7 +63,6 @@ struct _MemoryDB {
   struct NullTransaction {
     tid_t txn_id = tid_t(1);
     offset_t root{0};
-    std::atomic<uint32_t> refs{0};
   };
 
   typedef NullTransaction* txn_ptr;
@@ -74,7 +73,6 @@ struct _MemoryDB {
     typedef ::NullHasher Hasher;  // No hashing needed for memory-only
     typedef uint8_t hash_t[0];
     constexpr static bool TRANSACTIONAL = false;
-    constexpr static bool TRACKED = false;
     static void set_root(txn_ptr txn, offset_t offset) { txn->root = offset; }
     static offset_t get_root(txn_ptr txn) { return txn->root; }
   };

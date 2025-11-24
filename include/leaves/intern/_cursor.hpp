@@ -390,8 +390,8 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   _Cursor(db_ptr db) : CursorBase(db) {
     if constexpr (Traits::TRANSACTIONAL) {
       _id = this->_db->new_cursor_id();
+      update();
     }
-    update();
   }
 
   ~_Cursor() {
@@ -423,6 +423,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   bool _prepare_move() {
     this->stack.clear(0);
+    if (! this->_txn) return true;
     auto root = Traits::get_root(this->_txn);
     if (!root) return true;
     this->rest_key.reset();

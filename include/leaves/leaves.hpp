@@ -2,6 +2,7 @@
 #define _LEAVES_HPP
 
 #include "mmap.hpp"
+#include "lsm_mmap.hpp"
 
 
-#endif  // _LEAVES_MMAP_HPP
+#endif  // _LEAVES_HPP

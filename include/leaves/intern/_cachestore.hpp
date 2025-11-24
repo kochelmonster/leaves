@@ -310,6 +310,7 @@ struct _CacheStore : public Opers_ {
 
   Slice db_name(int index) const { return Slice(_header->dbs[index].name); }
 
+  db_ptr operator[](uint16_t index) { return _dbs[index].lock(); }
   db_ptr operator[](const char* name) { return make(name); }
 
   db_ptr make(const char* name) {

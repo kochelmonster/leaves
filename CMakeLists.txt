@@ -137,6 +137,11 @@ target_link_libraries(test_db PUBLIC core test)
 add_executable(test_lsm_db tests/test_lsm_db.cpp)
 target_link_libraries(test_lsm_db PUBLIC core test pthread)
 
+add_executable(test_lsm_mmap tests/test_lsm_mmap.cpp)
+target_sources(test_lsm_mmap INTERFACE
+    include/leaves/lsm_mmap.hpp include/leaves/intern/_lsm_db.hpp include/leaves/intern/_mmap.hpp)
+target_link_libraries(test_lsm_mmap PUBLIC core test pthread)
+
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
     include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
@@ -183,6 +188,7 @@ COMMAND ./test_bits
 COMMAND ./test_mmap
 COMMAND ./test_db
 COMMAND ./test_lsm_db
+COMMAND ./test_lsm_mmap
 COMMAND ./test_string_insert
 COMMAND ./test_multithread
 COMMAND ./test_merger
@@ -190,7 +196,7 @@ COMMAND ./test_serial
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_lsm_db test_node test_string_insert test_multithread test_merger test_serial test_twoquecache
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_lsm_db test_lsm_mmap test_node test_string_insert test_multithread test_merger test_serial test_twoquecache
 )
 
 endif(LEAVES_BUILD_TESTS)

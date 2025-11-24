@@ -10,6 +10,7 @@
 #include "_db.hpp"
 #include "_memory.hpp"
 #include "_memstore.hpp"
+#include "_merger.hpp"
 
 namespace leaves {
 
@@ -25,16 +26,6 @@ enum MergePhase : uint8_t {
   WRITING = 0,     // Active transaction, writes going to segment
   COMMITTING = 1,  // Committed, ready for merge
   COMMITTED = 2    // Merge complete, transaction fully committed
-};
-
-// Segment-specific traits with smaller BlockContainer
-template <typename BaseTraits_>
-struct SegmentTraits : public BaseTraits_ {
-  typedef BaseTraits_ BaseTraits;
-
-  // Smaller BlockContainer for segment's limited space (512 bytes instead of
-  // 4KB)
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 512;
 };
 
 // LSM Header - extends base DB header with multi-process LSM state
@@ -82,11 +73,12 @@ struct _LSMTransaction : public _Transaction<Traits_> {
   offset_t _allocate_segment(DB* db) {
     // Create segment resolver for this transaction
     SegmentResolver<DB> resolver(db);
+    typedef typename DB::SegmentType::ptr segment_ptr;
 
     // Try to pop from recycle pool (transaction-safe)
-    auto segment_block_ptr = _free_segments.pop(resolver);
+    segment_ptr pseg = _free_segments.pop(resolver);
 
-    if (!segment_block_ptr) {
+    if (!pseg) {
       // Allocate new area from storage if pool empty
       // Split area into segments, last segment gets remaining space
       auto area = db->alloc_single_area();
@@ -96,8 +88,7 @@ struct _LSMTransaction : public _Transaction<Traits_> {
       // Split area into segments and push all to _free_segments
       offset_t seg_offset = area_start;
       while (seg_offset < area_end) {
-        auto seg_ptr =
-            db->template resolve<typename DB::SegmentType>(seg_offset, WRITE);
+        pseg = db->template resolve(seg_offset, WRITE);
 
         // Calculate data bounds for this segment
         // data_start accounts for Segment header (includes BaseMemoryDB fields
@@ -114,31 +105,25 @@ struct _LSMTransaction : public _Transaction<Traits_> {
         }
 
         // Initialize segment with specific bounds (called only once)
-        seg_ptr->init(data_start, data_end);
-        db->make_dirty(seg_ptr);
-        _free_segments.push(seg_ptr, resolver);
+        pseg->init(data_start, data_end);
+        db->make_dirty(pseg);
+        _free_segments.push(pseg, resolver);
 
         seg_offset += SEGMENT_SIZE;
       }
 
-      segment_block_ptr = _free_segments.pop(resolver);
+      pseg = _free_segments.pop(resolver);
     }
 
-    assert(segment_block_ptr);
-    // Reuse existing segment from pool (already initialized)
-    offset_t segment_offset = db->resolve(segment_block_ptr);
-    auto segment_ptr =
-        db->template resolve<typename DB::SegmentType>(segment_offset, WRITE);
-
-    // Reset segment state
-    segment_ptr->reinit(db);
+    assert(pseg);
+    pseg->reinit(db);
 
     // Immediately push back to _GarbageSlot for future recycling
     // SegmentResolver::may_recycle() will check refs and merge_phase
     // when popping
-    _free_segments.push(segment_block_ptr, resolver);
+    _free_segments.push(pseg, resolver);
 
-    return segment_offset;
+    return db->resolve(pseg);
   }
 
   // Iterate through all segments in the segment chain
@@ -150,26 +135,65 @@ struct _LSMTransaction : public _Transaction<Traits_> {
     while (seg_offset) {
       auto segment =
           db->template resolve<typename DB::SegmentType>(seg_offset, READ);
-      if (caller(segment, seg_offset)) break;
+      if (caller(&*segment, seg_offset)) break;
       seg_offset = segment->next;
     }
   }
 };
 
 // Segment represents a fixed-size (64KB) storage block for one transaction's
-// writes Segments contain a MemManager for memory allocation within the segment
+// writes. Segments work like _MemoryDB - lightweight database objects with
+// their own memory manager.
 template <typename LSMDB_>
 struct Segment {
   typedef LSMDB_ LSMDB;
-  typedef typename LSMDB::Traits Traits;
+  typedef Segment<LSMDB> SegmentType;
+  typedef typename LSMDB::Transaction Transaction;
+  using ptr = typename LSMDB::Traits::template Pointer<SegmentType>;
+
+  struct NullTransaction {
+    tid_t txn_id = tid_t(1);
+    offset_t root{0};
+  };
+  typedef NullTransaction* txn_ptr;
+
+  struct SegmentTraits : public LSMDB::Traits {
+    typedef LSMDB::Traits BaseTraits;
+
+    // Smaller BlockContainer for segment's limited space (512 bytes instead of
+    // 4KB)
+    static constexpr size_t BLOCK_CONTAINER_SIZE = 512;
+
+    // Segment traits work like _MemoryDB::ValueTraits
+    typedef ::NullHasher Hasher;  // No hashing needed for segments
+    typedef uint8_t hash_t[0];
+    constexpr static bool TRANSACTIONAL = false;
+
+    typedef Segment::ptr db_ptr;
+    // Get/set root from segment's transaction
+    template <typename TxnPtr>
+    static void set_root(TxnPtr txn, offset_t offset) {
+      txn->root = offset;
+    }
+
+    template <typename TxnPtr>
+    static offset_t get_root(TxnPtr txn) {
+      return txn->root;
+    }
+  };
+
+  // Now define Traits to be SegmentTraits (not LSMDB::Traits)
+  typedef SegmentTraits Traits;
+  typedef typename Traits::ptr block_ptr;
   typedef _MemManager<Traits> MemManager;
+  using area_ptr = typename LSMDB::area_ptr;
 
   MemManager _mem_manager;
   offset_t allocation_start{0};
   offset_t next{0};  // Next segment in the linked list (offset, not pointer)
   std::atomic<int> refs{0};  // Refcount tracks all cursors using this segment
-  LSMDB* parent_db{
-      nullptr};  // Parent LSMDB for forwarding big memory operations
+  LSMDB* parent_db{nullptr};           
+  NullTransaction _null_txn;
 
   // Initialize segment's memory manager with specific bounds
   // Called once when area is split into segments
@@ -177,22 +201,85 @@ struct Segment {
     allocation_start = data_start + sizeof(Segment);
     _mem_manager.init(allocation_start, data_end);
     next = 0;
+    _null_txn.root = 0;
     refs.store(0, std::memory_order_release);
   }
 
   // Set parent DB pointer before returning segment to user
   void reinit(LSMDB* parent) {
     _mem_manager.allocation_start = allocation_start;
-    refs.store(1, std::memory_order_release);
     next = 0;
+    _null_txn.root = 0;
+    refs.store(1, std::memory_order_release);
     parent_db = parent;
   }
 
-  // Allocate memory within this segment
-  template <typename Resolver>
-  auto alloc(uint16_t slot_id, Resolver& resolver) {
-    return _mem_manager.alloc(slot_id, resolver);
+  txn_ptr txn() { return &_null_txn; }
+
+  // Block allocation (like _MemoryDB::alloc)
+  block_ptr alloc(uint16_t space) {
+    uint8_t slot = _mem_manager.assign_slot(space);
+    return alloc_slot(slot);
   }
+
+  void free(block_ptr p) { _mem_manager.free(p, *this); }
+
+  // Memory manager interface (like _MemoryDB::alloc_slot)
+  block_ptr alloc_slot(uint8_t slot_id) {
+    return _mem_manager.alloc(slot_id, *this);
+  }
+
+  // Methods required by _MemManager (like _MemoryDB)
+  template <typename BlockType>
+  void mark_for_recycle(const BlockType& /*block*/) {}
+
+  template <typename BlockType>
+  bool may_recycle(const BlockType& /*block*/) const {
+    return true;
+  }
+
+  // Resolve methods - delegate to parent DB
+  template <typename T = typename Traits::BlockHeader>
+  auto resolve(offset_t offset, Access mode = READ) {
+    return parent_db->template resolve<T>(offset, mode);
+  }
+
+  template <typename Pointer>
+  offset_t resolve(const Pointer& p) const {
+    return parent_db->resolve(p);
+  }
+
+  // Make dirty - delegate to parent
+  template <typename T>
+  void make_dirty(T block) {
+    parent_db->make_dirty(block);
+  }
+
+  // Prefetch (no-op like _MemoryDB)
+  void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {}
+  void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}
+
+  // Flush (no-op like _MemoryDB)
+  void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
+
+  // Big allocation - delegate to parent DB
+  AreaSlice alloc_big(uint64_t size) { return parent_db->alloc_big(size); }
+
+  void free_big(typename Traits::offset_e offset, size_t size) {
+    parent_db->free_big(offset, size);
+  }
+
+  area_ptr alloc_single_area() { return area_ptr(); }
+
+  // Copy-on-write - delegate to parent
+  template <typename ptr>
+  ptr cow(ptr& src) {
+    return parent_db->cow(src);
+  }
+
+  // Transaction status (segments don't use transaction system)
+  tid_t txn_id() const { return _null_txn.txn_id; }
+  tid_t transaction_active() const { return tid_t(0); }
 
   // Cursor management
   void acquire() { refs.fetch_add(1, std::memory_order_relaxed); }
@@ -257,9 +344,20 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
   typedef _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
               LSMHeader<Storage_>>
       BaseDB;
+  typedef _LSMDB<Storage_> DB;
   typedef _LSMTransaction<typename Storage_::Traits> Transaction;
   typedef Segment<_LSMDB<Storage_>> SegmentType;
-  typedef _LSMCursor<_LSMDB<Storage_>, typename Storage_::Traits> Cursor;
+
+  struct BaseCursorTraits : public BaseDB::ValueTraits {
+    typedef BaseDB* db_ptr;
+  };
+
+  struct CursorTraits : public BaseDB::ValueTraits {
+    typedef std::shared_ptr<DB> db_ptr;
+    static constexpr size_t MAX_KEY_SIZE = 32 * K;
+  };
+  typedef _LSMCursor<DB, CursorTraits> Cursor;
+
   using txn_ptr = typename BaseDB::txn_ptr;
   using Traits = typename Storage_::Traits;
   using area_ptr = typename Storage_::area_ptr;
@@ -277,7 +375,8 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
   _LSMDB(Storage_& storage, offset_t* header, uint16_t index)
       : BaseDB(storage, header, index) {
     // Initialize LSM header for new database
-    this->_header->last_merged_txn_id.store(tid_t(0), std::memory_order_release);
+    this->_header->last_merged_txn_id.store(tid_t(0),
+                                            std::memory_order_release);
     this->_header->auto_commit_ms = 200;
     this->_header->auto_commit_enabled = 0;
     // Initialize additional transaction state
@@ -301,14 +400,182 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
   void disable_auto_commit() { this->_header->auto_commit_enabled = 0; }
 
   // Background thread operations
-  void _start_background_thread();
-  void _stop_background_thread();
-  void _background_loop();
+  void _start_background_thread() {
+    _shutdown.store(false, std::memory_order_release);
+    _background_thread = std::thread([this]() { _background_loop(); });
+  }
+
+  void _stop_background_thread() {
+    _shutdown.store(true, std::memory_order_release);
+    this->_header->background_cv.notify_all();
+    if (_background_thread.joinable()) {
+      _background_thread.join();
+    }
+  }
+
+  void _background_loop() {
+    while (!_shutdown.load(std::memory_order_acquire)) {
+      bool any_sync_commit = false;
+      tid_t max_merged_txn_id{0};
+      bool merged_any = false;
+
+      // Create cursor with raw pointer to BaseDB (this is already BaseDB*)
+      typename Cursor::BaseCursor cursor(this);
+      cursor.start_transaction();
+
+      // Walk transaction chain from oldest to newest using iter_transactions
+      this->iter_transactions([&](txn_ptr txn) -> bool {
+        if (txn->merge_phase == COMMITTED) {
+          // Already committed, continue to next
+          return false;
+        } else if (txn->merge_phase == COMMITTING) {
+          // Ready for merge - merge it now
+          if (txn->sync_commit) {
+            any_sync_commit = true;
+          }
+
+          _merge_transaction(txn, cursor);
+
+          // Mark as committed
+          txn->merge_phase = COMMITTED;
+          if (txn->txn_id > max_merged_txn_id) {
+            max_merged_txn_id = txn->txn_id;
+          }
+
+          merged_any = true;
+          return false;  // Continue to next transaction
+        } else if (txn->merge_phase == WRITING) {
+          // Transaction still being written - stop here
+          // Cannot merge transactions beyond this point
+          return true;  // Break iteration
+        }
+        return false;
+      });
+
+      if (merged_any) {
+        cursor.commit(any_sync_commit);
+
+        // Now release refs on merged transactions - segments can be freed after
+        // sync completes
+        this->iter_transactions([&](txn_ptr txn) -> bool {
+          if (txn->txn_id <= max_merged_txn_id) {
+            assert(txn->merge_phase == COMMITTED);
+            txn->refs.fetch_sub(1, std::memory_order_release);
+          }
+          return false;
+        });
+
+        // Update last merged transaction ID for cursor validation
+        this->_header->last_merged_txn_id.store(max_merged_txn_id,
+                                                std::memory_order_release);
+      } else {
+        // No merge work, wait for notification or timeout
+        std::unique_lock<boost::interprocess::interprocess_mutex> lock(
+            this->_header->background_mutex);
+        this->_header->background_cv.wait_for(
+            lock, boost::posix_time::milliseconds(50),
+            [&]() { return _shutdown.load(std::memory_order_acquire); });
+      }
+    }
+  }
+
+  struct MergerHandler {
+    // Always accept source entries (they are newer)
+    bool operator()(const std::string& key, const Slice& dst,
+                    const Slice& src) {
+      return true;  // Always overwrite
+    }
+  };
 
   // LSM operations performed by background thread
-  void _merge_transaction(txn_ptr& txn);
-  void _prune_tombstones_cycle();
-  void sanitize();
+  void _merge_transaction(txn_ptr& txn,
+                          typename Cursor::BaseCursor& dst_cursor) {
+    txn->iter_segments(this, [&](auto segment, offset_t seg_offset) -> bool {
+      // segment is already a raw pointer from iter_segments (&*segment)
+      typedef std::remove_pointer_t<decltype(segment)> SegmentType;
+      typedef typename SegmentType::Traits SegmentTraits;
+      typedef _Cursor<SegmentType, SegmentTraits> SrcCursor;
+
+      // segment is already a raw pointer
+      SrcCursor src_cursor(segment);
+      src_cursor._txn = segment->txn(); // set transaction for cursor
+      MergerHandler handler;
+      _Merger merger(dst_cursor, src_cursor, handler);
+      merger.exec();
+      return false;  // Continue to next segment
+    });
+
+    dst_cursor.commit();
+  }
+
+  void _prune_tombstones_cycle() {
+    // Check if merge work arrived (check for COMMITTING transactions)
+    auto check_merge_work = [&]() {
+      bool has_merge_work = false;
+      this->iter_transactions([&](txn_ptr txn) -> bool {
+        if (txn->merge_phase == COMMITTING) {
+          has_merge_work = true;
+          return true;  // Break iteration
+        }
+        return false;
+      });
+      return has_merge_work;
+    };
+
+    if (check_merge_work()) return;  // Interrupt pruning
+
+    // Scan persistent storage for tombstones and remove them
+    // Use BaseDB cursor (not LSMCursor) to scan only persistent storage
+    typename Cursor::BaseCursor cursor(this);
+    cursor.first();
+
+    while (cursor.is_valid()) {
+      if (check_merge_work()) {
+        cursor.commit();  // Commit any removes done so far before interrupting
+        return;           // Interrupt pruning
+      }
+
+      // Check if current entry is tombstone
+      auto* leaf = cursor.leaf();
+      if (leaf && leaf->is_tombstone()) {
+        cursor.remove();
+      } else {
+        cursor.next();
+      }
+    }
+
+    // Commit all remove operations at the end
+    cursor.commit();
+  }
+
+  void sanitize() {
+    // Create cursor for sanitization with raw pointer
+    typename Cursor::BaseCursor cursor(this);
+
+    // Walk all transactions and sanitize their state
+    this->iter_transactions([&](txn_ptr txn) -> bool {
+      if (txn->merge_phase == COMMITTING) {
+        // Transaction was committed but merge may not have completed
+        // Merge it now (no cursors exist yet at startup)
+        _merge_transaction(txn, cursor);
+        txn->merge_phase = COMMITTED;
+      }
+      return false;
+    });
+
+    cursor.commit();
+
+    // Reset all segment refs to 0 for recycling eligibility
+    txn_ptr read_txn =
+        this->template resolve<Transaction>(this->_header->read_txn);
+    read_txn->_free_segments.iter(*this, [&](auto& block_item) {
+      auto segment =
+          this->template resolve<SegmentType>(block_item.link, WRITE);
+      segment->refs.store(0, std::memory_order_relaxed);
+    });
+
+    BaseDB::sanitize();
+  }
 
   // Override start_transaction to allocate initial segment
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
@@ -336,12 +603,13 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
   offset_t add_segment(txn_ptr& txn) {
     // Allocate new segment
     offset_t new_segment_offset = txn->_allocate_segment(this);
-    auto new_segment = this->template resolve<SegmentType>(new_segment_offset, WRITE);
-    
+    auto new_segment =
+        this->template resolve<SegmentType>(new_segment_offset, WRITE);
+
     // Link new segment at the head (becomes current segment)
     new_segment->next = txn->current_segment;
     txn->current_segment = new_segment_offset;
-    
+
     return new_segment_offset;
   }
 
@@ -359,11 +627,8 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
           this, [&](auto segment, offset_t seg_offset) -> bool {
             // Flush only the used portion (allocation_start to allocation_end)
             offset_t start = segment->allocation_start;
-            offset_t end =
-                segment->_mem_manager
-                    .allocation_start;  // the last allocated position
+            offset_t end = segment->_mem_manager.allocation_start;
             size_t used_size = end - start;
-
             this->flush(&*segment, start, used_size, true);  // sync=true
             segment->release();
             return false;  // Continue to next segment
@@ -394,7 +659,9 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
   }
 
   // Override commit to mark transaction as ready for merge
-  void commit(bool sync = false) {
+  bool commit(uint64_t cursor_id, bool sync = false) {
+    if (!prepare_commit(cursor_id, sync)) return false;
+
     // Increment refs to prevent transaction from being freed during merge
     this->_wtxn->refs.fetch_add(1, std::memory_order_release);
 
@@ -409,7 +676,7 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
 
     // Commit transaction metadata (always with sync=false)
     // In sync mode, prepare_commit already flushed everything
-    BaseDB::commit(false);
+    BaseDB::commit(cursor_id, false);
 
     if (sync) {
       // Flush read_txn (last committed transaction)
@@ -420,135 +687,9 @@ struct _LSMDB : public _DB<Storage_, _LSMTransaction<typename Storage_::Traits>,
           ((char*)&this->_header->read_txn - (char*)&this->_header);
       this->flush(&this->_header->read_txn, offset, sizeof(offset_t), true);
     }
+    return true;
   }
 };
-
-
-
-
-// Background thread implementation
-template <typename Storage_>
-void _LSMDB<Storage_>::_start_background_thread() {
-  _shutdown.store(false, std::memory_order_release);
-  _background_thread = std::thread([this]() { _background_loop(); });
-}
-
-template <typename Storage_>
-void _LSMDB<Storage_>::_stop_background_thread() {
-  _shutdown.store(true, std::memory_order_release);
-  this->_header->background_cv.notify_all();
-  if (_background_thread.joinable()) {
-    _background_thread.join();
-  }
-}
-
-template <typename Storage_>
-void _LSMDB<Storage_>::_background_loop() {
-  while (!_shutdown.load(std::memory_order_acquire)) {
-    bool any_sync_commit = false;
-    tid_t max_merged_txn_id{0};
-    bool merged_any = false;
-
-    // Walk transaction chain from oldest to newest using iter_transactions
-    this->iter_transactions([&](txn_ptr txn) -> bool {
-      if (txn->merge_phase == COMMITTED) {
-        // Already committed, continue to next
-        return false;
-      } else if (txn->merge_phase == COMMITTING) {
-        // Ready for merge - merge it now
-        if (txn->sync_commit) {
-          any_sync_commit = true;
-        }
-
-        _merge_transaction(txn);
-
-        // Mark as committed
-        txn->merge_phase = COMMITTED;
-        if (txn->txn_id > max_merged_txn_id) {
-          max_merged_txn_id = txn->txn_id;
-        }
-
-        merged_any = true;
-        return false;  // Continue to next transaction
-      } else if (txn->merge_phase == WRITING) {
-        // Transaction still being written - stop here
-        // Cannot merge transactions beyond this point
-        return true;  // Break iteration
-      }
-      return false;
-    });
-
-    if (merged_any) {
-      // Perform single synchronized flush if any transaction requires it
-      if (any_sync_commit) {
-        this->_storage.flush(true);
-      }
-
-      // Now release refs on merged transactions - segments can be freed after
-      // sync completes
-      this->iter_transactions([&](txn_ptr txn) -> bool {
-        if (txn->txn_id <= max_merged_txn_id) {
-          assert(txn->merge_phase == COMMITTED);
-          txn->refs.fetch_sub(1, std::memory_order_release);
-        }
-        return false;
-      });
-
-      // Update last merged transaction ID for cursor validation
-      this->_header->last_merged_txn_id.store(max_merged_txn_id,
-                                              std::memory_order_release);
-    } else {
-      // No merge work, wait for notification or timeout
-      std::unique_lock<boost::interprocess::interprocess_mutex> lock(
-          this->_header->background_mutex);
-      this->_header->background_cv.wait_for(
-          lock, boost::posix_time::milliseconds(50),
-          [&]() { return _shutdown.load(std::memory_order_acquire); });
-    }
-  }
-}
-
-template <typename Storage_>
-void _LSMDB<Storage_>::_merge_transaction(txn_ptr& txn) {
-  // Iterate through segments (oldest first from segment_head)
-  txn->iter_segments(this, [&](auto segment, offset_t seg_offset) -> bool {
-    // TODO: Implement actual merge logic using _Merger
-    // For now, just advance to next segment
-    return false;  // Continue to next segment
-  });
-
-  // Transaction state (COMMITTED, sync, refs) handled by _background_loop
-}
-
-template <typename Storage_>
-void _LSMDB<Storage_>::_prune_tombstones_cycle() {
-  // TODO: Implement tombstone pruning
-  // This is a lower-priority operation that can be interrupted by merges
-}
-
-template <typename Storage_>
-void _LSMDB<Storage_>::sanitize() {
-  // Walk all transactions and sanitize their state
-  this->iter_transactions([&](txn_ptr txn) -> bool {
-    if (txn->merge_phase == COMMITTING) {
-      // Transaction was committed but merge may not have completed
-      // Merge it now (no cursors exist yet at startup)
-      _merge_transaction(txn);
-      txn->merge_phase = COMMITTED;
-    }
-    return false;
-  });
-
-  // Reset all segment refs to 0 for recycling eligibility
-  txn_ptr read_txn =
-      this->template resolve<Transaction>(this->_header->read_txn);
-  read_txn->_free_segments.iter(*this, [&](auto& block_item) {
-    auto segment = this->template resolve<SegmentType>(block_item.link, WRITE);
-    segment->refs.store(0, std::memory_order_relaxed);
-  });
-
-  BaseDB::sanitize();
-}
 
 }  // namespace leaves
 

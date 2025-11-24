@@ -281,6 +281,7 @@ struct _MemManager {
       }
       // Always allocate new area since current allocation is exhausted
       auto area = resolver.alloc_single_area();
+      if (!area) return block_ptr();
       allocation_start = area->content_offset();
       allocation_end = area->end();
     }

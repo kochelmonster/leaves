@@ -14,14 +14,16 @@ template <typename DB_, typename Traits_>
 struct _LSMCursor {
   typedef DB_ DB;
   typedef Traits_ Traits;
-  typedef _Cursor<DB_, Traits_> BaseCursor;
+  typedef _Cursor<DB_, typename DB::BaseCursorTraits> BaseCursor;
   typedef typename DB::SegmentType Segment;
   typedef typename Segment::Traits SegmentTraits;
   typedef _Cursor<Segment, SegmentTraits> SegmentCursor;
   using txn_ptr = typename DB::txn_ptr;
   using db_ptr = typename Traits::db_ptr;
-  static_assert(Traits_::MAX_KEY_SIZE < DB_::Transaction::SEGMENT_SIZE / 2,
+  static_assert(Traits_::MAX_KEY_SIZE <= DB_::Transaction::SEGMENT_SIZE / 2,
                 "Cursor key size exceeds segment size");
+
+  db_ptr _db;
 
   // Persistent storage cursor
   BaseCursor _base_cursor;
@@ -29,8 +31,6 @@ struct _LSMCursor {
   // Per-segment cursors (newest to oldest, reverse order from segment_head
   // list) Index 0 is always the current transaction's segment (for writes)
   std::vector<std::unique_ptr<SegmentCursor>> _segment_cursors;
-  tid_t _segment_refs_txn_id{
-      0};  // Transaction ID when segment references were acquired
 
   // Active cursor for delegation
   // nullptr = use _base_cursor (persistent storage)
@@ -38,7 +38,9 @@ struct _LSMCursor {
   SegmentCursor* _active_cursor{nullptr};
   bool _needs_cursor_sync{false};  // True after find(), cleared by next/prev
 
-  _LSMCursor(db_ptr db) : _base_cursor(db) { _acquire_segment_refs(); }
+  _LSMCursor(db_ptr db) : _db(db), _base_cursor(_db.get()) {
+    _acquire_segment_refs();
+  }
 
   ~_LSMCursor() { _release_segment_refs(); }
 
@@ -59,18 +61,17 @@ struct _LSMCursor {
 
     // Not found in segments, search persistent storage
     _base_cursor.find(key);
-    _active_cursor = nullptr;  // nullptr = use _base_cursor for persistent storage
+    _active_cursor = nullptr;  
   }
 
   // Override is_valid to use active cursor
   bool is_valid() const {
-    if (_active_cursor) {
-      return _active_cursor->is_valid();
-    }
-    return _base_cursor.is_valid();
+    return _active_cursor ? _active_cursor->is_valid() : _base_cursor.is_valid();
   }
 
-  Slice key() const { return _active_cursor ? _active_cursor->key() : _base_cursor.key(); }
+  Slice key() const {
+    return _active_cursor ? _active_cursor->key() : _base_cursor.key();
+  }
 
   Slice value() const {
     return _active_cursor ? _active_cursor->value() : _base_cursor.value();
@@ -164,7 +165,7 @@ struct _LSMCursor {
     if (_active_cursor != segment_cursor.get()) {
       segment_cursor->find(key());
     }
-    
+
     segment_cursor->insert(key(), Slice());
     auto* leaf = segment_cursor->leaf();
     assert(leaf);
@@ -184,10 +185,9 @@ struct _LSMCursor {
 
       void* result = _active_cursor->reserve(size);
       if (result) return result;
-    
+
       // Segment overflow - create new segment and retry
-      auto& lsm_txn = *_base_cursor._txn;
-      _base_cursor._db->add_segment(_base_cursor._txn.get());
+      _db->add_segment(_db->_wtxn);
       _add_current_segment();
       // now reserve will succeed
     }
@@ -201,11 +201,19 @@ struct _LSMCursor {
 
   // Override start_transaction to add current segment
   bool start_transaction(bool non_blocking = false) {
-    if (_base_cursor.start_transaction(non_blocking)) {
+    if (_db->start_transaction(_base_cursor._id, non_blocking)) {
       _add_current_segment();
       return true;
     }
     return false;
+  }
+
+  tid_t prepare_commit(bool sync = false) {
+    return _db->prepare_commit(_base_cursor._id, sync);
+  }
+
+  bool commit(bool sync = false) {
+    return _db->commit(_base_cursor._id, sync);
   }
 
   // Helper methods
@@ -213,15 +221,17 @@ struct _LSMCursor {
     // Only check if cursor has segment references
     if (_segment_cursors.empty()) return;
 
-    auto& cursor_txn = static_cast<typename DB::Transaction&>(*_base_cursor._txn);
+    auto& cursor_txn =
+        static_cast<typename DB::Transaction&>(*_base_cursor._txn);
 
     // If cursor's transaction is COMMITTED, all its segments are merged -
     // release them
     if (cursor_txn.merge_phase == COMMITTED) {
       std::string saved_key;
       if (is_valid()) {
-        saved_key = (_active_cursor ? _active_cursor->key() : _base_cursor.key())
-                        .to_string();
+        saved_key =
+            (_active_cursor ? _active_cursor->key() : _base_cursor.key())
+                .string();
       }
       _release_segment_refs();
       _base_cursor.stack.clear();
@@ -236,7 +246,8 @@ struct _LSMCursor {
 
     if (!_base_cursor._txn) return;
 
-    auto& cursor_txn = static_cast<typename DB::Transaction&>(*_base_cursor._txn);
+    auto& cursor_txn =
+        static_cast<typename DB::Transaction&>(*_base_cursor._txn);
     tid_t cursor_txn_id = cursor_txn.txn_id;
 
     // Collect segments from all COMMITTING transactions that are older than
@@ -254,10 +265,11 @@ struct _LSMCursor {
         // Collect all segments from this transaction (oldest first in linked
         // list)
         lsm_txn.iter_segments(
-            _base_cursor._db.get(), [&](auto segment, offset_t seg_offset) -> bool {
+            _db.get(), [&](auto segment, offset_t seg_offset) -> bool {
               segment->acquire();
 
-              // Create cursor for this segment (segment is a Segment pointer)
+              // Create cursor for this segment (segment is a
+              // Segment pointer)
               auto cursor = std::make_unique<SegmentCursor>(segment);
               _segment_cursors.push_back(std::move(cursor));
 
@@ -270,8 +282,6 @@ struct _LSMCursor {
 
     // Reverse to get newest first (search priority: newest data checked first)
     std::reverse(_segment_cursors.begin(), _segment_cursors.end());
-
-    _segment_refs_txn_id = cursor_txn_id;
   }
 
   void _release_segment_refs() {
@@ -279,8 +289,8 @@ struct _LSMCursor {
 
     // Release all segment cursors
     for (auto& cursor : _segment_cursors) {
-      // Cursor's _db points to the Segment
-      Segment* segment = static_cast<Segment*>(cursor->_db.get());
+      // Cursor's _db is a Segment::ptr, dereference to get raw pointer
+      Segment* segment = &*cursor->_db;
       segment->release();
     }
     _segment_cursors.clear();
@@ -290,15 +300,16 @@ struct _LSMCursor {
   void _add_current_segment() {
     if (!_base_cursor._txn) return;
 
-    auto& lsm_txn = *_base_cursor._txn;
+    auto& lsm_txn = _db->_wtxn;
 
-    if (lsm_txn.current_segment) {
-      Segment* segment =
-          _base_cursor._db->template resolve<Segment>(lsm_txn.current_segment, WRITE);
-
+    if (lsm_txn->current_segment) {
+      typename Segment::ptr segment =
+          _db->resolve(lsm_txn->current_segment, WRITE);
       segment->acquire();
       // Insert at index 0 (newest segment for writes)
       auto cursor = std::make_unique<SegmentCursor>(segment);
+      // non transaction cursors need explicitly set transactions
+      cursor->_txn = segment->txn();
       _segment_cursors.insert(_segment_cursors.begin(), std::move(cursor));
     }
   }
@@ -308,14 +319,14 @@ struct _LSMCursor {
 
     _needs_cursor_sync = false;
     Slice current_key = key();
-    
+
     // Position all other cursors at the same key
     for (auto& cursor : _segment_cursors) {
       if (cursor.get() != _active_cursor) {
         cursor->find(current_key);
       }
     }
-    
+
     // Also sync base cursor if active cursor is a segment
     if (_active_cursor) {
       _base_cursor.find(current_key);

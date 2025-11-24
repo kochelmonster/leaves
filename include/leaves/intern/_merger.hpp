@@ -14,9 +14,9 @@ namespace leaves {
  *
  * Merges trie A into trie B,
  */
-template <typename CursorDst, typename CursorSrc, typename Handler>
+template <typename CursorDst, typename CursorSrc, typename OverwriteHandler>
 struct _Merger {
-  typedef _Merger<CursorDst, CursorSrc, Handler> Merger;
+  typedef _Merger<CursorDst, CursorSrc, OverwriteHandler> Merger;
   using Traits = typename CursorDst::Traits;
   using Transition = typename CursorDst::Transition;
   using TrieNode = typename Transition::TrieNode;
@@ -28,10 +28,10 @@ struct _Merger {
 
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
-  Handler& handler;
+  OverwriteHandler& handler;
   std::string current_key;
 
-  _Merger(CursorDst& dest, CursorSrc& src, Handler& handler)
+  _Merger(CursorDst& dest, CursorSrc& src, OverwriteHandler& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
   // Helper methods for memory management
@@ -169,10 +169,11 @@ struct _Merger {
       if (key == TrieNode::NONE && key1 == TrieNode::NONE) {
         assert(src.is_leaf());
         assert(child1.type() == LEAF);
-        if (handler.overwrite(current_key, dst, src)) {
+        auto dst_slice = dst.leaf()->value(*dst_cursor._db);
+        auto src_slice = src.leaf()->value(*src_cursor._db);
+        if (handler(current_key, dst_slice, src_slice)) {
           assert(key1 == TrieNode::NONE);
           leaf_ptr old_leaf = resolve_dst(child1);
-          auto src_slice = src.leaf()->value(*src_cursor._db);
           _Inserter(&dst, src_slice.size()).change_leaf();
           auto& new_leaf = dst.leaf();
           memcpy(new_leaf->vdata(), src_slice.data(), src_slice.size());
