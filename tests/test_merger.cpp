@@ -15,10 +15,10 @@ typedef _NodeIterator<InternalDB, ValueTraits> NodeIter;
 typedef _Cursor<InternalDB, ValueTraits> InternalCursor;
 
 // Function to execute merger within a transaction
-template<typename CursorDst, typename CursorSrc, typename Handler>
-void exec_merger(CursorDst& dst_cursor, CursorSrc& src_cursor, Handler& handler) {
+template<typename CursorDst, typename CursorSrc, typename OverwriteHandler>
+void exec_merger(CursorDst& dst_cursor, CursorSrc& src_cursor, OverwriteHandler& handler) {
   dst_cursor.start_transaction();
-  _Merger<CursorDst, CursorSrc, Handler> merger(dst_cursor, src_cursor, handler);
+  _Merger<CursorDst, CursorSrc, OverwriteHandler> merger(dst_cursor, src_cursor, handler);
   merger.exec();
   dst_cursor.commit();
 }
@@ -37,16 +37,14 @@ struct MergerPreparation {
 
 // Simple handler for testing - always overwrites
 struct OverwriteHandler {
-  template <typename Dst, typename Src>
-  bool overwrite(const std::string& key, Dst& dst, Src& src) {
+  bool operator()(const std::string& key, Slice& dst, Slice& src) {
     return true;  // Always overwrite
   }
 };
 
 // Handler that keeps destination values
 struct KeepDestHandler {
-  template <typename Dst, typename Src>
-  bool overwrite(const std::string& key, Dst& dst, Src& src) {
+  bool operator()(const std::string& key, Slice& dst, Slice& src) {
     return false;  // Never overwrite
   }
 };
