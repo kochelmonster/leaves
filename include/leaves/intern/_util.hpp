@@ -244,10 +244,12 @@ constexpr size_t padding(size_t a, size_t b) {
 const static uint32_t ALIGN = sizeof(void*);
 constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
-template <typename Block>
-void copy(Block& dst, const Block& src) {
-  uint16_t offset = (char*)dst.copy_start() - (char*)&dst, src_size = src.size();
-  memcpy((char*)&dst + offset, (char*)&src + offset, src_size - offset);
+template <typename DstBlock, typename SrcBlock>
+void copy(DstBlock& dst, const SrcBlock& src) {
+  uint16_t doffset = (char*)dst.copy_start() - (char*)&dst;
+  uint16_t soffset = (char*)src.copy_start() - (char*)&src;
+  uint16_t src_size = src.size();
+  memcpy((char*)&dst + doffset, (char*)&src + soffset, src_size - soffset);
 }
 
 }  // namespace leaves

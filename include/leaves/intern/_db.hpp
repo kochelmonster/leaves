@@ -42,7 +42,7 @@ struct _TransactionBase : public Traits_::BlockHeader {
 
   MemManager mem_manager;
 
-  char* copy_start() { return (char*)&root; }
+  char* copy_start() const { return (char*)&root; }
 };
 
 template <typename Traits_>
@@ -77,18 +77,40 @@ struct _Transaction : public _TransactionBase<Traits_> {
   }
 };
 
+// Default database header (defined outside _DB for reusability)
 template <typename Storage_>
+struct _DBHeader {
+  using Mutex = typename Storage_::Mutex;
+
+  offset_t read_txn;      // the current read transaction
+  offset_t prepared_txn;  // the transaction being prepared for commit
+  Mutex txn_lock;
+  std::atomic<uint64_t>
+      txn_cursor_id;  // the id of the cursor holding the transaction
+
+  // Atomic area management - no AreaList objects, just head pointers
+  // Areas are linked lists in storage, operations use atomic head/tail pattern
+  offset_t area_list_head_single;  // head of single AREA_SIZE areas linked list
+  offset_t area_list_head_multi;   // head of multi-AREA_SIZE areas linked list
+  AreaPool area_pool;              // area pool for allocating areas
+};
+
+// Make _DB accept Transaction and Header as template parameters
+template <typename Storage_,
+          typename Transaction_ = _Transaction<typename Storage_::Traits>,
+          typename Header_ = _DBHeader<Storage_>>
 struct _DB {
   typedef Storage_ Storage;
+  typedef Transaction_ Transaction;
+  typedef Header_ Header;
   using Traits = typename Storage::Traits;
-  typedef _Transaction<Traits> Transaction;
   using Mutex = typename Storage::Mutex;
   using area_ptr = typename Storage::area_ptr;
   using txn_ptr = typename Transaction::ptr;
   using block_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
 
-  typedef _DB<Storage> DB;
+  typedef _DB<Storage_, Transaction_, Header_> DB;
 
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
@@ -129,24 +151,13 @@ struct _DB {
   typedef DB db_type;
 
   static_assert(
-      sizeof(_Transaction<Traits>) == sizeof(_TransactionBase<Traits>),
-      "Size of _Transaction must be equal to size of _TransactionBase");
+      sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
+      "Size of Transaction must be at least size of _TransactionBase");
 
-  struct Header {
-    offset_t read_txn;      // the current read transaction
-    offset_t prepared_txn;  // the transaction being prepared for commit
-    Mutex txn_lock;
-    std::atomic<uint64_t>
-        txn_cursor_id;  // the id of the cursor holding the transaction
-    offset_t
-        area_list_head_single;  // head of single AREA_SIZE areas linked list
-    offset_t area_list_head_multi;  // head of multi-AREA_SIZE areas linked list
-    AreaPool area_pool;             // area pool for allocating areas
-  };
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
 
-  using header_ptr = typename Traits::Pointer<Header>;
+  using header_ptr = typename Traits::template Pointer<Header>;
 
   Storage& _storage;
   Transaction* _active_txn = nullptr;
@@ -240,6 +251,14 @@ struct _DB {
   }
 
   void make_dirty(block_ptr& block) { _storage.make_dirty(block); }
+
+  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
+    _storage.flush(ptr, offset, size, sync);
+  }
+
+  void flush(bool sync = false, bool force = false) {
+    _storage.flush(sync, force);
+  }
 
   template <typename ptr>
   ptr clone(const ptr& src) {
@@ -568,10 +587,6 @@ struct _DB {
     _header->txn_lock.unlock();
   }
 
-  void flush(bool sync = false, bool force = false) {
-    _storage.flush(sync, force);
-  }
-
   typedef _MemStatistics<Traits> MemStatistics;
 
   struct Statistics {
@@ -660,7 +675,7 @@ struct _DB {
     flush();
   }
 
-  const db_type& dump_db() const { return *this; }
+  const DB* _internal() const { return this; }
 };
 
 }  // namespace leaves

@@ -20,6 +20,7 @@ parent node) This makes the implmentation of many operations easier.
 template <typename Traits>
 struct _TrieNode : public Traits::BlockHeader {
   typedef _TrieNode<Traits> TrieNode;
+  using Base = typename Traits::BlockHeader;
   using hash_t = typename Traits::hash_t;
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
@@ -42,7 +43,7 @@ struct _TrieNode : public Traits::BlockHeader {
       257 * sizeof(offset_e);
   constexpr static uint8_t LOWER_MASK = 0b00011111;
 
-  char* copy_start() { return (char*)&_upper; }
+  char* copy_start() const { return (char*)&_upper; }
   uint8_t len() const { return _compressed_len; }
   int count() const { return (_array_len & ~NULL_MASK); }
   const uint8_t* compressed() const { return _compressed_data; }
@@ -440,6 +441,7 @@ struct _TrieNode : public Traits::BlockHeader {
       for (int i = 0; i < lidx; i++) {
         oidx += bits::count(lower_[i]);
       }
+      assert(oidx < count());
       return array() + oidx;
     }
 
@@ -503,6 +505,7 @@ struct _LeafNode : public Traits::BlockHeader {
   static constexpr auto BS_COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr auto MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
+  static constexpr auto TOMBSTONE_FLAG = uint16_e(1) << 14;
 
   struct BigValue {
     uint64_e value_size;
@@ -520,10 +523,18 @@ struct _LeafNode : public Traits::BlockHeader {
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
   Slice value() const { return Slice(data + key_size, value_size); }
-  uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
+  uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG & ~TOMBSTONE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
+  
+  bool is_tombstone() const {
+    return (value_size & TOMBSTONE_FLAG) == TOMBSTONE_FLAG;
+  }
+  
+  void set_tombstone() {
+    value_size = TOMBSTONE_FLAG;
+  }
 
-  char* copy_start() { return (char*)&key_size; }
+  char* copy_start() const { return (char*)&key_size; }
 
   template <typename Resolver>
   Slice value(Resolver& resolver) const {
