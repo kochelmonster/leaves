@@ -17,7 +17,6 @@ A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
 parent node) This makes the implmentation of many operations easier.
 */
-#pragma pack(1)
 template <typename Traits>
 struct _TrieNode : public Traits::BlockHeader {
   typedef _TrieNode<Traits> TrieNode;
@@ -34,15 +33,16 @@ struct _TrieNode : public Traits::BlockHeader {
   hash_t hash;
   uint8_t _compressed_data[];
 
-  const static uint16_e NULL_MASK = 0x8000;
-  const static int NONE = -1;
-  const static int OUT_OF_RANGE = -2;
-  const static uint16_t MAX_SIZE =
+  constexpr static uint16_e NULL_MASK = 0x8000;
+  constexpr static int NONE = -1;
+  constexpr static int OUT_OF_RANGE = -2;
+  constexpr static uint16_t MAX_SIZE =
       align(padding(sizeof(TrieNode) + MAX_BRANCH_COUNT, sizeof(uint32_e)) +
             8 * sizeof(uint32_e)) +
       257 * sizeof(offset_e);
-  const static uint8_t LOWER_MASK = 0b00011111;
+  constexpr static uint8_t LOWER_MASK = 0b00011111;
 
+  char* copy_start() { return (char*)&_upper; }
   uint8_t len() const { return _compressed_len; }
   int count() const { return (_array_len & ~NULL_MASK); }
   const uint8_t* compressed() const { return _compressed_data; }
@@ -523,6 +523,8 @@ struct _LeafNode : public Traits::BlockHeader {
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
+  char* copy_start() { return (char*)&key_size; }
+
   template <typename Resolver>
   Slice value(Resolver& resolver) const {
     if (is_big()) {
@@ -568,7 +570,6 @@ struct _LeafNode : public Traits::BlockHeader {
   }
 };
 
-#pragma pack(0)
 }  // namespace leaves
 
 #endif  // _LEAVES__NODE_HPP

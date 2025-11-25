@@ -30,7 +30,7 @@ class Slice {
   Slice(const std::string& src) : _size(src.size()), _data(src.data()) {}
 
   Slice() : _size(0), _data(NULL) {}
-  
+
   Slice(const Slice& other) : _size(other._size), _data(other._data) {}
 
   Slice slice(size_t len) const { return Slice(data(), len); }
@@ -89,7 +89,7 @@ struct _Offset {
   static const uint64_t TYPE_MASK = 0x3;
 
   constexpr _Offset(uint64_t src = 0) : _offset(src) {}
- 
+
   constexpr _Offset(const _Offset& other) : _offset(other._offset) {}
 
   template <typename T>
@@ -246,9 +246,8 @@ constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
 template <typename Block>
 void copy(Block& dst, const Block& src) {
-  uint16_t base_size = sizeof(typename Block::Base), src_size = src.size();
-  memcpy((char*)&dst + base_size, (char*)&src + base_size,
-         src_size - base_size);
+  uint16_t offset = (char*)dst.copy_start() - (char*)&dst, src_size = src.size();
+  memcpy((char*)&dst + offset, (char*)&src + offset, src_size - offset);
 }
 
 }  // namespace leaves
