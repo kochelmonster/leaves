@@ -83,7 +83,7 @@ struct _Transition {
   }
 
   offset_e* update() {
-    if constexpr (!Cursor::DB::Traits::TRANSACTIONAL) {
+    if constexpr (!Cursor::Traits::COW) {
       cursor->_db->make_dirty(block);
       return link();
     }
@@ -94,10 +94,13 @@ struct _Transition {
       return link();
     }
 
+    // copy-on-write trie
     assert(is_trie());
-    trie() = cursor->_db->cow(trie());
+    trie_ptr old_trie = trie();
+    trie() = cursor->_db->clone(old_trie);
     offset = cursor->_db->resolve(trie());
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
+    cursor->_db->free(old_trie);
 
     if (!is_root())
       *parent().update() = offset;
@@ -388,14 +391,14 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   std::string _refind_buffer;
 
   _Cursor(db_ptr db) : CursorBase(db) {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       _id = this->_db->new_cursor_id();
     }
     update();
   }
 
   ~_Cursor() {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       if (is_transaction_active()) {
         if (this->_txn) this->_txn->refs.fetch_sub(1);
       }
@@ -403,7 +406,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   bool is_transaction_active() const {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       return this->_db->txn_cursor_id() == _id;
     }
     return false;
@@ -495,7 +498,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   bool start_transaction(bool non_blocking = false) {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       if (this->_db->txn_cursor_id() != _id) {
         txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
         if (!new_txn) return false;
@@ -507,21 +510,21 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   tid_t prepare_commit(bool sync = false) {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       return this->_db->prepare_commit(_id, sync);
     }
     return tid_t(0);
   }
 
   bool commit(bool sync = false) {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       return this->_db->commit(_id, sync);
     }
     return false;
   }
 
   bool rollback() {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       if (this->_db->rollback(_id)) {
         this->stack.clear();
         find(this->current_key);
@@ -576,7 +579,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   void update() {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       auto new_txn = this->_db->txn();
       assert(new_txn);
       if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
@@ -586,7 +589,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   void _set_txn(txn_ptr& txn) {
-    if constexpr (Traits::TRANSACTIONAL) {
+    if constexpr (Traits::TRANSACTION_REF) {
       assert(txn);
       if (this->_txn != txn) {
         offset_t old_root;

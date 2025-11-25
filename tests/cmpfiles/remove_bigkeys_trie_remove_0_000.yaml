@@ -14,9 +14,9 @@ children:
 type: trie
 id: 13080
 page: 0
-freespace: 88
+freespace: 80
 txn: 2
-size: 40
+size: 48
 compressed: 
   size: 1
   key: "[1]"

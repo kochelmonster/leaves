@@ -36,11 +36,15 @@ struct _Inserter {
 
   template <typename T>
   void free(T& block) {
-    if constexpr (T::type == LEAF) {
-      if (block->is_big()) {
-        auto bv = block->big();
-        back->cursor->_db->free_big(bv->offset, bv->size());
-      }
+    back->cursor->_db->free(block);
+  }
+
+  template <typename T>
+  void free_complete(T& block) {
+    static_assert(T::type == LEAF);
+    if (block->is_big()) {
+      auto bv = block->big();
+      back->cursor->_db->free_big(bv->offset, bv->size());
     }
     back->cursor->_db->free(block);
   }
@@ -183,7 +187,7 @@ struct _Inserter {
       assert(back->prefix == back->leaf()->key_size);
       assert(back->key().empty());
       back->leaf() = fill_leaf(oleaf->key());
-      free(oleaf);
+      free_complete(oleaf);
       back->replace(resolve(back->leaf()));
       return;
     }
@@ -202,7 +206,7 @@ struct _Inserter {
         Slice(oleaf->data, back->prefix), bkey, resolve(copy),
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
 
-    free(oleaf);
+    free(oleaf);  // don't free a big value - it is now owned by copy
     back->replace(resolve(back->trie()));
     create_leaf();
   }

@@ -226,7 +226,7 @@ struct _Merger {
     if (src_trie->isset(key1)) {
       // copy src trie to dst and move down the branch src shares with dst
       trie_ptr new_trie = alloc(src_trie->size());
-      memcpy((char*)new_trie, (const char*)src_trie, src_trie->size());
+      copy(*new_trie, *src_trie);
       dst.replace(resolve_offset(new_trie));
 
       auto dst_p = new_trie->offset(key1);
@@ -392,7 +392,7 @@ struct _Merger {
     auto src_trie = (trie_ptr)resolve_src(src_offset);
     uint16_t trie_size = src_trie->size();
     trie_ptr dst_trie = alloc(trie_size);
-    memcpy((void*)&(*dst_trie), (void*)&(*src_trie), trie_size);
+    copy(*dst_trie, *src_trie);
 
     // Recursively copy all children and update offsets
     auto dst_array = dst_trie->array();

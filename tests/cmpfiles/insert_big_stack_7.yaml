@@ -1,16 +1,16 @@
 type: trie
-id: 10408
+id: 22088
 page: 0
-freespace: 96
-txn: 3
-size: 32
+freespace: 88
+txn: 9
+size: 40
 compressed: 
   size: 1
   key: "[a]"
 branches: "[][b]"
 children: 
   - 10281
-  - 15448
+  - 21960
 ---
 type: leaf
 id: 10281
@@ -24,18 +24,18 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 15448
+id: 21960
 page: 0
-freespace: 96
-txn: 4
-size: 32
+freespace: 88
+txn: 9
+size: 40
 compressed: 
   size: 1
   key: "[b]"
 branches: "[][c]"
 children: 
   - 15321
-  - 16392
+  - 21832
 ---
 type: leaf
 id: 15321
@@ -49,21 +49,21 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 16392
+id: 21832
 page: 0
-freespace: 96
-txn: 5
-size: 32
+freespace: 88
+txn: 9
+size: 40
 compressed: 
   size: 1
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 16265
-  - 19912
+  - 16393
+  - 21704
 ---
 type: leaf
-id: 16265
+id: 16393
 page: 0
 freespace: 117
 size: 11
@@ -74,7 +74,7 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 19912
+id: 21704
 page: 0
 freespace: 80
 txn: 9
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][*][e]"
 children: 
-  - 17209
-  - 20041
-  - 20168
+  - 17593
+  - 22217
+  - 22344
 ---
 type: leaf
-id: 17209
+id: 17593
 page: 0
 freespace: 116
 size: 12
@@ -100,7 +100,7 @@ valuesize: 4
 value: "abcd"
 ---
 type: leaf
-id: 20041
+id: 22217
 page: 0
 freespace: 114
 size: 14
@@ -111,7 +111,7 @@ valuesize: 5
 value: "abcd*"
 ---
 type: trie
-id: 20168
+id: 22344
 page: 0
 freespace: 72
 txn: 9
@@ -121,13 +121,13 @@ compressed:
   key: "[e]"
 branches: "[][*][f][g]"
 children: 
-  - 18153
-  - 20297
-  - 18409
-  - 19225
+  - 18921
+  - 22473
+  - 19689
+  - 21017
 ---
 type: leaf
-id: 18153
+id: 18921
 page: 0
 freespace: 115
 size: 13
@@ -138,7 +138,7 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 20297
+id: 22473
 page: 0
 freespace: 113
 size: 15
@@ -149,7 +149,7 @@ valuesize: 6
 value: "abcde*"
 ---
 type: leaf
-id: 18409
+id: 19689
 page: 0
 freespace: 113
 size: 15
@@ -160,7 +160,7 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 19225
+id: 21017
 page: 0
 freespace: 113
 size: 15

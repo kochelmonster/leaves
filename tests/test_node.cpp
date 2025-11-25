@@ -17,6 +17,10 @@ struct TestTraits {
   typedef offset_t offset_e;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
+  typedef uint64_t uint64_e;
+  
+  static constexpr uint16_t BLOCK_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
+  static constexpr uint16_t BLOCK_SIZES_COUNT = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
   struct BlockHeader {
     typedef BlockHeader Base;
@@ -394,4 +398,130 @@ BOOST_AUTO_TEST_CASE(test_count_uint8) {
   // Tests for 8-bit integers
   BOOST_CHECK_EQUAL(count<uint8_t>(0), 0);
   BOOST_CHECK_EQUAL(count<uint8_t>(0xFF), 8);
+}
+
+BOOST_AUTO_TEST_CASE(test_copy_trienode) {
+  // Test that the copy() function correctly copies all derived class fields
+  // This test verifies the fix for the pragma pack(1) issue where
+  // sizeof(BlockHeader) was 8 but derived fields started at offset 5
+  
+  char buffer1[AREA_SIZE], buffer2[AREA_SIZE], buffer3[AREA_SIZE];
+  TrieNode& src = *(TrieNode*)buffer1;
+  TrieNode& dst = *(TrieNode*)buffer2;
+  TrieNode& tmp = *(TrieNode*)buffer3;
+  
+  // Clear buffers
+  memset(buffer1, 0, AREA_SIZE);
+  memset(buffer2, 0xFF, AREA_SIZE);  // Fill with different pattern
+  memset(buffer3, 0, AREA_SIZE);
+  
+  // Create a trie node with specific values in the derived fields
+  Slice prefix("test");
+  uint16_t offset = src.create(prefix, 'a', 100, 'b');
+  *(offset_t*)((char*)&src + offset) = 200;
+  
+  // Add more branches by creating a new node from the existing one
+  offset = tmp.create(src, 'c');
+  *(offset_t*)((char*)&tmp + offset) = 300;
+  memcpy(&src, &tmp, tmp.size());
+  
+  // Store the original values we want to verify
+  uint8_t orig_upper = src._upper;
+  uint8_t orig_compressed_len = src._compressed_len;
+  uint8_t orig_lower_offset = src._lower_offset;
+  uint8_t orig_array_offset = src._array_offset;
+  uint16_t orig_array_len = src._array_len;
+  uint16_t orig_size = src.size();
+  int orig_count = src.count();
+  
+  // Verify the source is set up correctly
+  BOOST_CHECK(orig_upper != 0);
+  BOOST_CHECK_EQUAL(orig_compressed_len, 4);  // "test"
+  BOOST_CHECK(src.isset('a'));
+  BOOST_CHECK(src.isset('b'));
+  BOOST_CHECK(src.isset('c'));
+  
+  // Now copy using the copy() function
+  copy(dst, src);
+  
+  // Verify that all derived class fields were copied correctly
+  // These fields (_upper, _compressed_len, _lower_offset, etc.) 
+  // start at offset 5, not offset 8
+  BOOST_CHECK_EQUAL(dst._upper, orig_upper);
+  BOOST_CHECK_EQUAL(dst._compressed_len, orig_compressed_len);
+  BOOST_CHECK_EQUAL(dst._lower_offset, orig_lower_offset);
+  BOOST_CHECK_EQUAL(dst._array_offset, orig_array_offset);
+  BOOST_CHECK_EQUAL(dst._array_len, orig_array_len);
+  BOOST_CHECK_EQUAL(dst.size(), orig_size);
+  BOOST_CHECK_EQUAL(dst.count(), orig_count);
+  
+  // Verify the compressed data was copied
+  BOOST_CHECK_EQUAL(memcmp(src.compressed(), dst.compressed(), 
+                          src._compressed_len), 0);
+  
+  // Verify the branches are correct
+  BOOST_CHECK(dst.isset('a'));
+  BOOST_CHECK(dst.isset('b'));
+  BOOST_CHECK(dst.isset('c'));
+  
+  // Verify offsets were copied correctly
+  BOOST_CHECK_EQUAL(*dst.offset('a'), 100);
+  BOOST_CHECK_EQUAL(*dst.offset('b'), 200);
+  BOOST_CHECK_EQUAL(*dst.offset('c'), 300);
+  
+  // The test would fail if copy() used sizeof(BlockHeader)=8 instead of
+  // the actual start of derived fields at offset 5 (where copy_start() points)
+}
+
+BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
+  // Test that the copy() function correctly copies LeafNode fields
+  // LeafNode also inherits from BlockHeader and has fields starting at offset 5
+  
+  typedef _LeafNode<TestTraits> LeafNode;
+  
+  char buffer1[AREA_SIZE], buffer2[AREA_SIZE];
+  LeafNode& src = *(LeafNode*)buffer1;
+  LeafNode& dst = *(LeafNode*)buffer2;
+  
+  // Clear both buffers
+  memset(buffer1, 0, AREA_SIZE);
+  memset(buffer2, 0xFF, AREA_SIZE);
+  
+  // Create a leaf node with specific key and value
+  Slice key("mykey");
+  Slice value("myvalue");
+  
+  src.key_size = key.size();
+  src.value_size = value.size();
+  memcpy(src.data, key.data(), key.size());
+  memcpy(src.data + key.size(), value.data(), value.size());
+  
+  // Store original values
+  uint8_t orig_key_size = src.key_size;
+  uint16_t orig_value_size = src.value_size;
+  uint16_t orig_size = src.size();
+  
+  // Verify source setup
+  BOOST_CHECK_EQUAL(src.key_size, 5);
+  BOOST_CHECK_EQUAL(src.value_size, 7);
+  BOOST_CHECK_EQUAL(src.key(), key);
+  BOOST_CHECK_EQUAL(src.value(), value);
+  
+  // Copy using the copy() function
+  copy(dst, src);
+  
+  // Verify that key_size and value_size were copied
+  // These fields start at offset 5 (copy_start()), not offset 8
+  BOOST_CHECK_EQUAL(dst.key_size, orig_key_size);
+  BOOST_CHECK_EQUAL(dst.value_size, orig_value_size);
+  BOOST_CHECK_EQUAL(dst.size(), orig_size);
+  
+  // Verify the data was copied correctly
+  BOOST_CHECK_EQUAL(dst.key(), key);
+  BOOST_CHECK_EQUAL(dst.value(), value);
+  
+  // Verify the full memory content matches
+  BOOST_CHECK_EQUAL(memcmp((char*)&src + sizeof(TestTraits::BlockHeader),
+                          (char*)&dst + sizeof(TestTraits::BlockHeader),
+                          src.size() - sizeof(TestTraits::BlockHeader)), 0);
 }

@@ -1,8 +1,8 @@
 type: trie
-id: 80304
+id: 80816
 page: 0
 freespace: 88
-txn: 258
+txn: 259
 size: 40
 compressed: 
   size: 0
@@ -3108,7 +3108,7 @@ compressed:
 branches: "[0x0][0x1]"
 children: 
   - 80561
-  - 80817
+  - 80945
 ---
 type: leaf
 id: 80561
@@ -3122,7 +3122,7 @@ valuesize: 3
 value: "256"
 ---
 type: leaf
-id: 80817
+id: 80945
 page: 0
 freespace: 116
 size: 12

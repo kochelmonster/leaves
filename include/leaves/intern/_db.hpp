@@ -93,7 +93,8 @@ struct _DB {
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::Hasher Hasher;
-    constexpr static bool TRANSACTIONAL = true;
+    constexpr static bool TRANSACTION_REF = true;
+    constexpr static bool COW = Traits::TRANSACTIONAL;
     static offset_t get_root(txn_ptr& txn) { return txn->root; }
     static void set_root(txn_ptr& txn, offset_t offset) { txn->root = offset; }
   };
@@ -102,7 +103,8 @@ struct _DB {
     typedef DB* db_ptr;
     typedef ::NullHasher Hasher;
     typedef uint8_t hash_t[0];
-    constexpr static bool TRANSACTIONAL = false;
+    constexpr static bool TRANSACTION_REF = false;
+    constexpr static bool COW = Traits::TRANSACTIONAL;
     static offset_t get_root(txn_ptr& txn) { return txn->mem_root; }
     static void set_root(txn_ptr& txn, offset_t offset) {
       txn->mem_root = offset;
@@ -244,11 +246,6 @@ struct _DB {
     ptr dest = alloc_slot(src->slot_id);
     copy(*dest, *src);
     return dest;
-  }
-
-  template <typename ptr>
-  ptr cow(ptr& src) {
-    return src;
   }
 
   block_ptr alloc(uint16_t space) {
