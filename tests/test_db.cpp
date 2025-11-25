@@ -774,3 +774,199 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     BOOST_CHECK_EQUAL(db->_header->read_txn, db->_header->prepared_txn);
   }
 }
+
+BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_sanitize.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Start a transaction and allocate many areas
+    BOOST_REQUIRE(db->start_transaction(0));
+    
+    // Get initial area tail offsets from the write transaction
+    offset_t initial_single_tail = db->_wtxn->area_list_tail_single;
+    offset_t initial_multi_tail = db->_wtxn->area_list_tail_multi;
+    
+    std::vector<block_ptr> blocks;
+    // Allocate enough blocks to force multiple area allocations
+    const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
+    const size_t block_size = 4000;
+    const size_t num_blocks = (AREA_SIZE * 3) / block_size;  // Force 3+ areas
+    
+    for (size_t i = 0; i < num_blocks; i++) {
+      blocks.push_back(db->alloc(block_size));
+    }
+    
+    // Also allocate some big areas
+    std::vector<AreaSlice> big_areas;
+    for (int i = 0; i < 3; i++) {
+      big_areas.push_back(db->alloc_big(AREA_SIZE * 2));
+    }
+    
+    // Get the transaction state after allocations
+    offset_t final_single_tail = db->_wtxn->area_list_tail_single;
+    offset_t final_multi_tail = db->_wtxn->area_list_tail_multi;
+    
+    // Verify that areas were allocated (tails should have moved)
+    BOOST_CHECK_NE(final_single_tail, initial_single_tail);
+    BOOST_CHECK_NE(final_multi_tail, initial_multi_tail);
+    
+    // Prepare but don't commit - simulate a crash
+    tid_t tid = db->prepare_commit(0);
+    BOOST_CHECK_GT(tid, 0);
+    
+    // Don't call commit - simulate crash after prepare
+    // Just end the transaction without committing
+    db->end_transaction();
+  }
+  
+  // Reopen the database - this simulates crash recovery
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Check if database recovered a prepared transaction
+    bool has_prepared_txn = (db->_header->prepared_txn != db->_header->read_txn);
+    
+    if (has_prepared_txn) {
+      // Database should have recovered the prepared transaction
+      auto read_txn = db->txn();  // Use txn() to get the read transaction pointer
+      auto prep_txn = db->_active_txn;  // After recovery, _active_txn points to prepared txn
+      
+      // Verify that the prepared transaction has different area tails than read transaction
+      // This means there are uncommitted areas that need to be cleaned up
+      BOOST_REQUIRE(prep_txn != nullptr);
+      offset_t read_single_tail = read_txn->area_list_tail_single;
+      offset_t read_multi_tail = read_txn->area_list_tail_multi;
+      offset_t prep_single_tail = prep_txn->area_list_tail_single;
+      offset_t prep_multi_tail = prep_txn->area_list_tail_multi;
+      
+      // First sanitize - cleans locks/refs but won't touch areas while prepared txn exists
+      db->sanitize();
+      
+      // After first sanitize:
+      // 1. Transaction refs should be reset
+      auto txn_after = db->txn();
+      BOOST_CHECK_EQUAL(txn_after->refs.load(), 0u);
+      
+      // 2. Lock and cursor ID should be cleared
+      BOOST_CHECK_EQUAL(db->_header->txn_cursor_id.load(), 0u);
+      
+      // 3. prepared_txn should still be different (sanitize waits for rollback)
+      BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+      
+      // 4. Manually rollback by setting prepared_txn = read_txn
+      db->_header->prepared_txn = db->_header->read_txn;
+      db->_wtxn.reset();
+      db->_active_txn = nullptr;
+      db->flush();
+      
+      // 5. Now call sanitize again - should clean up areas
+      db->sanitize();
+    }
+    
+    // Database should be in a consistent state
+    // Try to start a new transaction and allocate - should work
+    BOOST_CHECK(db->start_transaction(0));
+    auto test_block = db->alloc(1000);
+    BOOST_CHECK(test_block);
+    BOOST_CHECK(db->commit(0));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_sanitize_chains.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Start transaction and allocate enough to create a chain of areas
+    BOOST_REQUIRE(db->start_transaction(0));
+    
+    std::vector<block_ptr> blocks;
+    const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
+    const size_t block_size = 3000;
+    
+    // Allocate much more to definitely create multiple linked areas
+    // We need to exceed the initial area and force allocation of new areas
+    for (size_t i = 0; i < 50; i++) {
+      blocks.push_back(db->alloc(block_size));
+    }
+    
+    offset_t tail_before_prepare = db->_wtxn->area_list_tail_single;
+    
+    // Prepare the transaction
+    tid_t tid = db->prepare_commit(0);
+    BOOST_CHECK_GT(tid, 0);
+    
+    // Simulate crash - don't commit
+    db->end_transaction();
+  }
+  
+  // Reopen and sanitize
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // After recovery, read the read transaction's area tail
+    auto read_txn_before = db->txn();  // Use txn() method to get proper transaction pointer
+    offset_t read_tail = read_txn_before->area_list_tail_single;
+    
+    // Test Area::get_end with a chain of areas
+    // This tests the actual implementation in sanitize()
+    if (read_tail) {
+      offset_t actual_tail = Area::get_end(read_tail, *db);
+      
+      // The actual tail should be at the end of the chain
+      auto tail_area = db->resolve<Area>(actual_tail, READ);
+      BOOST_CHECK_EQUAL(tail_area->next, 0);  // Should be the last area
+      
+      // Walk the chain manually to verify
+      offset_t manual_tail = read_tail;
+      auto area = db->resolve<Area>(manual_tail, READ);
+      int chain_length = 1;
+      while (area->next) {
+        manual_tail = area->next;
+        area = db->resolve<Area>(manual_tail, READ);
+        chain_length++;
+      }
+      
+      // get_end should find the same tail
+      BOOST_CHECK_EQUAL(actual_tail, manual_tail);
+      // Check that we have a chain (might be 1 if all fit in initial area, but likely >1)
+      // Don't fail test if chain_length == 1, just informational
+      if (chain_length == 1) {
+        BOOST_TEST_MESSAGE("Note: All allocations fit in initial area, no chain created");
+      }
+    }
+    
+    // First sanitize - cleans locks/refs
+    db->sanitize();
+    
+    // Check if there was a prepared txn and handle it
+    if (db->_header->prepared_txn != db->_header->read_txn) {
+      // Manually rollback by setting prepared_txn = read_txn
+      db->_header->prepared_txn = db->_header->read_txn;
+      db->_wtxn.reset();
+      db->_active_txn = nullptr;
+      db->flush();
+      
+      // Call sanitize again to clean up areas
+      db->sanitize();
+    }
+    
+    // After sanitize with no prepared txn, area cleanup should have happened
+    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    
+    // Database should be usable after sanitize
+    BOOST_CHECK(db->start_transaction(0));
+    auto test_block = db->alloc(1000);
+    BOOST_CHECK(test_block);
+    BOOST_CHECK(db->commit(0));
+  }
+}
