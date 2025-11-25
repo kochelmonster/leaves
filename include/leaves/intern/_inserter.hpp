@@ -208,9 +208,7 @@ struct _Inserter {
     if (back->cmp == 0) {
       assert(back->prefix == back->leaf()->key_size);
       assert(back->key().empty());
-      leaf_ptr new_leaf = fill_leaf(oleaf->key());
-      if (!new_leaf) return overflow(true);
-      back->leaf() = new_leaf;
+      back->leaf() = fill_leaf(oleaf->key());
       free_complete(oleaf);
       back->replace(resolve(back->leaf()));
       return _overflow;
@@ -235,11 +233,8 @@ struct _Inserter {
         Slice(oleaf->data, back->prefix), bkey, resolve(copy),
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
 
-    // free(oleaf); // correct
-    free_complete(oleaf);  // wrong only for debug
-
-
-    back->replace(resolve(new_trie));
+    free(oleaf);  // don't free a big value - it is now owned by copy
+    back->replace(resolve(back->trie()));
     create_leaf();
     return _overflow;
   }

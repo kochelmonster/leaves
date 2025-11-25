@@ -16,6 +16,7 @@ namespace leaves {
 
 template <typename Traits_>
 struct _TransactionBase : public Traits_::BlockHeader {
+  typedef _TransactionBase<Traits_> TransactionBase;
   typedef Traits_ Traits;
   typedef _MemManager<Traits> MemManager;
   using Traits::BlockHeader::txn_id;
@@ -40,6 +41,8 @@ struct _TransactionBase : public Traits_::BlockHeader {
   offset_t area_list_tail_multi{0};
 
   MemManager mem_manager;
+
+  char* copy_start() { return (char*)&root; }
 };
 
 template <typename Traits_>
@@ -112,7 +115,8 @@ struct _DB {
   struct ValueTraits : public Storage::Traits {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::Hasher Hasher;
-    constexpr static bool TRANSACTIONAL = true;
+    constexpr static bool TRANSACTION_REF = true;
+    constexpr static bool COW = Traits::TRANSACTIONAL;
     static offset_t get_root(txn_ptr& txn) { return txn->root; }
     static void set_root(txn_ptr& txn, offset_t offset) { txn->root = offset; }
   };
@@ -121,7 +125,8 @@ struct _DB {
     typedef DB* db_ptr;
     typedef ::NullHasher Hasher;
     typedef uint8_t hash_t[0];
-    constexpr static bool TRANSACTIONAL = false;
+    constexpr static bool TRANSACTION_REF = false;
+    constexpr static bool COW = Traits::TRANSACTIONAL;
     static offset_t get_root(txn_ptr& txn) { return txn->mem_root; }
     static void set_root(txn_ptr& txn, offset_t offset) {
       txn->mem_root = offset;
@@ -149,6 +154,17 @@ struct _DB {
       sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
       "Size of Transaction must be at least size of _TransactionBase");
 
+  struct Header {
+    offset_t read_txn;      // the current read transaction
+    offset_t prepared_txn;  // the transaction being prepared for commit
+    Mutex txn_lock;
+    std::atomic<uint64_t>
+        txn_cursor_id;  // the id of the cursor holding the transaction
+    offset_t
+        area_list_head_single;  // head of single AREA_SIZE areas linked list
+    offset_t area_list_head_multi;  // head of multi-AREA_SIZE areas linked list
+    AreaPool area_pool;             // area pool for allocating areas
+  };
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
 
@@ -667,7 +683,7 @@ struct _DB {
     // Return any uncommitted areas (after initialization, tails should be 0 or
     // at initial state) In sanitize context, we don't have pending areas to
     // return since we're resetting state
-    flush(true, true);
+    flush();
   }
 
   const DB* _internal() const { return this; }

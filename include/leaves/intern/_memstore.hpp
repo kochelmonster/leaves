@@ -31,7 +31,6 @@ struct _MemoryTraits {
   };
 #pragma pack(pop)
 
-  static constexpr bool TRANSACTIONAL = false;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
   static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
@@ -74,7 +73,8 @@ struct _MemoryDB {
     typedef std::shared_ptr<DB> db_ptr;
     typedef ::NullHasher Hasher;  // No hashing needed for memory-only
     typedef uint8_t hash_t[0];
-    constexpr static bool TRANSACTIONAL = false;
+    constexpr static bool TRANSACTION_REF = false;
+    constexpr static bool COW = false;
     static void set_root(txn_ptr txn, offset_t offset) { txn->root = offset; }
     static offset_t get_root(txn_ptr txn) { return txn->root; }
   };
@@ -161,9 +161,9 @@ struct _MemoryDB {
         "Big deallocation not supported in memory storage");
   }
 
-  // Copy-on-write - just return the same pointer for memory storage
   template <typename ptr>
   ptr clone(ptr& src) {
+    assert(0); // shall never be called
     return src;
   }
 

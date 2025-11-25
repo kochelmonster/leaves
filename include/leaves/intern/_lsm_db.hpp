@@ -167,7 +167,6 @@ struct Segment {
     // Segment traits work like _MemoryDB::ValueTraits
     typedef ::NullHasher Hasher;  // No hashing needed for segments
     typedef uint8_t hash_t[0];
-    constexpr static bool TRANSACTIONAL = false;
 
     typedef Segment::ptr db_ptr;
     // Get/set root from segment's transaction
