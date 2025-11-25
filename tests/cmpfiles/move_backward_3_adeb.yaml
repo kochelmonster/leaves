@@ -1,8 +1,8 @@
 type: trie
-id: 15448
+id: 16520
 page: 0
 freespace: 88
-txn: 4
+txn: 5
 size: 40
 compressed: 
   size: 1
@@ -60,7 +60,7 @@ compressed:
 branches: "[a][b]"
 children: 
   - 16265
-  - 16521
+  - 16649
 ---
 type: leaf
 id: 16265
@@ -74,7 +74,7 @@ valuesize: 4
 value: "adea"
 ---
 type: leaf
-id: 16521
+id: 16649
 page: 0
 freespace: 115
 size: 13

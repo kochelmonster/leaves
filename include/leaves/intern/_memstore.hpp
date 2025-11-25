@@ -23,11 +23,13 @@ struct _MemoryTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
+#pragma pack(push, 1)
   struct BlockHeader {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
   };
+#pragma pack(pop)
 
   static constexpr bool TRANSACTIONAL = false;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
@@ -161,7 +163,7 @@ struct _MemoryDB {
 
   // Copy-on-write - just return the same pointer for memory storage
   template <typename ptr>
-  ptr cow(ptr& src) {
+  ptr clone(ptr& src) {
     return src;
   }
 

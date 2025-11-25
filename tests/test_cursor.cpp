@@ -2,7 +2,7 @@
 Test the the cursor with without burst table
 */
 #define BOOST_TEST_MODULE CursorTest
-#define GENERATE
+// #define GENERATE
 
 #include <boost/endian/conversion.hpp>
 
@@ -266,6 +266,10 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
     cursor.find(skey);
     BOOST_REQUIRE(!cursor.is_valid());
     std::string value = std::to_string(i);
+    if (i == 257) {
+      std::cout << "DEBUG insert overflow key: " << i << std::endl;
+    } 
+
     cursor.value(value);
     cursor.commit();
   }

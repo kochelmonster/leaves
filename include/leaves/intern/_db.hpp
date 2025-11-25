@@ -49,10 +49,10 @@ struct _Transaction : public _TransactionBase<Traits_> {
   typedef _MemManager<Traits> MemManager;
   using ptr = typename Traits::Pointer<_Transaction>;
   using block_ptr = typename Traits::ptr;
+  using TransactionBase::area_list_tail_multi;
+  using TransactionBase::area_list_tail_single;
   using TransactionBase::mem_manager;
   using TransactionBase::txn_id;
-  using TransactionBase::area_list_tail_single;
-  using TransactionBase::area_list_tail_multi;
 
   static constexpr auto SLOT_ID =
       MemManager::assign_slot(sizeof(TransactionBase));
@@ -78,12 +78,13 @@ struct _Transaction : public _TransactionBase<Traits_> {
 template <typename Storage_>
 struct _DBHeader {
   using Mutex = typename Storage_::Mutex;
-  
+
   offset_t read_txn;      // the current read transaction
   offset_t prepared_txn;  // the transaction being prepared for commit
   Mutex txn_lock;
-  std::atomic<uint64_t> txn_cursor_id;  // the id of the cursor holding the transaction
-  
+  std::atomic<uint64_t>
+      txn_cursor_id;  // the id of the cursor holding the transaction
+
   // Atomic area management - no AreaList objects, just head pointers
   // Areas are linked lists in storage, operations use atomic head/tail pattern
   offset_t area_list_head_single;  // head of single AREA_SIZE areas linked list
@@ -92,7 +93,7 @@ struct _DBHeader {
 };
 
 // Make _DB accept Transaction and Header as template parameters
-template <typename Storage_, 
+template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
           typename Header_ = _DBHeader<Storage_>>
 struct _DB {
@@ -187,7 +188,7 @@ struct _DB {
     _header = _storage.resolve(*header);
     memset((void*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex();
-    
+
     // Initialize area lists with the first allocated area (area_ptr)
     offset_t first_area_offset = _storage.resolve(area_ptr);
     _header->area_list_head_single = first_area_offset;
@@ -205,7 +206,8 @@ struct _DB {
     txn->next_txn = 0;
     txn->refs.store(0);
     txn->start_txn = _header->read_txn;
-    txn->area_list_tail_single = first_area_offset;  // First area is also the tail
+    txn->area_list_tail_single =
+        first_area_offset;  // First area is also the tail
     txn->area_list_tail_multi = 0;
     txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
                           area_ptr->end());
@@ -258,11 +260,6 @@ struct _DB {
     ptr dest = alloc_slot(src->slot_id);
     copy(*dest, *src);
     return dest;
-  }
-
-  template <typename ptr>
-  ptr cow(ptr& src) {
-    return src;
   }
 
   block_ptr alloc(uint16_t space) {
@@ -418,7 +415,7 @@ struct _DB {
 
     auto area_ptr = _storage.alloc_single_area();
     area_ptr->next = 0;
-    
+
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_single) {
       auto tail = resolve<Area>(_active_txn->area_list_tail_single, READ);
@@ -430,7 +427,7 @@ struct _DB {
       make_dirty(_header);
     }
     _active_txn->area_list_tail_single = resolve(area_ptr);
-    
+
     make_dirty(area_ptr);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
@@ -441,7 +438,7 @@ struct _DB {
 
     auto area_ptr = _storage.alloc_multi_area(size);
     area_ptr->next = 0;
-    
+
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
       auto tail = resolve<Area>(_active_txn->area_list_tail_multi, READ);
@@ -453,7 +450,7 @@ struct _DB {
       make_dirty(_header);
     }
     _active_txn->area_list_tail_multi = resolve(area_ptr);
-    
+
     make_dirty(area_ptr);
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
@@ -499,7 +496,7 @@ struct _DB {
     _wtxn = tmp.clone(*this);
     _active_txn = &*_wtxn;
     _active_txn->refs.store(0);
-    
+
     // Initialize area list tails from the last transaction
     _active_txn->area_list_tail_single = last_txn->area_list_tail_single;
     _active_txn->area_list_tail_multi = last_txn->area_list_tail_multi;
@@ -537,8 +534,9 @@ struct _DB {
 
     // Return areas allocated during write transaction
     txn_ptr read_txn = resolve(_header->read_txn);
-    return_areas_range(read_txn->area_list_tail_single, _wtxn->area_list_tail_single,
-                       read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
+    return_areas_range(
+        read_txn->area_list_tail_single, _wtxn->area_list_tail_single,
+        read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
 
     _header->prepared_txn = _header->read_txn;
     flush();
@@ -568,7 +566,8 @@ struct _DB {
   bool commit(uint64_t cursor_id, bool sync = false) {
     if (!prepare_commit(cursor_id, sync)) return false;
 
-    // Atomically switch to new transaction (area tails are preserved in transaction)
+    // Atomically switch to new transaction (area tails are preserved in
+    // transaction)
     _header->read_txn = _header->prepared_txn;
     make_dirty(_header);
     flush(sync, true);
@@ -641,14 +640,15 @@ struct _DB {
   void return_areas_range(offset_t start_single, offset_t end_single,
                           offset_t start_multi, offset_t end_multi) {
     // Return area range [start->next ... end] to storage
-    // This is used during rollback to return areas allocated during write transaction
-    
+    // This is used during rollback to return areas allocated during write
+    // transaction
+
     if (start_single && end_single && start_single != end_single) {
       area_ptr start_area = resolve<Area>(start_single, READ);
       offset_t range_head = start_area->next;
       _storage.return_single_areas(range_head, end_single);
     }
-    
+
     if (start_multi && end_multi && start_multi != end_multi) {
       area_ptr start_area = resolve<Area>(start_multi, READ);
       offset_t range_head = start_area->next;
@@ -664,12 +664,13 @@ struct _DB {
       return false;
     });
 
-    // Return any uncommitted areas (after initialization, tails should be 0 or at initial state)
-    // In sanitize context, we don't have pending areas to return since we're resetting state
+    // Return any uncommitted areas (after initialization, tails should be 0 or
+    // at initial state) In sanitize context, we don't have pending areas to
+    // return since we're resetting state
     flush(true, true);
   }
 
-  const db_type& dump_db() const { return *this; }
+  const DB* _internal() const { return this; }
 };
 
 }  // namespace leaves

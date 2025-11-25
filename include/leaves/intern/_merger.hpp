@@ -35,13 +35,13 @@ struct _Merger {
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
   // Helper methods for memory management
-  block_ptr alloc(uint16_t size) { return dst_cursor._db->alloc(size); }
+  block_ptr alloc(uint16_t size) { return dst_cursor.alloc(size); }
 
   leaf_ptr fill_leaf(const Slice& key, const Slice& src_value) {
     leaf_ptr leaf = alloc(LeafNode::size(key.size(), src_value.size()));
     auto bv = leaf->set(key, src_value.size());
     if (bv) {
-      bv->offset = dst_cursor._db->alloc_big(bv->size()).offset();
+      bv->offset = dst_cursor.alloc_big(bv->size()).offset();
       block_ptr ptr = resolve_dst(bv->offset);
       memcpy((char*)ptr, src_value.data(), src_value.size());
     } else

@@ -102,7 +102,7 @@ static bool FLAGS_compression = true;
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
 
-#ifdef UNDEF
+#if 0
 namespace leaves {
 size_t dump_db(std::ostream& out, DB::db_ptr db);
 uint64_t dump_info(std::ostream& out, DB::db_ptr db);

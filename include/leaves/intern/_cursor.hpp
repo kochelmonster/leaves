@@ -83,7 +83,7 @@ struct _Transition {
   }
 
   offset_e* update() {
-    if constexpr (!Cursor::DB::Traits::TRANSACTIONAL) {
+    if constexpr (!Cursor::Traits::TRANSACTIONAL) {
       cursor->_db->make_dirty(block);
       return link();
     }
@@ -95,9 +95,11 @@ struct _Transition {
     }
 
     assert(is_trie());
-    trie() = cursor->_db->cow(trie());
+    auto old_trie = trie();
+    trie() = cursor->_db->clone(old_trie);
     offset = cursor->_db->resolve(trie());
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
+    cursor->_db->free(old_trie);
 
     if (!is_root())
       *parent().update() = offset;
@@ -344,6 +346,7 @@ struct _CursorBase {
   typedef _Stack<CursorBase> Stack;
   using db_ptr = typename Traits::db_ptr;
   using txn_ptr = typename DB::txn_ptr;
+  using block_ptr = typename DB::block_ptr;
   using Transition = typename Stack::Transition;
 
   db_ptr _db;
@@ -367,6 +370,11 @@ struct _CursorBase {
     current_key.resize(stack.back().keypos);
     stack.size--;
   }
+
+  // Allocation methods delegated through cursor to DB
+  block_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
+
+  AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
 };
 
 // Full cursor with find, transactions, and modification operations
@@ -378,6 +386,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   typedef _CursorBase<DB, Traits_> CursorBase;
   using db_ptr = typename Traits::db_ptr;
   using txn_ptr = typename DB::txn_ptr;
+  using block_ptr = typename DB::block_ptr;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
   using Hasher = typename Traits::Hasher;

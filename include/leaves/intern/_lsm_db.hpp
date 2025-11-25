@@ -273,8 +273,8 @@ struct Segment {
 
   // Copy-on-write - delegate to parent
   template <typename ptr>
-  ptr cow(ptr& src) {
-    return parent_db->cow(src);
+  ptr clone(ptr& src) {
+    return parent_db->clone(src);
   }
 
   // Transaction status (segments don't use transaction system)

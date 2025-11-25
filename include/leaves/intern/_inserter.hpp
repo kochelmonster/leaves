@@ -39,15 +39,19 @@ struct _Inserter {
     return back->cursor->_db->resolve(offset);
   }
 
-  block_ptr alloc(uint16_t size) { return back->cursor->_db->alloc(size); }
+  block_ptr alloc(uint16_t size) { return back->cursor->alloc(size); }
 
   template <typename T>
   void free(T& block) {
-    if constexpr (T::type == LEAF) {
-      if (block->is_big()) {
-        auto bv = block->big();
-        back->cursor->_db->free_big(bv->offset, bv->size());
-      }
+    back->cursor->_db->free(block);
+  }
+
+  template <typename T>
+  void free_complete(T& block) {
+    static_assert(T::type == LEAF);
+    if (block->is_big()) {
+      auto bv = block->big();
+      back->cursor->_db->free_big(bv->offset, bv->size());
     }
     back->cursor->_db->free(block);
   }
@@ -174,7 +178,7 @@ struct _Inserter {
     leaf_ptr leaf = alloc(LeafNode::size(key.size(), value_size));
     if (leaf) {
       auto bv = leaf->set(key, value_size);
-      if (bv) bv->offset = back->cursor->_db->alloc_big(bv->size()).offset();
+      if (bv) bv->offset = back->cursor->alloc_big(bv->size()).offset();
     }
     return leaf;
   }
@@ -207,12 +211,12 @@ struct _Inserter {
       leaf_ptr new_leaf = fill_leaf(oleaf->key());
       if (!new_leaf) return overflow(true);
       back->leaf() = new_leaf;
-      free(oleaf);
+      free_complete(oleaf);
       back->replace(resolve(back->leaf()));
       return _overflow;
     }
 
-    // replace the lead with a trie node!
+    // replace the leaf with a trie node!
 
     // first: copy the leaf node and cut of the new rest key by prefix
     // if it is a big leaf just the reference to the big value is copied
@@ -231,7 +235,10 @@ struct _Inserter {
         Slice(oleaf->data, back->prefix), bkey, resolve(copy),
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
 
-    free(oleaf);
+    // free(oleaf); // correct
+    free_complete(oleaf);  // wrong only for debug
+
+
     back->replace(resolve(new_trie));
     create_leaf();
     return _overflow;

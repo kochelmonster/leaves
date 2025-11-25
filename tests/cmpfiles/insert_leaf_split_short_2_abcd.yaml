@@ -1,8 +1,8 @@
 type: trie
-id: 10408
+id: 15576
 page: 0
 freespace: 88
-txn: 3
+txn: 4
 size: 40
 compressed: 
   size: 4
@@ -15,19 +15,19 @@ children:
 type: trie
 id: 15448
 page: 0
-freespace: 96
+freespace: 88
 txn: 4
-size: 32
+size: 40
 compressed: 
   size: 1
   key: "[*]"
 branches: "[][f]"
 children: 
-  - 15577
+  - 15705
   - 15321
 ---
 type: leaf
-id: 15577
+id: 15705
 page: 0
 freespace: 115
 size: 13

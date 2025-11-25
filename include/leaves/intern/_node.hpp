@@ -17,10 +17,10 @@ A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
 parent node) This makes the implmentation of many operations easier.
 */
-#pragma pack(1)
 template <typename Traits>
 struct _TrieNode : public Traits::BlockHeader {
   typedef _TrieNode<Traits> TrieNode;
+  using Base = typename Traits::BlockHeader;
   using hash_t = typename Traits::hash_t;
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
@@ -440,6 +440,7 @@ struct _TrieNode : public Traits::BlockHeader {
       for (int i = 0; i < lidx; i++) {
         oidx += bits::count(lower_[i]);
       }
+      assert(oidx < count());
       return array() + oidx;
     }
 
@@ -577,7 +578,6 @@ struct _LeafNode : public Traits::BlockHeader {
   }
 };
 
-#pragma pack(0)
 }  // namespace leaves
 
 #endif  // _LEAVES__NODE_HPP
