@@ -42,7 +42,7 @@ struct _TransactionBase : public Traits_::BlockHeader {
 
   MemManager mem_manager;
 
-  char* copy_start() { return (char*)&root; }
+  char* copy_start() const { return (char*)&root; }
 };
 
 template <typename Traits_>
@@ -154,17 +154,6 @@ struct _DB {
       sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
       "Size of Transaction must be at least size of _TransactionBase");
 
-  struct Header {
-    offset_t read_txn;      // the current read transaction
-    offset_t prepared_txn;  // the transaction being prepared for commit
-    Mutex txn_lock;
-    std::atomic<uint64_t>
-        txn_cursor_id;  // the id of the cursor holding the transaction
-    offset_t
-        area_list_head_single;  // head of single AREA_SIZE areas linked list
-    offset_t area_list_head_multi;  // head of multi-AREA_SIZE areas linked list
-    AreaPool area_pool;             // area pool for allocating areas
-  };
   static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
 

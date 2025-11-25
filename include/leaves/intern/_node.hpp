@@ -43,7 +43,7 @@ struct _TrieNode : public Traits::BlockHeader {
       257 * sizeof(offset_e);
   constexpr static uint8_t LOWER_MASK = 0b00011111;
 
-  char* copy_start() { return (char*)&_upper; }
+  char* copy_start() const { return (char*)&_upper; }
   uint8_t len() const { return _compressed_len; }
   int count() const { return (_array_len & ~NULL_MASK); }
   const uint8_t* compressed() const { return _compressed_data; }
@@ -534,7 +534,7 @@ struct _LeafNode : public Traits::BlockHeader {
     value_size = TOMBSTONE_FLAG;
   }
 
-  char* copy_start() { return (char*)&key_size; }
+  char* copy_start() const { return (char*)&key_size; }
 
   template <typename Resolver>
   Slice value(Resolver& resolver) const {
