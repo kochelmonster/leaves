@@ -669,9 +669,24 @@ struct _DB {
       return false;
     });
 
-    // Return any uncommitted areas (after initialization, tails should be 0 or
-    // at initial state) In sanitize context, we don't have pending areas to
-    // return since we're resetting state
+    if (_header->prepared_txn == _header->read_txn) {
+      // Return any uncommitted areas 
+      txn_ptr read_txn = resolve(_header->read_txn);
+      
+      // Find actual tail by iterating single area list
+      offset_t stail = Area::get_end(read_txn->area_list_tail_single, *this);
+      offset_t mtail = Area::get_end(read_txn->area_list_tail_multi, *this);
+      return_areas_range(
+          read_txn->area_list_tail_single, stail,
+          read_txn->area_list_tail_multi, mtail);
+      
+      // Clear transaction state after rolling back
+      _header->prepared_txn = _header->read_txn;
+      _wtxn.reset();
+      _active_txn = nullptr;
+    }
+    // otherwise we have to wait for rollback or commit
+    
     flush();
   }
 

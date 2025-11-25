@@ -341,6 +341,17 @@ struct Area : public AreaSlice {
 
   // Returns the offset where content can start (after the Area header)
   offset_t content_offset() const { return offset() + sizeof(Area); }
+
+  template <typename Resolver>
+  static offset_t get_end(offset_t cur, const Resolver& resolver) {
+    // Use resolver to get the area from offset
+    auto area = resolver.template resolve<Area>(cur, READ);
+    while (area->next) {
+      cur = area->next;
+      area = resolver.template resolve<Area>(cur, READ);
+    }
+    return cur;
+  }
 };
 
 static_assert(alignof(Area) >= alignof(void*),

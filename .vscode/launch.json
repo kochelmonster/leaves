@@ -138,7 +138,7 @@
             "program": "${workspaceFolder}/build/test_db",
             "args": [
                 "-t",
-                "test_big_allocs"
+                "test_sanitize_uncommitted_areas"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
