@@ -103,7 +103,7 @@ struct _Merger {
       // Get root from source - it's the first element in the stack
       auto root_offset = src_cursor.stack.front().offset;
       auto new_root = deep_copy_subtree(root_offset);
-      Traits::set_root(dst_cursor._txn, new_root);
+      *dst_cursor._root = new_root;
       return;
     }
 

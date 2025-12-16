@@ -15,11 +15,11 @@ class TCursor {
 
   template <typename DB>
   TCursor(storage_ptr storage, DB db)
-      : _storage(storage), _cursor(std::make_shared<CursorImpl>(db)) {}
+      : _storage(storage), _cursor(std::make_shared<CursorImpl>(db, &db->txn()->root)) {}
   TCursor() = default;
 
   TCursor(TCursor&& other) noexcept
-    : _storage(std::move(other._storage), _cursor(std::move(other._cursor))) {}
+    : _storage(std::move(other._storage)), _cursor(std::move(other._cursor)) {}
 
   ~TCursor() {
     _cursor.reset();

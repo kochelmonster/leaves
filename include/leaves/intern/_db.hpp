@@ -117,8 +117,6 @@ struct _DB {
     typedef ::Hasher Hasher;
     constexpr static bool TRANSACTION_REF = true;
     constexpr static bool COW = Traits::TRANSACTIONAL;
-    static offset_t get_root(txn_ptr& txn) { return txn->root; }
-    static void set_root(txn_ptr& txn, offset_t offset) { txn->root = offset; }
   };
 
   struct MemoryTraits : public Storage::Traits {
@@ -127,10 +125,6 @@ struct _DB {
     typedef uint8_t hash_t[0];
     constexpr static bool TRANSACTION_REF = false;
     constexpr static bool COW = Traits::TRANSACTIONAL;
-    static offset_t get_root(txn_ptr& txn) { return txn->mem_root; }
-    static void set_root(txn_ptr& txn, offset_t offset) {
-      txn->mem_root = offset;
-    }
   };
 
   struct BigSizeKey {
@@ -172,17 +166,18 @@ struct _DB {
   _DB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
         _header(storage.resolve(header)),
-        _mem_cursor(this),
+        _mem_cursor(this, nullptr),
         _index(index) {
     if (_header->prepared_txn != _header->read_txn) {
       // Recover a prepared transaction - set both _active_txn and _wtxn
       _wtxn = resolve<Transaction>(_header->prepared_txn);
       _active_txn = &*_wtxn;
+      _mem_cursor._root = &_active_txn->mem_root;
     }
   }
 
   _DB(Storage& storage, offset_t* header, uint16_t index)
-      : _storage(storage), _mem_cursor(this), _index(index) {
+      : _storage(storage), _mem_cursor(this, nullptr), _index(index) {
     init(header);
   }
 
@@ -501,6 +496,7 @@ struct _DB {
     _wtxn = tmp.clone(*this);
     _active_txn = &*_wtxn;
     _active_txn->refs.store(0);
+    _mem_cursor._root = &_active_txn->mem_root;
 
     // Initialize area list tails from the last transaction
     _active_txn->area_list_tail_single = last_txn->area_list_tail_single;

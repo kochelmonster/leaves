@@ -57,7 +57,8 @@ BOOST_AUTO_TEST_CASE(test_merge_iterator_empty) {
   Storage storage(TEST_FILE);
   auto db = storage["test"];
   
-  NodeIter iter(db._internal(), offset_t());
+  offset_t empty_root;
+  NodeIter iter(db._internal(), &empty_root);
   
   BOOST_CHECK(!iter.stack.size);
   BOOST_CHECK(!iter.next());
@@ -76,7 +77,7 @@ BOOST_AUTO_TEST_CASE(test_merge_iterator_single_leaf) {
   
   // Get root through db
   auto _internal = db._internal();
-  NodeIter iter(_internal);
+  NodeIter iter(_internal, &_internal->txn()->root);
   
   BOOST_CHECK(!!iter.stack.size);
   BOOST_CHECK(iter.node().is_leaf());
@@ -102,7 +103,7 @@ BOOST_AUTO_TEST_CASE(test_merge_iterator_multiple_values) {
   cursor.commit();
   
   auto _internal = db._internal();
-  NodeIter iter(_internal);
+  NodeIter iter(_internal, &_internal->txn()->root);
   
   std::map<std::string, std::string> found_values;
   
@@ -138,7 +139,7 @@ BOOST_AUTO_TEST_CASE(test_merge_single_value) {
   
   // Use iterator to read source
   auto src__internal = src_db._internal();
-  NodeIter iter(src__internal);
+  NodeIter iter(src__internal, &src__internal->txn()->root);
   
   // Insert into destination
   auto dst_cursor = dest_storage["test"].cursor();
@@ -178,7 +179,7 @@ BOOST_AUTO_TEST_CASE(test_merge_multiple_values) {
   
   // Use iterator to read source
   auto src__internal = src_db._internal();
-  NodeIter iter(src__internal);
+  NodeIter iter(src__internal, &src__internal->txn()->root);
   
   // Insert into destination
   auto dst_cursor = dest_storage["test"].cursor();
@@ -232,7 +233,7 @@ BOOST_AUTO_TEST_CASE(test_merge_with_existing_values) {
   
   // Merge using iterator
   auto src__internal = src_db._internal();
-  NodeIter iter(src__internal);
+  NodeIter iter(src__internal, &src__internal->txn()->root);
 
   if (!!iter.stack.size) {
     do {
@@ -278,7 +279,7 @@ BOOST_AUTO_TEST_CASE(test_merge_large_dataset) {
   
   // Merge using iterator
   auto src__internal = src_db._internal();
-  NodeIter iter(src__internal);
+  NodeIter iter(src__internal, &src__internal->txn()->root);
 
   auto dst_cursor = dest_storage["test"].cursor();
   
@@ -317,8 +318,8 @@ BOOST_AUTO_TEST_CASE(test_merger_empty_to_empty) {
   auto src_internal = src_storage["test"]._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -342,8 +343,8 @@ BOOST_AUTO_TEST_CASE(test_merger_single_leaf_to_empty) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -375,8 +376,8 @@ BOOST_AUTO_TEST_CASE(test_merger_multiple_leaves_to_empty) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -418,8 +419,8 @@ BOOST_AUTO_TEST_CASE(test_merger_overwrite_existing) {
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -452,8 +453,8 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_destination) {
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   KeepDestHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -491,8 +492,8 @@ BOOST_AUTO_TEST_CASE(test_merger_disjoint_keys) {
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -540,8 +541,8 @@ BOOST_AUTO_TEST_CASE(test_merger_prefix_keys) {
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -579,8 +580,8 @@ BOOST_AUTO_TEST_CASE(test_merger_big_values) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -609,8 +610,8 @@ BOOST_AUTO_TEST_CASE(test_merger_big_keys) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -641,8 +642,8 @@ BOOST_AUTO_TEST_CASE(test_merger_compressed_trie_nodes) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -681,8 +682,8 @@ BOOST_AUTO_TEST_CASE(test_merger_split_scenarios) {
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -736,8 +737,8 @@ BOOST_AUTO_TEST_CASE(test_merger_large_dataset) {
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -791,8 +792,8 @@ BOOST_AUTO_TEST_CASE(test_merger_empty_key) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -823,8 +824,8 @@ BOOST_AUTO_TEST_CASE(test_merger_null_branch) {
   auto src_internal = src_db._internal();
   auto dst_internal = dest_storage["test"]._internal();
   
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -871,8 +872,8 @@ BOOST_AUTO_TEST_CASE(test_merger_big_value_overwrite) {
   // This should call free(dst_leaf) on line 139, which should free the big value
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -918,8 +919,8 @@ BOOST_AUTO_TEST_CASE(test_merger_dst_trie_split) {
   // because source trie "abcde" matches only partially
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -973,8 +974,8 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_into_dst_leaf) {
   // This should trigger copy_src_plus_none with src.is_trie()
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -1025,8 +1026,8 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_with_none_branch) {
   // Merge - this should trigger split_trie with src_trie->isset(NONE) = true
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);
@@ -1075,8 +1076,8 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_longer_prefix) {
   // Merge - src trie "abcde" needs to be split when inserted into dst trie "ab"
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
-  InternalCursor src_cursor(src_internal);
-  InternalCursor dst_cursor(dst_internal);
+  InternalCursor src_cursor(src_internal, &src_internal->txn()->root);
+  InternalCursor dst_cursor(dst_internal, &dst_internal->txn()->root);
   
   OverwriteHandler handler;
   exec_merger(dst_cursor, src_cursor, handler);

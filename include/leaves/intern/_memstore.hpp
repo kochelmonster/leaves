@@ -73,8 +73,6 @@ struct _MemoryDB {
     typedef uint8_t hash_t[0];
     constexpr static bool TRANSACTION_REF = false;
     constexpr static bool COW = false;
-    static void set_root(txn_ptr txn, offset_t offset) { txn->root = offset; }
-    static offset_t get_root(txn_ptr txn) { return txn->root; }
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -181,7 +179,7 @@ struct _MemoryDB {
     // Get the proper shared_ptr from storage to ensure correct lifetime
     // management
     auto self = _storage.db();
-    return Cursor(self);
+    return Cursor(self, &_null_txn.root);
   }
 };
 

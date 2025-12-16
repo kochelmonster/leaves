@@ -72,7 +72,7 @@ struct _Transition {
 
   block_ptr resolve(offset_t offset) { return cursor->_db->resolve(offset); }
 
-  void set_root(offset_t offset_) { Traits::set_root(cursor->_txn, offset_); }
+  void set_root(offset_t offset_) { *cursor->_root = offset_; }
 
   void replace(offset_t offset_) {
     offset = offset_;
@@ -231,7 +231,7 @@ struct _Transition {
         cursor->_db->prefetch(*(lnk + 1));
       }
       auto& child = push(lnk);
-      cursor->_db->prefetch(*lnk); 
+      cursor->_db->prefetch(*lnk);
 
       child.first();
       branch_key = current_key()[child.keypos];
@@ -274,7 +274,7 @@ struct _Transition {
         cursor->_db->prefetch(*(lnk - 1));
       }
       auto& child = push(lnk);
-      cursor->_db->prefetch(*lnk); 
+      cursor->_db->prefetch(*lnk);
 
       child.last();
       branch_key = current_key()[child.keypos];
@@ -345,18 +345,22 @@ struct _CursorBase {
   typedef Traits_ Traits;
   typedef _CursorBase<DB, Traits_> CursorBase;
   typedef _Stack<CursorBase> Stack;
+  using offset_e = typename Traits::offset_e;
   using db_ptr = typename Traits::db_ptr;
   using txn_ptr = typename DB::txn_ptr;
   using Transition = typename Stack::Transition;
 
   db_ptr _db;
+  offset_e* _root;
   txn_ptr _txn;
   Stack stack;
   Slice rest_key;
   std::string current_key;
 
   _CursorBase() = default;
-  _CursorBase(db_ptr db) : _db(db) { current_key.reserve(128); }
+  _CursorBase(db_ptr db, offset_e* root) : _db(db), _root(root) {
+    current_key.reserve(128);
+  }
 
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
@@ -381,6 +385,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   typedef _CursorBase<DB, Traits_> CursorBase;
   using db_ptr = typename Traits::db_ptr;
   using txn_ptr = typename DB::txn_ptr;
+  using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
   using Hasher = typename Traits::Hasher;
@@ -390,7 +395,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   uint64_t _id{0};
   std::string _refind_buffer;
 
-  _Cursor(db_ptr db) : CursorBase(db) {
+  _Cursor(db_ptr db, offset_e* root) : CursorBase(db, root) {
     if constexpr (Traits::TRANSACTION_REF) {
       _id = this->_db->new_cursor_id();
     }
@@ -426,7 +431,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   bool _prepare_move() {
     this->stack.clear(0);
-    auto root = Traits::get_root(this->_txn);
+    auto root = *this->_root;
     if (!root) return true;
     this->rest_key.reset();
     this->current_key.clear();
@@ -465,7 +470,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     assert(r);
 
     if (!this->stack.size) {
-      if (!Traits::get_root(this->_txn)) {
+      if (!*this->_root) {
         this->push(offset_t());
         _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
@@ -570,7 +575,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   void _find() {
     if (!this->stack.size) {
-      auto root = Traits::get_root(this->_txn);
+      auto root = *this->_root;
       if (!root) return;  // empty db
       this->current_key.clear();
       this->push(root);
@@ -592,15 +597,15 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     if constexpr (Traits::TRANSACTION_REF) {
       assert(txn);
       if (this->_txn != txn) {
-        offset_t old_root;
+        offset_t old_root_val = this->_root ? *this->_root : offset_t();
         if (this->_txn) {
           this->_txn->refs.fetch_sub(1);
-          old_root = Traits::get_root(this->_txn);
         }
         this->_txn = txn;
         this->_txn->refs.fetch_add(1);
+        this->_root = &this->_txn->root;
         if ((this->current_key.size() || this->rest_key.size()) &&
-            old_root != Traits::get_root(this->_txn)) {
+            old_root_val != *this->_root) {
           // adjust to new root
           this->stack.clear();
           _refind_buffer.reserve(this->current_key.size() +
@@ -623,15 +628,14 @@ struct _NodeIterator : public _CursorBase<DB_, Traits_> {
   typedef _NodeIterator<DB, Traits_> NodeIterator;
   typedef _CursorBase<DB, Traits_> CursorBase;
   using db_ptr = typename Traits::db_ptr;
+  using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
 
   int stack_level;
-  offset_t root;
 
-  _NodeIterator(db_ptr db, offset_t root = 0) : CursorBase(db) {
+  _NodeIterator(db_ptr db, offset_e* root) : CursorBase(db, root) {
     this->_txn = this->_db->txn();
     this->_txn->refs.fetch_add(1);
-    this->root = root ? root : Traits::get_root(this->_txn);
     first();
   }
 
@@ -639,9 +643,9 @@ struct _NodeIterator : public _CursorBase<DB_, Traits_> {
 
   void first() {
     this->stack.clear(0);
-    if (!root) return;
+    if (!this->_root || !*this->_root) return;
     this->current_key.clear();
-    this->push(root);
+    this->push(*this->_root);
     this->stack.back().first();
     stack_level = 0;
   }
