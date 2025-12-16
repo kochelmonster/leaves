@@ -12,7 +12,7 @@ typedef MapStorage Storage;
 typedef Storage::StorageImpl::DB InternalDB;
 typedef InternalDB::ValueTraits ValueTraits;
 typedef _NodeIterator<InternalDB, ValueTraits> NodeIter;
-typedef _Cursor<InternalDB, ValueTraits> InternalCursor;
+typedef _TransactionalCursor<InternalDB, ValueTraits> InternalCursor;
 
 // Function to execute merger within a transaction
 template<typename CursorDst, typename CursorSrc, typename Handler>

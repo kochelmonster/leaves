@@ -384,7 +384,6 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   typedef _Cursor<DB, Traits_> Cursor;
   typedef _CursorBase<DB, Traits_> CursorBase;
   using db_ptr = typename Traits::db_ptr;
-  using txn_ptr = typename DB::txn_ptr;
   using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
@@ -392,30 +391,9 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   using hash_t = typename Hasher::hash_t;
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
-  uint64_t _id{0};
-  std::string _refind_buffer;
 
-  _Cursor(db_ptr db, offset_e* root) : CursorBase(db, root) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      _id = this->_db->new_cursor_id();
-    }
-    update();
-  }
+  _Cursor(db_ptr db, offset_e* root) : CursorBase(db, root) {}
 
-  ~_Cursor() {
-    if constexpr (Traits::TRANSACTION_REF) {
-      if (is_transaction_active()) {
-        if (this->_txn) this->_txn->refs.fetch_sub(1);
-      }
-    }
-  }
-
-  bool is_transaction_active() const {
-    if constexpr (Traits::TRANSACTION_REF) {
-      return this->_db->txn_cursor_id() == _id;
-    }
-    return false;
-  }
 
   // return true if the cursor is on a valid position
   bool is_valid() const {
@@ -466,9 +444,6 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   void* reserve(size_t size) {
-    [[maybe_unused]] bool r = start_transaction();
-    assert(r);
-
     if (!this->stack.size) {
       if (!*this->_root) {
         this->push(offset_t());
@@ -496,47 +471,8 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   Slice key() const { return this->current_key; }
 
   void remove() {
-    [[maybe_unused]] bool r = start_transaction();
-    assert(r);
     if (!is_valid()) throw NoValidPosition();
     _Deleter(*this).exec();
-  }
-
-  bool start_transaction(bool non_blocking = false) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      if (this->_db->txn_cursor_id() != _id) {
-        txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
-        if (!new_txn) return false;
-        assert(new_txn->refs.load() == 0);  // no one can reference it yet
-        _set_txn(new_txn);
-      }
-    }
-    return true;
-  }
-
-  tid_t prepare_commit(bool sync = false) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      return this->_db->prepare_commit(_id, sync);
-    }
-    return tid_t(0);
-  }
-
-  bool commit(bool sync = false) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      return this->_db->commit(_id, sync);
-    }
-    return false;
-  }
-
-  bool rollback() {
-    if constexpr (Traits::TRANSACTION_REF) {
-      if (this->_db->rollback(_id)) {
-        this->stack.clear();
-        find(this->current_key);
-        return true;
-      }
-    }
-    return false;
   }
 
   /* Helpers */
@@ -582,38 +518,110 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
     }
     this->stack.back().find();
   }
+};
+
+// Full cursor with find, transactions, and modification operations
+template <typename DB_, typename Traits_>
+struct _TransactionalCursor : public _Cursor<DB_, Traits_> {
+  typedef DB_ DB;
+  typedef Traits_ Traits;
+  typedef _Cursor<DB_, Traits_> Cursor;
+  using db_ptr = typename Traits::db_ptr;
+  using txn_ptr = typename DB::txn_ptr;
+  using offset_e = typename Traits::offset_e;
+
+  uint64_t _id{0};
+  std::string _refind_buffer;
+
+  _TransactionalCursor(db_ptr db, offset_e* root) : Cursor(db, root) {
+    _id = this->_db->new_cursor_id();
+    update();
+  }
+
+  ~_TransactionalCursor() {
+    if (is_transaction_active()) {
+      if (this->_txn) this->_txn->refs.fetch_sub(1);
+    }
+  }
+
+  bool is_transaction_active() const {
+    return this->_db->txn_cursor_id() == _id;
+  }
+
+  // Bring base class reserve and value getter into scope
+  using Cursor::value;
+  using Cursor::reserve;
+
+  void* reserve(size_t size) {
+    [[maybe_unused]] bool r = start_transaction();
+    assert(r);
+    return Cursor::reserve(size);
+  }
+
+  void value(const Slice& value) {
+    [[maybe_unused]] bool r = start_transaction();
+    assert(r);
+    Cursor::value(value);
+  }
+
+  void remove() {
+    [[maybe_unused]] bool r = start_transaction();
+    assert(r);
+    Cursor::remove();
+  }
+
+  bool start_transaction(bool non_blocking = false) {
+    if (this->_db->txn_cursor_id() != _id) {
+      txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
+      if (!new_txn) return false;
+      assert(new_txn->refs.load() == 0);  // no one can reference it yet
+      _set_txn(new_txn);
+    }
+    return true;
+  }
+
+  tid_t prepare_commit(bool sync = false) {
+    return this->_db->prepare_commit(_id, sync);
+  }
+
+  bool commit(bool sync = false) { return this->_db->commit(_id, sync); }
+
+  bool rollback() {
+    if (this->_db->rollback(_id)) {
+      this->stack.clear();
+      this->find(this->current_key);
+      return true;
+    }
+    return false;
+  }
 
   void update() {
-    if constexpr (Traits::TRANSACTION_REF) {
-      auto new_txn = this->_db->txn();
-      assert(new_txn);
-      if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
-        _set_txn(new_txn);
-      }
+    auto new_txn = this->_db->txn();
+    assert(new_txn);
+    if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
+      _set_txn(new_txn);
     }
   }
 
   void _set_txn(txn_ptr& txn) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      assert(txn);
-      if (this->_txn != txn) {
-        offset_t old_root_val = this->_root ? *this->_root : offset_t();
-        if (this->_txn) {
-          this->_txn->refs.fetch_sub(1);
-        }
-        this->_txn = txn;
-        this->_txn->refs.fetch_add(1);
-        this->_root = &this->_txn->root;
-        if ((this->current_key.size() || this->rest_key.size()) &&
-            old_root_val != *this->_root) {
-          // adjust to new root
-          this->stack.clear();
-          _refind_buffer.reserve(this->current_key.size() +
-                                 this->rest_key.size());
-          _refind_buffer = this->current_key;
-          _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
-          find(_refind_buffer);
-        }
+    assert(txn);
+    if (this->_txn != txn) {
+      offset_t old_root_val = this->_root ? *this->_root : offset_t();
+      if (this->_txn) {
+        this->_txn->refs.fetch_sub(1);
+      }
+      this->_txn = txn;
+      this->_txn->refs.fetch_add(1);
+      this->_root = &this->_txn->root;
+      if ((this->current_key.size() || this->rest_key.size()) &&
+          old_root_val != *this->_root) {
+        // adjust to new root
+        this->stack.clear();
+        _refind_buffer.reserve(this->current_key.size() +
+                               this->rest_key.size());
+        _refind_buffer = this->current_key;
+        _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
+        this->find(_refind_buffer);
       }
     }
   }

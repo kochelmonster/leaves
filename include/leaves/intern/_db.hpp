@@ -139,7 +139,7 @@ struct _DB {
   static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[BLOCK_SIZES_COUNT - 1];
   static constexpr uint64_t SIZE_BIT = uint64_t(1) << 63;
 
-  typedef _Cursor<DB, ValueTraits> Cursor;
+  typedef _TransactionalCursor<DB, ValueTraits> Cursor;
   typedef _Cursor<DB, MemoryTraits> MemCursor;
   typedef _MemManager<Traits> MemManager;
   typedef DB db_type;
