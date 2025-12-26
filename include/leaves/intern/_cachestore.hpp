@@ -37,8 +37,7 @@ struct _CacheStore : public Opers_ {
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef Opers_ Operations;
   typedef _DB<_CacheStore> DB;
-  typedef std::shared_ptr<DB> db_ptr;
-  typedef std::weak_ptr<DB> wdb_ptr;
+  typedef std::unique_ptr<DB> _db_ptr;
   typedef std::vector<char> area_chunk_t;
   using Opers_::_header;
   using Opers_::calc_header_size;
@@ -52,7 +51,6 @@ struct _CacheStore : public Opers_ {
   // Use TwoQCache instead of LRUCache
   using Cache = TwoQCache<uint64_t, block_ptr>;
 
-  std::vector<wdb_ptr> _dbs;  // databases
   mutable Cache _cache;
   size_t _capacity;  // Cache capacity in bytes
 
@@ -89,6 +87,7 @@ struct _CacheStore : public Opers_ {
   std::condition_variable _dirty_cv;
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
+  std::vector<_db_ptr> _dbs;
 
   _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M)
       : _cache(capacity), _capacity(capacity), _should_stop(false) {
@@ -305,9 +304,9 @@ struct _CacheStore : public Opers_ {
 
   Slice db_name(int index) const { return Slice(_header->dbs[index].name); }
 
-  db_ptr operator[](const char* name) { return make(name); }
+  DB* operator[](const char* name) { return make(name); }
 
-  db_ptr make(const char* name) {
+  DB* make(const char* name) {
     if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) throw KeyTooBig();
 
     // No locking needed since we're single-process
@@ -315,25 +314,23 @@ struct _CacheStore : public Opers_ {
     for (uint16_t i = 0; i < _header->db_count; i++) {
       if (_header->dbs[i].offset) {
         if (!strcmp(_header->dbs[i].name, name)) {
-          if (_dbs[i].expired()) {
-            db_ptr tmp = std::make_shared<DB>(*this, _header->dbs[i].offset, i);
+          if (!_dbs[i]) {
+            _dbs[i] = std::make_unique<DB>(*this, _header->dbs[i].offset, i);
             make_header_dirty();
-            _dbs[i] = tmp;
-            return _dbs[i].lock();
+            return _dbs[i].get();
           }
-          return _dbs[i].lock();
+          return _dbs[i].get();
         }
       } else if (free < 0)
         free = i;
     }
 
     if (free < 0) throw LeavesException();
-    std::snprintf(_header->dbs[free].name, sizeof(_header->dbs[free].name),
-                  "%s", name);
-    db_ptr tmp = std::make_shared<DB>(*this, &_header->dbs[free].offset, free);
+    std::strncpy(_header->dbs[free].name, name, sizeof(_header->dbs[free].name) - 1);
+    _header->dbs[free].name[sizeof(_header->dbs[free].name) - 1] = '\0';
+    _dbs[free] = std::make_unique<DB>(*this, &_header->dbs[free].offset, free);
     make_header_dirty();
-    _dbs[free] = tmp;
-    return _dbs[free].lock();
+    return _dbs[free].get();
   }
 
   void remove_db(const char* name) {
@@ -341,7 +338,7 @@ struct _CacheStore : public Opers_ {
 
     for (uint16_t i = 0; i < _header->db_count; i++) {
       if (_header->dbs[i].offset && !strcmp(_header->dbs[i].name, name)) {
-        if (_dbs[i].use_count()) throw TransactionActive();
+        if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
         DB tmp(*this, _header->dbs[i].offset, i);
         // Return the DB's areas back into storage using head/tail pattern
         auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);

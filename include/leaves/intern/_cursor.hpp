@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "_bigmemory.hpp"
 #include "_deleter.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
@@ -52,8 +53,6 @@ struct _Transition {
     return (offset_e*)(trie().link(link_offset));
   }
 
-  //_Transition() : trie(*(trie_ptr*)&block), leaf(*(leaf_ptr*)&block) {}
-
   bool is_leaf() const { return offset.type() == LEAF; }
   bool is_trie() const { return offset.type() == TRIE; }
 
@@ -77,19 +76,13 @@ struct _Transition {
   void replace(offset_t offset_) {
     offset = offset_;
     if (!is_root())
-      *parent().update() = offset_;
+      *parent().update(*this) = offset_;
     else
       set_root(offset);
   }
 
-  offset_e* update() {
-    if constexpr (!Cursor::Traits::COW) {
-      cursor->_db->make_dirty(block);
-      return link();
-    }
-
-    if (block->txn_id == cursor->_txn->txn_id) {
-      assert(cursor->_db->transaction_active());
+  offset_e* update(Transition& child) {
+    if (!block->needs_cow(*child.block.operator->())) {
       cursor->_db->make_dirty(block);
       return link();
     }
@@ -103,7 +96,7 @@ struct _Transition {
     cursor->_db->free(old_trie);
 
     if (!is_root())
-      *parent().update() = offset;
+      *parent().update(*this) = offset;
     else
       set_root(offset);
 
@@ -140,7 +133,7 @@ struct _Transition {
 
   Slice value() const {
     assert(is_leaf());
-    return leaf()->value(*cursor->_db);
+    return leaf()->value();
   }
 
   std::string& current_key() { return cursor->current_key; }
@@ -339,26 +332,23 @@ struct _Stack {
 };
 
 // Base cursor with stack and core navigation functionality
-template <typename DB_, typename Traits_>
+template <typename Traits_>
 struct _CursorBase {
-  typedef DB_ DB;
   typedef Traits_ Traits;
-  typedef _CursorBase<DB, Traits_> CursorBase;
+  typedef _CursorBase<Traits_> CursorBase;
   typedef _Stack<CursorBase> Stack;
+  typedef typename Traits::DB DB;
   using offset_e = typename Traits::offset_e;
-  using db_ptr = typename Traits::db_ptr;
-  using txn_ptr = typename DB::txn_ptr;
   using Transition = typename Stack::Transition;
 
-  db_ptr _db;
+  DB* _db;
   offset_e* _root;
-  txn_ptr _txn;
   Stack stack;
   Slice rest_key;
   std::string current_key;
 
   _CursorBase() = default;
-  _CursorBase(db_ptr db, offset_e* root) : _db(db), _root(root) {
+  _CursorBase(DB* db, offset_e* root) : _db(db), _root(root) {
     current_key.reserve(128);
   }
 
@@ -377,13 +367,12 @@ struct _CursorBase {
 };
 
 // Full cursor with find, transactions, and modification operations
-template <typename DB_, typename Traits_>
-struct _Cursor : public _CursorBase<DB_, Traits_> {
-  typedef DB_ DB;
+template <typename Traits_>
+struct _Cursor : public _CursorBase<Traits_> {
   typedef Traits_ Traits;
-  typedef _Cursor<DB, Traits_> Cursor;
-  typedef _CursorBase<DB, Traits_> CursorBase;
-  using db_ptr = typename Traits::db_ptr;
+  typedef _Cursor<Traits_> Cursor;
+  typedef _CursorBase<Traits_> CursorBase;
+  using DB = typename Traits::DB;
   using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
@@ -392,8 +381,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 
-  _Cursor(db_ptr db, offset_e* root) : CursorBase(db, root) {}
-
+  _Cursor(DB* db, offset_e* root) : CursorBase(db, root) {}
 
   // return true if the cursor is on a valid position
   bool is_valid() const {
@@ -521,19 +509,24 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 };
 
 // Full cursor with find, transactions, and modification operations
-template <typename DB_, typename Traits_>
-struct _TransactionalCursor : public _Cursor<DB_, Traits_> {
-  typedef DB_ DB;
+template <typename Traits_>
+struct _TransactionalCursor : public _Cursor<Traits_> {
   typedef Traits_ Traits;
-  typedef _Cursor<DB_, Traits_> Cursor;
-  using db_ptr = typename Traits::db_ptr;
-  using txn_ptr = typename DB::txn_ptr;
+  typedef _Cursor<Traits_> Cursor;
+  typedef _BigMemory<Cursor> BigMemory;
+  using DB = typename Traits::DB;
+  using txn_ptr = typename std::remove_pointer<DB>::type::txn_ptr;
   using offset_e = typename Traits::offset_e;
+  using Transition = typename Cursor::Transition;
+  using LeafNode = typename Transition::LeafNode;
+  typedef typename BigMemory::BigValue BigValue;
 
+  std::unique_ptr<BigMemory> _bigmemory;
+  txn_ptr _txn;
   uint64_t _id{0};
   std::string _refind_buffer;
 
-  _TransactionalCursor(db_ptr db, offset_e* root) : Cursor(db, root) {
+  _TransactionalCursor(DB* db, offset_e* root) : Cursor(db, root) {
     _id = this->_db->new_cursor_id();
     update();
   }
@@ -548,26 +541,66 @@ struct _TransactionalCursor : public _Cursor<DB_, Traits_> {
     return this->_db->txn_cursor_id() == _id;
   }
 
-  // Bring base class reserve and value getter into scope
-  using Cursor::value;
-  using Cursor::reserve;
+  BigMemory& get_bigmemory() {
+    if (!_bigmemory) {
+      _bigmemory = std::make_unique<BigMemory>(
+          this->_db, &this->_txn->size_root, &this->_txn->offset_root);
+    }
+    return *_bigmemory;
+  }
 
   void* reserve(size_t size) {
     [[maybe_unused]] bool r = start_transaction();
     assert(r);
-    return Cursor::reserve(size);
+
+    const Transition& back = this->stack.back();
+    if (this->is_valid() && back.leaf()->is_big()) {
+        BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+      get_bigmemory().free(bvalue->area);
+    }
+
+    uint16_t size_modified =
+        BigMemory::template modify_size<LeafNode>(this->rest_key.size(), size);
+    void* result = Cursor::reserve(size_modified);
+    if (size_modified != size) {
+      BigValue* bvalue = (BigValue*)result;
+      bvalue->area = get_bigmemory().alloc(size);
+      bvalue->value_size = size;
+      this->stack.back().leaf()->set_big();
+      return bvalue->data(this->_db);
+    }
+    return result;
+  }
+
+  Slice value() const {
+    const Transition& back = this->stack.back();
+    if (back.cmp == 0 && back.is_leaf()) {
+      if (back.leaf()->is_big()) {
+        BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+        return Slice(bvalue->data(this->_db), bvalue->value_size);
+      }
+      return back.value();
+    }
+    return Slice();
   }
 
   void value(const Slice& value) {
     [[maybe_unused]] bool r = start_transaction();
     assert(r);
-    Cursor::value(value);
+    void* space = reserve(value.size());
+    memcpy(space, value.data(), value.size());
+    this->_db->flush();
   }
 
   void remove() {
     [[maybe_unused]] bool r = start_transaction();
-    assert(r);
-    Cursor::remove();
+    if (!this->is_valid()) throw NoValidPosition();
+    const Transition& back = this->stack.back();
+    if (back.leaf()->is_big()) {
+      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+      get_bigmemory().free(bvalue->area);
+    }
+    _Deleter(*this).exec();
   }
 
   bool start_transaction(bool non_blocking = false) {
@@ -625,89 +658,6 @@ struct _TransactionalCursor : public _Cursor<DB_, Traits_> {
       }
     }
   }
-};
-
-// Node-by-node iterator for merging - no find, no transactions, just forward
-// traversal
-template <typename DB_, typename Traits_>
-struct _NodeIterator : public _CursorBase<DB_, Traits_> {
-  typedef DB_ DB;
-  typedef Traits_ Traits;
-  typedef _NodeIterator<DB, Traits_> NodeIterator;
-  typedef _CursorBase<DB, Traits_> CursorBase;
-  using db_ptr = typename Traits::db_ptr;
-  using offset_e = typename Traits::offset_e;
-  using Transition = typename CursorBase::Transition;
-
-  int stack_level;
-
-  _NodeIterator(db_ptr db, offset_e* root) : CursorBase(db, root) {
-    this->_txn = this->_db->txn();
-    this->_txn->refs.fetch_add(1);
-    first();
-  }
-
-  ~_NodeIterator() { this->_txn->refs.fetch_sub(1); }
-
-  void first() {
-    this->stack.clear(0);
-    if (!this->_root || !*this->_root) return;
-    this->current_key.clear();
-    this->push(*this->_root);
-    this->stack.back().first();
-    stack_level = 0;
-  }
-
-  bool next() {
-    if (!this->stack.size) return false;  // empty iterator
-
-    if (stack_level < (int)this->stack.size - 1) {
-      stack_level++;  // the next node in stack
-      return true;
-    }
-
-    // We're at the last node in stack, try to advance to next leaf
-    while (this->stack.size) {
-      if (this->stack.back().next()) {
-        stack_level++;
-        return true;
-      }
-      this->pop();
-      stack_level--;
-      assert(stack_level == (int)this->stack.size - 1);
-    }
-    return false;
-  }
-
-  // skip the next subtrie
-  bool skip() {
-    if (!this->stack.size) return false;  // empty iterator
-
-    this->stack.clear(stack_level + 1);
-
-    // We're at the last node in stack, try to advance to next leaf
-    while (this->stack.size) {
-      if (this->stack.back().next()) {
-        stack_level++;
-        return true;
-      }
-      this->pop();
-      stack_level--;
-      assert(stack_level == (int)this->stack.size - 1);
-    }
-    return false;
-  }
-
-  Slice node_key() const {
-    if (this->stack.data[stack_level].is_leaf()) {
-      return Slice(this->current_key);
-    }
-    assert(this->current_key.size() > this->stack.data[stack_level].keypos);
-    return Slice(this->current_key.c_str(),
-                 this->stack.data[stack_level].keypos);
-  }
-
-  Transition& node() { return this->stack.data[stack_level]; }
 };
 
 }  // namespace leaves

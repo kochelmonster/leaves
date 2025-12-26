@@ -48,9 +48,9 @@ struct _Dumper {
   void dump(std::ostream& out) {
     offset_t root;
     if (_db.transaction_active())
-      root = _show_mem ? _db._wtxn->mem_root : _db._wtxn->root;
+      root = _show_mem ? _db._wtxn->offset_root : _db._wtxn->root;
     else
-      root = _show_mem ? _db.txn()->mem_root : _db.txn()->root;
+      root = _show_mem ? _db.txn()->offset_root : _db.txn()->root;
 
     if (root) dump_link(out, root, _id++);
   }
@@ -92,9 +92,12 @@ struct _Dumper {
       }
       out << "\"" << std::endl;
     } else {
-      auto bv = leaf->big();
+      using InternalCursor = typename Container::Cursor::cursor_ptr::element_type;
+      using BigMemory = typename InternalCursor::BigMemory;
+      using BigValue = typename BigMemory::BigValue;
+      auto bv = (BigValue*)leaf->vdata();
       out << "valuesize: " << bv->value_size << std::endl;
-      out << "value: \"" << bv->offset._offset << "\"" << std::endl;
+      out << "value: \"" << bv->area.offset() << "\"" << std::endl;
     }
     
     out << "---" << std::endl;
