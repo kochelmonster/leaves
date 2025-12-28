@@ -63,7 +63,7 @@ struct _BigMemory {
     return size;
   }
 
-  void _add_chunk(offset_t offset, size_t size) {
+  void _add_chunk(offset_t offset, size_t size, bool freed) {
     SizeKey skey{size, offset._offset};
     OffsetKey okey{offset._offset, size};
     _size_cursor.find(Slice(&skey, sizeof(skey)));
@@ -73,7 +73,7 @@ struct _BigMemory {
     assert(!_offset_cursor.is_valid());
 
     ValueBlock vblock;
-    _db->mark_for_recycle(vblock);
+    if (freed) _db->mark_for_recycle(vblock);
     Slice vblock_slice(&vblock, sizeof(vblock));
 
     _size_cursor.value(vblock_slice);
@@ -147,7 +147,7 @@ struct _BigMemory {
     uint64_t delta = found_size - padded_size;
     if (delta >= MAX_BLOCK_SIZE) {
       // enough space left -> reuse the rest
-      _add_chunk(found_offset + padded_size, delta);
+      _add_chunk(found_offset + padded_size, delta, false);
       found_size -= delta;
     }
 
@@ -157,10 +157,11 @@ struct _BigMemory {
   }
 
   void free(const BigValue* bvalue) {
-    _add_chunk(bvalue->area_offset, bvalue->area_size);
+    _add_chunk(bvalue->area_offset, bvalue->area_size, true);
   }
 
   void defrag() {
+    // TODO: may_recycle check during merging
     _offset_cursor.first();
     offset_e last = 0;
     size_t size = 0;
