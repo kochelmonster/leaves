@@ -94,10 +94,15 @@ struct _BigMemory {
   }
 
   void reset(offset_e* size_root, offset_e* offset_root) {
-    _size_cursor._root = size_root;
-    _offset_cursor._root = offset_root;
-    _size_cursor._prepare_move();
-    _offset_cursor._prepare_move();
+    // Only reset cursors if the roots actually changed
+    if (_size_cursor._root != size_root) {
+      _size_cursor._root = size_root;
+      _size_cursor._prepare_move();
+    }
+    if (_offset_cursor._root != offset_root) {
+      _offset_cursor._root = offset_root;
+      _offset_cursor._prepare_move();
+    }
   }
 
   void alloc(uint64_t size, BigValue* result) {
