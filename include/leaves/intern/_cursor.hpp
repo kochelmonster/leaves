@@ -555,8 +555,8 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
 
     const Transition& back = this->stack.back();
     if (this->is_valid() && back.leaf()->is_big()) {
-        BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-      get_bigmemory().free(bvalue->area);
+      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+      get_bigmemory().free(bvalue);
     }
 
     uint16_t size_modified =
@@ -564,8 +564,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
     void* result = Cursor::reserve(size_modified);
     if (size_modified != size) {
       BigValue* bvalue = (BigValue*)result;
-      bvalue->area = get_bigmemory().alloc(size);
-      bvalue->value_size = size;
+      get_bigmemory().alloc(size, bvalue);
       this->stack.back().leaf()->set_big();
       return bvalue->data(this->_db);
     }
@@ -598,7 +597,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-      get_bigmemory().free(bvalue->area);
+      get_bigmemory().free(bvalue);
     }
     _Deleter(*this).exec();
   }
@@ -646,6 +645,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
       this->_txn = txn;
       this->_txn->refs.fetch_add(1);
       this->_root = &this->_txn->root;
+      if (_bigmemory) _bigmemory->reset(&this->_txn->size_root, &this->_txn->offset_root);
       if ((this->current_key.size() || this->rest_key.size()) &&
           old_root_val != *this->_root) {
         // adjust to new root

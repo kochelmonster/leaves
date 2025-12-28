@@ -276,13 +276,13 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
   auto ptr = db.resolve(base + payload_off, READ);
   BOOST_REQUIRE(ptr);
   uint32_t got = 0;
-  std::memcpy(&got, (const void*)ptr, sizeof(got));
+  std::memcpy(&got, (const char*)ptr, sizeof(got));
   BOOST_CHECK_EQUAL(got, pattern);
 
   // Second resolve should hit cache path without throws
   auto ptr2 = db.resolve(base + payload_off, READ);
   BOOST_REQUIRE(ptr2);
-  std::memcpy(&got, (const void*)ptr2, sizeof(got));
+  std::memcpy(&got, (const char*)ptr2, sizeof(got));
   BOOST_CHECK_EQUAL(got, pattern);
 }
 

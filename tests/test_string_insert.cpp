@@ -541,11 +541,11 @@ typedef MapStorage Storage;
 BOOST_AUTO_TEST_CASE(test_strings) {
   Preparation p;
   {
-    Storage storage(TEST_FILE);
+    auto storage = Storage::create(TEST_FILE);
   }
 
-  Storage storage(TEST_FILE);
-  auto db = storage["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
 
   std::ostream null_stream(nullptr);
@@ -570,7 +570,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
       cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
            << ".yaml";
       std::ofstream out(cstr.str().c_str());
-      _Dumper(db, false, false).dump(out);
+      _Dumper(db, db._internal()->_wtxn->root, false).dump(out);
     }
     if (count % 20 == 0 && count > 0) {
       cursor.commit();
@@ -583,7 +583,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  _Dumper(db).dump(out);
+  _Dumper(db, db._internal()->_wtxn->root, false).dump(out);
 
   std::cout << "start test: " << count << std::endl;
   for (int i = 0; i < 100; i++) {

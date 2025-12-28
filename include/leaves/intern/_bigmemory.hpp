@@ -33,11 +33,14 @@ struct _BigMemory {
   };
 
   struct BigValue {
-    AreaSlice area;
-    uint64_e value_size;
+    using uint32_e = typename Traits::uint32_e;
+    using uint64_e = typename Traits::uint64_e;
+    uint64_e area_offset;
+    uint32_e area_size;
+    uint32_e value_size;
     template<typename DB_>
     char* data(DB_* db) {
-      auto ptr = db->resolve(offset_t(area.offset()));
+      auto ptr = db->resolve(offset_t(area_offset));
       return (char*)ptr;
     }
   };
@@ -48,7 +51,7 @@ struct _BigMemory {
 
   DB* _db;
   TCursor _size_cursor;
-  TCursor _offset_cursor;
+  TCursor _offset_cursor; 
   _BigMemory(DB* db, offset_e* size_root, offset_e* offset_root)
       : _db(db), _size_cursor(db, size_root), _offset_cursor(db, offset_root) {}
 
@@ -56,7 +59,7 @@ struct _BigMemory {
   static uint16_t modify_size(uint16_t key, uint64_t size) {
     key &= 0xff;
     if (sizeof(LeafNode) + size + key > LeafNode::MAX_SIZE)
-      return sizeof(LeafNode) + sizeof(BigValue) + key;
+      return sizeof(BigValue);
     return size;
   }
 
@@ -90,14 +93,21 @@ struct _BigMemory {
     _offset_cursor.remove();
   }
 
-  AreaSlice alloc(uint64_t size) {
-    size = padding(size, MAX_BLOCK_SIZE);
-    uint32_t found_size;
+  void reset(offset_e* size_root, offset_e* offset_root) {
+    _size_cursor._root = size_root;
+    _offset_cursor._root = offset_root;
+    _size_cursor._prepare_move();
+    _offset_cursor._prepare_move();
+  }
+
+  void alloc(uint64_t size, BigValue* result) {
+    uint64_t padded_size = padding(size, MAX_BLOCK_SIZE);
+    uint64_t found_size;
     offset_t found_offset;
 
     // find from big memory storage
     SizeKey skey;
-    skey.size = size;
+    skey.size = padded_size;
     skey.offset = 0;
     _size_cursor.find(Slice(&skey, sizeof(skey)));
 
@@ -106,7 +116,7 @@ struct _BigMemory {
       ValueBlock* vblock = (ValueBlock*)_size_cursor.value().data();
       if (_db->may_recycle(*vblock)) {
         found = (SizeKey*)_size_cursor.key().data();
-        assert(found->size >= size);
+        assert(found->size >= padded_size);
         break;
       }
       _size_cursor.next();
@@ -123,24 +133,26 @@ struct _BigMemory {
       _size_cursor.remove();
     } else {
       // allocate new multi-area
-      uint64_t psize = padding(size, AREA_SIZE);
+      uint64_t psize = padding(padded_size, AREA_SIZE);
       auto area = _db->alloc_multi_area(psize);
       found_offset = area->content_offset();
       found_size = area->end() - found_offset;
     }
 
-    uint32_t delta = found_size - size;
+    uint64_t delta = found_size - padded_size;
     if (delta >= MAX_BLOCK_SIZE) {
       // enough space left -> reuse the rest
-      _add_chunk(found_offset + size, delta);
+      _add_chunk(found_offset + padded_size, delta);
       found_size -= delta;
     }
 
-    return AreaSlice{found_offset, found_size};
+    result->area_offset = found_offset;
+    result->area_size = found_size;
+    result->value_size = size;
   }
 
-  void free(const AreaSlice& slice) {
-    _add_chunk(slice.offset(), slice.size());
+  void free(const BigValue* bvalue) {
+    _add_chunk(bvalue->area_offset, bvalue->area_size);
   }
 
   void defrag() {

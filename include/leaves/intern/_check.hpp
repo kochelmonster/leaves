@@ -35,27 +35,20 @@ struct _Dumper {
 
   const DB& _db;
   int _id;
+  offset_e _root;
   bool _simple;
-  bool _show_mem;
-
-  _Dumper(const Container& container, bool simple = false,
-          bool show_mem = false)
+  
+  _Dumper(const Container& container, offset_e root, bool simple = false)
       : _db(*container._internal()),
         _id(0),
-        _simple(simple),
-        _show_mem(show_mem) {}
+        _root(root),
+        _simple(simple) {}
 
   void dump(std::ostream& out) {
-    offset_t root;
-    if (_db.transaction_active())
-      root = _show_mem ? _db._wtxn->offset_root : _db._wtxn->root;
-    else
-      root = _show_mem ? _db.txn()->offset_root : _db.txn()->root;
-
-    if (root) dump_link(out, root, _id++);
+    if (_root) dump_link(out, _root, _id++);
   }
 
-  void dump_link(std::ostream& out, offset_t link, int id) {
+  void dump_link(std::ostream& out, offset_e link, int id) {
     if (link.type() == TRIE)
       dump_trie(out, link, id);
     else
@@ -97,13 +90,13 @@ struct _Dumper {
       using BigValue = typename BigMemory::BigValue;
       auto bv = (BigValue*)leaf->vdata();
       out << "valuesize: " << bv->value_size << std::endl;
-      out << "value: \"" << bv->area.offset() << "\"" << std::endl;
+      out << "value: \"offset=" << bv->area_offset << " size=" << bv->area_size << "\"" << std::endl;
     }
     
     out << "---" << std::endl;
   }
 
-  void dump_trie(std::ostream& out, offset_t offset, int id) {
+  void dump_trie(std::ostream& out, offset_e offset, int id) {
     trie_ptr trie = _db.resolve(offset);
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
@@ -127,7 +120,8 @@ struct _Dumper {
     offset_e* start = trie->array();
     offset_e* end = start + trie->count();
 
-    assert(trie->count());
+    assert(trie->count() > 0);
+    assert(trie->count() <= 256);
     out << "branches: \"";
     for (int iter = trie->first(); iter != TrieNode::OUT_OF_RANGE;
          iter = trie->next(iter)) {

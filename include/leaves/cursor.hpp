@@ -8,14 +8,16 @@
 
 namespace leaves {
 
-template <typename CursorImpl, typename storage_ptr>
+template <typename Storage>
 class TCursor {
  public:
-  typedef std::shared_ptr<CursorImpl> cursor_shared_ptr;
+  typedef typename Storage::storage_ptr storage_ptr;
+  typedef typename Storage::StorageImpl StorageImpl;
+  typedef typename StorageImpl::DB DBImpl;
+  typedef typename DBImpl::cursor_ptr cursor_ptr;
 
-  template <typename DB>
-  TCursor(storage_ptr storage, DB db)
-      : _storage(storage), _cursor(std::make_shared<CursorImpl>(db, &db->txn()->root)) {}
+  TCursor(storage_ptr storage, DBImpl* db)
+      : _storage(storage), _cursor(db->create_cursor()) {}
   TCursor() = default;
 
   TCursor(TCursor&& other) noexcept
@@ -71,7 +73,7 @@ class TCursor {
 
  private:
   storage_ptr _storage;
-  cursor_shared_ptr _cursor;
+  cursor_ptr _cursor;
 };
 }  // namespace leaves
 

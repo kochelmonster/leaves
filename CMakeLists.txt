@@ -134,6 +134,9 @@ target_link_libraries(test_node PUBLIC core test)
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
+add_executable(test_bigmemory tests/test_bigmemory.cpp)
+target_link_libraries(test_bigmemory PUBLIC core test)
+
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
     include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
@@ -194,10 +197,11 @@ endif(LEAVES_BUILD_TESTS)
 if (LEAVES_BUILD_BENCHMARKS) 
 add_subdirectory("leveldb")
 
+set(DEBUG_BENCHMARKS OFF CACHE BOOL "Build benchmarks with debug info")
+
 add_library(lbench INTERFACE)
 target_include_directories(lbench INTERFACE leveldb)
-target_compile_definitions(lbench INTERFACE NDEBUG)
-# target_compile_definitions(lbench INTERFACE DEBUG)
+
 target_sources(lbench INTERFACE 
     "leveldb/util/histogram.cc"
     "leveldb/util/histogram.h"
@@ -207,21 +211,26 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core)
-target_compile_options(db_bench_leaves PUBLIC -g -march=native -O3 -funroll-loops -flto=auto)
 
-# Removed optimized version since optimizations are now in the main implementation
-# target_compile_options(db_bench_leaves PUBLIC -g -march=native)
+if (DEBUG_BENCHMARKS)
+    target_compile_options(db_bench_leaves PRIVATE -g -O0)
+    target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
+else()
+    target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
+endif()
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
     benchmark leveldb lmdb pthread)
-target_compile_options(db_bench_mdb PUBLIC -march=native -O3)
-target_compile_options(db_bench_mdb PUBLIC -g)
+target_compile_options(db_bench_mdb PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread)
 target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
+target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
 #target_compile_options(db_bench_memory PUBLIC -g -march=native)
 
 # Check for RocksDB and add benchmark if available

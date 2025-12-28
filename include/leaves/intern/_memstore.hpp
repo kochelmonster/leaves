@@ -25,8 +25,8 @@ struct _MemoryTraits {
 
   struct BlockHeader {
     typedef BlockHeader Base;
-    tid_t txn_id;
     uint8_t slot_id;
+    bool needs_cow(const BlockHeader& other) const { return false; }
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
@@ -56,23 +56,13 @@ struct _MemoryDB {
   using offset_e = typename Traits::offset_e;
 
   typedef _MemoryDB<Storage> DB;
-
-  // Transaction methods become no-ops
-  struct NullTransaction {
-    tid_t txn_id = tid_t(1);
-    offset_t root{0};
-    std::atomic<uint32_t> refs{0};
-  };
-
-  typedef NullTransaction* txn_ptr;
+  typedef DB db_type;
 
   // Value traits for non-transactional operations
-  struct ValueTraits : public Storage::Traits {
-    typedef std::shared_ptr<DB> db_ptr;
+  struct CursorTraits : public Storage::Traits {
+    typedef db_type DB;
     typedef ::NullHasher Hasher;  // No hashing needed for memory-only
     typedef uint8_t hash_t[0];
-    constexpr static bool TRANSACTION_REF = false;
-    constexpr static bool COW = false;
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -81,13 +71,13 @@ struct _MemoryDB {
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
   static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[BLOCK_SIZES_COUNT - 1];
 
-  typedef _Cursor<DB, ValueTraits> Cursor;
+  typedef _Cursor<CursorTraits> Cursor;
   typedef _MemManager<Traits> MemManager;
-  typedef DB db_type;
-
+  typedef std::unique_ptr<Cursor> cursor_ptr;
+  
+  offset_e _root;
   Storage& _storage;
   MemManager _mem_manager;
-  NullTransaction _null_txn;
 
   _MemoryDB(Storage& storage) : _storage(storage) { init(); }
 
@@ -95,8 +85,6 @@ struct _MemoryDB {
     auto area_ptr = _storage.alloc_single_area();
     _mem_manager.init(area_ptr->content_offset(), area_ptr->end());
   }
-
-  txn_ptr txn() { return &_null_txn; }
 
   // Area management
   area_ptr alloc_single_area() { return _storage.alloc_single_area(); }
@@ -127,15 +115,16 @@ struct _MemoryDB {
   block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {
     return block_ptr(reinterpret_cast<void*>((uint64_t)offset));
   }
-  
-  // Non-template overload for block_ptr to avoid implicit conversion to uint64_t
+
+  // Non-template overload for block_ptr to avoid implicit conversion to
+  // uint64_t
   offset_t resolve(const block_ptr& p) const {
     return offset_t((uint64_t)p).type(block_ptr::type);
   }
-  
+
   // Template for typed pointers - disabled for integral types
-  template <typename Pointer, 
-            typename = typename std::enable_if<!std::is_integral<Pointer>::value>::type>
+  template <typename Pointer, typename = typename std::enable_if<
+                                  !std::is_integral<Pointer>::value>::type>
   offset_t resolve(const Pointer& p) const {
     return offset_t((uint64_t)p).type(Pointer::type);
   }
@@ -143,8 +132,14 @@ struct _MemoryDB {
   void make_dirty(block_ptr& /*block*/) {}
   void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {}
   void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}
-  
+
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
+
+  // Clone a block (copy-on-write) - never called since needs_cow() returns false
+  template <typename ptr>
+  ptr clone(const ptr& src) {
+    return src;
+  }
 
   // Big allocation methods - throw exceptions since memory storage doesn't
   // support them
@@ -157,29 +152,9 @@ struct _MemoryDB {
         "Big deallocation not supported in memory storage");
   }
 
-  template <typename ptr>
-  ptr clone(ptr& src) {
-    assert(0); // shall never be called
-    return src;
-  }
-
-  // Transaction ID access
-  tid_t txn_id() const { return _null_txn.txn_id; }
-
-  // Transaction active check
-  tid_t transaction_active() const {
-    return tid_t(0);  // Memory storage doesn't use transactions
-  }
-
-  // Write transaction access for compatibility
-  NullTransaction& _wtxn = _null_txn;
-
   // Cursor factory methods
-  Cursor cursor() {
-    // Get the proper shared_ptr from storage to ensure correct lifetime
-    // management
-    auto self = _storage.db();
-    return Cursor(self, &_null_txn.root);
+  cursor_ptr create_cursor() {
+    return std::make_unique<Cursor>(this, &_root);
   }
 };
 
@@ -190,21 +165,12 @@ struct _MemoryStorage {
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef _MemoryDB<_MemoryStorage> DB;
-  typedef std::shared_ptr<DB> db_ptr;
-
-  // Simple mutex for memory storage (no-op for single-threaded)
-  struct Mutex {
-    template <typename Time = std::chrono::seconds>
-    void lock(Time t = Time(10)) {}
-    bool try_lock() { return true; }
-    void unlock() {}
-  };
 
   // Memory-based storage using vectors (single-threaded)
   std::vector<std::unique_ptr<char[]>> _areas;
   size_t _total_size = 0;
-  db_ptr _db;  // Single DB instance
-  _MemoryStorage() : _total_size(0) { _db = std::make_shared<DB>(*this); }
+  DB _db;  // Single DB instance
+  _MemoryStorage() : _total_size(0), _db(*this) { }
 
   // Area allocation - creates new memory areas
   area_ptr alloc_single_area() {
@@ -219,7 +185,6 @@ struct _MemoryStorage {
 
     _total_size += AREA_SIZE;
     _areas.push_back(std::move(memory));
-
     return area_ptr(area);
   }
 
@@ -230,14 +195,15 @@ struct _MemoryStorage {
   }
 
   // Single DB access
-  db_ptr db() { return _db; }
+  DB& db() { return _db; }
+
+  DB::cursor_ptr create_cursor() {
+    return _db.create_cursor();
+  }
 
   // Compatibility methods
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
-  Mutex& file_lock() {
-    static Mutex m;
-    return m;
-  }
+
   const char* filename() const { return "memory"; }
   size_t file_size() const { return _total_size; }
 };

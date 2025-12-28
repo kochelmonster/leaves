@@ -8,22 +8,23 @@
 
 namespace leaves {
 
-template <typename StorageImpl>
+template <typename Storage>
 class TDB {
  public:
-  typedef typename StorageImpl::DB db_type;
-  typedef typename StorageImpl::db_ptr db_ptr;
-  typedef std::shared_ptr<StorageImpl> storage_ptr;
-  typedef TCursor<typename StorageImpl::DB::Cursor, storage_ptr> Cursor;
+  typedef typename Storage::storage_ptr storage_ptr;
+  typedef typename Storage::StorageImpl StorageImpl;
+  typedef typename StorageImpl::DB DBImpl;
+  typedef DBImpl db_type;
+  typedef TCursor<Storage> Cursor;
 
   TDB(storage_ptr storage, const char* name)
-      : _db(storage->make(name)), _storage(storage) {}
+      : _storage(storage), _db(storage->_storage->make(name)) {}
 
   Cursor cursor() { return Cursor(_storage, _db); }
 
   Slice name() const { return _db->name(); }
 
-  db_ptr _internal() const { return _db; }
+  db_type* _internal() const { return _db; }
 
   // Transaction management methods for crash recovery
   tid_t transaction_active() const { return _db->transaction_active(); }
@@ -31,8 +32,8 @@ class TDB {
   bool rollback() { return _db->rollback(0); }
 
  private:
-  db_ptr _db;
   storage_ptr _storage;
+  DBImpl *_db;
 };
 
 }  // namespace leaves

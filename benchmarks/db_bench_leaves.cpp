@@ -6,10 +6,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <sys/stat.h>
 
+#include "leaves/fstore.hpp"
 #include "leaves/intern/_check.hpp"
 #include "leaves/leaves.hpp"
-#include "leaves/fstore.hpp"
 #include "leaves/mmap.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
@@ -18,7 +21,7 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-//#define BINARY_KEY
+// #define BINARY_KEY
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -36,8 +39,8 @@ using boost::endian::native_to_big;
 //   readrandom    -- read N times in random order
 static const char* FLAGS_benchmarks =
     "fillseq,"
-//    "fillseqsync,"
-//    "fillrandsync,"
+    //    "fillseqsync,"
+    //    "fillrandsync,"
     "fillrandom,"
     "overwrite,"
     "readrandom,"
@@ -170,8 +173,8 @@ static Slice TrimSpace(Slice s) {
 class Benchmark {
  private:
   // Storage pointers - only one will be non-null based on configuration
-  leaves::FileStorage* file_storage_;
-  leaves::MapStorage* map_storage_;
+  std::shared_ptr<leaves::FileStorage> file_storage_;
+  std::shared_ptr<leaves::MapStorage> map_storage_;
   bool using_file_storage_;
   int db_num_;
   int num_;
@@ -191,8 +194,8 @@ class Benchmark {
   void PrintHeader() {
     const int kKeySize = 16;
     PrintEnvironment();
-    std::fprintf(stdout, "Storage:     %s\n", 
-                using_file_storage_ ? "FileStorage" : "MapStorage");
+    std::fprintf(stdout, "Storage:     %s\n",
+                 using_file_storage_ ? "FileStorage" : "MapStorage");
     std::fprintf(stdout, "Keys:        %d bytes each\n", kKeySize);
     std::fprintf(
         stdout, "Values:      %d bytes each (%d bytes after compression)\n",
@@ -266,7 +269,7 @@ class Benchmark {
     for (int i = 0; i < 1000; ++i) {
       warmup_sum += i * i;
     }
-    
+
     start_ = Env::Default()->NowMicros() * 1e-6;
     bytes_ = 0;
     message_.clear();
@@ -365,15 +368,10 @@ class Benchmark {
     }
   }
 
-  ~Benchmark() { 
-    if (file_storage_) {
-      delete file_storage_;
-      file_storage_ = nullptr;
-    }
-    if (map_storage_) {
-      delete map_storage_;
-      map_storage_ = nullptr;
-    }
+  ~Benchmark() {
+    // shared_ptr will automatically clean up
+    file_storage_.reset();
+    map_storage_.reset();
   }
 
   void Run() {
@@ -397,13 +395,17 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       if (name == Slice("fillseq")) {
-        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
+        Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size,
+              FLAGS_batch_size);
       } else if (name == Slice("fillbatch")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size,
+              FLAGS_batch_size);
       } else if (name == Slice("fillrandom")) {
-        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
+        Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size,
+              FLAGS_batch_size);
       } else if (name == Slice("overwrite")) {
-        Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size, FLAGS_batch_size);
+        Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size,
+              FLAGS_batch_size);
       } else if (name == Slice("fillrandsync")) {
         write_sync = true;
         Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size, 1);
@@ -439,11 +441,13 @@ class Benchmark {
         Stop(name);
 #ifdef STATISTICS
         if (using_file_storage_ && file_storage_) {
-          std::cout << "File size: " << file_storage_->file_size() / (1024 * 1024)
-                    << " MB" << std::endl;
+          std::cout << "File size: "
+                    << file_storage_->file_size() / (1024 * 1024) << " MB"
+                    << std::endl;
         } else if (map_storage_) {
-          std::cout << "File size: " << map_storage_->file_size() / (1024 * 1024)
-                    << " MB" << std::endl;
+          std::cout << "File size: "
+                    << map_storage_->file_size() / (1024 * 1024) << " MB"
+                    << std::endl;
         }
         // leaves::_MemoryChecker<Storage>(*db_).check();
         auto txn = db_->txn();
@@ -527,26 +531,29 @@ class Benchmark {
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
-    
+
     if (using_file_storage_) {
-      file_storage_ = new leaves::FileStorage(test_fname.c_str());
+      file_storage_ = leaves::FileStorage::create(test_fname.c_str());
     } else {
-      map_storage_ = new leaves::MapStorage(test_fname.c_str());
+      map_storage_ = leaves::MapStorage::create(test_fname.c_str());
     }
   }
 
   // Template method for writing operations
-  template<typename StorageType>
-  void WriteImpl(StorageType& storage, bool sync, Order order, int num_entries, 
-                int value_size, int entries_per_batch) {
+  template <typename StorageType>
+  void WriteImpl(StorageType& storage, bool sync, Order order, int num_entries,
+                 int value_size, int entries_per_batch) {
     leaves::Slice mkey, mval;
     char key[100];
-    
+
     auto cursor = storage["benchmark"].cursor();
+    auto db = storage["benchmark"];
+
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
       for (int j = 0; j < entries_per_batch; j++) {
-        const int k = (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
+        const int k =
+            (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
 
 #ifdef BINARY_KEY
         *(uint64_t*)key = native_to_big(k);
@@ -556,12 +563,13 @@ class Benchmark {
         mkey = leaves::Slice(key);
 #endif
         int iter = i + j;
-        
+
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
         cursor.find(mkey);
         cursor.value(mval);
+     
         FinishedSingleOp();
       }
       cursor.commit(sync);
@@ -576,24 +584,18 @@ class Benchmark {
         message_ = "skipping (--use_existing_db is true)";
         return;
       }
-      
+
       // Clean up existing storage if any
       if (file_storage_ || map_storage_) {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
-        
-        if (file_storage_) {
-          delete file_storage_;
-          file_storage_ = nullptr;
-        }
-        if (map_storage_) {
-          delete map_storage_;
-          map_storage_ = nullptr; 
-        }
-        
+
+        file_storage_.reset();
+        map_storage_.reset();
+
         int r = system(cmd);
       }
-      
+
       Open(sync);
       Start();  // Do not count time taken to destroy/open
     }
@@ -609,20 +611,22 @@ class Benchmark {
       if (!file_storage_) {
         throw std::runtime_error("File storage pointer is null");
       }
-      WriteImpl(*file_storage_, sync, order, num_entries, value_size, entries_per_batch);
+      WriteImpl(*file_storage_, sync, order, num_entries, value_size,
+                entries_per_batch);
     } else {
       if (!map_storage_) {
         throw std::runtime_error("Map storage pointer is null");
       }
-      WriteImpl(*map_storage_, sync, order, num_entries, value_size, entries_per_batch);
+      WriteImpl(*map_storage_, sync, order, num_entries, value_size,
+                entries_per_batch);
     }
   }
 
   // Template method for sequential reading
-  template<typename StorageType>
+  template <typename StorageType>
   void ReadSequentialImpl(StorageType& storage) {
     leaves::Slice key, value;
-    
+
     auto cursor = storage["benchmark"].cursor();
     for (cursor.first(); cursor.is_valid(); cursor.next()) {
       key = cursor.key();
@@ -648,11 +652,11 @@ class Benchmark {
   }
 
   // Template method for random reading
-  template<typename StorageType>
+  template <typename StorageType>
   void ReadRandomImpl(StorageType& storage) {
     leaves::Slice key;
     char ckey[100];
-    
+
     auto cursor = storage["benchmark"].cursor();
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
@@ -712,7 +716,8 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--use_file_storage=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_use_file_storage = (n == 1) ? true : false;
-      std::fprintf(stderr, "Using %s for storage\n", FLAGS_use_file_storage ? "FileStorage" : "MapStorage");
+      std::fprintf(stderr, "Using %s for storage\n",
+                   FLAGS_use_file_storage ? "FileStorage" : "MapStorage");
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;

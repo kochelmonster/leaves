@@ -49,12 +49,14 @@ struct _MemoryMapTraits {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
+    bool needs_cow(const BlockHeader& other) const {
+      return txn_id != other.txn_id;
+    }
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
-  static constexpr bool TRANSACTIONAL = true;
 
   static constexpr uint16_t BLOCK_SIZES[] = {     // Typical node sizes
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
@@ -81,9 +83,8 @@ struct _MemoryMapFile {
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef _DB<MemoryMapFile> DB;
-  typedef std::shared_ptr<DB> db_ptr;
-  typedef std::weak_ptr<DB> wdb_ptr;
-
+  typedef std::unique_ptr<DB> _db_ptr;
+  
   using Mutex = boost::interprocess::interprocess_mutex;
 
   struct DBEntry {
@@ -121,7 +122,7 @@ struct _MemoryMapFile {
   mapped_region _region;
   FileHeader* _memory;
   pid_type _pid;
-  std::vector<wdb_ptr> _dbs;
+  std::vector<_db_ptr> _dbs;
 
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
                  uint16_t db_count = 48) {
@@ -227,7 +228,7 @@ struct _MemoryMapFile {
   void sanitize_dbs() {
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset) {
-        assert(_dbs[i].expired());
+        assert(!_dbs[i]);
         _DB(*this, _memory->dbs[i].offset, i).sanitize();
       }
     }
@@ -337,9 +338,9 @@ struct _MemoryMapFile {
 
   Slice db_name(int index) const { return Slice(_memory->dbs[index].name); }
 
-  db_ptr operator[](const char* name) { return make(name); }
+  DB* operator[](const char* name) { return make(name); }
 
-  db_ptr make(const char* name) {
+  DB* make(const char* name) {
     if (strlen(name) >= sizeof(DBEntry::name)) throw KeyTooBig();
 
     boost::interprocess::file_lock flock(filename());
@@ -349,12 +350,11 @@ struct _MemoryMapFile {
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset) {
         if (!strcmp(_memory->dbs[i].name, name)) {
-          if (_dbs[i].expired()) {
-            db_ptr tmp = std::make_shared<DB>(*this, _memory->dbs[i].offset, i);
-            _dbs[i] = tmp;
-            return _dbs[i].lock();
+          if (!_dbs[i]) {
+            _dbs[i] = std::make_unique<DB>(*this, _memory->dbs[i].offset, i);
+            return _dbs[i].get();
           }
-          return _dbs[i].lock();
+          return _dbs[i].get();
         }
       } else if (free < 0)
         free = i;
@@ -362,9 +362,8 @@ struct _MemoryMapFile {
 
     if (free < 0) throw LeavesException();
     strcpy(_memory->dbs[free].name, name);
-    db_ptr tmp = std::make_shared<DB>(*this, &_memory->dbs[free].offset, free);
-    _dbs[free] = tmp;
-    return _dbs[free].lock();
+    _dbs[free] = std::make_unique<DB>(*this, &_memory->dbs[free].offset, free);
+    return _dbs[free].get();
   }
 
   void remove_db(const char* name) {
@@ -374,7 +373,7 @@ struct _MemoryMapFile {
 
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
-        if (_dbs[i].use_count()) throw TransactionActive();
+        if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
         DB tmp(*this, _memory->dbs[i].offset, i);
 
         // Return the DB's areas back into storage using head/tail pattern

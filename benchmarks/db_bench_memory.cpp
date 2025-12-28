@@ -102,7 +102,7 @@ static Slice TrimSpace(Slice s) {
 class MemoryBenchmark {
  private:
   std::unique_ptr<leaves::_MemoryStorage> storage_;
-  leaves::_MemoryStorage::db_ptr db_;
+  leaves::_MemoryStorage::DB* db_;
   int num_;
   int reads_;
   double start_;
@@ -327,7 +327,7 @@ class MemoryBenchmark {
  private:
   void Open() {
     storage_ = std::make_unique<leaves::_MemoryStorage>();
-    db_ = storage_->db();
+    db_ = &storage_->db();
   }
 
   void Write(Order order, DBState state, int num_entries,
@@ -335,7 +335,7 @@ class MemoryBenchmark {
     // For memory storage, FRESH means create new storage, EXISTING reuses current
     if (state == FRESH) {
       storage_ = std::make_unique<leaves::_MemoryStorage>();
-      db_ = storage_->db();
+      db_ = &storage_->db();
       Start();  // Do not count time taken to recreate storage
     }
 
@@ -348,7 +348,7 @@ class MemoryBenchmark {
     leaves::Slice mkey, mval;
     char key[100];
     
-    auto cursor = db_->cursor();
+    auto cursor = db_->create_cursor();
     
     // Write to database - memory storage doesn't need transactions
     for (int i = 0; i < num_entries; i++) {
@@ -370,8 +370,8 @@ class MemoryBenchmark {
         std::cout << "Debugging" << std::endl;
       }
 
-      cursor.find(mkey);
-      cursor.value(mval);
+      cursor->find(mkey);
+      cursor->value(mval);
       FinishedSingleOp();
     }
   }
@@ -379,10 +379,10 @@ class MemoryBenchmark {
   void ReadSequential() {
     leaves::Slice key, value;
     
-    auto cursor = db_->cursor();
-    for (cursor.first(); cursor.is_valid(); cursor.next()) {
-      key = cursor.key();
-      value = cursor.value();
+    auto cursor = db_->create_cursor();
+    for (cursor->first(); cursor->is_valid(); cursor->next()) {
+      key = cursor->key();
+      value = cursor->value();
       bytes_ += key.size() + value.size();
       FinishedSingleOp();
     }
@@ -392,14 +392,14 @@ class MemoryBenchmark {
     leaves::Slice key;
     char ckey[100];
     
-    auto cursor = db_->cursor();
+    auto cursor = db_->create_cursor();
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
       snprintf(ckey, sizeof(ckey), "%016d", k);
 
-      cursor.find(ckey);
-      if (cursor.is_valid()) {
-        bytes_ += cursor.key().size() + cursor.value().size();
+      cursor->find(ckey);
+      if (cursor->is_valid()) {
+        bytes_ += cursor->key().size() + cursor->value().size();
       }
       FinishedSingleOp();
     }
