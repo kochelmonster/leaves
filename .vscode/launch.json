@@ -208,7 +208,7 @@
             "MIMode": "gdb",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "args": [
+            "_args": [
                 "-t",
                 "remove_trie"
             ],
@@ -226,7 +226,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/db_bench_leaves",
             "args": [
-                "--benchmarks=fillrandom",
+                "--benchmarks=fillrand100K",
                 "--use_file_storage=0"
             ],
             "stopAtEntry": false,
