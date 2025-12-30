@@ -200,8 +200,13 @@ struct _Transition {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
     append_key(trie_.compressed(), trie_._compressed_len);
+    prefix = trie_._compressed_len;
     cmp = 0;
-    push(trie_.array()).first();
+    auto& child = push(trie_.array());
+    child.first();
+    if (child.keypos < current_key().size()) {
+      branch_key = current_key()[child.keypos];
+    }
   }
 
   bool next() {
@@ -293,8 +298,12 @@ struct _Transition {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
     append_key(trie_.compressed(), trie_._compressed_len);
+    prefix = trie_._compressed_len;
     cmp = 0;
-    push(trie_.array() + trie_.count() - 1).last();
+    auto& child = push(trie_.array() + trie_.count() - 1);
+    child.last();
+    assert(child.keypos < current_key().size());
+    branch_key = current_key()[child.keypos];
   }
 };
 
@@ -584,8 +593,6 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
   }
 
   void value(const Slice& value) {
-    [[maybe_unused]] bool r = start_transaction();
-    assert(r);
     void* space = reserve(value.size());
     memcpy(space, value.data(), value.size());
     this->_db->flush();
@@ -645,7 +652,8 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
       this->_txn = txn;
       this->_txn->refs.fetch_add(1);
       this->_root = &this->_txn->root;
-      if (_bigmemory) _bigmemory->reset(&this->_txn->size_root, &this->_txn->offset_root);
+      if (_bigmemory)
+        _bigmemory->reset(&this->_txn->size_root, &this->_txn->offset_root);
       if ((this->current_key.size() || this->rest_key.size()) &&
           old_root_val != *this->_root) {
         // adjust to new root

@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <sys/stat.h>
+
 #include <boost/endian/conversion.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-#include <sys/stat.h>
 
 #include "leaves/fstore.hpp"
 #include "leaves/intern/_check.hpp"
@@ -569,8 +570,34 @@ class Benchmark {
 
         cursor.find(mkey);
         cursor.value(mval);
-     
+
         FinishedSingleOp();
+#if 0
+        // Dump size_root and offset_root for debugging
+        auto db_internal = db._internal();
+        auto txn = db_internal->_wtxn;
+
+        std::cout << "Iter " << iter << ": size_root=" << txn->size_root._offset
+                  << ", offset_root=" << txn->offset_root._offset << std::endl;
+
+        if (iter > 230 && iter < 240) {
+          if (txn->size_root) {
+            char filename[256];
+            snprintf(filename, sizeof(filename), "errors/dump_size_%06d.yaml",
+                     iter);
+            std::ofstream of(filename);
+            leaves::_Dumper(db, txn->size_root, false).dump(of);
+          }
+
+          if (txn->offset_root) {
+            char filename[256];
+            snprintf(filename, sizeof(filename), "errors/dump_offset_%06d.yaml",
+                     iter);
+            std::ofstream of(filename);
+            leaves::_Dumper(db, txn->offset_root, false).dump(of);
+          }
+        }
+#endif        
       }
       cursor.commit(sync);
     }

@@ -2,6 +2,8 @@
 #define _LEAVES_BIGMEMORY_HPP
 
 #include <boost/endian/arithmetic.hpp>
+
+#include "_check.hpp"
 #include "_hash.hpp"
 #include "_util.hpp"
 
@@ -15,7 +17,8 @@ struct _BigMemory {
   using uint64_e = typename Traits::uint64_e;
   using tid_t = typename Traits::tid_t;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static constexpr auto MAX_BLOCK_SIZE = Traits::BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT - 1];
+  static constexpr auto MAX_BLOCK_SIZE =
+      Traits::BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_t(1) << 15;
 
   struct SizeKey {
@@ -30,6 +33,7 @@ struct _BigMemory {
 
   struct ValueBlock {
     tid_t txn_id;
+    char debug[40];
   };
 
   struct BigValue {
@@ -38,7 +42,7 @@ struct _BigMemory {
     uint64_e area_offset;
     uint32_e area_size;
     uint32_e value_size;
-    template<typename DB_>
+    template <typename DB_>
     char* data(DB_* db) {
       auto ptr = db->resolve(offset_t(area_offset));
       return (char*)ptr;
@@ -51,7 +55,7 @@ struct _BigMemory {
 
   DB* _db;
   TCursor _size_cursor;
-  TCursor _offset_cursor; 
+  TCursor _offset_cursor;
   _BigMemory(DB* db, offset_e* size_root, offset_e* offset_root)
       : _db(db), _size_cursor(db, size_root), _offset_cursor(db, offset_root) {}
 
@@ -66,6 +70,7 @@ struct _BigMemory {
   void _add_chunk(offset_t offset, size_t size, bool freed) {
     SizeKey skey{size, offset._offset};
     OffsetKey okey{offset._offset, size};
+
     _size_cursor.find(Slice(&skey, sizeof(skey)));
     _offset_cursor.find(Slice(&okey, sizeof(okey)));
 
@@ -73,9 +78,9 @@ struct _BigMemory {
     assert(!_offset_cursor.is_valid());
 
     ValueBlock vblock;
+
     if (freed) _db->mark_for_recycle(vblock);
     Slice vblock_slice(&vblock, sizeof(vblock));
-
     _size_cursor.value(vblock_slice);
     _offset_cursor.value(vblock_slice);
   }
@@ -94,15 +99,12 @@ struct _BigMemory {
   }
 
   void reset(offset_e* size_root, offset_e* offset_root) {
-    // Only reset cursors if the roots actually changed
-    if (_size_cursor._root != size_root) {
-      _size_cursor._root = size_root;
-      _size_cursor._prepare_move();
-    }
-    if (_offset_cursor._root != offset_root) {
-      _offset_cursor._root = offset_root;
-      _offset_cursor._prepare_move();
-    }
+    // Always reset cursors to pick up root changes
+    if (*size_root != *_size_cursor._root) _size_cursor._prepare_move();
+    _size_cursor._root = size_root;
+
+    if (*offset_root != *_offset_cursor._root) _offset_cursor._prepare_move();
+    _offset_cursor._root = offset_root;
   }
 
   void alloc(uint64_t size, BigValue* result) {
@@ -115,6 +117,9 @@ struct _BigMemory {
     skey.size = padded_size;
     skey.offset = 0;
     _size_cursor.find(Slice(&skey, sizeof(skey)));
+    // offset == 0 does not exist. next() position the cursor to
+    // the first entry with size >= padded_size
+    _size_cursor.next();
 
     SizeKey* found = nullptr;
     for (int i = 0; i < 10 && _size_cursor.is_valid(); i++) {
@@ -128,14 +133,27 @@ struct _BigMemory {
     }
 
     if (found) {
+      // Store values before any cursor operations
+      found_offset = found->offset;
+      found_size = found->size;
+
+      // Find in BOTH trees first
+      SizeKey skey;
+      skey.size = found_size;
+      skey.offset = found_offset;
+      _size_cursor.find(Slice(&skey, sizeof(skey)));
+      assert(_size_cursor.is_valid());
+
       OffsetKey okey;
-      okey.offset = found_offset = found->offset;
-      okey.size = found_size = found->size;
+      okey.offset = found_offset;
+      okey.size = found_size;
       _offset_cursor.find(Slice(&okey, sizeof(okey)));
+
       assert(_offset_cursor.is_valid());
 
-      _offset_cursor.remove();
+      // Now remove from BOTH
       _size_cursor.remove();
+      _offset_cursor.remove();
     } else {
       // allocate new multi-area
       uint64_t psize = padding(padded_size, AREA_SIZE);
@@ -176,8 +194,7 @@ struct _BigMemory {
         _size_cursor.remove();
         _offset_cursor.remove();
         merged++;
-      }
-      else if (merged) {
+      } else if (merged) {
         _offset_cursor.prev();
         OffsetKey* okey = (OffsetKey*)_offset_cursor.key().data();
         assert(okey->offset == last);

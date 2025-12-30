@@ -19,6 +19,19 @@ inline std::string bitstr(char bit) {
   return cstr.str();
 }
 
+// Helper to extract the actual cursor type:
+// - If Container::Cursor has cursor_ptr, use that->element_type
+// - Otherwise, use Container::Cursor directly
+template <typename T, typename = void>
+struct ExtractInternalCursor {
+  using type = T;  // No cursor_ptr, so T is the cursor itself
+};
+
+template <typename T>
+struct ExtractInternalCursor<T, std::void_t<typename T::cursor_ptr>> {
+  using type = typename T::cursor_ptr::element_type;
+};
+
 template <typename Container>
 struct _Dumper {
   using DB = typename Container::db_type;
@@ -85,7 +98,7 @@ struct _Dumper {
       }
       out << "\"" << std::endl;
     } else {
-      using InternalCursor = typename Container::Cursor::cursor_ptr::element_type;
+      using InternalCursor = typename ExtractInternalCursor<typename Container::Cursor>::type;
       using BigMemory = typename InternalCursor::BigMemory;
       using BigValue = typename BigMemory::BigValue;
       auto bv = (BigValue*)leaf->vdata();
