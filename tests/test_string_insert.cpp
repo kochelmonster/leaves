@@ -583,7 +583,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   cstr << "errors/test_" << std::setw(2) << std::setfill('0') << count
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  _Dumper(db, db._internal()->_wtxn->root, false).dump(out);
+  _Dumper(db, db._internal()->txn()->root, false).dump(out);
 
   std::cout << "start test: " << count << std::endl;
   for (int i = 0; i < 100; i++) {

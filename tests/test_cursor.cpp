@@ -522,6 +522,176 @@ BOOST_AUTO_TEST_CASE(remove_bigkeys_one) {
   test_remove(storage, "remove_bigkeys_one", keys, remove);
 }
 
+BOOST_AUTO_TEST_CASE(remove_after_first) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  const char *keys[] = {"abc", "abd", "abe", "abf", "abg", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_first_begin", storage);
+  
+  // Test removing first element
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abc"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_first_end", storage);
+  
+  // Verify first is now "abd"
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abd"));
+  
+  // Verify all remaining keys exist
+  cursor.find("abd");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abe");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abf");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abg");
+  BOOST_REQUIRE(cursor.is_valid());
+  
+  // Verify removed key doesn't exist
+  cursor.find("abc");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(remove_after_last) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  const char *keys[] = {"abc", "abd", "abe", "abf", "abg", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_last_begin", storage);
+  
+  // Test removing last element
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abg"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_last_end", storage);
+  
+  // Verify last is now "abf"
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abf"));
+  
+  // Verify all remaining keys exist
+  cursor.find("abc");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abd");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abe");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abf");
+  BOOST_REQUIRE(cursor.is_valid());
+  
+  // Verify removed key doesn't exist
+  cursor.find("abg");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(remove_after_first_trie) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  // Create a scenario with trie nodes
+  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_first_trie_begin", storage);
+  
+  // Test removing first element in a trie structure
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("a@"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_first_trie_end", storage);
+  
+  // Verify first is now "aA"
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("aA"));
+  
+  // Verify removed key doesn't exist
+  cursor.find("a@");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(remove_after_last_trie) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  // Create a scenario with trie nodes
+  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_last_trie_begin", storage);
+  
+  // Test removing last element in a trie structure
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("aM"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_last_trie_end", storage);
+  
+  // Verify last is now "aF"
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("aF"));
+  
+  // Verify removed key doesn't exist
+  cursor.find("aM");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;

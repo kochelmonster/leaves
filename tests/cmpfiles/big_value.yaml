@@ -32,5 +32,5 @@ txn: 3
 keysize: 3
 key: "[d][e][f]"
 valuesize: 5000
-value: "offset=1052696 size=8192"
+value: "offset=536600 size=8192"
 ---
