@@ -53,10 +53,7 @@ struct _Merger {
   template <typename T>
   void free(T& block) {
     if constexpr (T::type == LEAF) {
-      if (block->is_big()) {
-        auto bv = block->big();
-        dst_cursor._db->free_big(bv->offset, bv->size());
-      }
+      if (block->is_big()) handler->free_big(block);
     }
     dst_cursor._db->free(block);
   }
@@ -103,7 +100,7 @@ struct _Merger {
       // Get root from source - it's the first element in the stack
       auto root_offset = src_cursor.stack.front().offset;
       auto new_root = deep_copy_subtree(root_offset);
-      Traits::set_root(dst_cursor._txn, new_root);
+      *dst_cursor._root = new_root;
       return;
     }
 
@@ -194,9 +191,14 @@ struct _Merger {
         auto& src_leaf = src.leaf();
         assert(src_leaf->key_size >= src_split_pos);
         uint8_t suffix_len = src_leaf->key_size - src_split_pos;
-        leaf_ptr new_leaf =
-            fill_leaf(Slice(&src_leaf->data[src_split_pos], suffix_len),
-                      src_leaf->value(*src_cursor._db));
+
+        Slice src_value = src_leaf->value();
+        if (src_leaf.is_big()) {
+          src_value = handler.extract_big_value(src_value, *src_cursor._db);
+        }
+
+        leaf_ptr new_leaf = fill_leaf(
+            Slice(&src_leaf->data[src_split_pos], suffix_len), src_value);
         *dst.link() = resolve_offset(new_leaf);
         return;
       }

@@ -81,8 +81,8 @@ void test_map_storage_random_insert_and_read(const std::string& db_path, const c
   {
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    MapStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = MapStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Insert without explicit transaction management (auto-handled)
@@ -118,8 +118,8 @@ void test_map_storage_random_insert_and_read(const std::string& db_path, const c
   {
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    MapStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = MapStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Shuffle the test strings for random access pattern
@@ -156,8 +156,8 @@ void test_map_storage_random_insert_and_read(const std::string& db_path, const c
   
   // Phase 3: Verify sequential iteration works correctly
   {
-    MapStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = MapStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Sort the original strings for comparison
@@ -182,8 +182,8 @@ void test_map_storage_random_insert_and_read(const std::string& db_path, const c
   
   // Phase 4: Test some non-existent keys
   {
-    MapStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = MapStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Test some keys that should not exist
@@ -216,8 +216,8 @@ BOOST_AUTO_TEST_CASE(test_map_storage_key_patterns) {
                              const std::vector<std::string>& keys, const char* pattern_name) {
     BOOST_TEST_MESSAGE("Testing MapStorage key pattern: " << pattern_name);
     
-    MapStorage storage(map_path.c_str());
-    auto db = storage["pattern_test"];
+    auto storage = MapStorage::create(map_path.c_str());
+    auto db = (*storage)["pattern_test"];
     auto cursor = db.cursor();
     
     // Insert without explicit transaction management

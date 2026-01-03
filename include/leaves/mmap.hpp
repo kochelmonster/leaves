@@ -8,16 +8,16 @@
 
 namespace leaves {
 
-class MapStorage {
+class MapStorage : public std::enable_shared_from_this<MapStorage> {
  public:
   typedef _MemoryMapFile<_MemoryMapTraits> StorageImpl;
-  typedef TDB<StorageImpl> DB;
-  typedef std::shared_ptr<StorageImpl> storage_ptr;
+  typedef TDB<MapStorage> DB;
+  typedef std::shared_ptr<MapStorage> storage_ptr;
 
   MapStorage(const char* path, size_t map_size = 4 * G, uint16_t db_count = 48)
-      : _storage(std::make_shared<StorageImpl>(path, map_size, db_count)) {}
+      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count)) {}
 
-  DB operator[](const char* name) { return DB(_storage, name); }
+  DB operator[](const char* name) { return DB(shared_from_this(), name); }
 
   void remove_db(const char* name) { _storage->remove_db(name); }
 
@@ -29,8 +29,14 @@ class MapStorage {
 
   size_t file_size() const { return _storage->file_size(); }
 
+  static storage_ptr create(const char* path, size_t map_size = 4 * G,
+                            uint16_t db_count = 48) {
+    return std::make_shared<MapStorage>(path, map_size, db_count);
+  }
+
  private:
-  storage_ptr _storage;
+  friend class TDB<MapStorage>;
+  std::unique_ptr<StorageImpl> _storage;
 };
 
 }  // namespace leaves

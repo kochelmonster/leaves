@@ -26,7 +26,8 @@ struct SimplePointer {
     operator uint64_t() { return (uint64_t)p; }
     operator bool() const { return p != nullptr; }
     operator bool() { return p != nullptr; }
-
+    operator BlockHeader*() { return (BlockHeader*)p; }
+    operator const BlockHeader*() const { return (const BlockHeader*)p; }
     BlockHeader* operator->() { return (BlockHeader*)p; }
     const BlockHeader* operator->() const { return (const BlockHeader*)p; }
 
@@ -45,12 +46,12 @@ struct SimplePointer {
     Pointer(void* src = nullptr) : ptr(src) {}
     Pointer(const ptr& src) : ptr(src) {}
     Pointer(const Pointer& other) : ptr(other) {}
-    
+
     Pointer& operator=(const Pointer& other) {
       ptr::operator=(other);
       return *this;
     }
-    
+
     const ptr& operator=(const ptr& src) {
       ptr::p = src.p;
       return src;
@@ -117,12 +118,12 @@ struct SmartPointer {
     operator bool() const { return _iref != nullptr; }
     operator bool() { return _iref != nullptr; }
 
-    BlockHeader* operator->() {
-      return reinterpret_cast<BlockHeader*>((char*)*this);
+    operator BlockHeader*() { return (BlockHeader*)((char*)*this); }
+    operator const BlockHeader*() const {
+      return (const BlockHeader*)((const char*)*this);
     }
-    const BlockHeader* operator->() const {
-      return reinterpret_cast<const BlockHeader*>((const char*)*this);
-    }
+    BlockHeader* operator->() { return (BlockHeader*)*this; }
+    const BlockHeader* operator->() const { return (const BlockHeader*)*this; }
     bool operator==(const ptr& other) const {
       return _iref == other._iref && _offset == other._offset;
     }
@@ -151,12 +152,12 @@ struct SmartPointer {
     Pointer(void* src = nullptr) : ptr(reinterpret_cast<AreaSlice*>(src)) {}
     Pointer(const ptr& src) : ptr(src) {}
     Pointer(const Pointer& other) : ptr(other) {}
-    
+
     Pointer& operator=(const Pointer& other) {
       ptr::operator=(other);
       return *this;
     }
-    
+
     const ptr& operator=(const ptr& src) {
       if (ptr::_iref) ptr::_iref->dec_ref();
       ptr::_iref = src._iref;

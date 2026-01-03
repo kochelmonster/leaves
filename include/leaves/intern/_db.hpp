@@ -10,8 +10,6 @@
 #include "_memory.hpp"
 #include "_port.hpp"
 
-// #define DEBUG_MEM
-
 namespace leaves {
 
 template <typename Traits_>
@@ -20,25 +18,29 @@ struct _TransactionBase : public Traits_::BlockHeader {
   typedef Traits_ Traits;
   typedef _MemManager<Traits> MemManager;
   using Traits::BlockHeader::txn_id;
+  using offset_e = typename Traits::offset_e;
 
   // pointer to the active root of the trie
-  offset_t root;
+  offset_e root;
 
-  // pointer to the active root of the mem trie
-  offset_t mem_root;
+  // pointer to the active offset memory manager root
+  offset_e offset_root;
+
+  // pointer to the active size memory manager root
+  offset_e size_root;
 
   // pointer to the oldest transaction
-  offset_t start_txn;
+  offset_e start_txn;
 
   // pointer ot the next higher transaction
-  offset_t next_txn;
+  offset_e next_txn;
 
   // count of cursors accessing this transaction
   std::atomic<uint32_t> refs;
 
   // Area tracking: tail pointers for areas allocated during this transaction
-  offset_t area_list_tail_single{0};
-  offset_t area_list_tail_multi{0};
+  offset_e area_list_tail_single{0};
+  offset_e area_list_tail_multi{0};
 
   MemManager mem_manager;
 
@@ -112,30 +114,10 @@ struct _DB {
 
   typedef _DB<Storage_, Transaction_, Header_> DB;
 
-  struct ValueTraits : public Storage::Traits {
-    typedef std::shared_ptr<DB> db_ptr;
+  struct CursorTraits : public Storage::Traits {
+    typedef _DB<Storage_, Transaction_, Header_> DB;
     typedef ::Hasher Hasher;
-    constexpr static bool TRANSACTION_REF = true;
-    constexpr static bool COW = Traits::TRANSACTIONAL;
-    static offset_t get_root(txn_ptr& txn) { return txn->root; }
-    static void set_root(txn_ptr& txn, offset_t offset) { txn->root = offset; }
-  };
-
-  struct MemoryTraits : public Storage::Traits {
-    typedef DB* db_ptr;
-    typedef ::NullHasher Hasher;
-    typedef uint8_t hash_t[0];
-    constexpr static bool TRANSACTION_REF = false;
-    constexpr static bool COW = Traits::TRANSACTIONAL;
-    static offset_t get_root(txn_ptr& txn) { return txn->mem_root; }
-    static void set_root(txn_ptr& txn, offset_t offset) {
-      txn->mem_root = offset;
-    }
-  };
-
-  struct BigSizeKey {
-    boost::endian::big_uint64_t first;
-    uint64_t second;
+    using tid_t = leaves::tid_t;
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -145,10 +127,10 @@ struct _DB {
   static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[BLOCK_SIZES_COUNT - 1];
   static constexpr uint64_t SIZE_BIT = uint64_t(1) << 63;
 
-  typedef _Cursor<DB, ValueTraits> Cursor;
-  typedef _Cursor<DB, MemoryTraits> MemCursor;
+  typedef _TransactionalCursor<CursorTraits> Cursor;
   typedef _MemManager<Traits> MemManager;
   typedef DB db_type;
+  typedef std::shared_ptr<Cursor> cursor_ptr;
 
   static_assert(
       sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
@@ -163,7 +145,6 @@ struct _DB {
   Transaction* _active_txn = nullptr;
   txn_ptr _wtxn;
   header_ptr _header;
-  MemCursor _mem_cursor;
   uint16_t _index;
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
@@ -172,7 +153,6 @@ struct _DB {
   _DB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
         _header(storage.resolve(header)),
-        _mem_cursor(this),
         _index(index) {
     if (_header->prepared_txn != _header->read_txn) {
       // Recover a prepared transaction - set both _active_txn and _wtxn
@@ -182,7 +162,7 @@ struct _DB {
   }
 
   _DB(Storage& storage, offset_t* header, uint16_t index)
-      : _storage(storage), _mem_cursor(this), _index(index) {
+      : _storage(storage), _index(index) {
     init(header);
   }
 
@@ -191,7 +171,7 @@ struct _DB {
 
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(*header);
-    memset((void*)_header, 0, sizeof(Header));
+    memset((char*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex();
 
     // Initialize area lists with the first allocated area (area_ptr)
@@ -203,11 +183,11 @@ struct _DB {
     uint16_t header_size = padding(sizeof(Header), MIN_BLOCK_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve(_header->read_txn);
-    memset((void*)txn, 0, sizeof(Transaction));
+    memset((char*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
     txn->txn_id = tid_t(1);
     txn->slot_id = Transaction::SLOT_ID;
-    txn->root = txn->mem_root = 0;
+    txn->root = txn->offset_root = txn->size_root = 0;
     txn->next_txn = 0;
     txn->refs.store(0);
     txn->start_txn = _header->read_txn;
@@ -218,6 +198,10 @@ struct _DB {
                           area_ptr->end());
     make_dirty(_header);
     flush();
+  }
+
+  cursor_ptr create_cursor() {
+    return std::make_unique<Cursor>(this, &txn()->root);
   }
 
   uint64_t new_cursor_id() { return _storage.new_cursor_id(); }
@@ -284,134 +268,6 @@ struct _DB {
     _active_txn->mem_manager.free(block, *this);
   }
 
-  void _add_to_bigmem(offset_t offset, size_t size) {
-#ifdef DEBUG_MEM
-    std::stringstream cstr;
-    cstr << offset._offset << "-" << size;
-#endif
-
-    BigSizeKey bkey;
-    bkey.first = offset;
-    bkey.second = size;
-    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-    assert(!_mem_cursor.is_valid());
-
-#ifdef DEBUG_MEM
-    _mem_cursor.value(cstr.str());
-#else
-    _mem_cursor.value(Slice());
-#endif
-
-    bkey.first = size | SIZE_BIT;
-    bkey.second = offset;
-    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-    assert(!_mem_cursor.is_valid());
-#ifdef DEBUG_MEM
-    _mem_cursor.value(cstr.str());
-#else
-    _mem_cursor.value(Slice());
-#endif
-  }
-
-  void _remove_from_bigmem(offset_t offset, size_t size) {
-    BigSizeKey bkey;
-    bkey.first = size | SIZE_BIT;
-    bkey.second = offset;
-    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-    assert(_mem_cursor.is_valid());
-    _mem_cursor.remove();
-
-    bkey.first = offset;
-    bkey.second = size;
-    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-    assert(_mem_cursor.is_valid());
-    _mem_cursor.remove();
-  }
-
-  AreaSlice alloc_big(uint64_t size) {
-    assert(_active_txn);
-
-    size = padding(size, MAX_BLOCK_SIZE);
-    uint32_t found_size;
-    offset_t found_offset;
-
-    // find from big memory storage
-    BigSizeKey bkey;
-    bkey.first = size | SIZE_BIT;
-    bkey.second = 0;
-    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-    _mem_cursor.next();
-
-    if (_mem_cursor.is_valid()) {
-      BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
-      found_size = found->first & ~SIZE_BIT;
-      found_offset = found->second;
-
-      // remove the block from bit memory storage
-      assert(found_size >= size);
-      _mem_cursor.remove();
-
-      // remove from offset list
-      bkey.first = found_offset;
-      bkey.second = found_size;
-      _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-      assert(_mem_cursor.is_valid());
-      _mem_cursor.remove();
-    } else {
-      // allocate new multi-area
-      uint64_t psize = padding(size, AREA_SIZE);
-      auto slice = alloc_multi_area(psize);
-      found_offset = slice->content_offset();
-      found_size = slice->end() - found_offset;
-    }
-
-    uint32_t delta = found_size - size;
-    if (delta >= MAX_BLOCK_SIZE) {
-      // enough space left -> reuse the rest
-      _add_to_bigmem(found_offset + size, delta);
-      found_size -= delta;
-    }
-
-    return AreaSlice{found_offset, found_size};
-  }
-
-  void free_big(offset_e offset, size_t size) {
-    assert(_active_txn);
-    size = padding(size, MAX_BLOCK_SIZE);
-
-    BigSizeKey bkey;
-    bkey.first = offset;
-    bkey.second = size;
-    _mem_cursor.find(Slice(&bkey, sizeof(bkey)));
-    assert(!_mem_cursor.is_valid());
-
-    _mem_cursor.prev();
-    if (_mem_cursor.is_valid()) {
-      BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
-      uint64_t foffset = found->first;
-      if (foffset + found->second == offset) {
-        // a contiguous block: paste them together
-        offset = foffset;
-        size += found->second;
-        _remove_from_bigmem(foffset, found->second);
-      } else
-        _mem_cursor.next();
-    } else
-      _mem_cursor.first();
-
-    if (_mem_cursor.is_valid()) {
-      BigSizeKey* found = (BigSizeKey*)_mem_cursor.key().data();
-      uint64_t foffset = found->first;
-      if (foffset == offset + size) {
-        // a contiguous block: paste them together
-        size += found->second;
-        _remove_from_bigmem(foffset, found->second);
-      }
-    }
-
-    _add_to_bigmem(offset, size);
-  }
-
   void prefetch(offset_t offset) const { _storage.prefetch(offset); }
 
   area_ptr alloc_single_area() {
@@ -461,7 +317,7 @@ struct _DB {
   }
 
   template <typename T>
-  void iter_transactions(T caller) {
+  void iter_transactions(T caller) const {
     txn_ptr txn = _storage.resolve(_header->read_txn);
     tid_t end = txn->txn_id;
     offset_t* link = &txn->start_txn;
@@ -479,6 +335,16 @@ struct _DB {
   }
 
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
+
+  bool is_active() const {
+    bool is_active_ = false;
+    iter_transactions([&is_active_](txn_ptr txn) -> bool {
+      if (txn->refs.load() > 0) is_active_ = true;
+      return is_active_;
+    });
+    
+    return is_active_;
+  }
 
   // Start a write transaction. If nonblocking is true, this will return false
   // immediately when the txn_lock cannot be acquired.
@@ -530,7 +396,6 @@ struct _DB {
     });
 
     last_txn->refs.fetch_sub(1);
-    _mem_cursor._txn = _wtxn;
     return _wtxn;
   }
 
@@ -640,6 +505,20 @@ struct _DB {
       offset_t offset = resolve(txn);
       return false;
     });
+  }
+
+  // Defragment big memory - merge adjacent free chunks
+  void defrag() {
+    txn_ptr active_txn = txn();
+    if (!active_txn->size_root || !active_txn->offset_root) {
+      return;  // No big memory allocated yet
+    }
+    
+    // Create a temporary _BigMemory instance to access defrag
+    typedef _BigMemory<Cursor> BigMemory;
+    BigMemory big_mem(this, &active_txn->size_root, &active_txn->offset_root);
+    big_mem.defrag();
+    flush();
   }
 
   void return_areas_range(offset_t start_single, offset_t end_single,

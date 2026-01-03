@@ -19,6 +19,19 @@ inline std::string bitstr(char bit) {
   return cstr.str();
 }
 
+// Helper to extract the actual cursor type:
+// - If Container::Cursor has cursor_ptr, use that->element_type
+// - Otherwise, use Container::Cursor directly
+template <typename T, typename = void>
+struct ExtractInternalCursor {
+  using type = T;  // No cursor_ptr, so T is the cursor itself
+};
+
+template <typename T>
+struct ExtractInternalCursor<T, std::void_t<typename T::cursor_ptr>> {
+  using type = typename T::cursor_ptr::element_type;
+};
+
 template <typename Container>
 struct _Dumper {
   using DB = typename Container::db_type;
@@ -35,27 +48,20 @@ struct _Dumper {
 
   const DB& _db;
   int _id;
+  offset_e _root;
   bool _simple;
-  bool _show_mem;
-
-  _Dumper(const Container& container, bool simple = false,
-          bool show_mem = false)
+  
+  _Dumper(const Container& container, offset_e root, bool simple = false)
       : _db(*container._internal()),
         _id(0),
-        _simple(simple),
-        _show_mem(show_mem) {}
+        _root(root),
+        _simple(simple) {}
 
   void dump(std::ostream& out) {
-    offset_t root;
-    if (_db.transaction_active())
-      root = _show_mem ? _db._wtxn->mem_root : _db._wtxn->root;
-    else
-      root = _show_mem ? _db.txn()->mem_root : _db.txn()->root;
-
-    if (root) dump_link(out, root, _id++);
+    if (_root) dump_link(out, _root, _id++);
   }
 
-  void dump_link(std::ostream& out, offset_t link, int id) {
+  void dump_link(std::ostream& out, offset_e link, int id) {
     if (link.type() == TRIE)
       dump_trie(out, link, id);
     else
@@ -92,15 +98,18 @@ struct _Dumper {
       }
       out << "\"" << std::endl;
     } else {
-      auto bv = leaf->big();
+      using InternalCursor = typename ExtractInternalCursor<typename Container::Cursor>::type;
+      using BigMemory = typename InternalCursor::BigMemory;
+      using BigValue = typename BigMemory::BigValue;
+      auto bv = (BigValue*)leaf->vdata();
       out << "valuesize: " << bv->value_size << std::endl;
-      out << "value: \"" << bv->offset._offset << "\"" << std::endl;
+      out << "value: \"offset=" << bv->area_offset << " size=" << bv->area_size << "\"" << std::endl;
     }
     
     out << "---" << std::endl;
   }
 
-  void dump_trie(std::ostream& out, offset_t offset, int id) {
+  void dump_trie(std::ostream& out, offset_e offset, int id) {
     trie_ptr trie = _db.resolve(offset);
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
@@ -124,7 +133,8 @@ struct _Dumper {
     offset_e* start = trie->array();
     offset_e* end = start + trie->count();
 
-    assert(trie->count());
+    assert(trie->count() > 0);
+    assert(trie->count() <= 256);
     out << "branches: \"";
     for (int iter = trie->first(); iter != TrieNode::OUT_OF_RANGE;
          iter = trie->next(iter)) {

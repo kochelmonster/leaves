@@ -96,8 +96,8 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
   {
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    FileStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = FileStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     size_t inserted = 0;
@@ -134,8 +134,8 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
   {
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    FileStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = FileStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Shuffle the test strings for random access pattern
@@ -178,8 +178,8 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
   
   // Phase 3: Verify sequential iteration works correctly
   {
-    FileStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = FileStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Sort the original strings for comparison
@@ -204,8 +204,8 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
   
   // Phase 4: Test some non-existent keys
   {
-    FileStorage storage(db_path.c_str());
-    auto db = storage[db_name.c_str()];
+    auto storage = FileStorage::create(db_path.c_str());
+    auto db = (*storage)[db_name.c_str()];
     auto cursor = db.cursor();
     
     // Test some keys that should not exist
@@ -239,8 +239,8 @@ BOOST_AUTO_TEST_CASE(test_file_storage_key_patterns) {
                              const std::vector<std::string>& keys, const char* pattern_name) {
     BOOST_TEST_MESSAGE("Testing FileStorage key pattern: " << pattern_name);
     
-    FileStorage storage(file_path.c_str());
-    auto db = storage["pattern_test"];
+    auto storage = FileStorage::create(file_path.c_str());
+    auto db = (*storage)["pattern_test"];
     auto cursor = db.cursor();
     
     BOOST_REQUIRE(cursor.start_transaction());

@@ -51,17 +51,19 @@ struct _StoreTraits {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
+    bool needs_cow(const BlockHeader& other) const {
+      return txn_id != other.txn_id;
+    }
   };
 
-  static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
-  static constexpr uint16_t BLOCK_SIZES[] = {  // Typical node sizes
-      _TrieNode<_StoreTraits>::size(1, 10),    // digits 0-9
-      _TrieNode<_StoreTraits>::size(1, 16),    // hex 0-9A-F
-      _TrieNode<_StoreTraits>::size(1, 64),    // base64
-      _TrieNode<_StoreTraits>::size(1, 127),   // utf-8
-      _TrieNode<_StoreTraits>::size(1, 256),   // binary
+  static constexpr uint16_t BLOCK_SIZES[] = {   // Typical node sizes
+      _TrieNode<_StoreTraits>::size(1, 10),     // digits 0-9
+      _TrieNode<_StoreTraits>::size(1, 16),     // hex 0-9A-F
+      _TrieNode<_StoreTraits>::size(1, 64),     // base64
+      _TrieNode<_StoreTraits>::size(1, 127),    // utf-8
+      _TrieNode<_StoreTraits>::size(1, 256),    // binary
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
@@ -244,11 +246,9 @@ struct _FileOperations : _CacheBase {
   Mutex& file_lock() { return _header->file_lock; }
 };
 
-
 struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
   using DB = base_t::DB;
-  using db_ptr = base_t::db_ptr;
 
   _FileStore(const char* path, uint16_t db_count = 48,
              size_t capacity = 500 * M)
@@ -302,7 +302,7 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   void sanitize_dbs() {
     for (uint16_t i = 0; i < _header->db_count; i++) {
       if (_header->dbs[i].offset) {
-        assert(_dbs[i].expired());
+        assert(!_dbs[i]);
         _DB(*this, _header->dbs[i].offset, i).sanitize();
       }
     }
