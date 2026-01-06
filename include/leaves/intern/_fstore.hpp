@@ -60,6 +60,7 @@ struct _StoreTraits {
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
+  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t BLOCK_SIZES[] = {   // Typical node sizes
       _TrieNode<_StoreTraits>::size(1, 10),     // digits 0-9
       _TrieNode<_StoreTraits>::size(1, 16),     // hex 0-9A-F
