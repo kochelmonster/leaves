@@ -16,7 +16,7 @@ typedef MapStorage Storage;
 
 BOOST_AUTO_TEST_CASE(insert_bigkeys) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"a",     "ab",     "abc",    "abcd",
                         "abcde", "abcdef", "abcdeg", NULL};
   test_insertion(storage, "insert_big_keys", keys, 0, 530);
@@ -24,8 +24,8 @@ BOOST_AUTO_TEST_CASE(insert_bigkeys) {
 
 BOOST_AUTO_TEST_CASE(insert_bigvalues) {
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto cursor = storage["test"].cursor();
+  auto storage = Storage::create(TEST_FILE);
+  auto cursor = (*storage)["test"].cursor();
 
   std::string value(5000, '0');
   cursor.find("abc");
@@ -52,8 +52,9 @@ BOOST_AUTO_TEST_CASE(insert_bigvalues) {
   cursor.find("abce");
   cursor.value(value);
   cursor.commit();
-  // the new pointer is the recycled one from the last replacement action
-  BOOST_CHECK(cursor.value().data() == recycled_pointer);
+  // COW strategy: freed areas cannot be recycled within the same transaction
+  // to ensure old transaction data remains accessible to other cursors
+  BOOST_CHECK(cursor.value().data() != recycled_pointer);
 }
 
 BOOST_AUTO_TEST_CASE(change_leaf_with_bigvalue) {
@@ -61,8 +62,8 @@ BOOST_AUTO_TEST_CASE(change_leaf_with_bigvalue) {
   // the big value memory is properly freed via free_complete()
   // This tests the if (back->cmp == 0) branch in change_leaf()
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto cursor = storage["test"].cursor();
+  auto storage = Storage::create(TEST_FILE);
+  auto cursor = (*storage)["test"].cursor();
 
   // Insert a leaf with a big value at key "abc"
   std::string big_value(5000, 'X');
@@ -122,8 +123,8 @@ BOOST_AUTO_TEST_CASE(split_leaf_keep_bigvalue) {
   // the big value reference is properly transferred to the copy and only the
   // leaf node is freed (not the big value, since copy now owns it)
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto cursor = storage["test"].cursor();
+  auto storage = Storage::create(TEST_FILE);
+  auto cursor = (*storage)["test"].cursor();
 
   // Insert a leaf with a big value at key "abc"
   std::string big_value(5000, 'Z');
@@ -200,14 +201,14 @@ BOOST_AUTO_TEST_CASE(split_leaf_keep_bigvalue) {
 
 BOOST_AUTO_TEST_CASE(insert_one) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abc", NULL};
   test_insertion(storage, "insert_one", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_one_big_key) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   std::string big_key(260, '0');
   const char *keys[] = {big_key.c_str(), NULL};
   test_insertion(storage, "insert_one_big_key", keys);
@@ -216,16 +217,16 @@ BOOST_AUTO_TEST_CASE(insert_one_big_key) {
 BOOST_AUTO_TEST_CASE(insert_start_extend) {
   Preparation p;
   {
-    Storage storage(TEST_FILE);
+    auto storage = Storage::create(TEST_FILE);
   }
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abc", "abcd", NULL};
   test_insertion(storage, "insert_start_extend", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_start_split) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abc", "a*c", NULL};
   test_insertion(storage, "insert_start_split", keys);
 }
@@ -233,8 +234,8 @@ BOOST_AUTO_TEST_CASE(insert_start_split) {
 BOOST_AUTO_TEST_CASE(insert_start_short) {
   // A variant of insert_compress_extend
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto db = storage["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   cursor.find("abc");
   cursor.value(string("abc"));
@@ -250,8 +251,8 @@ BOOST_AUTO_TEST_CASE(insert_start_short) {
 BOOST_AUTO_TEST_CASE(insert_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto db = storage["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   cursor.find("");
   cursor.value(string("aaa"));
@@ -267,8 +268,8 @@ BOOST_AUTO_TEST_CASE(insert_start_null) {
 BOOST_AUTO_TEST_CASE(change_start) {
   // A variant of insert_compress_extend
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto db = storage["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   cursor.find("abc");
   cursor.value(string("aaa"));
@@ -284,8 +285,8 @@ BOOST_AUTO_TEST_CASE(change_start) {
 BOOST_AUTO_TEST_CASE(change_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
-  Storage storage(TEST_FILE);
-  auto db = storage["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   cursor.find("");
   cursor.value(string("aaa"));
@@ -300,33 +301,33 @@ BOOST_AUTO_TEST_CASE(change_start_null) {
 
 BOOST_AUTO_TEST_CASE(insert_compress_split) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abc*efghi", "ab*defghi", NULL};
   test_insertion(storage, "insert_compress_split", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compress_short) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abcdefg", "abc*efg", "ab", NULL};
   test_insertion(storage, "insert_compress_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_compress_start) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abcdefg", "ba", NULL};
   test_insertion(storage, "insert_compress_start", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_big_stack) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"a",     "ab",     "abc",    "abcd",
                         "abcde", "abcdef", "abcdeg", NULL};
   test_insertion(storage, "insert_big_stack", keys);
 
-  auto db = storage["test"];
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   std::cout << "insert 7: abcd*" << std::endl;
 
@@ -360,35 +361,35 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
 
 BOOST_AUTO_TEST_CASE(insert_leaf_split) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abc*efghi", "abc*e*ghi", NULL};
   test_insertion(storage, "insert_leaf_split", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_split_short) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abcd*fghi", "abcd*", NULL};
   test_insertion(storage, "insert_leaf_split_short", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_extend) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abcdefghi", "abc*efghi", "abc*efghijk", NULL};
   test_insertion(storage, "insert_leaf_extend", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_array) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", NULL};
   test_insertion(storage, "insert_array", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_trie) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "abf", "abg",
                         "abh", "abi", "abj", "abk", "abl", "abm", "abn",
                         "abo", "abp", "abA", "ab",  NULL};
@@ -398,9 +399,9 @@ BOOST_AUTO_TEST_CASE(insert_trie) {
 
 BOOST_AUTO_TEST_CASE(overflow_trie) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   uint16_t i;
-  auto db = storage["test"];
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   for (i = 0; i < 258; i++) {
     uint16_t key = native_to_big(i);
@@ -444,21 +445,21 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
 
 BOOST_AUTO_TEST_CASE(insert_null_leaf) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "ab", NULL};
   test_insertion(storage, "insert_null_leaf", keys);
 }
 
 BOOST_AUTO_TEST_CASE(insert_value) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abc", "abcdefg", NULL};
   test_insertion(storage, "insert_value", keys);
 }
 
 BOOST_AUTO_TEST_CASE(remove_trie) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
                         "aI", "aJ", "aK", "aC", "al", "an", "aO", NULL};
   const char *remove[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", "aG", "aH",
@@ -468,7 +469,7 @@ BOOST_AUTO_TEST_CASE(remove_trie) {
 
 BOOST_AUTO_TEST_CASE(remove_none_leaf) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "abd", "abe", "ab", NULL};
   const char *remove[] = {"ab", NULL};
   test_remove(storage, "remove_none_leaf", keys, remove);
@@ -476,7 +477,7 @@ BOOST_AUTO_TEST_CASE(remove_none_leaf) {
 
 BOOST_AUTO_TEST_CASE(remove_combine_trie) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"ab", "abcf", "abcde", "abcdf", NULL};
   const char *remove[] = {"abcf", NULL};
   test_remove(storage, "remove_combine_trie", keys, remove);
@@ -484,7 +485,7 @@ BOOST_AUTO_TEST_CASE(remove_combine_trie) {
 
 BOOST_AUTO_TEST_CASE(remove_combine_leaf) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"ab", "abc", "abde", "abdf", NULL};
   const char *remove[] = {"abdf", NULL};
   test_remove(storage, "remove_combine_leaf", keys, remove);
@@ -492,7 +493,7 @@ BOOST_AUTO_TEST_CASE(remove_combine_leaf) {
 
 BOOST_AUTO_TEST_CASE(remove_bigkeys_trie) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   std::string prefix(255, '0');
   std::string child1 = prefix + "1";
   std::string child2 = prefix + "11";
@@ -504,7 +505,7 @@ BOOST_AUTO_TEST_CASE(remove_bigkeys_trie) {
 
 BOOST_AUTO_TEST_CASE(remove_bigkeys_leaf) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   std::string prefix(255, '0');
   std::string child1 = prefix + "11111";
   std::string child2 = prefix + "22222";
@@ -516,7 +517,7 @@ BOOST_AUTO_TEST_CASE(remove_bigkeys_leaf) {
 
 BOOST_AUTO_TEST_CASE(remove_bigkeys_one) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   std::string prefix(255, '0');
   std::string child1 = prefix + "11111";
 
@@ -525,12 +526,182 @@ BOOST_AUTO_TEST_CASE(remove_bigkeys_one) {
   test_remove(storage, "remove_bigkeys_one", keys, remove);
 }
 
+BOOST_AUTO_TEST_CASE(remove_after_first) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  const char *keys[] = {"abc", "abd", "abe", "abf", "abg", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_first_begin", storage);
+  
+  // Test removing first element
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abc"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_first_end", storage);
+  
+  // Verify first is now "abd"
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abd"));
+  
+  // Verify all remaining keys exist
+  cursor.find("abd");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abe");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abf");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abg");
+  BOOST_REQUIRE(cursor.is_valid());
+  
+  // Verify removed key doesn't exist
+  cursor.find("abc");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(remove_after_last) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  const char *keys[] = {"abc", "abd", "abe", "abf", "abg", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_last_begin", storage);
+  
+  // Test removing last element
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abg"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_last_end", storage);
+  
+  // Verify last is now "abf"
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("abf"));
+  
+  // Verify all remaining keys exist
+  cursor.find("abc");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abd");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abe");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.find("abf");
+  BOOST_REQUIRE(cursor.is_valid());
+  
+  // Verify removed key doesn't exist
+  cursor.find("abg");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(remove_after_first_trie) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  // Create a scenario with trie nodes
+  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_first_trie_begin", storage);
+  
+  // Test removing first element in a trie structure
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("a@"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_first_trie_end", storage);
+  
+  // Verify first is now "aA"
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("aA"));
+  
+  // Verify removed key doesn't exist
+  cursor.find("a@");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(remove_after_last_trie) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  // Create a scenario with trie nodes
+  const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", NULL};
+  
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+  
+  // Insert keys
+  for (int i = 0; keys[i]; i++) {
+    cursor.find(keys[i]);
+    BOOST_REQUIRE(!cursor.is_valid());
+    cursor.value(keys[i]);
+  }
+  cursor.commit();
+  
+  check_graph("remove_after_last_trie_begin", storage);
+  
+  // Test removing last element in a trie structure
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("aM"));
+  cursor.remove();
+  cursor.commit();
+  
+  check_graph("remove_after_last_trie_end", storage);
+  
+  // Verify last is now "aF"
+  cursor.last();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key(), Slice("aF"));
+  
+  // Verify removed key doesn't exist
+  cursor.find("aM");
+  BOOST_REQUIRE(!cursor.is_valid());
+}
+
 
 BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   Slice key("abcdefg");
-  auto db = storage["test"];
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
 
   cursor.find(key);
@@ -565,11 +736,11 @@ BOOST_AUTO_TEST_CASE(replace_value) {
 
 BOOST_AUTO_TEST_CASE(move_backward) {
   Preparation p;
-  Storage storage(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abca", "abcb", "adea", "adeb", NULL};
   test_insertion(storage, "move_backward", keys);
 
-  auto cursor = storage["test"].cursor();
+  auto cursor = (*storage)["test"].cursor();
   cursor.find("ad");
   BOOST_REQUIRE(!cursor.is_valid());
   cursor.prev();
@@ -584,7 +755,7 @@ BOOST_AUTO_TEST_CASE(move_backward) {
 
   // no extra test for this
   try {
-    auto cursor = storage["test"].cursor();
+    auto cursor = (*storage)["test"].cursor();
     cursor.value("abcb");
     BOOST_REQUIRE(false);
   } catch (const leaves::NoValidPosition &e) {

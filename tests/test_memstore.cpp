@@ -23,29 +23,29 @@ BOOST_AUTO_TEST_CASE(test_memory_storage_area_allocation) {
 
 BOOST_AUTO_TEST_CASE(test_memory_storage_block_allocation) {
   _MemoryStorage storage;
-  auto db = storage.db();
+  auto& db = storage.db();
   
   // Test block allocation through the DB
-  auto block = db->alloc(100);
+  auto block = db.alloc(100);
   BOOST_CHECK(block);
   
   // Test freeing the block
-  db->free(block);  // Should not crash
+  db.free(block);  // Should not crash
 }
 
 BOOST_AUTO_TEST_CASE(test_memory_storage_resolve) {
   _MemoryStorage storage;
-  auto db = storage.db();
+  auto& db = storage.db();
   
   // Test pointer resolution
   auto area = storage.alloc_single_area();
   
   // Test resolve with area - offset to block_ptr using resolve(offset_t) method
   auto area_offset = area->offset();
-  auto resolved_block = db->resolve(area_offset);
+  auto resolved_block = db.resolve(area_offset);
   BOOST_CHECK(resolved_block);
   
   // Test reverse resolve - block_ptr to offset
-  auto offset_back = db->resolve(resolved_block);
+  auto offset_back = db.resolve(resolved_block);
   BOOST_CHECK_EQUAL(offset_back, area_offset);
 }

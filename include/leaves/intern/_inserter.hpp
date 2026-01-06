@@ -46,19 +46,9 @@ struct _Inserter {
     back->cursor->_db->free(block);
   }
 
-  template <typename T>
-  void free_complete(T& block) {
-    static_assert(T::type == LEAF);
-    if (block->is_big()) {
-      auto bv = block->big();
-      back->cursor->_db->free_big(bv->offset, bv->size());
-    }
-    back->cursor->_db->free(block);
-  }
-
-  bool exec() {
-    if (back->is_leaf()) return !change_leaf();
-    if (split_compressed()) return !_overflow;
+  void exec() {
+    if (back->is_leaf()) return change_leaf();
+    if (split_compressed()) return;
     add_to_array();
     return !_overflow;
   }
@@ -176,10 +166,7 @@ struct _Inserter {
 
   leaf_ptr fill_leaf(const Slice& key) {
     leaf_ptr leaf = alloc(LeafNode::size(key.size(), value_size));
-    if (leaf) {
-      auto bv = leaf->set(key, value_size);
-      if (bv) bv->offset = back->cursor->alloc_big(bv->size()).offset();
-    }
+    leaf->set(key, value_size);
     return leaf;
   }
 
@@ -209,7 +196,7 @@ struct _Inserter {
       assert(back->prefix == back->leaf()->key_size);
       assert(back->key().empty());
       back->leaf() = fill_leaf(oleaf->key());
-      free_complete(oleaf);
+      free(oleaf);
       back->replace(resolve(back->leaf()));
       return _overflow;
     }

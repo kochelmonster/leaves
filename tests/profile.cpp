@@ -20,8 +20,8 @@ struct Preparation {
 };
 
 void create() {
-  MapStorage storage(TEST_FILE);
-  auto cursor = storage["test"].cursor();
+  auto storage = MapStorage::create(TEST_FILE);
+  auto cursor = (*storage)["test"].cursor();
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
@@ -53,8 +53,8 @@ void create() {
 }
 
 void read() {
-  MapStorage storage(TEST_FILE);
-  auto cursor = storage["test"].cursor();
+  auto storage = MapStorage::create(TEST_FILE);
+  auto cursor = (*storage)["test"].cursor();
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);

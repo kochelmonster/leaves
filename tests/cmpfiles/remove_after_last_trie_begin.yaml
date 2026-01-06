@@ -1,0 +1,96 @@
+type: trie
+id: 11128
+page: 0
+freespace: 48
+txn: 2
+size: 80
+compressed: 
+  size: 1
+  key: "[a]"
+branches: "[@][A][B][D][E][F][M]"
+children: 
+  - 5625
+  - 10233
+  - 10489
+  - 10745
+  - 11001
+  - 11257
+  - 9977
+---
+type: leaf
+id: 5625
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[@]"
+valuesize: 2
+value: "a@"
+---
+type: leaf
+id: 10233
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[A]"
+valuesize: 2
+value: "aA"
+---
+type: leaf
+id: 10489
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[B]"
+valuesize: 2
+value: "aB"
+---
+type: leaf
+id: 10745
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[D]"
+valuesize: 2
+value: "aD"
+---
+type: leaf
+id: 11001
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[E]"
+valuesize: 2
+value: "aE"
+---
+type: leaf
+id: 11257
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[F]"
+valuesize: 2
+value: "aF"
+---
+type: leaf
+id: 9977
+page: 0
+freespace: 117
+size: 11
+txn: 2
+keysize: 1
+key: "[M]"
+valuesize: 2
+value: "aM"
+---

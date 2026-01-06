@@ -507,14 +507,6 @@ struct _LeafNode : public Traits::BlockHeader {
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
   static constexpr auto TOMBSTONE_FLAG = uint16_e(1) << 14;
 
-  struct BigValue {
-    uint64_e value_size;
-    offset_e offset;
-    size_t size() const { return value_size; }
-  };
-
-  static constexpr auto BIG_VALUE = BIG_VALUE_FLAG | sizeof(BigValue);
-
   uint8_t key_size;
   uint16_e value_size;
   hash_t hash;
@@ -534,29 +526,17 @@ struct _LeafNode : public Traits::BlockHeader {
     value_size = TOMBSTONE_FLAG;
   }
 
-  char* copy_start() const { return (char*)&key_size; }
-
-  template <typename Resolver>
-  Slice value(Resolver& resolver) const {
-    if (is_big()) {
-      auto bv = big();
-      auto big_value = resolver.resolve(bv->offset);
-      return Slice(((const char*)big_value), bv->value_size);
-    }
-    return value();
+  void set_big() {
+    value_size |= BIG_VALUE_FLAG;
   }
 
-  BigValue* set(const Slice& key, size_t value_size_) {
+  char* copy_start() const { return (char*)&key_size; }
+
+  void set(const Slice& key, size_t value_size_) {
     key_size = key.size();
     memcpy(data, key.data(), key.size());
-    if (key.size() + value_size_ + sizeof(LeafNode) > MAX_SIZE) {
-      value_size = BIG_VALUE;
-      auto bv = big();
-      bv->value_size = value_size_;
-      return bv;
-    }
     value_size = value_size_;
-    return nullptr;
+
   }
 
   Slice memory() { return Slice((char*)this, size()); }
@@ -565,15 +545,9 @@ struct _LeafNode : public Traits::BlockHeader {
     return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
   }
 
-  BigValue* big() const {
-    assert(is_big());
-    return (BigValue*)vdata();
-  }
-
+  // TODO: needed?
   static uint16_t size(uint16_t key, size_t value) {
-    size_t size = sizeof(LeafNode) + key + value;
-    if (size > MAX_SIZE) return sizeof(LeafNode) + key + sizeof(BigValue);
-    return size;
+    return sizeof(LeafNode) + key + value;
   }
 
   static uint16_t size(const Slice& key, const Slice& value) {

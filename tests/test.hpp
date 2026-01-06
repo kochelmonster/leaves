@@ -34,13 +34,13 @@ struct Preparation {
 template <typename T>
 inline void dump_graph(const char* output, T& storage) {
   std::ofstream out(output);
-  _Dumper<T>(storage, false).dump(out);
+  _Dumper<T>(storage, storage._internal()->txn()->root, false).dump(out);
 }
 
 template <typename T>
 inline void compare_graph(const char* input, T& storage) {
   std::stringstream cstr;
-  _Dumper<T>(storage, false).dump(cstr);
+  _Dumper<T>(storage, storage._internal()->txn()->root, false).dump(cstr);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),
@@ -70,7 +70,7 @@ inline void check_graph(const char* name, T& storage, const char* dbname = "test
   path.append(".yaml");
   std::replace(path.begin(), path.end(), ' ', '_');
 
-  auto db = storage[dbname];
+  auto db = (*storage)[dbname];
 #ifdef GENERATE
   std::cout << "generate graph " << name << std::endl;
   dump_graph(path.c_str(), db);
@@ -115,7 +115,7 @@ void cmp_value(const Slice& value, const std::string& find) {
 template <typename T>
 inline void insert(T& storage, const char* test_name, const Slice& key,
                    const Slice& value) {
-  auto db = storage["test"];
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
   // std::cout << "insert " << test_name << std::endl;
   cursor.find(key);
@@ -146,7 +146,7 @@ template <typename T>
 inline void test_movement(T& storage, strings_t& strings) {
   std::sort(strings.begin(), strings.end());
 
-  auto db = storage["test"];
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
 
   std::cout << std::endl
@@ -292,7 +292,7 @@ inline void test_remove(T& storage, const char* title, const char* keys[],
             << "==========================================" << std::endl;
   std::cout << "insert keys" << std::endl << "-----------" << std::endl;
 
-  auto db = storage["test"];
+  auto db = (*storage)["test"];
   auto cursor = db.cursor();
 
   for (int i = 0; keys[i]; i++) {

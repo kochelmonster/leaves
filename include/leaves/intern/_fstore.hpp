@@ -52,19 +52,20 @@ struct _StoreTraits {
     typedef BlockHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
+    bool needs_cow(const BlockHeader& other) const {
+      return txn_id != other.txn_id;
+    }
   };
 #pragma pack(pop)
 
-  static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t BLOCK_SIZES[] = {  // Typical node sizes
-      _TrieNode<_StoreTraits>::size(1, 10),    // digits 0-9
-      _TrieNode<_StoreTraits>::size(1, 16),    // hex 0-9A-F
-      _TrieNode<_StoreTraits>::size(1, 64),    // base64
-      _TrieNode<_StoreTraits>::size(1, 127),   // utf-8
-      _TrieNode<_StoreTraits>::size(1, 256),   // binary
+  static constexpr uint16_t BLOCK_SIZES[] = {   // Typical node sizes
+      _TrieNode<_StoreTraits>::size(1, 10),     // digits 0-9
+      _TrieNode<_StoreTraits>::size(1, 16),     // hex 0-9A-F
+      _TrieNode<_StoreTraits>::size(1, 64),     // base64
+      _TrieNode<_StoreTraits>::size(1, 127),    // utf-8
+      _TrieNode<_StoreTraits>::size(1, 256),    // binary
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
@@ -245,32 +246,11 @@ struct _FileOperations : _CacheBase {
   const char* filename() const { return _filepath.c_str(); }
 
   Mutex& file_lock() { return _header->file_lock; }
-
-  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
-    if (size > 0) {
-      std::lock_guard<std::mutex> lock(_io_mutex);
-      if (!_file.is_open()) {
-        throw std::runtime_error("File not open");
-      }
-      _file.clear();
-      _file.seekp(static_cast<std::streampos>(offset));
-      if (_file.fail()) {
-        throw std::runtime_error("Failed to seek to offset for flush");
-      }
-      _file.write(static_cast<const char*>(ptr), size);
-      if (_file.fail()) {
-        throw std::runtime_error("Failed to write data during flush");
-      }
-      _file.flush();
-    }
-  }
 };
-
 
 struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
   using DB = base_t::DB;
-  using db_ptr = base_t::db_ptr;
 
   _FileStore(const char* path, uint16_t db_count = 48,
              size_t capacity = 500 * M)
@@ -324,7 +304,7 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   void sanitize_dbs() {
     for (uint16_t i = 0; i < _header->db_count; i++) {
       if (_header->dbs[i].offset) {
-        assert(_dbs[i].expired());
+        assert(!_dbs[i]);
         _DB(*this, _header->dbs[i].offset, i).sanitize();
       }
     }

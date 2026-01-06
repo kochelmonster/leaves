@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "_bigmemory.hpp"
 #include "_deleter.hpp"
 #include "_exception.hpp"
 #include "_inserter.hpp"
@@ -52,8 +53,6 @@ struct _Transition {
     return (offset_e*)(trie().link(link_offset));
   }
 
-  //_Transition() : trie(*(trie_ptr*)&block), leaf(*(leaf_ptr*)&block) {}
-
   bool is_leaf() const { return offset.type() == LEAF; }
   bool is_trie() const { return offset.type() == TRIE; }
 
@@ -72,24 +71,18 @@ struct _Transition {
 
   block_ptr resolve(offset_t offset) { return cursor->_db->resolve(offset); }
 
-  void set_root(offset_t offset_) { Traits::set_root(cursor->_txn, offset_); }
+  void set_root(offset_t offset_) { *cursor->_root = offset_; }
 
   void replace(offset_t offset_) {
     offset = offset_;
     if (!is_root())
-      *parent().update() = offset_;
+      *parent().update(*this) = offset_;
     else
       set_root(offset);
   }
 
-  offset_e* update() {
-    if constexpr (!Cursor::Traits::COW) {
-      cursor->_db->make_dirty(block);
-      return link();
-    }
-
-    if (block->txn_id == cursor->_txn->txn_id) {
-      assert(cursor->_db->transaction_active());
+  offset_e* update(Transition& child) {
+    if (!block->needs_cow(*child.block.operator->())) {
       cursor->_db->make_dirty(block);
       return link();
     }
@@ -103,7 +96,7 @@ struct _Transition {
     cursor->_db->free(old_trie);
 
     if (!is_root())
-      *parent().update() = offset;
+      *parent().update(*this) = offset;
     else
       set_root(offset);
 
@@ -140,7 +133,7 @@ struct _Transition {
 
   Slice value() const {
     assert(is_leaf());
-    return leaf()->value(*cursor->_db);
+    return leaf()->value();
   }
 
   std::string& current_key() { return cursor->current_key; }
@@ -207,8 +200,13 @@ struct _Transition {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
     append_key(trie_.compressed(), trie_._compressed_len);
+    prefix = trie_._compressed_len;
     cmp = 0;
-    push(trie_.array()).first();
+    auto& child = push(trie_.array());
+    child.first();
+    if (child.keypos < current_key().size()) {
+      branch_key = current_key()[child.keypos];
+    }
   }
 
   bool next() {
@@ -231,7 +229,7 @@ struct _Transition {
         cursor->_db->prefetch(*(lnk + 1));
       }
       auto& child = push(lnk);
-      cursor->_db->prefetch(*lnk); 
+      cursor->_db->prefetch(*lnk);
 
       child.first();
       branch_key = current_key()[child.keypos];
@@ -274,7 +272,7 @@ struct _Transition {
         cursor->_db->prefetch(*(lnk - 1));
       }
       auto& child = push(lnk);
-      cursor->_db->prefetch(*lnk); 
+      cursor->_db->prefetch(*lnk);
 
       child.last();
       branch_key = current_key()[child.keypos];
@@ -300,8 +298,12 @@ struct _Transition {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
     append_key(trie_.compressed(), trie_._compressed_len);
+    prefix = trie_._compressed_len;
     cmp = 0;
-    push(trie_.array() + trie_.count() - 1).last();
+    auto& child = push(trie_.array() + trie_.count() - 1);
+    child.last();
+    assert(child.keypos < current_key().size());
+    branch_key = current_key()[child.keypos];
   }
 };
 
@@ -339,25 +341,25 @@ struct _Stack {
 };
 
 // Base cursor with stack and core navigation functionality
-template <typename DB_, typename Traits_>
+template <typename Traits_>
 struct _CursorBase {
-  typedef DB_ DB;
   typedef Traits_ Traits;
-  typedef _CursorBase<DB, Traits_> CursorBase;
+  typedef _CursorBase<Traits_> CursorBase;
   typedef _Stack<CursorBase> Stack;
-  using db_ptr = typename Traits::db_ptr;
-  using txn_ptr = typename DB::txn_ptr;
-  using block_ptr = typename DB::block_ptr;
+  typedef typename Traits::DB DB;
+  using offset_e = typename Traits::offset_e;
   using Transition = typename Stack::Transition;
 
-  db_ptr _db;
-  txn_ptr _txn;
+  DB* _db;
+  offset_e* _root;
   Stack stack;
   Slice rest_key;
   std::string current_key;
 
   _CursorBase() = default;
-  _CursorBase(db_ptr db) : _db(db) { current_key.reserve(128); }
+  _CursorBase(DB* db, offset_e* root) : _db(db), _root(root) {
+    current_key.reserve(128);
+  }
 
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
@@ -379,45 +381,21 @@ struct _CursorBase {
 };
 
 // Full cursor with find, transactions, and modification operations
-template <typename DB_, typename Traits_>
-struct _Cursor : public _CursorBase<DB_, Traits_> {
-  typedef DB_ DB;
+template <typename Traits_>
+struct _Cursor : public _CursorBase<Traits_> {
   typedef Traits_ Traits;
-  typedef _Cursor<DB, Traits_> Cursor;
-  typedef _CursorBase<DB, Traits_> CursorBase;
-  using db_ptr = typename Traits::db_ptr;
-  using txn_ptr = typename DB::txn_ptr;
-  using block_ptr = typename DB::block_ptr;
+  typedef _Cursor<Traits_> Cursor;
+  typedef _CursorBase<Traits_> CursorBase;
+  using DB = typename Traits::DB;
+  using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
   using Hasher = typename Traits::Hasher;
   using hash_t = typename Hasher::hash_t;
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
-  uint64_t _id{0};
-  std::string _refind_buffer;
 
-  _Cursor(db_ptr db) : CursorBase(db) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      _id = this->_db->new_cursor_id();
-      update();
-    }
-  }
-
-  ~_Cursor() {
-    if constexpr (Traits::TRANSACTION_REF) {
-      if (is_transaction_active()) {
-        if (this->_txn) this->_txn->refs.fetch_sub(1);
-      }
-    }
-  }
-
-  bool is_transaction_active() const {
-    if constexpr (Traits::TRANSACTION_REF) {
-      return this->_db->txn_cursor_id() == _id;
-    }
-    return false;
-  }
+  _Cursor(DB* db, offset_e* root) : CursorBase(db, root) {}
 
   // return true if the cursor is on a valid position
   bool is_valid() const {
@@ -433,8 +411,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   bool _prepare_move() {
     this->stack.clear(0);
-    if (! this->_txn) return true;
-    auto root = Traits::get_root(this->_txn);
+    auto root = *this->_root;
     if (!root) return true;
     this->rest_key.reset();
     this->current_key.clear();
@@ -469,11 +446,8 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
   }
 
   void* reserve(size_t size) {
-    [[maybe_unused]] bool r = start_transaction();
-    assert(r);
-
     if (!this->stack.size) {
-      if (!Traits::get_root(this->_txn)) {
+      if (!*this->_root) {
         this->push(offset_t());
         _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
@@ -501,46 +475,7 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   void remove() {
     if (!is_valid()) throw NoValidPosition();
-    [[maybe_unused]] bool r = start_transaction();
-    assert(r);
     _Deleter(*this).exec();
-  }
-
-  bool start_transaction(bool non_blocking = false) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      if (this->_db->txn_cursor_id() != _id) {
-        txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
-        if (!new_txn) return false;
-        assert(new_txn->refs.load() == 0);  // no one can reference it yet
-        _set_txn(new_txn);
-      }
-    }
-    return true;
-  }
-
-  tid_t prepare_commit(bool sync = false) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      return this->_db->prepare_commit(_id, sync);
-    }
-    return tid_t(0);
-  }
-
-  bool commit(bool sync = false) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      return this->_db->commit(_id, sync);
-    }
-    return false;
-  }
-
-  bool rollback() {
-    if constexpr (Traits::TRANSACTION_REF) {
-      if (this->_db->rollback(_id)) {
-        this->stack.clear();
-        find(this->current_key);
-        return true;
-      }
-    }
-    return false;
   }
 
   /* Helpers */
@@ -579,132 +514,164 @@ struct _Cursor : public _CursorBase<DB_, Traits_> {
 
   void _find() {
     if (!this->stack.size) {
-      auto root = Traits::get_root(this->_txn);
+      auto root = *this->_root;
       if (!root) return;  // empty db
       this->current_key.clear();
       this->push(root);
     }
     this->stack.back().find();
   }
+};
+
+// Full cursor with find, transactions, and modification operations
+template <typename Traits_>
+struct _TransactionalCursor : public _Cursor<Traits_> {
+  typedef Traits_ Traits;
+  typedef _Cursor<Traits_> Cursor;
+  typedef _BigMemory<Cursor> BigMemory;
+  using DB = typename Traits::DB;
+  using txn_ptr = typename std::remove_pointer<DB>::type::txn_ptr;
+  using offset_e = typename Traits::offset_e;
+  using Transition = typename Cursor::Transition;
+  using LeafNode = typename Transition::LeafNode;
+  typedef typename BigMemory::BigValue BigValue;
+
+  std::unique_ptr<BigMemory> _bigmemory;
+  txn_ptr _txn;
+  uint64_t _id{0};
+  std::string _refind_buffer;
+
+  _TransactionalCursor(DB* db, offset_e* root) : Cursor(db, root) {
+    _id = this->_db->new_cursor_id();
+    update();
+  }
+
+  ~_TransactionalCursor() {
+    if (is_transaction_active()) {
+      if (this->_txn) this->_txn->refs.fetch_sub(1);
+    }
+  }
+
+  bool is_transaction_active() const {
+    return this->_db->txn_cursor_id() == _id;
+  }
+
+  BigMemory& get_bigmemory() {
+    if (!_bigmemory) {
+      _bigmemory = std::make_unique<BigMemory>(
+          this->_db, &this->_txn->size_root, &this->_txn->offset_root);
+    }
+    return *_bigmemory;
+  }
+
+  void* reserve(size_t size) {
+    [[maybe_unused]] bool r = start_transaction();
+    assert(r);
+
+    const Transition& back = this->stack.back();
+    if (this->is_valid() && back.leaf()->is_big()) {
+      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+      get_bigmemory().free(bvalue);
+    }
+
+    uint16_t size_modified =
+        BigMemory::template modify_size<LeafNode>(this->rest_key.size(), size);
+    void* result = Cursor::reserve(size_modified);
+    if (size_modified != size) {
+      BigValue* bvalue = (BigValue*)result;
+      get_bigmemory().alloc(size, bvalue);
+      this->stack.back().leaf()->set_big();
+      return bvalue->data(this->_db);
+    }
+    return result;
+  }
+
+  Slice value() const {
+    const Transition& back = this->stack.back();
+    if (back.cmp == 0 && back.is_leaf()) {
+      if (back.leaf()->is_big()) {
+        BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+        return Slice(bvalue->data(this->_db), bvalue->value_size);
+      }
+      return back.value();
+    }
+    return Slice();
+  }
+
+  void value(const Slice& value) {
+    void* space = reserve(value.size());
+    memcpy(space, value.data(), value.size());
+    this->_db->flush();
+  }
+
+  void remove() {
+    [[maybe_unused]] bool r = start_transaction();
+    if (!this->is_valid()) throw NoValidPosition();
+    const Transition& back = this->stack.back();
+    if (back.leaf()->is_big()) {
+      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+      get_bigmemory().free(bvalue);
+    }
+    _Deleter(*this).exec();
+  }
+
+  bool start_transaction(bool non_blocking = false) {
+    if (this->_db->txn_cursor_id() != _id) {
+      txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
+      if (!new_txn) return false;
+      assert(new_txn->refs.load() == 0);  // no one can reference it yet
+      _set_txn(new_txn);
+    }
+    return true;
+  }
+
+  tid_t prepare_commit(bool sync = false) {
+    return this->_db->prepare_commit(_id, sync);
+  }
+
+  bool commit(bool sync = false) { return this->_db->commit(_id, sync); }
+
+  bool rollback() {
+    if (this->_db->rollback(_id)) {
+      this->stack.clear();
+      this->find(this->current_key);
+      return true;
+    }
+    return false;
+  }
 
   void update() {
-    if constexpr (Traits::TRANSACTION_REF) {
-      auto new_txn = this->_db->txn();
-      assert(new_txn);
-      if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
-        _set_txn(new_txn);
-      }
+    auto new_txn = this->_db->txn();
+    assert(new_txn);
+    if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
+      _set_txn(new_txn);
     }
   }
 
   void _set_txn(txn_ptr& txn) {
-    if constexpr (Traits::TRANSACTION_REF) {
-      assert(txn);
-      if (this->_txn != txn) {
-        offset_t old_root;
-        if (this->_txn) {
-          this->_txn->refs.fetch_sub(1);
-          old_root = Traits::get_root(this->_txn);
-        }
-        this->_txn = txn;
-        this->_txn->refs.fetch_add(1);
-        if ((this->current_key.size() || this->rest_key.size()) &&
-            old_root != Traits::get_root(this->_txn)) {
-          // adjust to new root
-          this->stack.clear();
-          _refind_buffer.reserve(this->current_key.size() +
-                                 this->rest_key.size());
-          _refind_buffer = this->current_key;
-          _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
-          find(_refind_buffer);
-        }
+    assert(txn);
+    if (this->_txn != txn) {
+      offset_t old_root_val = this->_root ? *this->_root : offset_t();
+      if (this->_txn) {
+        this->_txn->refs.fetch_sub(1);
+      }
+      this->_txn = txn;
+      this->_txn->refs.fetch_add(1);
+      this->_root = &this->_txn->root;
+      if (_bigmemory)
+        _bigmemory->reset(&this->_txn->size_root, &this->_txn->offset_root);
+      if ((this->current_key.size() || this->rest_key.size()) &&
+          old_root_val != *this->_root) {
+        // adjust to new root
+        this->stack.clear();
+        _refind_buffer.reserve(this->current_key.size() +
+                               this->rest_key.size());
+        _refind_buffer = this->current_key;
+        _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
+        this->find(_refind_buffer);
       }
     }
   }
-};
-
-// Node-by-node iterator for merging - no find, no transactions, just forward
-// traversal
-template <typename DB_, typename Traits_>
-struct _NodeIterator : public _CursorBase<DB_, Traits_> {
-  typedef DB_ DB;
-  typedef Traits_ Traits;
-  typedef _NodeIterator<DB, Traits_> NodeIterator;
-  typedef _CursorBase<DB, Traits_> CursorBase;
-  using db_ptr = typename Traits::db_ptr;
-  using Transition = typename CursorBase::Transition;
-
-  int stack_level;
-  offset_t root;
-
-  _NodeIterator(db_ptr db, offset_t root = 0) : CursorBase(db) {
-    this->_txn = this->_db->txn();
-    this->_txn->refs.fetch_add(1);
-    this->root = root ? root : Traits::get_root(this->_txn);
-    first();
-  }
-
-  ~_NodeIterator() { this->_txn->refs.fetch_sub(1); }
-
-  void first() {
-    this->stack.clear(0);
-    if (!root) return;
-    this->current_key.clear();
-    this->push(root);
-    this->stack.back().first();
-    stack_level = 0;
-  }
-
-  bool next() {
-    if (!this->stack.size) return false;  // empty iterator
-
-    if (stack_level < (int)this->stack.size - 1) {
-      stack_level++;  // the next node in stack
-      return true;
-    }
-
-    // We're at the last node in stack, try to advance to next leaf
-    while (this->stack.size) {
-      if (this->stack.back().next()) {
-        stack_level++;
-        return true;
-      }
-      this->pop();
-      stack_level--;
-      assert(stack_level == (int)this->stack.size - 1);
-    }
-    return false;
-  }
-
-  // skip the next subtrie
-  bool skip() {
-    if (!this->stack.size) return false;  // empty iterator
-
-    this->stack.clear(stack_level + 1);
-
-    // We're at the last node in stack, try to advance to next leaf
-    while (this->stack.size) {
-      if (this->stack.back().next()) {
-        stack_level++;
-        return true;
-      }
-      this->pop();
-      stack_level--;
-      assert(stack_level == (int)this->stack.size - 1);
-    }
-    return false;
-  }
-
-  Slice node_key() const {
-    if (this->stack.data[stack_level].is_leaf()) {
-      return Slice(this->current_key);
-    }
-    assert(this->current_key.size() > this->stack.data[stack_level].keypos);
-    return Slice(this->current_key.c_str(),
-                 this->stack.data[stack_level].keypos);
-  }
-
-  Transition& node() { return this->stack.data[stack_level]; }
 };
 
 }  // namespace leaves
