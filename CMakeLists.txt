@@ -135,14 +135,6 @@ target_link_libraries(test_db PUBLIC core test)
 add_executable(test_bigmemory tests/test_bigmemory.cpp)
 target_link_libraries(test_bigmemory PUBLIC core test)
 
-add_executable(test_lsm_db tests/test_lsm_db.cpp)
-target_link_libraries(test_lsm_db PUBLIC core test pthread)
-
-add_executable(test_lsm_mmap tests/test_lsm_mmap.cpp)
-target_sources(test_lsm_mmap INTERFACE
-    include/leaves/lsm_mmap.hpp include/leaves/intern/_lsm_db.hpp include/leaves/intern/_mmap.hpp)
-target_link_libraries(test_lsm_mmap PUBLIC core test pthread)
-
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
     include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)

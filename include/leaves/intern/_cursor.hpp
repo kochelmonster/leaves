@@ -348,6 +348,7 @@ struct _CursorBase {
   typedef _Stack<CursorBase> Stack;
   typedef typename Traits::DB DB;
   using offset_e = typename Traits::offset_e;
+  using block_ptr = typename Traits::ptr;
   using Transition = typename Stack::Transition;
 
   DB* _db;
@@ -409,23 +410,33 @@ struct _Cursor : public _CursorBase<Traits_> {
     _find();
   }
 
-  bool _prepare_move() {
+  void set_root(offset_e* root) { 
+    if (*root != *this->_root) {
+      this->_root = root; 
+      clear();
+    }
+    else {
+      this->_root = root;
+    }
+  }
+
+  bool clear() {
     this->stack.clear(0);
-    auto root = *this->_root;
-    if (!root) return true;
     this->rest_key.reset();
     this->current_key.clear();
+    auto root = *this->_root;
+    if (!root) return true;
     this->push(root);
     return false;
   }
 
   void first() {
-    if (_prepare_move()) return;
+    if (clear()) return;
     this->stack.back().first();
   }
 
   void last() {
-    if (_prepare_move()) return;
+    if (clear()) return;
     this->stack.back().last();
   }
 
@@ -455,7 +466,7 @@ struct _Cursor : public _CursorBase<Traits_> {
       throw NoValidPosition();
     }
 
-    if (!_Inserter(&this->stack.back(), size).exec()) return nullptr;
+    _Inserter(&this->stack.back(), size).exec();
     return (void*)this->stack.back().value().data();
   }
 
@@ -530,7 +541,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
   typedef _Cursor<Traits_> Cursor;
   typedef _BigMemory<Cursor> BigMemory;
   using DB = typename Traits::DB;
-  using txn_ptr = typename std::remove_pointer<DB>::type::txn_ptr;
+  using txn_ptr = typename DB::txn_ptr;
   using offset_e = typename Traits::offset_e;
   using Transition = typename Cursor::Transition;
   using LeafNode = typename Transition::LeafNode;

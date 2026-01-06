@@ -55,6 +55,8 @@ struct _BigMemory {
   DB* _db;
   TCursor _size_cursor;
   TCursor _offset_cursor;
+
+  
   _BigMemory(DB* db, offset_e* size_root, offset_e* offset_root)
       : _db(db), _size_cursor(db, size_root), _offset_cursor(db, offset_root) {}
 

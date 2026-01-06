@@ -72,13 +72,8 @@ struct _Merger {
   }
 
   void exec() {
-    // put root in the stack
-    if (src_cursor._prepare_move()) return;
-    current_key.clear();
-
-    // now start merge recursively down the source trie
+    current_key = src_cursor.current_key;
     merge_node();
-    dst_cursor.stack.clear();  // reset dst_cursor
   }
 
   void merge_node() {
