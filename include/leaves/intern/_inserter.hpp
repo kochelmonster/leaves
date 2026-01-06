@@ -203,7 +203,7 @@ struct _Inserter {
         Slice(oleaf->data, back->prefix), bkey, resolve(copy),
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
 
-    free(oleaf);  // don't free a big value - it is now owned by copy
+    free(oleaf);
     back->replace(resolve(back->trie()));
     create_leaf();
   }
