@@ -123,7 +123,7 @@ struct _BigMemory {
       has_successor = true;
     }
 
-    auto header_ptr = (FreeKey*)(char*)_db->resolve(found_offset);
+    auto header_ptr = (FreeKey*)(char*)_db->resolve(found_offset, WRITE);
     header_ptr->size = found_size;
     header_ptr->offset = found_offset | (has_successor ? 1 : 0);
 
@@ -166,7 +166,7 @@ struct _BigMemory {
       
       while (has_successor) {
         uint64_t next_offset = current_offset + total_size;
-        auto next_header = (FreeKey*)(char*)_db->resolve(offset_t(next_offset));
+        auto next_header = (FreeKey*)(char*)_db->resolve(offset_t(next_offset), READ);
         FreeKey next_key = *next_header;
         
         lookup_cursor.find(Slice(&next_key, sizeof(next_key)));
@@ -186,10 +186,28 @@ struct _BigMemory {
       }
       
       if (found_mergeable) {
+        // Update the header of the merged chunk
+        auto merged_header = (FreeKey*)(char*)_db->resolve(offset_t(current_offset), WRITE);
+        merged_header->size = total_size;
+        uint64_t offset_val = current_offset & ~uint64_t(1);
+        if (has_successor) {
+          offset_val |= 1;
+        }
+        merged_header->offset = offset_val;
+        
+        // Remove old entry and add merged entry using iter_cursor
         iter_cursor.find(Slice(current_key, sizeof(*current_key)));
         assert(iter_cursor.is_valid());
         iter_cursor.remove();
-        _add_chunk(offset_t(current_offset), total_size, has_successor, false);
+        
+        // Add merged chunk to trie
+        FreeKey merged_key{total_size, offset_val};
+        iter_cursor.find(Slice(&merged_key, sizeof(merged_key)));
+        assert(!iter_cursor.is_valid());
+        ValueBlock new_vblock;
+        Slice vblock_slice(&new_vblock, sizeof(new_vblock));
+        iter_cursor.value(vblock_slice);
+        
         iter_cursor.first();
       } else {
         iter_cursor.next();
