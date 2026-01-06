@@ -222,3 +222,70 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
   BOOST_CHECK_EQUAL(val.size(), MULTI_AREA_SIZE);
   BOOST_CHECK(memcmp(val.data(), multi_data.data(), MULTI_AREA_SIZE) == 0);
 }
+
+BOOST_AUTO_TEST_CASE(test_big_area_defrag) {
+  TestStorage storage;
+  auto db = storage.db->make("test");
+  
+  auto cursor = db->create_cursor();
+  
+  // Create fragmentation by allocating and freeing alternating chunks
+  const size_t CHUNK_SIZE = 1 * K;
+  std::vector<char> chunk_data(CHUNK_SIZE, 'D');
+  
+  cursor->start_transaction();
+  
+  // Allocate 10 chunks
+  for (int i = 0; i < 10; i++) {
+    std::string key = "defrag_" + std::to_string(i);
+    std::fill(chunk_data.begin(), chunk_data.end(), 'D' + i);
+    cursor->find(key);
+    cursor->value(Slice(chunk_data.data(), CHUNK_SIZE));
+  }
+  
+  cursor->commit();
+  
+  // Now free alternating chunks (0, 2, 4, 6, 8) to create fragmentation
+  bool txn_started = cursor->start_transaction();
+  BOOST_REQUIRE(txn_started);
+  
+  for (int i = 0; i < 10; i += 2) {
+    std::string key = "defrag_" + std::to_string(i);
+    cursor->find(key);
+    cursor->remove();
+  }
+ 
+  cursor->commit();
+    
+  // At this point we have fragmented free space
+  // Call defrag within the same transaction to merge adjacent free chunks
+  db->defrag();
+
+  // After defrag, we should be able to allocate larger chunks more efficiently
+  cursor->start_transaction();
+  
+  // Allocate a larger chunk that benefits from defragmentation
+  const size_t LARGE_SIZE = 4 * K;
+  std::vector<char> large_data(LARGE_SIZE, 'L');
+  cursor->find("large_after_defrag");
+  cursor->value(Slice(large_data.data(), LARGE_SIZE));
+  
+  // Verify the allocation
+  cursor->find("large_after_defrag");
+  BOOST_CHECK(cursor->is_valid());
+  Slice val = cursor->value();
+  BOOST_CHECK_EQUAL(val.size(), LARGE_SIZE);
+  BOOST_CHECK_EQUAL(val.data()[0], 'L');
+  
+  cursor->commit();
+  
+  // Verify the remaining odd-numbered chunks are still intact
+  for (int i = 1; i < 10; i += 2) {
+    std::string key = "defrag_" + std::to_string(i);
+    cursor->find(key);
+    BOOST_CHECK(cursor->is_valid());
+    Slice val = cursor->value();
+    BOOST_CHECK_EQUAL(val.size(), CHUNK_SIZE);
+    BOOST_CHECK_EQUAL(val.data()[0], 'D' + i);
+  }
+}

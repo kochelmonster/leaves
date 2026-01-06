@@ -26,8 +26,8 @@ struct _TransactionBase : public Traits_::BlockHeader {
   // pointer to the active offset memory manager root
   offset_e offset_root;
 
-  // pointer to the active size memory manager root
-  offset_e size_root;
+  // pointer to the active bigmem freelist trie root
+  offset_e free_bigmem_root;
 
   // pointer to the oldest transaction
   offset_e start_txn;
@@ -187,7 +187,7 @@ struct _DB {
     txn->slot_id = Transaction::SLOT_ID;
     txn->txn_id = tid_t(1);
     txn->slot_id = Transaction::SLOT_ID;
-    txn->root = txn->offset_root = txn->size_root = 0;
+    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
     txn->next_txn = 0;
     txn->refs.store(0);
     txn->start_txn = _header->read_txn;
@@ -509,16 +509,19 @@ struct _DB {
 
   // Defragment big memory - merge adjacent free chunks
   void defrag() {
-    txn_ptr active_txn = txn();
-    if (!active_txn->size_root || !active_txn->offset_root) {
+    auto txn = start_transaction(1);
+    assert(txn);
+
+    if (!txn->free_bigmem_root) {
       return;  // No big memory allocated yet
     }
     
     // Create a temporary _BigMemory instance to access defrag
     typedef _BigMemory<Cursor> BigMemory;
-    BigMemory big_mem(this, &active_txn->size_root, &active_txn->offset_root);
-    big_mem.defrag();
+    BigMemory big_mem(this, &txn->free_bigmem_root);
+    big_mem.defrag(txn);
     flush();
+    commit(1);
   }
 
   void return_areas_range(offset_t start_single, offset_t end_single,

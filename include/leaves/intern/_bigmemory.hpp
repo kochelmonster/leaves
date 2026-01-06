@@ -20,31 +20,23 @@ struct _BigMemory {
       Traits::BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_t(1) << 15;
 
-  struct SizeKey {
+  struct FreeKey {
     boost::endian::big_uint64_t size;
     uint64_t offset;
   };
 
-  struct OffsetKey {
-    boost::endian::big_uint64_t offset;
-    uint64_t size;
-  };
-
   struct ValueBlock {
     tid_t txn_id;
-    char debug[40];
   };
 
   struct BigValue {
     using uint32_e = typename Traits::uint32_e;
     using uint64_e = typename Traits::uint64_e;
-    uint64_e area_offset;
-    uint32_e area_size;
+    uint64_e chunk_offset;
     uint32_e value_size;
     template <typename DB_>
     char* data(DB_* db) {
-      auto ptr = db->resolve(offset_t(area_offset));
-      return (char*)ptr;
+      return (char*)db->resolve(offset_t(chunk_offset));
     }
   };
 
@@ -53,12 +45,10 @@ struct _BigMemory {
   };
 
   DB* _db;
-  TCursor _size_cursor;
-  TCursor _offset_cursor;
+  TCursor _free_cursor;
 
-  
-  _BigMemory(DB* db, offset_e* size_root, offset_e* offset_root)
-      : _db(db), _size_cursor(db, size_root), _offset_cursor(db, offset_root) {}
+  _BigMemory(DB* db, offset_e* free_bigmem_root)
+      : _db(db), _free_cursor(db, free_bigmem_root) {}
 
   template <typename LeafNode>
   static uint16_t modify_size(uint16_t key, uint64_t size) {
@@ -68,143 +58,142 @@ struct _BigMemory {
     return size;
   }
 
-  void _add_chunk(offset_t offset, size_t size, bool freed) {
-    SizeKey skey{size, offset._offset};
-    OffsetKey okey{offset._offset, size};
-
-    _size_cursor.find(Slice(&skey, sizeof(skey)));
-    _offset_cursor.find(Slice(&okey, sizeof(okey)));
-
-    assert(!_size_cursor.is_valid());
-    assert(!_offset_cursor.is_valid());
+  void _add_chunk(offset_t offset, size_t size, bool has_successor, bool freed) {
+    uint64_t offset_val = offset._offset & ~uint64_t(1);
+    if (has_successor) {
+      offset_val |= 1;
+    }
+    
+    FreeKey fkey{size, offset_val};
+    _free_cursor.find(Slice(&fkey, sizeof(fkey)));
+    assert(!_free_cursor.is_valid());
 
     ValueBlock vblock;
-
     if (freed) _db->mark_for_recycle(vblock);
     Slice vblock_slice(&vblock, sizeof(vblock));
-    _size_cursor.value(vblock_slice);
-    _offset_cursor.value(vblock_slice);
+    _free_cursor.value(vblock_slice);
   }
 
-  void _remove_chunk(offset_t offset, size_t size) {
-    SizeKey skey{size, offset._offset};
-    OffsetKey okey{offset._offset, size};
-    _size_cursor.find(Slice(&skey, sizeof(skey)));
-    _offset_cursor.find(Slice(&okey, sizeof(okey)));
-
-    assert(_size_cursor.is_valid());
-    assert(_offset_cursor.is_valid());
-
-    _size_cursor.remove();
-    _offset_cursor.remove();
-  }
-
-  void reset(offset_e* size_root, offset_e* offset_root) {
-    // Always reset cursors to pick up root changes
-    _size_cursor.set_root(size_root);
-    _offset_cursor.set_root(offset_root);
+  void reset(offset_e* free_bigmem_root) {
+    _free_cursor.set_root(free_bigmem_root);
   }
 
   void alloc(uint64_t size, BigValue* result) {
-    uint64_t padded_size = padding(size, MAX_BLOCK_SIZE);
+    uint64_t total_size = sizeof(FreeKey) + size;
+    uint64_t padded_size = padding(total_size, MAX_BLOCK_SIZE);
     uint64_t found_size;
     offset_t found_offset;
+    bool has_successor = false;
 
-    // find from big memory storage
-    SizeKey skey;
-    skey.size = padded_size;
-    skey.offset = 0;
-    _size_cursor.find(Slice(&skey, sizeof(skey)));
-    // offset == 0 does not exist. next() position the cursor to
-    // the first entry with size >= padded_size
-    _size_cursor.next();
+    FreeKey fkey;
+    fkey.size = padded_size;
+    fkey.offset = 0;
+    _free_cursor.find(Slice(&fkey, sizeof(fkey)));
+    _free_cursor.next();
 
-    SizeKey* found = nullptr;
-    for (int i = 0; i < 10 && _size_cursor.is_valid(); i++) {
-      ValueBlock* vblock = (ValueBlock*)_size_cursor.value().data();
+    FreeKey* found = nullptr;
+    for (int i = 0; i < 10 && _free_cursor.is_valid(); i++) {
+      ValueBlock* vblock = (ValueBlock*)_free_cursor.value().data();
       if (_db->may_recycle(*vblock)) {
-        found = (SizeKey*)_size_cursor.key().data();
+        found = (FreeKey*)_free_cursor.key().data();
         assert(found->size >= padded_size);
         break;
       }
-      _size_cursor.next();
+      _free_cursor.next();
     }
 
     if (found) {
-      // Store values before any cursor operations
-      found_offset = found->offset;
+      uint64_t offset_with_flag = found->offset;
+      has_successor = (offset_with_flag & 1) != 0;
+      found_offset = offset_with_flag & ~uint64_t(1);
       found_size = found->size;
-
-      // Find in BOTH trees first
-      SizeKey skey;
-      skey.size = found_size;
-      skey.offset = found_offset;
-      _size_cursor.find(Slice(&skey, sizeof(skey)));
-      assert(_size_cursor.is_valid());
-
-      OffsetKey okey;
-      okey.offset = found_offset;
-      okey.size = found_size;
-      _offset_cursor.find(Slice(&okey, sizeof(okey)));
-
-      assert(_offset_cursor.is_valid());
-
-      // Now remove from BOTH
-      _size_cursor.remove();
-      _offset_cursor.remove();
+      _free_cursor.remove();
     } else {
-      // allocate new multi-area
       uint64_t psize = padding(padded_size, AREA_SIZE);
       auto area = _db->alloc_multi_area(psize);
       found_offset = area->content_offset();
       found_size = area->end() - found_offset;
+      has_successor = false;
     }
 
     uint64_t delta = found_size - padded_size;
     if (delta >= MAX_BLOCK_SIZE) {
-      // enough space left -> reuse the rest
-      _add_chunk(found_offset + padded_size, delta, false);
-      found_size -= delta;
+      _add_chunk(found_offset + padded_size, delta, has_successor, false);
+      found_size = padded_size;
+      has_successor = true;
     }
 
-    result->area_offset = found_offset;
-    result->area_size = found_size;
+    auto header_ptr = (FreeKey*)(char*)_db->resolve(found_offset);
+    header_ptr->size = found_size;
+    header_ptr->offset = found_offset | (has_successor ? 1 : 0);
+
+    result->chunk_offset = found_offset + sizeof(FreeKey);
     result->value_size = size;
   }
 
   void free(const BigValue* bvalue) {
-    _add_chunk(bvalue->area_offset, bvalue->area_size, true);
+    offset_t header_offset = offset_t(bvalue->chunk_offset - sizeof(FreeKey));
+    auto header_ptr = (FreeKey*)(char*)_db->resolve(header_offset);
+    uint64_t offset_with_flag = header_ptr->offset;
+    uint64_t chunk_offset = offset_with_flag & ~uint64_t(1);
+    uint64_t chunk_size = header_ptr->size;
+    bool has_successor = (offset_with_flag & 1) != 0;
+    _add_chunk(offset_t(chunk_offset), chunk_size, has_successor, true);
   }
 
-  void defrag() {
-    // TODO: may_recycle check during merging
-    _offset_cursor.first();
-    offset_e last = 0;
-    size_t size = 0;
-    size_t merged = 0;
-    while (_offset_cursor.is_valid()) {
-      OffsetKey* okey = (OffsetKey*)_offset_cursor.key().data();
-      if (okey->offset == last + size) {
-        size += okey->size;
-        SizeKey skey{okey->size, okey->offset};
-        _size_cursor.find(Slice(&skey, sizeof(skey)));
-        assert(_size_cursor.is_valid());
-        _size_cursor.remove();
-        _offset_cursor.remove();
-        merged++;
-      } else if (merged) {
-        _offset_cursor.prev();
-        OffsetKey* okey = (OffsetKey*)_offset_cursor.key().data();
-        assert(okey->offset == last);
-        SizeKey skey{okey->size, okey->offset};
-        _size_cursor.find(Slice(&skey, sizeof(skey)));
-        assert(_size_cursor.is_valid());
-        _size_cursor.remove();
-        _offset_cursor.remove();
-        _add_chunk(last, size);
-        merged = 0;
+  template <typename txn_ptr>
+  void defrag(txn_ptr txn) {
+    TCursor iter_cursor(_db, &txn->free_bigmem_root);
+    TCursor lookup_cursor(_db, &txn->free_bigmem_root);
+    
+    iter_cursor.first();
+    
+    while (iter_cursor.is_valid()) {
+      ValueBlock* vblock = (ValueBlock*)iter_cursor.value().data();
+      if (!_db->may_recycle(*vblock)) {
+        iter_cursor.next();
+        continue;
       }
-      _offset_cursor.next();
+
+      FreeKey* current_key = (FreeKey*)iter_cursor.key().data();
+      uint64_t offset_with_flag = current_key->offset;
+      uint64_t current_offset = offset_with_flag & ~uint64_t(1);
+      uint64_t current_size = current_key->size;
+      bool has_successor = (offset_with_flag & 1) != 0;
+
+      uint64_t total_size = current_size;
+      bool found_mergeable = false;
+      
+      while (has_successor) {
+        uint64_t next_offset = current_offset + total_size;
+        auto next_header = (FreeKey*)(char*)_db->resolve(offset_t(next_offset));
+        FreeKey next_key = *next_header;
+        
+        lookup_cursor.find(Slice(&next_key, sizeof(next_key)));
+        if (!lookup_cursor.is_valid()) {
+          break;
+        }
+        
+        ValueBlock* next_vblock = (ValueBlock*)lookup_cursor.value().data();
+        if (!_db->may_recycle(*next_vblock)) {
+          break;
+        }
+        
+        lookup_cursor.remove();
+        total_size += next_key.size;
+        has_successor = (next_key.offset & 1) != 0;
+        found_mergeable = true;
+      }
+      
+      if (found_mergeable) {
+        iter_cursor.find(Slice(current_key, sizeof(*current_key)));
+        assert(iter_cursor.is_valid());
+        iter_cursor.remove();
+        _add_chunk(offset_t(current_offset), total_size, has_successor, false);
+        iter_cursor.first();
+      } else {
+        iter_cursor.next();
+      }
     }
   }
 };
