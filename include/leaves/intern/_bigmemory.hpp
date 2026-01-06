@@ -15,7 +15,6 @@ struct _BigMemory {
   using DB = typename Traits::DB;
   using offset_e = typename Traits::offset_e;
   using uint64_e = typename Traits::uint64_e;
-  using tid_t = typename Traits::tid_t;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto MAX_BLOCK_SIZE =
       Traits::BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT - 1];
@@ -100,11 +99,8 @@ struct _BigMemory {
 
   void reset(offset_e* size_root, offset_e* offset_root) {
     // Always reset cursors to pick up root changes
-    if (*size_root != *_size_cursor._root) _size_cursor._prepare_move();
-    _size_cursor._root = size_root;
-
-    if (*offset_root != *_offset_cursor._root) _offset_cursor._prepare_move();
-    _offset_cursor._root = offset_root;
+    _size_cursor.set_root(size_root);
+    _offset_cursor.set_root(offset_root);
   }
 
   void alloc(uint64_t size, BigValue* result) {
