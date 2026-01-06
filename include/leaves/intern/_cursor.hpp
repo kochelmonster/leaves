@@ -473,7 +473,7 @@ struct _Cursor : public _CursorBase<Traits_> {
   void value(const Slice& value) {
     void* space = reserve(value.size());
     assert(space);
-    memcpy(space, value.data(), value.size());
+    optimized_memcpy(space, value.data(), value.size());
     this->_db->flush();
   }
 
@@ -611,7 +611,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
 
   void value(const Slice& value) {
     void* space = reserve(value.size());
-    memcpy(space, value.data(), value.size());
+    optimized_memcpy(space, value.data(), value.size());
     this->_db->flush();
   }
 

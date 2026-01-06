@@ -8,9 +8,134 @@
 #include <cstring>
 #include <string>
 
+// Compiler detection for builtin memcpy
+#if defined(__GNUC__) || defined(__clang__)
+  #define LEAVES_HAS_BUILTIN_MEMCPY 1
+#endif
+
+// Platform detection for SIMD optimizations
+#if defined(__x86_64__) || defined(_M_X64)
+  #define LEAVES_X86_64 1
+  #if defined(__SSE2__) || (defined(_MSC_VER) && _M_X64)
+    #include <emmintrin.h>  // SSE2 for non-temporal stores
+    #define LEAVES_HAS_SSE2 1
+  #endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  #define LEAVES_ARM64 1
+  #if defined(__ARM_NEON) || defined(_M_ARM64)
+    #include <arm_neon.h>
+    #define LEAVES_HAS_NEON 1
+  #endif
+#endif
+
 #include "_serial.hpp"
 
 namespace leaves {
+
+// Optimized memcpy for database values
+inline void* optimized_memcpy(void* dest, const void* src, size_t n) {
+  // Fast path for small sizes (<= 32 bytes) - common for keys and small values
+  if (n <= 32) {
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    
+#ifdef LEAVES_HAS_BUILTIN_MEMCPY
+    // Use compiler builtins when available (GCC/Clang)
+    if (n >= 16) {
+      __builtin_memcpy(d, s, 16);
+      __builtin_memcpy(d + n - 16, s + n - 16, 16);
+    } else if (n >= 8) {
+      __builtin_memcpy(d, s, 8);
+      __builtin_memcpy(d + n - 8, s + n - 8, 8);
+    } else if (n >= 4) {
+      __builtin_memcpy(d, s, 4);
+      __builtin_memcpy(d + n - 4, s + n - 4, 4);
+    } else {
+      for (size_t i = 0; i < n; i++) d[i] = s[i];
+    }
+#else
+    // Fallback for other compilers (MSVC, etc.)
+    if (n >= 16) {
+      memcpy(d, s, 16);
+      memcpy(d + n - 16, s + n - 16, 16);
+    } else if (n >= 8) {
+      memcpy(d, s, 8);
+      memcpy(d + n - 8, s + n - 8, 8);
+    } else {
+      memcpy(d, s, n);
+    }
+#endif
+    return dest;
+  }
+
+#if defined(LEAVES_HAS_SSE2)
+  // x86-64: Use non-temporal stores for large copies to avoid cache pollution
+  if (n >= 32768) {
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    
+    // Align destination to 16-byte boundary
+    size_t align_bytes = (16 - ((uintptr_t)d & 15)) & 15;
+    if (align_bytes > 0 && align_bytes < n) {
+      memcpy(d, s, align_bytes);
+      d += align_bytes;
+      s += align_bytes;
+      n -= align_bytes;
+    }
+    
+    // Non-temporal stores for aligned 16-byte chunks
+    size_t chunks = n / 16;
+    for (size_t i = 0; i < chunks; i++) {
+      __m128i data = _mm_loadu_si128((const __m128i*)s);
+      _mm_stream_si128((__m128i*)d, data);
+      d += 16;
+      s += 16;
+    }
+    _mm_sfence();  // Ensure stores are visible
+    
+    // Copy remainder
+    size_t remainder = n & 15;
+    if (remainder > 0) {
+      memcpy(d, s, remainder);
+    }
+    return dest;
+  }
+#elif defined(LEAVES_HAS_NEON)
+  // ARM64: Use NEON non-temporal stores for large copies
+  if (n >= 32768) {
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    
+    // Align destination to 16-byte boundary
+    size_t align_bytes = (16 - ((uintptr_t)d & 15)) & 15;
+    if (align_bytes > 0 && align_bytes < n) {
+      memcpy(d, s, align_bytes);
+      d += align_bytes;
+      s += align_bytes;
+      n -= align_bytes;
+    }
+    
+    // NEON stores for 16-byte chunks
+    size_t chunks = n / 16;
+    for (size_t i = 0; i < chunks; i++) {
+      uint8x16_t data = vld1q_u8((const uint8_t*)s);
+      vst1q_u8((uint8_t*)d, data);
+      d += 16;
+      s += 16;
+    }
+    
+    // Copy remainder
+    size_t remainder = n & 15;
+    if (remainder > 0) {
+      memcpy(d, s, remainder);
+    }
+    return dest;
+  }
+#endif
+  
+  // Default path for medium sizes and unsupported platforms
+  return memcpy(dest, src, n);
+}
 
 typedef tid_serial tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
