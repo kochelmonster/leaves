@@ -30,6 +30,7 @@ class TDB {
   tid_t transaction_active() const { return _db->transaction_active(); }
   bool commit(bool sync = true) { return _db->commit(0, sync); }
   bool rollback() { return _db->rollback(0); }
+  void defrag() { _db->defrag(); }
 
  private:
   storage_ptr _storage;

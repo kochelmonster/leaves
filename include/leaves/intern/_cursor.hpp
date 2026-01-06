@@ -473,7 +473,7 @@ struct _Cursor : public _CursorBase<Traits_> {
   void value(const Slice& value) {
     void* space = reserve(value.size());
     assert(space);
-    memcpy(space, value.data(), value.size());
+    optimized_memcpy(space, value.data(), value.size());
     this->_db->flush();
   }
 
@@ -570,7 +570,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
   BigMemory& get_bigmemory() {
     if (!_bigmemory) {
       _bigmemory = std::make_unique<BigMemory>(
-          this->_db, &this->_txn->size_root, &this->_txn->offset_root);
+          this->_db, &this->_txn->free_bigmem_root);
     }
     return *_bigmemory;
   }
@@ -611,7 +611,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
 
   void value(const Slice& value) {
     void* space = reserve(value.size());
-    memcpy(space, value.data(), value.size());
+    optimized_memcpy(space, value.data(), value.size());
     this->_db->flush();
   }
 
@@ -670,7 +670,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
       this->_txn->refs.fetch_add(1);
       this->_root = &this->_txn->root;
       if (_bigmemory)
-        _bigmemory->reset(&this->_txn->size_root, &this->_txn->offset_root);
+        _bigmemory->reset(&this->_txn->free_bigmem_root);
       if ((this->current_key.size() || this->rest_key.size()) &&
           old_root_val != *this->_root) {
         // adjust to new root

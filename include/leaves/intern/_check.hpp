@@ -101,9 +101,21 @@ struct _Dumper {
       using InternalCursor = typename ExtractInternalCursor<typename Container::Cursor>::type;
       using BigMemory = typename InternalCursor::BigMemory;
       using BigValue = typename BigMemory::BigValue;
+      using FreeKey = typename BigMemory::FreeKey;
       auto bv = (BigValue*)leaf->vdata();
       out << "valuesize: " << bv->value_size << std::endl;
-      out << "value: \"offset=" << bv->area_offset << " size=" << bv->area_size << "\"" << std::endl;
+      
+      // Read chunk header to get size and has_successor flag
+      offset_e header_offset = bv->chunk_offset;
+      header_offset._offset -= sizeof(FreeKey);
+      auto header_ptr = (FreeKey*)(char*)_db.resolve(header_offset);
+      uint64_t chunk_size = header_ptr->size;
+      bool has_successor = (header_ptr->offset & 1) != 0;
+      
+      out << "value: \"chunk_offset=" << bv->chunk_offset 
+          << " chunk_size=" << chunk_size
+          << " has_successor=" << (has_successor ? "true" : "false")
+          << "\"" << std::endl;
     }
     
     out << "---" << std::endl;

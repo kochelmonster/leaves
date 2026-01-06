@@ -530,6 +530,7 @@ struct _LeafNode : public Traits::BlockHeader {
 
   }
 
+
   Slice memory() { return Slice((char*)this, size()); }
 
   bool is_big() const {

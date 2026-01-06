@@ -151,64 +151,17 @@ Additional advantage of this approach, would be the support of multiple writers.
 
 electra, julius, arachne, kaskade, lars, polaris, peppy, augustus, yasmin ishmael Kayla
 
+Bigmemory optimizations:
+- BigMemory only size_cursor
+  - BigMemory chunk get a header of SizeKey 
+  - sizekey has a next flag (to signal the memory behind chunk is also a big memem chunk)
+  - in defrag the next chunk's header is checked and if it exists in the freelest the chunk is merged
 
-
-Missing Implementation Details:
-1. Segment Search Implementation
-The document shows area-based iteration that doesn't match the architecture:
-
-Missing: How to search the segment's trie structure using segment->trie_root
-
-2. Segment release() Implementation
-The document says segments "auto-recycle via release()" but doesn't show:
-
-How release() checks can_recycle()
-How it pushes to _free_segments GarbageSlot
-Thread-safety considerations
-3. Transaction Commit Flow
-Missing:
-
-How commit() transitions segments from WRITING → COMMITTING
-How segments are added to the global _segment_head linked list
-When/how _background_cv is notified
-4. Segment-to-Offset Mapping
-The code shows this->resolve(segment) but segments ARE offsets. Missing:
-
-How to get offset from a segment pointer
-Whether segments need an offset field
-5. _find_in_segment() Implementation
-Declared but never defined. Missing:
-
-How to navigate segment's trie using trie_root
-How to use segment's mem_manager as resolver
-6. Transaction State Management
-Missing:
-
-When is current_segment set/cleared?
-How is segment_head maintained?
-What happens to segments on rollback?
-7. Critical Helper Methods
-Never defined:
-
-_find_segment_for_block() - How to map a block back to its segment?
-_find_oldest_committing_segment() - Search criteria?
-8. Background Thread Coordination
-Missing:
-
-Synchronization between commit and background thread
-How background thread safely accesses segment list
-Race condition handling during merge
-9. Concrete Iterator Types
-Shows _NodeIterator<Segment, Traits> but:
-
-How does it differ from persistent storage iterator?
-What resolver does it use?
-10. Memory Pressure Integration
-_check_memory_pressure() is shown but:
-
-When is it called?
-How is total_memdb_bytes tracked?
-What
-
-the arealist handling in commit and prepare_commit is wrong 
+Locality optimizations:
+- BlockHeader bekommt ein uin16_t size flag
+- Nodes werden nicht von BlockHeader abegeleited, sondern haben nur noch ein offset zum BlockHeader
+  node_pointer - offset is the BlockHeader pointer
+- Offset bekommen ein relative flag, mit diesem flag wird der offset als int64 relativ zur akutellen addresse interpretiert
+- Transistion::update  nur wenn node::offset == 0 (root innerhalb eines blocks) dann kopieren des ganzen blocks
+- Inserter alloc und create in zwei verschienden phasen.
 
