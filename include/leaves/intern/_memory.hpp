@@ -292,8 +292,9 @@ struct _MemManager {
     return result;
   }
 
-  template <typename Resolver>
-  void free(block_ptr& block, Resolver& resolver) {
+  template <typename Resolver, typename PtrType>
+  void free(PtrType block_arg, Resolver& resolver) {
+    block_ptr block = block_arg;
     slots[block->slot_id].push(block, resolver);
   }
 };

@@ -49,8 +49,7 @@ struct TestTraits {
     typedef DBMMap::Traits::BlockHeader Base;
   };
 
-  typedef DBMMap::Traits::Pointers Pointers;
-  typedef DBMMap::Traits::ptr ptr;
+  using ptr = typename DBMMap::Traits::ptr;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = typename DBMMap::Traits::template Pointer<T, type>;
 };

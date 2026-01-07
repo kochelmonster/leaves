@@ -36,7 +36,8 @@ struct _Deleter {
 
   block_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
 
-  void free(block_ptr& block) { cursor._db->free(block); }
+  template <typename PtrType>
+  void free(PtrType block) { cursor._db->free(block); }
 
   void exec() {
     assert(back->success());

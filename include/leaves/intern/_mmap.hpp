@@ -73,10 +73,9 @@ struct _MemoryMapTraits {
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
-  typedef SimplePointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SimplePointer<BlockHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SimplePointer<T, type>;
 };
 
 template <typename Traits_, template<typename> class DB_ = _DB>
@@ -94,7 +93,7 @@ struct _MemoryMapFile {
 
   struct DBEntry {
     char name[21];
-    offset_t offset;
+    offset_t offset;  
   };
 
   struct FileHeader {
@@ -288,7 +287,8 @@ struct _MemoryMapFile {
     return offset_t(offset).type(p.type);
   }
 
-  void make_dirty(block_ptr& /*block*/) {}
+  template <typename PtrType>
+  void make_dirty(PtrType /*block*/) {}
 
   void prefetch(const offset_t* offset_ptr, Access access = READ) const {
     offset_t offset = *offset_ptr;

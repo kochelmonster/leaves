@@ -70,10 +70,9 @@ struct _StoreTraits {
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  typedef SmartPointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SmartPointer<BlockHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SmartPointer<T, type>;
 };
 
 struct _FileOperations : _CacheBase {

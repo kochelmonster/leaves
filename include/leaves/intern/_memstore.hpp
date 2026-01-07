@@ -43,10 +43,9 @@ struct _MemoryTraits {
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  typedef SimplePointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SimplePointer<BlockHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SimplePointer<T, type>;
 };
 
 // Non-transactional DB that derives from _DB but removes transaction handling
@@ -135,7 +134,8 @@ struct _MemoryDB {
     return offset_t((uint64_t)p).type(p.type);
   }
 
-  void make_dirty(block_ptr& /*block*/) {}
+  template <typename PtrType>
+  void make_dirty(PtrType /*block*/) {}
   void prefetch(const offset_t& offset) const { prefetch(&offset); }
   void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {}
   void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}

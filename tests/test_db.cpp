@@ -355,10 +355,9 @@ struct TestTraits {
     uint16_t slot_id;
   };
 
-  typedef SimplePointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SimplePointer<BlockHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SimplePointer<T, type>;
 };
 
 struct TestStorage {
@@ -409,7 +408,7 @@ struct TestStorage {
     return offset_t((const char*)p - (char*)&memory[0]).type(p.type);
   }
 
-  void make_dirty(block_ptr& /* block */) {}
+  void make_dirty(block_ptr /* block */) {}
 
   // New area allocation methods required by _db.hpp
   area_ptr alloc_single_area() {

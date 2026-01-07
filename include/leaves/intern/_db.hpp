@@ -235,7 +235,11 @@ struct _DB {
     garbage_block.txn_id = _active_txn->txn_id;
   }
 
-  void make_dirty(block_ptr& block) { _storage.make_dirty(block); }
+  template <typename PtrType>
+  void make_dirty(PtrType block) { 
+    block_ptr base_ptr = block;
+    _storage.make_dirty(base_ptr); 
+  }
 
   void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
     _storage.flush(ptr, offset, size, sync);
@@ -263,7 +267,9 @@ struct _DB {
     return _active_txn->alloc_slot(slot, *this);
   }
 
-  void free(block_ptr& block) {
+  template <typename PtrType>
+  void free(PtrType block_arg) {
+    block_ptr block = block_arg;
     assert(transaction_active());
     assert(_active_txn);
     _active_txn->mem_manager.free(block, *this);

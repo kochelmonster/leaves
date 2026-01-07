@@ -190,7 +190,9 @@ struct _CacheStore : public Opers_ {
     // Could potentially implement with platform-specific hints
   }
 
-  void make_dirty(block_ptr& block) {
+  template <typename PtrType>
+  void make_dirty(PtrType block_arg) {
+    block_ptr block = block_arg;
     _pending_dirty_areas[block.area()->offset()] = block;
   }
 

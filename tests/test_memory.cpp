@@ -29,10 +29,9 @@ struct TestTraits {
     tid_t txn_id;
     uint8_t slot_id;
   };
-  typedef SimplePointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SimplePointer<BlockHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SimplePointer<T, type>;
 };
 
 constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
@@ -131,7 +130,7 @@ struct TestStorage {
     free_block.txn_id = mark_tid;
   }
 
-  void make_dirty(block_ptr& /* block */) {}
+  void make_dirty(block_ptr /* block */) {}
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
 };
 
