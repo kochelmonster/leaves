@@ -117,11 +117,11 @@ struct _GarbageSlot {
     assert(!(ostart == oend && istart == iend));
     assert(istart + count > BlockContainer::COUNT || ostart == oend);
 
-    cont_ptr front(resolver.resolve(ostart, WRITE));
+    cont_ptr front(resolver.resolve(&ostart, WRITE));
     if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
 
     assert(front->blocks[istart].link != 0);
-    ptr result = resolver.resolve(front->blocks[istart].link, WRITE);
+    ptr result = resolver.resolve(&front->blocks[istart].link, WRITE);
 
     count--;
     istart++;
@@ -152,7 +152,7 @@ struct _GarbageSlot {
     cont_ptr back;
 
     if (oend) {
-      back = resolver.resolve(oend, WRITE);
+      back = resolver.resolve(&oend, WRITE);
       if (iend >= BlockContainer::COUNT) {
         cont_ptr new_back = resolver.alloc_slot(BlockContainer::SLOT_ID);
         assert(new_back->slot_id == BlockContainer::SLOT_ID);
@@ -190,7 +190,7 @@ struct _GarbageSlot {
     uint16_t index = istart;
 
     while (true) {
-      cont_ptr container = resolver.resolve(ocontainer);
+      cont_ptr container = resolver.resolve(&ocontainer);
 
       if (ocontainer == oend) {
         for (; index < iend; index++) {
@@ -267,7 +267,7 @@ struct _MemManager {
     }
 
     if (left_over_start + bsize <= left_over_end) {
-      result = resolver.resolve(left_over_start, WRITE);
+      result = resolver.resolve(&left_over_start, WRITE);
       left_over_start += bsize;
       result->slot_id = sidx;
       return result;
@@ -286,7 +286,7 @@ struct _MemManager {
       allocation_end = area->end();
     }
 
-    result = resolver.resolve(allocation_start, WRITE);
+    result = resolver.resolve(&allocation_start, WRITE);
     allocation_start += bsize;
     result->slot_id = sidx;
     return result;
@@ -345,10 +345,10 @@ struct Area : public AreaSlice {
   template <typename Resolver>
   static offset_t get_end(offset_t cur, const Resolver& resolver) {
     // Use resolver to get the area from offset
-    auto area = resolver.template resolve<Area>(cur, READ);
+    auto area = resolver.template resolve<Area>(&cur, READ);
     while (area->next) {
       cur = area->next;
-      area = resolver.template resolve<Area>(cur, READ);
+      area = resolver.template resolve<Area>(&cur, READ);
     }
     return cur;
   }
@@ -391,7 +391,8 @@ struct AreaList {
     }
 
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
-    area_ptr area = resolver.resolve(get_head(), WRITE);
+    offset_t head = get_head();
+    area_ptr area = resolver.resolve(&head, WRITE);
 
     offset_t new_head = area->next;
     offset_t new_tail = new_head ? get_tail() : offset_t(0);
@@ -405,7 +406,8 @@ struct AreaList {
     typedef typename Resolver::Traits::template Pointer<Area> area_ptr;
 
     // Use the area itself to store the Area header
-    area_ptr area = resolver.resolve(area_slice.offset(), WRITE);
+    offset_t area_offset = area_slice.offset();
+    area_ptr area = resolver.resolve(&area_offset, WRITE);
     area->init(area_slice.offset(), area_slice.size(), get_head());
     resolver.make_dirty(area);
 
@@ -428,7 +430,7 @@ struct AreaList {
     uint8_t iter_count = 0;
 
     while (curr_offset && iter_count < MAX_ITER) {
-      area_ptr curr = resolver.resolve(curr_offset, WRITE);
+      area_ptr curr = resolver.resolve(&curr_offset, WRITE);
 
       if (curr->size() >= size) {
         // Found suitable area - remove from list
@@ -436,7 +438,7 @@ struct AreaList {
         offset_t new_tail = get_tail();
 
         if (prev_offset) {
-          area_ptr prev = resolver.resolve(prev_offset, WRITE);
+          area_ptr prev = resolver.resolve(&prev_offset, WRITE);
           prev->next = curr->next;
           resolver.make_dirty(prev);
           // Update tail if we're removing the last element
@@ -458,7 +460,7 @@ struct AreaList {
           size_t rest_size = curr->size() - size;
 
           // Insert rest area at head
-          area_ptr rest = resolver.resolve(rest_offset, WRITE);
+          area_ptr rest = resolver.resolve(&rest_offset, WRITE);
           rest->init(rest_offset, rest_size, new_head);
           new_head = rest_offset;
           resolver.make_dirty(rest);
@@ -493,7 +495,8 @@ struct AreaList {
       atomic_switch(other_head, other_tail);
     } else {
       // Connect our tail to other's head
-      area_ptr tail_area = resolver.resolve(get_tail(), WRITE);
+      offset_t tail_offset = get_tail();
+      area_ptr tail_area = resolver.resolve(&tail_offset, WRITE);
       tail_area->next = other_head;
       resolver.make_dirty(tail_area);
 

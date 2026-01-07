@@ -2,6 +2,7 @@
 #define _LEAVES__IMMAP_HPP
 
 #include <algorithm>
+#include <type_traits>
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
@@ -261,15 +262,27 @@ struct _MemoryMapFile {
     return free_count == MAX_PROCESSES;  // the first to open the db
   }
 
-  block_ptr resolve(offset_t offset, Access access = READ) const {
-    assert(offset < _memory->file_size);
-    char* p = (char*)_memory + (uint64_t)offset;
+  // Resolve offset - handles both absolute and relative offsets uniformly
+  block_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
+    offset_t offset = *offset_ptr;
+    char* p;
+    
+    if (offset.is_relative()) {
+      // Relative: calculate address relative to where offset_t is stored
+      int64_t rel_value = offset.as_signed();
+      p = (char*)offset_ptr + rel_value;
+    } else {
+      // Absolute: offset from _memory base
+      p = (char*)_memory + (uint64_t)offset;
+    }
+    
     prefetch(p, access);
     return block_ptr(p);
   }
 
   template <typename Pointer>
-  offset_t resolve(const Pointer& p) const {
+  typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
+  resolve(const Pointer& p) const {
     uint64_t offset = (uint64_t)p - (uint64_t)_memory;
     assert(offset < _memory->file_size);
     return offset_t(offset).type(p.type);
@@ -277,8 +290,14 @@ struct _MemoryMapFile {
 
   void make_dirty(block_ptr& /*block*/) {}
 
-  void prefetch(offset_t offset, Access access = READ) const {
-    prefetch((char*)_memory + (uint64_t)offset, access);
+  void prefetch(const offset_t* offset_ptr, Access access = READ) const {
+    offset_t offset = *offset_ptr;
+    if (offset.is_relative()) {
+      int64_t rel_value = offset.as_signed();
+      prefetch((char*)offset_ptr + rel_value, access);
+    } else {
+      prefetch((char*)_memory + (uint64_t)offset, access);
+    }
   }
 
   void prefetch(void* mem, Access access = READ) const {
@@ -303,14 +322,14 @@ struct _MemoryMapFile {
     assert(_memory->file_size <= _region.get_size());
 
     // Create Area for the requested size
-    auto area = area_ptr(resolve(new_offset, WRITE));
+    auto area = area_ptr(resolve(&new_offset, WRITE));
     area->init(new_offset, size, 0);
 
     // Add remaining space to multi_areas pool
     if (total_growth > size) {
       offset_t extra_offset = new_offset + size;
       uint64_t extra_size = total_growth - size;
-      auto extra_area = area_ptr(resolve(extra_offset, WRITE));
+      auto extra_area = area_ptr(resolve(&extra_offset, WRITE));
       extra_area->init(extra_offset, extra_size, 0);
       _memory->area_pool.multi_areas.push(*extra_area, *this);
     }
@@ -387,7 +406,7 @@ struct _MemoryMapFile {
         DB tmp(*this, _memory->dbs[i].offset, i);
 
         // Return the DB's areas back into storage using head/tail pattern
-        auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);
+        auto read_txn = tmp.template resolve<typename DB::Transaction>(&tmp._header->read_txn);
         if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
           _memory->area_pool.return_single_areas(tmp._header->area_list_head_single,
                                                  read_txn->area_list_tail_single, *this);

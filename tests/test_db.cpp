@@ -185,7 +185,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for (offset_t bo : block_offsets) {
-        block_ptr block = db->resolve(bo);
+        block_ptr block = db->resolve(&bo);
         BOOST_REQUIRE(db->resolve(block) == bo);
         db->free(block);
       }
@@ -400,8 +400,8 @@ struct TestStorage {
   Mutex& file_lock() { return mutex; }
   size_t file_size() const { return memory.size(); }
 
-  block_ptr resolve(offset_t offset, Access /* access */ = READ) {
-    return block_ptr(&memory[offset]);
+  block_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) {
+    return block_ptr(&memory[*offset_ptr]);
   }
 
   template <typename Pointer>
@@ -420,7 +420,8 @@ struct TestStorage {
       memory.resize(old_size + AREA_SIZE);
 
       // Create Area in the new memory location
-      auto area = area_ptr(resolve(old_size, WRITE));
+      offset_t area_offset(old_size);
+      auto area = area_ptr(resolve(&area_offset, WRITE));
       area->init(old_size, AREA_SIZE, 0);
       return area;
     }
@@ -438,7 +439,8 @@ struct TestStorage {
       memory.resize(old_size + size);
 
       // Create Area in the new memory location
-      auto area = area_ptr(resolve(old_size, WRITE));
+      offset_t area_offset(old_size);
+      auto area = area_ptr(resolve(&area_offset, WRITE));
       area->init(old_size, size, 0);
       return area;
     }
@@ -667,14 +669,14 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     BOOST_CHECK_GT(tid, 0);
     
     // In new architecture, area tails are in transaction, not separate pending lists
-    auto read_txn = db->resolve(db->_header->read_txn);
-    auto prep_txn = db->template resolve<typename std::remove_pointer_t<decltype(db)>::Transaction>(db->_header->prepared_txn);
+    auto read_txn = db->resolve(&db->_header->read_txn);
+    auto prep_txn = db->template resolve<typename std::remove_pointer_t<decltype(db)>::Transaction>(&db->_header->prepared_txn);
     
     // Commit switches read_txn pointer
     BOOST_CHECK(db->commit(0));
     
     // After commit, read_txn should point to what was prepared_txn
-    auto new_read_txn = db->resolve(db->_header->read_txn);
+    auto new_read_txn = db->resolve(&db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->_header->read_txn, db->_header->prepared_txn);
   }
 }
@@ -826,16 +828,16 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
       offset_t actual_tail = Area::get_end(read_tail, *db);
       
       // The actual tail should be at the end of the chain
-      auto tail_area = db->resolve<Area>(actual_tail, READ);
+      auto tail_area = db->resolve<Area>(&actual_tail, READ);
       BOOST_CHECK_EQUAL(tail_area->next, 0);  // Should be the last area
       
       // Walk the chain manually to verify
       offset_t manual_tail = read_tail;
-      auto area = db->resolve<Area>(manual_tail, READ);
+      auto area = db->resolve<Area>(&manual_tail, READ);
       int chain_length = 1;
       while (area->next) {
         manual_tail = area->next;
-        area = db->resolve<Area>(manual_tail, READ);
+        area = db->resolve<Area>(&manual_tail, READ);
         chain_length++;
       }
       

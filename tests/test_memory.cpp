@@ -65,8 +65,8 @@ struct TestStorage {
   tid_t accept_tid;
   tid_t mark_tid;
 
-  block_ptr resolve(offset_t offset, Access /* access */ = READ) {
-    return block_ptr(&memory[offset]);
+  block_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) {
+    return block_ptr(&memory[*offset_ptr]);
   }
 
   offset_t resolve(const block_ptr& p) {
@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   }
 
   for (auto offset : offsets) {
-    auto p = storage.resolve(offset);
+    auto p = storage.resolve(&offset);
     storage.free(p);
   }
 
@@ -731,7 +731,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   }
   
   for (auto offset : bc_offsets) {
-    auto p = storage.resolve(offset);
+    auto p = storage.resolve(&offset);
     storage.free(p);
   }
   
@@ -773,7 +773,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_cleanup) {
   }
   
   for (auto offset : offsets) {
-    auto p = storage.resolve(offset);
+    auto p = storage.resolve(&offset);
     storage.free(p);
   }
   

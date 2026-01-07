@@ -65,11 +65,11 @@ struct _Transition {
     cmp = Transition::UNDEFINED;
     offset = offset_;
     link_offset = 0xFFFF;
-    block = resolve(offset);
+    block = resolve(&offset);
     return true;  // the caller shall set the trie root
   }
 
-  block_ptr resolve(offset_t offset) { return cursor->_db->resolve(offset); }
+  block_ptr resolve(const offset_t* offset_ptr) { return cursor->_db->resolve(offset_ptr); }
 
   void set_root(offset_t offset_) { *cursor->_root = offset_; }
 

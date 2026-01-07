@@ -36,7 +36,9 @@ struct _BigMemory {
     uint32_e value_size;
     template <typename DB_>
     char* data(DB_* db) {
-      return (char*)db->resolve(offset_t(chunk_offset));
+      offset_t temp_offset(chunk_offset);
+      auto ptr = db->resolve(&temp_offset, READ);
+      return (char*)ptr;
     }
   };
 
@@ -123,7 +125,7 @@ struct _BigMemory {
       has_successor = true;
     }
 
-    auto header_ptr = (FreeKey*)(char*)_db->resolve(found_offset, WRITE);
+    auto header_ptr = (FreeKey*)(char*)_db->resolve(&found_offset, WRITE);
     header_ptr->size = found_size;
     header_ptr->offset = found_offset | (has_successor ? 1 : 0);
 
@@ -133,7 +135,8 @@ struct _BigMemory {
 
   void free(const BigValue* bvalue) {
     offset_t header_offset = offset_t(bvalue->chunk_offset - sizeof(FreeKey));
-    auto header_ptr = (FreeKey*)(char*)_db->resolve(header_offset);
+    auto header_block = _db->resolve(&header_offset, READ);
+    auto header_ptr = (FreeKey*)(char*)header_block;
     uint64_t offset_with_flag = header_ptr->offset;
     uint64_t chunk_offset = offset_with_flag & ~uint64_t(1);
     uint64_t chunk_size = header_ptr->size;
@@ -168,7 +171,8 @@ struct _BigMemory {
       
       while (has_successor) {
         uint64_t next_offset = current_offset + total_size;
-        auto next_header = (FreeKey*)(char*)_db->resolve(offset_t(next_offset), READ);
+        offset_t next_offset_t(next_offset);
+        auto next_header = (FreeKey*)(char*)_db->resolve(&next_offset_t, READ);
         FreeKey next_key = *next_header;
         
         lookup_cursor.find(Slice(&next_key, sizeof(next_key)));
@@ -189,7 +193,8 @@ struct _BigMemory {
       
       if (found_mergeable) {
         // Update the header of the merged chunk
-        auto merged_header = (FreeKey*)(char*)_db->resolve(offset_t(current_offset), WRITE);
+        offset_t current_offset_t(current_offset);
+        auto merged_header = (FreeKey*)(char*)_db->resolve(&current_offset_t, WRITE);
         merged_header->size = total_size;
         uint64_t offset_val = current_offset & ~uint64_t(1);
         if (has_successor) {

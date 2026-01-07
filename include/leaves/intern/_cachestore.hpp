@@ -139,7 +139,8 @@ struct _CacheStore : public Opers_ {
     Opers_::flush(ptr, offset, size, sync);
   }
 
-  block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {
+  block_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
+    offset_t offset = *offset_ptr;
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
     // Check cache first
@@ -179,7 +180,7 @@ struct _CacheStore : public Opers_ {
     return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
-  void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {
+  void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {
     // For file storage, prefetch is essentially a no-op
     // Could potentially implement with platform-specific hints
   }
@@ -346,7 +347,7 @@ struct _CacheStore : public Opers_ {
         if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
         DB tmp(*this, _header->dbs[i].offset, i);
         // Return the DB's areas back into storage using head/tail pattern
-        auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);
+        auto read_txn = tmp.template resolve<typename DB::Transaction>(&tmp._header->read_txn);
         if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
           _header->area_pool.return_single_areas(tmp._header->area_list_head_single,
                                                  read_txn->area_list_tail_single, *this);

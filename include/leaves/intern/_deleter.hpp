@@ -25,12 +25,13 @@ struct _Deleter {
   _Deleter(Cursor& cursor) : cursor(cursor), back(&cursor.stack.back()) {}
 
   template <typename T>
-  offset_t resolve(T ptr) {
-    return cursor._db->resolve(ptr);
+  typename Traits::template Pointer<T> resolve(const offset_t* offset_ptr) {
+    return cursor._db->template resolve<T>(offset_ptr);
   }
 
-  block_ptr resolve(offset_t offset) {
-    return cursor._db->resolve(offset);
+  template <typename T>
+  offset_t resolve(T ptr) {
+    return cursor._db->resolve(ptr);
   }
 
   block_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
@@ -101,7 +102,7 @@ struct _Deleter {
     uint8_t buffer[256];  // to hold the compressed key
     memcpy(buffer, parent.trie()->compressed(), len);
     if (child_remaining->type() == TRIE) {
-      trie_ptr child = resolve(*child_remaining);
+      trie_ptr child = resolve<TrieNode>(child_remaining);
       if (len + child->len() > 255) {
         // the compressed part is too big -> keep the parent
         return reduce_array(parent, prefix);
@@ -118,7 +119,7 @@ struct _Deleter {
 
       free(child);
     } else {
-      leaf_ptr child = resolve(*child_remaining);
+      leaf_ptr child = resolve<LeafNode>(child_remaining);
       if (len + child->key_size > 255) {
         // the compressed part is too big -> keep the parent
         return reduce_array(parent, prefix);

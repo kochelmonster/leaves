@@ -28,8 +28,8 @@ struct _Inserter {
     return back->cursor->_db->resolve(ptr);
   }
 
-  block_ptr resolve(offset_t offset) {
-    return back->cursor->_db->resolve(offset);
+  block_ptr resolve(const offset_t* offset_ptr) {
+    return back->cursor->_db->resolve(offset_ptr);
   }
 
   block_ptr alloc(uint16_t size) { return back->cursor->alloc(size); }

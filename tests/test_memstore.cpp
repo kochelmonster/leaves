@@ -42,7 +42,8 @@ BOOST_AUTO_TEST_CASE(test_memory_storage_resolve) {
   
   // Test resolve with area - offset to block_ptr using resolve(offset_t) method
   auto area_offset = area->offset();
-  auto resolved_block = db.resolve(area_offset);
+  offset_t area_off_temp(area_offset);
+  auto resolved_block = db.resolve(&area_off_temp);
   BOOST_CHECK(resolved_block);
   
   // Test reverse resolve - block_ptr to offset

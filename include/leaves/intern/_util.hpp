@@ -212,6 +212,7 @@ struct _Offset {
   BaseType _offset;
 
   static const uint64_t TYPE_MASK = 0x3;
+  static const uint64_t RELATIVE_FLAG = 0x4;  // Bit 2: relative offset flag (offsets are 8-byte aligned)
 
   constexpr _Offset(uint64_t src = 0) : _offset(src) {}
 
@@ -275,12 +276,44 @@ struct _Offset {
     return _Offset(_offset - src);
   }
 
-  operator uint64_t() const { return _offset & ~TYPE_MASK; }
+  // Get absolute offset value (mask out TYPE_MASK and RELATIVE_FLAG)
+  operator uint64_t() const { return _offset & ~(TYPE_MASK | RELATIVE_FLAG); }
+  
   NodeTypes type() const { return (NodeTypes)(_offset & TYPE_MASK); }
   const _Offset& type(NodeTypes type) {
     _offset &= ~TYPE_MASK;
     _offset |= type;
     return *this;
+  }
+
+  // Relative offset flag accessors
+  bool is_relative() const { return (_offset & RELATIVE_FLAG) != 0; }
+  
+  // Convert an absolute offset to relative (given the address of the offset_t field containing this offset)
+  const _Offset& set_relative(const void* offset_field_addr) {
+    if (!is_relative()) {
+      uint64_t abs_value = _offset & ~(TYPE_MASK | RELATIVE_FLAG);
+      uint64_t base_addr = (uint64_t)offset_field_addr;
+      int64_t rel_value = (int64_t)abs_value - (int64_t)base_addr;
+      
+      NodeTypes saved_type = type();  // Save the type
+      
+      // Store as relative: set signed relative value, preserve type, set relative flag
+      _offset = (BaseType)rel_value & ~(TYPE_MASK | RELATIVE_FLAG);
+      _offset |= RELATIVE_FLAG;
+      type(saved_type);  // Restore type
+    }
+    return *this;
+  }
+
+  // Get the raw offset as signed integer (for relative addressing)
+  int64_t as_signed() const {
+    // Sign-extend the offset value (excluding TYPE_MASK and RELATIVE_FLAG bits)
+    uint64_t raw = _offset & ~(TYPE_MASK | RELATIVE_FLAG);
+    // Check if the sign bit is set (bit 63 - 3 = bit 60 after masking)
+    constexpr int shift = 3;  // TYPE_MASK (2 bits) + RELATIVE_FLAG (1 bit)
+    int64_t signed_val = (int64_t)(raw << shift) >> shift;
+    return signed_val;
   }
 };
 

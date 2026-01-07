@@ -58,12 +58,12 @@ struct _Merger {
     dst_cursor._db->free(block);
   }
 
-  block_ptr resolve_src(offset_t offset) {
-    return src_cursor._db->resolve(offset);
+  block_ptr resolve_src(const offset_t* offset_ptr) {
+    return src_cursor._db->resolve(offset_ptr);
   }
 
-  block_ptr resolve_dst(offset_t offset) {
-    return dst_cursor._db->resolve(offset);
+  block_ptr resolve_dst(const offset_t* offset_ptr) {
+    return dst_cursor._db->resolve(offset_ptr);
   }
 
   template <typename T>

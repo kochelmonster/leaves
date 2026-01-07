@@ -115,7 +115,9 @@ struct _MemoryDB {
   }
 
   // Direct pointer/offset resolution - no storage delegation needed
-  block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {
+  block_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
+    offset_t offset = *offset_ptr;
+    // memstore doesn't support relative offsets - all offsets are absolute pointers
     return block_ptr(reinterpret_cast<void*>((uint64_t)offset));
   }
 
@@ -125,15 +127,17 @@ struct _MemoryDB {
     return offset_t((uint64_t)p).type(block_ptr::type);
   }
 
-  // Template for typed pointers - disabled for integral types
+  // Template for typed pointers - disabled for integral types and raw pointers
   template <typename Pointer, typename = typename std::enable_if<
-                                  !std::is_integral<Pointer>::value>::type>
+                                  !std::is_integral<Pointer>::value &&
+                                  !std::is_pointer<Pointer>::value>::type>
   offset_t resolve(const Pointer& p) const {
-    return offset_t((uint64_t)p).type(Pointer::type);
+    return offset_t((uint64_t)p).type(p.type);
   }
 
   void make_dirty(block_ptr& /*block*/) {}
-  void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {}
+  void prefetch(const offset_t& offset) const { prefetch(&offset); }
+  void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {}
   void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}
 
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}

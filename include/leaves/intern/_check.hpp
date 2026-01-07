@@ -69,7 +69,7 @@ struct _Dumper {
   }
 
   void dump_leaf(std::ostream& out, offset_e offset, int id) {
-    leaf_ptr leaf = _db.resolve(offset);
+    leaf_ptr leaf = _db.resolve(&offset);
     uint16_t size = leaf->size();
     out << "type: leaf" << std::endl;
     if (_simple) {
@@ -108,7 +108,7 @@ struct _Dumper {
       // Read chunk header to get size and has_successor flag
       offset_e header_offset = bv->chunk_offset;
       header_offset._offset -= sizeof(FreeKey);
-      auto header_ptr = (FreeKey*)(char*)_db.resolve(header_offset);
+      auto header_ptr = (FreeKey*)(char*)_db.resolve(&header_offset, READ);
       uint64_t chunk_size = header_ptr->size;
       bool has_successor = (header_ptr->offset & 1) != 0;
       
@@ -122,7 +122,7 @@ struct _Dumper {
   }
 
   void dump_trie(std::ostream& out, offset_e offset, int id) {
-    trie_ptr trie = _db.resolve(offset);
+    trie_ptr trie = _db.resolve(&offset);
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
     if (_simple) {
@@ -238,14 +238,15 @@ struct _MemoryChecker {
         uint64_t pb = padding(b, AREA_SIZE);  // this is wrong
         if (b + size > pb) b = pb;
         if (b == slot.end_free) break;
-        storage.resolve(offset_t(b))->slot_id = i;
+        offset_t b_offset(b);
+        storage.resolve(&b_offset, READ)->slot_id = i;
         mark_page(b);
         b += size;
       }
       // collect garbage container blocks
       offset_t o = slot.ostart;
       while (o) {
-        typename Storage::MemManager::Slot::cont_ptr gc = storage.resolve(o);
+        typename Storage::MemManager::Slot::cont_ptr gc = storage.resolve(&o);
         mark_page(o);
         if (o == slot.oend) break;
         o = gc->next;
@@ -267,7 +268,8 @@ struct _MemoryChecker {
     for (int i = 0; i < pages.size(); i++) {
       uint64_t p = pages[i];
       if (p != ALL) {
-        block_ptr ptr = storage.resolve(offset_t(i * AREA_SIZE));
+        offset_t i_offset(i * AREA_SIZE);
+        block_ptr ptr = storage.resolve(&i_offset);
         uint16_t s0 = BLOCK_SIZES[0];
         uint16_t s1 = BLOCK_SIZES[1];
         uint16_t size = BLOCK_SIZES[ptr->slot_id];
@@ -279,7 +281,7 @@ struct _MemoryChecker {
   }
 
   void mark_page(offset_t offset) {
-    uint16_t slot_id = storage.resolve(offset)->slot_id;
+    uint16_t slot_id = storage.resolve(&offset, READ)->slot_id;
     uint64_t addr = offset;
     uint16_t size = BLOCK_SIZES[slot_id];
     uint64_t page = addr / AREA_SIZE;
@@ -297,7 +299,7 @@ struct _MemoryChecker {
     mark_page(offset);
 
     if (offset.type() == TRIE) {
-      trie_ptr branch = storage.resolve(offset);
+      trie_ptr branch = storage.resolve(&offset);
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {

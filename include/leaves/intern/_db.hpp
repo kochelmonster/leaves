@@ -152,11 +152,11 @@ struct _DB {
 
   _DB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
-        _header(storage.resolve(header)),
+        _header(storage.resolve(&header, READ)),
         _index(index) {
     if (_header->prepared_txn != _header->read_txn) {
       // Recover a prepared transaction - set both _active_txn and _wtxn
-      _wtxn = resolve<Transaction>(_header->prepared_txn);
+      _wtxn = resolve<Transaction>(&_header->prepared_txn);
       _active_txn = &*_wtxn;
     }
   }
@@ -170,7 +170,7 @@ struct _DB {
     auto area_ptr = _storage.alloc_single_area();
 
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
-    _header = _storage.resolve(*header);
+    _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex();
 
@@ -182,7 +182,7 @@ struct _DB {
 
     uint16_t header_size = padding(sizeof(Header), MIN_BLOCK_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
-    txn_ptr txn = resolve(_header->read_txn);
+    txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
     txn->txn_id = tid_t(1);
@@ -209,17 +209,18 @@ struct _DB {
   Slice name() const { return _storage.db_name(_index); }
 
   template <typename T>
-  typename Traits::Pointer<T> resolve(offset_t offset,
+  typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
                                       Access access = READ) const {
-    return _storage.resolve(offset, access);
+    return _storage.resolve(offset_ptr, access);
   }
 
-  block_ptr resolve(offset_t offset, Access access = READ) const {
-    return _storage.resolve(offset, access);
+  block_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
+    return _storage.resolve(offset_ptr, access);
   }
 
   template <typename Pointer>
-  offset_t resolve(const Pointer& p) const {
+  typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
+  resolve(const Pointer& p) const {
     return _storage.resolve(p);
   }
 
@@ -268,7 +269,7 @@ struct _DB {
     _active_txn->mem_manager.free(block, *this);
   }
 
-  void prefetch(offset_t offset) const { _storage.prefetch(offset); }
+  void prefetch(const offset_t& offset) const { _storage.prefetch(&offset); }
 
   area_ptr alloc_single_area() {
     assert(_active_txn);
@@ -279,7 +280,7 @@ struct _DB {
 
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_single) {
-      auto tail = resolve<Area>(_active_txn->area_list_tail_single, READ);
+      auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
       tail->next = resolve(area_ptr);
       make_dirty(tail);
     } else {
@@ -302,7 +303,7 @@ struct _DB {
 
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
-      auto tail = resolve<Area>(_active_txn->area_list_tail_multi, READ);
+      auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, READ);
       tail->next = resolve(area_ptr);
       make_dirty(tail);
     } else {
@@ -318,17 +319,17 @@ struct _DB {
 
   template <typename T>
   void iter_transactions(T caller) const {
-    txn_ptr txn = _storage.resolve(_header->read_txn);
+    txn_ptr txn = _storage.resolve(&_header->read_txn);
     tid_t end = txn->txn_id;
     offset_t* link = &txn->start_txn;
     do {
-      txn = resolve(*link);
+      txn = resolve<Transaction>(link);
       if (caller(txn)) break;
       link = &txn->next_txn;
     } while (txn->txn_id < end);
   }
 
-  txn_ptr txn() const { return resolve(_header->read_txn); }
+  txn_ptr txn() const { return resolve(&_header->read_txn); }
 
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
@@ -403,7 +404,7 @@ struct _DB {
     if (_header->txn_cursor_id.load() != cursor_id) return false;
 
     // Return areas allocated during write transaction
-    txn_ptr read_txn = resolve(_header->read_txn);
+    txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
     return_areas_range(
         read_txn->area_list_tail_single, _wtxn->area_list_tail_single,
         read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
@@ -423,7 +424,7 @@ struct _DB {
 
     _header->prepared_txn = resolve(_wtxn);
 
-    txn_ptr active = resolve(_header->read_txn);
+    txn_ptr active = resolve<Transaction>(&_header->read_txn);
     active->next_txn = _header->prepared_txn;
     make_dirty(_header);
     make_dirty(active);
@@ -534,13 +535,13 @@ struct _DB {
     // transaction
 
     if (start_single && end_single && start_single != end_single) {
-      area_ptr start_area = resolve<Area>(start_single, READ);
+      area_ptr start_area = resolve<Area>(&start_single, READ);
       offset_t range_head = start_area->next;
       _storage.return_single_areas(range_head, end_single);
     }
 
     if (start_multi && end_multi && start_multi != end_multi) {
-      area_ptr start_area = resolve<Area>(start_multi, READ);
+      area_ptr start_area = resolve<Area>(&start_multi, READ);
       offset_t range_head = start_area->next;
       _storage.return_multi_areas(range_head, end_multi);
     }
@@ -556,7 +557,7 @@ struct _DB {
 
     if (_header->prepared_txn == _header->read_txn) {
       // Return any uncommitted areas 
-      txn_ptr read_txn = resolve(_header->read_txn);
+      txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
       
       // Find actual tail by iterating single area list
       offset_t stail = Area::get_end(read_txn->area_list_tail_single, *this);
