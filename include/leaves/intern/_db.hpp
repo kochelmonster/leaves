@@ -516,8 +516,11 @@ struct _DB {
       return;  // No big memory allocated yet
     }
     
-    // Create a temporary _BigMemory instance to access defrag
-    typedef _BigMemory<Cursor> BigMemory;
+    // Use the non-transactional cursor type for the free-bigmem trie.
+    // _TransactionalCursor rewires its root to txn->root in update(), which
+    // would ignore &txn->free_bigmem_root and prevent defrag from working.
+    using RawCursor = typename Cursor::Cursor;
+    using BigMemory = _BigMemory<RawCursor>;
     BigMemory big_mem(this, &txn->free_bigmem_root);
     big_mem.defrag(txn);
     flush();

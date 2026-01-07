@@ -558,9 +558,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
   }
 
   ~_TransactionalCursor() {
-    if (is_transaction_active()) {
-      if (this->_txn) this->_txn->refs.fetch_sub(1);
-    }
+    if (this->_txn) this->_txn->refs.fetch_sub(1);
   }
 
   bool is_transaction_active() const {

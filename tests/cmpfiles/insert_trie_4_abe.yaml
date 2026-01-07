@@ -1,5 +1,5 @@
 type: trie
-id: 16952
+id: 10408
 page: 0
 freespace: 64
 txn: 6
@@ -12,8 +12,8 @@ children:
   - 10281
   - 14633
   - 15449
+  - 16137
   - 16265
-  - 17081
 ---
 type: leaf
 id: 10281
@@ -49,7 +49,7 @@ valuesize: 3
 value: "abc"
 ---
 type: leaf
-id: 16265
+id: 16137
 page: 0
 freespace: 116
 size: 12
@@ -60,7 +60,7 @@ valuesize: 3
 value: "abd"
 ---
 type: leaf
-id: 17081
+id: 16265
 page: 0
 freespace: 116
 size: 12

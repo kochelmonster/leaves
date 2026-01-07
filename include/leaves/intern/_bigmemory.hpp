@@ -68,7 +68,7 @@ struct _BigMemory {
     _free_cursor.find(Slice(&fkey, sizeof(fkey)));
     assert(!_free_cursor.is_valid());
 
-    ValueBlock vblock;
+    ValueBlock vblock{};
     if (freed) _db->mark_for_recycle(vblock);
     Slice vblock_slice(&vblock, sizeof(vblock));
     _free_cursor.value(vblock_slice);
@@ -155,10 +155,12 @@ struct _BigMemory {
         continue;
       }
 
-      FreeKey* current_key = (FreeKey*)iter_cursor.key().data();
-      uint64_t offset_with_flag = current_key->offset;
+      ValueBlock current_vblock = *vblock;
+
+      FreeKey current_key = *(FreeKey*)iter_cursor.key().data();
+      uint64_t offset_with_flag = current_key.offset;
       uint64_t current_offset = offset_with_flag & ~uint64_t(1);
-      uint64_t current_size = current_key->size;
+      uint64_t current_size = current_key.size;
       bool has_successor = (offset_with_flag & 1) != 0;
 
       uint64_t total_size = current_size;
@@ -195,19 +197,18 @@ struct _BigMemory {
         }
         merged_header->offset = offset_val;
         
-        // Remove old entry and add merged entry using iter_cursor
-        iter_cursor.find(Slice(current_key, sizeof(*current_key)));
-        assert(iter_cursor.is_valid());
-        iter_cursor.remove();
-        
-        // Add merged chunk to trie
+        // Remove old entry and add merged entry using the lookup cursor.
+        // (Avoids relying on iter_cursor's internal stack after mutations.)
+        lookup_cursor.find(Slice(&current_key, sizeof(current_key)));
+        assert(lookup_cursor.is_valid());
+        lookup_cursor.remove();
+
         FreeKey merged_key{total_size, offset_val};
-        iter_cursor.find(Slice(&merged_key, sizeof(merged_key)));
-        assert(!iter_cursor.is_valid());
-        ValueBlock new_vblock;
-        Slice vblock_slice(&new_vblock, sizeof(new_vblock));
-        iter_cursor.value(vblock_slice);
-        
+        lookup_cursor.find(Slice(&merged_key, sizeof(merged_key)));
+        assert(!lookup_cursor.is_valid());
+        Slice vblock_slice(&current_vblock, sizeof(current_vblock));
+        lookup_cursor.value(vblock_slice);
+
         iter_cursor.first();
       } else {
         iter_cursor.next();
