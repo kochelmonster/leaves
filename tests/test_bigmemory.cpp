@@ -329,11 +329,11 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
     const uint64_t off1_raw = (uint64_t)off1._offset;
 
     // Write the on-disk headers that defrag() consults.
-    auto* h0 = (FreeKey*)(char*)cursor->_db->resolve(&base, WRITE);
+    auto h0 = cursor->_db->template resolve<FreeKey>(&base, WRITE);
     h0->size = CHUNK0_SIZE;
     h0->offset = (base_raw & ~uint64_t(1)) | 1;  // has successor
 
-    auto* h1 = (FreeKey*)(char*)cursor->_db->resolve(&off1, WRITE);
+    auto h1 = cursor->_db->template resolve<FreeKey>(&off1, WRITE);
     h1->size = CHUNK1_SIZE;
     h1->offset = (off1_raw & ~uint64_t(1));  // last chunk
 
@@ -375,7 +375,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
     uint64_t current_size = (uint64_t)((FreeKey*)bm._free_cursor.key().data())->size;
     uint64_t next_offset = current_offset + current_size;
     offset_t temp_offset(next_offset);
-    auto next_header = (FreeKey*)(char*)pre->_db->resolve(&temp_offset, READ);
+    auto next_header = (FreeKey*)(char*)pre->_db->template resolve<int>(&temp_offset, READ);
     FreeKey next_key = *next_header;
 
     bm._free_cursor.find(Slice(&next_key, sizeof(next_key)));
@@ -414,7 +414,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
   BOOST_CHECK(bm._free_cursor.is_valid());
 
   // Header at base should be updated to the merged chunk.
-  auto* merged_header = (FreeKey*)(char*)check->_db->resolve(&base, READ);
+  auto merged_header = check->_db->template resolve<FreeKey>(&base, READ);
   BOOST_CHECK_EQUAL((uint64_t)merged_header->size, merged_size);
   BOOST_CHECK_EQUAL(merged_header->offset & 1, 0ull);
 

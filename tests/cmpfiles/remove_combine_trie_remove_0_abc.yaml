@@ -1,22 +1,22 @@
 type: trie
-id: 15656
+id: 15536
 page: 0
 freespace: 88
 txn: 3
-size: 40
+size: 32
 compressed: 
   size: 2
   key: "[a][b]"
 branches: "[][c]"
 children: 
-  - 5625
-  - 15528
+  - 5593
+  - 15416
 ---
 type: leaf
-id: 5625
+id: 5593
 page: 0
-freespace: 118
-size: 10
+freespace: 114
+size: 6
 txn: 2
 keysize: 0
 key: ""
@@ -24,24 +24,24 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 15528
+id: 15416
 page: 0
 freespace: 88
 txn: 3
-size: 40
+size: 32
 compressed: 
   size: 2
   key: "[c][d]"
 branches: "[e][f]"
 children: 
-  - 10489
-  - 10745
+  - 10409
+  - 10649
 ---
 type: leaf
-id: 10489
+id: 10409
 page: 0
-freespace: 114
-size: 14
+freespace: 110
+size: 10
 txn: 2
 keysize: 1
 key: "[e]"
@@ -49,10 +49,10 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 10745
+id: 10649
 page: 0
-freespace: 114
-size: 14
+freespace: 110
+size: 10
 txn: 2
 keysize: 1
 key: "[f]"

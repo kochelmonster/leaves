@@ -12,15 +12,17 @@
 
 namespace leaves {
 
+// dummy structure for all node pointers
+struct _Node {};
+
 /*
 A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
 parent node) This makes the implmentation of many operations easier.
 */
 template <typename Traits>
-struct _TrieNode : public Traits::BlockHeader {
+struct _TrieNode {
   typedef _TrieNode<Traits> TrieNode;
-  using Base = typename Traits::BlockHeader;
   using hash_t = typename Traits::hash_t;
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
@@ -43,7 +45,6 @@ struct _TrieNode : public Traits::BlockHeader {
       257 * sizeof(offset_e);
   constexpr static uint8_t LOWER_MASK = 0b00011111;
 
-  char* copy_start() const { return (char*)&_upper; }
   uint8_t len() const { return _compressed_len; }
   int count() const { return (_array_len & ~NULL_MASK); }
   const uint8_t* compressed() const { return _compressed_data; }
@@ -492,10 +493,9 @@ struct _TrieNode : public Traits::BlockHeader {
 };
 
 template <typename Traits>
-struct _LeafNode : public Traits::BlockHeader {
+struct _LeafNode {
   typedef _LeafNode<Traits> LeafNode;
 
-  using Base = typename Traits::BlockHeader;
   using hash_t = typename Traits::hash_t;
   using uint16_e = typename Traits::uint16_e;
   using uint32_e = typename Traits::uint32_e;
@@ -521,15 +521,11 @@ struct _LeafNode : public Traits::BlockHeader {
     value_size |= BIG_VALUE_FLAG;
   }
 
-  char* copy_start() const { return (char*)&key_size; }
-
   void set(const Slice& key, size_t value_size_) {
     key_size = key.size();
     memcpy(data, key.data(), key.size());
     value_size = value_size_;
-
   }
-
 
   Slice memory() { return Slice((char*)this, size()); }
 

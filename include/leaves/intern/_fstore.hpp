@@ -47,7 +47,6 @@ struct _StoreTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(push, 1)
   struct BlockHeader {
     typedef BlockHeader Base;
     tid_t txn_id;
@@ -56,7 +55,6 @@ struct _StoreTraits {
       return txn_id != other.txn_id;
     }
   };
-#pragma pack(pop)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE

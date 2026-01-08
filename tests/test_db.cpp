@@ -185,7 +185,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for (offset_t bo : block_offsets) {
-        block_ptr block = db->resolve(&bo);
+        block_ptr block = db->template resolve<BlockHeader>(&bo);
         BOOST_REQUIRE(db->resolve(block) == bo);
         db->free(block);
       }
@@ -407,8 +407,9 @@ struct TestStorage {
   offset_t resolve(const Pointer& p) const {
     return offset_t((const char*)p - (char*)&memory[0]).type(p.type);
   }
-
-  void make_dirty(block_ptr /* block */) {}
+  
+  template <typename PtrType>
+  void make_dirty(PtrType /* block */) { }
 
   // New area allocation methods required by _db.hpp
   area_ptr alloc_single_area() {
@@ -667,15 +668,17 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
     
+    using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
+
     // In new architecture, area tails are in transaction, not separate pending lists
-    auto read_txn = db->resolve(&db->_header->read_txn);
-    auto prep_txn = db->template resolve<typename std::remove_pointer_t<decltype(db)>::Transaction>(&db->_header->prepared_txn);
+    auto read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
+    auto prep_txn = db->template resolve<Transaction>(&db->_header->prepared_txn);
     
     // Commit switches read_txn pointer
     BOOST_CHECK(db->commit(0));
     
     // After commit, read_txn should point to what was prepared_txn
-    auto new_read_txn = db->resolve(&db->_header->read_txn);
+    auto new_read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->_header->read_txn, db->_header->prepared_txn);
   }
 }

@@ -577,27 +577,27 @@ class Benchmark {
         auto db_internal = db._internal();
         auto txn = db_internal->_wtxn;
 
-        std::cout << "Iter " << iter << ": size_root=" << txn->size_root._offset
-                  << ", offset_root=" << txn->offset_root._offset << std::endl;
+        std::cout << "Iter " << iter
+                  << ": free_bigmem_root=" << txn->free_bigmem_root._offset
+                  << std::endl;
 
-        if (iter > 230 && iter < 240) {
-          if (txn->size_root) {
+        if (iter >= 0 && iter < 240) {
+          if (txn->free_bigmem_root) {
             char filename[256];
-            snprintf(filename, sizeof(filename), "errors/dump_size_%06d.yaml",
+            snprintf(filename, sizeof(filename), "errors/dump_bigmen_%06d.yaml",
                      iter);
             std::ofstream of(filename);
-            leaves::_Dumper(db, txn->size_root, false).dump(of);
+            leaves::_Dumper(db, txn->free_bigmem_root, false).dump(of);
           }
-
-          if (txn->offset_root) {
+          if (txn->root) {
             char filename[256];
-            snprintf(filename, sizeof(filename), "errors/dump_offset_%06d.yaml",
+            snprintf(filename, sizeof(filename), "errors/dump_data_%06d.yaml",
                      iter);
             std::ofstream of(filename);
-            leaves::_Dumper(db, txn->offset_root, false).dump(of);
+            leaves::_Dumper(db, txn->root, false).dump(of);
           }
         }
-#endif        
+#endif
       }
       cursor.commit(sync);
     }

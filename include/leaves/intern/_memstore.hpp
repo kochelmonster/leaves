@@ -23,13 +23,11 @@ struct _MemoryTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(push, 1)
   struct BlockHeader {
     typedef BlockHeader Base;
     uint8_t slot_id;
     bool needs_cow(const BlockHeader& other) const { return false; }
   };
-#pragma pack(pop)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
@@ -118,6 +116,14 @@ struct _MemoryDB {
     offset_t offset = *offset_ptr;
     // memstore doesn't support relative offsets - all offsets are absolute pointers
     return block_ptr(reinterpret_cast<void*>((uint64_t)offset));
+  }
+
+  template <typename T>
+  typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
+                                      Access access = READ) const {
+    offset_t offset = *offset_ptr;
+    // memstore doesn't support relative offsets - all offsets are absolute pointers
+    return typename Traits::Pointer<T>(reinterpret_cast<void*>((uint64_t)offset));
   }
 
   // Non-template overload for block_ptr to avoid implicit conversion to

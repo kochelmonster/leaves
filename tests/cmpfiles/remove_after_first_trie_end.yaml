@@ -1,26 +1,26 @@
 type: trie
-id: 16040
+id: 15896
 page: 0
 freespace: 56
 txn: 3
-size: 72
+size: 64
 compressed: 
   size: 1
   key: "[a]"
 branches: "[A][B][D][E][F][M]"
 children: 
-  - 10233
-  - 10489
-  - 10745
-  - 11001
-  - 11257
-  - 9977
+  - 10169
+  - 10409
+  - 10649
+  - 10889
+  - 11129
+  - 9929
 ---
 type: leaf
-id: 10233
+id: 10169
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[A]"
@@ -28,10 +28,10 @@ valuesize: 2
 value: "aA"
 ---
 type: leaf
-id: 10489
+id: 10409
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[B]"
@@ -39,10 +39,10 @@ valuesize: 2
 value: "aB"
 ---
 type: leaf
-id: 10745
+id: 10649
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[D]"
@@ -50,10 +50,10 @@ valuesize: 2
 value: "aD"
 ---
 type: leaf
-id: 11001
+id: 10889
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[E]"
@@ -61,10 +61,10 @@ valuesize: 2
 value: "aE"
 ---
 type: leaf
-id: 11257
+id: 11129
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[F]"
@@ -72,10 +72,10 @@ valuesize: 2
 value: "aF"
 ---
 type: leaf
-id: 9977
+id: 9929
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[M]"

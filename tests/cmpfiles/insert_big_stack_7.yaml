@@ -1,22 +1,22 @@
 type: trie
-id: 17032
+id: 16880
 page: 0
 freespace: 88
 txn: 9
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 10281
-  - 16904
+  - 10241
+  - 16760
 ---
 type: leaf
-id: 10281
+id: 10241
 page: 0
-freespace: 119
-size: 9
+freespace: 115
+size: 5
 txn: 3
 keysize: 0
 key: ""
@@ -24,24 +24,24 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 16904
+id: 16760
 page: 0
 freespace: 88
 txn: 9
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 15321
-  - 10408
+  - 15249
+  - 10360
 ---
 type: leaf
-id: 15321
+id: 15249
 page: 0
-freespace: 118
-size: 10
+freespace: 114
+size: 6
 txn: 4
 keysize: 0
 key: ""
@@ -49,24 +49,24 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 10408
+id: 10360
 page: 0
 freespace: 88
 txn: 9
-size: 40
+size: 32
 compressed: 
   size: 1
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 5497
-  - 17288
+  - 5473
+  - 17120
 ---
 type: leaf
-id: 5497
+id: 5473
 page: 0
-freespace: 117
-size: 11
+freespace: 113
+size: 7
 txn: 5
 keysize: 0
 key: ""
@@ -74,25 +74,25 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 17288
+id: 17120
 page: 0
 freespace: 80
 txn: 9
-size: 48
+size: 40
 compressed: 
   size: 1
   key: "[d]"
 branches: "[][*][e]"
 children: 
-  - 14633
-  - 17161
-  - 18184
+  - 14577
+  - 17001
+  - 17960
 ---
 type: leaf
-id: 14633
+id: 14577
 page: 0
-freespace: 116
-size: 12
+freespace: 112
+size: 8
 txn: 6
 keysize: 0
 key: ""
@@ -100,10 +100,10 @@ valuesize: 4
 value: "abcd"
 ---
 type: leaf
-id: 17161
+id: 17001
 page: 0
-freespace: 114
-size: 14
+freespace: 110
+size: 10
 txn: 9
 keysize: 1
 key: "[*]"
@@ -111,26 +111,26 @@ valuesize: 5
 value: "abcd*"
 ---
 type: trie
-id: 18184
+id: 17960
 page: 0
 freespace: 72
 txn: 9
-size: 56
+size: 48
 compressed: 
   size: 1
   key: "[e]"
 branches: "[][*][f][g]"
 children: 
-  - 15705
-  - 18313
-  - 17801
-  - 18057
+  - 15609
+  - 18081
+  - 17601
+  - 17841
 ---
 type: leaf
-id: 15705
+id: 15609
 page: 0
-freespace: 115
-size: 13
+freespace: 111
+size: 9
 txn: 7
 keysize: 0
 key: ""
@@ -138,10 +138,10 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 18313
+id: 18081
 page: 0
-freespace: 113
-size: 15
+freespace: 109
+size: 11
 txn: 9
 keysize: 1
 key: "[*]"
@@ -149,10 +149,10 @@ valuesize: 6
 value: "abcde*"
 ---
 type: leaf
-id: 17801
+id: 17601
 page: 0
-freespace: 113
-size: 15
+freespace: 109
+size: 11
 txn: 7
 keysize: 1
 key: "[f]"
@@ -160,10 +160,10 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 18057
+id: 17841
 page: 0
-freespace: 113
-size: 15
+freespace: 109
+size: 11
 txn: 8
 keysize: 1
 key: "[g]"

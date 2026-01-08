@@ -43,8 +43,6 @@ struct _TransactionBase : public Traits_::BlockHeader {
   offset_e area_list_tail_multi{0};
 
   MemManager mem_manager;
-
-  char* copy_start() const { return (char*)&root; }
 };
 
 template <typename Traits_>
@@ -74,7 +72,8 @@ struct _Transaction : public _TransactionBase<Traits_> {
   template <typename Resolver>
   ptr clone(Resolver& resolver) {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
-    copy(*new_txn, *this);
+    memcpy((char*)new_txn, this, sizeof(TransactionBase));
+    assert(new_txn->slot_id == SLOT_ID);
     return new_txn;
   }
 };
@@ -214,10 +213,6 @@ struct _DB {
     return _storage.resolve(offset_ptr, access);
   }
 
-  block_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
-    return _storage.resolve(offset_ptr, access);
-  }
-
   template <typename Pointer>
   typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
   resolve(const Pointer& p) const {
@@ -236,9 +231,8 @@ struct _DB {
   }
 
   template <typename PtrType>
-  void make_dirty(PtrType block) { 
-    block_ptr base_ptr = block;
-    _storage.make_dirty(base_ptr); 
+  void make_dirty(PtrType block) {
+    _storage.make_dirty(block);
   }
 
   void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
@@ -249,10 +243,19 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  template <typename ptr>
-  ptr clone(const ptr& src) {
-    ptr dest = alloc_slot(src->slot_id);
-    copy(*dest, *src);
+  template <typename NodePtr>
+  NodePtr clone(const NodePtr& src) {
+    using BlockHeader = typename Traits::BlockHeader;
+    static_assert(!std::is_same<NodePtr, block_ptr>::value,
+                  "NodePtr must not be a block_ptr ");
+
+    // src is a node_ptr pointing to node data after BlockHeader
+    // Get BlockHeader by subtracting sizeof(BlockHeader)
+    const char* src_ptr = (const char*)src;
+    BlockHeader* src_header = (BlockHeader*)(src_ptr - sizeof(BlockHeader));
+    block_ptr dest_header = alloc_slot(src_header->slot_id);
+    NodePtr dest((char*)dest_header + sizeof(BlockHeader));
+    memcpy((char*)dest, src_ptr, src->size());
     return dest;
   }
 
@@ -267,9 +270,7 @@ struct _DB {
     return _active_txn->alloc_slot(slot, *this);
   }
 
-  template <typename PtrType>
-  void free(PtrType block_arg) {
-    block_ptr block = block_arg;
+  void free(block_ptr block) {
     assert(transaction_active());
     assert(_active_txn);
     _active_txn->mem_manager.free(block, *this);
@@ -335,7 +336,7 @@ struct _DB {
     } while (txn->txn_id < end);
   }
 
-  txn_ptr txn() const { return resolve(&_header->read_txn); }
+  txn_ptr txn() const { return resolve<Transaction>(&_header->read_txn); }
 
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
@@ -349,7 +350,7 @@ struct _DB {
       if (txn->refs.load() > 0) is_active_ = true;
       return is_active_;
     });
-    
+
     return is_active_;
   }
 
@@ -522,7 +523,7 @@ struct _DB {
     if (!txn->free_bigmem_root) {
       return;  // No big memory allocated yet
     }
-    
+
     // Use the non-transactional cursor type for the free-bigmem trie.
     // _TransactionalCursor rewires its root to txn->root in update(), which
     // would ignore &txn->free_bigmem_root and prevent defrag from working.
@@ -562,23 +563,22 @@ struct _DB {
     });
 
     if (_header->prepared_txn == _header->read_txn) {
-      // Return any uncommitted areas 
+      // Return any uncommitted areas
       txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-      
+
       // Find actual tail by iterating single area list
       offset_t stail = Area::get_end(read_txn->area_list_tail_single, *this);
       offset_t mtail = Area::get_end(read_txn->area_list_tail_multi, *this);
-      return_areas_range(
-          read_txn->area_list_tail_single, stail,
-          read_txn->area_list_tail_multi, mtail);
-      
+      return_areas_range(read_txn->area_list_tail_single, stail,
+                         read_txn->area_list_tail_multi, mtail);
+
       // Clear transaction state after rolling back
       _header->prepared_txn = _header->read_txn;
       _wtxn.reset();
       _active_txn = nullptr;
     }
     // otherwise we have to wait for rollback or commit
-    
+
     flush();
   }
 

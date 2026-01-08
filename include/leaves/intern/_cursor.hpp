@@ -23,16 +23,19 @@ struct _Transition {
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
+  using node_ptr = typename Traits::Pointer<_Node>;
 
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp
 
   Cursor* cursor;
-  block_ptr block;
+  node_ptr node;
 
-  trie_ptr& trie() const { return *(trie_ptr*)&block; }
+  trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
+  const trie_ptr& trie() const { return *reinterpret_cast<const trie_ptr*>(&node); }
 
-  leaf_ptr& leaf() const { return *(leaf_ptr*)&block; }
+  leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
+  const leaf_ptr& leaf() const { return *reinterpret_cast<const leaf_ptr*>(&node); }
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -59,17 +62,16 @@ struct _Transition {
   bool success() const { return cmp == 0 && is_leaf(); }
 
   bool init(Cursor* cursor_, offset_t offset_, uint16_t keypos_ = 0) {
+    using BlockHeader = typename Traits::BlockHeader;
     cursor = cursor_;
     keypos = keypos_;
     prefix = 0;
     cmp = Transition::UNDEFINED;
     offset = offset_;
     link_offset = 0xFFFF;
-    block = resolve(&offset);
+    node = cursor->_db->template resolve<_Node>(&offset);
     return true;  // the caller shall set the trie root
   }
-
-  block_ptr resolve(const offset_t* offset_ptr) { return cursor->_db->resolve(offset_ptr); }
 
   void set_root(offset_t offset_) { *cursor->_root = offset_; }
 
@@ -82,18 +84,25 @@ struct _Transition {
   }
 
   offset_e* update(Transition& child) {
-    if (!block->needs_cow(*child.block.operator->())) {
-      cursor->_db->make_dirty(block);
+    using BlockHeader = typename Traits::BlockHeader;
+    // Compute BlockHeader addresses from node pointers
+    BlockHeader* parent_header = (BlockHeader*)((char*)node - sizeof(BlockHeader));
+    BlockHeader* child_header = (BlockHeader*)((char*)child.node - sizeof(BlockHeader));
+    if (!parent_header->needs_cow(*child_header)) {
+      block_ptr parent_block((char*)parent_header);
+      cursor->_db->make_dirty(parent_block);
       return link();
     }
 
     // copy-on-write trie
     assert(is_trie());
     trie_ptr old_trie = trie();
+    // Clone node directly
     trie() = cursor->_db->clone(old_trie);
     offset = cursor->_db->resolve(trie());
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
-    cursor->_db->free(old_trie);
+    block_ptr old_block((char*)old_trie - sizeof(BlockHeader));
+    cursor->_db->free(old_block);
 
     if (!is_root())
       *parent().update(*this) = offset;
@@ -112,7 +121,7 @@ struct _Transition {
   void resize_key(size_t size) { cursor->current_key.resize(size); }
 
   Transition& push(const offset_e* lnk) {
-    link_offset = (char*)lnk - (char*)block;
+    link_offset = (char*)lnk - (char*)node;
     cursor->push(*lnk);
     return cursor->stack.back();
   }
@@ -125,7 +134,7 @@ struct _Transition {
   void pop() { cursor->pop(); }
 
   void reset() {
-    block.reset();
+    node.reset();
     cmp = UNDEFINED;
   }
 
@@ -590,7 +599,9 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
       BigValue* bvalue = (BigValue*)result;
       get_bigmemory().alloc(size, bvalue);
       this->stack.back().leaf()->set_big();
-      return bvalue->data(this->_db);
+      auto data_ptr = bvalue->data(this->_db);
+      this->_db->make_dirty(data_ptr);
+      return (char*)data_ptr;
     }
     return result;
   }
@@ -600,7 +611,8 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
     if (back.cmp == 0 && back.is_leaf()) {
       if (back.leaf()->is_big()) {
         BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-        return Slice(bvalue->data(this->_db), bvalue->value_size);
+        auto data_ptr = bvalue->data(this->_db);
+        return Slice((char*)data_ptr, bvalue->value_size);
       }
       return back.value();
     }

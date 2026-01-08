@@ -404,10 +404,8 @@ constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
 template <typename DstBlock, typename SrcBlock>
 void copy(DstBlock& dst, const SrcBlock& src) {
-  uint16_t doffset = (char*)dst.copy_start() - (char*)&dst;
-  uint16_t soffset = (char*)src.copy_start() - (char*)&src;
   uint16_t src_size = src.size();
-  memcpy((char*)&dst + doffset, (char*)&src + soffset, src_size - soffset);
+  memcpy((char*)&dst, (char*)&src, src_size);
 }
 
 }  // namespace leaves

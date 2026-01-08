@@ -68,6 +68,12 @@ struct TestStorage {
     return block_ptr(&memory[*offset_ptr]);
   }
 
+  template <typename T>
+  typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
+                                      Access access = READ) {
+    return typename Traits::Pointer<T>(&memory[*offset_ptr]);
+  }
+
   offset_t resolve(const block_ptr& p) {
     return offset_t((const char*)p - (char*)&memory[0]);
   }
@@ -130,7 +136,9 @@ struct TestStorage {
     free_block.txn_id = mark_tid;
   }
 
-  void make_dirty(block_ptr /* block */) {}
+  template <typename PtrType>
+  void make_dirty(PtrType /* block */) { }
+
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
 };
 

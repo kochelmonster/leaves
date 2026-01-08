@@ -69,7 +69,10 @@ struct _Dumper {
   }
 
   void dump_leaf(std::ostream& out, offset_e offset, int id) {
-    leaf_ptr leaf = _db.resolve(&offset);
+    using BlockHeader = typename Traits::BlockHeader;
+    leaf_ptr leaf = _db.template resolve<LeafNode>(&offset);
+    // Compute BlockHeader address (leaf points to node after header)
+    BlockHeader* header = (BlockHeader*)((char*)leaf - sizeof(BlockHeader));
     uint16_t size = leaf->size();
     out << "type: leaf" << std::endl;
     if (_simple) {
@@ -77,10 +80,10 @@ struct _Dumper {
     } else {
       out << "id: " << offset._offset << std::endl;
       out << "page: " << offset._offset / AREA_SIZE << std::endl;
-      out << "freespace: " << BLOCK_SIZES[leaf->slot_id] - size << std::endl;
+      out << "freespace: " << BLOCK_SIZES[header->slot_id] - size << std::endl;
     }
     out << "size: " << size << std::endl;
-    out << "txn: " << leaf->txn_id << std::endl;
+    out << "txn: " << header->txn_id << std::endl;
     out << "keysize: " << (uint16_t)leaf->key_size << std::endl;
     out << "key: \"";
     for (int i = 0; i < leaf->key_size; i++) {
@@ -108,7 +111,7 @@ struct _Dumper {
       // Read chunk header to get size and has_successor flag
       offset_e header_offset = bv->chunk_offset;
       header_offset._offset -= sizeof(FreeKey);
-      auto header_ptr = (FreeKey*)(char*)_db.resolve(&header_offset, READ);
+      auto header_ptr = (FreeKey*)(char*)_db.template resolve<BlockHeader>(&header_offset, READ);
       uint64_t chunk_size = header_ptr->size;
       bool has_successor = (header_ptr->offset & 1) != 0;
       
@@ -122,7 +125,10 @@ struct _Dumper {
   }
 
   void dump_trie(std::ostream& out, offset_e offset, int id) {
-    trie_ptr trie = _db.resolve(&offset);
+    using BlockHeader = typename Traits::BlockHeader;
+    trie_ptr trie = _db.template resolve<TrieNode>(&offset);
+    // Compute BlockHeader address (trie points to node after header)
+    BlockHeader* header = (BlockHeader*)((char*)trie - sizeof(BlockHeader));
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
     if (_simple) {
@@ -130,9 +136,9 @@ struct _Dumper {
     } else {
       out << "id: " << offset._offset << std::endl;
       out << "page: " << offset._offset / AREA_SIZE << std::endl;
-      out << "freespace: " << BLOCK_SIZES[trie->slot_id] - size << std::endl;
+      out << "freespace: " << BLOCK_SIZES[header->slot_id] - size << std::endl;
     }
-    out << "txn: " << trie->txn_id << std::endl;
+    out << "txn: " << header->txn_id << std::endl;
     out << "size: " << size << std::endl;
     out << "compressed: " << std::endl;
     out << "  size: " << (int)trie->len() << std::endl;
@@ -246,7 +252,7 @@ struct _MemoryChecker {
       // collect garbage container blocks
       offset_t o = slot.ostart;
       while (o) {
-        typename Storage::MemManager::Slot::cont_ptr gc = storage.resolve(&o);
+        typename Storage::MemManager::Slot::cont_ptr gc = storage.template resolve<BlockContainer>(&o);
         mark_page(o);
         if (o == slot.oend) break;
         o = gc->next;
@@ -269,7 +275,7 @@ struct _MemoryChecker {
       uint64_t p = pages[i];
       if (p != ALL) {
         offset_t i_offset(i * AREA_SIZE);
-        block_ptr ptr = storage.resolve(&i_offset);
+        block_ptr ptr = storage.template resolve<BlockHeader>(&i_offset);
         uint16_t s0 = BLOCK_SIZES[0];
         uint16_t s1 = BLOCK_SIZES[1];
         uint16_t size = BLOCK_SIZES[ptr->slot_id];
@@ -299,7 +305,7 @@ struct _MemoryChecker {
     mark_page(offset);
 
     if (offset.type() == TRIE) {
-      trie_ptr branch = storage.resolve(&offset);
+      trie_ptr branch = storage.template resolve<TrieNode>(&offset);
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {

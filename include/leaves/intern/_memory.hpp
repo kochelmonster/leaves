@@ -1,9 +1,10 @@
 /*
 Memory management for transactional systems.
 
-This module provides memory allocation and garbage collection for database systems
-that support transactions and crash recovery. The design uses atomic operations
-and careful ordering to ensure consistency across transaction boundaries.
+This module provides memory allocation and garbage collection for database
+systems that support transactions and crash recovery. The design uses atomic
+operations and careful ordering to ensure consistency across transaction
+boundaries.
 
 Key Components:
 - AreaPool: Manages allocation of memory areas from the underlying storage
@@ -70,8 +71,8 @@ struct _BlockContainer : public Traits::BlockHeader {
   using offset_e = typename Traits::offset_e;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr uint16_t SIZE = Traits::BLOCK_CONTAINER_SIZE;
-  static constexpr uint16_t SLOT_ID = 
-      binary_search(&BLOCK_SIZES[0], &BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT], SIZE);
+  static constexpr uint16_t SLOT_ID = binary_search(
+      &BLOCK_SIZES[0], &BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT], SIZE);
   typedef typename Traits::BlockHeader Base;
   typedef typename Traits::template Pointer<_BlockContainer> ptr;
 
@@ -117,11 +118,12 @@ struct _GarbageSlot {
     assert(!(ostart == oend && istart == iend));
     assert(istart + count > BlockContainer::COUNT || ostart == oend);
 
-    cont_ptr front(resolver.resolve(&ostart, WRITE));
+    cont_ptr front(resolver.template resolve<BlockContainer>(&ostart, WRITE));
     if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
 
     assert(front->blocks[istart].link != 0);
-    ptr result = resolver.resolve(&front->blocks[istart].link, WRITE);
+    ptr result = resolver.template resolve<BlockHeader>(
+        &front->blocks[istart].link, WRITE);
 
     count--;
     istart++;
@@ -152,7 +154,7 @@ struct _GarbageSlot {
     cont_ptr back;
 
     if (oend) {
-      back = resolver.resolve(&oend, WRITE);
+      back = resolver.template resolve<BlockContainer>(&oend, WRITE);
       if (iend >= BlockContainer::COUNT) {
         cont_ptr new_back = resolver.alloc_slot(BlockContainer::SLOT_ID);
         assert(new_back->slot_id == BlockContainer::SLOT_ID);
@@ -173,11 +175,11 @@ struct _GarbageSlot {
       oend = ostart = resolver.resolve(back);
     }
     back->blocks[iend].link = resolver.resolve(block);
+
     assert(back->blocks[iend].link != 0);
     resolver.template mark_for_recycle(back->blocks[iend]);
     resolver.make_dirty(back);
     resolver.make_dirty(block);
-
     iend++;
     count++;
 
@@ -190,7 +192,8 @@ struct _GarbageSlot {
     uint16_t index = istart;
 
     while (true) {
-      cont_ptr container = resolver.resolve(&ocontainer);
+      cont_ptr container =
+          resolver.template resolve<BlockContainer>(&ocontainer);
 
       if (ocontainer == oend) {
         for (; index < iend; index++) {
@@ -267,7 +270,7 @@ struct _MemManager {
     }
 
     if (left_over_start + bsize <= left_over_end) {
-      result = resolver.resolve(&left_over_start, WRITE);
+      result = resolver.template resolve<BlockHeader>(&left_over_start, WRITE);
       left_over_start += bsize;
       result->slot_id = sidx;
       return result;
@@ -286,15 +289,14 @@ struct _MemManager {
       allocation_end = area->end();
     }
 
-    result = resolver.resolve(&allocation_start, WRITE);
+    result = resolver.template resolve<BlockHeader>(&allocation_start, WRITE);
     allocation_start += bsize;
     result->slot_id = sidx;
     return result;
   }
 
-  template <typename Resolver, typename PtrType>
-  void free(PtrType block_arg, Resolver& resolver) {
-    block_ptr block = block_arg;
+  template <typename Resolver>
+  void free(block_ptr block, Resolver& resolver) {
     slots[block->slot_id].push(block, resolver);
   }
 };

@@ -47,7 +47,6 @@ struct _MemoryMapTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(push, 1)
   struct BlockHeader {
     typedef BlockHeader Base;
     tid_t txn_id;
@@ -56,7 +55,6 @@ struct _MemoryMapTraits {
       return txn_id != other.txn_id;
     }
   };
-#pragma pack(pop)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;
@@ -263,16 +261,15 @@ struct _MemoryMapFile {
 
   // Resolve offset - handles both absolute and relative offsets uniformly
   block_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
-    offset_t offset = *offset_ptr;
     char* p;
     
-    if (offset.is_relative()) {
+    if (offset_ptr->is_relative()) {
       // Relative: calculate address relative to where offset_t is stored
-      int64_t rel_value = offset.as_signed();
+      int64_t rel_value = offset_ptr->as_signed();
       p = (char*)offset_ptr + rel_value;
     } else {
       // Absolute: offset from _memory base
-      p = (char*)_memory + (uint64_t)offset;
+      p = (char*)_memory + (uint64_t)*offset_ptr;
     }
     
     prefetch(p, access);
