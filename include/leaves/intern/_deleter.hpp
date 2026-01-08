@@ -48,14 +48,14 @@ struct _Deleter {
   template <typename NodePtr>
   void free_node(NodePtr& node) {
     using BlockHeader = typename Traits::BlockHeader;
-    static_assert(!std::is_same_v<NodePtr, block_ptr>, "free_node must be called with node pointers, not block pointers");
+    static_assert(
+        !std::is_same_v<NodePtr, block_ptr>,
+        "free_node must be called with node pointers, not block pointers");
     block_ptr block((char*)node - sizeof(BlockHeader));
     cursor._db->free(block);
   }
 
-  void free(block_ptr block) {
-    cursor._db->free(block);
-  }
+  void free(block_ptr block) { cursor._db->free(block); }
 
   void exec() {
     assert(back->success());
@@ -73,7 +73,8 @@ struct _Deleter {
     }
 
     Transition& parent = trans->parent();
-    auto node = trans->node;  // Save the node pointer before pop invalidates trans
+    auto node =
+        trans->node;  // Save the node pointer before pop invalidates trans
     uint16_t prefix = trans->prefix;
     parent.pop();  // remove trans from stack
     assert(parent.is_trie());
@@ -97,7 +98,8 @@ struct _Deleter {
   void reduce_array(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
     // Calculate proper size: same prefix length, one less branch
-    parent.trie() = alloc_node<trie_ptr>(TrieNode::size(otrie->len(), otrie->count() - 1));
+    parent.trie() =
+        alloc_node<trie_ptr>(TrieNode::size(otrie->len(), otrie->count() - 1));
     parent.trie()->create_remove(*otrie,
                                  prefix ? parent.branch_key : TrieNode::NONE);
     parent.replace(resolve(parent.trie()));
