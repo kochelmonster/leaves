@@ -92,8 +92,8 @@ BOOST_AUTO_TEST_CASE(test_extend) {
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.make("test");
   const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
-  const size_t BLOCK_SIZE =
-      DBMMap::Traits::BLOCK_SIZES[DBMMap::Traits::BLOCK_SIZES_COUNT - 1];
+  const size_t PAGE_SIZE =
+      DBMMap::Traits::PAGE_SIZES[DBMMap::Traits::PAGE_SIZES_COUNT - 1];
 
   size_t initial_file_size = storage._memory->file_size;
 
@@ -103,9 +103,9 @@ BOOST_AUTO_TEST_CASE(test_extend) {
     // We need to allocate enough to exhaust that and trigger another resize
     // New resize will grow by max(requested, 10*AREA_SIZE, 25% of file_size)
     // Allocate enough blocks to exceed initial capacity
-    int count = (11 * AREA_SIZE) / BLOCK_SIZE;  // Force growth beyond initial allocation
+    int count = (11 * AREA_SIZE) / PAGE_SIZE;  // Force growth beyond initial allocation
     for (int i = 0; i < count; i++) {
-      db->alloc(BLOCK_SIZE);
+      db->alloc(PAGE_SIZE);
     }
   }
 
@@ -343,11 +343,11 @@ struct TestTraits {
   static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
-  static constexpr uint16_t BLOCK_SIZES[] = {100, 4 * K};
-  static constexpr uint16_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr uint16_t PAGE_SIZES[] = {100, 4 * K};
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
   struct PageHeader {
     typedef PageHeader Base;
@@ -653,11 +653,11 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     std::vector<page_ptr> blocks;
     // Allocate many large blocks to exhaust the initial area and force new area allocation
     const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
-    const size_t block_size = 4000;  // Large blocks
-    const size_t num_blocks = (AREA_SIZE * 2) / block_size;  // Enough to need multiple areas
+    const size_t page_size = 4000;  // Large blocks
+    const size_t num_blocks = (AREA_SIZE * 2) / page_size;  // Enough to need multiple areas
     
     for (size_t i = 0; i < num_blocks; i++) {
-      blocks.push_back(db->alloc(block_size));
+      blocks.push_back(db->alloc(page_size));
     }
     
     // Before prepare, pending areas should have content (may not always be true if blocks fit in initial area)
@@ -701,11 +701,11 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     std::vector<page_ptr> blocks;
     // Allocate enough blocks to force multiple area allocations
     const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
-    const size_t block_size = 4000;
-    const size_t num_blocks = (AREA_SIZE * 3) / block_size;  // Force 3+ areas
+    const size_t page_size = 4000;
+    const size_t num_blocks = (AREA_SIZE * 3) / page_size;  // Force 3+ areas
     
     for (size_t i = 0; i < num_blocks; i++) {
-      blocks.push_back(db->alloc(block_size));
+      blocks.push_back(db->alloc(page_size));
     }
     
     // Get the transaction state after allocations
@@ -797,12 +797,12 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     
     std::vector<page_ptr> blocks;
     const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
-    const size_t block_size = 3000;
+    const size_t page_size = 3000;
     
     // Allocate much more to definitely create multiple linked areas
     // We need to exceed the initial area and force allocation of new areas
     for (size_t i = 0; i < 50; i++) {
-      blocks.push_back(db->alloc(block_size));
+      blocks.push_back(db->alloc(page_size));
     }
     
     offset_t tail_before_prepare = db->_wtxn->area_list_tail_single;

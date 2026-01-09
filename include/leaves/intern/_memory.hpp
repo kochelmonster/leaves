@@ -20,7 +20,7 @@ The system ensures that memory operations are atomic and crash-safe through:
 
 Memory Layout:
 - Areas are allocated in AREA_SIZE chunks from the underlying resolver
-- Blocks within areas are managed by size classes defined in BLOCK_SIZES
+- Pages within areas are managed by size classes defined in PAGE_SIZES
 - Freed pages are queued per transaction and recycled when safe
 - Block containers themselves use the largest size class slot
 
@@ -69,10 +69,10 @@ constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
 template <typename Traits>
 struct _PageContainer : public Traits::PageHeader {
   using offset_e = typename Traits::offset_e;
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr uint16_t SIZE = Traits::BLOCK_CONTAINER_SIZE;
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr uint16_t SIZE = Traits::PAGE_CONTAINER_SIZE;
   static constexpr uint16_t SLOT_ID = binary_search(
-      &BLOCK_SIZES[0], &BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT], SIZE);
+      &PAGE_SIZES[0], &PAGE_SIZES[Traits::PAGE_SIZES_COUNT], SIZE);
   typedef typename Traits::PageHeader Base;
   typedef typename Traits::template Pointer<_PageContainer> ptr;
 
@@ -221,8 +221,8 @@ struct _MemManager {
   using uint32_e = typename Traits::uint32_e;
   using offset_e = typename Traits::offset_e;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static constexpr auto COUNT = Traits::BLOCK_SIZES_COUNT;
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  static constexpr auto COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
   typedef typename Traits::PageHeader PageHeader;
   typedef _MemManager<Traits> MemManager;
   using ptr = typename Traits::Pointer<MemManager>;
@@ -232,8 +232,8 @@ struct _MemManager {
   using PageContainer = typename Slot::PageContainer;
 
   static constexpr uint16_t PAGE_ID = COUNT - 1;
-  static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
-  static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[COUNT - 1];
+  static constexpr uint16_t MIN_PAGE_SIZE = PAGE_SIZES[0];
+  static constexpr uint16_t MAX_PAGE_SIZE = PAGE_SIZES[COUNT - 1];
 
   offset_e allocation_end;
   offset_e allocation_start;
@@ -251,13 +251,13 @@ struct _MemManager {
 
   static constexpr int assign_slot(uint16_t size) {
     assert(size > 0);
-    return binary_search(&BLOCK_SIZES[0], &BLOCK_SIZES[COUNT], size);
+    return binary_search(&PAGE_SIZES[0], &PAGE_SIZES[COUNT], size);
   }
 
   template <typename Resolver>
   page_ptr alloc(uint8_t sidx, Resolver& resolver) {
     assert(sidx < COUNT);
-    uint16_t bsize = BLOCK_SIZES[sidx];
+    uint16_t bsize = PAGE_SIZES[sidx];
 
     Slot& slot = slots[sidx];
     page_ptr result = slot.pop(resolver);
@@ -302,12 +302,12 @@ struct _MemManager {
 
 template <typename Traits>
 struct _MemStatistics {
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr uint16_t COUNT = Traits::BLOCK_SIZES_COUNT;
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr uint16_t COUNT = Traits::PAGE_SIZES_COUNT;
   static const uint16_t SIZE = 4096;
 
   struct Slot {
-    size_t block_size;
+    size_t page_size;
     size_t count;
     size_t free;
   };
@@ -318,7 +318,7 @@ struct _MemStatistics {
 
   void add(uint16_t sidx, size_t count, size_t free = 0) {
     Slot& slot = slots[sidx];
-    slot.block_size = BLOCK_SIZES[sidx];
+    slot.page_size = PAGE_SIZES[sidx];
     slot.count += count;
     slot.free += free;
   }

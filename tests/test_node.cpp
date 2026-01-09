@@ -19,8 +19,8 @@ struct TestTraits {
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   
-  static constexpr uint16_t BLOCK_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
-  static constexpr uint16_t BLOCK_SIZES_COUNT = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr uint16_t PAGE_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
+  static constexpr uint16_t PAGE_SIZES_COUNT = sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
   struct PageHeader {
     typedef PageHeader Base;

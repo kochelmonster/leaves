@@ -501,9 +501,9 @@ struct _LeafNode {
   using uint32_e = typename Traits::uint32_e;
   using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr auto BS_COUNT = Traits::BLOCK_SIZES_COUNT;
-  static constexpr auto MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1];
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr auto BS_COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr auto MAX_SIZE = PAGE_SIZES[BS_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
 
   uint8_t key_size;

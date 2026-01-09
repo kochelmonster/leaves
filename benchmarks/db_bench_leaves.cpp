@@ -459,9 +459,9 @@ class Benchmark {
         Storage::Statistics stat;
         db_->statistics(stat);
         for (auto slot : stat.garbage.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << std::endl;
-          size += slot.block_size * slot.count;
+          size += slot.page_size * slot.count;
           counts += slot.count;
         }
         std::cout << "CHECK Garbage: " << size << "(" << counts << ")"
@@ -470,25 +470,25 @@ class Benchmark {
         std::cout << "BRANCHES" << std::endl;
         size_t nsize = 0;
         for (auto slot : stat.branch.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          nsize += slot.block_size * slot.count;
+          nsize += slot.page_size * slot.count;
         }
 
         std::cout << "LEAVES" << std::endl;
         for (auto slot : stat.leaf.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          nsize += slot.block_size * slot.count;
+          nsize += slot.page_size * slot.count;
         }
         std::cout << "CHECK Nodes: " << nsize << std::endl;
 
         nsize = 0;
         std::cout << "TRANSACTION" << std::endl;
         for (auto slot : stat.transaction.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          nsize += slot.block_size * slot.count;
+          nsize += slot.page_size * slot.count;
         }
         std::cout << "CHECK Transactions: " << nsize << std::endl;
 

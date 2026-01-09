@@ -31,16 +31,16 @@ struct _MemoryTraits {
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t BLOCK_SIZES[] = {   // Typical node sizes
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t PAGE_SIZES[] = {   // Typical node sizes
       _TrieNode<_MemoryTraits>::size(1, 10),    // digits 0-9
       _TrieNode<_MemoryTraits>::size(1, 16),    // hex 0-9A-F
       _TrieNode<_MemoryTraits>::size(1, 64),    // base64
       _TrieNode<_MemoryTraits>::size(1, 127),   // utf-8
       _TrieNode<_MemoryTraits>::size(1, 256),   // binary
       4 * K};
-  static constexpr uint16_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
   using ptr = SimplePointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = SimplePointer<T, type>;
@@ -66,10 +66,10 @@ struct _MemoryDB {
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr uint16_t BLOCK_SIZES_COUNT = Traits::BLOCK_SIZES_COUNT;
-  static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
-  static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[BLOCK_SIZES_COUNT - 1];
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr uint16_t PAGE_SIZES_COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr uint16_t MIN_PAGE_SIZE = PAGE_SIZES[0];
+  static constexpr uint16_t MAX_PAGE_SIZE = PAGE_SIZES[PAGE_SIZES_COUNT - 1];
 
   typedef _Cursor<CursorTraits> Cursor;
   typedef _MemManager<Traits> MemManager;

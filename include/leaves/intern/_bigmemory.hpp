@@ -21,8 +21,8 @@ struct _BigMemory {
   using chunk_ptr = typename Traits::template Pointer<Chunk>;
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static constexpr auto MAX_BLOCK_SIZE =
-      Traits::BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT - 1];
+  static constexpr auto MAX_PAGE_SIZE =
+      Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_t(1) << 15;
 
   struct FreeKey {
@@ -86,7 +86,7 @@ struct _BigMemory {
 
   void alloc(uint64_t size, BigValue* result) {
     uint64_t total_size = sizeof(FreeKey) + size;
-    uint64_t padded_size = padding(total_size, MAX_BLOCK_SIZE);
+    uint64_t padded_size = padding(total_size, MAX_PAGE_SIZE);
     uint64_t found_size;
     offset_t found_offset;
     bool has_successor = false;
@@ -123,7 +123,7 @@ struct _BigMemory {
     }
 
     uint64_t delta = found_size - padded_size;
-    if (delta >= MAX_BLOCK_SIZE) {
+    if (delta >= MAX_PAGE_SIZE) {
       _add_chunk(found_offset + padded_size, delta, has_successor, false);
       found_size = padded_size;
       has_successor = true;

@@ -16,14 +16,14 @@ struct TestTraits {
   typedef uint32_t uint32_e;
   typedef uint64_t uint64_e;
 
-  static constexpr size_t BLOCK_SIZE = 4 * K;
+  static constexpr size_t PAGE_SIZE = 4 * K;
 
   // size of newly allocated areas
-  static constexpr size_t AREA_SIZE = 4 * BLOCK_SIZE;
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t BLOCK_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
-  static constexpr uint16_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr size_t AREA_SIZE = 4 * PAGE_SIZE;
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t PAGE_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
   struct PageHeader {
     tid_t txn_id;
@@ -215,13 +215,13 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
 }
 
-constexpr auto BLOCK_SIZE = TestTraits::BLOCK_SIZE;
+constexpr auto PAGE_SIZE = TestTraits::PAGE_SIZE;
 
 BOOST_AUTO_TEST_CASE(test_page_border) {
   TestStorage storage;
-  constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
+  constexpr auto& PAGE_SIZES = TestTraits::PAGE_SIZES;
 
-  uint16_t bsize = BLOCK_SIZES[3];
+  uint16_t bsize = PAGE_SIZES[3];
   offset_t delta = storage.resolve(storage.alloc_slot(3));
   delta += bsize;
 
@@ -455,7 +455,7 @@ BOOST_AUTO_TEST_CASE(test_mem_statistics) {
   
   // Test adding statistics
   stats.add(0, 10, 3);
-  BOOST_CHECK_EQUAL(stats.slots[0].block_size, TestTraits::BLOCK_SIZES[0]);
+  BOOST_CHECK_EQUAL(stats.slots[0].page_size, TestTraits::PAGE_SIZES[0]);
   BOOST_CHECK_EQUAL(stats.slots[0].count, 10);
   BOOST_CHECK_EQUAL(stats.slots[0].free, 3);
   
@@ -466,7 +466,7 @@ BOOST_AUTO_TEST_CASE(test_mem_statistics) {
   
   // Test different slot
   stats.add(2, 7, 1);
-  BOOST_CHECK_EQUAL(stats.slots[2].block_size, TestTraits::BLOCK_SIZES[2]);
+  BOOST_CHECK_EQUAL(stats.slots[2].page_size, TestTraits::PAGE_SIZES[2]);
   BOOST_CHECK_EQUAL(stats.slots[2].count, 7);
   BOOST_CHECK_EQUAL(stats.slots[2].free, 1);
 }
@@ -505,9 +505,9 @@ BOOST_AUTO_TEST_CASE(test_mem_manager_left_over_usage) {
   TestStorage storage;
   
   // Force allocation to create left-over space
-  constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
-  uint16_t large_size = BLOCK_SIZES[4]; // Large block
-  [[maybe_unused]] uint16_t small_size = BLOCK_SIZES[0]; // Small block
+  constexpr auto& PAGE_SIZES = TestTraits::PAGE_SIZES;
+  uint16_t large_size = PAGE_SIZES[4]; // Large block
+  [[maybe_unused]] uint16_t small_size = PAGE_SIZES[0]; // Small block
   
   // Allocate large blocks until near end of area
   while (storage.mm.allocation_start + large_size < storage.mm.allocation_end) {

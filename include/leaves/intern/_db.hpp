@@ -120,10 +120,10 @@ struct _DB {
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr uint16_t BLOCK_SIZES_COUNT = Traits::BLOCK_SIZES_COUNT;
-  static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
-  static constexpr uint16_t MAX_BLOCK_SIZE = BLOCK_SIZES[BLOCK_SIZES_COUNT - 1];
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr uint16_t PAGE_SIZES_COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr uint16_t MIN_PAGE_SIZE = PAGE_SIZES[0];
+  static constexpr uint16_t MAX_PAGE_SIZE = PAGE_SIZES[PAGE_SIZES_COUNT - 1];
   static constexpr uint64_t SIZE_BIT = uint64_t(1) << 63;
 
   typedef _TransactionalCursor<CursorTraits> Cursor;
@@ -179,7 +179,7 @@ struct _DB {
     _header->area_list_head_multi = 0;
     _header->area_pool.init();
 
-    uint16_t header_size = padding(sizeof(Header), MIN_BLOCK_SIZE);
+    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
@@ -193,7 +193,7 @@ struct _DB {
     txn->area_list_tail_single =
         first_area_offset;  // First area is also the tail
     txn->area_list_tail_multi = 0;
-    txn->mem_manager.init(_header->read_txn + BLOCK_SIZES[txn->slot_id],
+    txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
                           area_ptr->end());
     make_dirty(_header);
     flush();
@@ -260,7 +260,7 @@ struct _DB {
   }
 
   page_ptr alloc(uint16_t space) {
-    assert(space <= BLOCK_SIZES[BLOCK_SIZES_COUNT - 1]);
+    assert(space <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     return alloc_slot(MemManager::assign_slot(space));
   }
 
@@ -493,7 +493,7 @@ struct _DB {
     if (offset.type() == TRIE) {
       trie_ptr branch = resolve(offset);
       stat.branch.add(branch->slot_id, 1,
-                      BLOCK_SIZES[branch->slot_id] - branch->size());
+                      PAGE_SIZES[branch->slot_id] - branch->size());
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {
@@ -508,7 +508,7 @@ struct _DB {
     _node_statistics(stat, txn()->root);
 
     iter_transactions([this, &stat](txn_ptr txn) -> bool {
-      uint16_t bsize = BLOCK_SIZES[txn->slot_id];
+      uint16_t bsize = PAGE_SIZES[txn->slot_id];
       stat.transaction.add(txn->slot_id, 1, bsize - sizeof(Transaction));
       offset_t offset = resolve(txn);
       return false;

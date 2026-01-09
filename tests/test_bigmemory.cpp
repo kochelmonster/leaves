@@ -40,10 +40,10 @@ struct TestTraits {
   static constexpr size_t MAX_KEY_SIZE = 256;
   static constexpr size_t AREA_SIZE = 128 * K;  // Larger area size for big value tests
   static constexpr uint16_t MAX_PROCESSES = 100;
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t BLOCK_SIZES[] = {64, 128, 256, 512, 1 * K, 4 * K};
-  static constexpr size_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t PAGE_SIZES[] = {64, 128, 256, 512, 1 * K, 4 * K};
+  static constexpr size_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
   struct PageHeader : public DBMMap::Traits::PageHeader {
     typedef DBMMap::Traits::PageHeader Base;

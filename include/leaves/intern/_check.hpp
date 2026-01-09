@@ -43,7 +43,7 @@ struct _Dumper {
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
   static constexpr auto& AREA_SIZE = Traits::AREA_SIZE;
 
   const DB& _db;
@@ -80,7 +80,7 @@ struct _Dumper {
     } else {
       out << "id: " << offset._offset << std::endl;
       out << "page: " << offset._offset / AREA_SIZE << std::endl;
-      out << "freespace: " << BLOCK_SIZES[header->slot_id] - size << std::endl;
+      out << "freespace: " << PAGE_SIZES[header->slot_id] - size << std::endl;
     }
     out << "size: " << size << std::endl;
     out << "txn: " << header->txn_id << std::endl;
@@ -136,7 +136,7 @@ struct _Dumper {
     } else {
       out << "id: " << offset._offset << std::endl;
       out << "page: " << offset._offset / AREA_SIZE << std::endl;
-      out << "freespace: " << BLOCK_SIZES[header->slot_id] - size << std::endl;
+      out << "freespace: " << PAGE_SIZES[header->slot_id] - size << std::endl;
     }
     out << "txn: " << header->txn_id << std::endl;
     out << "size: " << size << std::endl;
@@ -191,25 +191,25 @@ struct _Dumper {
 template <typename Storage>
 struct _MemoryChecker {
   using Traits = typename Storage::Traits;
-  static constexpr auto& BLOCK_SIZES = Storage::BLOCK_SIZES;
+  static constexpr auto& PAGE_SIZES = Storage::PAGE_SIZES;
   using offset_e = typename Storage::offset_e;
   using txn_ptr = typename Storage::txn_ptr;
   using page_ptr = typename Storage::page_ptr;
   static constexpr uint16_t COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
   Storage& storage;
   std::vector<uint64_t> pages;
 
   static constexpr std::array<uint16_t, COUNT> generate_counts() {
     std::array<uint16_t, COUNT> result;
     for (int i = 0; i < COUNT; i++) {
-      uint16_t bsize = BLOCK_SIZES[i];
+      uint16_t bsize = PAGE_SIZES[i];
       uint16_t count = AREA_SIZE / bsize;
       uint16_t used = count * bsize;
       uint16_t collect = count;
       uint16_t rest = AREA_SIZE - used;
-      for (int id = i - 1; id >= 0 && rest > BLOCK_SIZES[0]; id--) {
-        uint16_t bs = BLOCK_SIZES[id];
+      for (int id = i - 1; id >= 0 && rest > PAGE_SIZES[0]; id--) {
+        uint16_t bs = PAGE_SIZES[id];
         while (bs < rest) {
           collect++;
           rest -= bs;
@@ -238,7 +238,7 @@ struct _MemoryChecker {
 
     for (int i = 0; i < txn_->mem_manager.COUNT; i++) {
       auto& slot = txn_->mem_manager.slots[i];
-      uint16_t size = BLOCK_SIZES[i];
+      uint16_t size = PAGE_SIZES[i];
       uint64_t b = slot.next_free;
       while (true) {
         uint64_t pb = padding(b, AREA_SIZE);  // this is wrong
@@ -276,9 +276,9 @@ struct _MemoryChecker {
       if (p != ALL) {
         offset_t i_offset(i * AREA_SIZE);
         page_ptr ptr = storage.template resolve<PageHeader>(&i_offset);
-        uint16_t s0 = BLOCK_SIZES[0];
-        uint16_t s1 = BLOCK_SIZES[1];
-        uint16_t size = BLOCK_SIZES[ptr->slot_id];
+        uint16_t s0 = PAGE_SIZES[0];
+        uint16_t s1 = PAGE_SIZES[1];
+        uint16_t size = PAGE_SIZES[ptr->slot_id];
         int collected = bits::count(p);
         int needed = PART_COUNT[ptr->slot_id];
         assert(collected == needed);
@@ -289,7 +289,7 @@ struct _MemoryChecker {
   void mark_page(offset_t offset) {
     uint16_t slot_id = storage.resolve(&offset, READ)->slot_id;
     uint64_t addr = offset;
-    uint16_t size = BLOCK_SIZES[slot_id];
+    uint16_t size = PAGE_SIZES[slot_id];
     uint64_t page = addr / AREA_SIZE;
     uint16_t poff = (addr % AREA_SIZE);
     uint16_t part = poff / size;
