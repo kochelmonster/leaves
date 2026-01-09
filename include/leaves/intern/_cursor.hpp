@@ -32,10 +32,11 @@ struct _Transition {
   node_ptr node;
 
   trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
-  const trie_ptr& trie() const { return *reinterpret_cast<const trie_ptr*>(&node); }
 
   leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
-  const leaf_ptr& leaf() const { return *reinterpret_cast<const leaf_ptr*>(&node); }
+  const leaf_ptr& leaf() const {
+    return *reinterpret_cast<const leaf_ptr*>(&node);
+  }
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -48,20 +49,20 @@ struct _Transition {
   // UNDEFINED: not tested
   int cmp;
 
-  offset_t offset;
-  uint16_t link_offset;
+  offset_e* offset;
+  uint16_t link_offset;  // the offset to the child inside trie
 
   offset_e* link() {
     assert(link_offset != 0xFFFF);
     return (offset_e*)(trie().link(link_offset));
   }
 
-  bool is_leaf() const { return offset.type() == LEAF; }
-  bool is_trie() const { return offset.type() == TRIE; }
+  bool is_leaf() const { return offset->type() == LEAF; }
+  bool is_trie() const { return offset->type() == TRIE; }
 
   bool success() const { return cmp == 0 && is_leaf(); }
 
-  bool init(Cursor* cursor_, offset_t offset_, uint16_t keypos_ = 0) {
+  bool init(Cursor* cursor_, offset_e* offset_, uint16_t keypos_ = 0) {
     using BlockHeader = typename Traits::BlockHeader;
     cursor = cursor_;
     keypos = keypos_;
@@ -69,46 +70,56 @@ struct _Transition {
     cmp = Transition::UNDEFINED;
     offset = offset_;
     link_offset = 0xFFFF;
-    node = cursor->_db->template resolve<_Node>(&offset);
+    node = cursor->_db->template resolve<_Node>(offset);
     return true;  // the caller shall set the trie root
   }
 
-  void set_root(offset_t offset_) { *cursor->_root = offset_; }
+  void update_trie_offset() {
+    _update_offset(cursor->_db->resolve(trie()));
+  }
 
-  void replace(offset_t offset_) {
-    offset = offset_;
-    if (!is_root())
-      *parent().update(*this) = offset_;
-    else
-      set_root(offset);
+  void update_leaf_offset() {
+    _update_offset(cursor->_db->resolve(leaf()));
+  }
+
+  void _update_offset(offset_e new_offset) {
+    // set the offset to the current node that has been changed.
+    // to transfer the node type to offset we have to distinguish between leaf and trie
+    assert(*offset != new_offset);
+    if (!is_root()) offset = parent().update(*this);
+    *offset = new_offset;
   }
 
   offset_e* update(Transition& child) {
     using BlockHeader = typename Traits::BlockHeader;
     // Compute BlockHeader addresses from node pointers
-    BlockHeader* parent_header = (BlockHeader*)((char*)node - sizeof(BlockHeader));
-    BlockHeader* child_header = (BlockHeader*)((char*)child.node - sizeof(BlockHeader));
+    BlockHeader* parent_header =
+        (BlockHeader*)((char*)node - sizeof(BlockHeader));
+    BlockHeader* child_header =
+        (BlockHeader*)((char*)child.node - sizeof(BlockHeader));
     if (!parent_header->needs_cow(*child_header)) {
-      block_ptr parent_block((char*)parent_header);
-      cursor->_db->make_dirty(parent_block);
+      cursor->_db->make_dirty(node);
       return link();
     }
 
     // copy-on-write trie
     assert(is_trie());
     trie_ptr old_trie = trie();
+
     // Clone node directly
     trie() = cursor->_db->clone(old_trie);
-    offset = cursor->_db->resolve(trie());
-    assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
+    auto new_offset = cursor->_db->resolve(trie());
     block_ptr old_block((char*)old_trie - sizeof(BlockHeader));
     cursor->_db->free(old_block);
+    assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
 
-    if (!is_root())
-      *parent().update(*this) = offset;
-    else
-      set_root(offset);
+    // Propagate COW upward: grandparent's needs_cow will compare its txn_id with
+    // our NEW cloned trie's txn_id. If they match (same transaction), no COW needed.
+    // If different, grandparent will also COW and recursively propagate upward.
+    if (!is_root()) offset = parent().update(*this);
+    *offset = new_offset;
 
+    // Return the child's offset location in the NEW cloned trie
     return link();
   }
 
@@ -120,14 +131,14 @@ struct _Transition {
 
   void resize_key(size_t size) { cursor->current_key.resize(size); }
 
-  Transition& push(const offset_e* lnk) {
+  Transition& push(offset_e* lnk) {
     link_offset = (char*)lnk - (char*)node;
-    cursor->push(*lnk);
+    cursor->push(lnk);
     return cursor->stack.back();
   }
 
-  Transition& push(offset_e lnk) {
-    cursor->push(lnk);
+  Transition& push() {
+    cursor->push(link());
     return cursor->stack.back();
   }
 
@@ -255,7 +266,7 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int next_ = trie_.next(branch_key);
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
-    const offset_e* next_offset = trie_.offset(next_);
+    offset_e* next_offset = trie_.offset(next_);
     branch_key = (uint8_t)next_;
     push(next_offset).first();
     return true;
@@ -321,12 +332,14 @@ struct _Stack {
   typedef _Stack<Cursor> Stack;
   typedef _Transition<Cursor> Transition;
   typedef std::vector<Transition> stack_v;
+  typedef Cursor::Traits::offset_e offset_e;
+
   stack_v data;
   size_t size;
 
   _Stack() : size(0) { data.resize(100); }
 
-  void push(Cursor* cursor, offset_t offset, uint16_t keypos = 0) {
+  void push(Cursor* cursor, offset_e* offset, uint16_t keypos = 0) {
     if (size == data.size()) data.resize(size * 2);
     data[size].init(cursor, offset, keypos);
     size++;
@@ -376,7 +389,7 @@ struct _CursorBase {
     rest_key.iadvance(size);
   }
 
-  void push(offset_t ptr) { stack.push(this, ptr, current_key.size()); }
+  void push(offset_e* ptr) { stack.push(this, ptr, current_key.size()); }
 
   void pop() {
     assert(stack.size > 0);
@@ -419,12 +432,11 @@ struct _Cursor : public _CursorBase<Traits_> {
     _find();
   }
 
-  void set_root(offset_e* root) { 
+  void set_root(offset_e* root) {
     if (*root != *this->_root) {
-      this->_root = root; 
+      this->_root = root;
       clear();
-    }
-    else {
+    } else {
       this->_root = root;
     }
   }
@@ -433,9 +445,8 @@ struct _Cursor : public _CursorBase<Traits_> {
     this->stack.clear(0);
     this->rest_key.reset();
     this->current_key.clear();
-    auto root = *this->_root;
-    if (!root) return true;
-    this->push(root);
+    if (!*this->_root) return true;
+    this->push(this->_root);
     return false;
   }
 
@@ -468,7 +479,7 @@ struct _Cursor : public _CursorBase<Traits_> {
   void* reserve(size_t size) {
     if (!this->stack.size) {
       if (!*this->_root) {
-        this->push(offset_t());
+        this->push(this->_root);
         _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
       }
@@ -534,10 +545,9 @@ struct _Cursor : public _CursorBase<Traits_> {
 
   void _find() {
     if (!this->stack.size) {
-      auto root = *this->_root;
-      if (!root) return;  // empty db
+      if (!*this->_root) return;  // empty db
       this->current_key.clear();
-      this->push(root);
+      this->push(this->_root);
     }
     this->stack.back().find();
   }
@@ -576,8 +586,8 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
 
   BigMemory& get_bigmemory() {
     if (!_bigmemory) {
-      _bigmemory = std::make_unique<BigMemory>(
-          this->_db, &this->_txn->free_bigmem_root);
+      _bigmemory =
+          std::make_unique<BigMemory>(this->_db, &this->_txn->free_bigmem_root);
     }
     return *_bigmemory;
   }
@@ -672,15 +682,15 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
   void _set_txn(txn_ptr& txn) {
     assert(txn);
     if (this->_txn != txn) {
-      offset_t old_root_val = this->_root ? *this->_root : offset_t();
+      offset_e old_root_val = this->_root ? *this->_root : offset_e();
       if (this->_txn) {
         this->_txn->refs.fetch_sub(1);
       }
       this->_txn = txn;
       this->_txn->refs.fetch_add(1);
       this->_root = &this->_txn->root;
-      if (_bigmemory)
-        _bigmemory->reset(&this->_txn->free_bigmem_root);
+      this->stack.front().offset = this->_root;
+      if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
       if ((this->current_key.size() || this->rest_key.size()) &&
           old_root_val != *this->_root) {
         // adjust to new root

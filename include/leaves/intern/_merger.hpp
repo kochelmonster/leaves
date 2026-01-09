@@ -210,9 +210,9 @@ struct _Merger {
       auto loffset =
           new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
                            key1, child1, key);
-      dst.replace(resolve_offset(new_trie));
       dst.trie() = new_trie;
       dst.link_offset = loffset;
+      dst.update_trie_offset();
 
       if (src.is_leaf()) {
         auto& src_leaf = src.leaf();
@@ -250,7 +250,8 @@ struct _Merger {
       // copy src trie to dst and move down the branch src shares with dst
       trie_ptr new_trie = alloc_node<trie_ptr>(src_trie->size());
       copy(*new_trie, *src_trie);
-      dst.replace(resolve_offset(new_trie));
+      dst.trie() = new_trie;
+      dst.update_trie_offset();
 
       auto dst_p = new_trie->offset(key1);
       auto dst_offset = new_trie->array();
@@ -270,9 +271,9 @@ struct _Merger {
 
     trie_ptr new_trie =
         alloc(TrieNode::size(src_trie->len(), src_trie->count() + 1));
-    dst.replace(resolve_offset(new_trie));
-    dst.node = new_trie;
+    dst.trie() = new_trie;
     dst.link_offset = new_trie->create(*src_trie, key1);
+    dst.update_trie_offset();
     *dst.link() = child1;
     for (int key = new_trie->first(); key != TrieNode::OUT_OF_RANGE;
          key = new_trie->next(key)) {
@@ -307,10 +308,10 @@ struct _Merger {
           Slice(&src_trie->compressed()[src_trie->len() - suffix_len],
                 suffix_len));
 
-      dst.replace(resolve_offset(new_trie));
-      dst.node = new_trie;
+      dst.trie() = new_trie;
       dst.link_offset = loffset;
       *dst.link() = resolve_offset(suffix_trie);
+      dst.update_trie_offset();
 
       auto dst_offset = suffix_trie->array();
       auto src_offset = src_trie->array();
@@ -325,8 +326,8 @@ struct _Merger {
         dst_trie->len(), dst_trie->count() + src_trie->count()));
 
     // merge src_trie into dst_trie
-    dst.replace(resolve_offset(new_trie));
-    dst.node = new_trie;
+    dst.trie() = new_trie;
+    dst.update_trie_offset();
 
     const typename DstTrieNode::offset_e* dst_poffset[257];
     const typename SrcTrieNode::offset_e* src_poffset[257];
@@ -368,10 +369,10 @@ struct _Merger {
     leaf_ptr new_leaf =
         fill_leaf(Slice(&src_leaf->data[split_pos], suffix_len), *src_leaf);
 
-    dst.replace(resolve_offset(new_trie));
     dst.trie() = new_trie;
     dst.link_offset = loffset;
     *dst.link() = resolve_offset(new_leaf);
+    dst.update_trie_offset();
   }
 
   typename CursorDst::Transition::trie_ptr clone_plus_one(

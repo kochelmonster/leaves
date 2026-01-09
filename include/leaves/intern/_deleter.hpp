@@ -66,15 +66,15 @@ struct _Deleter {
   void remove_node(Transition* trans) {
     if (trans->is_root()) {
       // remove the last node
-      trans->set_root(offset_t());
+      *trans->offset = offset_t();
       free_node(trans->node);
       trans->pop();
       return;
     }
 
     Transition& parent = trans->parent();
-    auto node =
-        trans->node;  // Save the node pointer before pop invalidates trans
+    // Save the node pointer before pop invalidates trans
+    auto node = trans->node;  
     uint16_t prefix = trans->prefix;
     parent.pop();  // remove trans from stack
     assert(parent.is_trie());
@@ -102,7 +102,7 @@ struct _Deleter {
         alloc_node<trie_ptr>(TrieNode::size(otrie->len(), otrie->count() - 1));
     parent.trie()->create_remove(*otrie,
                                  prefix ? parent.branch_key : TrieNode::NONE);
-    parent.replace(resolve(parent.trie()));
+    parent.update_trie_offset();
     free_node(otrie);
     parent.cmp = -1;
     if (!prefix) parent.prefix = 0;  // NONE Key -> to the first child
@@ -133,7 +133,7 @@ struct _Deleter {
       len += child->len();
       parent.trie() = alloc_node<trie_ptr>(TrieNode::size(len, child->count()));
       parent.trie()->create(*child, Slice(buffer, len));
-      parent.replace(resolve(parent.trie()));
+      parent.update_trie_offset();
       // replace trie! the type is important
       parent.link_offset = (char*)(&parent.trie()->array()[parent.branch_key]) -
                            (char*)parent.node;
@@ -153,8 +153,7 @@ struct _Deleter {
       parent.leaf()->value_size = child->value_size;
       memcpy(parent.leaf()->data, buffer, len);
       memcpy(parent.leaf()->vdata(), child->vdata(), child->vsize());
-      // replace leaf! the type is important
-      parent.replace(resolve(parent.leaf()));
+      parent.update_leaf_offset();
       free_node(child);
     }
 

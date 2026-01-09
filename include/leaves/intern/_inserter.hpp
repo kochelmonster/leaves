@@ -63,14 +63,13 @@ struct _Inserter {
 
   // insert the very first value
   void first_exec() {
-    Transition* front = back;
+    assert(back->is_root());
 
     const Slice& bkey = back->key();
     if (bkey.size() > 255) {
       trie_ptr trie = alloc_node<trie_ptr>(TrieNode::size(255, 1));
       assert(trie);  // must always succeed
-      back->offset = resolve(trie);
-      back->set_root(back->offset);
+      *back->offset = resolve(trie);
       back->trie() = trie;
       fill_bigkey(*back);
       create_leaf();
@@ -80,14 +79,10 @@ struct _Inserter {
     assert(bkey.size() <= 255);
     back->leaf() = fill_leaf(bkey);
     assert(back->leaf());  // must always succeed
-    back->offset = resolve(back->leaf());
+    *back->offset = resolve(back->leaf());
     back->cmp = 0;
     back->prefix = bkey.size();
     back->advance_key(back->prefix);
-    if (front == back)
-      back->set_root(back->offset);
-    else
-      *back->parent().link() = back->offset;
   }
 
   bool split_compressed() {
@@ -131,7 +126,7 @@ struct _Inserter {
         Slice(otrie->compressed(), back->prefix),
         otrie->compressed()[back->prefix], resolve(child_trie), key);
     free_node(otrie);
-    back->replace(resolve(back->trie()));
+    back->update_trie_offset();
     create_leaf();
     return true;
   }
@@ -149,10 +144,10 @@ struct _Inserter {
   void create_bigkey() {
     Slice& key = back->key();
     while (key.size() > 255) {
-      trie_ptr trie = alloc(TrieNode::size(255, 1));
-      Transition& bottom = back->push(resolve(trie));
+      trie_ptr trie = alloc_node<trie_ptr>(TrieNode::size(255, 1));
+      *back->link() = resolve(trie);
+      Transition& bottom = back->push();
       fill_bigkey(bottom);
-      *back->link() = bottom.offset;
       back = &bottom;
     }
   }
@@ -161,11 +156,11 @@ struct _Inserter {
     create_bigkey();
     const Slice& bkey = back->key();
     leaf_ptr leaf = fill_leaf(bkey);
-    Transition& bottom = back->push(resolve(leaf));
+    *back->link() = resolve(leaf);
+    Transition& bottom = back->push();
     bottom.cmp = 0;
     bottom.prefix = bkey.size();
     bottom.advance_key(bottom.prefix);
-    *back->link() = bottom.offset;
   }
 
   leaf_ptr fill_leaf(const Slice& key) {
@@ -187,7 +182,7 @@ struct _Inserter {
         *otrie, back->key() ? back->branch_key : TrieNode::NONE);
 
     free_node(otrie);
-    back->replace(resolve(new_trie));
+    back->update_trie_offset();
     back->cmp = 0;
     create_leaf();
   }
@@ -202,7 +197,7 @@ struct _Inserter {
       assert(back->key().empty());
       back->leaf() = fill_leaf(oleaf->key());
       free_node(oleaf);
-      back->replace(resolve(back->leaf()));
+      back->update_leaf_offset();
       return;
     }
 
@@ -221,21 +216,23 @@ struct _Inserter {
     back->link_offset = new_trie->create(
         Slice(oleaf->data, back->prefix), bkey, resolve(copy),
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
-
+    back->cmp = 0;
+    
     free_node(oleaf);
-    back->replace(resolve(back->trie()));
+    back->update_trie_offset();
     create_leaf();
   }
 
+  // copy the leaf node but reduce the key size by split_pos
   leaf_ptr copy_reduced_leaf(uint8_t split_pos, leaf_ptr& oleaf) {
     leaf_ptr copy = alloc_node<leaf_ptr>(
         LeafNode::size(oleaf->key_size - split_pos, oleaf->vsize()));
-    if (copy) {
-      copy->key_size = oleaf->key_size - split_pos;
-      copy->value_size = oleaf->value_size;
-      memcpy(copy->data, oleaf->data + split_pos,
-             copy->key_size + copy->vsize());
-    }
+
+    copy->key_size = oleaf->key_size - split_pos;
+    copy->value_size = oleaf->value_size;
+    memcpy(copy->data, oleaf->data + split_pos,
+            copy->key_size + copy->vsize());
+
     return copy;
   }
 };
