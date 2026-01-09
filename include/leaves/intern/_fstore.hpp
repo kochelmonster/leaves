@@ -50,7 +50,9 @@ struct _StoreTraits {
   struct PageHeader {
     typedef PageHeader Base;
     tid_t txn_id;
+    uint16_e used;
     uint8_t slot_id;
+
     bool needs_cow(const PageHeader& other) const {
       return txn_id != other.txn_id;
     }

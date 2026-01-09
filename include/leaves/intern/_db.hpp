@@ -72,6 +72,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   template <typename Resolver>
   ptr clone(Resolver& resolver) {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
+    new_txn->used = sizeof(TransactionBase);
     memcpy((char*)new_txn, this, sizeof(TransactionBase));
     assert(new_txn->slot_id == SLOT_ID);
     return new_txn;
@@ -243,25 +244,13 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  template <typename NodePtr>
-  NodePtr clone(const NodePtr& src) {
-    using PageHeader = typename Traits::PageHeader;
-    static_assert(!std::is_same<NodePtr, page_ptr>::value,
-                  "NodePtr must not be a page_ptr ");
-
-    // src is a node_ptr pointing to node data after PageHeader
-    // Get PageHeader by subtracting sizeof(PageHeader)
-    const char* src_ptr = (const char*)src;
-    PageHeader* src_header = (PageHeader*)(src_ptr - sizeof(PageHeader));
-    page_ptr dest_header = alloc_slot(src_header->slot_id);
-    NodePtr dest((char*)dest_header + sizeof(PageHeader));
-    memcpy((char*)dest, src_ptr, src->size());
-    return dest;
-  }
-
+  // space without PageHeader
   page_ptr alloc(uint16_t space) {
     assert(space <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
-    return alloc_slot(MemManager::assign_slot(space));
+    page_ptr result = alloc_slot(
+        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
+    result->used = space;
+    return result;
   }
 
   page_ptr alloc_slot(uint16_t slot) {

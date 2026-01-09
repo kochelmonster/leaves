@@ -38,8 +38,8 @@ struct _Inserter {
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
     using PageHeader = typename Traits::PageHeader;
-    page_ptr page = alloc(sizeof(PageHeader) + node_size);
-    return NodePtr((char*)page + sizeof(PageHeader));
+    page_ptr page = alloc(node_size);
+    return page + sizeof(PageHeader);
   }
 
   // Free node by computing PageHeader pointer
@@ -49,7 +49,7 @@ struct _Inserter {
     static_assert(
         !std::is_same_v<NodePtr, page_ptr>,
         "free_node must be called with node pointers, not page pointers");
-    page_ptr page((char*)node - sizeof(PageHeader));
+    page_ptr page = node - sizeof(PageHeader);
     free(page);
   }
 

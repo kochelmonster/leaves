@@ -62,8 +62,9 @@ struct _Transition {
 
   bool success() const { return cmp == 0 && is_leaf(); }
 
+  bool is_page_root() const { return !offset->is_relative(); }
+
   bool init(Cursor* cursor_, offset_e* offset_, uint16_t keypos_ = 0) {
-    using PageHeader = typename Traits::PageHeader;
     cursor = cursor_;
     keypos = keypos_;
     prefix = 0;
@@ -74,17 +75,16 @@ struct _Transition {
     return true;  // the caller shall set the trie root
   }
 
-  void update_trie_offset() {
-    _update_offset(cursor->_db->resolve(trie()));
+  void update_trie_offset() { 
+    _update_offset(cursor->_db->resolve(trie())); 
   }
 
-  void update_leaf_offset() {
-    _update_offset(cursor->_db->resolve(leaf()));
-  }
+  void update_leaf_offset() { _update_offset(cursor->_db->resolve(leaf())); }
 
   void _update_offset(offset_e new_offset) {
     // set the offset to the current node that has been changed.
-    // to transfer the node type to offset we have to distinguish between leaf and trie
+    // to transfer the node type to offset we have to distinguish between leaf
+    // and trie
     assert(*offset != new_offset);
     if (!is_root()) offset = parent().update(*this);
     *offset = new_offset;
@@ -92,12 +92,18 @@ struct _Transition {
 
   offset_e* update(Transition& child) {
     using PageHeader = typename Traits::PageHeader;
+
+    if (!is_page_root()) {
+      // not a page root: cow has to be done in page root
+      offset = parent().update(*this);
+      return link();
+    }
+
     // Compute PageHeader addresses from node pointers
-    PageHeader* parent_header =
-        (PageHeader*)((char*)node - sizeof(PageHeader));
+    page_ptr page_header = node - sizeof(PageHeader);
     PageHeader* child_header =
         (PageHeader*)((char*)child.node - sizeof(PageHeader));
-    if (!parent_header->needs_cow(*child_header)) {
+    if (!page_header->needs_cow(*child_header)) {
       cursor->_db->make_dirty(node);
       return link();
     }
@@ -106,16 +112,22 @@ struct _Transition {
     assert(is_trie());
     trie_ptr old_trie = trie();
 
-    // Clone node directly
-    trie() = cursor->_db->clone(old_trie);
+    page_ptr new_page = cursor->_db->alloc_slot(page_header->slot_id);
+    new_page->used = page_header->used;
+    assert(new_page->used <= Traits::PAGE_SIZES[new_page->slot_id]);
+    
+    assert(old_trie->size() <= page_header->used);
+    trie() = new_page + sizeof(PageHeader);
+    memcpy((char*)trie(), (char*)old_trie, page_header->used);
+
     auto new_offset = cursor->_db->resolve(trie());
-    page_ptr old_page((char*)old_trie - sizeof(PageHeader));
-    cursor->_db->free(old_page);
+    cursor->_db->free(page_header);
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
 
-    // Propagate COW upward: grandparent's needs_cow will compare its txn_id with
-    // our NEW cloned trie's txn_id. If they match (same transaction), no COW needed.
-    // If different, grandparent will also COW and recursively propagate upward.
+    // Propagate COW upward: grandparent's needs_cow will compare its txn_id
+    // with our NEW cloned trie's txn_id. If they match (same transaction), no
+    // COW needed. If different, grandparent will also COW and recursively
+    // propagate upward.
     if (!is_root()) offset = parent().update(*this);
     *offset = new_offset;
 

@@ -25,6 +25,7 @@ struct _MemoryTraits {
 
   struct PageHeader {
     typedef PageHeader Base;
+    uint16_e used;     // used bytes in page
     uint8_t slot_id;
     bool needs_cow(const PageHeader& other) const { return false; }
   };
