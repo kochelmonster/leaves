@@ -25,11 +25,11 @@ struct TestTraits {
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
-  struct BlockHeader {
+  struct PageHeader {
     tid_t txn_id;
     uint8_t slot_id;
   };
-  using ptr = SimplePointer<BlockHeader, TRIE>;
+  using ptr = SimplePointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = SimplePointer<T, type>;
 };
@@ -38,8 +38,8 @@ constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
 
 struct TestStorage {
   typedef TestTraits Traits;
-  using BlockHeader = typename TestTraits::BlockHeader;
-  using block_ptr = typename TestTraits::ptr;
+  using PageHeader = typename TestTraits::PageHeader;
+  using page_ptr = typename TestTraits::ptr;
   using offset_e = typename TestTraits::offset_e;
   using uint32_e = typename TestTraits::uint32_e;
   using uint16_e = typename TestTraits::uint16_e;
@@ -64,8 +64,8 @@ struct TestStorage {
   tid_t accept_tid;
   tid_t mark_tid;
 
-  block_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) {
-    return block_ptr(&memory[*offset_ptr]);
+  page_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) {
+    return page_ptr(&memory[*offset_ptr]);
   }
 
   template <typename T>
@@ -74,19 +74,19 @@ struct TestStorage {
     return typename Traits::Pointer<T>(&memory[*offset_ptr]);
   }
 
-  offset_t resolve(const block_ptr& p) {
+  offset_t resolve(const page_ptr& p) {
     return offset_t((const char*)p - (char*)&memory[0]);
   }
 
-  block_ptr alloc(uint16_t space) { return alloc_slot(mm.assign_slot(space)); }
+  page_ptr alloc(uint16_t space) { return alloc_slot(mm.assign_slot(space)); }
 
-  block_ptr alloc_slot(uint8_t slot) {
-    block_ptr result = mm.alloc(slot, *this);
+  page_ptr alloc_slot(uint8_t slot) {
+    page_ptr result = mm.alloc(slot, *this);
     result->txn_id = mark_tid;
     return result;
   }
 
-  void free(block_ptr p) { mm.free(p, *this); }
+  void free(page_ptr p) { mm.free(p, *this); }
 
   area_ptr alloc_single_area() {
     auto result = single_areas.pop(*this);
@@ -165,20 +165,20 @@ BOOST_AUTO_TEST_CASE(test_block_assignment) {
   BOOST_CHECK_EQUAL(TestStorage::MemManager::assign_slot(4096), 5);
 }
 
-using BlockHeader = TestTraits::BlockHeader;
-using block_ptr = TestTraits::ptr;
+using PageHeader = TestTraits::PageHeader;
+using page_ptr = TestTraits::ptr;
 using MemManager = TestStorage::MemManager;
 
 BOOST_AUTO_TEST_CASE(test_free_overflow) {
   TestStorage storage;
 
   static const int BC =
-      storage.mm.assign_slot(MemManager::BlockContainer::SIZE);
+      storage.mm.assign_slot(MemManager::PageContainer::SIZE);
 
   const uint16_t SPACE = 200;
 
   std::vector<offset_t> offsets;
-  const int COUNT = MemManager::BlockContainer::COUNT;
+  const int COUNT = MemManager::PageContainer::COUNT;
   int count = 1 + COUNT;
   for (int i = 0; i < count; ++i) {
     auto result = storage.alloc(SPACE);
@@ -726,11 +726,11 @@ BOOST_AUTO_TEST_CASE(test_binary_search_edge_cases) {
 BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   TestStorage storage;
   
-  static const int BC = storage.mm.assign_slot(MemManager::BlockContainer::SIZE);
+  static const int BC = storage.mm.assign_slot(MemManager::PageContainer::SIZE);
   [[maybe_unused]] const uint16_t SPACE = 200;
-  const int COUNT = MemManager::BlockContainer::COUNT;
+  const int COUNT = MemManager::PageContainer::COUNT;
   
-  // Allocate and free exactly COUNT BlockContainers to fill one container
+  // Allocate and free exactly COUNT PageContainers to fill one container
   std::vector<offset_t> bc_offsets;
   for (int i = 0; i < COUNT; ++i) {
     auto bc = storage.alloc_slot(BC);
@@ -754,7 +754,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   }
   
   // This allocation should trigger the circular prevention logic
-  // because we're trying to pop the last BlockContainer from the BC slot itself
+  // because we're trying to pop the last PageContainer from the BC slot itself
   auto result = storage.alloc_slot(BC);
   
   // The circular prevention should have prevented returning the last BC
@@ -769,7 +769,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_cleanup) {
   TestStorage storage;
   
   const uint16_t SPACE = 200;
-  const int COUNT = MemManager::BlockContainer::COUNT;
+  const int COUNT = MemManager::PageContainer::COUNT;
   int sid = storage.mm.assign_slot(SPACE);
   
   // Allocate and free exactly COUNT blocks to fill one container

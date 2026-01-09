@@ -75,8 +75,8 @@ BOOST_AUTO_TEST_CASE(test_double_open) {
   BOOST_CHECK_EQUAL(db2._memory->db_version, 1);
 }
 
-using BlockHeader = DBMMap::Traits::BlockHeader;
-using block_ptr = DBMMap::block_ptr;
+using PageHeader = DBMMap::Traits::PageHeader;
+using page_ptr = DBMMap::page_ptr;
 
 
 BOOST_AUTO_TEST_CASE(test_sanitize) {

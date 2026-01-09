@@ -47,11 +47,11 @@ struct _StoreTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
-    bool needs_cow(const BlockHeader& other) const {
+    bool needs_cow(const PageHeader& other) const {
       return txn_id != other.txn_id;
     }
   };
@@ -68,7 +68,7 @@ struct _StoreTraits {
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  using ptr = SmartPointer<BlockHeader, TRIE>;
+  using ptr = SmartPointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = SmartPointer<T, type>;
 };

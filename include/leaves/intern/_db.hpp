@@ -13,11 +13,11 @@
 namespace leaves {
 
 template <typename Traits_>
-struct _TransactionBase : public Traits_::BlockHeader {
+struct _TransactionBase : public Traits_::PageHeader {
   typedef _TransactionBase<Traits_> TransactionBase;
   typedef Traits_ Traits;
   typedef _MemManager<Traits> MemManager;
-  using Traits::BlockHeader::txn_id;
+  using Traits::PageHeader::txn_id;
   using offset_e = typename Traits::offset_e;
 
   // pointer to the active root of the trie
@@ -51,7 +51,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   typedef _TransactionBase<Traits_> TransactionBase;
   typedef _MemManager<Traits> MemManager;
   using ptr = typename Traits::Pointer<_Transaction>;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using TransactionBase::area_list_tail_multi;
   using TransactionBase::area_list_tail_single;
   using TransactionBase::mem_manager;
@@ -62,8 +62,8 @@ struct _Transaction : public _TransactionBase<Traits_> {
   uint16_t size() const { return sizeof(TransactionBase); }
 
   template <typename Resolver>
-  block_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
-    block_ptr result = mem_manager.alloc(slot, resolver);
+  page_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
+    page_ptr result = mem_manager.alloc(slot, resolver);
     result->txn_id = txn_id;
     resolver.make_dirty(result);
     return result;
@@ -108,7 +108,7 @@ struct _DB {
   using Mutex = typename Storage::Mutex;
   using area_ptr = typename Storage::area_ptr;
   using txn_ptr = typename Transaction::ptr;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
 
   typedef _DB<Storage_, Transaction_, Header_> DB;
@@ -245,35 +245,35 @@ struct _DB {
 
   template <typename NodePtr>
   NodePtr clone(const NodePtr& src) {
-    using BlockHeader = typename Traits::BlockHeader;
-    static_assert(!std::is_same<NodePtr, block_ptr>::value,
-                  "NodePtr must not be a block_ptr ");
+    using PageHeader = typename Traits::PageHeader;
+    static_assert(!std::is_same<NodePtr, page_ptr>::value,
+                  "NodePtr must not be a page_ptr ");
 
-    // src is a node_ptr pointing to node data after BlockHeader
-    // Get BlockHeader by subtracting sizeof(BlockHeader)
+    // src is a node_ptr pointing to node data after PageHeader
+    // Get PageHeader by subtracting sizeof(PageHeader)
     const char* src_ptr = (const char*)src;
-    BlockHeader* src_header = (BlockHeader*)(src_ptr - sizeof(BlockHeader));
-    block_ptr dest_header = alloc_slot(src_header->slot_id);
-    NodePtr dest((char*)dest_header + sizeof(BlockHeader));
+    PageHeader* src_header = (PageHeader*)(src_ptr - sizeof(PageHeader));
+    page_ptr dest_header = alloc_slot(src_header->slot_id);
+    NodePtr dest((char*)dest_header + sizeof(PageHeader));
     memcpy((char*)dest, src_ptr, src->size());
     return dest;
   }
 
-  block_ptr alloc(uint16_t space) {
+  page_ptr alloc(uint16_t space) {
     assert(space <= BLOCK_SIZES[BLOCK_SIZES_COUNT - 1]);
     return alloc_slot(MemManager::assign_slot(space));
   }
 
-  block_ptr alloc_slot(uint16_t slot) {
+  page_ptr alloc_slot(uint16_t slot) {
     assert(transaction_active());
     assert(_active_txn);
     return _active_txn->alloc_slot(slot, *this);
   }
 
-  void free(block_ptr block) {
+  void free(page_ptr page) {
     assert(transaction_active());
     assert(_active_txn);
-    _active_txn->mem_manager.free(block, *this);
+    _active_txn->mem_manager.free(page, *this);
   }
 
   void prefetch(const offset_t& offset) const { _storage.prefetch(&offset); }
@@ -469,7 +469,7 @@ struct _DB {
   void _garbage_statistics(MemStatistics& tofill) {
     txn_ptr txn_ = txn();
     const int garbage =
-        MemManager::assign_slot(MemManager::BlockContainer::SIZE);
+        MemManager::assign_slot(MemManager::PageContainer::SIZE);
     for (int i = 0; i < MemManager::COUNT; i++) {
       auto slot = txn_->mem_manager.slots[i];
       // collect blocks

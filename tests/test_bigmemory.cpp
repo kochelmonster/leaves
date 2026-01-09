@@ -45,8 +45,8 @@ struct TestTraits {
   static constexpr size_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
-  struct BlockHeader : public DBMMap::Traits::BlockHeader {
-    typedef DBMMap::Traits::BlockHeader Base;
+  struct PageHeader : public DBMMap::Traits::PageHeader {
+    typedef DBMMap::Traits::PageHeader Base;
   };
 
   using ptr = typename DBMMap::Traits::ptr;

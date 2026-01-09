@@ -69,10 +69,10 @@ struct _Dumper {
   }
 
   void dump_leaf(std::ostream& out, offset_e offset, int id) {
-    using BlockHeader = typename Traits::BlockHeader;
+    using PageHeader = typename Traits::PageHeader;
     leaf_ptr leaf = _db.template resolve<LeafNode>(&offset);
-    // Compute BlockHeader address (leaf points to node after header)
-    BlockHeader* header = (BlockHeader*)((char*)leaf - sizeof(BlockHeader));
+    // Compute PageHeader address (leaf points to node after header)
+    PageHeader* header = (PageHeader*)((char*)leaf - sizeof(PageHeader));
     uint16_t size = leaf->size();
     out << "type: leaf" << std::endl;
     if (_simple) {
@@ -111,7 +111,7 @@ struct _Dumper {
       // Read chunk header to get size and has_successor flag
       offset_e header_offset = bv->chunk_offset;
       header_offset._offset -= sizeof(FreeKey);
-      auto header_ptr = (FreeKey*)(char*)_db.template resolve<BlockHeader>(&header_offset, READ);
+      auto header_ptr = (FreeKey*)(char*)_db.template resolve<PageHeader>(&header_offset, READ);
       uint64_t chunk_size = header_ptr->size;
       bool has_successor = (header_ptr->offset & 1) != 0;
       
@@ -125,10 +125,10 @@ struct _Dumper {
   }
 
   void dump_trie(std::ostream& out, offset_e offset, int id) {
-    using BlockHeader = typename Traits::BlockHeader;
+    using PageHeader = typename Traits::PageHeader;
     trie_ptr trie = _db.template resolve<TrieNode>(&offset);
-    // Compute BlockHeader address (trie points to node after header)
-    BlockHeader* header = (BlockHeader*)((char*)trie - sizeof(BlockHeader));
+    // Compute PageHeader address (trie points to node after header)
+    PageHeader* header = (PageHeader*)((char*)trie - sizeof(PageHeader));
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
     if (_simple) {
@@ -194,7 +194,7 @@ struct _MemoryChecker {
   static constexpr auto& BLOCK_SIZES = Storage::BLOCK_SIZES;
   using offset_e = typename Storage::offset_e;
   using txn_ptr = typename Storage::txn_ptr;
-  using block_ptr = typename Storage::block_ptr;
+  using page_ptr = typename Storage::page_ptr;
   static constexpr uint16_t COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
   Storage& storage;
@@ -252,7 +252,7 @@ struct _MemoryChecker {
       // collect garbage container blocks
       offset_t o = slot.ostart;
       while (o) {
-        typename Storage::MemManager::Slot::cont_ptr gc = storage.template resolve<BlockContainer>(&o);
+        typename Storage::MemManager::Slot::cont_ptr gc = storage.template resolve<PageContainer>(&o);
         mark_page(o);
         if (o == slot.oend) break;
         o = gc->next;
@@ -275,7 +275,7 @@ struct _MemoryChecker {
       uint64_t p = pages[i];
       if (p != ALL) {
         offset_t i_offset(i * AREA_SIZE);
-        block_ptr ptr = storage.template resolve<BlockHeader>(&i_offset);
+        page_ptr ptr = storage.template resolve<PageHeader>(&i_offset);
         uint16_t s0 = BLOCK_SIZES[0];
         uint16_t s1 = BLOCK_SIZES[1];
         uint16_t size = BLOCK_SIZES[ptr->slot_id];

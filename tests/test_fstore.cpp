@@ -303,7 +303,7 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
   std::memcpy(buf.data(), &area, sizeof(AreaSlice));
   db.write(base + db.calc_header_size(), buf.data(), buf.size());
 
-  // Resolve a location to get a block_ptr
+  // Resolve a location to get a page_ptr
   offset_t base_offset(base);
   auto blk = db.resolve(&base_offset, WRITE);
   BOOST_REQUIRE(blk);

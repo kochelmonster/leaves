@@ -47,11 +47,11 @@ struct _MemoryMapTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
     tid_t txn_id;
     uint8_t slot_id;
-    bool needs_cow(const BlockHeader& other) const {
+    bool needs_cow(const PageHeader& other) const {
       return txn_id != other.txn_id;
     }
   };
@@ -71,7 +71,7 @@ struct _MemoryMapTraits {
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
-  using ptr = SimplePointer<BlockHeader, TRIE>;
+  using ptr = SimplePointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = SimplePointer<T, type>;
 };
@@ -80,7 +80,7 @@ template <typename Traits_, template<typename> class DB_ = _DB>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
   typedef _MemoryMapFile<Traits_, DB_> MemoryMapFile;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -260,7 +260,7 @@ struct _MemoryMapFile {
   }
 
   // Resolve offset - handles both absolute and relative offsets uniformly
-  block_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
+  page_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
     char* p;
     
     if (offset_ptr->is_relative()) {
@@ -273,7 +273,7 @@ struct _MemoryMapFile {
     }
     
     prefetch(p, access);
-    return block_ptr(p);
+    return page_ptr(p);
   }
 
   template <typename Pointer>

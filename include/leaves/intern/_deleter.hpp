@@ -14,7 +14,7 @@ struct _Deleter {
   using Traits = typename Transition::Traits;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
-  using block_ptr = typename Transition::block_ptr;
+  using page_ptr = typename Transition::page_ptr;
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
@@ -34,28 +34,28 @@ struct _Deleter {
     return cursor._db->resolve(ptr);
   }
 
-  block_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
+  page_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
 
-  // Allocate node with BlockHeader prefix, return pointer to node
+  // Allocate node with PageHeader prefix, return pointer to node
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
-    using BlockHeader = typename Traits::BlockHeader;
-    block_ptr block = alloc(sizeof(BlockHeader) + node_size);
-    return NodePtr((char*)block + sizeof(BlockHeader));
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc(sizeof(PageHeader) + node_size);
+    return NodePtr((char*)page + sizeof(PageHeader));
   }
 
-  // Free node by computing BlockHeader pointer
+  // Free node by computing PageHeader pointer
   template <typename NodePtr>
   void free_node(NodePtr& node) {
-    using BlockHeader = typename Traits::BlockHeader;
+    using PageHeader = typename Traits::PageHeader;
     static_assert(
-        !std::is_same_v<NodePtr, block_ptr>,
-        "free_node must be called with node pointers, not block pointers");
-    block_ptr block((char*)node - sizeof(BlockHeader));
-    cursor._db->free(block);
+        !std::is_same_v<NodePtr, page_ptr>,
+        "free_node must be called with node pointers, not page pointers");
+    page_ptr page((char*)node - sizeof(PageHeader));
+    cursor._db->free(page);
   }
 
-  void free(block_ptr block) { cursor._db->free(block); }
+  void free(page_ptr page) { cursor._db->free(page); }
 
   void exec() {
     assert(back->success());

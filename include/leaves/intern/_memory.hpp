@@ -8,9 +8,9 @@ boundaries.
 
 Key Components:
 - AreaPool: Manages allocation of memory areas from the underlying storage
-- _MemManager: Handles block allocation/deallocation with size-based slots
-- _GarbageSlot: Maintains queues of freed blocks per transaction
-- _BlockContainer: 4K structures that store freed block metadata
+- _MemManager: Handles page allocation/deallocation with size-based slots
+- _GarbageSlot: Maintains queues of freed pages per transaction
+- _PageContainer: 4K structures that store freed page metadata
 
 Transaction Safety:
 The system ensures that memory operations are atomic and crash-safe through:
@@ -21,7 +21,7 @@ The system ensures that memory operations are atomic and crash-safe through:
 Memory Layout:
 - Areas are allocated in AREA_SIZE chunks from the underlying resolver
 - Blocks within areas are managed by size classes defined in BLOCK_SIZES
-- Freed blocks are queued per transaction and recycled when safe
+- Freed pages are queued per transaction and recycled when safe
 - Block containers themselves use the largest size class slot
 
 Crash Recovery:
@@ -64,17 +64,17 @@ constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
   return first - start;
 }
 
-// A configurable Structure to register memory blocks.
-// Size is determined by Traits::BLOCK_CONTAINER_SIZE (default 4K)
+// A configurable Structure to register memory pages.
+// Size is determined by Traits::PAGE_CONTAINER_SIZE (default 4K)
 template <typename Traits>
-struct _BlockContainer : public Traits::BlockHeader {
+struct _PageContainer : public Traits::PageHeader {
   using offset_e = typename Traits::offset_e;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
   static constexpr uint16_t SIZE = Traits::BLOCK_CONTAINER_SIZE;
   static constexpr uint16_t SLOT_ID = binary_search(
       &BLOCK_SIZES[0], &BLOCK_SIZES[Traits::BLOCK_SIZES_COUNT], SIZE);
-  typedef typename Traits::BlockHeader Base;
-  typedef typename Traits::template Pointer<_BlockContainer> ptr;
+  typedef typename Traits::PageHeader Base;
+  typedef typename Traits::template Pointer<_PageContainer> ptr;
 
   struct BlockItem {
     offset_e link;  // link to the page
@@ -100,14 +100,14 @@ different ends and starts of the queue.
 
 template <typename Traits>
 struct _GarbageSlot {
-  using BlockHeader = typename Traits::BlockHeader;
+  using PageHeader = typename Traits::PageHeader;
   using offset_e = typename Traits::offset_e;
   using uint16_e = typename Traits::uint16_e;
   using uint64_e = typename Traits::uint64_e;
   using ptr = typename Traits::ptr;
   typedef _GarbageSlot<Traits> GarbageSlot;
-  typedef _BlockContainer<Traits> BlockContainer;
-  using cont_ptr = typename BlockContainer::ptr;
+  typedef _PageContainer<Traits> PageContainer;
+  using cont_ptr = typename PageContainer::ptr;
 
   template <typename Resolver>
   ptr pop(Resolver& resolver) {
@@ -116,21 +116,21 @@ struct _GarbageSlot {
     assert(ostart);
     assert(oend);
     assert(!(ostart == oend && istart == iend));
-    assert(istart + count > BlockContainer::COUNT || ostart == oend);
+    assert(istart + count > PageContainer::COUNT || ostart == oend);
 
-    cont_ptr front(resolver.template resolve<BlockContainer>(&ostart, WRITE));
+    cont_ptr front(resolver.template resolve<PageContainer>(&ostart, WRITE));
     if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
 
     assert(front->blocks[istart].link != 0);
-    ptr result = resolver.template resolve<BlockHeader>(
+    ptr result = resolver.template resolve<PageHeader>(
         &front->blocks[istart].link, WRITE);
 
     count--;
     istart++;
-    if (istart >= BlockContainer::COUNT) {
-      if (result->slot_id == BlockContainer::SLOT_ID && !count) {
+    if (istart >= PageContainer::COUNT) {
+      if (result->slot_id == PageContainer::SLOT_ID && !count) {
         // avoid possible circle if the method is called by
-        // push(BlockContainer::SLOT_ID)
+        // push(PageContainer::SLOT_ID)
         count = 1;
         istart--;
         return nullptr;
@@ -138,7 +138,7 @@ struct _GarbageSlot {
 
       ostart = front->next;
       if (!ostart) {
-        assert(iend == BlockContainer::COUNT);
+        assert(iend == PageContainer::COUNT);
         assert(count == 0);
         oend = 0;
         iend = 0;
@@ -154,10 +154,10 @@ struct _GarbageSlot {
     cont_ptr back;
 
     if (oend) {
-      back = resolver.template resolve<BlockContainer>(&oend, WRITE);
-      if (iend >= BlockContainer::COUNT) {
-        cont_ptr new_back = resolver.alloc_slot(BlockContainer::SLOT_ID);
-        assert(new_back->slot_id == BlockContainer::SLOT_ID);
+      back = resolver.template resolve<PageContainer>(&oend, WRITE);
+      if (iend >= PageContainer::COUNT) {
+        cont_ptr new_back = resolver.alloc_slot(PageContainer::SLOT_ID);
+        assert(new_back->slot_id == PageContainer::SLOT_ID);
         new_back->next = 0;
         oend = back->next = resolver.resolve(new_back);
         iend = 0;
@@ -169,8 +169,8 @@ struct _GarbageSlot {
       assert(istart == 0);
       assert(iend == 0);
       assert(count == 0);
-      back = resolver.alloc_slot(BlockContainer::SLOT_ID);
-      assert(back->slot_id == BlockContainer::SLOT_ID);
+      back = resolver.alloc_slot(PageContainer::SLOT_ID);
+      assert(back->slot_id == PageContainer::SLOT_ID);
       back->next = 0;
       oend = ostart = resolver.resolve(back);
     }
@@ -182,7 +182,7 @@ struct _GarbageSlot {
     iend++;
     count++;
 
-    assert(istart + count > BlockContainer::COUNT || ostart == oend);
+    assert(istart + count > PageContainer::COUNT || ostart == oend);
   }
 
   template <typename Caller, typename Resolver>
@@ -192,7 +192,7 @@ struct _GarbageSlot {
 
     while (true) {
       cont_ptr container =
-          resolver.template resolve<BlockContainer>(&ocontainer);
+          resolver.template resolve<PageContainer>(&ocontainer);
 
       if (ocontainer == oend) {
         for (; index < iend; index++) {
@@ -201,7 +201,7 @@ struct _GarbageSlot {
         break;
       }
 
-      for (; index < BlockContainer::COUNT; index++)
+      for (; index < PageContainer::COUNT; index++)
         call(container->blocks[index]);
 
       index = 0;
@@ -223,13 +223,13 @@ struct _MemManager {
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto COUNT = Traits::BLOCK_SIZES_COUNT;
   static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  typedef typename Traits::BlockHeader BlockHeader;
+  typedef typename Traits::PageHeader PageHeader;
   typedef _MemManager<Traits> MemManager;
   using ptr = typename Traits::Pointer<MemManager>;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
 
   typedef _GarbageSlot<Traits> Slot;
-  using BlockContainer = typename Slot::BlockContainer;
+  using PageContainer = typename Slot::PageContainer;
 
   static constexpr uint16_t PAGE_ID = COUNT - 1;
   static constexpr uint16_t MIN_BLOCK_SIZE = BLOCK_SIZES[0];
@@ -255,12 +255,12 @@ struct _MemManager {
   }
 
   template <typename Resolver>
-  block_ptr alloc(uint8_t sidx, Resolver& resolver) {
+  page_ptr alloc(uint8_t sidx, Resolver& resolver) {
     assert(sidx < COUNT);
     uint16_t bsize = BLOCK_SIZES[sidx];
 
     Slot& slot = slots[sidx];
-    block_ptr result = slot.pop(resolver);
+    page_ptr result = slot.pop(resolver);
     if (result) {
       // Because of some rollback situations slot_id of result could be wrong
       // but the classification of the slot is right
@@ -269,7 +269,7 @@ struct _MemManager {
     }
 
     if (left_over_start + bsize <= left_over_end) {
-      result = resolver.template resolve<BlockHeader>(&left_over_start, WRITE);
+      result = resolver.template resolve<PageHeader>(&left_over_start, WRITE);
       left_over_start += bsize;
       result->slot_id = sidx;
       return result;
@@ -283,19 +283,19 @@ struct _MemManager {
       }
       // Always allocate new area since current allocation is exhausted
       auto area = resolver.alloc_single_area();
-      if (!area) return block_ptr();
+      if (!area) return page_ptr();
       allocation_start = area->content_offset();
       allocation_end = area->end();
     }
 
-    result = resolver.template resolve<BlockHeader>(&allocation_start, WRITE);
+    result = resolver.template resolve<PageHeader>(&allocation_start, WRITE);
     allocation_start += bsize;
     result->slot_id = sidx;
     return result;
   }
 
   template <typename Resolver>
-  void free(block_ptr block, Resolver& resolver) {
+  void free(page_ptr block, Resolver& resolver) {
     slots[block->slot_id].push(block, resolver);
   }
 };

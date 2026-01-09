@@ -22,8 +22,8 @@ struct TestTraits {
   static constexpr uint16_t BLOCK_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
   static constexpr uint16_t BLOCK_SIZES_COUNT = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
 
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
   };
 };
 
@@ -403,7 +403,7 @@ BOOST_AUTO_TEST_CASE(test_count_uint8) {
 BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   // Test that the copy() function correctly copies all derived class fields
   // This test verifies the fix for the pragma pack(1) issue where
-  // sizeof(BlockHeader) was 8 but derived fields started at offset 5
+  // sizeof(PageHeader) was 8 but derived fields started at offset 5
   
   char buffer1[AREA_SIZE], buffer2[AREA_SIZE], buffer3[AREA_SIZE];
   TrieNode& src = *(TrieNode*)buffer1;
@@ -469,13 +469,13 @@ BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   BOOST_CHECK_EQUAL(*dst.offset('b'), 200);
   BOOST_CHECK_EQUAL(*dst.offset('c'), 300);
   
-  // The test would fail if copy() used sizeof(BlockHeader)=8 instead of
+  // The test would fail if copy() used sizeof(PageHeader)=8 instead of
   // the actual start of derived fields at offset 5 (where copy_start() points)
 }
 
 BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
   // Test that the copy() function correctly copies LeafNode fields
-  // LeafNode also inherits from BlockHeader and has fields starting at offset 5
+  // LeafNode also inherits from PageHeader and has fields starting at offset 5
   
   typedef _LeafNode<TestTraits> LeafNode;
   
@@ -521,7 +521,7 @@ BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
   BOOST_CHECK_EQUAL(dst.value(), value);
   
   // Verify the full memory content matches
-  BOOST_CHECK_EQUAL(memcmp((char*)&src + sizeof(TestTraits::BlockHeader),
-                          (char*)&dst + sizeof(TestTraits::BlockHeader),
-                          src.size() - sizeof(TestTraits::BlockHeader)), 0);
+  BOOST_CHECK_EQUAL(memcmp((char*)&src + sizeof(TestTraits::PageHeader),
+                          (char*)&dst + sizeof(TestTraits::PageHeader),
+                          src.size() - sizeof(TestTraits::PageHeader)), 0);
 }

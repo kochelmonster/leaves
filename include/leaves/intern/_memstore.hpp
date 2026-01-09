@@ -23,10 +23,10 @@ struct _MemoryTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
     uint8_t slot_id;
-    bool needs_cow(const BlockHeader& other) const { return false; }
+    bool needs_cow(const PageHeader& other) const { return false; }
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
@@ -41,7 +41,7 @@ struct _MemoryTraits {
       4 * K};
   static constexpr uint16_t BLOCK_SIZES_COUNT =
       sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  using ptr = SimplePointer<BlockHeader, TRIE>;
+  using ptr = SimplePointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
   using Pointer = SimplePointer<T, type>;
 };
@@ -52,7 +52,7 @@ struct _MemoryDB {
   typedef Storage_ Storage;
   using Traits = typename Storage::Traits;
   using area_ptr = typename Storage::area_ptr;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
 
   typedef _MemoryDB<Storage> DB;
@@ -90,15 +90,15 @@ struct _MemoryDB {
   area_ptr alloc_single_area() { return _storage.alloc_single_area(); }
 
   // Block allocation - using memory manager properly
-  block_ptr alloc(uint16_t space) {
+  page_ptr alloc(uint16_t space) {
     uint8_t slot = _mem_manager.assign_slot(space);
     return alloc_slot(slot);
   }
 
-  void free(block_ptr p) { _mem_manager.free(p, *this); }
+  void free(page_ptr p) { _mem_manager.free(p, *this); }
 
   // Memory manager interface
-  block_ptr alloc_slot(uint8_t slot_id) {
+  page_ptr alloc_slot(uint8_t slot_id) {
     return _mem_manager.alloc(slot_id, *this);
   }
 
@@ -112,10 +112,10 @@ struct _MemoryDB {
   }
 
   // Direct pointer/offset resolution - no storage delegation needed
-  block_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
+  page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
     // memstore doesn't support relative offsets - all offsets are absolute pointers
-    return block_ptr(reinterpret_cast<void*>((uint64_t)offset));
+    return page_ptr(reinterpret_cast<void*>((uint64_t)offset));
   }
 
   template <typename T>
@@ -126,10 +126,10 @@ struct _MemoryDB {
     return typename Traits::Pointer<T>(reinterpret_cast<void*>((uint64_t)offset));
   }
 
-  // Non-template overload for block_ptr to avoid implicit conversion to
+  // Non-template overload for page_ptr to avoid implicit conversion to
   // uint64_t
-  offset_t resolve(const block_ptr& p) const {
-    return offset_t((uint64_t)p).type(block_ptr::type);
+  offset_t resolve(const page_ptr& p) const {
+    return offset_t((uint64_t)p).type(page_ptr::type);
   }
 
   // Template for typed pointers - disabled for integral types and raw pointers
@@ -174,7 +174,7 @@ struct _MemoryDB {
 // Memory storage implementation
 struct _MemoryStorage {
   typedef _MemoryTraits Traits;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef _MemoryDB<_MemoryStorage> DB;

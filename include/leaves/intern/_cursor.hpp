@@ -19,7 +19,7 @@ struct _Transition {
   typedef _Transition<Cursor> Transition;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
@@ -63,7 +63,7 @@ struct _Transition {
   bool success() const { return cmp == 0 && is_leaf(); }
 
   bool init(Cursor* cursor_, offset_e* offset_, uint16_t keypos_ = 0) {
-    using BlockHeader = typename Traits::BlockHeader;
+    using PageHeader = typename Traits::PageHeader;
     cursor = cursor_;
     keypos = keypos_;
     prefix = 0;
@@ -91,12 +91,12 @@ struct _Transition {
   }
 
   offset_e* update(Transition& child) {
-    using BlockHeader = typename Traits::BlockHeader;
-    // Compute BlockHeader addresses from node pointers
-    BlockHeader* parent_header =
-        (BlockHeader*)((char*)node - sizeof(BlockHeader));
-    BlockHeader* child_header =
-        (BlockHeader*)((char*)child.node - sizeof(BlockHeader));
+    using PageHeader = typename Traits::PageHeader;
+    // Compute PageHeader addresses from node pointers
+    PageHeader* parent_header =
+        (PageHeader*)((char*)node - sizeof(PageHeader));
+    PageHeader* child_header =
+        (PageHeader*)((char*)child.node - sizeof(PageHeader));
     if (!parent_header->needs_cow(*child_header)) {
       cursor->_db->make_dirty(node);
       return link();
@@ -109,8 +109,8 @@ struct _Transition {
     // Clone node directly
     trie() = cursor->_db->clone(old_trie);
     auto new_offset = cursor->_db->resolve(trie());
-    block_ptr old_block((char*)old_trie - sizeof(BlockHeader));
-    cursor->_db->free(old_block);
+    page_ptr old_page((char*)old_trie - sizeof(PageHeader));
+    cursor->_db->free(old_page);
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
 
     // Propagate COW upward: grandparent's needs_cow will compare its txn_id with
@@ -370,7 +370,7 @@ struct _CursorBase {
   typedef _Stack<CursorBase> Stack;
   typedef typename Traits::DB DB;
   using offset_e = typename Traits::offset_e;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using Transition = typename Stack::Transition;
 
   DB* _db;
@@ -398,7 +398,7 @@ struct _CursorBase {
   }
 
   // Allocation methods delegated through cursor to DB
-  block_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
+  page_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
 
   AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
 };

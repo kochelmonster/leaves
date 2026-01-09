@@ -100,7 +100,7 @@ struct TwoQCache {
         prune();
     }
 
-    // Get size of value - default implementation for block_ptr with area() method
+    // Get size of value - default implementation for page_ptr with area() method
     size_t get_item_size(const Value& value) const {
         auto* slice = value.area();
         if (!slice) return 0;
