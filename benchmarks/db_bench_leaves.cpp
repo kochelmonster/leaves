@@ -568,6 +568,7 @@ class Benchmark {
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
+
         cursor.find(mkey);
         cursor.value(mval);
 

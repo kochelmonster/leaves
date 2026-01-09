@@ -439,6 +439,7 @@ struct _Cursor : public _CursorBase<Traits_> {
     } else {
       this->_root = root;
     }
+    this->stack.front().offset = this->_root;
   }
 
   bool clear() {
