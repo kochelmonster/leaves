@@ -92,8 +92,9 @@ BOOST_AUTO_TEST_CASE(test_extend) {
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.make("test");
   const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
-  const size_t PAGE_SIZE =
-      DBMMap::Traits::PAGE_SIZES[DBMMap::Traits::PAGE_SIZES_COUNT - 1];
+  const size_t MAX_PAYLOAD =
+      DBMMap::Traits::PAGE_SIZES[DBMMap::Traits::PAGE_SIZES_COUNT - 1] -
+      sizeof(DBMMap::Traits::PageHeader);
 
   size_t initial_file_size = storage._memory->file_size;
 
@@ -103,9 +104,9 @@ BOOST_AUTO_TEST_CASE(test_extend) {
     // We need to allocate enough to exhaust that and trigger another resize
     // New resize will grow by max(requested, 10*AREA_SIZE, 25% of file_size)
     // Allocate enough blocks to exceed initial capacity
-    int count = (11 * AREA_SIZE) / PAGE_SIZE;  // Force growth beyond initial allocation
+    int count = (11 * AREA_SIZE) / MAX_PAYLOAD;  // Force growth beyond initial allocation
     for (int i = 0; i < count; i++) {
-      db->alloc(PAGE_SIZE);
+      db->alloc(MAX_PAYLOAD);
     }
   }
 
@@ -255,6 +256,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   DBMMap storage(dbFilePath.c_str());
 
   auto db1 = storage.make("test1");
+  const uint64_t MAX_PAYLOAD = 4 * K - sizeof(DBMMap::Traits::PageHeader);
 
   std::vector<offset_t> offsets;
 
@@ -265,8 +267,8 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
                               db1->_wtxn->mem_manager.allocation_start;
   uint64_t size = 0;
   while (size < ALLOC_SIZE) {
-    offsets.push_back(storage.resolve(db1->alloc(4 * K)));
-    size += 4 * K;
+    offsets.push_back(storage.resolve(db1->alloc(MAX_PAYLOAD)));
+    size += MAX_PAYLOAD + sizeof(DBMMap::Traits::PageHeader);
   }
 
   // Check that area allocation succeeded
@@ -284,7 +286,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   // alloc again - with recycling, we should get similar allocation patterns
   std::vector<offset_t> new_offsets;
   for (size_t i = 0; i < offsets.size(); i++) {
-    new_offsets.push_back(storage.resolve(db1->alloc(4 * K)));
+    new_offsets.push_back(storage.resolve(db1->alloc(MAX_PAYLOAD)));
   }
 
   // Check that we allocated the same number of blocks (recycling working)

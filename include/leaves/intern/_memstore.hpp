@@ -25,20 +25,23 @@ struct _MemoryTraits {
 
   struct PageHeader {
     typedef PageHeader Base;
-    uint16_e used;     // used bytes in page
+    uint16_e used;  // used bytes in page
     uint8_t slot_id;
-    bool needs_cow(const PageHeader& other) const { return false; }
+    template <typename DB>
+    bool needs_cow(const DB* db) const {
+      return false;
+    }
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t PAGE_SIZES[] = {   // Typical node sizes
-      _TrieNode<_MemoryTraits>::size(1, 10),    // digits 0-9
-      _TrieNode<_MemoryTraits>::size(1, 16),    // hex 0-9A-F
-      _TrieNode<_MemoryTraits>::size(1, 64),    // base64
-      _TrieNode<_MemoryTraits>::size(1, 127),   // utf-8
-      _TrieNode<_MemoryTraits>::size(1, 256),   // binary
+      _TrieNode<_MemoryTraits>::size(1, 10),   // digits 0-9
+      _TrieNode<_MemoryTraits>::size(1, 16),   // hex 0-9A-F
+      _TrieNode<_MemoryTraits>::size(1, 64),   // base64
+      _TrieNode<_MemoryTraits>::size(1, 127),  // utf-8
+      _TrieNode<_MemoryTraits>::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
@@ -75,7 +78,7 @@ struct _MemoryDB {
   typedef _Cursor<CursorTraits> Cursor;
   typedef _MemManager<Traits> MemManager;
   typedef std::unique_ptr<Cursor> cursor_ptr;
-  
+
   offset_e _root;
   Storage& _storage;
   MemManager _mem_manager;
@@ -115,7 +118,8 @@ struct _MemoryDB {
   // Direct pointer/offset resolution - no storage delegation needed
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
-    // memstore doesn't support relative offsets - all offsets are absolute pointers
+    // memstore doesn't support relative offsets - all offsets are absolute
+    // pointers
     return page_ptr(reinterpret_cast<void*>((uint64_t)offset));
   }
 
@@ -123,8 +127,10 @@ struct _MemoryDB {
   typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
                                       Access access = READ) const {
     offset_t offset = *offset_ptr;
-    // memstore doesn't support relative offsets - all offsets are absolute pointers
-    return typename Traits::Pointer<T>(reinterpret_cast<void*>((uint64_t)offset));
+    // memstore doesn't support relative offsets - all offsets are absolute
+    // pointers
+    return
+        typename Traits::Pointer<T>(reinterpret_cast<void*>((uint64_t)offset));
   }
 
   // Non-template overload for page_ptr to avoid implicit conversion to
@@ -144,12 +150,14 @@ struct _MemoryDB {
   template <typename PtrType>
   void make_dirty(PtrType /*block*/) {}
   void prefetch(const offset_t& offset) const { prefetch(&offset); }
-  void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {}
+  void prefetch(const offset_t* /*offset_ptr*/,
+                Access /*access*/ = READ) const {}
   void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}
 
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
 
-  // Clone a block (copy-on-write) - never called since needs_cow() returns false
+  // Clone a block (copy-on-write) - never called since needs_cow() returns
+  // false
   template <typename ptr>
   ptr clone(const ptr& src) {
     return src;
@@ -167,9 +175,7 @@ struct _MemoryDB {
   }
 
   // Cursor factory methods
-  cursor_ptr create_cursor() {
-    return std::make_unique<Cursor>(this, &_root);
-  }
+  cursor_ptr create_cursor() { return std::make_unique<Cursor>(this, &_root); }
 };
 
 // Memory storage implementation
@@ -184,7 +190,7 @@ struct _MemoryStorage {
   std::vector<std::unique_ptr<char[]>> _areas;
   size_t _total_size = 0;
   DB _db;  // Single DB instance
-  _MemoryStorage() : _total_size(0), _db(*this) { }
+  _MemoryStorage() : _total_size(0), _db(*this) {}
 
   // Area allocation - creates new memory areas
   area_ptr alloc_single_area() {
@@ -211,9 +217,7 @@ struct _MemoryStorage {
   // Single DB access
   DB& db() { return _db; }
 
-  DB::cursor_ptr create_cursor() {
-    return _db.create_cursor();
-  }
+  DB::cursor_ptr create_cursor() { return _db.create_cursor(); }
 
   // Compatibility methods
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}

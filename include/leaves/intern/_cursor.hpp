@@ -75,9 +75,7 @@ struct _Transition {
     return true;  // the caller shall set the trie root
   }
 
-  void update_trie_offset() { 
-    _update_offset(cursor->_db->resolve(trie())); 
-  }
+  void update_trie_offset() { _update_offset(cursor->_db->resolve(trie())); }
 
   void update_leaf_offset() { _update_offset(cursor->_db->resolve(leaf())); }
 
@@ -86,36 +84,37 @@ struct _Transition {
     // to transfer the node type to offset we have to distinguish between leaf
     // and trie
     assert(*offset != new_offset);
-    if (!is_root()) offset = parent().update(*this);
+    if (!is_root()) offset = parent().update();
     *offset = new_offset;
   }
 
-  offset_e* update(Transition& child) {
+  offset_e* update() {
     using PageHeader = typename Traits::PageHeader;
 
     if (!is_page_root()) {
       // not a page root: cow has to be done in page root
-      offset = parent().update(*this);
+      offset = parent().update();
       return link();
     }
 
     // Compute PageHeader addresses from node pointers
     page_ptr page_header = node - sizeof(PageHeader);
-    PageHeader* child_header =
-        (PageHeader*)((char*)child.node - sizeof(PageHeader));
-    if (!page_header->needs_cow(*child_header)) {
+    if (!page_header->needs_cow(cursor->_db)) {
       cursor->_db->make_dirty(node);
       return link();
     }
 
     // copy-on-write trie
+    // Keep in mind: old_trie is the page root and therefor the start of page
+    // data
+
     assert(is_trie());
     trie_ptr old_trie = trie();
 
     page_ptr new_page = cursor->_db->alloc_slot(page_header->slot_id);
     new_page->used = page_header->used;
     assert(new_page->used <= Traits::PAGE_SIZES[new_page->slot_id]);
-    
+
     assert(old_trie->size() <= page_header->used);
     trie() = new_page + sizeof(PageHeader);
     memcpy((char*)trie(), (char*)old_trie, page_header->used);
@@ -128,7 +127,7 @@ struct _Transition {
     // with our NEW cloned trie's txn_id. If they match (same transaction), no
     // COW needed. If different, grandparent will also COW and recursively
     // propagate upward.
-    if (!is_root()) offset = parent().update(*this);
+    if (!is_root()) offset = parent().update();
     *offset = new_offset;
 
     // Return the child's offset location in the NEW cloned trie

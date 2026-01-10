@@ -52,9 +52,10 @@ struct _MemoryMapTraits {
     tid_t txn_id;
     uint16_e used;
     uint8_t slot_id;
-    
-    bool needs_cow(const PageHeader& other) const {
-      return txn_id != other.txn_id;
+
+    template <typename DB>
+    bool needs_cow(const DB* db) const {
+      return txn_id != db->transaction_active();
     }
   };
 

@@ -246,7 +246,7 @@ struct _DB {
 
   // space without PageHeader
   page_ptr alloc(uint16_t space) {
-    assert(space <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+    assert(space + sizeof(typename Traits::PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     page_ptr result = alloc_slot(
         MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
     result->used = space;
