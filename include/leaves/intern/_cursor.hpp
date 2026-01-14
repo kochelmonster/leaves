@@ -105,7 +105,7 @@ struct _Transition {
     }
 
     // copy-on-write trie
-    // Keep in mind: old_trie is the page root and therefor the start of page
+    // Keep in mind: old_trie is the page root and therefore the start of page
     // data
 
     assert(is_trie());

@@ -11,7 +11,7 @@
             "_program": "${workspaceFolder}/build/db_bench_leaves",
             "_program": "${workspaceFolder}/build/test_memory",
             "program": "${workspaceFolder}/build/test_cursor",
-            "_args": [
+            "args": [
                 "-t",
                 "insert_bigkeys"
             ],
@@ -208,9 +208,9 @@
             "MIMode": "gdb",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "_args": [
+            "args": [
                 "-t",
-                "overflow_trie"
+                "insert_bigkeys"
             ],
             "setupCommands": [
                 {

@@ -217,7 +217,7 @@ struct _Inserter {
         Slice(oleaf->data, back->prefix), bkey, resolve(copy),
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
     back->cmp = 0;
-    
+
     free_node(oleaf);
     back->update_trie_offset();
     create_leaf();
@@ -230,10 +230,94 @@ struct _Inserter {
 
     copy->key_size = oleaf->key_size - split_pos;
     copy->value_size = oleaf->value_size;
-    memcpy(copy->data, oleaf->data + split_pos,
-            copy->key_size + copy->vsize());
+    memcpy(copy->data, oleaf->data + split_pos, copy->key_size + copy->vsize());
 
     return copy;
+  }
+};
+
+
+template <typename Inserter>
+struct CreateLeaf {
+  using LeafNode = typename Inserter::LeafNode;
+  using leaf_ptr = typename Inserter::leaf_ptr;
+
+  Inserter& _inserter;
+  Slice& _key;
+
+  CreateLeaf(Inserter& inserter)
+      : _inserter(inserter), _key(inserter.back->key()) {
+
+    _key.size() >
+  }
+
+  uint64_t size() const {
+    if (_key.size() <= 255)
+
+
+    return LeafNode::size(_key.size(), _inserter.value_size);
+  }
+
+  void exec(leaf_ptr dst) {
+    dst->set(_key, _inserter.value_size);
+  }
+};
+
+
+  void create_bigkey() {
+    Slice& key = back->key();
+    while (key.size() > 255) {
+      trie_ptr trie = alloc_node<trie_ptr>(TrieNode::size(255, 1));
+      *back->link() = resolve(trie);
+      Transition& bottom = back->push();
+      fill_bigkey(bottom);
+      back = &bottom;
+    }
+  }
+
+  void create_leaf() {
+    create_bigkey();
+    const Slice& bkey = back->key();
+    leaf_ptr leaf = fill_leaf(bkey);
+    *back->link() = resolve(leaf);
+    Transition& bottom = back->push();
+    bottom.cmp = 0;
+    bottom.prefix = bkey.size();
+    bottom.advance_key(bottom.prefix);
+  }
+
+  leaf_ptr fill_leaf(const Slice& key) {
+    leaf_ptr leaf =
+        alloc_node<leaf_ptr>(LeafNode::size(key.size(), value_size));
+    leaf->set(key, value_size);
+    return leaf;
+  }
+
+
+
+
+
+template <typename Inserter>
+struct CopyReducedLeaf {
+  using LeafNode = typename Inserter::LeafNode;
+  using leaf_ptr = typename Inserter::leaf_ptr;
+
+  Inserter& _inserter;
+  uint8_t _split_pos;
+  leaf_ptr _old_leaf;
+
+  CopyReducedLeaf(Inserter& inserter, uint8_t split_pos, leaf_ptr old_leaf)
+      : _inserter(inserter), _split_pos(split_pos), _old_leaf(old_leaf) {}
+
+  uint64_t size() const {
+    return LeafNode::size(_old_leaf->key_size - _split_pos, _old_leaf->vsize());
+  }
+
+  void exec(leaf_ptr dst) {
+    dst->key_size = _old_leaf->key_size - _split_pos;
+    dst->value_size = _old_leaf->value_size;
+    memcpy(dst->data, _old_leaf->data + _split_pos,
+           dst->key_size + dst->vsize());
   }
 };
 
