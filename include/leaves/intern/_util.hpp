@@ -289,19 +289,17 @@ struct _Offset {
   // Relative offset flag accessors
   bool is_relative() const { return (_offset & RELATIVE_FLAG) != 0; }
   
-  // Convert an absolute offset to relative (given the address of the offset_t field containing this offset)
-  const _Offset& set_relative(const void* offset_field_addr) {
+  // Convert to relative offset given the resolved destination pointer
+  // dest_ptr: the actual memory address of the target (resolved from absolute offset)
+  // this: the offset_t field that will hold the relative offset
+  // Result: relative = dest_ptr - this
+  const _Offset& set_relative(const void* dest_ptr) {
     if (!is_relative()) {
-      uint64_t abs_value = _offset & ~(TYPE_MASK | RELATIVE_FLAG);
-      uint64_t base_addr = (uint64_t)offset_field_addr;
-      int64_t rel_value = (int64_t)abs_value - (int64_t)base_addr;
-      
-      NodeTypes saved_type = type();  // Save the type
-      
-      // Store as relative: set signed relative value, preserve type, set relative flag
-      _offset = (BaseType)rel_value & ~(TYPE_MASK | RELATIVE_FLAG);
+      NodeTypes saved_type = type();
+      _offset = (BaseType)(int64_t)dest_ptr - (int64_t)this;
+      assert((_offset & 7) == 0);
       _offset |= RELATIVE_FLAG;
-      type(saved_type);  // Restore type
+      type(saved_type);
     }
     return *this;
   }

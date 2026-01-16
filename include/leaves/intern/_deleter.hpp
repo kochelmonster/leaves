@@ -135,8 +135,8 @@ struct _Deleter {
       parent.trie()->create(*child, Slice(buffer, len));
       parent.update_trie_offset();
       // replace trie! the type is important
-      parent.link_offset = (char*)(&parent.trie()->array()[parent.branch_key]) -
-                           (char*)parent.node;
+      parent.link_idx = parent.trie()->array_index(parent.branch_key);
+      assert(parent.link_idx < parent.trie()->count());
 
       free_node(child);
     } else {

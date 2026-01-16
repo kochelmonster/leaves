@@ -50,27 +50,24 @@ struct _Dumper {
   int _id;
   offset_e _root;
   bool _simple;
-  
+
   _Dumper(const Container& container, offset_e root, bool simple = false)
-      : _db(*container._internal()),
-        _id(0),
-        _root(root),
-        _simple(simple) {}
+      : _db(*container._internal()), _id(0), _root(root), _simple(simple) {}
 
   void dump(std::ostream& out) {
-    if (_root) dump_link(out, _root, _id++);
+    if (_root) dump_link(out, &_root, _id++);
   }
 
-  void dump_link(std::ostream& out, offset_e link, int id) {
-    if (link.type() == TRIE)
+  void dump_link(std::ostream& out, offset_e* link, int id) {
+    if (link->type() == TRIE)
       dump_trie(out, link, id);
     else
       dump_leaf(out, link, id);
   }
 
-  void dump_leaf(std::ostream& out, offset_e offset, int id) {
+  void dump_leaf(std::ostream& out, offset_e* offset, int id) {
     using PageHeader = typename Traits::PageHeader;
-    leaf_ptr leaf = _db.template resolve<LeafNode>(&offset);
+    leaf_ptr leaf = _db.template resolve<LeafNode>(offset);
     // Compute PageHeader address (leaf points to node after header)
     PageHeader* header = (PageHeader*)((char*)leaf - sizeof(PageHeader));
     uint16_t size = leaf->size();
@@ -78,8 +75,8 @@ struct _Dumper {
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
-      out << "id: " << offset._offset << std::endl;
-      out << "page: " << offset._offset / AREA_SIZE << std::endl;
+      out << "id: " << offset->_offset << std::endl;
+      out << "page: " << offset->_offset / AREA_SIZE << std::endl;
       out << "freespace: " << PAGE_SIZES[header->slot_id] - size << std::endl;
     }
     out << "size: " << size << std::endl;
@@ -101,32 +98,34 @@ struct _Dumper {
       }
       out << "\"" << std::endl;
     } else {
-      using InternalCursor = typename ExtractInternalCursor<typename Container::Cursor>::type;
+      using InternalCursor =
+          typename ExtractInternalCursor<typename Container::Cursor>::type;
       using BigMemory = typename InternalCursor::BigMemory;
       using BigValue = typename BigMemory::BigValue;
       using FreeKey = typename BigMemory::FreeKey;
       auto bv = (BigValue*)leaf->vdata();
       out << "valuesize: " << bv->value_size << std::endl;
-      
+
       // Read chunk header to get size and has_successor flag
       offset_e header_offset = bv->chunk_offset;
       header_offset._offset -= sizeof(FreeKey);
-      auto header_ptr = (FreeKey*)(char*)_db.template resolve<PageHeader>(&header_offset, READ);
+      auto header_ptr = (FreeKey*)(char*)_db.template resolve<PageHeader>(
+          &header_offset, READ);
       uint64_t chunk_size = header_ptr->size;
       bool has_successor = (header_ptr->offset & 1) != 0;
-      
-      out << "value: \"chunk_offset=" << bv->chunk_offset 
+
+      out << "value: \"chunk_offset=" << bv->chunk_offset
           << " chunk_size=" << chunk_size
-          << " has_successor=" << (has_successor ? "true" : "false")
-          << "\"" << std::endl;
+          << " has_successor=" << (has_successor ? "true" : "false") << "\""
+          << std::endl;
     }
-    
+
     out << "---" << std::endl;
   }
 
-  void dump_trie(std::ostream& out, offset_e offset, int id) {
+  void dump_trie(std::ostream& out, offset_e* offset, int id) {
     using PageHeader = typename Traits::PageHeader;
-    trie_ptr trie = _db.template resolve<TrieNode>(&offset);
+    trie_ptr trie = _db.template resolve<TrieNode>(offset);
     // Compute PageHeader address (trie points to node after header)
     PageHeader* header = (PageHeader*)((char*)trie - sizeof(PageHeader));
     uint16_t size = trie->size();
@@ -134,8 +133,8 @@ struct _Dumper {
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
-      out << "id: " << offset._offset << std::endl;
-      out << "page: " << offset._offset / AREA_SIZE << std::endl;
+      out << "id: " << offset->_offset << std::endl;
+      out << "page: " << offset->_offset / AREA_SIZE << std::endl;
       out << "freespace: " << PAGE_SIZES[header->slot_id] - size << std::endl;
     }
     out << "txn: " << header->txn_id << std::endl;
@@ -177,13 +176,9 @@ struct _Dumper {
     }
 
     out << "---" << std::endl;
-    offset_e last;
     int id_repeat = id_start;
     for (offset_e* iter = start; iter < end; iter++) {
-      if (*iter != last) {
-        last = *iter;
-        dump_link(out, *iter, id_repeat++);
-      }
+      dump_link(out, iter, id_repeat++);
     }
   }
 };

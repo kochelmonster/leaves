@@ -50,11 +50,11 @@ struct _Transition {
   int cmp;
 
   offset_e* offset;
-  uint16_t link_offset;  // the offset to the child inside trie
+  uint16_t link_idx;  // the array index of the link in the trie node
 
   offset_e* link() {
-    assert(link_offset != 0xFFFF);
-    return (offset_e*)(trie().link(link_offset));
+    assert(link_idx != 0xFFFF);
+    return trie()->array() + link_idx;
   }
 
   bool is_leaf() const { return offset->type() == LEAF; }
@@ -70,7 +70,7 @@ struct _Transition {
     prefix = 0;
     cmp = Transition::UNDEFINED;
     offset = offset_;
-    link_offset = 0xFFFF;
+    link_idx = 0xFFFF;
     node = cursor->_db->template resolve<_Node>(offset);
     return true;  // the caller shall set the trie root
   }
@@ -143,7 +143,7 @@ struct _Transition {
   void resize_key(size_t size) { cursor->current_key.resize(size); }
 
   Transition& push(offset_e* lnk) {
-    link_offset = (char*)lnk - (char*)node;
+    link_idx = lnk - trie()->array();
     cursor->push(lnk);
     return cursor->stack.back();
   }
@@ -251,14 +251,10 @@ struct _Transition {
 
     TrieNode& trie_ = *trie();
     if (cmp == 0) {
-      link_offset += sizeof(offset_e);
+      if (++link_idx >= trie_.count()) return false;
       offset_e* lnk = link();
-      offset_e* end = trie_.array() + trie_.count();
-      if (lnk >= end) return false;
+      if (link_idx + 1 < trie_.count()) cursor->_db->prefetch(*(lnk + 1));
 
-      if (lnk + 1 < end) {
-        cursor->_db->prefetch(*(lnk + 1));
-      }
       auto& child = push(lnk);
       cursor->_db->prefetch(*lnk);
 
@@ -294,14 +290,10 @@ struct _Transition {
 
     TrieNode& trie_ = *trie();
     if (cmp == 0) {
-      link_offset -= sizeof(offset_e);
+      if (!link_idx--) return false;
       offset_e* lnk = link();
-      offset_e* begin = trie_.array();
-      if (lnk < begin) return false;
+      if (link_idx > 0) cursor->_db->prefetch(*(lnk - 1));
 
-      if (lnk - 1 >= begin) {
-        cursor->_db->prefetch(*(lnk - 1));
-      }
       auto& child = push(lnk);
       cursor->_db->prefetch(*lnk);
 

@@ -58,7 +58,6 @@ struct SimplePointer {
   bool operator==(const SimplePointer& other) const { return p == other.p; }
   bool operator!=(const SimplePointer& other) const { return p != other.p; }
   bool operator!=(const void* other) const { return p != other; }
-  void* link(uint16_t offset) { return (char*)p + offset; }
   void reset() { p = nullptr; }
 
   // Make p accessible to other template instantiations
@@ -178,7 +177,6 @@ struct SmartPointer {
   }
   bool operator!=(const SmartPointer& other) const { return !(*this == other); }
   bool operator!=(const void* other) const { return (char*)*this != other; }
-  void* link(uint16_t offset) { return (char*)_iref + _offset + offset; }
 
   void reset() {
     if (_iref) {
