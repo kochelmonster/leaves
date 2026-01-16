@@ -142,12 +142,6 @@ struct _Transition {
 
   void resize_key(size_t size) { cursor->current_key.resize(size); }
 
-  Transition& push(offset_e* lnk) {
-    link_idx = lnk - trie()->array();
-    cursor->push(lnk);
-    return cursor->stack.back();
-  }
-
   Transition& push() {
     cursor->push(link());
     return cursor->stack.back();
@@ -201,8 +195,8 @@ struct _Transition {
 
     if (key().empty()) {
       if (trie_.has_none()) {
-        push(trie_.offset(TrieNode::NONE));
-        child().find();
+        link_idx = 0;
+        push().find();
       } else
         cmp = -1;
       return;
@@ -214,8 +208,8 @@ struct _Transition {
       return;
     }
     cmp = 0;
-    push(trie_.offset(branch_key));
-    child().find();
+    link_idx = trie_.array_index(branch_key);
+    push().find();
   }
 
   void leaf_step() {
@@ -233,7 +227,8 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     prefix = trie_._compressed_len;
     cmp = 0;
-    auto& child = push(trie_.array());
+    link_idx = 0;
+    auto& child = push();
     child.first();
     if (child.keypos < current_key().size()) {
       branch_key = current_key()[child.keypos];
@@ -255,7 +250,7 @@ struct _Transition {
       offset_e* lnk = link();
       if (link_idx + 1 < trie_.count()) cursor->_db->prefetch(*(lnk + 1));
 
-      auto& child = push(lnk);
+      auto& child = push();
       cursor->_db->prefetch(*lnk);
 
       child.first();
@@ -273,9 +268,10 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int next_ = trie_.next(branch_key);
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
-    offset_e* next_offset = trie_.offset(next_);
     branch_key = (uint8_t)next_;
-    push(next_offset).first();
+    link_idx = trie_.array_index(next_);
+    assert(link_idx < trie_.count());
+    push().first();
     return true;
   }
 
@@ -294,7 +290,7 @@ struct _Transition {
       offset_e* lnk = link();
       if (link_idx > 0) cursor->_db->prefetch(*(lnk - 1));
 
-      auto& child = push(lnk);
+      auto& child = push();
       cursor->_db->prefetch(*lnk);
 
       child.last();
@@ -313,7 +309,9 @@ struct _Transition {
     int prev_ = trie_.prev(branch_key);
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
     branch_key = (uint8_t)prev_;
-    push(trie_.offset(prev_)).last();
+    link_idx = trie_.array_index(prev_);
+    assert(link_idx < trie_.count());
+    push().last();
     return true;
   }
 
@@ -323,7 +321,8 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     prefix = trie_._compressed_len;
     cmp = 0;
-    auto& child = push(trie_.array() + trie_.count() - 1);
+    link_idx = trie_.count() - 1;
+    auto& child = push();
     child.last();
     assert(child.keypos < current_key().size());
     branch_key = current_key()[child.keypos];
