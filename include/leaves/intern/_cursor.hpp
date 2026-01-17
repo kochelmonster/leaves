@@ -75,11 +75,11 @@ struct _Transition {
     return true;  // the caller shall set the trie root
   }
 
-  void update_trie_offset() { _update_offset(cursor->_db->resolve(trie())); }
+  void update_trie_offset() { update_offset(cursor->_db->resolve(trie())); }
 
-  void update_leaf_offset() { _update_offset(cursor->_db->resolve(leaf())); }
+  void update_leaf_offset() { update_offset(cursor->_db->resolve(leaf())); }
 
-  void _update_offset(offset_e new_offset) {
+  void update_offset(offset_e new_offset) {
     // set the offset to the current node that has been changed.
     // to transfer the node type to offset we have to distinguish between leaf
     // and trie
@@ -386,6 +386,18 @@ struct _CursorBase {
     current_key.reserve(128);
   }
 
+  // return true if the cursor is on a valid position
+  bool is_valid() const {
+    return this->stack.size ? this->stack.back().success() : false;
+  }
+
+  void reset_key(size_t keypos) {
+    assert(keypos <= current_key.size());
+    size_t delta = current_key.size() - keypos;
+    current_key.resize(keypos);
+    rest_key = Slice(rest_key.data() - delta, rest_key.size() + delta);
+  }
+
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
     rest_key.iadvance(size);
@@ -421,11 +433,6 @@ struct _Cursor : public _CursorBase<Traits_> {
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 
   _Cursor(DB* db, offset_e* root) : CursorBase(db, root) {}
-
-  // return true if the cursor is on a valid position
-  bool is_valid() const {
-    return this->stack.size ? this->stack.back().success() : false;
-  }
 
   void find(const Slice& key) {
     if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
@@ -483,13 +490,13 @@ struct _Cursor : public _CursorBase<Traits_> {
     if (!this->stack.size) {
       if (!*this->_root) {
         this->push(this->_root);
-        _Inserter(&this->stack.back(), size).first_exec();
+        _LocalityInserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
       }
       throw NoValidPosition();
     }
 
-    _Inserter(&this->stack.back(), size).exec();
+    _LocalityInserter(&this->stack.back(), size).exec();
     return (void*)this->stack.back().value().data();
   }
 
@@ -508,7 +515,7 @@ struct _Cursor : public _CursorBase<Traits_> {
   Slice key() const { return this->current_key; }
 
   void remove() {
-    if (!is_valid()) throw NoValidPosition();
+    if (!this->is_valid()) throw NoValidPosition();
     _Deleter(*this).exec();
   }
 

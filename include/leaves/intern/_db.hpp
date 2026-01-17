@@ -209,7 +209,7 @@ struct _DB {
   Slice name() const { return _storage.db_name(_index); }
 
   template <typename T>
-  typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
+  typename Traits::Pointer<T> resolve(const offset_e* offset_ptr,
                                       Access access = READ) const {
     return _storage.resolve(offset_ptr, access);
   }

@@ -268,8 +268,7 @@ struct _MemoryMapFile {
     
     if (offset_ptr->is_relative()) {
       // Relative: calculate address relative to where offset_t is stored
-      int64_t rel_value = offset_ptr->as_signed();
-      p = (char*)offset_ptr + rel_value;
+      p = (char*)offset_ptr + offset_ptr->as_signed();
     } else {
       // Absolute: offset from _memory base
       p = (char*)_memory + (uint64_t)*offset_ptr;
