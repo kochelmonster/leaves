@@ -3,8 +3,11 @@
 
 #include <array>
 #include <cstring>
+#include <fstream>
 #include <functional>
+#include <type_traits>
 
+#include "_check.hpp"
 #include "_node.hpp"
 
 namespace leaves {
@@ -112,8 +115,7 @@ struct _Inserter {
     // copy the original trie node with second part of compressed
     // to a new slot
     uint8_t suffix_len = otrie->len() - back->prefix;
-    trie_ptr child_trie =
-        alloc_node<trie_ptr>(TrieNode::size(suffix_len, otrie->count()));
+    trie_ptr child_trie = alloc_node<trie_ptr>(otrie->reduced_size(suffix_len));
     child_trie->create(*otrie,
                        Slice(&otrie->compressed()[back->prefix], suffix_len));
 
@@ -121,11 +123,13 @@ struct _Inserter {
     // and the first part of compressed
     int key =
         back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE;
-    trie_ptr trie = alloc_node<trie_ptr>(TrieNode::size(back->prefix, 2));
+    int okey = otrie->compressed()[back->prefix];
+    trie_ptr trie =
+        alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, key));
 
     back->trie() = trie;
-    auto idxs = trie->create(Slice(otrie->compressed(), back->prefix),
-                             otrie->compressed()[back->prefix], key);
+    auto idxs =
+        trie->create(Slice(otrie->compressed(), back->prefix), okey, key);
 
     back->link_idx = idxs.second;
     trie->array()[idxs.first] = resolve(child_trie);
@@ -178,13 +182,13 @@ struct _Inserter {
   const uint16_t MAX_SIZE = TrieNode::MAX_SIZE;
 
   void add_to_array() {
+    int key = back->key() ? back->branch_key : TrieNode::NONE;
     trie_ptr otrie = back->trie();
     trie_ptr new_trie =
-        alloc_node<trie_ptr>(TrieNode::size(back->prefix, otrie->count() + 1));
+        alloc_node<trie_ptr>(otrie->increment_size(back->prefix, key));
 
     back->trie() = new_trie;
-    back->link_idx = new_trie->create(
-        *otrie, back->key() ? back->branch_key : TrieNode::NONE);
+    back->link_idx = new_trie->create(*otrie, key);
 
     free_node(otrie);
     back->update_trie_offset();
@@ -214,13 +218,14 @@ struct _Inserter {
 
     leaf_ptr copy = copy_reduced_leaf(back->prefix, oleaf);
 
-    int bkey = !copy->key_size ? TrieNode::NONE : copy->data[0];
+    int okey = !copy->key_size ? TrieNode::NONE : copy->data[0];
+    int nkey = back->key() ? back->key()[0] : TrieNode::NONE;
+    back->branch_key = nkey;
 
-    trie_ptr new_trie = alloc_node<trie_ptr>(TrieNode::size(back->prefix, 2));
+    trie_ptr new_trie =
+        alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, nkey));
     back->trie() = new_trie;
-    auto idxs = new_trie->create(
-        Slice(oleaf->data, back->prefix), bkey,
-        back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE);
+    auto idxs = new_trie->create(Slice(oleaf->data, back->prefix), okey, nkey);
 
     back->link_idx = idxs.second;
     new_trie->array()[idxs.first] = resolve(copy);
@@ -293,15 +298,6 @@ struct _PageBuilder {
       type = LEAF;
       return page + (uint64_t)offset;
     }
-
-    const NodeSlot& operator=(const NodeSlot& src) {
-      // set placeholder
-      assert(size == 0);
-      page = src.page;
-      offset = src.offset;
-      type = src.type;
-      return *this;
-    }
   };
 
   static constexpr uint16_t MAX_NODES = 3;
@@ -321,10 +317,10 @@ struct _PageBuilder {
     assert(_node_count > 0);
     NodeSlot& slot = _slots[0];
     if (slot.type == LEAF) {
-      leaf_ptr leaf = slot.page + (uint64_t)slot.offset;
+      leaf_ptr leaf = slot.leaf();
       return resolver.resolve(leaf);
     }
-    trie_ptr trie = slot.page + (uint64_t)slot.offset;
+    trie_ptr trie = slot.trie();
     return resolver.resolve(trie);
   }
 
@@ -342,10 +338,10 @@ struct _PageBuilder {
         "Lambda capture too large - will cause heap allocation in "
         "std::function. "
         "Use [&] reference capture instead of capturing objects by value.");
-    assert(_node_count < MAX_NODES);
+    assert(slot_id < MAX_NODES);
 
     uint16_t aligned_size = align(node_size);
-    NodeSlot& slot = _slots[_node_count];
+    NodeSlot& slot = _slots[slot_id];
     slot.page = nullptr;
     slot.offset = 0;
     slot.size = aligned_size;
@@ -368,16 +364,21 @@ struct _PageBuilder {
   template <typename Allocator>
   void build(Allocator& alloc) {
     uint16_t page_size = 0;
-    static constexpr uint16_t MAX_PAYLOAD = MAX_PAGE_SIZE - sizeof(PageHeader);
+    static constexpr uint16_t MAX_PAYLOAD =
+        MAX_PAGE_SIZE - sizeof(PageHeader) - TrieNode::MAX_SIZE;
 
-    size_t i = 0;
+    // i == 0 is the root slot usually a trie, that will be for sure on the page
+    size_t i = 1;
     for (; i < _node_count; ++i) {
       page_size += _slots[i].size;
       if (page_size > MAX_PAYLOAD) {
+        // there must always be enough space for the maximum trie size
         page_size -= _slots[i].size;
         break;
       }
     }
+    page_size += _slots[0].size;  // add root slot size
+    assert(page_size + sizeof(PageHeader) <= MAX_PAGE_SIZE);
 
     _page = alloc.alloc(page_size);
     // fill the page
@@ -439,84 +440,48 @@ struct _LocalityInserter {
   using page_ptr = typename Traits::ptr;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;
   using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
+  using node_ptr = typename Traits::template Pointer<_Node>;
   using offset_e = typename Traits::offset_e;
   using PageHeader = typename Traits::PageHeader;
   typedef _PageBuilder<Traits> PageBuilder;
   using NodeSlot = typename PageBuilder::NodeSlot;
 
+  // Core state
   Transition* back;
   page_ptr old_page;
   bool is_page_root;
   const size_t value_size;
   PageBuilder builder;
 
+  // Lambda context - stored as members so lambdas capture only 'this'
+  trie_ptr _ptrie;                      // parent/original trie
+  leaf_ptr _oleaf;                      // original leaf
+  uint16_t _pk_size;                    // page kids size
+  uint16_t _link_idx;                   // link index in parent
+  uint16_t _prefix;                     // prefix length
+  uint8_t _suffix_len;                  // suffix length for split
+  uint16_t _child_trie_size;            // child trie size for split
+  uint16_t _idx;                        // result index from trie creation
+  std::pair<uint16_t, uint16_t> _idxs;  // result indices pair
+  int _nkey;              // new key byte (first byte of remaining key, or NONE)
+  int _okey;              // old key byte (from existing node)
+  int _chain_key;         // branch key for long key chains
+  offset_e _next;         // next link for long keys
+  Slice _key;             // current key slice
+  Slice _trie_key;        // trie key slice for long keys
+  Slice _leaf_key;        // leaf key slice for long keys
+  Slice _pair1;           // pair slice 1 for long keys
+  Slice _pair2;           // pair slice 2 for long keys
+  int _end;               // end position for long keys
+  page_ptr _root_page;    // stored root slot page
+  uint16_t _root_offset;  // stored root slot offset
+  NodeTypes _root_type;   // stored root slot type
+
   _LocalityInserter(Transition* back_, size_t size)
       : back(back_), value_size(size) {
     is_page_root = back->is_page_root();
     old_page =
         (is_page_root ? back->node : back->parent().node) - sizeof(PageHeader);
-  }
-
-  /*
-  Does all the cleanup work after exec
-  - free the space of of the old node
-  - connect the new node to the parent
-  - copy the parent pages if needed
-  - place the cursor on the new node
-  */
-  void clean_stack() {
-    back->cursor->reset_key(back->keypos);
-    if (is_page_root) {
-      back->cursor->_db->free(old_page);
-      back->update_offset(builder.page_link(*this));
-      back->node = resolve(back->offset);
-      back->find();
-      assert(back->cursor->stack.back().success());
-      return;
-    }
-
-    // Non-page-root case: copy the parent with siblings, link to new node
-    PageBuilder _builder;
-    auto& parent = back->parent();
-    assert(parent.is_page_root());
-    assert(parent.is_trie());
-
-    trie_ptr ptrie = parent.trie();
-    uint16_t pk_size = page_kids(&parent);
-
-    // Calculate size of old node being replaced
-    uint16_t old_size =
-        back->is_trie() ? back->trie()->size() : back->leaf()->size();
-    assert(pk_size >= old_size);
-    pk_size -= old_size;
-
-    // Copy parent trie and siblings (excluding old node)
-    struct Ctx {
-      trie_ptr ptrie;
-      uint16_t link_idx;
-      uint16_t pk_size;
-      _LocalityInserter* self;
-    };
-    Ctx ctx{ptrie, parent.link_idx, pk_size, this};
-    _builder.add(0, ptrie->size() + pk_size, [&ctx](NodeSlot& dst) {
-      memcpy((char*)dst.trie(), (char*)ctx.ptrie, ctx.ptrie->size());
-      dst.trie()->array()[ctx.link_idx] = 0;  // skip the old node from copying
-      [[maybe_unused]] auto filled =
-          ctx.self->copy_page_kids(ctx.ptrie, dst.trie());
-      assert(filled == ctx.pk_size + ctx.ptrie->size());
-    });
-
-    // Add placeholder for the new node from builder
-    _builder.add(1, 0, [&](NodeSlot& dst) { dst = builder.root(); });
-
-    _builder.build(*this);
-    _builder.set_root_link(parent.link_idx, 1, *this);
-
-    back->cursor->_db->free(old_page);
-    parent.update_offset(_builder.page_link(*this));
-    parent.node = back->cursor->_db->template resolve<_Node>(parent.offset);
-    back->find();
-    assert(back->cursor->stack.back().success());
   }
 
   void exec() {
@@ -532,6 +497,7 @@ struct _LocalityInserter {
     create_leaf(0);
     builder.build(*this);
     *back->offset = builder.page_link(*this);
+    back->node = resolve(back->offset);
     back->first();
   }
 
@@ -548,42 +514,127 @@ struct _LocalityInserter {
 
   Slice& key() { return back->key(); }
 
+  /*
+  Does all the cleanup work after exec
+  - free the space of of the old node
+  - connect the new node to the parent
+  - copy the parent pages if needed
+  - place the cursor on the new node
+  */
+  void clean_stack() {
+    if (is_page_root) {
+      back->cursor->_db->free(old_page);
+      back->update_offset(builder.page_link(*this));
+      back->node = resolve(back->offset);
+      back->cursor->reset_key(back->keypos);
+      back->find();
+      assert(back->cursor->stack.back().success());
+      return;
+    }
+
+    // Non-page-root case: copy the parent with siblings, link to new node
+    auto& parent = back->parent();
+    assert(parent.is_page_root());
+    assert(parent.is_trie());
+
+    _ptrie = parent.trie();
+    _pk_size = page_kids(&parent);
+    _link_idx = parent.link_idx;
+
+    // Calculate size of old node being replaced
+    uint16_t old_size =
+        back->is_trie() ? back->trie()->size() : align(back->leaf()->size());
+    assert(_pk_size >= old_size);
+    _pk_size -= old_size;
+
+    _root_page = builder.root().page;
+    _root_offset = builder.root().offset;
+    _root_type = builder.root().type;
+
+    builder.reset();
+    // Copy parent trie and siblings (excluding old node)
+    builder.add(0, _ptrie->size(), [this](NodeSlot& dst) {
+      memcpy((char*)dst.trie(), (char*)_ptrie, _ptrie->size());
+      dst.trie()->array()[_link_idx] = 0;  // skip the old node from copying
+    });
+    add_slot_copy_page_kids();
+
+    // Add placeholder for the new node from builder
+    builder.add(2, 0, [this](NodeSlot& dst) {
+      dst.page = _root_page;
+      dst.offset = _root_offset;
+      dst.type = _root_type;
+    });
+    builder.build(*this);
+    builder.set_root_link(parent.link_idx, 2, *this);
+
+    back->cursor->_db->free(old_page);
+    parent.update_offset(builder.page_link(*this));
+    parent.node = back->cursor->_db->template resolve<node_ptr>(parent.offset);
+    parent.cursor->reset_key(parent.keypos);
+    parent.cursor->stack.size--;
+    parent.find();
+    assert(parent.cursor->stack.back().success());
+  }
+
   uint16_t page_kids(Transition* trans) {
     assert(trans->is_page_root());
-    auto trie = trans->trie();
+    auto& trie = trans->trie();
     PageHeader* header = (PageHeader*)((char*)trie - sizeof(PageHeader));
     return header->used - trie->size();
   }
 
   uint16_t page_kids() { return is_page_root ? page_kids(back) : 0; }
 
-  uint16_t copy_page_kids(trie_ptr from, trie_ptr to) {
+  uint16_t copy_page_kids(trie_ptr from, trie_ptr to,
+                          uint16_t skip_idx = 0xffff) {
     uint16_t count = to->count();
-    assert(count == from->count());
+    assert(count == from->count() ||
+           (count == from->count() + 1 && skip_idx >= 0));
 
     char* dest = (char*)to + to->size();
     auto farray = from->array();
     auto tarray = to->array();
 
-    for (uint16_t i = 0; i < count; ++i) {
-      // Check tarray (destination) - allows caller to zero an entry to skip it
+    for (uint16_t i = 0, j = 0; i < count; ++i) {
+      if (i == skip_idx) continue;
+
       if (tarray[i].is_relative()) {
-        offset_e* foffset = &farray[i];
-        char* src = (char*)foffset + foffset->as_signed();
         tarray[i].set_relative(dest);
+        offset_e* foffset = &farray[j];
+        char* src = (char*)foffset + foffset->as_signed();
 
         if (tarray[i].type() == LEAF) {
           LeafNode* leaf = (LeafNode*)src;
           memcpy(dest, leaf, leaf->size());
-          dest += leaf->size();
+          dest += align(leaf->size());
         } else {
           TrieNode* trie = (TrieNode*)src;
           memcpy(dest, trie, trie->size());
+          assert(align(trie->size()) == trie->size());
           dest += trie->size();
         }
       }
+      ++j;
     }
     return dest - (char*)to;
+  }
+
+  /*
+    copy the page kids in an extra slot for correct overflow handling
+    (allways slot 1)
+  */
+  void add_slot_copy_page_kids(uint16_t* skip_idx = nullptr) {
+    builder.add(1, _pk_size, [this, skip_idx](NodeSlot& dst) {
+      if (_pk_size) {
+        auto& root = this->builder.root();
+        assert(root.page == dst.page);  // must be same page!
+        trie_ptr trie = root.trie();
+        [[maybe_unused]] auto filled =
+            copy_page_kids(_ptrie, trie, skip_idx ? *skip_idx : 0xffff);
+        assert(filled == _pk_size + trie->size());
+      }
+    });
   }
 
   bool split_compressed() {
@@ -605,115 +656,85 @@ struct _LocalityInserter {
 
     assert(back->prefix < back->trie()->len());
 
-    trie_ptr otrie = back->trie();
-    assert(otrie->count() < otrie->MAX_BRANCH_COUNT);
+    _ptrie = back->trie();
+    assert(_ptrie->count() < _ptrie->MAX_BRANCH_COUNT);
 
     // copy the original trie node with second part of compressed
     // to a new slot
-    uint8_t suffix_len = otrie->len() - back->prefix;
-    uint16_t child_trie_size = TrieNode::size(suffix_len, otrie->count());
-    uint16_t pk_size = page_kids();
+    _suffix_len = _ptrie->len() - back->prefix;
+    _child_trie_size = _ptrie->reduced_size(_suffix_len);
+    _pk_size = page_kids();
+    _prefix = back->prefix;
 
-    if (pk_size) {
+    if (_pk_size) {
       // root with relative children - put it in a extra page
       PageBuilder builder_;
-      struct Ctx {
-        trie_ptr otrie;
-        uint8_t suffix_len;
-        uint16_t pk_size;
-        uint16_t child_trie_size;
-        uint16_t prefix;
-        _LocalityInserter* self;
-      };
-      Ctx ctx{otrie, suffix_len, pk_size, child_trie_size, back->prefix, this};
-      builder_.add(0, child_trie_size + pk_size, [&ctx](NodeSlot& dst) {
-        dst.trie()->create(
-            *ctx.otrie,
-            Slice(&ctx.otrie->compressed()[ctx.prefix], ctx.suffix_len));
-        [[maybe_unused]] auto filled =
-            ctx.self->copy_page_kids(ctx.otrie, dst.trie());
-        assert(filled == ctx.pk_size + ctx.child_trie_size);
+      builder_.add(0, _child_trie_size + _pk_size, [this](NodeSlot& dst) {
+        dst.trie()->create(*_ptrie,
+                           Slice(&_ptrie->compressed()[_prefix], _suffix_len));
+        [[maybe_unused]] auto filled = copy_page_kids(_ptrie, dst.trie());
+        assert(filled == _pk_size + _child_trie_size);
       });
       builder_.build(*this);
-      builder.add(2, 0, [&builder_](NodeSlot& dst) { dst = builder_.root(); });
+      // Store root slot data before builder_ goes out of scope
+      _root_page = builder_.root().page;
+      _root_offset = builder_.root().offset;
+      _root_type = builder_.root().type;
+      builder.add(2, 0, [this](NodeSlot& dst) {
+        dst.page = _root_page;
+        dst.offset = _root_offset;
+        dst.type = _root_type;
+      });
     } else {
-      struct Ctx2 {
-        trie_ptr otrie;
-        uint8_t suffix_len;
-        uint16_t prefix;
-      };
-      Ctx2 ctx{otrie, suffix_len, back->prefix};
-      builder.add(2, child_trie_size, [&ctx](NodeSlot& dst) {
-        dst.trie()->create(
-            *ctx.otrie,
-            Slice(&ctx.otrie->compressed()[ctx.prefix], ctx.suffix_len));
+      builder.add(2, _child_trie_size, [this](NodeSlot& dst) {
+        dst.trie()->create(*_ptrie,
+                           Slice(&_ptrie->compressed()[_prefix], _suffix_len));
       });
     }
 
     // replace the original trie node with a two branch trie node
     // and the first part of compressed
-    int new_key = key() ? (back->branch_key = key()[0]) : TrieNode::NONE;
+    _nkey = key() ? (back->branch_key = key()[0]) : TrieNode::NONE;
+    _okey = _ptrie->compressed()[_prefix];
 
-    std::pair<uint16_t, uint16_t> idx;
-    struct IdxCtx {
-      std::pair<uint16_t, uint16_t>* idx;
-      trie_ptr otrie;
-      int new_key;
-      uint16_t prefix;
-    };
-    IdxCtx ictx{&idx, otrie, new_key, back->prefix};
-    builder.add(0, TrieNode::size(back->prefix, 2), [&ictx](NodeSlot& dst) {
-      *ictx.idx = dst.trie()->create(
-          Slice(ictx.otrie->compressed(), ictx.prefix), ictx.new_key,
-          ictx.otrie->compressed()[ictx.prefix]);
-    });
+    builder.add(0, TrieNode::size(_prefix, _nkey, _okey),
+                [this](NodeSlot& dst) {
+                  _idxs = dst.trie()->create(
+                      Slice(_ptrie->compressed(), _prefix), _nkey, _okey);
+                });
 
     create_leaf(1);
     builder.build(*this);
-    builder.set_root_link(idx.first, 1, *this);   // new branch → new leaf
-    builder.set_root_link(idx.second, 2, *this);  // old branch → child_trie
+    builder.set_root_link(_idxs.first, 1, *this);   // new branch → new leaf
+    builder.set_root_link(_idxs.second, 2, *this);  // old branch → child_trie
 
     clean_stack();
     return true;
   }
 
   void add_to_array() {
-    trie_ptr otrie = back->trie();
+    _ptrie = back->trie();
+    _pk_size = page_kids();
+    _idx = 0xffff;
+    assert(back->prefix == _ptrie->len());
 
-    uint16_t pk_size = page_kids();
-    uint16_t idx = 0xffff;
+    _nkey = key() ? (back->branch_key = key()[0]) : TrieNode::NONE;
+    builder.add(0, _ptrie->increment_size(_nkey), [this](NodeSlot& dst) {
+      _idx = dst.trie()->create(*_ptrie, _nkey);
+    });
+    add_slot_copy_page_kids(&_idx);
 
-    struct Ctx {
-      uint16_t* idx;
-      trie_ptr otrie;
-      uint16_t pk_size;
-      _LocalityInserter* self;
-    };
-    Ctx ctx{&idx, otrie, pk_size, this};
-    builder.add(0, TrieNode::size(back->prefix, otrie->count() + 1) + pk_size,
-                [&ctx](NodeSlot& dst) {
-                  *ctx.idx = dst.trie()->create(
-                      *ctx.otrie,
-                      ctx.self->key()
-                          ? (ctx.self->back->branch_key = ctx.self->key()[0])
-                          : TrieNode::NONE);
-                  if (ctx.pk_size) {
-                    [[maybe_unused]] auto filled =
-                        ctx.self->copy_page_kids(ctx.otrie, dst.trie());
-                    assert(filled == ctx.pk_size + dst.trie()->size());
-                  }
-                });
-    create_leaf(1);
+    create_leaf(2);
     builder.build(*this);
-    assert(idx != 0xffff);
-    builder.set_root_link(idx, 1, *this);
+    assert(_idx != 0xffff);
+    builder.set_root_link(_idx, 2, *this);
     clean_stack();
   }
 
   // change the value of leaf
   void change_leaf() {
     assert(back->is_leaf());
-    leaf_ptr oleaf = back->leaf();
+    _oleaf = back->leaf();
 
     if (back->cmp == 0) return replace_leaf();
 
@@ -721,64 +742,45 @@ struct _LocalityInserter {
 
     // first: copy the leaf node and cut of the new rest key by prefix
     // if it is a big leaf just the reference to the big value is copied
-    assert(back->prefix <= oleaf->key_size);
-    std::pair<uint16_t, uint16_t> idxs;
-    auto split_pos = back->prefix;
+    assert(back->prefix <= _oleaf->key_size);
+    _prefix = back->prefix;
     // the orinal leaf with key reduced split_pos on
-    struct LeafCtx {
-      leaf_ptr oleaf;
-      uint16_t split_pos;
-    };
-    LeafCtx lctx{oleaf, split_pos};
-    builder.add(1, LeafNode::size(oleaf->key_size - split_pos, oleaf->vsize()),
-                [&lctx](NodeSlot& dst) {
+    builder.add(1, LeafNode::size(_oleaf->key_size - _prefix, _oleaf->vsize()),
+                [this](NodeSlot& dst) {
                   auto copy = dst.leaf();
-                  copy->key_size = lctx.oleaf->key_size - lctx.split_pos;
-                  copy->value_size = lctx.oleaf->value_size;
-                  memcpy(copy->data, lctx.oleaf->data + lctx.split_pos,
+                  copy->key_size = _oleaf->key_size - _prefix;
+                  copy->value_size = _oleaf->value_size;
+                  memcpy(copy->data, _oleaf->data + _prefix,
                          copy->key_size + copy->vsize());
                 });
 
-    int okey =
-        split_pos < oleaf->key_size ? oleaf->data[split_pos] : TrieNode::NONE;
-    int bkey = split_pos < key().size() ? (back->branch_key = key()[split_pos])
-                                        : TrieNode::NONE;
+    _okey = _prefix < _oleaf->key_size ? _oleaf->data[_prefix] : TrieNode::NONE;
+    _nkey = key() ? key()[0] : TrieNode::NONE;
+    back->branch_key = _nkey;
 
-    struct TrieCtx {
-      std::pair<uint16_t, uint16_t>* idxs;
-      leaf_ptr oleaf;
-      uint16_t split_pos;
-      int okey;
-      int bkey;
-    };
-    TrieCtx tctx{&idxs, oleaf, split_pos, okey, bkey};
-    builder.add(0, TrieNode::size(split_pos, 2), [&tctx](NodeSlot& dst) {
-      *tctx.idxs = dst.trie()->create(Slice(tctx.oleaf->data, tctx.split_pos),
-                                      tctx.okey, tctx.bkey);
-    });
+    builder.add(
+        0, TrieNode::size(_prefix, _okey, _nkey), [this](NodeSlot& dst) {
+          _idxs =
+              dst.trie()->create(Slice(_oleaf->data, _prefix), _okey, _nkey);
+        });
 
     create_leaf(2);
     builder.build(*this);
-    builder.set_root_link(idxs.first, 1, *this);   // old branch → reduced leaf
-    builder.set_root_link(idxs.second, 2, *this);  // new branch → new leaf
+    builder.set_root_link(_idxs.first, 1, *this);   // old branch → reduced leaf
+    builder.set_root_link(_idxs.second, 2, *this);  // new branch → new leaf
     clean_stack();
   }
 
   void replace_leaf() {
-    auto oleaf = back->leaf();
-    assert(back->prefix == oleaf->key_size);
+    _oleaf = back->leaf();
+    assert(back->prefix == _oleaf->key_size);
     assert(key().empty());
     assert(back->cursor->is_valid());
 
     if (is_page_root) {
-      struct Ctx {
-        leaf_ptr oleaf;
-        size_t value_size;
-      };
-      Ctx ctx{oleaf, value_size};
-      builder.add(0, LeafNode::size(oleaf->key_size, value_size),
-                  [&ctx](NodeSlot& dst) {
-                    dst.leaf()->set(ctx.oleaf->key(), ctx.value_size);
+      builder.add(0, LeafNode::size(_oleaf->key_size, value_size),
+                  [this](NodeSlot& dst) {
+                    dst.leaf()->set(_oleaf->key(), value_size);
                   });
       builder.build(*this);
       return clean_stack();
@@ -787,37 +789,25 @@ struct _LocalityInserter {
     // copy the parent and the siblings into a new page
     auto& parent = back->parent();
     assert(parent.is_trie());
-    trie_ptr ptrie = parent.trie();
-    uint16_t pk_size = page_kids(&parent);
-    assert(pk_size > oleaf->size());
-    pk_size -= oleaf->size();
-    struct Ctx {
-      trie_ptr ptrie;
-      uint16_t link_idx;
-      uint16_t pk_size;
-      _LocalityInserter* self;
-    };
-    Ctx ctx{ptrie, parent.link_idx, pk_size, this};
-    builder.add(0, ptrie->size() + pk_size, [&ctx](NodeSlot& dst) {
-      memcpy((char*)dst.trie(), (char*)ctx.ptrie, ctx.ptrie->size());
-      dst.trie()->array()[ctx.link_idx] = 0;  // skip old_leaf from copying
-      [[maybe_unused]] auto filled =
-          ctx.self->copy_page_kids(ctx.ptrie, dst.trie());
-      assert(filled == ctx.pk_size + ctx.ptrie->size());
+    _ptrie = parent.trie();
+    _pk_size = page_kids(&parent);
+    _link_idx = parent.link_idx;
+    assert(_pk_size > align(_oleaf->size()));
+    _pk_size -= align(_oleaf->size());
+
+    builder.add(0, _ptrie->size(), [this](NodeSlot& dst) {
+      memcpy((char*)dst.trie(), (char*)_ptrie, _ptrie->size());
+      dst.trie()->array()[_link_idx] = 0;  // skip old_leaf from copying
     });
+    add_slot_copy_page_kids();
+
     // add the new leaf
-    struct LeafCtx {
-      leaf_ptr oleaf;
-      size_t value_size;
-    };
-    LeafCtx lctx{oleaf, value_size};
-    builder.add(1, LeafNode::size(oleaf->key_size, value_size),
-                [&lctx](NodeSlot& dst) {
-                  dst.leaf()->set(lctx.oleaf->key(), lctx.value_size);
-                });
+    builder.add(
+        2, LeafNode::size(_oleaf->key_size, value_size),
+        [this](NodeSlot& dst) { dst.leaf()->set(_oleaf->key(), value_size); });
 
     builder.build(*this);
-    builder.set_root_link(parent.link_idx, 1, *this);
+    builder.set_root_link(parent.link_idx, 2, *this);
     parent.update_offset(builder.page_link(*this));
     parent.node = back->cursor->_db->template resolve<_Node>(parent.offset);
     back->offset = parent.trie()->array() + parent.link_idx;
@@ -826,109 +816,85 @@ struct _LocalityInserter {
   }
 
   void create_leaf(uint16_t slot_id) {
-    Slice key = back->key();
+    _key = back->key();
 
-    if (key.size() <= 255) return create_leaf_only(builder, slot_id, key);
+    if (_key.size() <= 255) return create_leaf_only(builder, slot_id, _key);
 
     // we have to reverse iterate the key
 
     // first create the leaf page
-    size_t rest = key.size() % 255;
+    size_t rest = _key.size() % 255;
     if (rest == 0) rest = 255;  // leaf can hold up to 255 bytes
-    int end = key.size() - rest;
-    assert(end >= 255);
-    assert((end % 255) == 0);  // must be multiple of 255
-    Slice leaf_key = Slice(key.data() + end, rest);
-    end -= 255;
-    assert(end >= 0);
-    Slice trie_key = Slice(key.data() + end, 255);
+    _end = _key.size() - rest;
+    assert(_end >= 255);
+    assert((_end % 255) == 0);  // must be multiple of 255
+    _leaf_key = Slice(_key.data() + _end, rest);
+    _end -= 255;
+    assert(_end >= 0);
+    _trie_key = Slice(_key.data() + _end, 255);
 
     PageBuilder builder_;
-    uint16_t idx = 0;
-    struct Ctx1 {
-      uint16_t* idx;
-      const Slice* trie_key;
-      const Slice* leaf_key;
-    };
-    Ctx1 ctx1{&idx, &trie_key, &leaf_key};
-    builder_.add(0, TrieNode::size(255, 1), [&ctx1](NodeSlot& dst) {
-      *ctx1.idx = dst.trie()->create(*ctx1.trie_key, (*ctx1.leaf_key)[0]);
+    _idx = 0;
+    builder_.add(0, TrieNode::size(255, 1), [this](NodeSlot& dst) {
+      _idx = dst.trie()->create(_trie_key, _leaf_key[0]);
     });
-    create_leaf_only(builder_, 1, leaf_key);
+    create_leaf_only(builder_, 1, _leaf_key);
     builder_.build(*this);
-    builder_.set_root_link(idx, 1, *this);
+    builder_.set_root_link(_idx, 1, *this);
 
-    offset_e next = builder_.page_link(*this);
-    int branch_key = trie_key[0];
+    _next = builder_.page_link(*this);
+    _chain_key = _trie_key[0];
 
     constexpr uint16_t PAIR_SIZE = 255 * 2;
 
     // create pages with trie_255 pairs
-    while (end >= PAIR_SIZE) {
+    while (_end >= PAIR_SIZE) {
       builder_.reset();
-      Slice pair2(key.data() + end, 255);
-      end -= 255;
-      Slice pair1(key.data() + end, 255);
+      _pair2 = Slice(_key.data() + _end, 255);
+      _end -= 255;
+      _pair1 = Slice(_key.data() + _end, 255);
 
-      struct CtxPair1 {
-        uint16_t* idx;
-        const Slice* pair1;
-        const Slice* pair2;
-      };
-      CtxPair1 ctxp1{&idx, &pair1, &pair2};
-      builder_.add(0, TrieNode::size(255, 1), [&ctxp1](NodeSlot& dst) {
-        *ctxp1.idx = dst.trie()->create(*ctxp1.pair1, (*ctxp1.pair2)[0]);
+      builder_.add(0, TrieNode::size(255, 1), [this](NodeSlot& dst) {
+        _idx = dst.trie()->create(_pair1, _pair2[0]);
       });
-      struct CtxPair2 {
-        const Slice* pair2;
-        int branch_key;
-        offset_e next;
-      };
-      CtxPair2 ctxp2{&pair2, branch_key, next};
-      builder_.add(1, TrieNode::size(255, 1), [&ctxp2](NodeSlot& dst) {
+      builder_.add(1, TrieNode::size(255, 1), [this](NodeSlot& dst) {
         auto trie = dst.trie();
-        auto idx_ = trie->create(*ctxp2.pair2, ctxp2.branch_key);
-        trie->array()[idx_] = ctxp2.next;
+        auto idx_ = trie->create(_pair2, _chain_key);
+        trie->array()[idx_] = _next;
       });
       builder_.build(*this);
-      builder_.set_root_link(idx, 1, *this);
-      next = builder_.page_link(*this);
-      branch_key = pair1[0];
+      builder_.set_root_link(_idx, 1, *this);
+      _next = builder_.page_link(*this);
+      _chain_key = _pair1[0];
     }
 
     // create the first trie if needed
-    if (end == 0) {
-      builder.add(slot_id, 0, [&builder_](NodeSlot& dst) {
-        dst = builder_.root();  // set placeholder
+    if (_end == 0) {
+      // Store root slot data before builder_ goes out of scope
+      _root_page = builder_.root().page;
+      _root_offset = builder_.root().offset;
+      _root_type = builder_.root().type;
+      builder.add(slot_id, 0, [this](NodeSlot& dst) {
+        dst.page = _root_page;
+        dst.offset = _root_offset;
+        dst.type = _root_type;
       });
       return;
     }
 
-    struct CtxFirst {
-      const Slice* key;
-      int end;
-      int branch_key;
-      offset_e next;
-    };
-    CtxFirst ctxf{&key, end, branch_key, next};
-    builder.add(slot_id, TrieNode::size(end, 1), [&ctxf](NodeSlot& dst) {
-      Slice first_slice = ctxf.key->slice(ctxf.end);
+    builder.add(slot_id, TrieNode::size(_end, 1), [this](NodeSlot& dst) {
+      Slice first_slice = _key.slice(_end);
       auto trie = dst.trie();
-      auto idx_ = trie->create(first_slice, ctxf.branch_key);
-      trie->array()[idx_] = ctxf.next;
+      auto idx_ = trie->create(first_slice, _chain_key);
+      trie->array()[idx_] = _next;
     });
   }
 
-  void create_leaf_only(PageBuilder& builder, uint16_t slot_id,
-                        const Slice& key) {
-    struct Ctx {
-      const Slice* key;
-      size_t value_size;
-    };
-    Ctx ctx{&key, value_size};
-    builder.add(
-        slot_id, LeafNode::size(key.size(), value_size),
-        [&ctx](NodeSlot& dst) { dst.leaf()->set(*ctx.key, ctx.value_size); });
+  void create_leaf_only(PageBuilder& bldr, uint16_t slot_id,
+                        const Slice& leaf_key) {
+    _leaf_key = leaf_key;  // Store in member for lambda capture
+    bldr.add(slot_id, LeafNode::size(leaf_key.size(), value_size),
+             [this](NodeSlot& dst) { dst.leaf()->set(_leaf_key, value_size); });
   }
 };
 

@@ -71,7 +71,8 @@ struct _Merger {
     }
 
     uint64_t vsize = src_value.size();
-    uint16_t msize = CursorDst::BigMemory::modify_size<LeafNode>(key.size(), vsize);
+    uint16_t msize =
+        CursorDst::BigMemory::modify_size<LeafNode>(key.size(), vsize);
     leaf_ptr leaf = alloc_node<leaf_ptr>(LeafNode::size(key.size(), msize));
     leaf->set(key, src_value.size());
     if (msize != vsize) {
@@ -167,7 +168,7 @@ struct _Merger {
       merge_into_trie(dst, src);
     } else {
       trie_ptr new_trie =
-          alloc_node<trie_ptr>(TrieNode::size(suffix_len, dst_trie->count()));
+          alloc_node<trie_ptr>(dst_trie->reduced_size(suffix_len));
       new_trie->create(*dst_trie,
                        Slice(&dst_trie->compressed()[dst.prefix], suffix_len));
       free_node(dst_trie);
@@ -206,7 +207,7 @@ struct _Merger {
 
       // A new trie with two branches for the old dst and the new src
       trie_ptr new_trie =
-          alloc_node<trie_ptr>(TrieNode::size(src_split_pos, 2));
+          alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
       auto loffset =
           new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
                            key1, child1, key);
@@ -228,7 +229,7 @@ struct _Merger {
       uint8_t suffix_len = src_trie->len() - src_split_pos;
 
       trie_ptr suffix_trie =
-          alloc_node<trie_ptr>(TrieNode::size(suffix_len, src_trie->count()));
+          alloc_node<trie_ptr>(src_trie->reduced_size(suffix_len));
       suffix_trie->create(
           *src_trie, Slice(&src_trie->compressed()[src_split_pos], suffix_len));
       *dst.link() = resolve_offset(suffix_trie);
@@ -269,8 +270,7 @@ struct _Merger {
       return;
     }
 
-    trie_ptr new_trie =
-        alloc(TrieNode::size(src_trie->len(), src_trie->count() + 1));
+    trie_ptr new_trie = alloc(src_trie->increased_size(key1));
     dst.trie() = new_trie;
     dst.link_offset = new_trie->create(*src_trie, key1);
     dst.update_trie_offset();
@@ -301,8 +301,7 @@ struct _Merger {
       // src prefix is longer -> split src_trie and insert the suffix part
       uint16_t loffset;
       trie_ptr new_trie = clone_plus_one(dst_trie, suffix_len, &loffset);
-      trie_ptr suffix_trie =
-          inserter.alloc(DstTrieNode::size(suffix_len, src_trie->count()));
+      trie_ptr suffix_trie = inserter.alloc(src_trie->reduced_size(suffix_len));
       suffix_trie->create(
           *src_trie,
           Slice(&src_trie->compressed()[src_trie->len() - suffix_len],
@@ -384,8 +383,7 @@ struct _Merger {
                                           : dst_trie->isset(branch_key)));
     // otherwise find would have walked down
 
-    trie_ptr new_trie =
-        alloc(TrieNode::size(dst_trie->len(), dst_trie->count() + 1));
+    trie_ptr new_trie = alloc(dst_trie->increment_size(branch_key));
     *loffset = new_trie->create(*dst_trie, branch_key);
     free_node(dst_trie);
     return new_trie;

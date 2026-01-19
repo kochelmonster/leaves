@@ -204,6 +204,8 @@ struct _DB {
     return std::make_unique<Cursor>(this, &txn()->root);
   }
 
+  const db_type* _internal() const { return this; }  // for _Dumper
+
   uint64_t new_cursor_id() { return _storage.new_cursor_id(); }
 
   Slice name() const { return _storage.db_name(_index); }
@@ -246,7 +248,8 @@ struct _DB {
 
   // space without PageHeader
   page_ptr alloc(uint16_t space) {
-    assert(space + sizeof(typename Traits::PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+    assert(space + sizeof(typename Traits::PageHeader) <=
+           PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     page_ptr result = alloc_slot(
         MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
     result->used = space;
@@ -570,8 +573,6 @@ struct _DB {
 
     flush();
   }
-
-  const DB* _internal() const { return this; }
 };
 
 }  // namespace leaves

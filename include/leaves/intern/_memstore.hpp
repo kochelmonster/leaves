@@ -90,6 +90,8 @@ struct _MemoryDB {
     _mem_manager.init(area_ptr->content_offset(), area_ptr->end());
   }
 
+  const db_type* _internal() const { return this; }  // for _Dumper
+
   // Area management
   area_ptr alloc_single_area() { return _storage.alloc_single_area(); }
 

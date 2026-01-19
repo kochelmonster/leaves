@@ -40,9 +40,9 @@ struct _TrieNode {
   constexpr static int NONE = -1;
   constexpr static int OUT_OF_RANGE = -2;
   constexpr static uint16_t MAX_SIZE =
-      align(padding(sizeof(TrieNode) + MAX_BRANCH_COUNT, sizeof(uint32_e)) +
+      align(padding(sizeof(TrieNode) + 255, sizeof(uint32_e)) +
             8 * sizeof(uint32_e)) +
-      257 * sizeof(offset_e);
+      MAX_BRANCH_COUNT * sizeof(offset_e);
   constexpr static uint8_t LOWER_MASK = 0b00011111;
 
   uint8_t len() const { return _compressed_len; }
@@ -63,6 +63,33 @@ struct _TrieNode {
   static uint8_t ubit(uint8_t val) { return (val >> 5); }
   static uint32_t lbit(uint8_t val) { return (val & LOWER_MASK); }
   uint16_t size() const { return array_end(); }
+  uint16_t reduced_size(uint8_t new_compressed_len) const {
+    uint16_t prefix_size =
+        padding(sizeof(TrieNode) + new_compressed_len, sizeof(uint32_e));
+    return align(prefix_size + lower_size() + array_size());
+  }
+
+  uint16_t increment_size(int key) const {
+    uint16_t prefix_size =
+        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    uint16_t lower_size_ = lower_size();
+    if (key != NONE && !(_upper & (1 << ubit(key)))) {
+      lower_size_ += sizeof(uint32_e);
+    }
+    uint16_t array_size_ = (count() + 1) * sizeof(offset_e);
+    return align(prefix_size + lower_size_ + array_size_);
+  }
+
+  uint16_t decrement_size(int key) const {
+    uint16_t prefix_size =
+        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    uint16_t lower_size_ = lower_size();
+    if (key != NONE && bits::count(_upper) > 1 && (_upper & (1 << ubit(key)))) {
+      lower_size_ -= sizeof(uint32_e);
+    }
+    uint16_t array_size_ = (count() - 1) * sizeof(offset_e);
+    return align(prefix_size + lower_size_ + array_size_);
+  }
 
   uint16_t calc_lower_start() const {
     return padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
@@ -72,8 +99,25 @@ struct _TrieNode {
     return align(lower_start() + bits::count(_upper) * sizeof(uint32_e));
   }
 
+  static constexpr uint16_t size(uint8_t prefix, int key1, int key2) {
+    assert(key1 != key2);
+    uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
+    uint16_t lower_size;
+    if (key1 == NONE || key2 == NONE) {
+      lower_size = sizeof(uint32_e);  // only key2's upper bit
+    } else if (ubit(key1) == ubit(key2)) {
+      lower_size = sizeof(uint32_e);  // same upper bit
+    } else {
+      lower_size = 2 * sizeof(uint32_e);  // different upper bits
+    }
+    uint16_t array_start = align(prefix_size + lower_size);
+    return array_start + 2 * sizeof(offset_e);
+  }
+
   // estimates the max size for a trie node with a given prefix and branches
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
+    // TODO: calculate exact size
+
     uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
     uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
     uint16_t array_size = branches * sizeof(offset_e);
@@ -101,13 +145,14 @@ struct _TrieNode {
 
     if (key1 != NONE) {
       _upper = (1 << ubit(key1)) | (1 << ubit(key2));
-      if (bits::count(_upper) == 1)
+      if (bits::count(_upper) == 1) {
         lower_[0] = (1 << lbit(key1)) | (1 << lbit(key2));
-      else {
+        array_start_ = align(lower_start_ + sizeof(uint32_e));
+      } else {
         lower_[0] = 1 << lbit(key1);
         lower_[1] = 1 << lbit(key2);
+        array_start_ = align(lower_start_ + 2 * sizeof(uint32_e));
       }
-      array_start_ = align(lower_start_ + 2 * sizeof(uint32_e));
     } else {
       _upper = 1 << ubit(key2);
       _array_len |= NULL_MASK;

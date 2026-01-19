@@ -294,13 +294,11 @@ struct _Offset {
   // this: the offset_t field that will hold the relative offset
   // Result: relative = dest_ptr - this
   const _Offset& set_relative(const void* dest_ptr) {
-    if (!is_relative()) {
-      NodeTypes saved_type = type();
-      _offset = (BaseType)(int64_t)dest_ptr - (int64_t)this;
-      assert((_offset & 7) == 0);
-      _offset |= RELATIVE_FLAG;
-      type(saved_type);
-    }
+    NodeTypes saved_type = type();
+    _offset = (BaseType)(int64_t)dest_ptr - (int64_t)this;
+    assert((_offset & 7) == 0);
+    _offset |= RELATIVE_FLAG;
+    type(saved_type);
     return *this;
   }
 
