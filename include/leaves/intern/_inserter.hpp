@@ -184,8 +184,7 @@ struct _Inserter {
   void add_to_array() {
     int key = back->key() ? back->branch_key : TrieNode::NONE;
     trie_ptr otrie = back->trie();
-    trie_ptr new_trie =
-        alloc_node<trie_ptr>(otrie->increment_size(back->prefix, key));
+    trie_ptr new_trie = alloc_node<trie_ptr>(otrie->increment_size(key));
 
     back->trie() = new_trie;
     back->link_idx = new_trie->create(*otrie, key);

@@ -1,9 +1,9 @@
 type: trie
 id: 10360
-page: 0
-freespace: 80
+page: 10352
+freespace: 88
 txn: 3
-size: 40
+size: 32
 compressed: 
   size: 3
   key: "[a][b][c]"
@@ -14,7 +14,7 @@ children:
 ---
 type: leaf
 id: 10241
-page: 0
+page: 10233
 freespace: 111
 size: 9
 txn: 3
@@ -25,7 +25,7 @@ value: "abca"
 ---
 type: leaf
 id: 14577
-page: 0
+page: 14569
 freespace: 111
 size: 9
 txn: 3

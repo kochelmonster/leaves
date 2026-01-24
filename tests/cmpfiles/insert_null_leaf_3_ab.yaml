@@ -1,6 +1,6 @@
 type: trie
 id: 5472
-page: 0
+page: 5464
 freespace: 72
 txn: 5
 size: 48
@@ -16,7 +16,7 @@ children:
 ---
 type: leaf
 id: 16041
-page: 0
+page: 16033
 freespace: 114
 size: 6
 txn: 5
@@ -27,7 +27,7 @@ value: "ab"
 ---
 type: leaf
 id: 10241
-page: 0
+page: 10233
 freespace: 112
 size: 8
 txn: 3
@@ -38,7 +38,7 @@ value: "aba"
 ---
 type: leaf
 id: 14577
-page: 0
+page: 14569
 freespace: 112
 size: 8
 txn: 3
@@ -49,7 +49,7 @@ value: "abb"
 ---
 type: leaf
 id: 15369
-page: 0
+page: 15361
 freespace: 112
 size: 8
 txn: 4

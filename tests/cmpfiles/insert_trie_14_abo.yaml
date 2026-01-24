@@ -1,6 +1,6 @@
 type: trie
-id: 21192
-page: 0
+id: 21552
+page: 21544
 freespace: 32
 txn: 16
 size: 136
@@ -18,16 +18,16 @@ children:
   - 16401
   - 16521
   - 16641
+  - 16761
+  - 16881
+  - 17001
   - 5473
   - 10361
   - 15249
-  - 21361
-  - 21481
-  - 21601
 ---
 type: leaf
 id: 10241
-page: 0
+page: 10233
 freespace: 112
 size: 8
 txn: 3
@@ -38,7 +38,7 @@ value: "aba"
 ---
 type: leaf
 id: 14577
-page: 0
+page: 14569
 freespace: 112
 size: 8
 txn: 3
@@ -49,7 +49,7 @@ value: "abb"
 ---
 type: leaf
 id: 15369
-page: 0
+page: 15361
 freespace: 112
 size: 8
 txn: 4
@@ -60,7 +60,7 @@ value: "abc"
 ---
 type: leaf
 id: 16041
-page: 0
+page: 16033
 freespace: 112
 size: 8
 txn: 5
@@ -71,7 +71,7 @@ value: "abd"
 ---
 type: leaf
 id: 16161
-page: 0
+page: 16153
 freespace: 112
 size: 8
 txn: 6
@@ -82,7 +82,7 @@ value: "abe"
 ---
 type: leaf
 id: 16281
-page: 0
+page: 16273
 freespace: 112
 size: 8
 txn: 7
@@ -93,7 +93,7 @@ value: "abf"
 ---
 type: leaf
 id: 16401
-page: 0
+page: 16393
 freespace: 112
 size: 8
 txn: 8
@@ -104,7 +104,7 @@ value: "abg"
 ---
 type: leaf
 id: 16521
-page: 0
+page: 16513
 freespace: 112
 size: 8
 txn: 9
@@ -115,7 +115,7 @@ value: "abh"
 ---
 type: leaf
 id: 16641
-page: 0
+page: 16633
 freespace: 112
 size: 8
 txn: 10
@@ -125,8 +125,8 @@ valuesize: 3
 value: "abi"
 ---
 type: leaf
-id: 5473
-page: 0
+id: 16761
+page: 16753
 freespace: 112
 size: 8
 txn: 11
@@ -136,8 +136,8 @@ valuesize: 3
 value: "abj"
 ---
 type: leaf
-id: 10361
-page: 0
+id: 16881
+page: 16873
 freespace: 112
 size: 8
 txn: 12
@@ -147,8 +147,8 @@ valuesize: 3
 value: "abk"
 ---
 type: leaf
-id: 15249
-page: 0
+id: 17001
+page: 16993
 freespace: 112
 size: 8
 txn: 13
@@ -158,8 +158,8 @@ valuesize: 3
 value: "abl"
 ---
 type: leaf
-id: 21361
-page: 0
+id: 5473
+page: 5465
 freespace: 112
 size: 8
 txn: 14
@@ -169,8 +169,8 @@ valuesize: 3
 value: "abm"
 ---
 type: leaf
-id: 21481
-page: 0
+id: 10361
+page: 10353
 freespace: 112
 size: 8
 txn: 15
@@ -180,8 +180,8 @@ valuesize: 3
 value: "abn"
 ---
 type: leaf
-id: 21601
-page: 0
+id: 15249
+page: 15241
 freespace: 112
 size: 8
 txn: 16

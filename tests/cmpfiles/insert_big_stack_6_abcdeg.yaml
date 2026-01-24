@@ -1,6 +1,6 @@
 type: trie
 id: 17720
-page: 0
+page: 17712
 freespace: 88
 txn: 8
 size: 32
@@ -14,7 +14,7 @@ children:
 ---
 type: leaf
 id: 10241
-page: 0
+page: 10233
 freespace: 115
 size: 5
 txn: 3
@@ -25,7 +25,7 @@ value: "a"
 ---
 type: trie
 id: 16520
-page: 0
+page: 16512
 freespace: 88
 txn: 8
 size: 32
@@ -39,7 +39,7 @@ children:
 ---
 type: leaf
 id: 15249
-page: 0
+page: 15241
 freespace: 114
 size: 6
 txn: 4
@@ -50,7 +50,7 @@ value: "ab"
 ---
 type: trie
 id: 16400
-page: 0
+page: 16392
 freespace: 88
 txn: 8
 size: 32
@@ -64,7 +64,7 @@ children:
 ---
 type: leaf
 id: 5473
-page: 0
+page: 5465
 freespace: 113
 size: 7
 txn: 5
@@ -75,7 +75,7 @@ value: "abc"
 ---
 type: trie
 id: 16280
-page: 0
+page: 16272
 freespace: 88
 txn: 8
 size: 32
@@ -89,7 +89,7 @@ children:
 ---
 type: leaf
 id: 14577
-page: 0
+page: 14569
 freespace: 112
 size: 8
 txn: 6
@@ -100,7 +100,7 @@ value: "abcd"
 ---
 type: trie
 id: 16640
-page: 0
+page: 16632
 freespace: 80
 txn: 8
 size: 40
@@ -115,7 +115,7 @@ children:
 ---
 type: leaf
 id: 15609
-page: 0
+page: 15601
 freespace: 111
 size: 9
 txn: 7
@@ -126,7 +126,7 @@ value: "abcde"
 ---
 type: leaf
 id: 17601
-page: 0
+page: 17593
 freespace: 109
 size: 11
 txn: 7
@@ -137,7 +137,7 @@ value: "abcdef"
 ---
 type: leaf
 id: 17841
-page: 0
+page: 17833
 freespace: 109
 size: 11
 txn: 8

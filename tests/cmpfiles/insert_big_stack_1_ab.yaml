@@ -1,6 +1,6 @@
 type: trie
 id: 10360
-page: 0
+page: 10352
 freespace: 88
 txn: 3
 size: 32
@@ -14,7 +14,7 @@ children:
 ---
 type: leaf
 id: 10241
-page: 0
+page: 10233
 freespace: 115
 size: 5
 txn: 3
@@ -25,7 +25,7 @@ value: "a"
 ---
 type: leaf
 id: 14577
-page: 0
+page: 14569
 freespace: 113
 size: 7
 txn: 3

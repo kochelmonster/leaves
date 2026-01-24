@@ -1,7 +1,7 @@
 type: trie
 id: 15416
-page: 0
-freespace: 72
+page: 15408
+freespace: 64
 txn: 3
 size: 48
 compressed: 
@@ -16,7 +16,7 @@ children:
 ---
 type: leaf
 id: 5593
-page: 0
+page: 5585
 freespace: 112
 size: 8
 txn: 2
@@ -27,7 +27,7 @@ value: "abc"
 ---
 type: leaf
 id: 9929
-page: 0
+page: 9921
 freespace: 112
 size: 8
 txn: 2
@@ -38,7 +38,7 @@ value: "abd"
 ---
 type: leaf
 id: 10169
-page: 0
+page: 10161
 freespace: 112
 size: 8
 txn: 2
@@ -49,7 +49,7 @@ value: "abe"
 ---
 type: leaf
 id: 10409
-page: 0
+page: 10401
 freespace: 112
 size: 8
 txn: 2

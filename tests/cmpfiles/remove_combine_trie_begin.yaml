@@ -1,6 +1,6 @@
 type: trie
 id: 5712
-page: 0
+page: 5704
 freespace: 88
 txn: 2
 size: 32
@@ -14,7 +14,7 @@ children:
 ---
 type: leaf
 id: 5593
-page: 0
+page: 5585
 freespace: 114
 size: 6
 txn: 2
@@ -25,7 +25,7 @@ value: "ab"
 ---
 type: trie
 id: 10168
-page: 0
+page: 10160
 freespace: 88
 txn: 2
 size: 32
@@ -39,7 +39,7 @@ children:
 ---
 type: trie
 id: 10528
-page: 0
+page: 10520
 freespace: 88
 txn: 2
 size: 32
@@ -53,7 +53,7 @@ children:
 ---
 type: leaf
 id: 10409
-page: 0
+page: 10401
 freespace: 110
 size: 10
 txn: 2
@@ -64,7 +64,7 @@ value: "abcde"
 ---
 type: leaf
 id: 10649
-page: 0
+page: 10641
 freespace: 110
 size: 10
 txn: 2
@@ -75,7 +75,7 @@ value: "abcdf"
 ---
 type: leaf
 id: 10049
-page: 0
+page: 10041
 freespace: 111
 size: 9
 txn: 2

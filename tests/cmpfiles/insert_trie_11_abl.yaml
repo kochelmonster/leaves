@@ -1,7 +1,7 @@
 type: trie
-id: 21192
-page: 0
-freespace: 56
+id: 15248
+page: 15240
+freespace: 8
 txn: 13
 size: 112
 compressed: 
@@ -18,13 +18,13 @@ children:
   - 16401
   - 16521
   - 16641
-  - 5473
-  - 10361
-  - 15249
+  - 16761
+  - 16881
+  - 17001
 ---
 type: leaf
 id: 10241
-page: 0
+page: 10233
 freespace: 112
 size: 8
 txn: 3
@@ -35,7 +35,7 @@ value: "aba"
 ---
 type: leaf
 id: 14577
-page: 0
+page: 14569
 freespace: 112
 size: 8
 txn: 3
@@ -46,7 +46,7 @@ value: "abb"
 ---
 type: leaf
 id: 15369
-page: 0
+page: 15361
 freespace: 112
 size: 8
 txn: 4
@@ -57,7 +57,7 @@ value: "abc"
 ---
 type: leaf
 id: 16041
-page: 0
+page: 16033
 freespace: 112
 size: 8
 txn: 5
@@ -68,7 +68,7 @@ value: "abd"
 ---
 type: leaf
 id: 16161
-page: 0
+page: 16153
 freespace: 112
 size: 8
 txn: 6
@@ -79,7 +79,7 @@ value: "abe"
 ---
 type: leaf
 id: 16281
-page: 0
+page: 16273
 freespace: 112
 size: 8
 txn: 7
@@ -90,7 +90,7 @@ value: "abf"
 ---
 type: leaf
 id: 16401
-page: 0
+page: 16393
 freespace: 112
 size: 8
 txn: 8
@@ -101,7 +101,7 @@ value: "abg"
 ---
 type: leaf
 id: 16521
-page: 0
+page: 16513
 freespace: 112
 size: 8
 txn: 9
@@ -112,7 +112,7 @@ value: "abh"
 ---
 type: leaf
 id: 16641
-page: 0
+page: 16633
 freespace: 112
 size: 8
 txn: 10
@@ -122,8 +122,8 @@ valuesize: 3
 value: "abi"
 ---
 type: leaf
-id: 5473
-page: 0
+id: 16761
+page: 16753
 freespace: 112
 size: 8
 txn: 11
@@ -133,8 +133,8 @@ valuesize: 3
 value: "abj"
 ---
 type: leaf
-id: 10361
-page: 0
+id: 16881
+page: 16873
 freespace: 112
 size: 8
 txn: 12
@@ -144,8 +144,8 @@ valuesize: 3
 value: "abk"
 ---
 type: leaf
-id: 15249
-page: 0
+id: 17001
+page: 16993
 freespace: 112
 size: 8
 txn: 13

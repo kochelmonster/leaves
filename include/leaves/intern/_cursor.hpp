@@ -490,13 +490,14 @@ struct _Cursor : public _CursorBase<Traits_> {
     if (!this->stack.size) {
       if (!*this->_root) {
         this->push(this->_root);
-        _LocalityInserter(&this->stack.back(), size).first_exec();
+        //_LocalityInserter(&this->stack.back(), size).first_exec();
+        _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
       }
       throw NoValidPosition();
     }
-
-    _LocalityInserter(&this->stack.back(), size).exec();
+    //_LocalityInserter(&this->stack.back(), size).exec();
+    _Inserter(&this->stack.back(), size).exec();
     return (void*)this->stack.back().value().data();
   }
 
