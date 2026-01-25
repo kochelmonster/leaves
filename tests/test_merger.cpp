@@ -4,7 +4,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 // TODO: Merger needs adaptation for new BigMemory architecture
-// - Handlers need extract_big_value() and free_big() methods
+// - Handlers need migrate_big_value() and free_big() methods
 // - leaf->value() signature changed
 
 BOOST_AUTO_TEST_CASE(test_merger_disabled) {
@@ -14,8 +14,8 @@ BOOST_AUTO_TEST_CASE(test_merger_disabled) {
 
 #if 0
 
-#include "../include/leaves/intern/_merger.hpp"
-#include "../include/leaves/intern/_cursor.hpp"
+#include "../include/leaves/intern/util/_merger.hpp"
+#include "../include/leaves/intern/db/_cursor.hpp"
 #include "test.hpp"
 
 using namespace leaves;

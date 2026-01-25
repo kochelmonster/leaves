@@ -7,7 +7,7 @@
 #error "TESTING must be defined"
 #endif
 
-#include "leaves/intern/_mmap.hpp"
+#include "leaves/intern/storage/_mmap.hpp"
 
 using namespace leaves;
 

@@ -4,7 +4,7 @@
 #include <memory>
 
 #include "db.hpp"
-#include "intern/_fstore.hpp"
+#include "intern/storage/_fstore.hpp"
 
 namespace leaves {
 

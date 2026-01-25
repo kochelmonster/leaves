@@ -7,10 +7,10 @@
 #error "TESTING must be defined"
 #endif
 
-#include "leaves/intern/_bigmemory.hpp"
-#include "leaves/intern/_check.hpp"
-#include "leaves/intern/_cursor.hpp"
-#include "leaves/intern/_mmap.hpp"
+#include "leaves/intern/memory/_bigmemory.hpp"
+#include "leaves/intern/db/_check.hpp"
+#include "leaves/intern/db/_cursor.hpp"
+#include "leaves/intern/storage/_mmap.hpp"
 
 using namespace leaves;
 

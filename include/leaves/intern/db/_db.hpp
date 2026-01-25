@@ -6,9 +6,9 @@
 #include <mutex>
 
 #include "_cursor.hpp"
-#include "_hash.hpp"
-#include "_memory.hpp"
-#include "_port.hpp"
+#include "../core/_hash.hpp"
+#include "../memory/_memory.hpp"
+#include "../core/_port.hpp"
 
 namespace leaves {
 

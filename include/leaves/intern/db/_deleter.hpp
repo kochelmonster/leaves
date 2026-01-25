@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-#include "_node.hpp"
+#include "../core/_node.hpp"
 
 namespace leaves {
 

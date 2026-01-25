@@ -16,14 +16,13 @@
 #include <fstream>
 #include <type_traits>
 
-#include "_db.hpp"
-#include "_exception.hpp"
-#include "_lsm.hpp"
-#include "_memory.hpp"
-#include "_node.hpp"
-#include "_port.hpp"
-#include "_traits.hpp"
-#include "_util.hpp"
+#include "../db/_db.hpp"
+#include "../core/_exception.hpp"
+#include "../memory/_memory.hpp"
+#include "../core/_node.hpp"
+#include "../core/_port.hpp"
+#include "../core/_traits.hpp"
+#include "../core/_util.hpp"
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
@@ -91,9 +90,7 @@ struct _MemoryMapFile {
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef _DB<MemoryMapFile> DB;
-  typedef _LSMDB<MemoryMapFile, _Transaction<Traits>, _DBHeader<MemoryMapFile>> LSMDB;
   typedef std::unique_ptr<DB> _db_ptr;
-  typedef std::unique_ptr<LSMDB> _lsmdb_ptr;
   
   using Mutex = boost::interprocess::interprocess_mutex;
 
@@ -133,13 +130,11 @@ struct _MemoryMapFile {
   FileHeader* _memory;
   pid_type _pid;
   std::vector<_db_ptr> _dbs;
-  std::vector<_lsmdb_ptr> _lsm_dbs;
 
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
                  uint16_t db_count = 48) {
     _pid = current_pid();
     _dbs.resize(db_count);
-    _lsm_dbs.resize(db_count);
     init_dbfile(path, map_size, db_count);
   }
 
@@ -399,32 +394,6 @@ struct _MemoryMapFile {
     strcpy(_memory->dbs[free].name, name);
     _dbs[free] = std::make_unique<DB>(*this, &_memory->dbs[free].offset, free);
     return _dbs[free].get();
-  }
-
-  LSMDB* make_lsm(const char* name) {
-    if (strlen(name) >= sizeof(DBEntry::name)) throw KeyTooBig();
-
-    boost::interprocess::file_lock flock(filename());
-    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-        flock_guard(flock);
-    int free = -1;
-    for (uint16_t i = 0; i < _memory->db_count; i++) {
-      if (_memory->dbs[i].offset) {
-        if (!strcmp(_memory->dbs[i].name, name)) {
-          if (!_lsm_dbs[i]) {
-            _lsm_dbs[i] = std::make_unique<LSMDB>(*this, _memory->dbs[i].offset, i);
-            return _lsm_dbs[i].get();
-          }
-          return _lsm_dbs[i].get();
-        }
-      } else if (free < 0)
-        free = i;
-    }
-
-    if (free < 0) throw LeavesException();
-    strcpy(_memory->dbs[free].name, name);
-    _lsm_dbs[free] = std::make_unique<LSMDB>(*this, &_memory->dbs[free].offset, free);
-    return _lsm_dbs[free].get();
   }
 
   void remove_db(const char* name) {

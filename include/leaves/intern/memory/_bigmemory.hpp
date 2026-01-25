@@ -3,9 +3,9 @@
 
 #include <boost/endian/arithmetic.hpp>
 
-#include "_check.hpp"
-#include "_hash.hpp"
-#include "_util.hpp"
+#include "../db/_check.hpp"
+#include "../core/_hash.hpp"
+#include "../core/_util.hpp"
 
 namespace leaves {
 

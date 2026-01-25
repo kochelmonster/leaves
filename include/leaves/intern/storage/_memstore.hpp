@@ -6,12 +6,12 @@
 #include <memory>
 #include <vector>
 
-#include "_db.hpp"
-#include "_exception.hpp"
-#include "_memory.hpp"
-#include "_node.hpp"
-#include "_port.hpp"
-#include "_traits.hpp"
+#include "../db/_db.hpp"
+#include "../core/_exception.hpp"
+#include "../memory/_memory.hpp"
+#include "../core/_node.hpp"
+#include "../core/_port.hpp"
+#include "../core/_traits.hpp"
 
 namespace leaves {
 

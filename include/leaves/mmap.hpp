@@ -4,7 +4,7 @@
 #include <memory>
 
 #include "db.hpp"
-#include "intern/_mmap.hpp"
+#include "intern/storage/_mmap.hpp"
 
 namespace leaves {
 

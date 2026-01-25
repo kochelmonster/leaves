@@ -7,7 +7,7 @@
 #error "TESTING must be defined"
 #endif
 
-#include "leaves/intern/_fstore.hpp"
+#include "leaves/intern/storage/_fstore.hpp"
 
 using namespace leaves;
 

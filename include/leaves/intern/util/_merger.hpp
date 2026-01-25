@@ -1,9 +1,9 @@
 #ifndef _LEAVES_MERGER_HPP
 #define _LEAVES_MERGER_HPP
 
-#include "_bits.hpp"
-#include "_cursor.hpp"
-#include "_node.hpp"
+#include "../core/_bits.hpp"
+#include "../db/_cursor.hpp"
+#include "../core/_node.hpp"
 
 namespace leaves {
 
@@ -26,6 +26,8 @@ struct _Merger {
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
   using SrcLeafNode = typename CursorSrc::Transition::LeafNode;
+  using BigMemory = typename CursorDst::BigMemory;
+  using BigValue = typename BigMemory::BigValue;
 
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
@@ -65,14 +67,14 @@ struct _Merger {
   leaf_ptr fill_leaf(const Slice& key, SrcLeafNode& src_leaf) {
     Slice src_value;
     if (src_leaf.is_big()) {
-      src_value = handler.extract_big_value(src_leaf, *src_cursor._db);
+      src_value = handler.migrate_big_value(src_leaf, *src_cursor._db);
     } else {
       src_value = src_leaf.value();
     }
 
     uint64_t vsize = src_value.size();
     uint16_t msize =
-        CursorDst::BigMemory::modify_size<LeafNode>(key.size(), vsize);
+        BigMemory::template modify_size<LeafNode>(key.size(), vsize);
     leaf_ptr leaf = alloc_node<leaf_ptr>(LeafNode::size(key.size(), msize));
     leaf->set(key, src_value.size());
     if (msize != vsize) {

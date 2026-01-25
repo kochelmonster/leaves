@@ -8,7 +8,7 @@
 #include <type_traits>
 
 #include "_check.hpp"
-#include "_node.hpp"
+#include "../core/_node.hpp"
 
 namespace leaves {
 

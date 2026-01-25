@@ -12,12 +12,12 @@
 #include <thread>
 #include <unordered_map>
 
-#include "_db.hpp"
-#include "_exception.hpp"
-#include "_memory.hpp"  // for AreaSlice, SmartPointer
-#include "_port.hpp"
-#include "_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
-#include "_twoquecache.hpp"
+#include "../db/_db.hpp"
+#include "../core/_exception.hpp"
+#include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
+#include "../core/_port.hpp"
+#include "../core/_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
+#include "../memory/_twoquecache.hpp"
 
 namespace leaves {
 

@@ -4,11 +4,11 @@
 #include <string>
 #include <vector>
 
-#include "_bigmemory.hpp"
+#include "../memory/_bigmemory.hpp"
 #include "_deleter.hpp"
-#include "_exception.hpp"
+#include "../core/_exception.hpp"
 #include "_inserter.hpp"
-#include "_node.hpp"
+#include "../core/_node.hpp"
 
 namespace leaves {
 

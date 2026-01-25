@@ -7,7 +7,7 @@
 #error "TESTING must be defined"
 #endif
 
-#include "leaves/intern/_node.hpp"
+#include "leaves/intern/core/_node.hpp"
 
 using namespace leaves;
 using namespace leaves::bits;

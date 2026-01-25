@@ -3,8 +3,8 @@
 
 #include <memory>
 
-#include "intern/_cursor.hpp"
-#include "intern/_util.hpp"
+#include "intern/db/_cursor.hpp"
+#include "intern/core/_util.hpp"
 
 namespace leaves {
 

@@ -4,7 +4,7 @@
 #include <memory>
 
 #include "cursor.hpp"
-#include "intern/_db.hpp"
+#include "intern/db/_db.hpp"
 
 namespace leaves {
 

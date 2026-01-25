@@ -7,7 +7,7 @@
 #error "TESTING must be defined"
 #endif
 
-#include "leaves/intern/_replicatior.hpp"
+#include "leaves/intern/util/_replicatior.hpp"
 
 struct DirPreparation {
   DirPreparation() {

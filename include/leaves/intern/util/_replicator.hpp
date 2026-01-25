@@ -3,7 +3,7 @@
 
 #include <boost/endian/arithmetic.hpp>
 
-#include "_node.hpp"
+#include "../core/_node.hpp"
 
 namespace leaves {
 namespace Replication {

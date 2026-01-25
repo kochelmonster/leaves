@@ -4,7 +4,7 @@
 #include <sstream>
 #include <string>
 
-#include "_node.hpp"
+#include "../core/_node.hpp"
 
 namespace leaves {
 

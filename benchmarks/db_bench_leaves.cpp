@@ -12,7 +12,7 @@
 #include <sstream>
 
 #include "leaves/fstore.hpp"
-#include "leaves/intern/_check.hpp"
+#include "leaves/intern/db/_check.hpp"
 #include "leaves/leaves.hpp"
 #include "leaves/mmap.hpp"
 #include "util/histogram.h"
