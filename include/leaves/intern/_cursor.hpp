@@ -19,20 +19,24 @@ struct _Transition {
   typedef _Transition<Cursor> Transition;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
+  using node_ptr = typename Traits::Pointer<_Node>;
 
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp
 
   Cursor* cursor;
-  block_ptr block;
+  node_ptr node;
 
-  trie_ptr& trie() const { return *(trie_ptr*)&block; }
+  trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
 
-  leaf_ptr& leaf() const { return *(leaf_ptr*)&block; }
+  leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
+  const leaf_ptr& leaf() const {
+    return *reinterpret_cast<const leaf_ptr*>(&node);
+  }
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -45,61 +49,88 @@ struct _Transition {
   // UNDEFINED: not tested
   int cmp;
 
-  offset_t offset;
-  uint16_t link_offset;
+  offset_e* offset;
+  uint16_t link_idx;  // the array index of the link in the trie node
 
   offset_e* link() {
-    assert(link_offset != 0xFFFF);
-    return (offset_e*)(trie().link(link_offset));
+    assert(link_idx != 0xFFFF);
+    return trie()->array() + link_idx;
   }
 
-  bool is_leaf() const { return offset.type() == LEAF; }
-  bool is_trie() const { return offset.type() == TRIE; }
+  bool is_leaf() const { return offset->type() == LEAF; }
+  bool is_trie() const { return offset->type() == TRIE; }
 
   bool success() const { return cmp == 0 && is_leaf(); }
 
-  bool init(Cursor* cursor_, offset_t offset_, uint16_t keypos_ = 0) {
+  bool is_page_root() const { return !offset->is_relative(); }
+
+  bool init(Cursor* cursor_, offset_e* offset_, uint16_t keypos_ = 0) {
     cursor = cursor_;
     keypos = keypos_;
     prefix = 0;
     cmp = Transition::UNDEFINED;
     offset = offset_;
-    link_offset = 0xFFFF;
-    block = resolve(offset);
+    link_idx = 0xFFFF;
+    node = cursor->_db->template resolve<_Node>(offset);
     return true;  // the caller shall set the trie root
   }
 
-  block_ptr resolve(offset_t offset) { return cursor->_db->resolve(offset); }
+  void update_trie_offset() { update_offset(cursor->_db->resolve(trie())); }
 
-  void set_root(offset_t offset_) { *cursor->_root = offset_; }
+  void update_leaf_offset() { update_offset(cursor->_db->resolve(leaf())); }
 
-  void replace(offset_t offset_) {
-    offset = offset_;
-    if (!is_root())
-      *parent().update(*this) = offset_;
-    else
-      set_root(offset);
+  void update_offset(offset_e new_offset) {
+    // set the offset to the current node that has been changed.
+    // to transfer the node type to offset we have to distinguish between leaf
+    // and trie
+    assert(*offset != new_offset);
+    if (!is_root()) offset = parent().update();
+    *offset = new_offset;
   }
 
-  offset_e* update(Transition& child) {
-    if (!block->needs_cow(*child.block.operator->())) {
-      cursor->_db->make_dirty(block);
+  offset_e* update() {
+    using PageHeader = typename Traits::PageHeader;
+
+    if (!is_page_root()) {
+      // not a page root: cow has to be done in page root
+      offset = parent().update();
+      return link();
+    }
+
+    // Compute PageHeader addresses from node pointers
+    page_ptr page_header = node - sizeof(PageHeader);
+    if (!page_header->needs_cow(cursor->_db)) {
+      cursor->_db->make_dirty(node);
       return link();
     }
 
     // copy-on-write trie
+    // Keep in mind: old_trie is the page root and therefore the start of page
+    // data
+
     assert(is_trie());
     trie_ptr old_trie = trie();
-    trie() = cursor->_db->clone(old_trie);
-    offset = cursor->_db->resolve(trie());
+
+    page_ptr new_page = cursor->_db->alloc_slot(page_header->slot_id);
+    new_page->used = page_header->used;
+    assert(new_page->used <= Traits::PAGE_SIZES[new_page->slot_id]);
+
+    assert(old_trie->size() <= page_header->used);
+    trie() = new_page + sizeof(PageHeader);
+    memcpy((char*)trie(), (char*)old_trie, page_header->used);
+
+    auto new_offset = cursor->_db->resolve(trie());
+    cursor->_db->free(page_header);
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
-    cursor->_db->free(old_trie);
 
-    if (!is_root())
-      *parent().update(*this) = offset;
-    else
-      set_root(offset);
+    // Propagate COW upward: grandparent's needs_cow will compare its txn_id
+    // with our NEW cloned trie's txn_id. If they match (same transaction), no
+    // COW needed. If different, grandparent will also COW and recursively
+    // propagate upward.
+    if (!is_root()) offset = parent().update();
+    *offset = new_offset;
 
+    // Return the child's offset location in the NEW cloned trie
     return link();
   }
 
@@ -111,21 +142,15 @@ struct _Transition {
 
   void resize_key(size_t size) { cursor->current_key.resize(size); }
 
-  Transition& push(const offset_e* lnk) {
-    link_offset = (char*)lnk - (char*)block;
-    cursor->push(*lnk);
-    return cursor->stack.back();
-  }
-
-  Transition& push(offset_e lnk) {
-    cursor->push(lnk);
+  Transition& push() {
+    cursor->push(link());
     return cursor->stack.back();
   }
 
   void pop() { cursor->pop(); }
 
   void reset() {
-    block.reset();
+    node.reset();
     cmp = UNDEFINED;
   }
 
@@ -170,8 +195,8 @@ struct _Transition {
 
     if (key().empty()) {
       if (trie_.has_none()) {
-        push(trie_.offset(TrieNode::NONE));
-        child().find();
+        link_idx = 0;
+        push().find();
       } else
         cmp = -1;
       return;
@@ -183,8 +208,8 @@ struct _Transition {
       return;
     }
     cmp = 0;
-    push(trie_.offset(branch_key));
-    child().find();
+    link_idx = trie_.array_index(branch_key);
+    push().find();
   }
 
   void leaf_step() {
@@ -202,7 +227,8 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     prefix = trie_._compressed_len;
     cmp = 0;
-    auto& child = push(trie_.array());
+    link_idx = 0;
+    auto& child = push();
     child.first();
     if (child.keypos < current_key().size()) {
       branch_key = current_key()[child.keypos];
@@ -220,15 +246,11 @@ struct _Transition {
 
     TrieNode& trie_ = *trie();
     if (cmp == 0) {
-      link_offset += sizeof(offset_e);
+      if (++link_idx >= trie_.count()) return false;
       offset_e* lnk = link();
-      offset_e* end = trie_.array() + trie_.count();
-      if (lnk >= end) return false;
+      if (link_idx + 1 < trie_.count()) cursor->_db->prefetch(*(lnk + 1));
 
-      if (lnk + 1 < end) {
-        cursor->_db->prefetch(*(lnk + 1));
-      }
-      auto& child = push(lnk);
+      auto& child = push();
       cursor->_db->prefetch(*lnk);
 
       child.first();
@@ -246,9 +268,10 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int next_ = trie_.next(branch_key);
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
-    const offset_e* next_offset = trie_.offset(next_);
     branch_key = (uint8_t)next_;
-    push(next_offset).first();
+    link_idx = trie_.array_index(next_);
+    assert(link_idx < trie_.count());
+    push().first();
     return true;
   }
 
@@ -263,15 +286,11 @@ struct _Transition {
 
     TrieNode& trie_ = *trie();
     if (cmp == 0) {
-      link_offset -= sizeof(offset_e);
+      if (!link_idx--) return false;
       offset_e* lnk = link();
-      offset_e* begin = trie_.array();
-      if (lnk < begin) return false;
+      if (link_idx > 0) cursor->_db->prefetch(*(lnk - 1));
 
-      if (lnk - 1 >= begin) {
-        cursor->_db->prefetch(*(lnk - 1));
-      }
-      auto& child = push(lnk);
+      auto& child = push();
       cursor->_db->prefetch(*lnk);
 
       child.last();
@@ -290,7 +309,9 @@ struct _Transition {
     int prev_ = trie_.prev(branch_key);
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
     branch_key = (uint8_t)prev_;
-    push(trie_.offset(prev_)).last();
+    link_idx = trie_.array_index(prev_);
+    assert(link_idx < trie_.count());
+    push().last();
     return true;
   }
 
@@ -300,7 +321,8 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     prefix = trie_._compressed_len;
     cmp = 0;
-    auto& child = push(trie_.array() + trie_.count() - 1);
+    link_idx = trie_.count() - 1;
+    auto& child = push();
     child.last();
     assert(child.keypos < current_key().size());
     branch_key = current_key()[child.keypos];
@@ -312,12 +334,14 @@ struct _Stack {
   typedef _Stack<Cursor> Stack;
   typedef _Transition<Cursor> Transition;
   typedef std::vector<Transition> stack_v;
+  typedef Cursor::Traits::offset_e offset_e;
+
   stack_v data;
   size_t size;
 
   _Stack() : size(0) { data.resize(100); }
 
-  void push(Cursor* cursor, offset_t offset, uint16_t keypos = 0) {
+  void push(Cursor* cursor, offset_e* offset, uint16_t keypos = 0) {
     if (size == data.size()) data.resize(size * 2);
     data[size].init(cursor, offset, keypos);
     size++;
@@ -348,7 +372,7 @@ struct _CursorBase {
   typedef _Stack<CursorBase> Stack;
   typedef typename Traits::DB DB;
   using offset_e = typename Traits::offset_e;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using Transition = typename Stack::Transition;
 
   DB* _db;
@@ -362,12 +386,24 @@ struct _CursorBase {
     current_key.reserve(128);
   }
 
+  // return true if the cursor is on a valid position
+  bool is_valid() const {
+    return this->stack.size ? this->stack.back().success() : false;
+  }
+
+  void reset_key(size_t keypos) {
+    assert(keypos <= current_key.size());
+    size_t delta = current_key.size() - keypos;
+    current_key.resize(keypos);
+    rest_key = Slice(rest_key.data() - delta, rest_key.size() + delta);
+  }
+
   void advance_key(size_t size) {
     current_key.append(rest_key.data(), size);
     rest_key.iadvance(size);
   }
 
-  void push(offset_t ptr) { stack.push(this, ptr, current_key.size()); }
+  void push(offset_e* ptr) { stack.push(this, ptr, current_key.size()); }
 
   void pop() {
     assert(stack.size > 0);
@@ -376,7 +412,7 @@ struct _CursorBase {
   }
 
   // Allocation methods delegated through cursor to DB
-  block_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
+  page_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
 
   AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
 };
@@ -398,11 +434,6 @@ struct _Cursor : public _CursorBase<Traits_> {
 
   _Cursor(DB* db, offset_e* root) : CursorBase(db, root) {}
 
-  // return true if the cursor is on a valid position
-  bool is_valid() const {
-    return this->stack.size ? this->stack.back().success() : false;
-  }
-
   void find(const Slice& key) {
     if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
     this->rest_key = key;
@@ -410,23 +441,22 @@ struct _Cursor : public _CursorBase<Traits_> {
     _find();
   }
 
-  void set_root(offset_e* root) { 
+  void set_root(offset_e* root) {
     if (*root != *this->_root) {
-      this->_root = root; 
+      this->_root = root;
       clear();
-    }
-    else {
+    } else {
       this->_root = root;
     }
+    this->stack.front().offset = this->_root;
   }
 
   bool clear() {
     this->stack.clear(0);
     this->rest_key.reset();
     this->current_key.clear();
-    auto root = *this->_root;
-    if (!root) return true;
-    this->push(root);
+    if (!*this->_root) return true;
+    this->push(this->_root);
     return false;
   }
 
@@ -459,13 +489,14 @@ struct _Cursor : public _CursorBase<Traits_> {
   void* reserve(size_t size) {
     if (!this->stack.size) {
       if (!*this->_root) {
-        this->push(offset_t());
+        this->push(this->_root);
+        //_LocalityInserter(&this->stack.back(), size).first_exec();
         _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
       }
       throw NoValidPosition();
     }
-
+    //_LocalityInserter(&this->stack.back(), size).exec();
     _Inserter(&this->stack.back(), size).exec();
     return (void*)this->stack.back().value().data();
   }
@@ -485,7 +516,7 @@ struct _Cursor : public _CursorBase<Traits_> {
   Slice key() const { return this->current_key; }
 
   void remove() {
-    if (!is_valid()) throw NoValidPosition();
+    if (!this->is_valid()) throw NoValidPosition();
     _Deleter(*this).exec();
   }
 
@@ -525,10 +556,9 @@ struct _Cursor : public _CursorBase<Traits_> {
 
   void _find() {
     if (!this->stack.size) {
-      auto root = *this->_root;
-      if (!root) return;  // empty db
+      if (!*this->_root) return;  // empty db
       this->current_key.clear();
-      this->push(root);
+      this->push(this->_root);
     }
     this->stack.back().find();
   }
@@ -567,8 +597,8 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
 
   BigMemory& get_bigmemory() {
     if (!_bigmemory) {
-      _bigmemory = std::make_unique<BigMemory>(
-          this->_db, &this->_txn->free_bigmem_root);
+      _bigmemory =
+          std::make_unique<BigMemory>(this->_db, &this->_txn->free_bigmem_root);
     }
     return *_bigmemory;
   }
@@ -590,7 +620,9 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
       BigValue* bvalue = (BigValue*)result;
       get_bigmemory().alloc(size, bvalue);
       this->stack.back().leaf()->set_big();
-      return bvalue->data(this->_db);
+      auto data_ptr = bvalue->data(this->_db);
+      this->_db->make_dirty(data_ptr);
+      return (char*)data_ptr;
     }
     return result;
   }
@@ -600,7 +632,8 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
     if (back.cmp == 0 && back.is_leaf()) {
       if (back.leaf()->is_big()) {
         BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-        return Slice(bvalue->data(this->_db), bvalue->value_size);
+        auto data_ptr = bvalue->data(this->_db);
+        return Slice((char*)data_ptr, bvalue->value_size);
       }
       return back.value();
     }
@@ -660,15 +693,15 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
   void _set_txn(txn_ptr& txn) {
     assert(txn);
     if (this->_txn != txn) {
-      offset_t old_root_val = this->_root ? *this->_root : offset_t();
+      offset_e old_root_val = this->_root ? *this->_root : offset_e();
       if (this->_txn) {
         this->_txn->refs.fetch_sub(1);
       }
       this->_txn = txn;
       this->_txn->refs.fetch_add(1);
       this->_root = &this->_txn->root;
-      if (_bigmemory)
-        _bigmemory->reset(&this->_txn->free_bigmem_root);
+      this->stack.front().offset = this->_root;
+      if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
       if ((this->current_key.size() || this->rest_key.size()) &&
           old_root_val != *this->_root) {
         // adjust to new root

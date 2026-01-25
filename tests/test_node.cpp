@@ -19,11 +19,11 @@ struct TestTraits {
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   
-  static constexpr uint16_t BLOCK_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
-  static constexpr uint16_t BLOCK_SIZES_COUNT = sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr uint16_t PAGE_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
+  static constexpr uint16_t PAGE_SIZES_COUNT = sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
   };
 };
 
@@ -36,55 +36,55 @@ void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
   char buffer1[AREA_SIZE], buffer2[AREA_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;
   TrieNode& trie2 = *(TrieNode*)buffer2;
-  uint16_t offset;
+  uint16_t idx;
 
-  offset = trie1.create(prefix, 130);
-  *(offset_t*)((char*)&trie1 + offset) = 130;
+  idx = trie1.create(prefix, 130);
+  trie1.array()[idx] = 130;
   BOOST_CHECK(trie1.isset(130));
   BOOST_CHECK_EQUAL(*trie1.offset(130), 130);
   BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
-  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(idx, *offsets++);
 
-  offset = trie2.create(trie1, 5);
-  *(offset_t*)((char*)&trie2 + offset) = 5;
+  idx = trie2.create(trie1, 5);
+  trie2.array()[idx] = 5;
   BOOST_CHECK(trie2.isset(130));
   BOOST_CHECK(trie2.isset(5));
   BOOST_CHECK_EQUAL(*trie2.offset(5), 5);
   BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
-  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(idx, *offsets++);
 
-  offset = trie1.create(trie2, 70);
-  *(offset_t*)((char*)&trie1 + offset) = 70;
+  idx = trie1.create(trie2, 70);
+  trie1.array()[idx] = 70;
   BOOST_CHECK(trie1.isset(130));
   BOOST_CHECK(trie1.isset(5));
   BOOST_CHECK(trie1.isset(70));
   BOOST_CHECK_EQUAL(*trie1.offset(70), 70);
   BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
-  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(idx, *offsets++);
 
-  offset = trie2.create(trie1, 7);
-  *(offset_t*)((char*)&trie2 + offset) = 7;
+  idx = trie2.create(trie1, 7);
+  trie2.array()[idx] = 7;
   BOOST_CHECK(trie2.isset(130));
   BOOST_CHECK(trie2.isset(5));
   BOOST_CHECK(trie2.isset(70));
   BOOST_CHECK(trie2.isset(7));
   BOOST_CHECK_EQUAL(*trie2.offset(7), 7);
   BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
-  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(idx, *offsets++);
 
   BOOST_CHECK_EQUAL(trie2.count(), 4);
 
   BOOST_CHECK_EQUAL(trie2.offset(TrieNode::NONE), nullptr);
 
-  offset = trie1.create(trie2, TrieNode::NONE);
-  *(offset_t*)((char*)&trie1 + offset) = 0;
+  idx = trie1.create(trie2, TrieNode::NONE);
+  trie1.array()[idx] = 0;
   BOOST_CHECK(trie1.isset(130));
   BOOST_CHECK(trie1.isset(5));
   BOOST_CHECK(trie1.isset(70));
   BOOST_CHECK(trie1.isset(7));
   BOOST_CHECK_EQUAL(*trie1.offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
-  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(idx, *offsets++);
   BOOST_CHECK_EQUAL(trie1.count(), 5);
 
   BOOST_CHECK(trie1.has_none());
@@ -106,22 +106,22 @@ void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
   BOOST_CHECK(*trie1.offset(70) == 70);
   BOOST_CHECK(*trie1.offset(130) == 130);
 
-  offset = trie2.create(trie1, 250);
-  *(offset_t*)((char*)&trie2 + offset) = 250;
+  idx = trie2.create(trie1, 250);
+  trie2.array()[idx] = 250;
   BOOST_CHECK_EQUAL(*trie2.offset(250), 250);
   BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
-  BOOST_CHECK_EQUAL(offset, *offsets++);
+  BOOST_CHECK_EQUAL(idx, *offsets++);
   BOOST_CHECK_EQUAL(trie2.count(), 6);
 }
 
 BOOST_AUTO_TEST_CASE(test_set_and_get) {
-  //                     130, 5, 70, 7, NONE, 240
+  //                     130, 5, 70, 7, NONE, 250
   uint16_t sizes1[] = {24, 32, 48, 56, 64, 72};
-  uint16_t offsets1[] = {16, 16, 32, 32, 24, 64};
+  uint16_t offsets1[] = {0, 0, 1, 1, 0, 5};
   set_and_get(Slice(), sizes1, offsets1);
 
   uint16_t sizes2[] = {24, 40, 48, 56, 64, 80};
-  uint16_t offsets2[] = {16, 24, 32, 32, 24, 72};
+  uint16_t offsets2[] = {0, 0, 1, 1, 0, 5};
   set_and_get(Slice("1234"), sizes2, offsets2);
 }
 
@@ -130,29 +130,25 @@ BOOST_AUTO_TEST_CASE(test_create) {
   TrieNode& trie = *(TrieNode*)buffer;
   Slice prefix("123456");
 
-  uint16_t offset = trie.create(prefix, 130);
-  *(offset_t*)((char*)&trie + offset) = 130;
+  uint16_t idx = trie.create(prefix, 130);
+  trie.array()[idx] = 130;
   BOOST_CHECK_EQUAL(*trie.offset(130), 130);
   BOOST_CHECK_EQUAL(trie.size(), 24);
 
-  offset = trie.create(prefix, TrieNode::NONE);
-  *(offset_t*)((char*)&trie + offset) = 0;
+  idx = trie.create(prefix, TrieNode::NONE);
+  trie.array()[idx] = 0;
   BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(trie.size(), 24);
 
-  offset = trie.create(prefix, 5, 5, TrieNode::NONE);
-  *(offset_t*)((char*)&trie + offset) = 0;
+  auto indices = trie.create(prefix, 5, TrieNode::NONE);
+  trie.array()[indices.first] = 5;
+  trie.array()[indices.second] = 0;
   BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(*trie.offset(5), 5);
   BOOST_CHECK_EQUAL(trie.size(), 32);
-  BOOST_CHECK_EQUAL(offset, 16);
-
-  offset = trie.create(prefix, TrieNode::NONE, 0, 5);
-  *(offset_t*)((char*)&trie + offset) = 5;
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
-  BOOST_CHECK_EQUAL(*trie.offset(5), 5);
-  BOOST_CHECK_EQUAL(trie.size(), 32);
-  BOOST_CHECK_EQUAL(offset, 24);
+  // NONE (-1) < 5, so keys are swapped internally, result pair is swapped
+  BOOST_CHECK_EQUAL(indices.first, 1);
+  BOOST_CHECK_EQUAL(indices.second, 0);
 
   char buffer1[AREA_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;
@@ -167,12 +163,12 @@ void create_trie(TrieNode* fill, int size, int* values) {
   TrieNode* tmp = (TrieNode*)buffer;
   Slice prefix;
 
-  uint16_t offset = fill->create(prefix, values[0]);
-  *(offset_t*)((char*)fill + offset) = 0;
+  uint16_t idx = fill->create(prefix, values[0]);
+  fill->array()[idx] = 0;
   for (int i = 1; i < size; i++) {
     memcpy(tmp, fill, fill->size());
-    offset = fill->create(*tmp, values[i]);
-    *(offset_t*)((char*)fill + offset) = 0;
+    idx = fill->create(*tmp, values[i]);
+    fill->array()[idx] = 0;
   }
 }
 
@@ -226,8 +222,8 @@ BOOST_AUTO_TEST_CASE(test_count) {
 void test_add(TrieNode& trie, uint8_t branch) {
   char buffer[AREA_SIZE];
   TrieNode* tmp = (TrieNode*)buffer;
-  uint16_t offset = tmp->create(trie, branch);
-  *(offset_t*)((char*)tmp + offset) = branch;
+  uint16_t idx = tmp->create(trie, branch);
+  tmp->array()[idx] = branch;
   memcpy(&trie, tmp, tmp->size());
   BOOST_CHECK_EQUAL(*trie.offset(branch), branch);
 }
@@ -236,8 +232,8 @@ BOOST_AUTO_TEST_CASE(test_many_branches) {
   char buffer[AREA_SIZE];
   TrieNode& trie = *(TrieNode*)buffer;
   Slice prefix;
-  uint16_t offset = trie.create(prefix, 'a');
-  *(offset_t*)((char*)&trie + offset) = 'a';
+  uint16_t idx = trie.create(prefix, 'a');
+  trie.array()[idx] = 'a';
   test_add(trie, 'b');
   test_add(trie, 'c');
   test_add(trie, 'd');
@@ -403,7 +399,7 @@ BOOST_AUTO_TEST_CASE(test_count_uint8) {
 BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   // Test that the copy() function correctly copies all derived class fields
   // This test verifies the fix for the pragma pack(1) issue where
-  // sizeof(BlockHeader) was 8 but derived fields started at offset 5
+  // sizeof(PageHeader) was 8 but derived fields started at offset 5
   
   char buffer1[AREA_SIZE], buffer2[AREA_SIZE], buffer3[AREA_SIZE];
   TrieNode& src = *(TrieNode*)buffer1;
@@ -417,12 +413,13 @@ BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   
   // Create a trie node with specific values in the derived fields
   Slice prefix("test");
-  uint16_t offset = src.create(prefix, 'a', 100, 'b');
-  *(offset_t*)((char*)&src + offset) = 200;
+  auto indices = src.create(prefix, 'a', 'b');
+  src.array()[indices.first] = 100;
+  src.array()[indices.second] = 200;
   
   // Add more branches by creating a new node from the existing one
-  offset = tmp.create(src, 'c');
-  *(offset_t*)((char*)&tmp + offset) = 300;
+  uint16_t idx = tmp.create(src, 'c');
+  tmp.array()[idx] = 300;
   memcpy(&src, &tmp, tmp.size());
   
   // Store the original values we want to verify
@@ -469,13 +466,13 @@ BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   BOOST_CHECK_EQUAL(*dst.offset('b'), 200);
   BOOST_CHECK_EQUAL(*dst.offset('c'), 300);
   
-  // The test would fail if copy() used sizeof(BlockHeader)=8 instead of
+  // The test would fail if copy() used sizeof(PageHeader)=8 instead of
   // the actual start of derived fields at offset 5 (where copy_start() points)
 }
 
 BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
   // Test that the copy() function correctly copies LeafNode fields
-  // LeafNode also inherits from BlockHeader and has fields starting at offset 5
+  // LeafNode also inherits from PageHeader and has fields starting at offset 5
   
   typedef _LeafNode<TestTraits> LeafNode;
   
@@ -521,7 +518,7 @@ BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
   BOOST_CHECK_EQUAL(dst.value(), value);
   
   // Verify the full memory content matches
-  BOOST_CHECK_EQUAL(memcmp((char*)&src + sizeof(TestTraits::BlockHeader),
-                          (char*)&dst + sizeof(TestTraits::BlockHeader),
-                          src.size() - sizeof(TestTraits::BlockHeader)), 0);
+  BOOST_CHECK_EQUAL(memcmp((char*)&src + sizeof(TestTraits::PageHeader),
+                          (char*)&dst + sizeof(TestTraits::PageHeader),
+                          src.size() - sizeof(TestTraits::PageHeader)), 0);
 }

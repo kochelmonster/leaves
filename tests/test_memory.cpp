@@ -16,31 +16,30 @@ struct TestTraits {
   typedef uint32_t uint32_e;
   typedef uint64_t uint64_e;
 
-  static constexpr size_t BLOCK_SIZE = 4 * K;
+  static constexpr size_t PAGE_SIZE = 4 * K;
 
   // size of newly allocated areas
-  static constexpr size_t AREA_SIZE = 4 * BLOCK_SIZE;
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t BLOCK_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
-  static constexpr uint16_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr size_t AREA_SIZE = 4 * PAGE_SIZE;
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t PAGE_SIZES[] = {104, 160, 568, 1056, 2088, 4 * K};
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
-  struct BlockHeader {
+  struct PageHeader {
     tid_t txn_id;
     uint8_t slot_id;
   };
-  typedef SimplePointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SimplePointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SimplePointer<T, type>;
 };
 
 constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
 
 struct TestStorage {
   typedef TestTraits Traits;
-  using BlockHeader = typename TestTraits::BlockHeader;
-  using block_ptr = typename TestTraits::ptr;
+  using PageHeader = typename TestTraits::PageHeader;
+  using page_ptr = typename TestTraits::ptr;
   using offset_e = typename TestTraits::offset_e;
   using uint32_e = typename TestTraits::uint32_e;
   using uint16_e = typename TestTraits::uint16_e;
@@ -65,23 +64,29 @@ struct TestStorage {
   tid_t accept_tid;
   tid_t mark_tid;
 
-  block_ptr resolve(offset_t offset, Access /* access */ = READ) {
-    return block_ptr(&memory[offset]);
+  page_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) {
+    return page_ptr(&memory[*offset_ptr]);
   }
 
-  offset_t resolve(const block_ptr& p) {
+  template <typename T>
+  typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
+                                      Access access = READ) {
+    return typename Traits::Pointer<T>(&memory[*offset_ptr]);
+  }
+
+  offset_t resolve(const page_ptr& p) {
     return offset_t((const char*)p - (char*)&memory[0]);
   }
 
-  block_ptr alloc(uint16_t space) { return alloc_slot(mm.assign_slot(space)); }
+  page_ptr alloc(uint16_t space) { return alloc_slot(mm.assign_slot(space)); }
 
-  block_ptr alloc_slot(uint8_t slot) {
-    block_ptr result = mm.alloc(slot, *this);
+  page_ptr alloc_slot(uint8_t slot) {
+    page_ptr result = mm.alloc(slot, *this);
     result->txn_id = mark_tid;
     return result;
   }
 
-  void free(block_ptr p) { mm.free(p, *this); }
+  void free(page_ptr p) { mm.free(p, *this); }
 
   area_ptr alloc_single_area() {
     auto result = single_areas.pop(*this);
@@ -131,7 +136,9 @@ struct TestStorage {
     free_block.txn_id = mark_tid;
   }
 
-  void make_dirty(block_ptr& /* block */) {}
+  template <typename PtrType>
+  void make_dirty(PtrType /* block */) { }
+
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
 };
 
@@ -158,20 +165,20 @@ BOOST_AUTO_TEST_CASE(test_block_assignment) {
   BOOST_CHECK_EQUAL(TestStorage::MemManager::assign_slot(4096), 5);
 }
 
-using BlockHeader = TestTraits::BlockHeader;
-using block_ptr = TestTraits::ptr;
+using PageHeader = TestTraits::PageHeader;
+using page_ptr = TestTraits::ptr;
 using MemManager = TestStorage::MemManager;
 
 BOOST_AUTO_TEST_CASE(test_free_overflow) {
   TestStorage storage;
 
   static const int BC =
-      storage.mm.assign_slot(MemManager::BlockContainer::SIZE);
+      storage.mm.assign_slot(MemManager::PageContainer::SIZE);
 
   const uint16_t SPACE = 200;
 
   std::vector<offset_t> offsets;
-  const int COUNT = MemManager::BlockContainer::COUNT;
+  const int COUNT = MemManager::PageContainer::COUNT;
   int count = 1 + COUNT;
   for (int i = 0; i < count; ++i) {
     auto result = storage.alloc(SPACE);
@@ -181,7 +188,7 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   }
 
   for (auto offset : offsets) {
-    auto p = storage.resolve(offset);
+    auto p = storage.resolve(&offset);
     storage.free(p);
   }
 
@@ -208,13 +215,13 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
 }
 
-constexpr auto BLOCK_SIZE = TestTraits::BLOCK_SIZE;
+constexpr auto PAGE_SIZE = TestTraits::PAGE_SIZE;
 
 BOOST_AUTO_TEST_CASE(test_page_border) {
   TestStorage storage;
-  constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
+  constexpr auto& PAGE_SIZES = TestTraits::PAGE_SIZES;
 
-  uint16_t bsize = BLOCK_SIZES[3];
+  uint16_t bsize = PAGE_SIZES[3];
   offset_t delta = storage.resolve(storage.alloc_slot(3));
   delta += bsize;
 
@@ -448,7 +455,7 @@ BOOST_AUTO_TEST_CASE(test_mem_statistics) {
   
   // Test adding statistics
   stats.add(0, 10, 3);
-  BOOST_CHECK_EQUAL(stats.slots[0].block_size, TestTraits::BLOCK_SIZES[0]);
+  BOOST_CHECK_EQUAL(stats.slots[0].page_size, TestTraits::PAGE_SIZES[0]);
   BOOST_CHECK_EQUAL(stats.slots[0].count, 10);
   BOOST_CHECK_EQUAL(stats.slots[0].free, 3);
   
@@ -459,7 +466,7 @@ BOOST_AUTO_TEST_CASE(test_mem_statistics) {
   
   // Test different slot
   stats.add(2, 7, 1);
-  BOOST_CHECK_EQUAL(stats.slots[2].block_size, TestTraits::BLOCK_SIZES[2]);
+  BOOST_CHECK_EQUAL(stats.slots[2].page_size, TestTraits::PAGE_SIZES[2]);
   BOOST_CHECK_EQUAL(stats.slots[2].count, 7);
   BOOST_CHECK_EQUAL(stats.slots[2].free, 1);
 }
@@ -498,9 +505,9 @@ BOOST_AUTO_TEST_CASE(test_mem_manager_left_over_usage) {
   TestStorage storage;
   
   // Force allocation to create left-over space
-  constexpr auto& BLOCK_SIZES = TestTraits::BLOCK_SIZES;
-  uint16_t large_size = BLOCK_SIZES[4]; // Large block
-  [[maybe_unused]] uint16_t small_size = BLOCK_SIZES[0]; // Small block
+  constexpr auto& PAGE_SIZES = TestTraits::PAGE_SIZES;
+  uint16_t large_size = PAGE_SIZES[4]; // Large block
+  [[maybe_unused]] uint16_t small_size = PAGE_SIZES[0]; // Small block
   
   // Allocate large blocks until near end of area
   while (storage.mm.allocation_start + large_size < storage.mm.allocation_end) {
@@ -719,11 +726,11 @@ BOOST_AUTO_TEST_CASE(test_binary_search_edge_cases) {
 BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   TestStorage storage;
   
-  static const int BC = storage.mm.assign_slot(MemManager::BlockContainer::SIZE);
+  static const int BC = storage.mm.assign_slot(MemManager::PageContainer::SIZE);
   [[maybe_unused]] const uint16_t SPACE = 200;
-  const int COUNT = MemManager::BlockContainer::COUNT;
+  const int COUNT = MemManager::PageContainer::COUNT;
   
-  // Allocate and free exactly COUNT BlockContainers to fill one container
+  // Allocate and free exactly COUNT PageContainers to fill one container
   std::vector<offset_t> bc_offsets;
   for (int i = 0; i < COUNT; ++i) {
     auto bc = storage.alloc_slot(BC);
@@ -731,7 +738,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   }
   
   for (auto offset : bc_offsets) {
-    auto p = storage.resolve(offset);
+    auto p = storage.resolve(&offset);
     storage.free(p);
   }
   
@@ -747,7 +754,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_circular_prevention) {
   }
   
   // This allocation should trigger the circular prevention logic
-  // because we're trying to pop the last BlockContainer from the BC slot itself
+  // because we're trying to pop the last PageContainer from the BC slot itself
   auto result = storage.alloc_slot(BC);
   
   // The circular prevention should have prevented returning the last BC
@@ -762,7 +769,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_cleanup) {
   TestStorage storage;
   
   const uint16_t SPACE = 200;
-  const int COUNT = MemManager::BlockContainer::COUNT;
+  const int COUNT = MemManager::PageContainer::COUNT;
   int sid = storage.mm.assign_slot(SPACE);
   
   // Allocate and free exactly COUNT blocks to fill one container
@@ -773,7 +780,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_cleanup) {
   }
   
   for (auto offset : offsets) {
-    auto p = storage.resolve(offset);
+    auto p = storage.resolve(&offset);
     storage.free(p);
   }
   

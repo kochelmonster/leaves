@@ -1,27 +1,27 @@
 type: trie
-id: 10360
-page: 0
-freespace: 48
+id: 10048
+page: 10040
+freespace: 24
 txn: 11
-size: 80
+size: 72
 compressed: 
   size: 1
   key: "[a]"
 branches: "[C][I][J][K][O][l][n]"
 children: 
-  - 17033
-  - 12025
+  - 12617
+  - 11849
+  - 12089
   - 12329
-  - 16729
-  - 17945
-  - 17337
-  - 17641
+  - 17577
+  - 17001
+  - 17289
 ---
 type: leaf
-id: 17033
-page: 0
-freespace: 117
-size: 11
+id: 12617
+page: 12609
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[C]"
@@ -29,10 +29,10 @@ valuesize: 2
 value: "aC"
 ---
 type: leaf
-id: 12025
-page: 0
-freespace: 117
-size: 11
+id: 11849
+page: 11841
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[I]"
@@ -40,10 +40,10 @@ valuesize: 2
 value: "aI"
 ---
 type: leaf
-id: 12329
-page: 0
-freespace: 117
-size: 11
+id: 12089
+page: 12081
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[J]"
@@ -51,10 +51,10 @@ valuesize: 2
 value: "aJ"
 ---
 type: leaf
-id: 16729
-page: 0
-freespace: 117
-size: 11
+id: 12329
+page: 12321
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[K]"
@@ -62,10 +62,10 @@ valuesize: 2
 value: "aK"
 ---
 type: leaf
-id: 17945
-page: 0
-freespace: 117
-size: 11
+id: 17577
+page: 17569
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[O]"
@@ -73,10 +73,10 @@ valuesize: 2
 value: "aO"
 ---
 type: leaf
-id: 17337
-page: 0
-freespace: 117
-size: 11
+id: 17001
+page: 16993
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[l]"
@@ -84,10 +84,10 @@ valuesize: 2
 value: "al"
 ---
 type: leaf
-id: 17641
-page: 0
-freespace: 117
-size: 11
+id: 17289
+page: 17281
+freespace: 113
+size: 7
 txn: 2
 keysize: 1
 key: "[n]"

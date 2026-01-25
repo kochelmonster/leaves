@@ -12,15 +12,17 @@
 
 namespace leaves {
 
+// dummy structure for all node pointers
+struct _Node {};
+
 /*
 A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
 parent node) This makes the implmentation of many operations easier.
 */
 template <typename Traits>
-struct _TrieNode : public Traits::BlockHeader {
+struct _TrieNode {
   typedef _TrieNode<Traits> TrieNode;
-  using Base = typename Traits::BlockHeader;
   using hash_t = typename Traits::hash_t;
   using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
@@ -38,12 +40,11 @@ struct _TrieNode : public Traits::BlockHeader {
   constexpr static int NONE = -1;
   constexpr static int OUT_OF_RANGE = -2;
   constexpr static uint16_t MAX_SIZE =
-      align(padding(sizeof(TrieNode) + MAX_BRANCH_COUNT, sizeof(uint32_e)) +
+      align(padding(sizeof(TrieNode) + 255, sizeof(uint32_e)) +
             8 * sizeof(uint32_e)) +
-      257 * sizeof(offset_e);
+      MAX_BRANCH_COUNT * sizeof(offset_e);
   constexpr static uint8_t LOWER_MASK = 0b00011111;
 
-  char* copy_start() const { return (char*)&_upper; }
   uint8_t len() const { return _compressed_len; }
   int count() const { return (_array_len & ~NULL_MASK); }
   const uint8_t* compressed() const { return _compressed_data; }
@@ -62,6 +63,33 @@ struct _TrieNode : public Traits::BlockHeader {
   static uint8_t ubit(uint8_t val) { return (val >> 5); }
   static uint32_t lbit(uint8_t val) { return (val & LOWER_MASK); }
   uint16_t size() const { return array_end(); }
+  uint16_t reduced_size(uint8_t new_compressed_len) const {
+    uint16_t prefix_size =
+        padding(sizeof(TrieNode) + new_compressed_len, sizeof(uint32_e));
+    return align(prefix_size + lower_size() + array_size());
+  }
+
+  uint16_t increment_size(int key) const {
+    uint16_t prefix_size =
+        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    uint16_t lower_size_ = lower_size();
+    if (key != NONE && !(_upper & (1 << ubit(key)))) {
+      lower_size_ += sizeof(uint32_e);
+    }
+    uint16_t array_size_ = (count() + 1) * sizeof(offset_e);
+    return align(prefix_size + lower_size_ + array_size_);
+  }
+
+  uint16_t decrement_size(int key) const {
+    uint16_t prefix_size =
+        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    uint16_t lower_size_ = lower_size();
+    if (key != NONE && bits::count(_upper) > 1 && (_upper & (1 << ubit(key)))) {
+      lower_size_ -= sizeof(uint32_e);
+    }
+    uint16_t array_size_ = (count() - 1) * sizeof(offset_e);
+    return align(prefix_size + lower_size_ + array_size_);
+  }
 
   uint16_t calc_lower_start() const {
     return padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
@@ -71,8 +99,25 @@ struct _TrieNode : public Traits::BlockHeader {
     return align(lower_start() + bits::count(_upper) * sizeof(uint32_e));
   }
 
+  static constexpr uint16_t size(uint8_t prefix, int key1, int key2) {
+    assert(key1 != key2);
+    uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
+    uint16_t lower_size;
+    if (key1 == NONE || key2 == NONE) {
+      lower_size = sizeof(uint32_e);  // only key2's upper bit
+    } else if (ubit(key1) == ubit(key2)) {
+      lower_size = sizeof(uint32_e);  // same upper bit
+    } else {
+      lower_size = 2 * sizeof(uint32_e);  // different upper bits
+    }
+    uint16_t array_start = align(prefix_size + lower_size);
+    return array_start + 2 * sizeof(offset_e);
+  }
+
   // estimates the max size for a trie node with a given prefix and branches
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
+    // TODO: calculate exact size
+
     uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
     uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
     uint16_t array_size = branches * sizeof(offset_e);
@@ -81,16 +126,17 @@ struct _TrieNode : public Traits::BlockHeader {
 
   bool has_none() const { return _array_len & NULL_MASK; }
 
-  // create a trie node with a prefix and two keys; returns a the link offset
-  // for key2
-  uint16_t create(Slice prefix, int key1, offset_t offset1, int key2) {
+  // create a trie node with a prefix and two keys; returns the array indexes
+  // for key1 and key2
+  std::pair<uint16_t, uint16_t> create(Slice prefix, int key1, int key2) {
     _compressed_len = prefix.size();
     memcpy(_compressed_data, prefix.data(), _compressed_len);
 
-    bool swapped = false;
+    uint16_t idx0 = 0, idx1 = 1;
+    std::pair<uint16_t, uint16_t> result(0, 1);
     if (key2 < key1) {
       std::swap(key1, key2);
-      swapped = true;
+      std::swap(result.first, result.second);
     }
 
     _array_len = 2;
@@ -99,13 +145,14 @@ struct _TrieNode : public Traits::BlockHeader {
 
     if (key1 != NONE) {
       _upper = (1 << ubit(key1)) | (1 << ubit(key2));
-      if (bits::count(_upper) == 1)
+      if (bits::count(_upper) == 1) {
         lower_[0] = (1 << lbit(key1)) | (1 << lbit(key2));
-      else {
+        array_start_ = align(lower_start_ + sizeof(uint32_e));
+      } else {
         lower_[0] = 1 << lbit(key1);
         lower_[1] = 1 << lbit(key2);
+        array_start_ = align(lower_start_ + 2 * sizeof(uint32_e));
       }
-      array_start_ = align(lower_start_ + 2 * sizeof(uint32_e));
     } else {
       _upper = 1 << ubit(key2);
       _array_len |= NULL_MASK;
@@ -115,9 +162,7 @@ struct _TrieNode : public Traits::BlockHeader {
 
     _array_offset = array_start_ / sizeof(offset_e);
     _lower_offset = lower_start_ / sizeof(uint32_e);
-    offset_e* array_ = (offset_e*)((char*)this + array_start_);
-    array_[swapped ? 1 : 0] = offset1;
-    return (char*)(swapped ? array_ : array_ + 1) - (char*)this;
+    return result;
   }
 
   /**
@@ -127,8 +172,7 @@ struct _TrieNode : public Traits::BlockHeader {
    * node.
    * @param key An integer key used to set the upper and lower bitmaps. If the
    * key is NONE, the node is marked as null.
-   * @return The offset to the key link: (char*)node + offset ==
-   * node->offset(key)
+   * @return array_index of the key (0)
    */
   uint16_t create(Slice prefix, int key) {
     _compressed_len = prefix.size();
@@ -152,8 +196,7 @@ struct _TrieNode : public Traits::BlockHeader {
 
     _array_offset = array_start_ / sizeof(offset_e);
     _lower_offset = lower_start_ / sizeof(uint32_e);
-    offset_e* array_ = (offset_e*)((char*)this + array_start_);
-    return (char*)array_ - (char*)this;
+    return 0;
   }
 
   /**
@@ -243,7 +286,7 @@ struct _TrieNode : public Traits::BlockHeader {
     memcpy((void*)array_, src.array(), oidx * sizeof(offset_e));
     memcpy((void*)(array_ + oidx + 1), src.array() + oidx,
            (count() - 1 - oidx) * sizeof(offset_e));
-    return (char*)(array_ + oidx) - (char*)this;
+    return oidx;
   }
 
   // create a new trie node without the branch of key
@@ -421,7 +464,7 @@ struct _TrieNode : public Traits::BlockHeader {
 
     assert(idx == count());
   }
-  
+
   // check if the index exists
   bool isset(int nchar) const {
     if (nchar == NONE) return has_none();
@@ -429,9 +472,8 @@ struct _TrieNode : public Traits::BlockHeader {
            (lower()[bits::index(_upper, ubit(nchar))] & (1 << lbit(nchar)));
   }
 
-  // returns the link for nchar
-  offset_e* offset(int nchar) {
-    if (nchar == NONE) return has_none() ? array() : nullptr;
+  int array_index(int nchar) const {
+    if (nchar == NONE) return has_none() ? 0 : -1;
 
     uint32_e* lower_ = lower();
     int lidx = bits::index(_upper, ubit(nchar));
@@ -442,10 +484,16 @@ struct _TrieNode : public Traits::BlockHeader {
         oidx += bits::count(lower_[i]);
       }
       assert(oidx < count());
-      return array() + oidx;
+      return oidx;
     }
 
-    return nullptr;
+    return -1;
+  }
+
+  // returns the link for nchar
+  offset_e* offset(int nchar) {
+    auto idx = array_index(nchar);
+    return idx >= 0 ? &array()[idx] : nullptr;
   }
 
   int _prev_lower(int nchar) const {
@@ -492,18 +540,17 @@ struct _TrieNode : public Traits::BlockHeader {
 };
 
 template <typename Traits>
-struct _LeafNode : public Traits::BlockHeader {
+struct _LeafNode {
   typedef _LeafNode<Traits> LeafNode;
 
-  using Base = typename Traits::BlockHeader;
   using hash_t = typename Traits::hash_t;
   using uint16_e = typename Traits::uint16_e;
   using uint32_e = typename Traits::uint32_e;
   using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr auto& BLOCK_SIZES = Traits::BLOCK_SIZES;
-  static constexpr auto BS_COUNT = Traits::BLOCK_SIZES_COUNT;
-  static constexpr auto MAX_SIZE = BLOCK_SIZES[BS_COUNT - 1];
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr auto BS_COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr auto MAX_SIZE = PAGE_SIZES[BS_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
 
   uint8_t key_size;
@@ -517,19 +564,13 @@ struct _LeafNode : public Traits::BlockHeader {
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
-  void set_big() {
-    value_size |= BIG_VALUE_FLAG;
-  }
-
-  char* copy_start() const { return (char*)&key_size; }
+  void set_big() { value_size |= BIG_VALUE_FLAG; }
 
   void set(const Slice& key, size_t value_size_) {
     key_size = key.size();
     memcpy(data, key.data(), key.size());
     value_size = value_size_;
-
   }
-
 
   Slice memory() { return Slice((char*)this, size()); }
 

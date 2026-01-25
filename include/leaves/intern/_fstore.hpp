@@ -47,33 +47,33 @@ struct _StoreTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(push, 1)
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
     tid_t txn_id;
+    uint16_e used;
     uint8_t slot_id;
-    bool needs_cow(const BlockHeader& other) const {
-      return txn_id != other.txn_id;
+
+    template <typename DB>
+    bool needs_cow(const DB* db) const {
+      return txn_id != db->transaction_active();
     }
   };
-#pragma pack(pop)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t BLOCK_SIZES[] = {   // Typical node sizes
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t PAGE_SIZES[] = {   // Typical node sizes
       _TrieNode<_StoreTraits>::size(1, 10),     // digits 0-9
       _TrieNode<_StoreTraits>::size(1, 16),     // hex 0-9A-F
       _TrieNode<_StoreTraits>::size(1, 64),     // base64
       _TrieNode<_StoreTraits>::size(1, 127),    // utf-8
       _TrieNode<_StoreTraits>::size(1, 256),    // binary
       4 * K};
-  static constexpr uint16_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
-  typedef SmartPointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
+  using ptr = SmartPointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SmartPointer<T, type>;
 };
 
 struct _FileOperations : _CacheBase {

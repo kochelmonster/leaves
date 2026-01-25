@@ -212,6 +212,7 @@ struct _Offset {
   BaseType _offset;
 
   static const uint64_t TYPE_MASK = 0x3;
+  static const uint64_t RELATIVE_FLAG = 0x4;  // Bit 2: relative offset flag (offsets are 8-byte aligned)
 
   constexpr _Offset(uint64_t src = 0) : _offset(src) {}
 
@@ -275,12 +276,40 @@ struct _Offset {
     return _Offset(_offset - src);
   }
 
-  operator uint64_t() const { return _offset & ~TYPE_MASK; }
+  // Get absolute offset value (mask out TYPE_MASK and RELATIVE_FLAG)
+  operator uint64_t() const { return _offset & ~(TYPE_MASK | RELATIVE_FLAG); }
+  
   NodeTypes type() const { return (NodeTypes)(_offset & TYPE_MASK); }
   const _Offset& type(NodeTypes type) {
     _offset &= ~TYPE_MASK;
     _offset |= type;
     return *this;
+  }
+
+  // Relative offset flag accessors
+  bool is_relative() const { return (_offset & RELATIVE_FLAG) != 0; }
+  
+  // Convert to relative offset given the resolved destination pointer
+  // dest_ptr: the actual memory address of the target (resolved from absolute offset)
+  // this: the offset_t field that will hold the relative offset
+  // Result: relative = dest_ptr - this
+  const _Offset& set_relative(const void* dest_ptr) {
+    NodeTypes saved_type = type();
+    _offset = (BaseType)(int64_t)dest_ptr - (int64_t)this;
+    assert((_offset & 7) == 0);
+    _offset |= RELATIVE_FLAG;
+    type(saved_type);
+    return *this;
+  }
+
+  // Get the raw offset as signed integer (for relative addressing)
+  int64_t as_signed() const {
+    // Sign-extend the offset value (excluding TYPE_MASK and RELATIVE_FLAG bits)
+    uint64_t raw = _offset & ~(TYPE_MASK | RELATIVE_FLAG);
+    // Check if the sign bit is set (bit 63 - 3 = bit 60 after masking)
+    constexpr int shift = 3;  // TYPE_MASK (2 bits) + RELATIVE_FLAG (1 bit)
+    int64_t signed_val = (int64_t)(raw << shift) >> shift;
+    return signed_val;
   }
 };
 
@@ -371,10 +400,8 @@ constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
 template <typename DstBlock, typename SrcBlock>
 void copy(DstBlock& dst, const SrcBlock& src) {
-  uint16_t doffset = (char*)dst.copy_start() - (char*)&dst;
-  uint16_t soffset = (char*)src.copy_start() - (char*)&src;
   uint16_t src_size = src.size();
-  memcpy((char*)&dst + doffset, (char*)&src + soffset, src_size - soffset);
+  memcpy((char*)&dst, (char*)&src, src_size);
 }
 
 }  // namespace leaves

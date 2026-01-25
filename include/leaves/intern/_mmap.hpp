@@ -2,6 +2,7 @@
 #define _LEAVES__IMMAP_HPP
 
 #include <algorithm>
+#include <type_traits>
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
@@ -46,43 +47,43 @@ struct _MemoryMapTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-#pragma pack(push, 1)
-  struct BlockHeader {
-    typedef BlockHeader Base;
+  struct PageHeader {
+    typedef PageHeader Base;
     tid_t txn_id;
+    uint16_e used;
     uint8_t slot_id;
-    bool needs_cow(const BlockHeader& other) const {
-      return txn_id != other.txn_id;
+
+    template <typename DB>
+    bool needs_cow(const DB* db) const {
+      return txn_id != db->transaction_active();
     }
   };
-#pragma pack(pop)
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;
-  static constexpr size_t BLOCK_CONTAINER_SIZE = 4 * K;
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
 
-  static constexpr uint16_t BLOCK_SIZES[] = {     // Typical node sizes
+  static constexpr uint16_t PAGE_SIZES[] = {     // Typical node sizes
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
       _TrieNode<_MemoryMapTraits>::size(1, 16),   // hex 0-9A-F
       _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
       _TrieNode<_MemoryMapTraits>::size(1, 127),  // utf-8
       _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
       4 * K};
-  static constexpr uint16_t BLOCK_SIZES_COUNT =
-      sizeof(BLOCK_SIZES) / sizeof(BLOCK_SIZES[0]);
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 
-  typedef SimplePointer<BlockHeader> Pointers;
-  using ptr = typename Pointers::ptr;
+  using ptr = SimplePointer<PageHeader, TRIE>;
   template <typename T, NodeTypes type = TRIE>
-  using Pointer = typename Pointers::template Pointer<T, type>;
+  using Pointer = SimplePointer<T, type>;
 };
 
 template <typename Traits_, template<typename> class DB_ = _DB>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
   typedef _MemoryMapFile<Traits_, DB_> MemoryMapFile;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -93,7 +94,7 @@ struct _MemoryMapFile {
 
   struct DBEntry {
     char name[21];
-    offset_t offset;
+    offset_t offset;  
   };
 
   struct FileHeader {
@@ -261,24 +262,41 @@ struct _MemoryMapFile {
     return free_count == MAX_PROCESSES;  // the first to open the db
   }
 
-  block_ptr resolve(offset_t offset, Access access = READ) const {
-    assert(offset < _memory->file_size);
-    char* p = (char*)_memory + (uint64_t)offset;
+  // Resolve offset - handles both absolute and relative offsets uniformly
+  page_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
+    char* p;
+    
+    if (offset_ptr->is_relative()) {
+      // Relative: calculate address relative to where offset_t is stored
+      p = (char*)offset_ptr + offset_ptr->as_signed();
+    } else {
+      // Absolute: offset from _memory base
+      p = (char*)_memory + (uint64_t)*offset_ptr;
+    }
+    
     prefetch(p, access);
-    return block_ptr(p);
+    return page_ptr(p);
   }
 
   template <typename Pointer>
-  offset_t resolve(const Pointer& p) const {
+  typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
+  resolve(const Pointer& p) const {
     uint64_t offset = (uint64_t)p - (uint64_t)_memory;
     assert(offset < _memory->file_size);
     return offset_t(offset).type(p.type);
   }
 
-  void make_dirty(block_ptr& /*block*/) {}
+  template <typename PtrType>
+  void make_dirty(PtrType /*block*/) {}
 
-  void prefetch(offset_t offset, Access access = READ) const {
-    prefetch((char*)_memory + (uint64_t)offset, access);
+  void prefetch(const offset_t* offset_ptr, Access access = READ) const {
+    offset_t offset = *offset_ptr;
+    if (offset.is_relative()) {
+      int64_t rel_value = offset.as_signed();
+      prefetch((char*)offset_ptr + rel_value, access);
+    } else {
+      prefetch((char*)_memory + (uint64_t)offset, access);
+    }
   }
 
   void prefetch(void* mem, Access access = READ) const {
@@ -303,14 +321,14 @@ struct _MemoryMapFile {
     assert(_memory->file_size <= _region.get_size());
 
     // Create Area for the requested size
-    auto area = area_ptr(resolve(new_offset, WRITE));
+    auto area = area_ptr(resolve(&new_offset, WRITE));
     area->init(new_offset, size, 0);
 
     // Add remaining space to multi_areas pool
     if (total_growth > size) {
       offset_t extra_offset = new_offset + size;
       uint64_t extra_size = total_growth - size;
-      auto extra_area = area_ptr(resolve(extra_offset, WRITE));
+      auto extra_area = area_ptr(resolve(&extra_offset, WRITE));
       extra_area->init(extra_offset, extra_size, 0);
       _memory->area_pool.multi_areas.push(*extra_area, *this);
     }
@@ -387,7 +405,7 @@ struct _MemoryMapFile {
         DB tmp(*this, _memory->dbs[i].offset, i);
 
         // Return the DB's areas back into storage using head/tail pattern
-        auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);
+        auto read_txn = tmp.template resolve<typename DB::Transaction>(&tmp._header->read_txn);
         if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
           _memory->area_pool.return_single_areas(tmp._header->area_list_head_single,
                                                  read_txn->area_list_tail_single, *this);

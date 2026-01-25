@@ -47,7 +47,7 @@ typedef std::vector<uint8_t> buffer_t;
 template <typename Cursor_>
 struct _QueryBuilder {
   struct Traits {
-    struct BlockHeader {
+    struct PageHeader {
       hash_t hash;
     };
     typedef char[0] offset_t;
@@ -433,7 +433,7 @@ struct _Replicator {
   using Traits = typename Storage::Traits;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::Pointer<TrieNode>;
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;

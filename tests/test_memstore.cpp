@@ -40,12 +40,13 @@ BOOST_AUTO_TEST_CASE(test_memory_storage_resolve) {
   // Test pointer resolution
   auto area = storage.alloc_single_area();
   
-  // Test resolve with area - offset to block_ptr using resolve(offset_t) method
+  // Test resolve with area - offset to page_ptr using resolve(offset_t) method
   auto area_offset = area->offset();
-  auto resolved_block = db.resolve(area_offset);
+  offset_t area_off_temp(area_offset);
+  auto resolved_block = db.resolve(&area_off_temp);
   BOOST_CHECK(resolved_block);
   
-  // Test reverse resolve - block_ptr to offset
+  // Test reverse resolve - page_ptr to offset
   auto offset_back = db.resolve(resolved_block);
   BOOST_CHECK_EQUAL(offset_back, area_offset);
 }

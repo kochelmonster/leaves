@@ -14,7 +14,7 @@ struct _Deleter {
   using Traits = typename Transition::Traits;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
-  using block_ptr = typename Transition::block_ptr;
+  using page_ptr = typename Transition::page_ptr;
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
@@ -25,17 +25,37 @@ struct _Deleter {
   _Deleter(Cursor& cursor) : cursor(cursor), back(&cursor.stack.back()) {}
 
   template <typename T>
+  typename Traits::template Pointer<T> resolve(const offset_t* offset_ptr) {
+    return cursor._db->template resolve<T>(offset_ptr);
+  }
+
+  template <typename T>
   offset_t resolve(T ptr) {
     return cursor._db->resolve(ptr);
   }
 
-  block_ptr resolve(offset_t offset) {
-    return cursor._db->resolve(offset);
+  page_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
+
+  // Allocate node with PageHeader prefix, return pointer to node
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc(node_size);
+    return page + sizeof(PageHeader);
   }
 
-  block_ptr alloc(uint16_t size) { return cursor._db->alloc(size); }
+  // Free node by computing PageHeader pointer
+  template <typename NodePtr>
+  void free_node(NodePtr& node) {
+    using PageHeader = typename Traits::PageHeader;
+    static_assert(
+        !std::is_same_v<NodePtr, page_ptr>,
+        "free_node must be called with node pointers, not page pointers");
+    page_ptr page = node - sizeof(PageHeader);
+    cursor._db->free(page);
+  }
 
-  void free(block_ptr& block) { cursor._db->free(block); }
+  void free(page_ptr page) { cursor._db->free(page); }
 
   void exec() {
     assert(back->success());
@@ -46,14 +66,15 @@ struct _Deleter {
   void remove_node(Transition* trans) {
     if (trans->is_root()) {
       // remove the last node
-      trans->set_root(offset_t());
-      free(trans->block);
+      *trans->offset = offset_t();
+      free_node(trans->node);
       trans->pop();
       return;
     }
 
     Transition& parent = trans->parent();
-    block_ptr block = trans->block;
+    // Save the node pointer before pop invalidates trans
+    auto node = trans->node;  
     uint16_t prefix = trans->prefix;
     parent.pop();  // remove trans from stack
     assert(parent.is_trie());
@@ -71,17 +92,18 @@ struct _Deleter {
         reduce_array(parent, prefix);
         break;
     }
-    free(block);
+    free_node(node);
   }
 
   void reduce_array(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
     // Calculate proper size: same prefix length, one less branch
-    parent.trie() = alloc(TrieNode::size(otrie->len(), otrie->count() - 1));
+    parent.trie() =
+        alloc_node<trie_ptr>(TrieNode::size(otrie->len(), otrie->count() - 1));
     parent.trie()->create_remove(*otrie,
                                  prefix ? parent.branch_key : TrieNode::NONE);
-    parent.replace(resolve(parent.trie()));
-    free(otrie);
+    parent.update_trie_offset();
+    free_node(otrie);
     parent.cmp = -1;
     if (!prefix) parent.prefix = 0;  // NONE Key -> to the first child
     cursor.next();
@@ -101,7 +123,7 @@ struct _Deleter {
     uint8_t buffer[256];  // to hold the compressed key
     memcpy(buffer, parent.trie()->compressed(), len);
     if (child_remaining->type() == TRIE) {
-      trie_ptr child = resolve(*child_remaining);
+      trie_ptr child = resolve<TrieNode>(child_remaining);
       if (len + child->len() > 255) {
         // the compressed part is too big -> keep the parent
         return reduce_array(parent, prefix);
@@ -109,16 +131,16 @@ struct _Deleter {
 
       memcpy(buffer + len, child->compressed(), child->len());
       len += child->len();
-      parent.trie() = alloc(TrieNode::size(len, child->count()));
+      parent.trie() = alloc_node<trie_ptr>(TrieNode::size(len, child->count()));
       parent.trie()->create(*child, Slice(buffer, len));
-      parent.replace(resolve(parent.trie()));
+      parent.update_trie_offset();
       // replace trie! the type is important
-      parent.link_offset = (char*)(&parent.trie()->array()[parent.branch_key]) -
-                           (char*)parent.block;
+      parent.link_idx = parent.trie()->array_index(parent.branch_key);
+      assert(parent.link_idx < parent.trie()->count());
 
-      free(child);
+      free_node(child);
     } else {
-      leaf_ptr child = resolve(*child_remaining);
+      leaf_ptr child = resolve<LeafNode>(child_remaining);
       if (len + child->key_size > 255) {
         // the compressed part is too big -> keep the parent
         return reduce_array(parent, prefix);
@@ -126,17 +148,16 @@ struct _Deleter {
 
       memcpy(buffer + len, child->data, child->key_size);
       len += child->key_size;
-      parent.leaf() = alloc(LeafNode::size(len, child->vsize()));
+      parent.leaf() = alloc_node<leaf_ptr>(LeafNode::size(len, child->vsize()));
       parent.leaf()->key_size = len;
       parent.leaf()->value_size = child->value_size;
       memcpy(parent.leaf()->data, buffer, len);
       memcpy(parent.leaf()->vdata(), child->vdata(), child->vsize());
-      // replace leaf! the type is important
-      parent.replace(resolve(parent.leaf()));
-      free(child);
+      parent.update_leaf_offset();
+      free_node(child);
     }
 
-    free(otrie);
+    free_node(otrie);
     if (go_next)
       cursor.next();
     else {

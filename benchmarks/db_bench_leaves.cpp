@@ -459,9 +459,9 @@ class Benchmark {
         Storage::Statistics stat;
         db_->statistics(stat);
         for (auto slot : stat.garbage.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << std::endl;
-          size += slot.block_size * slot.count;
+          size += slot.page_size * slot.count;
           counts += slot.count;
         }
         std::cout << "CHECK Garbage: " << size << "(" << counts << ")"
@@ -470,25 +470,25 @@ class Benchmark {
         std::cout << "BRANCHES" << std::endl;
         size_t nsize = 0;
         for (auto slot : stat.branch.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          nsize += slot.block_size * slot.count;
+          nsize += slot.page_size * slot.count;
         }
 
         std::cout << "LEAVES" << std::endl;
         for (auto slot : stat.leaf.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          nsize += slot.block_size * slot.count;
+          nsize += slot.page_size * slot.count;
         }
         std::cout << "CHECK Nodes: " << nsize << std::endl;
 
         nsize = 0;
         std::cout << "TRANSACTION" << std::endl;
         for (auto slot : stat.transaction.slots) {
-          std::cout << "Slot: " << slot.block_size << ": " << slot.count
+          std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
-          nsize += slot.block_size * slot.count;
+          nsize += slot.page_size * slot.count;
         }
         std::cout << "CHECK Transactions: " << nsize << std::endl;
 
@@ -568,6 +568,7 @@ class Benchmark {
         bytes_ += value_size + mkey.size();
         mval = gen_.Generate(value_size);
 
+
         cursor.find(mkey);
         cursor.value(mval);
 
@@ -577,27 +578,27 @@ class Benchmark {
         auto db_internal = db._internal();
         auto txn = db_internal->_wtxn;
 
-        std::cout << "Iter " << iter << ": size_root=" << txn->size_root._offset
-                  << ", offset_root=" << txn->offset_root._offset << std::endl;
+        std::cout << "Iter " << iter
+                  << ": free_bigmem_root=" << txn->free_bigmem_root._offset
+                  << std::endl;
 
-        if (iter > 230 && iter < 240) {
-          if (txn->size_root) {
+        if (iter >= 0 && iter < 240) {
+          if (txn->free_bigmem_root) {
             char filename[256];
-            snprintf(filename, sizeof(filename), "errors/dump_size_%06d.yaml",
+            snprintf(filename, sizeof(filename), "errors/dump_bigmen_%06d.yaml",
                      iter);
             std::ofstream of(filename);
-            leaves::_Dumper(db, txn->size_root, false).dump(of);
+            leaves::_Dumper(db, txn->free_bigmem_root, false).dump(of);
           }
-
-          if (txn->offset_root) {
+          if (txn->root) {
             char filename[256];
-            snprintf(filename, sizeof(filename), "errors/dump_offset_%06d.yaml",
+            snprintf(filename, sizeof(filename), "errors/dump_data_%06d.yaml",
                      iter);
             std::ofstream of(filename);
-            leaves::_Dumper(db, txn->offset_root, false).dump(of);
+            leaves::_Dumper(db, txn->root, false).dump(of);
           }
         }
-#endif        
+#endif
       }
       cursor.commit(sync);
     }

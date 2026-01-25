@@ -32,7 +32,7 @@ template <typename Traits_, typename Opers_>
 struct _CacheStore : public Opers_ {
   typedef Traits_ Traits;
   typedef _CacheStore<Traits_, Opers_> Self;
-  using block_ptr = typename Traits::ptr;
+  using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef Opers_ Operations;
@@ -49,7 +49,7 @@ struct _CacheStore : public Opers_ {
   using DBEntry = typename _CacheBase::DBEntry;
 
   // Use TwoQCache instead of LRUCache
-  using Cache = TwoQCache<uint64_t, block_ptr>;
+  using Cache = TwoQCache<uint64_t, page_ptr>;
 
   mutable Cache _cache;
   size_t _capacity;  // Cache capacity in bytes
@@ -78,8 +78,8 @@ struct _CacheStore : public Opers_ {
   }
 
   // Handling for dirty areas - using mutex-protected map for thread safety
-  std::unordered_map<uint64_t, block_ptr> _pending_dirty_areas;
-  std::unordered_map<uint64_t, block_ptr> _dirty_areas;
+  std::unordered_map<uint64_t, page_ptr> _pending_dirty_areas;
+  std::unordered_map<uint64_t, page_ptr> _dirty_areas;
   std::mutex _dirty_areas_mutex;
   std::thread _write_back_thread;
   std::atomic<bool> _should_stop;
@@ -139,14 +139,15 @@ struct _CacheStore : public Opers_ {
     Opers_::flush(ptr, offset, size, sync);
   }
 
-  block_ptr resolve(offset_t offset, Access /*access*/ = READ) const {
+  page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
+    offset_t offset = *offset_ptr;
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
     // Check cache first
-    block_ptr cached;
+    page_ptr cached;
     if (_cache.get(area_offset, cached)) {
       assert(cached.area()->offset() == area_offset);
-      block_ptr result = cached;  // copy increments refcount
+      page_ptr result = cached;  // copy increments refcount
       result._offset = static_cast<uint32_t>(raw_offset - area_offset);
       return result;
     }
@@ -162,7 +163,7 @@ struct _CacheStore : public Opers_ {
     read((uint64_t)read_offset, slice, disk_header.size());
     slice->_ref.store(0);
 
-    block_ptr result(slice);
+    page_ptr result(slice);
     result._offset = static_cast<uint32_t>(raw_offset - area_offset);
     _cache.put(area_offset, result);
     return result;
@@ -179,7 +180,7 @@ struct _CacheStore : public Opers_ {
     return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
-  void prefetch(offset_t /*offset*/, Access /*access*/ = READ) const {
+  void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {
     // For file storage, prefetch is essentially a no-op
     // Could potentially implement with platform-specific hints
   }
@@ -189,7 +190,9 @@ struct _CacheStore : public Opers_ {
     // Could potentially implement with platform-specific hints
   }
 
-  void make_dirty(block_ptr& block) {
+  template <typename PtrType>
+  void make_dirty(PtrType block_arg) {
+    page_ptr block = block_arg;
     _pending_dirty_areas[block.area()->offset()] = block;
   }
 
@@ -213,7 +216,7 @@ struct _CacheStore : public Opers_ {
     area->_ref.store(0);
 
     // Insert into cache as a block starting at area base
-    block_ptr blk(area);
+    page_ptr blk(area);
     blk._offset = 0;
     _cache.put(start, blk);
     return area_ptr(area);
@@ -247,7 +250,7 @@ struct _CacheStore : public Opers_ {
     // Use a batch approach for blocks with contiguous offsets
     
     // We'll collect blocks to write in this vector
-    std::vector<block_ptr> blocks_to_write;
+    std::vector<page_ptr> blocks_to_write;
     
     // Get all dirty blocks under a single lock to reduce lock contention
     {
@@ -346,7 +349,7 @@ struct _CacheStore : public Opers_ {
         if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
         DB tmp(*this, _header->dbs[i].offset, i);
         // Return the DB's areas back into storage using head/tail pattern
-        auto read_txn = tmp.template resolve<typename DB::Transaction>(tmp._header->read_txn);
+        auto read_txn = tmp.template resolve<typename DB::Transaction>(&tmp._header->read_txn);
         if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
           _header->area_pool.return_single_areas(tmp._header->area_list_head_single,
                                                  read_txn->area_list_tail_single, *this);

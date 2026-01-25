@@ -7,7 +7,7 @@
 
 using namespace leaves;
 
-struct DummyBlockHeader {
+struct DummyPageHeader {
     uint32_t slot_id;
 };
 

@@ -273,14 +273,16 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
   db._cache = typename decltype(db)::Cache(db._capacity);  // Clear cache to force read from file
 
   // Resolve a pointer inside the payload and verify
-  auto ptr = db.resolve(base + payload_off, READ);
+  offset_t temp_offset(base + payload_off);
+  auto ptr = db.resolve(&temp_offset, READ);
   BOOST_REQUIRE(ptr);
   uint32_t got = 0;
   std::memcpy(&got, (const char*)ptr, sizeof(got));
   BOOST_CHECK_EQUAL(got, pattern);
 
   // Second resolve should hit cache path without throws
-  auto ptr2 = db.resolve(base + payload_off, READ);
+  temp_offset = offset_t(base + payload_off);
+  auto ptr2 = db.resolve(&temp_offset, READ);
   BOOST_REQUIRE(ptr2);
   std::memcpy(&got, (const char*)ptr2, sizeof(got));
   BOOST_CHECK_EQUAL(got, pattern);
@@ -301,8 +303,9 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
   std::memcpy(buf.data(), &area, sizeof(AreaSlice));
   db.write(base + db.calc_header_size(), buf.data(), buf.size());
 
-  // Resolve a location to get a block_ptr
-  auto blk = db.resolve(base, WRITE);
+  // Resolve a location to get a page_ptr
+  offset_t base_offset(base);
+  auto blk = db.resolve(&base_offset, WRITE);
   BOOST_REQUIRE(blk);
 
   // Mark dirty twice; internal queue should accept both, but clear_dirty

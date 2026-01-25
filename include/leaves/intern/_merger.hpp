@@ -21,10 +21,11 @@ struct _Merger {
   using Transition = typename CursorDst::Transition;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
-  using block_ptr = typename Transition::block_ptr;
+  using page_ptr = typename Transition::page_ptr;
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
+  using SrcLeafNode = typename CursorSrc::Transition::LeafNode;
 
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
@@ -35,15 +36,50 @@ struct _Merger {
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
   // Helper methods for memory management
-  block_ptr alloc(uint16_t size) { return dst_cursor.alloc(size); }
+  page_ptr alloc(uint16_t size) { return dst_cursor.alloc(size); }
 
-  leaf_ptr fill_leaf(const Slice& key, const Slice& src_value) {
-    leaf_ptr leaf = alloc(LeafNode::size(key.size(), src_value.size()));
-    auto bv = leaf->set(key, src_value.size());
-    if (bv) {
-      bv->offset = dst_cursor.alloc_big(bv->size()).offset();
-      block_ptr ptr = resolve_dst(bv->offset);
-      memcpy((char*)ptr, src_value.data(), src_value.size());
+  // Allocate node with PageHeader prefix, return pointer to node
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc(sizeof(PageHeader) + node_size);
+    return NodePtr((char*)page + sizeof(PageHeader));
+  }
+
+  // Free node by computing PageHeader pointer
+  template <typename NodePtr>
+  void free_node(NodePtr& node) {
+    using PageHeader = typename Traits::PageHeader;
+    static_assert(
+        !std::is_same_v<NodePtr, page_ptr>,
+        "free_node must be called with node pointers, not page pointers");
+
+    if constexpr (NodePtr::type == LEAF) {
+      if (node->is_big()) handler.free_big(node);
+    }
+
+    page_ptr page((char*)node - sizeof(PageHeader));
+    dst_cursor._db->free(page);
+  }
+
+  leaf_ptr fill_leaf(const Slice& key, SrcLeafNode& src_leaf) {
+    Slice src_value;
+    if (src_leaf.is_big()) {
+      src_value = handler.extract_big_value(src_leaf, *src_cursor._db);
+    } else {
+      src_value = src_leaf.value();
+    }
+
+    uint64_t vsize = src_value.size();
+    uint16_t msize =
+        CursorDst::BigMemory::modify_size<LeafNode>(key.size(), vsize);
+    leaf_ptr leaf = alloc_node<leaf_ptr>(LeafNode::size(key.size(), msize));
+    leaf->set(key, src_value.size());
+    if (msize != vsize) {
+      leaf->set_big();
+      BigValue* bvalue = (BigValue*)leaf->vdata();
+      dst_cursor.get_bigmemory().alloc(vsize, bvalue);
+      optimized_memcpy(bvalue->data(dst_cursor._db), src_value.data(), vsize);
     } else
       memcpy(leaf->vdata(), src_value.data(), src_value.size());
 
@@ -51,19 +87,13 @@ struct _Merger {
   }
 
   template <typename T>
-  void free(T& block) {
-    if constexpr (T::type == LEAF) {
-      if (block->is_big()) handler->free_big(block);
-    }
-    dst_cursor._db->free(block);
+  typename Traits::template Pointer<T> resolve_src(const offset_t* offset_ptr) {
+    return src_cursor._db->template resolve<T>(offset_ptr);
   }
 
-  block_ptr resolve_src(offset_t offset) {
-    return src_cursor._db->resolve(offset);
-  }
-
-  block_ptr resolve_dst(offset_t offset) {
-    return dst_cursor._db->resolve(offset);
+  template <typename T>
+  typename Traits::template Pointer<T> resolve_dst(const offset_t* offset_ptr) {
+    return dst_cursor._db->template resolve<T>(offset_ptr);
   }
 
   template <typename T>
@@ -122,7 +152,7 @@ struct _Merger {
     assert(dst.prefix <= dst_leaf->key_size);
     leaf_ptr new_leaf =
         _Inserter(&dst, 0).copy_reduced_leaf(dst.prefix, dst_leaf);
-    free(dst_leaf);
+    free_node(dst_leaf);
     split_trie(dst, src,
                new_leaf->key_size ? new_leaf->data[0] : TrieNode::NONE,
                resolve_offset(new_leaf));
@@ -137,10 +167,11 @@ struct _Merger {
     if (suffix_len == 0) {
       merge_into_trie(dst, src);
     } else {
-      trie_ptr new_trie = alloc(TrieNode::size(suffix_len, dst_trie->count()));
+      trie_ptr new_trie =
+          alloc_node<trie_ptr>(dst_trie->reduced_size(suffix_len));
       new_trie->create(*dst_trie,
                        Slice(&dst_trie->compressed()[dst.prefix], suffix_len));
-      free(dst_trie);
+      free_node(dst_trie);
       assert(new_trie->len() > 0);
       split_trie(dst, src, new_trie->compressed()[0], resolve_offset(new_trie));
     }
@@ -165,36 +196,31 @@ struct _Merger {
         auto src_slice = src.leaf()->value(*src_cursor._db);
         if (handler(current_key, dst_slice, src_slice)) {
           assert(key1 == TrieNode::NONE);
-          leaf_ptr old_leaf = resolve_dst(child1);
+          leaf_ptr old_leaf = resolve_dst<LeafNode>(child1);
           _Inserter(&dst, src_slice.size()).change_leaf();
           auto& new_leaf = dst.leaf();
           memcpy(new_leaf->vdata(), src_slice.data(), src_slice.size());
-          free(old_leaf);
+          free_node(old_leaf);
         }
         return;
       }
 
       // A new trie with two branches for the old dst and the new src
-      trie_ptr new_trie = alloc(TrieNode::size(src_split_pos, 2));
+      trie_ptr new_trie =
+          alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
       auto loffset =
           new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
                            key1, child1, key);
-      dst.replace(resolve_offset(new_trie));
-      dst.block = new_trie;
+      dst.trie() = new_trie;
       dst.link_offset = loffset;
+      dst.update_trie_offset();
 
       if (src.is_leaf()) {
         auto& src_leaf = src.leaf();
         assert(src_leaf->key_size >= src_split_pos);
         uint8_t suffix_len = src_leaf->key_size - src_split_pos;
-
-        Slice src_value = src_leaf->value();
-        if (src_leaf.is_big()) {
-          src_value = handler.extract_big_value(src_value, *src_cursor._db);
-        }
-
         leaf_ptr new_leaf = fill_leaf(
-            Slice(&src_leaf->data[src_split_pos], suffix_len), src_value);
+            Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
         *dst.link() = resolve_offset(new_leaf);
         return;
       }
@@ -203,7 +229,7 @@ struct _Merger {
       uint8_t suffix_len = src_trie->len() - src_split_pos;
 
       trie_ptr suffix_trie =
-          alloc(TrieNode::size(suffix_len, src_trie->count()));
+          alloc_node<trie_ptr>(src_trie->reduced_size(suffix_len));
       suffix_trie->create(
           *src_trie, Slice(&src_trie->compressed()[src_split_pos], suffix_len));
       *dst.link() = resolve_offset(suffix_trie);
@@ -223,9 +249,10 @@ struct _Merger {
     auto src_trie = src.trie();
     if (src_trie->isset(key1)) {
       // copy src trie to dst and move down the branch src shares with dst
-      trie_ptr new_trie = alloc(src_trie->size());
+      trie_ptr new_trie = alloc_node<trie_ptr>(src_trie->size());
       copy(*new_trie, *src_trie);
-      dst.replace(resolve_offset(new_trie));
+      dst.trie() = new_trie;
+      dst.update_trie_offset();
 
       auto dst_p = new_trie->offset(key1);
       auto dst_offset = new_trie->array();
@@ -243,11 +270,10 @@ struct _Merger {
       return;
     }
 
-    trie_ptr new_trie =
-        alloc(TrieNode::size(src_trie->len(), src_trie->count() + 1));
-    dst.replace(resolve_offset(new_trie));
-    dst.block = new_trie;
+    trie_ptr new_trie = alloc(src_trie->increased_size(key1));
+    dst.trie() = new_trie;
     dst.link_offset = new_trie->create(*src_trie, key1);
+    dst.update_trie_offset();
     *dst.link() = child1;
     for (int key = new_trie->first(); key != TrieNode::OUT_OF_RANGE;
          key = new_trie->next(key)) {
@@ -275,17 +301,16 @@ struct _Merger {
       // src prefix is longer -> split src_trie and insert the suffix part
       uint16_t loffset;
       trie_ptr new_trie = clone_plus_one(dst_trie, suffix_len, &loffset);
-      trie_ptr suffix_trie =
-          inserter.alloc(DstTrieNode::size(suffix_len, src_trie->count()));
+      trie_ptr suffix_trie = inserter.alloc(src_trie->reduced_size(suffix_len));
       suffix_trie->create(
           *src_trie,
           Slice(&src_trie->compressed()[src_trie->len() - suffix_len],
                 suffix_len));
 
-      dst.replace(resolve_offset(new_trie));
-      dst.block = new_trie;
+      dst.trie() = new_trie;
       dst.link_offset = loffset;
       *dst.link() = resolve_offset(suffix_trie);
+      dst.update_trie_offset();
 
       auto dst_offset = suffix_trie->array();
       auto src_offset = src_trie->array();
@@ -296,12 +321,12 @@ struct _Merger {
     }
 
     // Merge the children of both tries
-    trie_ptr new_trie = alloc(DstTrieNode::size(
+    trie_ptr new_trie = alloc_node<trie_ptr>(DstTrieNode::size(
         dst_trie->len(), dst_trie->count() + src_trie->count()));
 
     // merge src_trie into dst_trie
-    dst.replace(resolve_offset(new_trie));
-    dst.block = new_trie;
+    dst.trie() = new_trie;
+    dst.update_trie_offset();
 
     const typename DstTrieNode::offset_e* dst_poffset[257];
     const typename SrcTrieNode::offset_e* src_poffset[257];
@@ -326,7 +351,7 @@ struct _Merger {
       array[i] = deep_copy_subtree(*src_poffset[i]);
     }
 
-    free(dst_trie);
+    free_node(dst_trie);
   }
 
   void merge_leaf_into_trie(typename CursorDst::Transition& dst,
@@ -340,13 +365,13 @@ struct _Merger {
 
     assert(src_leaf->key_size >= suffix_len);
     uint8_t split_pos = src_leaf->key_size - suffix_len;
-    leaf_ptr new_leaf = fill_leaf(Slice(&src_leaf->data[split_pos], suffix_len),
-                                  src_leaf->value(*src_cursor._db));
+    leaf_ptr new_leaf =
+        fill_leaf(Slice(&src_leaf->data[split_pos], suffix_len), *src_leaf);
 
-    dst.replace(resolve_offset(new_trie));
-    dst.block = new_trie;
+    dst.trie() = new_trie;
     dst.link_offset = loffset;
     *dst.link() = resolve_offset(new_leaf);
+    dst.update_trie_offset();
   }
 
   typename CursorDst::Transition::trie_ptr clone_plus_one(
@@ -358,10 +383,9 @@ struct _Merger {
                                           : dst_trie->isset(branch_key)));
     // otherwise find would have walked down
 
-    trie_ptr new_trie =
-        alloc(TrieNode::size(dst_trie->len(), dst_trie->count() + 1));
+    trie_ptr new_trie = alloc(dst_trie->increment_size(branch_key));
     *loffset = new_trie->create(*dst_trie, branch_key);
-    free(dst_trie);
+    free_node(dst_trie);
     return new_trie;
   }
 
@@ -377,9 +401,8 @@ struct _Merger {
    * @brief Deep copy a leaf node from source to destination
    */
   offset_t deep_copy_leaf(offset_t src_offset) {
-    auto src_leaf = (leaf_ptr)resolve_src(src_offset);
-    Slice src_value = src_leaf->value(*src_cursor._db);
-    leaf_ptr new_leaf = fill_leaf(src_leaf->key(), src_value);
+    auto& src_leaf = resolve_src<LeafNode>(src_offset);
+    leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
     return resolve_offset(new_leaf);
   }
 
@@ -387,9 +410,9 @@ struct _Merger {
    * @brief Deep copy a trie node and its subtree from source to destination
    */
   offset_t deep_copy_trie(offset_t src_offset) {
-    auto src_trie = (trie_ptr)resolve_src(src_offset);
+    auto src_trie = resolve_src<TrieNode>(src_offset);
     uint16_t trie_size = src_trie->size();
-    trie_ptr dst_trie = alloc(trie_size);
+    trie_ptr dst_trie = alloc_node<trie_ptr>(trie_size);
     copy(*dst_trie, *src_trie);
 
     // Recursively copy all children and update offsets

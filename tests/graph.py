@@ -35,16 +35,16 @@ class Graph:
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
-            # free = pnodes[0]["freespace"]
-            # size = pnodes[0]["size"]
-            # txn = pnodes[0]["txn"]
-            # add(f"subgraph cluster_Page{k} {{")
-            # add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
+            free = pnodes[0]["freespace"]
+            size = pnodes[0]["size"]
+            txn = pnodes[0]["txn"]
+            add(f"subgraph cluster_Page{k} {{")
+            add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
                 add(getattr(self, "handle_" + type_)(n))
-            # add("}")
+            add("}")
 
         # add connections
         for n in nodes:
