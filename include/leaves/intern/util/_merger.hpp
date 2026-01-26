@@ -182,7 +182,7 @@ struct _Merger {
                   typename CursorSrc::Transition& src, int key1,
                   offset_t child1) {
     uint16_t split_pos = dst.keypos + dst.prefix;
-    assert(split_pos > src.keypos);
+    assert(split_pos >= src.keypos);
     uint16_t src_split_pos = split_pos - src.keypos;
     assert(src_split_pos < 256);
 

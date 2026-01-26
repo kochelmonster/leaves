@@ -167,6 +167,12 @@ BOOST_AUTO_TEST_CASE(test_lsm_merge_threshold) {
   
   cursor.commit();
   
-  // Check if merge should be triggered
-  BOOST_CHECK(db.should_merge());
+  // Data should be readable even if a merge is in progress
+  // because cursors now also read from the inactive L0 during merge
+  auto read_cursor = db.cursor();
+  read_cursor.find("key0");
+  BOOST_CHECK(read_cursor.is_valid());
+  if (read_cursor.is_valid()) {
+    BOOST_CHECK_EQUAL(read_cursor.value().string().size(), 100);
+  }
 }

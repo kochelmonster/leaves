@@ -145,6 +145,11 @@ struct _LSMDB {
   ~_LSMDB() {
     // Signal shutdown - any pending merge task will exit early
     _shutdown.store(true);
+
+    // Wait for any in-progress merge to complete
+    while (_header->merge_in_progress.load()) {
+      std::this_thread::yield();
+    }
   }
 
   void init(offset_t* header) {
@@ -263,43 +268,55 @@ struct _LSMDB {
 
     _header->merge_in_progress.store(true);
 
-    // Switch L0 buffers
+    // Switch L0 buffers - new writes go to the new buffer
     switch_l0();
 
-    // Wait for all cursors to release the old L0
+    // Note: We do NOT wait for inactive_l0_refs to drop to 0 before merging.
+    // The merge reads from the inactive L0 and writes to L1.
+    // Cursors that were created during merge_in_progress will have their
+    // own cursor on the inactive L0 and can read from it.
+    // After merge completes, we wait for all inactive L0 refs to drop
+    // before resetting.
+
+    // Get cursors for inactive L0 and L1 in a nested scope
+    // so they're destroyed before we try to reset
+    {
+      DB* old_l0 = inactive_l0();
+      auto l0_cursor = old_l0->create_cursor();
+      auto l1_cursor = _l1->create_cursor();
+
+      // Merge L0 into L1 using the LSM merge handler
+      using L1Cursor = typename DB::Cursor;
+      _LSMMergeHandler<L1Cursor> handler(*l1_cursor);
+
+      l0_cursor->first();
+      if (l0_cursor->is_valid()) {
+        l1_cursor->start_transaction();
+        _Merger merger(*l1_cursor, *l0_cursor, handler);
+
+        while (l0_cursor->is_valid()) {
+          merger.exec();
+          l0_cursor->next();
+        }
+
+        l1_cursor->commit();
+      }
+    }  // l0_cursor and l1_cursor destroyed here
+
+    // Now wait for all cursors reading from inactive L0 to finish
     while (inactive_l0_refs() > 0) {
       if (_shutdown.load()) {
-        _header->merge_in_progress.store(false);
-        return;
+        // Even on shutdown, merge is complete - data is in L1
+        // Just can't reset the old L0 yet
+        break;
       }
-      // Yield to other threads
       std::this_thread::yield();
     }
 
-    // Get cursors for inactive L0 and L1
-    DB* old_l0 = inactive_l0();
-    auto l0_cursor = old_l0->create_cursor();
-    auto l1_cursor = _l1->create_cursor();
-
-    // Merge L0 into L1 using the LSM merge handler
-    using L1Cursor = typename DB::Cursor;
-    _LSMMergeHandler<L1Cursor> handler(*l1_cursor);
-
-    l0_cursor->first();
-    if (l0_cursor->is_valid()) {
-      l1_cursor->start_transaction();
-      _Merger merger(*l1_cursor, *l0_cursor, handler);
-
-      while (l0_cursor->is_valid()) {
-        merger.exec();
-        l0_cursor->next();
-      }
-
-      l1_cursor->commit();
+    // Reset the old L0 by reinitializing it (if not shutting down)
+    if (!_shutdown.load()) {
+      reset_inactive_l0();
     }
-
-    // Reset the old L0 by reinitializing it
-    reset_inactive_l0();
 
     _header->merge_in_progress.store(false);
     _storage.make_dirty(_header);
@@ -349,13 +366,15 @@ struct _LSMCursor {
   using offset_e = typename Traits::offset_e;
 
   LSMDB* _lsm_db;
-  std::shared_ptr<InnerCursor> _l0_cursor;
+  std::shared_ptr<InnerCursor> _l0_cursor;        // Active L0 cursor
+  std::shared_ptr<InnerCursor> _l0_inactive_cursor;  // Inactive L0 cursor (during merge)
   std::shared_ptr<InnerCursor> _l1_cursor;
   uint8_t _l0_which;  // Which L0 buffer this cursor is using
+  bool _has_inactive_l0{false};  // Whether we have an inactive L0 cursor
   uint64_t _id{0};
 
   // Which cursor is currently "active" (pointing to current position)
-  enum class Active { L0, L1, BOTH, NONE } _active = Active::NONE;
+  enum class Active { L0, L0_INACTIVE, L1, BOTH, NONE } _active = Active::NONE;
 
   _LSMCursor(LSMDB* lsm_db)
       : _lsm_db(lsm_db), _l0_which(lsm_db->_header->active_l0.load()) {
@@ -368,24 +387,42 @@ struct _LSMCursor {
     DB* l0 = _l0_which == 0 ? lsm_db->_l0_a.get() : lsm_db->_l0_b.get();
     _l0_cursor = l0->create_cursor();
     _l1_cursor = lsm_db->l1()->create_cursor();
+
+    // If merge is in progress, also create cursor for inactive L0
+    // We ref-count it so the merge knows not to reset it until we're done
+    if (lsm_db->_header->merge_in_progress.load()) {
+      uint8_t inactive_which = _l0_which == 0 ? 1 : 0;
+      lsm_db->ref_l0(inactive_which);
+      DB* inactive_l0 = inactive_which == 0 ? lsm_db->_l0_a.get() : lsm_db->_l0_b.get();
+      _l0_inactive_cursor = inactive_l0->create_cursor();
+      _has_inactive_l0 = true;
+    }
   }
 
   ~_LSMCursor() {
     // Release L0 reference
     _lsm_db->unref_l0(_l0_which);
+    // Release inactive L0 reference if we have one
+    if (_has_inactive_l0) {
+      uint8_t inactive_which = _l0_which == 0 ? 1 : 0;
+      _lsm_db->unref_l0(inactive_which);
+    }
   }
 
   bool is_valid() const {
-    return _l0_cursor->is_valid() || _l1_cursor->is_valid();
+    return _l0_cursor->is_valid() || _l1_cursor->is_valid() ||
+           (_has_inactive_l0 && _l0_inactive_cursor->is_valid());
   }
 
   Slice key() const {
     switch (_active) {
+      case Active::L1:  // Most common case - majority of data is in L1
+        return _l1_cursor->key();
+      case Active::L0_INACTIVE:
+        return _l0_inactive_cursor->key();
       case Active::L0:
       case Active::BOTH:
         return _l0_cursor->key();
-      case Active::L1:
-        return _l1_cursor->key();
       default:
         return Slice();
     }
@@ -393,11 +430,13 @@ struct _LSMCursor {
 
   Slice value() const {
     switch (_active) {
-      case Active::L0:
-      case Active::BOTH:  // L0 takes precedence
-        return _l0_cursor->value();
-      case Active::L1:
+      case Active::L1:  // Most common case - majority of data is in L1
         return _l1_cursor->value();
+      case Active::L0_INACTIVE:
+        return _l0_inactive_cursor->value();
+      case Active::L0:
+      case Active::BOTH:  // L0 takes precedence for overwrites
+        return _l0_cursor->value();
       default:
         return Slice();
     }
@@ -405,18 +444,21 @@ struct _LSMCursor {
 
   void find(const Slice& key) {
     _l0_cursor->find(key);
+    if (_has_inactive_l0) _l0_inactive_cursor->find(key);
     _l1_cursor->find(key);
     _update_active();
   }
 
   void first() {
     _l0_cursor->first();
+    if (_has_inactive_l0) _l0_inactive_cursor->first();
     _l1_cursor->first();
     _update_active();
   }
 
   void last() {
     _l0_cursor->last();
+    if (_has_inactive_l0) _l0_inactive_cursor->last();
     _l1_cursor->last();
     _update_active_reverse();
   }
@@ -427,11 +469,18 @@ struct _LSMCursor {
       case Active::L0:
         _l0_cursor->next();
         break;
+      case Active::L0_INACTIVE:
+        _l0_inactive_cursor->next();
+        break;
       case Active::L1:
         _l1_cursor->next();
         break;
       case Active::BOTH:
         _l0_cursor->next();
+        if (_has_inactive_l0 && _l0_inactive_cursor->is_valid() &&
+            _l0_inactive_cursor->key() == _l0_cursor->key()) {
+          _l0_inactive_cursor->next();
+        }
         _l1_cursor->next();
         break;
       default:
@@ -445,11 +494,18 @@ struct _LSMCursor {
       case Active::L0:
         _l0_cursor->prev();
         break;
+      case Active::L0_INACTIVE:
+        _l0_inactive_cursor->prev();
+        break;
       case Active::L1:
         _l1_cursor->prev();
         break;
       case Active::BOTH:
         _l0_cursor->prev();
+        if (_has_inactive_l0 && _l0_inactive_cursor->is_valid() &&
+            _l0_inactive_cursor->key() == _l0_cursor->key()) {
+          _l0_inactive_cursor->prev();
+        }
         _l1_cursor->prev();
         break;
       default:
@@ -503,70 +559,95 @@ struct _LSMCursor {
   bool rollback() { return _l0_cursor->rollback(); }
 
   // Determine which cursor is "active" based on key comparison
+  // Priority: L0 (active) > L0 (inactive) > L1
   void _update_active() {
     bool l0_valid = _l0_cursor->is_valid();
+    bool l0_inactive_valid = _has_inactive_l0 && _l0_inactive_cursor->is_valid();
     bool l1_valid = _l1_cursor->is_valid();
 
-    if (!l0_valid && !l1_valid) {
+    if (!l0_valid && !l0_inactive_valid && !l1_valid) {
       _active = Active::NONE;
       return;
     }
 
-    if (!l0_valid) {
-      _active = Active::L1;
-      return;
+    // Find the smallest key among all valid cursors
+    Slice min_key;
+    Active min_cursor = Active::NONE;
+
+    if (l0_valid) {
+      min_key = _l0_cursor->key();
+      min_cursor = Active::L0;
     }
 
-    if (!l1_valid) {
-      _active = Active::L0;
-      return;
+    if (l0_inactive_valid) {
+      Slice key = _l0_inactive_cursor->key();
+      if (min_cursor == Active::NONE || key.compare(min_key) < 0) {
+        min_key = key;
+        min_cursor = Active::L0_INACTIVE;
+      }
     }
 
-    // Both valid - compare keys
-    Slice l0_key = _l0_cursor->key();
-    Slice l1_key = _l1_cursor->key();
-    int cmp = l0_key.compare(l1_key);
+    if (l1_valid) {
+      Slice key = _l1_cursor->key();
+      if (min_cursor == Active::NONE || key.compare(min_key) < 0) {
+        min_key = key;
+        min_cursor = Active::L1;
+      }
+    }
 
-    if (cmp < 0) {
-      _active = Active::L0;
-    } else if (cmp > 0) {
-      _active = Active::L1;
+    // Check for ties - prefer L0 > L0_INACTIVE > L1
+    if (l0_valid && _l0_cursor->key().compare(min_key) == 0) {
+      _active = Active::L0;  // L0 active always wins for equal keys
+    } else if (l0_inactive_valid && _l0_inactive_cursor->key().compare(min_key) == 0) {
+      _active = Active::L0_INACTIVE;
     } else {
-      _active = Active::BOTH;  // Same key, L0 takes precedence for value
+      _active = min_cursor;
     }
   }
 
   // Same as _update_active but for reverse iteration
   void _update_active_reverse() {
     bool l0_valid = _l0_cursor->is_valid();
+    bool l0_inactive_valid = _has_inactive_l0 && _l0_inactive_cursor->is_valid();
     bool l1_valid = _l1_cursor->is_valid();
 
-    if (!l0_valid && !l1_valid) {
+    if (!l0_valid && !l0_inactive_valid && !l1_valid) {
       _active = Active::NONE;
       return;
     }
 
-    if (!l0_valid) {
-      _active = Active::L1;
-      return;
+    // Find the largest key among all valid cursors
+    Slice max_key;
+    Active max_cursor = Active::NONE;
+
+    if (l0_valid) {
+      max_key = _l0_cursor->key();
+      max_cursor = Active::L0;
     }
 
-    if (!l1_valid) {
-      _active = Active::L0;
-      return;
+    if (l0_inactive_valid) {
+      Slice key = _l0_inactive_cursor->key();
+      if (max_cursor == Active::NONE || key.compare(max_key) > 0) {
+        max_key = key;
+        max_cursor = Active::L0_INACTIVE;
+      }
     }
 
-    // Both valid - compare keys (reverse order)
-    Slice l0_key = _l0_cursor->key();
-    Slice l1_key = _l1_cursor->key();
-    int cmp = l0_key.compare(l1_key);
+    if (l1_valid) {
+      Slice key = _l1_cursor->key();
+      if (max_cursor == Active::NONE || key.compare(max_key) > 0) {
+        max_key = key;
+        max_cursor = Active::L1;
+      }
+    }
 
-    if (cmp > 0) {
-      _active = Active::L0;
-    } else if (cmp < 0) {
-      _active = Active::L1;
+    // Check for ties - prefer L0 > L0_INACTIVE > L1
+    if (l0_valid && _l0_cursor->key().compare(max_key) == 0) {
+      _active = Active::L0;  // L0 active always wins for equal keys
+    } else if (l0_inactive_valid && _l0_inactive_cursor->key().compare(max_key) == 0) {
+      _active = Active::L0_INACTIVE;
     } else {
-      _active = Active::BOTH;
+      _active = max_cursor;
     }
   }
 };
