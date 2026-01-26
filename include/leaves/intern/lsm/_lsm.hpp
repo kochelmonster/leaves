@@ -131,10 +131,10 @@ struct _LSMDB {
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _index(index) {
-    // Initialize L0 and L1 from existing headers
-    _l0_a = std::make_unique<DB>(storage, _header->l0_a_header, index * 3);
-    _l0_b = std::make_unique<DB>(storage, _header->l0_b_header, index * 3 + 1);
-    _l1 = std::make_unique<DB>(storage, _header->l1_header, index * 3 + 2);
+    // Initialize L0 and L1 from existing headers - all share parent's index
+    _l0_a = std::make_unique<DB>(storage, _header->l0_a_header, index);
+    _l0_b = std::make_unique<DB>(storage, _header->l0_b_header, index);
+    _l1 = std::make_unique<DB>(storage, _header->l1_header, index);
   }
 
   _LSMDB(Storage& storage, offset_t* header, uint16_t index)
@@ -161,16 +161,15 @@ struct _LSMDB {
 
     // Initialize L0 A
     _header->l0_a_header = base;
-    _l0_a = std::make_unique<DB>(_storage, &_header->l0_a_header, _index * 3);
+    _l0_a = std::make_unique<DB>(_storage, &_header->l0_a_header, _index);
 
     // Initialize L0 B
     _header->l0_b_header = base + Traits::AREA_SIZE;
-    _l0_b =
-        std::make_unique<DB>(_storage, &_header->l0_b_header, _index * 3 + 1);
+    _l0_b = std::make_unique<DB>(_storage, &_header->l0_b_header, _index);
 
     // Initialize L1
     _header->l1_header = base + 2 * Traits::AREA_SIZE;
-    _l1 = std::make_unique<DB>(_storage, &_header->l1_header, _index * 3 + 2);
+    _l1 = std::make_unique<DB>(_storage, &_header->l1_header, _index);
 
     _header->active_l0.store(0);
     _header->l0_a_refs.store(0);
@@ -299,10 +298,23 @@ struct _LSMDB {
       l1_cursor->commit();
     }
 
-    // Clear the old L0
-    // TODO: Implement proper L0 clearing - reinitialize the DB
+    // Reset the old L0 by reinitializing it
+    reset_inactive_l0();
 
     _header->merge_in_progress.store(false);
+    _storage.make_dirty(_header);
+  }
+
+  // Reset the inactive L0 database after merge
+  void reset_inactive_l0() {
+    uint8_t active = _header->active_l0.load();
+    if (active == 0) {
+      // L0 B is inactive, reset it
+      _l0_b->reset(&_header->l0_b_header);
+    } else {
+      // L0 A is inactive, reset it
+      _l0_a->reset(&_header->l0_a_header);
+    }
     _storage.make_dirty(_header);
   }
 
@@ -312,6 +324,11 @@ struct _LSMDB {
     _l1->sanitize();
     new (&_header->merge_lock) Mutex();
     _header->merge_in_progress.store(false);
+
+    // Reschedule merge if L0 needs compaction
+    if (should_merge()) {
+      schedule_merge();
+    }
   }
 };
 
@@ -457,8 +474,11 @@ struct _LSMCursor {
     memcpy(space, val.data(), val.size());
     _lsm_db->flush();
 
-    // Update L0 size estimate
+    // Update L0 size estimate and trigger merge if needed
     _lsm_db->_header->l0_size.fetch_add(val.size());
+    if (_lsm_db->should_merge()) {
+      _lsm_db->schedule_merge();
+    }
   }
 
   void remove() {
@@ -482,7 +502,6 @@ struct _LSMCursor {
 
   bool rollback() { return _l0_cursor->rollback(); }
 
- private:
   // Determine which cursor is "active" based on key comparison
   void _update_active() {
     bool l0_valid = _l0_cursor->is_valid();

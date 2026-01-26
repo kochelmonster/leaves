@@ -49,16 +49,16 @@ add_subdirectory("BLAKE3/c")
 add_library(core INTERFACE)
 target_sources(core INTERFACE 
     # include/leaves.hpp
-    include/leaves/intern/_util.hpp
-    include/leaves/intern/_exception.hpp
-    include/leaves/intern/_bits.hpp
-    include/leaves/intern/_memory.hpp
-    include/leaves/intern/_mmap.hpp
-    include/leaves/intern/_cursor.hpp
-    include/leaves/intern/_node.hpp
-    include/leaves/intern/_inserter.hpp
-    include/leaves/intern/_fstore.hpp
-    include/leaves/intern/_twoquecache.hpp
+    include/leaves/intern/core/_util.hpp
+    include/leaves/intern/core/_exception.hpp
+    include/leaves/intern/core/_bits.hpp
+    include/leaves/intern/memory/_memory.hpp
+    include/leaves/intern/storage/_mmap.hpp
+    include/leaves/intern/db/_cursor.hpp
+    include/leaves/intern/core/_node.hpp
+    include/leaves/intern/db/_inserter.hpp
+    include/leaves/intern/storage/_fstore.hpp
+    include/leaves/intern/memory/_twoquecache.hpp
 )
 
 if (HAVE_BOOST_PROCESS)
@@ -131,6 +131,9 @@ target_link_libraries(test_node PUBLIC core test)
 
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
+
+add_executable(test_lsm tests/test_lsm.cpp)
+target_link_libraries(test_lsm PUBLIC core test)
 
 add_executable(test_bigmemory tests/test_bigmemory.cpp)
 target_link_libraries(test_bigmemory PUBLIC core test)

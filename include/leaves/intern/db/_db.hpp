@@ -200,6 +200,26 @@ struct _DB {
     flush();
   }
 
+  // Return all areas to storage pool
+  void return_areas() {
+    auto read_txn = resolve<Transaction>(&_header->read_txn);
+    if (_header->area_list_head_single && read_txn->area_list_tail_single) {
+      _storage.return_single_areas(_header->area_list_head_single,
+                                   read_txn->area_list_tail_single);
+    }
+    if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
+      _storage.return_multi_areas(_header->area_list_head_multi,
+                                  read_txn->area_list_tail_multi);
+    }
+  }
+
+  // Reset the DB by returning all areas to storage and reinitializing
+  void reset(offset_t* header) {
+    if (is_active()) throw TransactionActive();
+    return_areas();
+    init(header);
+  }
+
   cursor_ptr create_cursor() {
     return std::make_unique<Cursor>(this, &txn()->root);
   }

@@ -348,16 +348,7 @@ struct _CacheStore : public Opers_ {
       if (_header->dbs[i].offset && !strcmp(_header->dbs[i].name, name)) {
         if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
         DB tmp(*this, _header->dbs[i].offset, i);
-        // Return the DB's areas back into storage using head/tail pattern
-        auto read_txn = tmp.template resolve<typename DB::Transaction>(&tmp._header->read_txn);
-        if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
-          _header->area_pool.return_single_areas(tmp._header->area_list_head_single,
-                                                 read_txn->area_list_tail_single, *this);
-        }
-        if (tmp._header->area_list_head_multi && read_txn->area_list_tail_multi) {
-          _header->area_pool.return_multi_areas(tmp._header->area_list_head_multi,
-                                                read_txn->area_list_tail_multi, *this);
-        }
+        tmp.return_areas();
         _header->dbs[i].offset = 0;
         flush(true, true);
         return;

@@ -81,7 +81,7 @@ struct _Merger {
       leaf->set_big();
       BigValue* bvalue = (BigValue*)leaf->vdata();
       dst_cursor.get_bigmemory().alloc(vsize, bvalue);
-      optimized_memcpy(bvalue->data(dst_cursor._db), src_value.data(), vsize);
+      optimized_memcpy((char*)bvalue->data(dst_cursor._db), src_value.data(), vsize);
     } else
       memcpy(leaf->vdata(), src_value.data(), src_value.size());
 
@@ -125,8 +125,7 @@ struct _Merger {
     // Handle empty destination - deep copy entire source tree
     if (!dst_cursor.stack.size) {
       // Get root from source - it's the first element in the stack
-      auto root_offset = src_cursor.stack.front().offset;
-      auto new_root = deep_copy_subtree(root_offset);
+      auto new_root = deep_copy_subtree(src_cursor.stack.front().offset);
       *dst_cursor._root = new_root;
       return;
     }
@@ -194,11 +193,11 @@ struct _Merger {
       if (key == TrieNode::NONE && key1 == TrieNode::NONE) {
         assert(src.is_leaf());
         assert(child1.type() == LEAF);
-        auto dst_slice = dst.leaf()->value(*dst_cursor._db);
-        auto src_slice = src.leaf()->value(*src_cursor._db);
+        auto dst_slice = dst.leaf()->value();
+        auto src_slice = src.leaf()->value();
         if (handler(current_key, dst_slice, src_slice)) {
           assert(key1 == TrieNode::NONE);
-          leaf_ptr old_leaf = resolve_dst<LeafNode>(child1);
+          leaf_ptr old_leaf = resolve_dst<LeafNode>(&child1);
           _Inserter(&dst, src_slice.size()).change_leaf();
           auto& new_leaf = dst.leaf();
           memcpy(new_leaf->vdata(), src_slice.data(), src_slice.size());
@@ -210,11 +209,12 @@ struct _Merger {
       // A new trie with two branches for the old dst and the new src
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
-      auto loffset =
+      auto idxs =
           new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
-                           key1, child1, key);
+                           key1, key);
+      new_trie->array()[idxs.first] = child1;
       dst.trie() = new_trie;
-      dst.link_offset = loffset;
+      dst.link_idx = idxs.second;
       dst.update_trie_offset();
 
       if (src.is_leaf()) {
@@ -239,7 +239,7 @@ struct _Merger {
       auto dst_offset = suffix_trie->array();
       auto src_offset = src_trie->array();
       for (int i = 0, scount = src_trie->count(); i < scount; i++) {
-        dst_offset[i] = deep_copy_subtree(src_offset[i]);
+        dst_offset[i] = deep_copy_subtree(&src_offset[i]);
       }
       return;
     }
@@ -262,25 +262,25 @@ struct _Merger {
       for (int i = 0, count = new_trie->count(); i < count; i++) {
         if (&dst_offset[i] == dst_p) {
           dst_offset[i] = child1;
-          src_cursor.push(src_offset[i]);
+          src_cursor.push(&src_offset[i]);
           dst_cursor.stack.clear();
           merge_node();
           continue;
         }
-        dst_offset[i] = deep_copy_subtree(src_offset[i]);
+        dst_offset[i] = deep_copy_subtree(&src_offset[i]);
       }
       return;
     }
 
-    trie_ptr new_trie = alloc(src_trie->increased_size(key1));
+    trie_ptr new_trie = alloc(src_trie->increment_size(key1));
     dst.trie() = new_trie;
-    dst.link_offset = new_trie->create(*src_trie, key1);
+    dst.link_idx = new_trie->create(*src_trie, key1);
     dst.update_trie_offset();
     *dst.link() = child1;
     for (int key = new_trie->first(); key != TrieNode::OUT_OF_RANGE;
          key = new_trie->next(key)) {
       if (key == key1) continue;
-      *new_trie->offset(key) = deep_copy_subtree(*src_trie->offset(key));
+      *new_trie->offset(key) = deep_copy_subtree(src_trie->offset(key));
     }
   }
 
@@ -310,14 +310,14 @@ struct _Merger {
                 suffix_len));
 
       dst.trie() = new_trie;
-      dst.link_offset = loffset;
+      dst.link_idx = loffset;
       *dst.link() = resolve_offset(suffix_trie);
       dst.update_trie_offset();
 
       auto dst_offset = suffix_trie->array();
       auto src_offset = src_trie->array();
       for (int i = 0, scount = src_trie->count(); i < scount; i++) {
-        dst_offset[i] = deep_copy_subtree(src_offset[i]);
+        dst_offset[i] = deep_copy_subtree(&src_offset[i]);
       }
       return;
     }
@@ -338,7 +338,7 @@ struct _Merger {
       if (dst_poffset[i] && src_poffset[i]) {
         // walk down and merge - both tries have this branch
         array[i] = *dst_poffset[i];
-        src_cursor.push(*src_poffset[i]);
+        src_cursor.push(const_cast<offset_e*>(src_poffset[i]));
         dst_cursor.stack.clear();
         merge_node();
         continue;
@@ -350,7 +350,7 @@ struct _Merger {
       }
       assert(src_poffset[i]);
       assert(!dst_poffset[i]);
-      array[i] = deep_copy_subtree(*src_poffset[i]);
+      array[i] = deep_copy_subtree(src_poffset[i]);
     }
 
     free_node(dst_trie);
@@ -371,7 +371,7 @@ struct _Merger {
         fill_leaf(Slice(&src_leaf->data[split_pos], suffix_len), *src_leaf);
 
     dst.trie() = new_trie;
-    dst.link_offset = loffset;
+    dst.link_idx = loffset;
     *dst.link() = resolve_offset(new_leaf);
     dst.update_trie_offset();
   }
@@ -394,16 +394,16 @@ struct _Merger {
   /**
    * @brief Deep copy entire subtree from source to destination
    */
-  offset_t deep_copy_subtree(offset_t src_offset) {
-    if (src_offset.type() == LEAF) return deep_copy_leaf(src_offset);
+  offset_t deep_copy_subtree(const offset_t* src_offset) {
+    if (src_offset->type() == LEAF) return deep_copy_leaf(src_offset);
     return deep_copy_trie(src_offset);
   }
 
   /**
    * @brief Deep copy a leaf node from source to destination
    */
-  offset_t deep_copy_leaf(offset_t src_offset) {
-    auto& src_leaf = resolve_src<LeafNode>(src_offset);
+  offset_t deep_copy_leaf(const offset_t* src_offset) {
+    auto src_leaf = resolve_src<LeafNode>(src_offset);
     leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
     return resolve_offset(new_leaf);
   }
@@ -411,7 +411,7 @@ struct _Merger {
   /**
    * @brief Deep copy a trie node and its subtree from source to destination
    */
-  offset_t deep_copy_trie(offset_t src_offset) {
+  offset_t deep_copy_trie(const offset_t* src_offset) {
     auto src_trie = resolve_src<TrieNode>(src_offset);
     uint16_t trie_size = src_trie->size();
     trie_ptr dst_trie = alloc_node<trie_ptr>(trie_size);
@@ -421,7 +421,7 @@ struct _Merger {
     auto dst_array = dst_trie->array();
     auto src_array = src_trie->array();
     for (int i = 0, count = dst_trie->count(); i < count; i++) {
-      dst_array[i] = deep_copy_subtree(src_array[i]);
+      dst_array[i] = deep_copy_subtree(&src_array[i]);
     }
     return resolve_offset(dst_trie);
   }

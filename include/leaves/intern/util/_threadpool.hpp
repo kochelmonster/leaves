@@ -55,7 +55,7 @@ struct _ThreadPoolMixin {
     _pool_shutdown.store(false);
     _workers.reserve(num_threads);
     for (size_t i = 0; i < num_threads; ++i) {
-      _workers.emplace_back([this]() { worker_loop(); });
+      _workers.emplace_back([this]() { _worker_loop(); });
     }
   }
 
@@ -119,8 +119,7 @@ struct _ThreadPoolMixin {
     });
   }
 
- private:
-  void worker_loop() {
+  void _worker_loop() {
     while (true) {
       Task task;
       {

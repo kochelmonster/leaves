@@ -405,18 +405,7 @@ struct _MemoryMapFile {
       if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
         if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
         DB tmp(*this, _memory->dbs[i].offset, i);
-
-        // Return the DB's areas back into storage using head/tail pattern
-        auto read_txn = tmp.template resolve<typename DB::Transaction>(&tmp._header->read_txn);
-        if (tmp._header->area_list_head_single && read_txn->area_list_tail_single) {
-          _memory->area_pool.return_single_areas(tmp._header->area_list_head_single,
-                                                 read_txn->area_list_tail_single, *this);
-        }
-        if (tmp._header->area_list_head_multi && read_txn->area_list_tail_multi) {
-          _memory->area_pool.return_multi_areas(tmp._header->area_list_head_multi,
-                                                read_txn->area_list_tail_multi, *this);
-        }
-
+        tmp.return_areas();
         _memory->dbs[i].offset = 0;
         flush();
         return;
