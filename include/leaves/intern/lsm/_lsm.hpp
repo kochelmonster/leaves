@@ -1,24 +1,32 @@
 /*
 Todos: 
-  - Zombie count ist schlecht statt dessen L0DB mit erweiterten header für ref count.
   - Löschen -> node zombies
   - big values -> beide l0 sollen mit dem gleichen root arbeiten
   - was ist mit rollback? Kein l1 commit nach merge. 
        Eine Haupttransaction, die die roots für l0 hält
-*/
+  
+  
+  _lsm_db->flush();
+
+  while (_header->merge_in_progress.load()) {
+      std::this_thread::yield();
+    }
+
+  */
 
 #ifndef _LEAVES_LSM_HPP
 #define _LEAVES_LSM_HPP
 
 #include <atomic>
-#include <chrono>
+#include <algorithm>
+#include <fstream>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <thread>
-#include <unordered_map>
+#include <vector>
 
 #include "../db/_db.hpp"
+#include "../db/_check.hpp"
 #include "../util/_merger.hpp"
 
 namespace leaves {
@@ -34,31 +42,34 @@ namespace leaves {
  * - Background thread merges L0 into L1 when L0 reaches threshold
  * - Reads merge L0 and L1 cursors, preferring L0 for same key
  * - Double buffering: two L0 stores to avoid write stalls during merge
- * - Reference counting: keeps L0 alive while cursors hold references
- * - Zombie L0s: when L0 can't be reset due to refs, it becomes a zombie
+ * - Reference counting: embedded in L0 extended header
+ * - Zombie L0s: when L0 can't be reset due to refs, marked as zombie and replaced
  */
-
-/**
- * @brief Persistent linked list entry for zombie L0 databases
- */
-struct ZombieL0Entry {
-  offset_t db_header;  // The zombie L0 database header
-  offset_t next;       // Next zombie in linked list (0 = end)
-};
 
 template <typename Traits_>
 struct _LSMCursor;
 
 /**
+ * @brief Extended DB header for L0 databases with embedded reference counting
+ *
+ * Each L0 tracks its own refs and zombie state in its header.
+ */
+template <typename Storage_>
+struct _L0DBHeader : public _DBHeader<Storage_> {
+  std::atomic<uint32_t> refs{0};      // Cursor reference count
+  std::atomic<bool> is_zombie{false}; // True when replaced but still has refs
+};
+
+/**
  * @brief Handler for LSM merge operations - prefer newer values
  */
 template <typename CursorDst>
-struct _LSMMergeHandler {
+struct _LSMMergePolicy {
   CursorDst& cursor;
 
-  _LSMMergeHandler(CursorDst& c) : cursor(c) {}
+  _LSMMergePolicy(CursorDst& c) : cursor(c) {}
 
-  bool operator()(const std::string&, const Slice&, const Slice&) {
+  bool check_overwrite(const std::string&, const Slice&, const Slice&) {
     return true;  // Always overwrite with newer value
   }
 
@@ -77,7 +88,8 @@ struct _LSMMergeHandler {
 /**
  * @brief Header for LSM database
  *
- * Contains references to L0 (double-buffered) and L1 databases
+ * Contains references to L0 (double-buffered) and L1 databases.
+ * L0 ref counts are embedded in each L0's _L0DBHeader.
  */
 template <typename Storage_>
 struct _LSMHeader {
@@ -93,18 +105,11 @@ struct _LSMHeader {
   // L1: read-optimized level
   offset_t l1_header;
 
-  // Reference counts for L0 buffers (cursors holding references)
-  std::atomic<uint32_t> l0_a_refs;
-  std::atomic<uint32_t> l0_b_refs;
-
   // Lock for merge operations
   Mutex merge_lock;
 
   // Merge state
   std::atomic<bool> merge_in_progress;
-
-  // Head of zombie L0 linked list (for crash recovery)
-  offset_t zombie_list_head;
 
   // Statistics
   std::atomic<uint64_t> l0_size;  // Approximate size of current L0
@@ -113,7 +118,8 @@ struct _LSMHeader {
 /**
  * @brief LSM Database implementation
  *
- * Wraps two _DB instances (L0 and L1) with LSM semantics
+ * Wraps two _DB instances (L0 and L1) with LSM semantics.
+ * L0 databases use extended header with embedded ref counts.
  */
 template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
@@ -123,6 +129,9 @@ struct _LSMDB {
   typedef Transaction_ Transaction;
   typedef _LSMDB<Storage_, Transaction_, DBHeader_> LSMDB;
   typedef _DB<Storage_, Transaction_, DBHeader_> DB;
+  // L0 uses extended header with embedded refs
+  typedef _L0DBHeader<Storage_> L0DBHeader;
+  typedef _DB<Storage_, Transaction_, L0DBHeader> L0DB;
   typedef _LSMHeader<Storage_> LSMHeader;
   using Traits = typename Storage::Traits;
   using Mutex = typename Storage::Mutex;
@@ -138,10 +147,14 @@ struct _LSMDB {
   header_ptr _header;
   uint16_t _index;
 
-  // The actual L0 and L1 databases
-  std::unique_ptr<DB> _l0_a;
-  std::unique_ptr<DB> _l0_b;
+  // The actual L0 (with extended header) and L1 databases
+  std::unique_ptr<L0DB> _l0_a;
+  std::unique_ptr<L0DB> _l0_b;
   std::unique_ptr<DB> _l1;
+
+  // Zombie L0s - kept alive until refs drop to 0
+  std::vector<std::unique_ptr<L0DB>> _zombies;
+  std::mutex _zombie_mutex;
 
   // Merge threshold (bytes in L0 before triggering merge)
   uint64_t _merge_threshold = 64 * 1024 * 1024;  // 64 MB default
@@ -150,18 +163,13 @@ struct _LSMDB {
   std::atomic<bool> _shutdown{false};
   std::atomic<bool> _merge_scheduled{false};
 
-  // Zombie L0 tracking (in-memory) - use uint64_t keys for hash map compatibility
-  std::shared_mutex _zombie_mutex;
-  std::unordered_map<uint64_t, std::atomic<uint32_t>> _zombie_refs;
-  std::unordered_map<uint64_t, std::unique_ptr<DB>> _zombie_dbs;
-
   _LSMDB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _index(index) {
     // Initialize L0 and L1 from existing headers - all share parent's index
-    _l0_a = std::make_unique<DB>(storage, _header->l0_a_header, index);
-    _l0_b = std::make_unique<DB>(storage, _header->l0_b_header, index);
+    _l0_a = std::make_unique<L0DB>(storage, _header->l0_a_header, index);
+    _l0_b = std::make_unique<L0DB>(storage, _header->l0_b_header, index);
     _l1 = std::make_unique<DB>(storage, _header->l1_header, index);
   }
 
@@ -192,211 +200,124 @@ struct _LSMDB {
     uint16_t header_size = padding(sizeof(LSMHeader), Traits::PAGE_SIZES[0]);
     offset_t base = *header + header_size;
 
-    // Initialize L0 A
+    // Initialize L0 A (with extended header)
     _header->l0_a_header = base;
-    _l0_a = std::make_unique<DB>(_storage, &_header->l0_a_header, _index);
+    _l0_a = std::make_unique<L0DB>(_storage, &_header->l0_a_header, _index);
 
-    // Initialize L0 B
+    // Initialize L0 B (with extended header)
     _header->l0_b_header = base + Traits::AREA_SIZE;
-    _l0_b = std::make_unique<DB>(_storage, &_header->l0_b_header, _index);
+    _l0_b = std::make_unique<L0DB>(_storage, &_header->l0_b_header, _index);
 
     // Initialize L1
     _header->l1_header = base + 2 * Traits::AREA_SIZE;
     _l1 = std::make_unique<DB>(_storage, &_header->l1_header, _index);
 
     _header->active_l0.store(0);
-    _header->l0_a_refs.store(0);
-    _header->l0_b_refs.store(0);
     _header->merge_in_progress.store(false);
     _header->l0_size.store(0);
-    _header->zombie_list_head = 0;  // Empty zombie list
 
     _storage.make_dirty(_header);
     _storage.flush();
   }
 
   // Get the currently active L0 for writes
-  DB* active_l0() {
+  L0DB* active_l0() {
     return _header->active_l0.load() == 0 ? _l0_a.get() : _l0_b.get();
   }
 
   // Get the inactive L0 (being merged or empty)
-  DB* inactive_l0() {
+  L0DB* inactive_l0() {
     return _header->active_l0.load() == 0 ? _l0_b.get() : _l0_a.get();
   }
 
   DB* l1() { return _l1.get(); }
 
-  // Increment reference count for a specific L0
-  void ref_l0(uint8_t which) {
-    if (which == 0)
-      _header->l0_a_refs.fetch_add(1);
-    else
-      _header->l0_b_refs.fetch_add(1);
+  // Increment reference count for an L0 (uses embedded header refs)
+  void ref_l0(L0DB* l0) {
+    l0->_header->refs.fetch_add(1);
   }
 
-  // Decrement reference count for a specific L0
-  void unref_l0(uint8_t which) {
-    if (which == 0)
-      _header->l0_a_refs.fetch_sub(1);
-    else
-      _header->l0_b_refs.fetch_sub(1);
-  }
-
-  // Decrement reference count for a zombie L0
-  // If refs drop to 0, schedule cleanup
-  void unref_zombie(offset_t zombie_header) {
-    uint64_t key = zombie_header._offset;
-    std::shared_lock lock(_zombie_mutex);
-    auto it = _zombie_refs.find(key);
-    if (it != _zombie_refs.end()) {
-      if (it->second.fetch_sub(1) == 1) {
-        // Refs dropped to 0, schedule cleanup
-        lock.unlock();
-        schedule_zombie_cleanup(zombie_header);
+  // Decrement reference count for an L0
+  // If refs drop to 0 and it's a zombie, schedule cleanup
+  void unref_l0(L0DB* l0) {
+    if (l0->_header->refs.fetch_sub(1) == 1) {
+      // Refs dropped to 0
+      if (l0->_header->is_zombie.load()) {
+        schedule_zombie_cleanup(l0);
       }
     }
   }
-
-  // Reference a zombie L0
-  void ref_zombie(offset_t zombie_header) {
-    uint64_t key = zombie_header._offset;
-    std::shared_lock lock(_zombie_mutex);
-    auto it = _zombie_refs.find(key);
-    if (it != _zombie_refs.end()) {
-      it->second.fetch_add(1);
-    }
-  }
-
   // Schedule cleanup of a zombie L0
-  void schedule_zombie_cleanup(offset_t zombie_header) {
-    _storage.submit_task([this, zombie_header]() {
-      cleanup_zombie(zombie_header);
+  void schedule_zombie_cleanup(L0DB* l0) {
+    _storage.submit_task([this, l0]() {
+      cleanup_zombie(l0);
     });
   }
 
-  // Clean up a zombie L0: remove from list, free memory
-  void cleanup_zombie(offset_t zombie_header) {
-    uint64_t key = zombie_header._offset;
-    std::unique_lock lock(_zombie_mutex);
+  // Clean up a zombie L0: return its areas, remove from zombie list
+  void cleanup_zombie(L0DB* zombie) {
+    std::lock_guard lock(_zombie_mutex);
     
-    // Remove from in-memory tracking
-    _zombie_refs.erase(key);
-    auto db_it = _zombie_dbs.find(key);
-    if (db_it != _zombie_dbs.end()) {
-      db_it->second->return_areas();
-      _zombie_dbs.erase(db_it);
+    // Find and remove from zombie list
+    auto it = std::find_if(_zombies.begin(), _zombies.end(),
+        [zombie](const std::unique_ptr<L0DB>& z) { return z.get() == zombie; });
+    
+    if (it != _zombies.end()) {
+      (*it)->return_areas();
+      _zombies.erase(it);
     }
-    
-    // Remove from persistent linked list
-    remove_zombie_from_list(zombie_header);
-  }
-
-  // Remove a zombie from the persistent linked list
-  void remove_zombie_from_list(offset_t zombie_header) {
-    offset_t* prev_ptr = &_header->zombie_list_head;
-    offset_t current = _header->zombie_list_head;
-    
-    while (current != 0) {
-      auto raw_ptr = _storage.resolve(&current, READ);
-      ZombieL0Entry* entry = reinterpret_cast<ZombieL0Entry*>(&*raw_ptr);
-      if (entry->db_header == zombie_header) {
-        // Found it - unlink
-        *prev_ptr = entry->next;
-        _storage.make_dirty(_header);
-        // Free the zombie entry itself
-        // (the DB areas were already freed by return_areas)
-        return;
-      }
-      prev_ptr = &entry->next;
-      current = entry->next;
-    }
-  }
-
-  // Create a zombie from an L0 that can't be reset, atomically replacing it with a fresh L0
-  offset_t zombify_l0(uint8_t which) {
-    std::unique_lock lock(_zombie_mutex);
-    
-    // Get the DB header offset BEFORE we change it
-    offset_t db_header = which == 0 ? _header->l0_a_header : _header->l0_b_header;
-    uint64_t key = db_header._offset;
-    
-    // Create zombie entry in storage
-    auto area = _storage.alloc_single_area();
-    offset_t entry_offset = area->content_offset();
-    auto raw_ptr = _storage.resolve(&entry_offset, READ);
-    ZombieL0Entry* entry = reinterpret_cast<ZombieL0Entry*>(&*raw_ptr);
-    entry->db_header = db_header;
-    entry->next = _header->zombie_list_head;
-    _header->zombie_list_head = entry_offset;
-    _storage.make_dirty(_header);
-    
-    // Get current ref count - this is how many cursors are using this L0
-    // These cursors will call unref and we need to track when it hits 0
-    uint32_t refs = which == 0 ? _header->l0_a_refs.load() 
-                                : _header->l0_b_refs.load();
-    _zombie_refs[key].store(refs);
-    
-    // Create new L0 BEFORE moving old one to ensure no null window
-    auto new_area = _storage.alloc_single_area();
-    offset_t new_header = new_area->content_offset();
-    auto new_db = std::make_unique<DB>(_storage, &new_header, _index);
-    
-    // Atomically swap: move old to zombie, install new
-    if (which == 0) {
-      _zombie_dbs[key] = std::move(_l0_a);
-      _l0_a = std::move(new_db);
-      _header->l0_a_header = new_header;
-      _header->l0_a_refs.store(0);
-    } else {
-      _zombie_dbs[key] = std::move(_l0_b);
-      _l0_b = std::move(new_db);
-      _header->l0_b_header = new_header;
-      _header->l0_b_refs.store(0);
-    }
-    _storage.make_dirty(_header);
-    
-    return db_header;
-  }
-
-  // Get a zombie DB for cursor creation
-  DB* get_zombie_db(offset_t zombie_header) {
-    uint64_t key = zombie_header._offset;
-    std::shared_lock lock(_zombie_mutex);
-    auto it = _zombie_dbs.find(key);
-    return it != _zombie_dbs.end() ? it->second.get() : nullptr;
   }
 
   // Prepare inactive L0 for reuse: either reset it or zombify it
   // Returns true if a zombie was created
   bool prepare_inactive_l0() {
-    uint8_t active = _header->active_l0.load();
-    uint8_t inactive = active == 0 ? 1 : 0;
+    L0DB* inactive = inactive_l0();
     
     // Check if inactive L0 has any refs
-    uint32_t refs = inactive == 0 ? _header->l0_a_refs.load() 
-                                   : _header->l0_b_refs.load();
+    uint32_t refs = inactive->_header->refs.load();
     
     if (refs == 0) {
       // No refs - we can reset it directly
-      if (inactive == 0) {
-        _l0_a->reset(&_header->l0_a_header);
-      } else {
+      uint8_t active = _header->active_l0.load();
+      if (active == 0) {
         _l0_b->reset(&_header->l0_b_header);
+      } else {
+        _l0_a->reset(&_header->l0_a_header);
       }
       _storage.make_dirty(_header);
       return false;
     } else {
-      // Has refs - zombify it (which also creates fresh L0 atomically)
-      zombify_l0(inactive);
+      // Has refs - mark as zombie and create fresh L0
+      zombify_inactive_l0();
       return true;
     }
   }
 
-  // Get reference count for inactive L0
-  uint32_t inactive_l0_refs() {
-    return _header->active_l0.load() == 0 ? _header->l0_b_refs.load()
-                                          : _header->l0_a_refs.load();
+  // Mark inactive L0 as zombie and create fresh replacement
+  void zombify_inactive_l0() {
+    std::lock_guard lock(_zombie_mutex);
+    
+    uint8_t active = _header->active_l0.load();
+    
+    // Create new L0 BEFORE moving old one to zombie list
+    auto new_area = _storage.alloc_single_area();
+    offset_t new_header = new_area->content_offset();
+    auto new_db = std::make_unique<L0DB>(_storage, &new_header, _index);
+    
+    if (active == 0) {
+      // B is inactive - zombify it
+      _l0_b->_header->is_zombie.store(true);
+      _zombies.push_back(std::move(_l0_b));
+      _l0_b = std::move(new_db);
+      _header->l0_b_header = new_header;
+    } else {
+      // A is inactive - zombify it
+      _l0_a->_header->is_zombie.store(true);
+      _zombies.push_back(std::move(_l0_a));
+      _l0_a = std::move(new_db);
+      _header->l0_a_header = new_header;
+    }
+    _storage.make_dirty(_header);
   }
 
   cursor_ptr create_cursor() { return std::make_unique<Cursor>(this); }
@@ -429,65 +350,78 @@ struct _LSMDB {
   }
 
   // Schedule a merge task on the storage's thread pool
-  void schedule_merge() {
-    if (_merge_scheduled.exchange(true)) return;  // Already scheduled
-    if (_shutdown.load()) return;
+  // This is called from the writing thread when merge threshold is reached.
+  // Returns true if the future active L0 was zombified (caller should recreate cursor)
+  // Flow:
+  // 1. Wait for any previous merge to complete
+  // 2. Prepare the inactive L0 (reset or zombify) - it will become active
+  // 3. Mark merge_in_progress BEFORE switching (so new cursors see both L0s)
+  // 4. Switch L0 buffers - new writes go to the fresh L0
+  // 5. Start background merge of the now-inactive L0 into L1
+  bool schedule_merge() {
+    if (_merge_scheduled.exchange(true)) return false;  // Already scheduled
+    if (_shutdown.load()) return false;
 
+    // 1. Wait for previous merge to complete
+    while (_header->merge_in_progress.load()) {
+      std::this_thread::yield();
+    }
+
+    // 2. Prepare the inactive L0 (which will become active after switch)
+    // This resets it if no refs, or zombifies it if cursors still hold refs
+    bool zombified = prepare_inactive_l0();
+
+    // 3. Mark merge as in progress BEFORE switching
+    // This ensures any cursor created after this point will see both L0s
+    _header->merge_in_progress.store(true);
+    _storage.make_dirty(_header);
+
+    // 4. Switch L0 buffers - new writes now go to the fresh (just prepared) L0
+    switch_l0();
+
+    // 5. Start background merge task
     _storage.submit_task([this]() {
       if (!_shutdown.load()) {
         do_merge();
       }
       _merge_scheduled.store(false);
     });
+
+    return zombified;
   }
 
-  // Perform merge of inactive L0 into L1
+  // Perform merge of inactive L0 into L1 (runs on background thread)
+  // The L0 switch has already happened - we just merge the inactive L0.
   void do_merge() {
     std::scoped_lock lock(_header->merge_lock);
-    if (_header->merge_in_progress.load()) return;
 
-    _header->merge_in_progress.store(true);
-
-    // Switch L0 buffers - new writes go to the new buffer
-    switch_l0();
-
-    // Get the L0 that we're merging FROM (it's now inactive)
-    // We need to get the actual DB pointer - it could be the regular L0
-    // or if it's already been zombified, we need to merge from the zombie
-    DB* merge_source_l0;
-    uint8_t active = _header->active_l0.load();
-    if (active == 0) {
-      merge_source_l0 = _l0_b.get();  // B is inactive
-    } else {
-      merge_source_l0 = _l0_a.get();  // A is inactive
-    }
+    // Get the L0 that we're merging FROM (the now-inactive one with data)
+    L0DB* merge_source_l0 = inactive_l0();
 
     // Merge L0 into L1
     {
-      auto l0_cursor = merge_source_l0->create_cursor();
       auto l1_cursor = _l1->create_cursor();
 
       using L1Cursor = typename DB::Cursor;
-      _LSMMergeHandler<L1Cursor> handler(*l1_cursor);
+      _LSMMergePolicy<L1Cursor> handler(*l1_cursor);
 
-      l0_cursor->first();
-      if (l0_cursor->is_valid()) {
+      // Get source root offset
+      offset_e* l0_root = &merge_source_l0->txn()->root;
+      if (*l0_root) {  // Only merge if L0 has data
         l1_cursor->start_transaction();
-        _Merger merger(*l1_cursor, *l0_cursor, handler);
 
-        while (l0_cursor->is_valid()) {
-          merger.exec();
-          l0_cursor->next();
-        }
+        // Get destination root offset (from current transaction)
+        offset_e* l1_root = &_l1->txn()->root;
+
+        // Use new tree-based merge API
+        _Merger merger(*_l1, l1_root, *merge_source_l0, l0_root, handler);
+        merger.exec();
 
         l1_cursor->commit();
       }
-    }  // l0_cursor and l1_cursor destroyed here
+    }  // l1_cursor destroyed here
 
-    // Merge is complete. Now prepare the inactive L0 for next use.
-    // If it has refs, zombify it and create fresh. Otherwise reset.
-    prepare_inactive_l0();
-
+    // Merge complete
     _header->merge_in_progress.store(false);
     _storage.make_dirty(_header);
   }
@@ -499,30 +433,24 @@ struct _LSMDB {
     new (&_header->merge_lock) Mutex();
     _header->merge_in_progress.store(false);
 
-    // Clean up zombie list - after crash, all zombie refs are gone
-    // so we can reclaim all zombies
-    reclaim_all_zombies();
+    // After crash, clear any zombie flags and reset refs
+    _l0_a->_header->refs.store(0);
+    _l0_a->_header->is_zombie.store(false);
+    _l0_b->_header->refs.store(0);
+    _l0_b->_header->is_zombie.store(false);
+    
+    // Clear in-memory zombie list and reclaim their storage
+    {
+      std::lock_guard lock(_zombie_mutex);
+      for (auto& zombie : _zombies) {
+        zombie->return_areas();
+      }
+      _zombies.clear();
+    }
 
     // Reschedule merge if L0 needs compaction
     if (should_merge()) {
       schedule_merge();
-    }
-  }
-
-  // Reclaim all zombies after a crash recovery
-  void reclaim_all_zombies() {
-    while (_header->zombie_list_head != 0) {
-      offset_t entry_offset = _header->zombie_list_head;
-      auto raw_ptr = _storage.resolve(&entry_offset, READ);
-      ZombieL0Entry* entry = reinterpret_cast<ZombieL0Entry*>(&*raw_ptr);
-      
-      // Load the zombie DB to get its areas
-      DB zombie_db(_storage, entry->db_header, _index);
-      zombie_db.return_areas();
-      
-      // Remove from list
-      _header->zombie_list_head = entry->next;
-      _storage.make_dirty(_header);
     }
   }
 };
@@ -530,7 +458,8 @@ struct _LSMDB {
 /**
  * @brief LSM Cursor that merges L0 and L1 cursors
  *
- * Presents a unified view of both levels, preferring L0 for same key
+ * Presents a unified view of both levels, preferring L0 for same key.
+ * Uses L0DB pointers with embedded ref counts for lifecycle management.
  */
 template <typename Traits_>
 struct _LSMCursor {
@@ -540,73 +469,49 @@ struct _LSMCursor {
   typedef _LSMDB<typename DB::Storage, typename DB::Transaction,
                  _DBHeader<typename DB::Storage>>
       LSMDB;
-  typedef _TransactionalCursor<Traits_> InnerCursor;
+  typedef typename LSMDB::L0DB L0DB;
+  // Separate cursor types for L0 (extended header) and L1 (base header)
+  typedef _TransactionalCursor<typename L0DB::CursorTraits> L0Cursor;
+  typedef _TransactionalCursor<Traits_> L1Cursor;
   using offset_e = typename Traits::offset_e;
 
   LSMDB* _lsm_db;
-  std::shared_ptr<InnerCursor> _l0_cursor;        // Active L0 cursor
-  std::shared_ptr<InnerCursor> _l0_inactive_cursor;  // Inactive L0 cursor (during merge)
-  std::shared_ptr<InnerCursor> _l1_cursor;
-  uint8_t _l0_which;  // Which L0 buffer this cursor is using (0 or 1)
-  uint8_t _l0_inactive_which{0};  // Which L0 buffer the inactive cursor uses
-  offset_e _l0_header_offset{0};  // Header offset of the L0 we're using
-  offset_e _l0_inactive_header_offset{0};  // Header offset of inactive L0
-  bool _has_inactive_l0{false};  // Whether we have an inactive L0 cursor
+  std::shared_ptr<L0Cursor> _l0_a_cursor;
+  std::shared_ptr<L0Cursor> _l0_b_cursor;
+  L0Cursor* _l0_active;    // Points to active L0 cursor
+  L0Cursor* _l0_inactive;  // Points to inactive L0 cursor
+  std::shared_ptr<L1Cursor> _l1_cursor;
+  L0DB* _l0_a_db{nullptr};
+  L0DB* _l0_b_db{nullptr};
   uint64_t _id{0};
 
   // Which cursor is currently "active" (pointing to current position)
   enum class Active { L0, L0_INACTIVE, L1, BOTH, NONE } _active = Active::NONE;
 
-  _LSMCursor(LSMDB* lsm_db)
-      : _lsm_db(lsm_db), _l0_which(lsm_db->_header->active_l0.load()) {
+  _LSMCursor(LSMDB* lsm_db) : _lsm_db(lsm_db) {
     _id = lsm_db->new_cursor_id();
 
-    // Reference the L0 we're using
-    lsm_db->ref_l0(_l0_which);
-    _l0_header_offset = _l0_which == 0 ? lsm_db->_header->l0_a_header 
-                                        : lsm_db->_header->l0_b_header;
+    // Reference and create cursors for both L0 databases
+    _l0_a_db = lsm_db->_l0_a.get();
+    _l0_b_db = lsm_db->_l0_b.get();
+    lsm_db->ref_l0(_l0_a_db);
+    lsm_db->ref_l0(_l0_b_db);
 
-    // Create cursors for both levels
-    DB* l0 = _l0_which == 0 ? lsm_db->_l0_a.get() : lsm_db->_l0_b.get();
-    _l0_cursor = l0->create_cursor();
+    _l0_a_cursor = _l0_a_db->create_cursor();
+    _l0_b_cursor = _l0_b_db->create_cursor();
     _l1_cursor = lsm_db->l1()->create_cursor();
 
-    // If merge is in progress, also create cursor for inactive L0
-    // We ref-count it so the merge knows not to reset it until we're done
-    if (lsm_db->_header->merge_in_progress.load()) {
-      _l0_inactive_which = _l0_which == 0 ? 1 : 0;
-      lsm_db->ref_l0(_l0_inactive_which);
-      _l0_inactive_header_offset = _l0_inactive_which == 0 
-          ? lsm_db->_header->l0_a_header 
-          : lsm_db->_header->l0_b_header;
-      DB* inactive_l0 = _l0_inactive_which == 0 ? lsm_db->_l0_a.get() : lsm_db->_l0_b.get();
-      _l0_inactive_cursor = inactive_l0->create_cursor();
-      _has_inactive_l0 = true;
-    }
+    _refresh_l0_pointers();
   }
 
   ~_LSMCursor() {
-    // Release L0 reference
-    // Check if it became a zombie - compare header offsets
-    if (_lsm_db->get_zombie_db(_l0_header_offset)) {
-      _lsm_db->unref_zombie(_l0_header_offset);
-    } else {
-      _lsm_db->unref_l0(_l0_which);
-    }
-    
-    // Release inactive L0 reference if we have one
-    if (_has_inactive_l0) {
-      if (_lsm_db->get_zombie_db(_l0_inactive_header_offset)) {
-        _lsm_db->unref_zombie(_l0_inactive_header_offset);
-      } else {
-        _lsm_db->unref_l0(_l0_inactive_which);
-      }
-    }
+    _lsm_db->unref_l0(_l0_a_db);
+    _lsm_db->unref_l0(_l0_b_db);
   }
 
   bool is_valid() const {
-    return _l0_cursor->is_valid() || _l1_cursor->is_valid() ||
-           (_has_inactive_l0 && _l0_inactive_cursor->is_valid());
+    return _l0_active->is_valid() || _l1_cursor->is_valid() ||
+           (_lsm_db->_header->merge_in_progress.load() && _l0_inactive->is_valid());
   }
 
   Slice key() const {
@@ -614,10 +519,10 @@ struct _LSMCursor {
       case Active::L1:  // Most common case - majority of data is in L1
         return _l1_cursor->key();
       case Active::L0_INACTIVE:
-        return _l0_inactive_cursor->key();
+        return _l0_inactive->key();
       case Active::L0:
       case Active::BOTH:
-        return _l0_cursor->key();
+        return _l0_active->key();
       default:
         return Slice();
     }
@@ -628,32 +533,32 @@ struct _LSMCursor {
       case Active::L1:  // Most common case - majority of data is in L1
         return _l1_cursor->value();
       case Active::L0_INACTIVE:
-        return _l0_inactive_cursor->value();
+        return _l0_inactive->value();
       case Active::L0:
       case Active::BOTH:  // L0 takes precedence for overwrites
-        return _l0_cursor->value();
+        return _l0_active->value();
       default:
         return Slice();
     }
   }
 
   void find(const Slice& key) {
-    _l0_cursor->find(key);
-    if (_has_inactive_l0) _l0_inactive_cursor->find(key);
+    _l0_active->find(key);
+    _l0_inactive->find(key);
     _l1_cursor->find(key);
     _update_active();
   }
 
   void first() {
-    _l0_cursor->first();
-    if (_has_inactive_l0) _l0_inactive_cursor->first();
+    _l0_active->first();
+    _l0_inactive->first();
     _l1_cursor->first();
     _update_active();
   }
 
   void last() {
-    _l0_cursor->last();
-    if (_has_inactive_l0) _l0_inactive_cursor->last();
+    _l0_active->last();
+    _l0_inactive->last();
     _l1_cursor->last();
     _update_active_reverse();
   }
@@ -662,19 +567,19 @@ struct _LSMCursor {
     // Advance whichever cursor(s) are at current position
     switch (_active) {
       case Active::L0:
-        _l0_cursor->next();
+        _l0_active->next();
         break;
       case Active::L0_INACTIVE:
-        _l0_inactive_cursor->next();
+        _l0_inactive->next();
         break;
       case Active::L1:
         _l1_cursor->next();
         break;
       case Active::BOTH:
-        _l0_cursor->next();
-        if (_has_inactive_l0 && _l0_inactive_cursor->is_valid() &&
-            _l0_inactive_cursor->key() == _l0_cursor->key()) {
-          _l0_inactive_cursor->next();
+        _l0_active->next();
+        if (_lsm_db->_header->merge_in_progress.load() && _l0_inactive->is_valid() &&
+            _l0_inactive->key() == _l0_active->key()) {
+          _l0_inactive->next();
         }
         _l1_cursor->next();
         break;
@@ -687,19 +592,19 @@ struct _LSMCursor {
   void prev() {
     switch (_active) {
       case Active::L0:
-        _l0_cursor->prev();
+        _l0_active->prev();
         break;
       case Active::L0_INACTIVE:
-        _l0_inactive_cursor->prev();
+        _l0_inactive->prev();
         break;
       case Active::L1:
         _l1_cursor->prev();
         break;
       case Active::BOTH:
-        _l0_cursor->prev();
-        if (_has_inactive_l0 && _l0_inactive_cursor->is_valid() &&
-            _l0_inactive_cursor->key() == _l0_cursor->key()) {
-          _l0_inactive_cursor->prev();
+        _l0_active->prev();
+        if (_lsm_db->_header->merge_in_progress.load() && _l0_inactive->is_valid() &&
+            _l0_inactive->key() == _l0_active->key()) {
+          _l0_inactive->prev();
         }
         _l1_cursor->prev();
         break;
@@ -709,55 +614,94 @@ struct _LSMCursor {
     _update_active_reverse();
   }
 
-  // Write operations go to L0
-  void* reserve(size_t size) {
+  // Write operations go to active L0
+  void* _reserve(size_t size) {
     // Need to find position in L0 if not already there
     if (_active == Active::L1 || _active == Active::NONE) {
       if (_l1_cursor->is_valid()) {
-        _l0_cursor->find(_l1_cursor->key());
+        _l0_active->find(_l1_cursor->key());
       }
     }
-    return _l0_cursor->reserve(size);
+    return _l0_active->reserve(size);
   }
 
   void value(const Slice& val) {
-    void* space = reserve(val.size());
+    void* space = _reserve(val.size());
     memcpy(space, val.data(), val.size());
     _lsm_db->flush();
 
     // Update L0 size estimate and trigger merge if needed
     _lsm_db->_header->l0_size.fetch_add(val.size());
     if (_lsm_db->should_merge()) {
-      _lsm_db->schedule_merge();
+      bool zombified = _lsm_db->schedule_merge();
+      if (zombified) {
+        // Future active L0 was zombified - reconnect to new L0
+        _reconnect_active_l0();
+      }
+      // Always refresh active/inactive pointers after L0 switch
+      _refresh_l0_pointers();
+    }
+  }
+
+  // Reconnect to the new active L0 after zombification
+  void _reconnect_active_l0() {
+    uint8_t active = _lsm_db->_header->active_l0.load();
+    
+    if (active == 0) {
+      // A is now active - it was replaced
+      L0DB* new_a = _lsm_db->_l0_a.get();
+      _lsm_db->unref_l0(_l0_a_db);
+      _l0_a_db = new_a;
+      _lsm_db->ref_l0(_l0_a_db);
+      _l0_a_cursor = _l0_a_db->create_cursor();
+    } else {
+      // B is now active - it was replaced
+      L0DB* new_b = _lsm_db->_l0_b.get();
+      _lsm_db->unref_l0(_l0_b_db);
+      _l0_b_db = new_b;
+      _lsm_db->ref_l0(_l0_b_db);
+      _l0_b_cursor = _l0_b_db->create_cursor();
+    }
+  }
+
+  // Refresh active/inactive pointers based on current active_l0 flag
+  void _refresh_l0_pointers() {
+    if (_lsm_db->_header->active_l0.load() == 0) {
+      _l0_active = _l0_a_cursor.get();
+      _l0_inactive = _l0_b_cursor.get();
+    } else {
+      _l0_active = _l0_b_cursor.get();
+      _l0_inactive = _l0_a_cursor.get();
     }
   }
 
   void remove() {
     // For LSM, we could use tombstones, but for now just remove from L0
     // if present, and mark as deleted somehow
-    if (_l0_cursor->is_valid()) {
-      _l0_cursor->remove();
+    if (_l0_active->is_valid()) {
+      _l0_active->remove();
     }
     // TODO: Handle tombstones for L1 deletes
   }
 
   bool start_transaction(bool non_blocking = false) {
-    return _l0_cursor->start_transaction(non_blocking);
+    return _l0_active->start_transaction(non_blocking);
   }
 
   tid_t prepare_commit(bool sync = false) {
-    return _l0_cursor->prepare_commit(sync);
+    return _l0_active->prepare_commit(sync);
   }
 
-  bool commit(bool sync = false) { return _l0_cursor->commit(sync); }
+  bool commit(bool sync = false) { return _l0_active->commit(sync); }
 
-  bool rollback() { return _l0_cursor->rollback(); }
+  bool rollback() { return _l0_active->rollback(); }
 
   // Determine which cursor is "active" based on key comparison
   // Priority: L0 (active) > L0 (inactive) > L1
   void _update_active() {
-    bool l0_valid = _l0_cursor->is_valid();
-    bool l0_inactive_valid = _has_inactive_l0 && _l0_inactive_cursor->is_valid();
+    bool merge_in_progress = _lsm_db->_header->merge_in_progress.load();
+    bool l0_valid = _l0_active->is_valid();
+    bool l0_inactive_valid = merge_in_progress && _l0_inactive->is_valid();
     bool l1_valid = _l1_cursor->is_valid();
 
     if (!l0_valid && !l0_inactive_valid && !l1_valid) {
@@ -770,12 +714,12 @@ struct _LSMCursor {
     Active min_cursor = Active::NONE;
 
     if (l0_valid) {
-      min_key = _l0_cursor->key();
+      min_key = _l0_active->key();
       min_cursor = Active::L0;
     }
 
     if (l0_inactive_valid) {
-      Slice key = _l0_inactive_cursor->key();
+      Slice key = _l0_inactive->key();
       if (min_cursor == Active::NONE || key.compare(min_key) < 0) {
         min_key = key;
         min_cursor = Active::L0_INACTIVE;
@@ -791,9 +735,9 @@ struct _LSMCursor {
     }
 
     // Check for ties - prefer L0 > L0_INACTIVE > L1
-    if (l0_valid && _l0_cursor->key().compare(min_key) == 0) {
+    if (l0_valid && _l0_active->key().compare(min_key) == 0) {
       _active = Active::L0;  // L0 active always wins for equal keys
-    } else if (l0_inactive_valid && _l0_inactive_cursor->key().compare(min_key) == 0) {
+    } else if (l0_inactive_valid && _l0_inactive->key().compare(min_key) == 0) {
       _active = Active::L0_INACTIVE;
     } else {
       _active = min_cursor;
@@ -802,8 +746,9 @@ struct _LSMCursor {
 
   // Same as _update_active but for reverse iteration
   void _update_active_reverse() {
-    bool l0_valid = _l0_cursor->is_valid();
-    bool l0_inactive_valid = _has_inactive_l0 && _l0_inactive_cursor->is_valid();
+    bool merge_in_progress = _lsm_db->_header->merge_in_progress.load();
+    bool l0_valid = _l0_active->is_valid();
+    bool l0_inactive_valid = merge_in_progress && _l0_inactive->is_valid();
     bool l1_valid = _l1_cursor->is_valid();
 
     if (!l0_valid && !l0_inactive_valid && !l1_valid) {
@@ -816,12 +761,12 @@ struct _LSMCursor {
     Active max_cursor = Active::NONE;
 
     if (l0_valid) {
-      max_key = _l0_cursor->key();
+      max_key = _l0_active->key();
       max_cursor = Active::L0;
     }
 
     if (l0_inactive_valid) {
-      Slice key = _l0_inactive_cursor->key();
+      Slice key = _l0_inactive->key();
       if (max_cursor == Active::NONE || key.compare(max_key) > 0) {
         max_key = key;
         max_cursor = Active::L0_INACTIVE;
@@ -837,12 +782,34 @@ struct _LSMCursor {
     }
 
     // Check for ties - prefer L0 > L0_INACTIVE > L1
-    if (l0_valid && _l0_cursor->key().compare(max_key) == 0) {
+    if (l0_valid && _l0_active->key().compare(max_key) == 0) {
       _active = Active::L0;  // L0 active always wins for equal keys
-    } else if (l0_inactive_valid && _l0_inactive_cursor->key().compare(max_key) == 0) {
+    } else if (l0_inactive_valid && _l0_inactive->key().compare(max_key) == 0) {
       _active = Active::L0_INACTIVE;
     } else {
       _active = max_cursor;
+    }
+  }
+
+  // Debug: dump all three tries to yaml files
+  void dump_debug() {
+    // Dump L0 A
+    {
+      std::ofstream out("/tmp/l0_a.yaml");
+      auto root = _l0_a_db->txn()->root;
+      _Dumper(*_l0_a_db, root, false).dump(out);
+    }
+    // Dump L0 B
+    {
+      std::ofstream out("/tmp/l0_b.yaml");
+      auto root = _l0_b_db->txn()->root;
+      _Dumper(*_l0_b_db, root, false).dump(out);
+    }
+    // Dump L1
+    {
+      std::ofstream out("/tmp/l1.yaml");
+      auto root = _lsm_db->l1()->txn()->root;
+      _Dumper(*_lsm_db->l1(), root, false).dump(out);
     }
   }
 };
