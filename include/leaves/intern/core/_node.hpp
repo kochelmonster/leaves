@@ -63,7 +63,7 @@ struct _TrieNode {
   static uint8_t ubit(uint8_t val) { return (val >> 5); }
   static uint32_t lbit(uint8_t val) { return (val & LOWER_MASK); }
   uint16_t size() const { return array_end(); }
-  uint16_t reduced_size(uint8_t new_compressed_len) const {
+  uint16_t changed_len(uint8_t new_compressed_len) const {
     uint16_t prefix_size =
         padding(sizeof(TrieNode) + new_compressed_len, sizeof(uint32_e));
     return align(prefix_size + lower_size() + array_size());
@@ -84,8 +84,13 @@ struct _TrieNode {
     uint16_t prefix_size =
         padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
     uint16_t lower_size_ = lower_size();
-    if (key != NONE && bits::count(_upper) > 1 && (_upper & (1 << ubit(key)))) {
-      lower_size_ -= sizeof(uint32_e);
+    if (key != NONE && (_upper & (1 << ubit(key)))) {
+      // Only decrement lower_size if this key is the only one in its lower
+      // bucket
+      int lidx = bits::index(_upper, ubit(key));
+      if (bits::count(lower()[lidx]) == 1) {
+        lower_size_ -= sizeof(uint32_e);
+      }
     }
     uint16_t array_size_ = (count() - 1) * sizeof(offset_e);
     return align(prefix_size + lower_size_ + array_size_);
@@ -129,6 +134,9 @@ struct _TrieNode {
   // create a trie node with a prefix and two keys; returns the array indexes
   // for key1 and key2
   std::pair<uint16_t, uint16_t> create(Slice prefix, int key1, int key2) {
+    assert(key1 >= NONE);
+    assert(key2 >= NONE);
+
     _compressed_len = prefix.size();
     memcpy(_compressed_data, prefix.data(), _compressed_len);
 
@@ -291,6 +299,7 @@ struct _TrieNode {
 
   // create a new trie node without the branch of key
   void create_remove(const TrieNode& src, int key) {
+    assert(src.isset(key));
     _compressed_len = src._compressed_len;
     memcpy(_compressed_data, src.compressed(), _compressed_len);
 
@@ -303,18 +312,26 @@ struct _TrieNode {
     int oidx;
     if (key != NONE) {
       uint8_t bit = ubit(key);
-      int lidx = bits::index(_upper, bit);
+      int lidx = bits::index(src._upper, bit);
+      uint32_e src_lower_val = src.lower()[lidx];
 
-      memcpy(lower_, src.lower(), bits::count(src._upper) * sizeof(uint32_e));
-      oidx = bits::count(lower_[lidx] & ((1 << lbit(key)) - 1)) +
+      // Calculate oidx using source value
+      oidx = bits::count(src_lower_val & ((1 << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
-      for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
+      for (int i = 0; i < lidx; i++) oidx += bits::count(src.lower()[i]);
 
-      lower_[lidx] &= ~(1 << lbit(key));
-      if (!lower_[lidx]) {
+      // Check if removing this bit will empty the lower bucket
+      uint32_e new_lower_val = src_lower_val & ~(1 << lbit(key));
+      if (!new_lower_val) {
+        // Remove the upper bit and copy lower array around the removed bucket
         _upper &= ~(1 << bit);
-        memmove(&lower_[lidx], &lower_[lidx + 1],
-                (bits::count(_upper) - lidx) * sizeof(uint32_e));
+        memcpy(lower_, src.lower(), lidx * sizeof(uint32_e));
+        memcpy(lower_ + lidx, src.lower() + lidx + 1,
+               (bits::count(src._upper) - lidx - 1) * sizeof(uint32_e));
+      } else {
+        // Keep the lower bucket with the bit removed
+        memcpy(lower_, src.lower(), bits::count(src._upper) * sizeof(uint32_e));
+        lower_[lidx] = new_lower_val;
       }
     } else {
       assert(src._array_len & NULL_MASK);
@@ -333,210 +350,220 @@ struct _TrieNode {
            (count() - oidx) * sizeof(offset_e));
   }
 
-  /**
-   * @brief Creates a TrieNode from an array of offsets for all possible byte
-   * values.
-   *
-   * This method builds a complete trie node by iterating through all 256
-   * possible byte values plus the NONE branch, creating the bitmap structure
-   * for only the branches that have non-zero offsets. This is useful for bulk
-   * creation of nodes where you have a pre-computed array of child offsets.
-   *
-   * @param prefix The compressed prefix data to store in the node.
-   * @param offsets Array of 257 offsets indexed by byte value (0-255) plus NONE
-   * at index -1. Non-zero values indicate branches to create; zero values are
-   * skipped.
-   *
-   * @note The offsets array must have NONE at index -1, accessible as
-   * offsets[NONE].
-   */
-  void create(const Slice& prefix, offset_e* offsets) {
-    assert(prefix.size() < 256);
-    _upper = 0;
-    _compressed_len = prefix.size();
-    memcpy(_compressed_data, prefix.data(), _compressed_len);
-    _lower_offset = calc_lower_start() / sizeof(uint32_e);
-    _array_offset = calc_array_start() / sizeof(offset_e);
+/**
+ * @brief Creates a TrieNode from an array of offsets for all possible byte
+ * values.
+ *
+ * This method builds a complete trie node by iterating through all 256
+ * possible byte values plus the NONE branch, creating the bitmap structure
+ * for only the branches that have non-zero offsets. This is useful for bulk
+ * creation of nodes where you have a pre-computed array of child offsets.
+ *
+ * @param prefix The compressed prefix data to store in the node.
+ * @param offsets Array of 257 offsets indexed by byte value (0-255) plus NONE
+ * at index -1. Non-zero values indicate branches to create; zero values are
+ * skipped.
+ *
+ * @note The offsets array must have NONE at index -1, accessible as
+ * offsets[NONE].
+ */
+void create(const Slice& prefix, offset_e* offsets) {
+  assert(prefix.size() < 256);
+  _compressed_len = prefix.size();
+  memcpy(_compressed_data, prefix.data(), _compressed_len);
 
-    uint16_t j = 0;
-    offset_e* array_ = array();
-    uint32_e* lower_ = lower();
-    memset(lower_, 0, lower_size());
-    if (offsets[NONE]) {
-      _array_len = 1 | TrieNode::NULL_MASK;
-      *array_++ = offsets[NONE];
-    } else
-      _array_len = 0;
-
-    for (int i = 0; i < 256; i++) {
-      if (offsets[i]) {
-        _array_len++;
-        *array_++ = offsets[i];
-        _upper |= (1 << ubit(i));
-        lower_[bits::index(_upper, ubit(i))] |= 1 << lbit(i);
-      }
+  // First pass: determine _upper bitmap
+  _upper = 0;
+  for (int i = 0; i < 256; i++) {
+    if (offsets[i]) {
+      _upper |= (1 << ubit(i));
     }
   }
 
-  /**
-   * @brief Creates a unified TrieNode by merging children from two source
-   * nodes.
-   *
-   * This method creates a new TrieNode that contains all children present in
-   * either src or dst (or both). The caller provides arrays where child
-   * offset pointers will be stored, allowing determination of which child
-   * offsets to use or merge.
-   *
-   * @param dst Pointer to the destination source TrieNode.
-   * @param src Pointer to the source TrieNode.
-   * @param dst_child Array of offset_e pointers to be filled with child offset
-   *                  pointers from dst node (nullptr if child doesn't exist).
-   * @param src_child Array of offset_e pointers to be filled with child offset
-   *                  pointers from src node (nullptr if child doesn't exist).
-   *                  Both arrays are indexed by unified children's position
-   *                  (NONE branch at index 0 if present, followed by byte
-   *                  values 0-255 in order).
-   *
-   * @note Both src and dst must have the same compressed prefix length and
-   * content.
-   */
-  template <typename TNode1, typename TNode2>
-  void create(TNode1& dst, TNode2& src,
-              const typename TNode1::offset_e* dst_child[257],
-              const typename TNode2::offset_e* src_child[257]) {
-    assert(src._compressed_len == dst._compressed_len);
-    assert(memcmp(src._compressed_data, dst._compressed_data,
-                  src._compressed_len) == 0);
+  // Now we can correctly calculate offsets
+  _lower_offset = calc_lower_start() / sizeof(uint32_e);
+  _array_offset = calc_array_start() / sizeof(offset_e);
 
-    // unify the children of src and dst
-    // and fill the provenance array with the corresponding offsets
+  offset_e* array_ = array();
+  uint32_e* lower_ = lower();
+  memset(lower_, 0, lower_size());
 
-    _upper = 0;
-    _compressed_len = src._compressed_len;
-    memcpy(_compressed_data, src.compressed(), _compressed_len);
+  if (offsets[NONE]) {
+    _array_len = 1 | TrieNode::NULL_MASK;
+    *array_++ = offsets[NONE];
+  } else {
+    _array_len = 0;
+  }
 
-    uint16_t idx = 0;  // index into provenance array
+  for (int i = 0; i < 256; i++) {
+    if (offsets[i]) {
+      _array_len++;
+      *array_++ = offsets[i];
+      lower_[bits::index(_upper, ubit(i))] |= 1 << lbit(i);
+    }
+  }
+}
 
-    // Handle NONE branch
-    bool src_has_none = src.has_none();
-    bool dst_has_none = dst.has_none();
-    if (src_has_none || dst_has_none) {
-      _array_len = 1 | TrieNode::NULL_MASK;
-      src_child[idx] = src_has_none ? src.offset(NONE) : nullptr;
-      dst_child[idx] = dst_has_none ? dst.offset(NONE) : nullptr;
+/**
+ * @brief Creates a unified TrieNode by merging children from two source
+ * nodes.
+ *
+ * This method creates a new TrieNode that contains all children present in
+ * either src or dst (or both). The caller provides arrays where child
+ * offset pointers will be stored, allowing determination of which child
+ * offsets to use or merge.
+ *
+ * @param dst Pointer to the destination source TrieNode.
+ * @param src Pointer to the source TrieNode.
+ * @param dst_child Array of offset_e pointers to be filled with child offset
+ *                  pointers from dst node (nullptr if child doesn't exist).
+ * @param src_child Array of offset_e pointers to be filled with child offset
+ *                  pointers from src node (nullptr if child doesn't exist).
+ *                  Both arrays are indexed by unified children's position
+ *                  (NONE branch at index 0 if present, followed by byte
+ *                  values 0-255 in order).
+ *
+ * @note Both src and dst must have the same compressed prefix length and
+ * content.
+ */
+template <typename TNode1, typename TNode2>
+void create(TNode1& dst, TNode2& src,
+            const typename TNode1::offset_e* dst_child[257],
+            const typename TNode2::offset_e* src_child[257]) {
+  assert(src._compressed_len == dst._compressed_len);
+  assert(memcmp(src._compressed_data, dst._compressed_data,
+                src._compressed_len) == 0);
+
+  // unify the children of src and dst
+  // and fill the provenance array with the corresponding offsets
+
+  _upper = 0;
+  _compressed_len = src._compressed_len;
+  memcpy(_compressed_data, src.compressed(), _compressed_len);
+
+  uint16_t idx = 0;  // index into provenance array
+
+  // Handle NONE branch
+  bool src_has_none = src.has_none();
+  bool dst_has_none = dst.has_none();
+  if (src_has_none || dst_has_none) {
+    _array_len = 1 | TrieNode::NULL_MASK;
+    src_child[idx] = src_has_none ? src.offset(NONE) : nullptr;
+    dst_child[idx] = dst_has_none ? dst.offset(NONE) : nullptr;
+    idx++;
+  } else {
+    _array_len = 0;
+  }
+
+  // Iterate through all byte values and build _upper bitmap
+  uint8_t unified_children[256];
+  uint16_t child_count = 0;
+
+  for (int i = 0; i < 256; i++) {
+    bool src_has = src.isset(i);
+    bool dst_has = dst.isset(i);
+
+    if (src_has || dst_has) {
+      _array_len++;
+      _upper |= (1 << ubit(i));
+      unified_children[child_count++] = i;
+      src_child[idx] = src_has ? src.offset(i) : nullptr;
+      dst_child[idx] = dst_has ? dst.offset(i) : nullptr;
       idx++;
-    } else {
-      _array_len = 0;
     }
+  }
 
-    // Iterate through all byte values and build _upper bitmap
-    uint8_t unified_children[256];
-    uint16_t child_count = 0;
+  // Now that _upper is set, calculate offsets and build lower bitmap
+  uint16_t lower_start_ = calc_lower_start();
+  _lower_offset = lower_start_ / sizeof(uint32_e);
+  _array_offset = align(lower_start_ + bits::count(_upper) * sizeof(uint32_e)) /
+                  sizeof(offset_e);
 
-    for (int i = 0; i < 256; i++) {
-      bool src_has = src.isset(i);
-      bool dst_has = dst.isset(i);
+  uint32_e* lower_ = lower();
+  memset(lower_, 0, bits::count(_upper) * sizeof(uint32_e));
+  for (uint16_t j = 0; j < child_count; j++) {
+    int i = unified_children[j];
+    int lidx = bits::index(_upper, ubit(i));
+    lower_[lidx] |= 1 << lbit(i);
+  }
 
-      if (src_has || dst_has) {
-        _array_len++;
-        _upper |= (1 << ubit(i));
-        unified_children[child_count++] = i;
-        src_child[idx] = src_has ? src.offset(i) : nullptr;
-        dst_child[idx] = dst_has ? dst.offset(i) : nullptr;
-        idx++;
-      }
+  assert(idx == count());
+}
+
+// check if the index exists
+bool isset(int nchar) const {
+  if (nchar == NONE) return has_none();
+  return (_upper & (1 << ubit(nchar))) &&
+         (lower()[bits::index(_upper, ubit(nchar))] & (1 << lbit(nchar)));
+}
+
+int array_index(int nchar) const {
+  assert(nchar >= NONE);
+  assert(isset(nchar));
+  if (nchar == NONE) return has_none() ? 0 : -1;
+
+  uint32_e* lower_ = lower();
+  int lidx = bits::index(_upper, ubit(nchar));
+  if (_upper & (1 << ubit(nchar))) {
+    int oidx = bits::count(lower_[lidx] & ((1 << lbit(nchar)) - 1)) +
+               bool(_array_len & NULL_MASK);
+    for (int i = 0; i < lidx; i++) {
+      oidx += bits::count(lower_[i]);
     }
-
-    // Now that _upper is set, calculate offsets and build lower bitmap
-    uint16_t lower_start_ = calc_lower_start();
-    _lower_offset = lower_start_ / sizeof(uint32_e);
-    _array_offset =
-        align(lower_start_ + bits::count(_upper) * sizeof(uint32_e)) /
-        sizeof(offset_e);
-
-    uint32_e* lower_ = lower();
-    memset(lower_, 0, bits::count(_upper) * sizeof(uint32_e));
-    for (uint16_t j = 0; j < child_count; j++) {
-      int i = unified_children[j];
-      int lidx = bits::index(_upper, ubit(i));
-      lower_[lidx] |= 1 << lbit(i);
-    }
-
-    assert(idx == count());
+    assert(oidx < count());
+    return oidx;
   }
 
-  // check if the index exists
-  bool isset(int nchar) const {
-    if (nchar == NONE) return has_none();
-    return (_upper & (1 << ubit(nchar))) &&
-           (lower()[bits::index(_upper, ubit(nchar))] & (1 << lbit(nchar)));
-  }
+  return -1;
+}
 
-  int array_index(int nchar) const {
-    if (nchar == NONE) return has_none() ? 0 : -1;
+// returns the link for nchar
+offset_e* offset(int nchar) {
+  auto idx = array_index(nchar);
+  return idx >= 0 ? &array()[idx] : nullptr;
+}
 
-    uint32_e* lower_ = lower();
-    int lidx = bits::index(_upper, ubit(nchar));
-    if (_upper & (1 << ubit(nchar))) {
-      int oidx = bits::count(lower_[lidx] & ((1 << lbit(nchar)) - 1)) +
-                 bool(_array_len & NULL_MASK);
-      for (int i = 0; i < lidx; i++) {
-        oidx += bits::count(lower_[i]);
-      }
-      assert(oidx < count());
-      return oidx;
-    }
+int _prev_lower(int nchar) const {
+  int lidx = bits::prev(_upper, ubit(nchar));
+  if (lidx < 0) return has_none() ? NONE : OUT_OF_RANGE;
+  int lbit_idx = bits::last(lower()[bits::index(_upper, lidx)]);
+  return (lidx << 5) | lbit_idx;
+}
 
-    return -1;
-  }
+int prev(int nchar) const {
+  if (nchar == NONE) return OUT_OF_RANGE;
+  if (!(_upper & (1 << ubit(nchar)))) return _prev_lower(nchar);
 
-  // returns the link for nchar
-  offset_e* offset(int nchar) {
-    auto idx = array_index(nchar);
-    return idx >= 0 ? &array()[idx] : nullptr;
-  }
+  int lidx = bits::index(_upper, ubit(nchar)),
+      lbit_idx = bits::prev(lower()[lidx], lbit(nchar));
+  if (lbit_idx < 0) return _prev_lower(nchar);
+  return (ubit(nchar) << 5) | lbit_idx;
+}
 
-  int _prev_lower(int nchar) const {
-    int lidx = bits::prev(_upper, ubit(nchar));
-    if (lidx < 0) return has_none() ? NONE : OUT_OF_RANGE;
-    int lbit_idx = bits::last(lower()[bits::index(_upper, lidx)]);
-    return (lidx << 5) | lbit_idx;
-  }
+int _next_lower(int nchar) const {
+  int lidx = bits::next(_upper, ubit(nchar));
+  if (lidx < 0) return OUT_OF_RANGE;
+  int lbit_idx = bits::first(lower()[bits::index(_upper, lidx)]);
+  return (lidx << 5) | lbit_idx;
+}
 
-  int prev(int nchar) const {
-    if (nchar == NONE) return OUT_OF_RANGE;
-    if (!(_upper & (1 << ubit(nchar)))) return _prev_lower(nchar);
-
-    int lidx = bits::index(_upper, ubit(nchar)),
-        lbit_idx = bits::prev(lower()[lidx], lbit(nchar));
-    if (lbit_idx < 0) return _prev_lower(nchar);
-    return (ubit(nchar) << 5) | lbit_idx;
-  }
-
-  int _next_lower(int nchar) const {
-    int lidx = bits::next(_upper, ubit(nchar));
+int next(int nchar) const {
+  if (nchar == NONE) {
+    int lidx = bits::first(_upper);
     if (lidx < 0) return OUT_OF_RANGE;
-    int lbit_idx = bits::first(lower()[bits::index(_upper, lidx)]);
-    return (lidx << 5) | lbit_idx;
+    return (lidx << 5) | bits::first(lower()[0]);
   }
+  if (!(_upper & (1 << ubit(nchar)))) return _next_lower(nchar);
+  int lidx = bits::index(_upper, ubit(nchar)),
+      lbit_idx = bits::next(lower()[lidx], lbit(nchar));
+  if (lbit_idx < 0) return _next_lower(nchar);
+  return (ubit(nchar) << 5) | lbit_idx;
+}
 
-  int next(int nchar) const {
-    if (nchar == NONE) {
-      int lidx = bits::first(_upper);
-      if (lidx < 0) return OUT_OF_RANGE;
-      return (lidx << 5) | bits::first(lower()[0]);
-    }
-    if (!(_upper & (1 << ubit(nchar)))) return _next_lower(nchar);
-    int lidx = bits::index(_upper, ubit(nchar)),
-        lbit_idx = bits::next(lower()[lidx], lbit(nchar));
-    if (lbit_idx < 0) return _next_lower(nchar);
-    return (ubit(nchar) << 5) | lbit_idx;
-  }
-
-  int first() const {
-    if (has_none()) return NONE;
-    return (bits::first(_upper) << 5) | bits::first(lower()[0]);
-  }
+int first() const {
+  if (has_none()) return NONE;
+  return (bits::first(_upper) << 5) | bits::first(lower()[0]);
+}
 };
 
 template <typename Traits>

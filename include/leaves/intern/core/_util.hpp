@@ -13,6 +13,11 @@
   #define LEAVES_HAS_BUILTIN_MEMCPY 1
 #endif
 
+// MSVC intrinsics for bit operations
+#if defined(_MSC_VER)
+  #include <intrin.h>
+#endif
+
 // Platform detection for SIMD optimizations
 #if defined(__x86_64__) || defined(_M_X64)
   #define LEAVES_X86_64 1
@@ -363,31 +368,183 @@ struct AreaSlice {
   uint64_t end() const { return offset() + size(); }
 };
 
+// Portable bit manipulation helpers
+namespace detail {
+
+inline unsigned count_trailing_zeros_32(uint32_t x) {
+#if defined(_MSC_VER)
+  unsigned long index;
+  _BitScanForward(&index, x);
+  return index;
+#elif defined(__GNUC__) || defined(__clang__)
+  return static_cast<unsigned>(__builtin_ctz(x));
+#else
+  // Portable fallback using de Bruijn sequence
+  static const unsigned debruijn32[32] = {
+    0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
+    31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9
+  };
+  return debruijn32[((x & -x) * 0x077CB531U) >> 27];
+#endif
+}
+
+inline unsigned count_trailing_zeros_64(uint64_t x) {
+#if defined(_MSC_VER)
+  #if defined(_M_X64) || defined(_M_ARM64)
+  unsigned long index;
+  _BitScanForward64(&index, x);
+  return index;
+  #else
+  // 32-bit MSVC fallback
+  unsigned long index;
+  if (static_cast<uint32_t>(x) != 0) {
+    _BitScanForward(&index, static_cast<uint32_t>(x));
+    return index;
+  }
+  _BitScanForward(&index, static_cast<uint32_t>(x >> 32));
+  return index + 32;
+  #endif
+#elif defined(__GNUC__) || defined(__clang__)
+  return static_cast<unsigned>(__builtin_ctzll(x));
+#else
+  // Portable fallback
+  if (static_cast<uint32_t>(x) != 0) {
+    return count_trailing_zeros_32(static_cast<uint32_t>(x));
+  }
+  return 32 + count_trailing_zeros_32(static_cast<uint32_t>(x >> 32));
+#endif
+}
+
+inline unsigned count_leading_zeros_64(uint64_t x) {
+#if defined(_MSC_VER)
+  #if defined(_M_X64) || defined(_M_ARM64)
+  unsigned long index;
+  _BitScanReverse64(&index, x);
+  return 63 - index;
+  #else
+  // 32-bit MSVC fallback
+  unsigned long index;
+  if (static_cast<uint32_t>(x >> 32) != 0) {
+    _BitScanReverse(&index, static_cast<uint32_t>(x >> 32));
+    return 31 - index;
+  }
+  _BitScanReverse(&index, static_cast<uint32_t>(x));
+  return 63 - index;
+  #endif
+#elif defined(__GNUC__) || defined(__clang__)
+  return static_cast<unsigned>(__builtin_clzll(x));
+#else
+  // Portable fallback
+  unsigned n = 0;
+  if (x <= 0x00000000FFFFFFFFULL) { n += 32; x <<= 32; }
+  if (x <= 0x0000FFFFFFFFFFFFULL) { n += 16; x <<= 16; }
+  if (x <= 0x00FFFFFFFFFFFFFFULL) { n += 8;  x <<= 8; }
+  if (x <= 0x0FFFFFFFFFFFFFFFULL) { n += 4;  x <<= 4; }
+  if (x <= 0x3FFFFFFFFFFFFFFFULL) { n += 2;  x <<= 2; }
+  if (x <= 0x7FFFFFFFFFFFFFFFULL) { n += 1; }
+  return n;
+#endif
+}
+
+// Detect endianness at compile time
+inline bool is_little_endian() {
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+  return __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
+#elif defined(_WIN32) || defined(__EMSCRIPTEN__) || defined(__x86_64__) || \
+      defined(_M_X64) || defined(__i386__) || defined(_M_IX86) || \
+      defined(__aarch64__) || defined(_M_ARM64) || defined(__arm__) || defined(_M_ARM)
+  // Most common platforms are little-endian
+  return true;
+#else
+  // Runtime check as last resort
+  const uint16_t test = 1;
+  return *reinterpret_cast<const uint8_t*>(&test) == 1;
+#endif
+}
+
+}  // namespace detail
+
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {
   size_t i = 0;
-  size_t limit = std::min(size1, size2) / sizeof(uint64_t);
-  const uint64_t* wstr1 = reinterpret_cast<const uint64_t*>(str1);
-  const uint64_t* wstr2 = reinterpret_cast<const uint64_t*>(str2);
+  const size_t min_size = std::min(size1, size2);
 
-  while (i < limit && wstr1[i] == wstr2[i]) {
+#if defined(LEAVES_HAS_SSE2) && !defined(__EMSCRIPTEN__)
+  // SSE2: Compare 16 bytes at a time (x86-64 only, not Emscripten)
+  while (i + 16 <= min_size) {
+    __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(str1 + i));
+    __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(str2 + i));
+    __m128i eq = _mm_cmpeq_epi8(a, b);
+    int mask = _mm_movemask_epi8(eq);
+    if (mask != 0xFFFF) {
+      i += detail::count_trailing_zeros_32(static_cast<uint32_t>(~mask) & 0xFFFF);
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i += 16;
+  }
+#elif defined(LEAVES_HAS_NEON) && !defined(__EMSCRIPTEN__)
+  // NEON: Compare 16 bytes at a time (ARM64 only)
+  while (i + 16 <= min_size) {
+    uint8x16_t a = vld1q_u8(reinterpret_cast<const uint8_t*>(str1 + i));
+    uint8x16_t b = vld1q_u8(reinterpret_cast<const uint8_t*>(str2 + i));
+    uint8x16_t eq = vceqq_u8(a, b);
+    // Check if all bytes are equal using min across vector
+    uint8x16_t min_val = vpminq_u8(eq, eq);
+    min_val = vpminq_u8(min_val, min_val);
+    min_val = vpminq_u8(min_val, min_val);
+    min_val = vpminq_u8(min_val, min_val);
+    if (vgetq_lane_u8(min_val, 0) != 0xFF) {
+      // Find first differing byte by scanning
+      const uint8_t* p1 = reinterpret_cast<const uint8_t*>(str1 + i);
+      const uint8_t* p2 = reinterpret_cast<const uint8_t*>(str2 + i);
+      for (unsigned j = 0; j < 16; j++) {
+        if (p1[j] != p2[j]) {
+          i += j;
+          cmp = p1[j] > p2[j] ? 1 : -1;
+          return i;
+        }
+      }
+    }
+    i += 16;
+  }
+#endif
+
+  // 64-bit word comparison for remaining bytes
+  // Using memcpy for safe unaligned access (compiler optimizes this)
+  while (i + sizeof(uint64_t) <= min_size) {
+    uint64_t w1, w2;
+    memcpy(&w1, str1 + i, sizeof(uint64_t));
+    memcpy(&w2, str2 + i, sizeof(uint64_t));
+    if (w1 != w2) {
+      uint64_t diff = w1 ^ w2;
+      size_t byte_offset;
+      if (detail::is_little_endian()) {
+        byte_offset = detail::count_trailing_zeros_64(diff) / 8;
+      } else {
+        byte_offset = detail::count_leading_zeros_64(diff) / 8;
+      }
+      i += byte_offset;
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i += sizeof(uint64_t);
+  }
+
+  // Byte-by-byte for remainder (0-7 bytes)
+  while (i < min_size && str1[i] == str2[i]) {
     i++;
   }
-  i *= sizeof(uint64_t);
 
-  limit = std::min(size1, size2);
-  while (i < limit && str1[i] == str2[i]) {
-    i++;
-  }
-
-  if (i < limit) {
+  if (i < min_size) {
     cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
-  } else if (size1 > limit)
+  } else if (size1 > size2) {
     cmp = 1;
-  else if (size2 > limit)
+  } else if (size2 > size1) {
     cmp = -1;
-  else
+  } else {
     cmp = 0;
+  }
   return i;
 }
 

@@ -7,8 +7,8 @@
 #include <functional>
 #include <type_traits>
 
-#include "_check.hpp"
 #include "../core/_node.hpp"
+#include "_check.hpp"
 
 namespace leaves {
 
@@ -115,14 +115,16 @@ struct _Inserter {
     // copy the original trie node with second part of compressed
     // to a new slot
     uint8_t suffix_len = otrie->len() - back->prefix;
-    trie_ptr child_trie = alloc_node<trie_ptr>(otrie->reduced_size(suffix_len));
+    uint16_t trie_size = otrie->changed_len(suffix_len);
+    trie_ptr child_trie = alloc_node<trie_ptr>(trie_size);
     child_trie->create(*otrie,
                        Slice(&otrie->compressed()[back->prefix], suffix_len));
+    assert(child_trie->size() == trie_size);
 
     // replace the original trie node with a two branch trie node
     // and the first part of compressed
-    int key =
-        back->key() ? (back->branch_key = back->key()[0]) : TrieNode::NONE;
+    int key = back->key() ? (back->branch_key = (uint8_t)back->key()[0])
+                          : TrieNode::NONE;
     int okey = otrie->compressed()[back->prefix];
     trie_ptr trie =
         alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, key));
@@ -133,6 +135,8 @@ struct _Inserter {
 
     back->link_idx = idxs.second;
     trie->array()[idxs.first] = resolve(child_trie);
+    assert(trie->isset(okey));
+    assert(trie->isset(key));
 
     free_node(otrie);
     back->update_trie_offset();
@@ -182,12 +186,13 @@ struct _Inserter {
   const uint16_t MAX_SIZE = TrieNode::MAX_SIZE;
 
   void add_to_array() {
-    int key = back->key() ? back->branch_key : TrieNode::NONE;
+    int key = back->key() ? (uint8_t)back->branch_key : TrieNode::NONE;
     trie_ptr otrie = back->trie();
     trie_ptr new_trie = alloc_node<trie_ptr>(otrie->increment_size(key));
 
     back->trie() = new_trie;
     back->link_idx = new_trie->create(*otrie, key);
+    assert(new_trie->isset(key));
 
     free_node(otrie);
     back->update_trie_offset();
@@ -218,13 +223,15 @@ struct _Inserter {
     leaf_ptr copy = copy_reduced_leaf(back->prefix, oleaf);
 
     int okey = !copy->key_size ? TrieNode::NONE : copy->data[0];
-    int nkey = back->key() ? back->key()[0] : TrieNode::NONE;
+    int nkey = back->key() ? (uint8_t)back->key()[0] : TrieNode::NONE;
     back->branch_key = nkey;
 
     trie_ptr new_trie =
         alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, nkey));
     back->trie() = new_trie;
     auto idxs = new_trie->create(Slice(oleaf->data, back->prefix), okey, nkey);
+    assert(new_trie->isset(okey));
+    assert(new_trie->isset(nkey));
 
     back->link_idx = idxs.second;
     new_trie->array()[idxs.first] = resolve(copy);
@@ -661,7 +668,7 @@ struct _LocalityInserter {
     // copy the original trie node with second part of compressed
     // to a new slot
     _suffix_len = _ptrie->len() - back->prefix;
-    _child_trie_size = _ptrie->reduced_size(_suffix_len);
+    _child_trie_size = _ptrie->changed_len(_suffix_len);
     _pk_size = page_kids();
     _prefix = back->prefix;
 
@@ -693,7 +700,7 @@ struct _LocalityInserter {
 
     // replace the original trie node with a two branch trie node
     // and the first part of compressed
-    _nkey = key() ? (back->branch_key = key()[0]) : TrieNode::NONE;
+    _nkey = key() ? (back->branch_key = (uint8_t)key()[0]) : TrieNode::NONE;
     _okey = _ptrie->compressed()[_prefix];
 
     builder.add(0, TrieNode::size(_prefix, _nkey, _okey),
@@ -717,7 +724,7 @@ struct _LocalityInserter {
     _idx = 0xffff;
     assert(back->prefix == _ptrie->len());
 
-    _nkey = key() ? (back->branch_key = key()[0]) : TrieNode::NONE;
+    _nkey = key() ? (back->branch_key = (uint8_t)key()[0]) : TrieNode::NONE;
     builder.add(0, _ptrie->increment_size(_nkey), [this](NodeSlot& dst) {
       _idx = dst.trie()->create(*_ptrie, _nkey);
     });
@@ -754,7 +761,7 @@ struct _LocalityInserter {
                 });
 
     _okey = _prefix < _oleaf->key_size ? _oleaf->data[_prefix] : TrieNode::NONE;
-    _nkey = key() ? key()[0] : TrieNode::NONE;
+    _nkey = key() ? (uint8_t)key()[0] : TrieNode::NONE;
     back->branch_key = _nkey;
 
     builder.add(

@@ -74,8 +74,9 @@ struct _Deleter {
 
     Transition& parent = trans->parent();
     // Save the node pointer before pop invalidates trans
-    auto node = trans->node;  
+    auto node = trans->node;
     uint16_t prefix = trans->prefix;
+    uint8_t branch_key = trans->branch_key;  
     parent.pop();  // remove trans from stack
     assert(parent.is_trie());
     switch (parent.trie()->count()) {
@@ -98,10 +99,11 @@ struct _Deleter {
   void reduce_array(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
     // Calculate proper size: same prefix length, one less branch
-    parent.trie() =
-        alloc_node<trie_ptr>(TrieNode::size(otrie->len(), otrie->count() - 1));
-    parent.trie()->create_remove(*otrie,
-                                 prefix ? parent.branch_key : TrieNode::NONE);
+    int branch = prefix ? parent.branch_key : TrieNode::NONE;
+    uint16_t new_size = otrie->decrement_size(branch);
+    parent.trie() = alloc_node<trie_ptr>(new_size);
+    parent.trie()->create_remove(*otrie, branch);
+    assert(parent.trie()->size() == new_size);
     parent.update_trie_offset();
     free_node(otrie);
     parent.cmp = -1;
@@ -131,13 +133,15 @@ struct _Deleter {
 
       memcpy(buffer + len, child->compressed(), child->len());
       len += child->len();
-      parent.trie() = alloc_node<trie_ptr>(TrieNode::size(len, child->count()));
-      parent.trie()->create(*child, Slice(buffer, len));
-      parent.update_trie_offset();
-      // replace trie! the type is important
-      parent.link_idx = parent.trie()->array_index(parent.branch_key);
-      assert(parent.link_idx < parent.trie()->count());
 
+      uint16_t p0 = Traits::PAGE_SIZES[0];
+      uint16_t p1 = Traits::PAGE_SIZES[1];
+      uint16_t p2 = Traits::PAGE_SIZES[2];
+      uint16_t trie_size = child->changed_len(len);
+      parent.trie() = alloc_node<trie_ptr>(trie_size);
+      parent.trie()->create(*child, Slice(buffer, len));
+      assert(parent.trie()->size() == trie_size);
+      parent.update_trie_offset();
       free_node(child);
     } else {
       leaf_ptr child = resolve<LeafNode>(child_remaining);
@@ -157,6 +161,7 @@ struct _Deleter {
       free_node(child);
     }
 
+    parent.cmp = 1;
     free_node(otrie);
     if (go_next)
       cursor.next();

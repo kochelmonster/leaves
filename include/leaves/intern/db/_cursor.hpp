@@ -255,6 +255,7 @@ struct _Transition {
 
       child.first();
       branch_key = current_key()[child.keypos];
+      assert(trie_.isset(branch_key));
       return true;
     }
 
@@ -268,6 +269,7 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int next_ = trie_.next(branch_key);
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
+    cmp = 0;
     branch_key = (uint8_t)next_;
     link_idx = trie_.array_index(next_);
     assert(link_idx < trie_.count());
@@ -294,7 +296,13 @@ struct _Transition {
       cursor->_db->prefetch(*lnk);
 
       child.last();
-      branch_key = current_key()[child.keypos];
+      if (child.keypos < current_key().size()) {
+        branch_key = current_key()[child.keypos];
+        assert(trie_.isset(branch_key));
+      }
+      else {
+        assert(trie_.isset(TrieNode::NONE));
+      }
       return true;
     }
 
@@ -308,6 +316,7 @@ struct _Transition {
     append_key(trie_.compressed(), trie_._compressed_len);
     int prev_ = trie_.prev(branch_key);
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
+    cmp = 0;
     branch_key = (uint8_t)prev_;
     link_idx = trie_.array_index(prev_);
     assert(link_idx < trie_.count());
