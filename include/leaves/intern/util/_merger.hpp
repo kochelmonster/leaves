@@ -7,12 +7,35 @@
 namespace leaves {
 
 /**
+ * @brief Default no-op merger dumper
+ */
+struct NoOpMergerDumper {
+  template<typename... Args>
+  void dump_merge_leaf_into_leaf(Args&&...) {}
+  
+  template<typename... Args>
+  void dump_merge_leaf_into_trie(Args&&...) {}
+  
+  template<typename... Args>
+  void dump_merge_trie_into_leaf(Args&&...) {}
+  
+  template<typename... Args>
+  void dump_merge_trie_into_trie(Args&&...) {}
+  
+  template<typename... Args>
+  void dump_merge_trie_children(Args&&...) {}
+  
+  template<typename... Args>
+  void dump_copy_subtree(Args&&...) {}
+};
+
+/**
  * @brief Recursive COW merger
  *
  * Recursively merges a source tree into a destination tree with copy-on-write
  * semantics. Only modified paths are copied; unchanged subtrees are shared.
  */
-template <typename DBDst, typename DBSrc, typename MergePolicy>
+template <typename DBDst, typename DBSrc, typename MergePolicy, typename MergerDumper = NoOpMergerDumper>
 struct _Merger {
   // Use CursorTraits from DB which has node type definitions
   using DstTraits = typename DBDst::CursorTraits;
@@ -35,6 +58,7 @@ struct _Merger {
   DBSrc& db_src;
   src_offset_e* src_root;
   MergePolicy& handler;
+  MergerDumper& dumper;
   std::string key_buf;  // Reusable buffer for building keys (avoids heap allocs)
   offset_e children_buf[257];  // Reusable buffer for collecting children (avoids stack allocs)
 
@@ -44,23 +68,47 @@ struct _Merger {
    * @param db_src   Source database for resolving source nodes
    * @param src      Pointer to the root offset of the source tree
    * @param h        Merge policy handler
+   * @param d        Merger dumper for instrumentation (optional)
    */
+  _Merger(DBDst& db_dest, offset_e* dest, DBSrc& db_src_, src_offset_e* src,
+          MergePolicy& h, MergerDumper& d)
+      : db_dst(db_dest),
+        dst_root(dest),
+        db_src(db_src_),
+        src_root(src),
+        handler(h),
+        dumper(d) {}
+
+  /**
+   * Constructor without dumper (uses default NoOpMergerDumper)
+   * Only available when MergerDumper is NoOpMergerDumper
+   */
+  template <typename MD = MergerDumper,
+            typename = std::enable_if_t<std::is_same_v<MD, NoOpMergerDumper>>>
   _Merger(DBDst& db_dest, offset_e* dest, DBSrc& db_src_, src_offset_e* src,
           MergePolicy& h)
       : db_dst(db_dest),
         dst_root(dest),
         db_src(db_src_),
         src_root(src),
-        handler(h) {}
+        handler(h),
+        dumper(get_default_dumper()) {}
+
+private:
+  static MergerDumper& get_default_dumper() {
+    static NoOpMergerDumper default_dumper;
+    return default_dumper;
+  }
+
+public:
 
   /**
    * Merge the entire source tree into the destination tree.
-   * Returns new root offset if anything was merged, or null offset if nothing
-   * changed.
+   * Updates dst_root directly.
    */
-  offset_e exec() {
+  void exec() {
     if (!*src_root) {
-      return offset_e();  // Nothing to merge
+      return;  // Nothing to merge
     }
 
     // Pre-allocate key buffer to avoid repeated heap allocations
@@ -68,12 +116,9 @@ struct _Merger {
     key_buf.reserve(256);
 
     // Recursively merge source into destination
-    offset_e new_root = merge_trees(*dst_root, *src_root);
-    *dst_root = new_root;
-    return new_root;
+    merge_trees(dst_root, src_root);
   }
 
- private:
   // =========================================================================
   // Node allocation helpers (following _Inserter patterns)
   // =========================================================================
@@ -118,22 +163,22 @@ struct _Merger {
 
   /**
    * Recursively merge source subtree into destination subtree.
-   * @param dst_offset  Destination node offset (may be empty)
+   * @param dst_offset  Pointer to destination node offset (may be empty)
    * @param src_offset  Source node offset (must be valid)
-   * @return New offset for merged subtree
-   * @note Uses key_buf member for accumulated key prefix
+   * @note Uses key_buf member for accumulated key prefix. Updates *dst_offset directly.
    */
-  offset_e merge_trees(offset_e dst_offset, src_offset_e src_offset) {
+  void merge_trees(offset_e* dst_offset, src_offset_e* src_offset) {
     // Empty destination - copy entire source subtree
-    if (!dst_offset) {
-      return copy_subtree(src_offset);
+    if (!*dst_offset) {
+      *dst_offset = copy_subtree(src_offset);
+      return;
     }
 
     // Dispatch based on source node type
-    if (src_offset.type() == LEAF) {
-      return merge_src_leaf(dst_offset, src_offset);
+    if (src_offset->type() == LEAF) {
+      merge_src_leaf(dst_offset, src_offset);
     } else {
-      return merge_src_trie(dst_offset, src_offset);
+      merge_src_trie(dst_offset, src_offset);
     }
   }
 
@@ -141,15 +186,15 @@ struct _Merger {
   // Source is LEAF
   // =========================================================================
 
-  offset_e merge_src_leaf(offset_e dst_offset, src_offset_e src_offset) {
-    auto src_leaf = resolve_src<SrcLeafNode, LEAF>(&src_offset);
+  void merge_src_leaf(offset_e* dst_offset, src_offset_e* src_offset) {
+    auto src_leaf = resolve_src<SrcLeafNode, LEAF>(src_offset);
     Slice src_key = src_leaf->key();
     Slice src_value = get_src_value(src_leaf);
 
-    if (dst_offset.type() == LEAF) {
-      return merge_leaf_into_leaf(dst_offset, src_key, src_value);
+    if (dst_offset->type() == LEAF) {
+      merge_leaf_into_leaf(dst_offset, src_key, src_value);
     } else {
-      return merge_leaf_into_trie(dst_offset, src_key, src_value);
+      merge_leaf_into_trie(dst_offset, src_key, src_value);
     }
   }
 
@@ -169,9 +214,9 @@ struct _Merger {
    *                                      |       |
    *                               [leaf:"c"=v1] [leaf:"yz"=v2]
    */
-  offset_e merge_leaf_into_leaf(offset_e dst_offset, const Slice& src_key,
+  void merge_leaf_into_leaf(offset_e* dst_offset, const Slice& src_key,
                                 const Slice& src_value) {
-    auto dst_leaf = resolve_dst<LeafNode, LEAF>(&dst_offset);
+    auto dst_leaf = resolve_dst<LeafNode, LEAF>(dst_offset);
     Slice dst_key = dst_leaf->key();
 
     size_t common = common_prefix_len(dst_key, src_key);
@@ -184,11 +229,12 @@ struct _Merger {
       bool do_overwrite = handler.check_overwrite(key_buf, dst_value, src_value);
       key_buf.resize(saved);
       if (do_overwrite) {
-        offset_e new_offset = create_leaf(src_key, src_value);
+        offset_e old_offset = *dst_offset;
+        *dst_offset = create_leaf(src_key, src_value);
         free_leaf(dst_leaf);
-        return new_offset;
+        dumper.dump_merge_leaf_into_leaf(key_buf, old_offset, *dst_offset, "overwrite");
       }
-      return dst_offset;  // Keep destination unchanged
+      return;  // Keep destination unchanged if no overwrite
     }
 
     // Keys diverge at 'common' - create a trie to split them
@@ -213,8 +259,10 @@ struct _Merger {
     new_trie->array()[idxs.first] = resolve(new_dst_leaf);
     new_trie->array()[idxs.second] = resolve(new_src_leaf);
 
+    offset_e old_offset = *dst_offset;
+    *dst_offset = resolve(new_trie);
     free_leaf(dst_leaf);
-    return resolve(new_trie);
+    dumper.dump_merge_leaf_into_leaf(key_buf, old_offset, *dst_offset, "split");
   }
 
   /**
@@ -242,17 +290,17 @@ struct _Merger {
    *     SRC: [leaf:"abxyz"=v]        |  'x'
    *                               [child]
    */
-  offset_e merge_leaf_into_trie(offset_e dst_offset, const Slice& src_key,
+  void merge_leaf_into_trie(offset_e* dst_offset, const Slice& src_key,
                                 const Slice& src_value) {
-    auto dst_trie = resolve_dst<TrieNode>(&dst_offset);
+    auto dst_trie = resolve_dst<TrieNode>(dst_offset);
     Slice dst_prefix((const char*)dst_trie->compressed(), dst_trie->len());
 
     size_t common = common_prefix_len(dst_prefix, src_key);
 
     if (common < dst_prefix.size()) {
       // Source key diverges within trie's prefix - need to split trie
-      return split_trie_for_leaf(dst_trie, dst_offset, common, src_key,
-                                 src_value);
+      split_trie_for_leaf(dst_offset, dst_trie, common, src_key, src_value);
+      return;
     }
 
     // common == dst_prefix.size(): source key matches trie prefix
@@ -273,15 +321,17 @@ struct _Merger {
     if (dst_trie->isset(branch)) {
       // Branch exists - recurse into child with leaf key/value
       offset_e* child_offset_ptr = dst_trie->offset(branch);
-      offset_e new_child =
-          merge_leaf_into_subtree(*child_offset_ptr, child_key, src_value);
+      offset_e old_child = *child_offset_ptr;
+      merge_leaf_into_subtree(child_offset_ptr, child_key, src_value);
 
-      if (new_child == *child_offset_ptr) {
-        return dst_offset;  // No change
+      if (*child_offset_ptr == old_child) {
+        return;  // No change
       }
 
       // COW: create new trie with updated child
-      return copy_trie_with_updated_branch(dst_trie, branch, new_child);
+      offset_e old_offset = *dst_offset;
+      *dst_offset = copy_trie_with_updated_branch(dst_trie, branch, *child_offset_ptr);
+      dumper.dump_merge_leaf_into_trie(key_buf, old_offset, *dst_offset, "update_branch");
     } else {
       // Branch doesn't exist - add new branch with leaf
       leaf_ptr new_leaf = create_leaf_node(child_key, src_value);
@@ -291,23 +341,25 @@ struct _Merger {
       uint16_t idx = new_trie->create(*dst_trie, branch);
       new_trie->array()[idx] = resolve(new_leaf);
 
+      offset_e old_offset = *dst_offset;
+      *dst_offset = resolve(new_trie);
       free_trie(dst_trie);
-      return resolve(new_trie);
+      dumper.dump_merge_leaf_into_trie(key_buf, old_offset, *dst_offset, "new_branch");
     }
   }
 
   /**
    * Helper: merge a leaf (by key+value) into an existing subtree.
-   * Precondition: dst_offset is valid (caller checked isset())
+   * Precondition: *dst_offset is valid (caller checked isset())
    */
-  offset_e merge_leaf_into_subtree(offset_e dst_offset, const Slice& key,
+  void merge_leaf_into_subtree(offset_e* dst_offset, const Slice& key,
                                    const Slice& value) {
-    assert(dst_offset && "caller must check isset() before calling");
+    assert(*dst_offset && "caller must check isset() before calling");
 
-    if (dst_offset.type() == LEAF) {
-      return merge_leaf_into_leaf(dst_offset, key, value);
+    if (dst_offset->type() == LEAF) {
+      merge_leaf_into_leaf(dst_offset, key, value);
     } else {
-      return merge_leaf_into_trie(dst_offset, key, value);
+      merge_leaf_into_trie(dst_offset, key, value);
     }
   }
 
@@ -315,33 +367,31 @@ struct _Merger {
    * Helper: merge a src trie (with prefix skipped) into dst subtree.
    * Used when dst prefix is a prefix of src prefix.
    */
-  offset_e merge_subtree_into_dst(offset_e dst_offset,
+  void merge_subtree_into_dst(offset_e* dst_offset,
                                    src_trie_ptr src_trie,
-                                   src_offset_e src_offset,
+                                   src_offset_e* src_offset,
                                    size_t skip_prefix) {
     Slice old_prefix((const char*)src_trie->compressed(), src_trie->len());
     Slice remaining(old_prefix.data() + skip_prefix, old_prefix.size() - skip_prefix);
 
     if (remaining.empty()) {
       // No remaining prefix - merge src children directly
-      if (dst_offset.type() == LEAF) {
+      if (dst_offset->type() == LEAF) {
         // Merge src trie (with empty prefix) into dst leaf
-        return merge_trie_into_leaf(dst_offset, src_trie, src_offset,
-                                    Slice());
+        merge_trie_into_leaf(dst_offset, src_trie, src_offset, Slice());
       } else {
         // Merge children
-        auto dst_trie = resolve_dst<TrieNode>(&dst_offset);
-        return merge_trie_children(dst_trie, dst_offset, src_trie, src_offset);
+        auto dst_trie = resolve_dst<TrieNode>(dst_offset);
+        merge_trie_children(dst_offset, dst_trie, src_trie, src_offset);
       }
+      return;
     }
 
     // There's still remaining prefix - recurse with reduced src prefix
-    if (dst_offset.type() == LEAF) {
-      return merge_trie_into_leaf(dst_offset, src_trie, src_offset,
-                                  remaining);
+    if (dst_offset->type() == LEAF) {
+      merge_trie_into_leaf(dst_offset, src_trie, src_offset, remaining);
     } else {
-      return merge_trie_into_trie(dst_offset, src_trie, src_offset,
-                                  remaining);
+      merge_trie_into_trie(dst_offset, src_trie, src_offset, remaining);
     }
   }
 
@@ -349,14 +399,14 @@ struct _Merger {
   // Source is TRIE
   // =========================================================================
 
-  offset_e merge_src_trie(offset_e dst_offset, src_offset_e src_offset) {
-    auto src_trie = resolve_src<SrcTrieNode>(&src_offset);
+  void merge_src_trie(offset_e* dst_offset, src_offset_e* src_offset) {
+    auto src_trie = resolve_src<SrcTrieNode>(src_offset);
     Slice src_prefix((const char*)src_trie->compressed(), src_trie->len());
 
-    if (dst_offset.type() == LEAF) {
-      return merge_trie_into_leaf(dst_offset, src_trie, src_offset, src_prefix);
+    if (dst_offset->type() == LEAF) {
+      merge_trie_into_leaf(dst_offset, src_trie, src_offset, src_prefix);
     } else {
-      return merge_trie_into_trie(dst_offset, src_trie, src_offset, src_prefix);
+      merge_trie_into_trie(dst_offset, src_trie, src_offset, src_prefix);
     }
   }
 
@@ -381,10 +431,10 @@ struct _Merger {
    *     DST: [leaf:"abcd"=v1]          Need to insert leaf into
    *     SRC: [trie prefix="ab"]        appropriate branch of trie
    */
-  offset_e merge_trie_into_leaf(offset_e dst_offset,
+  void merge_trie_into_leaf(offset_e* dst_offset,
                                 src_trie_ptr src_trie,
-                                src_offset_e src_offset, const Slice& src_prefix) {
-    auto dst_leaf = resolve_dst<LeafNode, LEAF>(&dst_offset);
+                                src_offset_e* src_offset, const Slice& src_prefix) {
+    auto dst_leaf = resolve_dst<LeafNode, LEAF>(dst_offset);
     Slice dst_key = dst_leaf->key();
 
     size_t common = common_prefix_len(dst_key, src_prefix);
@@ -413,8 +463,11 @@ struct _Merger {
       key_buf.resize(saved);
       new_trie->array()[idxs.second] = src_child;
 
+      offset_e old_offset = *dst_offset;
       free_leaf(dst_leaf);
-      return resolve(new_trie);
+      *dst_offset = resolve(new_trie);
+      dumper.dump_merge_trie_into_leaf(key_buf, old_offset, *dst_offset, "diverge");
+      return;
     }
 
     if (common == dst_key.size() && common == src_prefix.size()) {
@@ -436,7 +489,8 @@ struct _Merger {
         // Src also has NONE - merge
         src_offset_e* src_child = src_trie->offset(TrieNode::NONE);
         offset_e dst_none_leaf = create_leaf(Slice(), dst_leaf->value());
-        children_buf[0] = merge_trees(dst_none_leaf, *src_child);
+        merge_trees(&dst_none_leaf, src_child);
+        children_buf[0] = dst_none_leaf;
       } else {
         leaf_ptr new_dst_leaf = create_leaf_node(Slice(), dst_leaf->value());
         children_buf[0] = resolve(new_dst_leaf);
@@ -448,7 +502,7 @@ struct _Merger {
       for (int i = start; i != SrcTrieNode::OUT_OF_RANGE; i = src_trie->next(i)) {
         src_offset_e* child = src_trie->offset(i);
         key_buf += (char)i;
-        children_buf[i + 1] = copy_subtree(*child);
+        children_buf[i + 1] = copy_subtree(child);
         key_buf.resize(saved + common);  // Restore to just the prefix
         if (children_buf[i + 1]) branch_count++;
       }
@@ -458,8 +512,11 @@ struct _Merger {
           alloc_node<trie_ptr>(TrieNode::size(common, branch_count));
       new_trie->create(Slice(dst_key.data(), common), children_buf + 1);
 
+      offset_e old_offset = *dst_offset;
       free_leaf(dst_leaf);
-      return resolve(new_trie);
+      *dst_offset = resolve(new_trie);
+      dumper.dump_merge_trie_into_leaf(key_buf, old_offset, *dst_offset, "exact_match");
+      return;
     }
 
     if (common == dst_key.size()) {
@@ -491,8 +548,11 @@ struct _Merger {
       key_buf.resize(saved);
       new_trie->array()[idxs.second] = src_child;
 
+      offset_e old_offset = *dst_offset;
       free_leaf(dst_leaf);
-      return resolve(new_trie);
+      *dst_offset = resolve(new_trie);
+      dumper.dump_merge_trie_into_leaf(key_buf, old_offset, *dst_offset, "dst_is_prefix");
+      return;
     }
 
     // Case 3: Src trie prefix is prefix of dst leaf key (common == src_prefix.size())
@@ -520,9 +580,10 @@ struct _Merger {
         // Merge dst leaf into this branch
         Slice leaf_key = dst_remaining;
         offset_e dst_leaf_offset = create_leaf(leaf_key, dst_leaf->value());
-        children_buf[i + 1] = merge_trees(dst_leaf_offset, *child);
+        merge_trees(&dst_leaf_offset, child);
+        children_buf[i + 1] = dst_leaf_offset;
       } else {
-        children_buf[i + 1] = copy_subtree(*child);
+        children_buf[i + 1] = copy_subtree(child);
       }
       key_buf.resize(prefix_len);
       if (children_buf[i + 1]) branch_count++;
@@ -541,8 +602,10 @@ struct _Merger {
         alloc_node<trie_ptr>(TrieNode::size(src_prefix.size(), branch_count));
     new_trie->create(src_prefix, children_buf + 1);
 
+    offset_e old_offset = *dst_offset;
     free_leaf(dst_leaf);
-    return resolve(new_trie);
+    *dst_offset = resolve(new_trie);
+    dumper.dump_merge_trie_into_leaf(key_buf, old_offset, *dst_offset, "src_is_prefix");
   }
 
   /**
@@ -577,10 +640,10 @@ struct _Merger {
    *     DST: [trie prefix="abcd"]      Need to insert dst as child
    *     SRC: [trie prefix="ab"]        of copied src trie
    */
-  offset_e merge_trie_into_trie(offset_e dst_offset,
+  void merge_trie_into_trie(offset_e* dst_offset,
                                 src_trie_ptr src_trie,
-                                src_offset_e src_offset, const Slice& src_prefix) {
-    auto dst_trie = resolve_dst<TrieNode>(&dst_offset);
+                                src_offset_e* src_offset, const Slice& src_prefix) {
+    auto dst_trie = resolve_dst<TrieNode>(dst_offset);
     Slice dst_prefix((const char*)dst_trie->compressed(), dst_trie->len());
 
     size_t common = common_prefix_len(dst_prefix, src_prefix);
@@ -608,17 +671,20 @@ struct _Merger {
       key_buf.resize(saved);
       new_trie->array()[idxs.second] = src_child;
 
+      offset_e old_offset = *dst_offset;
       free_trie(dst_trie);
-      return resolve(new_trie);
+      *dst_offset = resolve(new_trie);
+      dumper.dump_merge_trie_into_trie(key_buf, old_offset, *dst_offset, "diverge");
+      return;
     }
 
     if (common == dst_prefix.size() && common == src_prefix.size()) {
       // Case 2: Prefixes match exactly - merge children
       size_t saved = key_buf.size();
       key_buf.append(dst_prefix.data(), dst_prefix.size());
-      offset_e result = merge_trie_children(dst_trie, dst_offset, src_trie, src_offset);
+      merge_trie_children(dst_offset, dst_trie, src_trie, src_offset);
       key_buf.resize(saved);
-      return result;
+      return;
     }
 
     if (common == dst_prefix.size()) {
@@ -637,14 +703,16 @@ struct _Merger {
       if (dst_trie->isset(src_branch)) {
         // Branch exists - recurse with reduced src prefix
         offset_e* child_ptr = dst_trie->offset(src_branch);
-        offset_e new_child = merge_subtree_into_dst(*child_ptr, src_trie, src_offset,
-                                                     common);
+        offset_e old_child = *child_ptr;
+        merge_subtree_into_dst(child_ptr, src_trie, src_offset, common);
         key_buf.resize(saved);
 
-        if (new_child == *child_ptr) {
-          return dst_offset;  // No change
+        if (*child_ptr == old_child) {
+          return;  // No change
         }
-        return copy_trie_with_updated_branch(dst_trie, src_branch, new_child);
+        offset_e old_offset = *dst_offset;
+        *dst_offset = copy_trie_with_updated_branch(dst_trie, src_branch, *child_ptr);
+        dumper.dump_merge_trie_into_trie(key_buf, old_offset, *dst_offset, "dst_is_prefix_update");
       } else {
         // Branch doesn't exist - add src subtree as new branch
         offset_e src_child = copy_subtree_with_prefix_adjust(src_trie, src_offset,
@@ -655,9 +723,12 @@ struct _Merger {
         uint16_t idx = new_trie->create(*dst_trie, src_branch);
         new_trie->array()[idx] = src_child;
 
+        offset_e old_offset = *dst_offset;
         free_trie(dst_trie);
-        return resolve(new_trie);
+        *dst_offset = resolve(new_trie);
+        dumper.dump_merge_trie_into_trie(key_buf, old_offset, *dst_offset, "dst_is_prefix_new");
       }
+      return;
     }
 
     // Case 4: Src prefix is prefix of dst prefix (common == src_prefix.size())
@@ -684,9 +755,10 @@ struct _Merger {
       if (i == dst_branch) {
         // Merge reduced dst into this src branch
         offset_e dst_reduced = copy_trie_with_reduced_prefix(dst_trie, common);
-        children_buf[i + 1] = merge_trees(dst_reduced, *child);
+        merge_trees(&dst_reduced, child);
+        children_buf[i + 1] = dst_reduced;
       } else {
-        children_buf[i + 1] = copy_subtree(*child);
+        children_buf[i + 1] = copy_subtree(child);
       }
       key_buf.resize(prefix_len);
       if (children_buf[i + 1]) branch_count++;
@@ -704,8 +776,10 @@ struct _Merger {
         alloc_node<trie_ptr>(TrieNode::size(src_prefix.size(), branch_count));
     new_trie->create(src_prefix, children_buf + 1);
 
+    offset_e old_offset = *dst_offset;
     free_trie(dst_trie);
-    return resolve(new_trie);
+    *dst_offset = resolve(new_trie);
+    dumper.dump_merge_trie_into_trie(key_buf, old_offset, *dst_offset, "src_is_prefix");
   }
 
   /**
@@ -726,9 +800,9 @@ struct _Merger {
    * - 'b': both have → recurse merge
    * - 'c': only src has → copy src child
    */
-  offset_e merge_trie_children(trie_ptr dst_trie, offset_e dst_offset,
+  void merge_trie_children(offset_e* dst_offset, trie_ptr dst_trie,
                                src_trie_ptr src_trie,
-                               src_offset_e src_offset) {
+                               src_offset_e* src_offset) {
     // Collect all children from both tries
     clear_children_buf();
     bool changed = false;
@@ -746,21 +820,21 @@ struct _Merger {
 
       if (children_buf[i + 1]) {
         // Both have this branch - recurse
-        offset_e merged = merge_trees(children_buf[i + 1], *src_child);
-        if (merged != children_buf[i + 1]) {
-          children_buf[i + 1] = merged;
+        offset_e old_child = children_buf[i + 1];
+        merge_trees(&children_buf[i + 1], src_child);
+        if (children_buf[i + 1] != old_child) {
           changed = true;
         }
       } else {
         // Only src has this branch - copy
-        children_buf[i + 1] = copy_subtree(*src_child);
+        children_buf[i + 1] = copy_subtree(src_child);
         changed = true;
       }
       key_buf.resize(saved);
     }
 
     if (!changed) {
-      return dst_offset;
+      return;
     }
 
     // Create new trie with merged children
@@ -776,8 +850,10 @@ struct _Merger {
         alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
     new_trie->create(prefix, children_buf + 1);  // +1 because NONE is at index 0
 
+    offset_e old_offset = *dst_offset;
     free_trie(dst_trie);
-    return resolve(new_trie);
+    *dst_offset = resolve(new_trie);
+    dumper.dump_merge_trie_children(key_buf, old_offset, *dst_offset, branch_count);
   }
 
   // =========================================================================
@@ -796,33 +872,42 @@ struct _Merger {
    *                  |                              |
    *               [leaf]                         [leaf']
    */
-  offset_e copy_subtree(src_offset_e src_offset) {
-    if (!src_offset) return offset_e();
+  offset_e copy_subtree(src_offset_e* src_offset) {
+    if (!*src_offset) return offset_e();
 
-    if (src_offset.type() == LEAF) {
-      auto src_leaf = resolve_src<SrcLeafNode, LEAF>(&src_offset);
+    if (src_offset->type() == LEAF) {
+      auto src_leaf = resolve_src<SrcLeafNode, LEAF>(src_offset);
       Slice key = src_leaf->key();
       Slice value = get_src_value(src_leaf);
 
       size_t saved = key_buf.size();
       key_buf.append(key.data(), key.size());
       bool should_copy = handler.check_overwrite(key_buf, Slice(), value);
-      key_buf.resize(saved);
+      
       if (!should_copy) {
+        key_buf.resize(saved);
         return offset_e();  // Policy says don't copy
       }
 
-      return create_leaf(key, value);
+      offset_e result = create_leaf(key, value);
+      std::string key_for_dump = key_buf;  // Make a copy for the dumper
+      key_buf.resize(saved);
+      dumper.dump_copy_subtree(key_for_dump, *src_offset, result, "leaf");
+      return result;
     } else {
-      auto src_trie = resolve_src<SrcTrieNode>(&src_offset);
-      return copy_trie(src_trie, src_offset);
+      size_t saved_for_trie = key_buf.size();
+      auto src_trie = resolve_src<SrcTrieNode>(src_offset);
+      offset_e result = copy_trie(src_trie, src_offset);
+      // copy_trie has already resized key_buf back, so we're good
+      dumper.dump_copy_subtree(key_buf, *src_offset, result, "trie");
+      return result;
     }
   }
 
   /**
    * Copy a source trie and all its children to destination.
    */
-  offset_e copy_trie(src_trie_ptr src_trie, src_offset_e src_offset) {
+  offset_e copy_trie(src_trie_ptr src_trie, src_offset_e* src_offset) {
     Slice prefix((const char*)src_trie->compressed(), src_trie->len());
     size_t saved = key_buf.size();
     key_buf.append(prefix.data(), prefix.size());
@@ -836,7 +921,7 @@ struct _Merger {
       size_t prefix_len = key_buf.size();
       if (i != TrieNode::NONE) key_buf += (char)i;
 
-      children_buf[i + 1] = copy_subtree(*child);
+      children_buf[i + 1] = copy_subtree(child);
       key_buf.resize(prefix_len);
       if (children_buf[i + 1]) branch_count++;
     }
@@ -851,7 +936,7 @@ struct _Merger {
   }
 
   offset_e copy_subtree_with_prefix_adjust(
-      src_trie_ptr src_trie, src_offset_e src_offset,
+      src_trie_ptr src_trie, src_offset_e* src_offset,
       size_t skip_prefix) {
     Slice old_prefix((const char*)src_trie->compressed(), src_trie->len());
     Slice new_prefix_slice(old_prefix.data() + skip_prefix,
@@ -866,7 +951,7 @@ struct _Merger {
       src_offset_e* child = src_trie->offset(i);
       if (i != TrieNode::NONE) key_buf += (char)i;
 
-      children_buf[i + 1] = copy_subtree(*child);
+      children_buf[i + 1] = copy_subtree(child);
       key_buf.resize(saved);
       if (children_buf[i + 1]) branch_count++;
     }
@@ -926,7 +1011,7 @@ struct _Merger {
    *   split_pos=2: common prefix is "ab", dst continues with 'c',
    *   src continues with 'd'. Original trie's prefix is reduced.
    */
-  offset_e split_trie_for_leaf(trie_ptr dst_trie, offset_e dst_offset,
+  void split_trie_for_leaf(offset_e* dst_offset, trie_ptr dst_trie,
                                size_t split_pos, const Slice& src_key,
                                const Slice& src_value) {
     Slice dst_prefix((const char*)dst_trie->compressed(), dst_trie->len());
@@ -952,7 +1037,7 @@ struct _Merger {
     new_parent->array()[idxs.second] = resolve(new_leaf);
 
     free_trie(dst_trie);
-    return resolve(new_parent);
+    *dst_offset = resolve(new_parent);
   }
 
   // =========================================================================
