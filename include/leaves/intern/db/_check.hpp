@@ -242,7 +242,8 @@ struct _Dumper {
     int id_repeat = id_start;
     for (offset_e* iter = start; iter < end; iter++) {
       // Pass current offset as parent for children
-      dump_link(out, iter, offset, id_repeat++);
+      if (offset)
+        dump_link(out, iter, offset, id_repeat++);
     }
   }
 };
