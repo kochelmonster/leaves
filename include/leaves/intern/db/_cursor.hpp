@@ -526,14 +526,7 @@ struct _Cursor : public _CursorBase<Traits_> {
 
   void remove() {
     if (!this->is_valid()) throw NoValidPosition();
-    if constexpr (Traits::use_tombstone) {
-      // Mark as tombstone instead of deleting
-      auto& leaf = this->stack.back().leaf();
-      leaf->set_tombstone();
-      this->_db->make_dirty(leaf);
-    } else {
-      _Deleter(*this).exec();
-    }
+    _Deleter(*this).exec();
   }
 
   /* Helpers */
@@ -671,14 +664,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();
       get_bigmemory().free(bvalue);
     }
-    if constexpr (Traits::use_tombstone) {
-      // Mark as tombstone instead of deleting
-      auto& leaf = back.leaf();
-      leaf->set_tombstone();
-      this->_db->make_dirty(leaf);
-    } else {
-      _Deleter(*this).exec();
-    }
+    _Deleter(*this).exec();
   }
 
   bool start_transaction(bool non_blocking = false) {

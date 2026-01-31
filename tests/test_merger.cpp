@@ -4,7 +4,6 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include "../include/leaves/intern/db/_cursor.hpp"
-#include "../include/leaves/intern/util/_file_merger_dumper.hpp"
 #include "../include/leaves/intern/util/_merger.hpp"
 #include "test.hpp"
 

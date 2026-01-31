@@ -5,10 +5,10 @@
 #include <memory>
 #include <mutex>
 
-#include "_cursor.hpp"
 #include "../core/_hash.hpp"
-#include "../memory/_memory.hpp"
 #include "../core/_port.hpp"
+#include "../memory/_memory.hpp"
+#include "_cursor.hpp"
 
 namespace leaves {
 
@@ -288,7 +288,9 @@ struct _DB {
     _active_txn->mem_manager.free(page, *this);
   }
 
-  void prefetch(const offset_t& offset) const { _storage.prefetch(&offset); }
+  void prefetch(const offset_t& offset, Access access = READ) const {
+    _storage.prefetch(&offset, access);
+  }
 
   area_ptr alloc_single_area() {
     assert(_active_txn);

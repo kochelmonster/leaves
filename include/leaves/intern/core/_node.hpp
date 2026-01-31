@@ -578,7 +578,6 @@ struct _LeafNode {
   static constexpr auto BS_COUNT = Traits::PAGE_SIZES_COUNT;
   static constexpr auto MAX_SIZE = PAGE_SIZES[BS_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
-  static constexpr auto TOMBSTONE_FLAG = uint16_e(1) << 14;
 
   uint8_t key_size;
   uint16_e value_size;
@@ -604,12 +603,6 @@ struct _LeafNode {
   bool is_big() const {
     return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
   }
-
-  bool is_tombstone() const {
-    return (value_size & TOMBSTONE_FLAG) == TOMBSTONE_FLAG;
-  }
-
-  void set_tombstone() { value_size |= TOMBSTONE_FLAG; }
 
   // TODO: needed?
   static uint16_t size(uint16_t key, size_t value) {

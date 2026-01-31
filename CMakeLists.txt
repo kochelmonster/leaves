@@ -132,9 +132,6 @@ target_link_libraries(test_node PUBLIC core test)
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core test)
 
-add_executable(test_lsm tests/test_lsm.cpp)
-target_link_libraries(test_lsm PUBLIC core test)
-
 add_executable(test_bigmemory tests/test_bigmemory.cpp)
 target_link_libraries(test_bigmemory PUBLIC core test)
 
