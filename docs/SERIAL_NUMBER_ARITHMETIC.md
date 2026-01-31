@@ -101,7 +101,7 @@ Numbers can be compared if they're within 2^31 of each other.
 ### Transaction ID Management
 
 ```cpp
-#include "leaves/intern/_serial.hpp"
+#include "leaves/intern/core/_serial.hpp"
 using namespace leaves;
 
 // Initialize transaction counter

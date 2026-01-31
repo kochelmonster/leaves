@@ -4,7 +4,7 @@
 #include <boost/test/included/unit_test.hpp>
 #include <string>
 
-#include "leaves/intern/_memstore.hpp"
+#include "leaves/intern/storage/_memstore.hpp"
 
 using namespace leaves;
 

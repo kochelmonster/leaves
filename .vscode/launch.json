@@ -210,7 +210,7 @@
             "cwd": "${workspaceFolder}/build",
             "args": [
                 "-t",
-                "insert_bigkeys"
+                "remove_combine_trie"
             ],
             "setupCommands": [
                 {
@@ -354,13 +354,12 @@
             ]
         },
         {
-            "name": "(gdb) test_lsm_db",
+            "name": "(gdb) test_merger",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/test_lsm_db",
+            "program": "${workspaceFolder}/build/test_merger",
             "args": [
-                "-t",
-                "test_sync_commit_triggers_flush"
+                "--run_test=test_merger_single_leaf_same_key"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
@@ -381,13 +380,11 @@
             ]
         },
         {
-            "name": "(gdb) test_lsm_mmap",
+            "name": "(gdb) test_node",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/test_lsm_mmap",
-            "args": [
-                "--run_test=test_lsm_cursor"
-            ],
+            "program": "${workspaceFolder}/build/test_node",
+            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],

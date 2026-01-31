@@ -5,8 +5,8 @@
 #include <map>
 #include <vector>
 
-#include "leaves/intern/_memory.hpp"
-#include "leaves/intern/_traits.hpp"
+#include "leaves/intern/memory/_memory.hpp"
+#include "leaves/intern/core/_traits.hpp"
 
 using namespace leaves;
 

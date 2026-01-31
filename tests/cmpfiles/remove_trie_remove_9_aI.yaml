@@ -1,7 +1,7 @@
 type: trie
-id: 10288
-page: 10280
-freespace: 40
+id: 11008
+page: 11000
+freespace: 56
 txn: 12
 size: 64
 compressed: 

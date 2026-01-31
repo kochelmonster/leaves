@@ -7,8 +7,8 @@
 #include <cstdlib>
 #include <memory>
 
-#include "leaves/intern/_check.hpp"
-#include "leaves/intern/_memstore.hpp"
+#include "leaves/intern/db/_check.hpp"
+#include "leaves/intern/storage/_memstore.hpp"
 #include "leaves/leaves.hpp"
 #include "util/histogram.h"
 #include "util/random.h"

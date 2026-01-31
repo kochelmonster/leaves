@@ -3,7 +3,7 @@
 #define BOOST_TEST_MODULE test_serial
 
 #include <boost/test/included/unit_test.hpp>
-#include "../include/leaves/intern/_serial.hpp"
+#include "../include/leaves/intern/core/_serial.hpp"
 
 using namespace leaves;
 

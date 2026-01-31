@@ -1,9 +1,9 @@
 #include <chrono>
 #include <iostream>
 
-#include "../include/leaves/intern/_twoquecache.hpp"
-#include "../include/leaves/intern/_traits.hpp"
-#include "../include/leaves/intern/_util.hpp"
+#include "../include/leaves/intern/memory/_twoquecache.hpp"
+#include "../include/leaves/intern/core/_traits.hpp"
+#include "../include/leaves/intern/core/_util.hpp"
 
 using namespace leaves;
 

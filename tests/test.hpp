@@ -7,7 +7,7 @@
 #include <random>
 #include <vector>
 
-#include "../include/leaves/intern/_check.hpp"
+#include "../include/leaves/intern/db/_check.hpp"
 #include "../include/leaves/mmap.hpp"
 
 #ifndef CMPFILES
