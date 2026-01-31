@@ -18,6 +18,7 @@
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
 #include "../memory/_twoquecache.hpp"
+#include "../util/_threadpool.hpp"
 
 namespace leaves {
 
@@ -29,7 +30,7 @@ struct _CacheBase {
 };
 
 template <typename Traits_, typename Opers_>
-struct _CacheStore : public Opers_ {
+struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_, Opers_>> {
   typedef Traits_ Traits;
   typedef _CacheStore<Traits_, Opers_> Self;
   using page_ptr = typename Traits::ptr;
@@ -81,38 +82,27 @@ struct _CacheStore : public Opers_ {
   std::unordered_map<uint64_t, page_ptr> _pending_dirty_areas;
   std::unordered_map<uint64_t, page_ptr> _dirty_areas;
   std::mutex _dirty_areas_mutex;
-  std::thread _write_back_thread;
-  std::atomic<bool> _should_stop;
-  std::mutex _dirty_mutex;
-  std::condition_variable _dirty_cv;
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
+  std::atomic<bool> _flush_pending{false};
   std::vector<_db_ptr> _dbs;
 
-  _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M)
-      : _cache(capacity), _capacity(capacity), _should_stop(false) {
+  _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M, size_t pool_threads = 1)
+      : _ThreadPoolMixin<Self>(pool_threads), _cache(capacity), _capacity(capacity) {
     _dbs.resize(db_count);
   }
 
   // must be called in the subclasses' destructor
   void destroy() {
-    // Stop the _write_back_thread
-    _should_stop.store(true, std::memory_order_release);
-    if (_write_back_thread.joinable()) {
-      {
-        std::lock_guard<std::mutex> lock(_dirty_mutex);
-        _dirty_cv.notify_all();  // Wake up the thread to process remaining work
-      }
-      _write_back_thread.join();
-    }
+    // Wait for any pending flush tasks to complete
+    this->wait_all();
 
+    // Final flush of any remaining dirty blocks
     write_dirty_blocks(calc_header_size());
     close();
   }
 
-  void start_write_back_thread() {
-    _write_back_thread = std::thread(&_CacheStore::write_back_loop, this);
-  }
+
 
   uint64_t new_cursor_id() {
     return _last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -129,8 +119,12 @@ struct _CacheStore : public Opers_ {
 
     if (sync) {
       write_dirty_blocks(calc_header_size());
-    } else if (has_pending) {
-      _dirty_cv.notify_one();
+    } else if (has_pending && !_flush_pending.exchange(true)) {
+      // Submit async flush task to thread pool (only if not already pending)
+      this->submit_task([this]() {
+        write_dirty_blocks(calc_header_size());
+        _flush_pending.store(false);
+      });
     }
   }
 
@@ -196,10 +190,10 @@ struct _CacheStore : public Opers_ {
     _pending_dirty_areas[block.area()->offset()] = block;
   }
 
-  // Mark the file header as dirty; background loop will flush it
+  // Mark the file header as dirty; background flush will write it
   void make_header_dirty() {
     _header_dirty.store(true, std::memory_order_release);
-    _dirty_cv.notify_one();
+    // Header will be flushed in next write_dirty_blocks call
   }
 
   area_ptr emplace_new_area(uint64_t size) {
@@ -275,34 +269,7 @@ struct _CacheStore : public Opers_ {
     }
   }
 
-  void write_back_loop() {
-    std::unique_lock<std::mutex> lock(_dirty_mutex);
-    size_t header_size = calc_header_size();
 
-    while (true) {
-      // Wait for notification or stop signal
-      _dirty_cv.wait(lock, [this]() {
-        // Check if we should stop OR have work to do
-        bool should_stop = _should_stop.load(std::memory_order_acquire);
-
-        // Check other conditions that require locks
-        std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
-        bool has_dirty_work = _header_dirty.load(std::memory_order_acquire) ||
-                              !_dirty_areas.empty();
-
-        // Wake up either if stopping OR have work
-        return should_stop || has_dirty_work;
-      });
-
-      // Check again immediately after wait returns
-      if (_should_stop.load(std::memory_order_acquire)) {
-        break;
-      }
-
-      // Call the extracted method to process dirty blocks
-      write_dirty_blocks(header_size);
-    }
-  }
 
   void list_dbs(std::vector<std::string>& result) {
     for (uint16_t i = 0; i < _header->db_count; i++) {

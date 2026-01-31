@@ -254,10 +254,10 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   using DB = base_t::DB;
 
   _FileStore(const char* path, uint16_t db_count = 48,
-             size_t capacity = 500 * M)
-      : base_t(db_count, capacity) {
+             size_t capacity = 500 * M, size_t pool_threads = 1)
+      : base_t(db_count, capacity, pool_threads) {
     init_dbfile(path, db_count);
-    start_write_back_thread();
+    // Thread pool already started by base constructor
   }
 
   ~_FileStore() {

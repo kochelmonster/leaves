@@ -172,8 +172,8 @@ BOOST_AUTO_TEST_CASE(test_dirty_processor_thread) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBFileStore db(dbFilePath.c_str());
 
-  // Test that the dirty processor thread is running
-  BOOST_CHECK(db._write_back_thread.joinable());
+  // Test that the thread pool is initialized
+  BOOST_CHECK_GT(db.pool_size(), 0);
 
   // Test basic cache functionality
   BOOST_CHECK_GT(db._capacity, 0);
