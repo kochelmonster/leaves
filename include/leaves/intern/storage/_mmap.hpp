@@ -3,8 +3,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <memory>
-#include <type_traits>
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
@@ -14,15 +12,16 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <type_traits>
 
-#include "../db/_db.hpp"
 #include "../core/_exception.hpp"
-#include "../memory/_memory.hpp"
 #include "../core/_node.hpp"
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"
 #include "../core/_util.hpp"
+#include "../db/_db.hpp"
+#include "../memory/_memory.hpp"
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
@@ -66,7 +65,7 @@ struct _MemoryMapTraits {
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
 
-  static constexpr uint16_t PAGE_SIZES[] = {     // Typical node sizes
+  static constexpr uint16_t PAGE_SIZES[] = {      // Typical node sizes
       _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
       _TrieNode<_MemoryMapTraits>::size(1, 16),   // hex 0-9A-F
       _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
@@ -81,7 +80,7 @@ struct _MemoryMapTraits {
   using Pointer = SimplePointer<T, type>;
 };
 
-template <typename Traits_, template<typename> class DB_ = _DB>
+template <typename Traits_, template <typename> class DB_ = _DB>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
   typedef _MemoryMapFile<Traits_, DB_> MemoryMapFile;
@@ -91,12 +90,12 @@ struct _MemoryMapFile {
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef _DB<MemoryMapFile> DB;
   typedef std::unique_ptr<DB> _db_ptr;
-  
+
   using Mutex = boost::interprocess::interprocess_mutex;
 
   struct DBEntry {
     char name[21];
-    offset_t offset;  
+    offset_t offset;
   };
 
   struct FileHeader {
@@ -211,12 +210,9 @@ struct _MemoryMapFile {
   }
 
   void flush(bool sync = false, bool force = false) {
-    if (force) _region.flush(0, 0, !sync);
-  }
-
-  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
-    if (size > 0) {
-      _region.flush(offset, size, !sync);
+    if (force) {
+      // Only sync actual file size, not entire mapped region
+      _region.flush(0, _memory->file_size, !sync);
     }
   }
 
@@ -267,7 +263,7 @@ struct _MemoryMapFile {
   // Resolve offset - handles both absolute and relative offsets uniformly
   page_ptr resolve(const offset_t* offset_ptr, Access access = READ) const {
     char* p;
-    
+
     if (offset_ptr->is_relative()) {
       // Relative: calculate address relative to where offset_t is stored
       p = (char*)offset_ptr + offset_ptr->as_signed();
@@ -275,7 +271,7 @@ struct _MemoryMapFile {
       // Absolute: offset from _memory base
       p = (char*)_memory + (uint64_t)*offset_ptr;
     }
-    
+
     prefetch(p, access);
     return page_ptr(p);
   }

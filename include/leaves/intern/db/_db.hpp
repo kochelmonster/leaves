@@ -258,10 +258,6 @@ struct _DB {
     _storage.make_dirty(block);
   }
 
-  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
-    _storage.flush(ptr, offset, size, sync);
-  }
-
   void flush(bool sync = false, bool force = false) {
     _storage.flush(sync, force);
   }
@@ -451,12 +447,12 @@ struct _DB {
     make_dirty(active);
     make_dirty(_wtxn);
 
-    flush(sync, true);
+    if (sync) flush(true, true);  // Only flush if explicitly requested
     return _wtxn->txn_id;
   }
 
   bool commit(uint64_t cursor_id, bool sync = false) {
-    if (!prepare_commit(cursor_id, sync)) return false;
+    if (!prepare_commit(cursor_id, false)) return false;
 
     // Atomically switch to new transaction (area tails are preserved in
     // transaction)

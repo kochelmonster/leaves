@@ -128,11 +128,6 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     }
   }
 
-  void flush(void* ptr, offset_t offset, size_t size, bool sync = false) {
-    // Delegate to the underlying operations layer (e.g., _FileOperations)
-    Opers_::flush(ptr, offset, size, sync);
-  }
-
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
     uint64_t raw_offset = (uint64_t)offset;

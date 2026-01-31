@@ -677,7 +677,7 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
     return true;
   }
 
-  tid_t prepare_commit(bool sync = false) {
+  tid_t prepare_commit(bool sync = true) {
     return this->_db->prepare_commit(_id, sync);
   }
 
