@@ -121,6 +121,7 @@ struct _BigMemory {
       found_size = area->end() - found_offset;
       has_successor = false;
     }
+    _db->prefetch(found_offset, WRITE);
 
     uint64_t delta = found_size - padded_size;
     if (delta >= MAX_PAGE_SIZE) {
