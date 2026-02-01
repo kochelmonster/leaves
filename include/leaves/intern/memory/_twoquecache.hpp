@@ -3,7 +3,7 @@
 
 #include <iostream>
 #include <list>
-#include <unordered_map>
+#include "../third_party/unordered_dense.h"
 
 namespace leaves {
 
@@ -43,17 +43,14 @@ struct TwoQCache {
         auto a1in_it = _a1in_map.find(key);
         if (a1in_it != _a1in_map.end()) {
             // Found in A1in queue - promote to Am queue (frequently used items)
-            out = a1in_it->second->second;
+            // Use splice to move the node without copying the Value
+            auto list_it = a1in_it->second;
+            out = list_it->second;  // Single copy to output
             
-            // Move from A1in to Am
-            Key k = a1in_it->first;
-            Value v = a1in_it->second->second;
-            _a1in_list.erase(a1in_it->second);
+            // Splice the node from A1in to Am (no Value copy)
+            _am_list.splice(_am_list.end(), _a1in_list, list_it);
+            _am_map[key] = list_it;
             _a1in_map.erase(a1in_it);
-            
-            // Add to Am queue
-            _am_list.push_back(std::make_pair(k, v));
-            _am_map[k] = std::prev(_am_list.end());
             
             return true;
         }
@@ -82,10 +79,11 @@ struct TwoQCache {
         _size += get_item_size(value);
 
         // Check if key is in A1out (was recently in cache)
-        if (_a1out_map.count(key) > 0) {
+        auto a1out_it = _a1out_map.find(key);
+        if (a1out_it != _a1out_map.end()) {
             // This is a recurring item, put directly in Am
-            _a1out_list.erase(_a1out_map[key]);
-            _a1out_map.erase(key);
+            _a1out_list.erase(a1out_it->second);
+            _a1out_map.erase(a1out_it);
             
             _am_list.push_back(std::make_pair(key, value));
             _am_map[key] = std::prev(_am_list.end());
@@ -217,15 +215,15 @@ struct TwoQCache {
     
     // A1in queue for recent items (first access)
     std::list<std::pair<Key, Value>> _a1in_list;
-    std::unordered_map<Key, typename std::list<std::pair<Key, Value>>::iterator> _a1in_map;
+    ankerl::unordered_dense::map<Key, typename std::list<std::pair<Key, Value>>::iterator> _a1in_map;
     
     // A1out queue for recently evicted items (ghost list - only keys)
     std::list<Key> _a1out_list;
-    std::unordered_map<Key, typename std::list<Key>::iterator> _a1out_map;
+    ankerl::unordered_dense::map<Key, typename std::list<Key>::iterator> _a1out_map;
     
     // Am queue for frequently accessed items
     std::list<std::pair<Key, Value>> _am_list;
-    std::unordered_map<Key, typename std::list<std::pair<Key, Value>>::iterator> _am_map;
+    ankerl::unordered_dense::map<Key, typename std::list<std::pair<Key, Value>>::iterator> _am_map;
 };
 
 } // namespace leaves

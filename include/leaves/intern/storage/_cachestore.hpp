@@ -5,18 +5,18 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstring>  // for std::memcpy
 #include <cstdint>
+#include <cstring>  // for std::memcpy
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
+#include "../third_party/unordered_dense.h"
 
-#include "../db/_db.hpp"
 #include "../core/_exception.hpp"
-#include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
+#include "../db/_db.hpp"
+#include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
 #include "../memory/_twoquecache.hpp"
 #include "../util/_threadpool.hpp"
 
@@ -30,7 +30,8 @@ struct _CacheBase {
 };
 
 template <typename Traits_, typename Opers_>
-struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_, Opers_>> {
+struct _CacheStore : public Opers_,
+                     public _ThreadPoolMixin<_CacheStore<Traits_, Opers_>> {
   typedef Traits_ Traits;
   typedef _CacheStore<Traits_, Opers_> Self;
   using page_ptr = typename Traits::ptr;
@@ -58,7 +59,7 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
   void debug_check_cache() const {
     std::cout << "\n==== DEBUG CACHE CHECK ====\n";
     std::cout << "Cache entries: " << _cache.size() << " entries\n";
-    
+
     // Cannot check cache contents with the new implementation
     // as we don't have direct access to internal structures
     std::cout << "Cannot check cache contents with TwoQCache implementation\n";
@@ -69,7 +70,7 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     std::cout << "Resetting cache (clearing all entries)\n";
     // Create a new cache instance
     _cache = Cache(_capacity);
-    
+
     // Also reset the dirty areas maps to avoid dangling references
     {
       std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
@@ -79,16 +80,19 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
   }
 
   // Handling for dirty areas - using mutex-protected map for thread safety
-  std::unordered_map<uint64_t, page_ptr> _pending_dirty_areas;
-  std::unordered_map<uint64_t, page_ptr> _dirty_areas;
+  ankerl::unordered_dense::map<uint64_t, page_ptr> _pending_dirty_areas;
+  ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_areas;
   std::mutex _dirty_areas_mutex;
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
   std::vector<_db_ptr> _dbs;
 
-  _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M, size_t pool_threads = 1)
-      : _ThreadPoolMixin<Self>(pool_threads), _cache(capacity), _capacity(capacity) {
+  _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M,
+              size_t pool_threads = 1)
+      : _ThreadPoolMixin<Self>(pool_threads),
+        _cache(capacity),
+        _capacity(capacity) {
     _dbs.resize(db_count);
   }
 
@@ -101,8 +105,6 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     write_dirty_blocks(calc_header_size());
     close();
   }
-
-
 
   uint64_t new_cursor_id() {
     return _last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -133,10 +135,9 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
     // Check cache first
-    page_ptr cached;
-    if (_cache.get(area_offset, cached)) {
-      assert(cached.area()->offset() == area_offset);
-      page_ptr result = cached;  // copy increments refcount
+    page_ptr result;
+    if (_cache.get(area_offset, result)) {
+      assert(result.area()->offset() == area_offset);
       result._offset = static_cast<uint32_t>(raw_offset - area_offset);
       return result;
     }
@@ -152,7 +153,7 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     read((uint64_t)read_offset, slice, disk_header.size());
     slice->_ref.store(0);
 
-    page_ptr result(slice);
+    result = page_ptr(slice);
     result._offset = static_cast<uint32_t>(raw_offset - area_offset);
     _cache.put(area_offset, result);
     return result;
@@ -169,14 +170,13 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
-  void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {
+  void prefetch(const offset_t* offset_ptr, Access access=READ) const {
     // For file storage, prefetch is essentially a no-op
     // Could potentially implement with platform-specific hints
   }
 
-  void prefetch(void* /*mem*/, Access /*access*/ = READ) const {
-    // For file storage, prefetch is essentially a no-op
-    // Could potentially implement with platform-specific hints
+  void prefetch(void* mem, Access access=READ) const {
+    leaves::prefetch(mem, access);
   }
 
   template <typename PtrType>
@@ -237,23 +237,22 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
   void write_dirty_blocks(size_t header_size) {
     // Process all dirty areas in the set
     // Use a batch approach for blocks with contiguous offsets
-    
+
     // We'll collect blocks to write in this vector
     std::vector<page_ptr> blocks_to_write;
-    
+
     // Get all dirty blocks under a single lock to reduce lock contention
     {
       std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
       blocks_to_write.reserve(_dirty_areas.size());
-      
+
       // Extract all dirty blocks
       for (auto& entry : _dirty_areas) {
         blocks_to_write.emplace_back(entry.second);
       }
-      
+
       // Clear the dirty areas map
       _dirty_areas.clear();
-  
     }
 
     write_batch(blocks_to_write, header_size);
@@ -263,8 +262,6 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
       write(0, _header, header_size);
     }
   }
-
-
 
   void list_dbs(std::vector<std::string>& result) {
     for (uint16_t i = 0; i < _header->db_count; i++) {
@@ -296,7 +293,8 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
     }
 
     if (free < 0) throw LeavesException();
-    std::strncpy(_header->dbs[free].name, name, sizeof(_header->dbs[free].name) - 1);
+    std::strncpy(_header->dbs[free].name, name,
+                 sizeof(_header->dbs[free].name) - 1);
     _header->dbs[free].name[sizeof(_header->dbs[free].name) - 1] = '\0';
     _dbs[free] = std::make_unique<DB>(*this, &_header->dbs[free].offset, free);
     make_header_dirty();
@@ -320,6 +318,6 @@ struct _CacheStore : public Opers_, public _ThreadPoolMixin<_CacheStore<Traits_,
   }
 };
 
-} // namespace leaves
+}  // namespace leaves
 
-#endif // _LEAVES__CACHESTORE_HPP
+#endif  // _LEAVES__CACHESTORE_HPP
