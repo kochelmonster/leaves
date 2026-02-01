@@ -429,17 +429,12 @@ struct _CursorBase {
 };
 
 // Full cursor with find, transactions, and modification operations
-template <typename Traits_, typename Derived = void>
+template <typename Traits_, typename Derived>
 struct _ICursor
-    : public _CursorBase<Traits_, typename std::conditional<
-                                      std::is_same<Derived, void>::value,
-                                      _ICursor<Traits_, void>, Derived>::type> {
+    : public _CursorBase<Traits_, Derived> {
   typedef Traits_ Traits;
-  typedef typename std::conditional<std::is_same<Derived, void>::value,
-                                    _ICursor<Traits_, void>, Derived>::type
-      FinalDerived;
   typedef _ICursor<Traits_, Derived> Cursor;
-  typedef _CursorBase<Traits_, FinalDerived> CursorBase;
+  typedef _CursorBase<Traits_, Derived> CursorBase;
   using DB = typename Traits::DB;
   using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
@@ -473,7 +468,7 @@ struct _ICursor
     this->rest_key.reset();
     this->current_key.clear();
     if (!*this->_root) return true;
-    static_cast<FinalDerived*>(this)->push(this->_root);
+    static_cast<Derived*>(this)->push(this->_root);
     return false;
   }
 
