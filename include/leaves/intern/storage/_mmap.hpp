@@ -40,7 +40,7 @@ namespace leaves {
 static const char MMAP_SIGNATURE[] = "larch-leaves-mmap";
 static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 
-// definition og all headers and data types
+// definition of all headers and data types
 struct _MemoryMapTraits {
   typedef uint8_t hash_t[0];
   typedef uint32_t uint32_e;

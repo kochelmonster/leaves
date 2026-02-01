@@ -52,6 +52,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   typedef _MemManager<Traits> MemManager;
   using ptr = typename Traits::Pointer<_Transaction>;
   using page_ptr = typename Traits::ptr;
+  using offset_e = typename Traits::offset_e;
   using TransactionBase::area_list_tail_multi;
   using TransactionBase::area_list_tail_single;
   using TransactionBase::mem_manager;
@@ -61,9 +62,16 @@ struct _Transaction : public _TransactionBase<Traits_> {
       MemManager::assign_slot(sizeof(TransactionBase));
   uint16_t size() const { return sizeof(TransactionBase); }
 
+  // Alloc without hint
   template <typename Resolver>
   page_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
-    page_ptr result = mem_manager.alloc(slot, resolver);
+    return alloc_slot(slot, resolver, nullptr);
+  }
+
+  // Alloc with locality hint
+  template <typename Resolver>
+  page_ptr alloc_slot(uint16_t slot, Resolver& resolver, const offset_e* hint) {
+    page_ptr result = mem_manager.alloc(slot, resolver, hint);
     result->txn_id = txn_id;
     resolver.make_dirty(result);
     return result;
@@ -116,9 +124,19 @@ struct _DB {
 
   struct CursorTraits : public Storage::Traits {
     typedef _DB<Storage_, Transaction_, Header_> DB;
-    typedef ::Hasher Hasher;
     using tid_t = leaves::tid_t;
   };
+
+  // Detect ReplicationHasher from Traits, fallback to NullHasher
+  template <typename T, typename = void>
+  struct get_replication_hasher { using type = NullHasher; };
+  
+  template <typename T>
+  struct get_replication_hasher<T, std::void_t<typename T::ReplicationHasher>> {
+    using type = typename T::ReplicationHasher;
+  };
+  
+  using ReplicationHasher = typename get_replication_hasher<Traits>::type;
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
@@ -262,20 +280,31 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  // space without PageHeader
+  // space without PageHeader - no hint
   page_ptr alloc(uint16_t space) {
+    return alloc(space, nullptr);
+  }
+
+  // space without PageHeader - with locality hint
+  page_ptr alloc(uint16_t space, const offset_e* hint) {
     assert(space + sizeof(typename Traits::PageHeader) <=
            PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     page_ptr result = alloc_slot(
-        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
+        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)), hint);
     result->used = space;
     return result;
   }
 
+  // alloc_slot without hint
   page_ptr alloc_slot(uint16_t slot) {
+    return alloc_slot(slot, nullptr);
+  }
+
+  // alloc_slot with locality hint
+  page_ptr alloc_slot(uint16_t slot, const offset_e* hint) {
     assert(transaction_active());
     assert(_active_txn);
-    return _active_txn->alloc_slot(slot, *this);
+    return _active_txn->alloc_slot(slot, *this, hint);
   }
 
   void free(page_ptr page) {
@@ -438,6 +467,9 @@ struct _DB {
 
     // already prepared
     if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
+
+    // Compute merkle hashes for all new nodes in this transaction
+    compute_hashes(ReplicationHasher{}, this, _wtxn);
 
     _header->prepared_txn = resolve(_wtxn);
 

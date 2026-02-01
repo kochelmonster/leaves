@@ -425,6 +425,10 @@ struct _CursorBase {
   // Allocation methods delegated through cursor to DB
   page_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
 
+  page_ptr alloc(uint16_t size, const offset_e* hint) {
+    return this->_db->alloc(size, hint);
+  }
+
   AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
 };
 
@@ -439,8 +443,6 @@ struct _ICursor
   using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
-  using Hasher = typename Traits::Hasher;
-  using hash_t = typename Hasher::hash_t;
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 

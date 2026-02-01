@@ -47,7 +47,6 @@ struct _BigMemory {
   };
 
   struct CursorTraits : public Traits {
-    typedef ::NullHasher Hasher;
   };
 
   DB* _db;
