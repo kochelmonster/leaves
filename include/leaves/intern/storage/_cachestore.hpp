@@ -134,10 +134,11 @@ struct _CacheStore : public Opers_,
     offset_t offset = *offset_ptr;
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
-    // Check cache first
-    page_ptr result;
-    if (_cache.get(area_offset, result)) {
-      assert(result.area()->offset() == area_offset);
+    
+    // Check cache first - use pointer-returning get to avoid copy
+    if (auto* cached = _cache.get(area_offset)) {
+      assert(cached->area()->offset() == area_offset);
+      page_ptr result = *cached;  // Single copy here
       result._offset = static_cast<uint32_t>(raw_offset - area_offset);
       return result;
     }
@@ -153,7 +154,7 @@ struct _CacheStore : public Opers_,
     read((uint64_t)read_offset, slice, disk_header.size());
     slice->_ref.store(0);
 
-    result = page_ptr(slice);
+    page_ptr result(slice);
     result._offset = static_cast<uint32_t>(raw_offset - area_offset);
     _cache.put(area_offset, result);
     return result;
@@ -170,12 +171,11 @@ struct _CacheStore : public Opers_,
     return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
-  void prefetch(const offset_t* offset_ptr, Access access=READ) const {
-    // For file storage, prefetch is essentially a no-op
-    // Could potentially implement with platform-specific hints
+  FORCE_INLINE void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {
+    // No-op for file storage: data gets cached in TwoQCache on first access
   }
 
-  void prefetch(void* mem, Access access=READ) const {
+  FORCE_INLINE void prefetch(void* mem, Access access=READ) const {
     leaves::prefetch(mem, access);
   }
 

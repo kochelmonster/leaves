@@ -5,12 +5,17 @@
 
 #if defined(_MSC_VER)
 #include <xmmintrin.h>  // For _mm_prefetch and _MM_HINT_T0 on MSVC
+#define FORCE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define FORCE_INLINE inline __attribute__((always_inline))
+#else
+#define FORCE_INLINE inline
 #endif
 
 namespace leaves {
 
 // Cross-platform prefetch function
-inline void prefetch(const void* ptr, Access access = READ) {
+FORCE_INLINE void prefetch(const void* ptr, Access access = READ) {
 #if defined(__GNUC__) || defined(__clang__) || defined(__INTEL_COMPILER)
   if (access == READ)
     __builtin_prefetch(ptr, 0);
