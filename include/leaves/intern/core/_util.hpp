@@ -354,8 +354,10 @@ struct AreaSlice {
   void size(uint32_t new_size) { _size = new_size; }
 
   // Reference counting methods - atomic
+  // inc_ref uses relaxed: just incrementing, no synchronization needed
+  // dec_ref uses acq_rel: ensures all prior writes are visible before potential delete
   uint32_t inc_ref() {
-    return _ref.fetch_add(1, std::memory_order_acq_rel) + 1;
+    return _ref.fetch_add(1, std::memory_order_relaxed) + 1;
   }
 
   uint32_t dec_ref() {
