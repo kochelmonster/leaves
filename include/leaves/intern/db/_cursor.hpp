@@ -248,10 +248,10 @@ struct _Transition {
     if (cmp == 0) {
       if (++link_idx >= trie_.count()) return false;
       offset_e* lnk = link();
-      if (link_idx + 1 < trie_.count()) cursor->_db->prefetch(*(lnk + 1));
+      if (link_idx + 1 < trie_.count()) cursor->_db->prefetch(lnk + 1);
 
       auto& child = push();
-      cursor->_db->prefetch(*lnk);
+      cursor->_db->prefetch(lnk);
 
       child.first();
       branch_key = current_key()[child.keypos];
@@ -290,10 +290,10 @@ struct _Transition {
     if (cmp == 0) {
       if (!link_idx--) return false;
       offset_e* lnk = link();
-      if (link_idx > 0) cursor->_db->prefetch(*(lnk - 1));
+      if (link_idx > 0) cursor->_db->prefetch(lnk - 1);
 
       auto& child = push();
-      cursor->_db->prefetch(*lnk);
+      cursor->_db->prefetch(lnk);
 
       child.last();
       if (child.keypos < current_key().size()) {
@@ -412,7 +412,7 @@ struct _CursorBase {
   }
 
   void push(offset_e* ptr) {
-    _db->prefetch(*ptr);
+    _db->prefetch(ptr);
     stack.push(static_cast<Derived*>(this), ptr, current_key.size());
   }
 
@@ -616,7 +616,7 @@ struct _TransactionalCursor
   }
 
   void push(offset_e* ptr) {
-    this->_db->prefetch(*ptr, is_transaction_active() ? WRITE : READ);
+    this->_db->prefetch(ptr, is_transaction_active() ? WRITE : READ);
     this->stack.push(this, ptr, this->current_key.size());
   }
 
@@ -657,7 +657,7 @@ struct _TransactionalCursor
     if (back.cmp == 0 && back.is_leaf()) {
       if (back.leaf()->is_big()) {
         BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-        this->_db->prefetch(bvalue->chunk_offset);
+        this->_db->prefetch((offset_e*)&bvalue->chunk_offset);
         auto data_ptr = bvalue->data(this->_db);
         return Slice((char*)data_ptr, bvalue->value_size);
       }

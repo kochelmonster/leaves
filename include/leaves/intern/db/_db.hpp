@@ -284,8 +284,8 @@ struct _DB {
     _active_txn->mem_manager.free(page, *this);
   }
 
-  void prefetch(const offset_t& offset, Access access = READ) const {
-    _storage.prefetch(&offset, access);
+  void prefetch(const offset_e* offset, Access access = READ) const {
+    _storage.prefetch(offset, access);
   }
 
   area_ptr alloc_single_area() {
