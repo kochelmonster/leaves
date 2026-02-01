@@ -4,11 +4,11 @@
 #include <string>
 #include <vector>
 
+#include "../core/_exception.hpp"
+#include "../core/_node.hpp"
 #include "../memory/_bigmemory.hpp"
 #include "_deleter.hpp"
-#include "../core/_exception.hpp"
 #include "_inserter.hpp"
-#include "../core/_node.hpp"
 
 namespace leaves {
 
@@ -299,8 +299,7 @@ struct _Transition {
       if (child.keypos < current_key().size()) {
         branch_key = current_key()[child.keypos];
         assert(trie_.isset(branch_key));
-      }
-      else {
+      } else {
         assert(trie_.isset(TrieNode::NONE));
       }
       return true;
@@ -343,13 +342,13 @@ struct _Stack {
   typedef _Stack<Cursor> Stack;
   typedef _Transition<Cursor> Transition;
   typedef std::vector<Transition> stack_v;
-  typedef Cursor::Traits::offset_e offset_e;
 
   stack_v data;
   size_t size;
 
   _Stack() : size(0) { data.resize(100); }
 
+  template <typename offset_e>
   void push(Cursor* cursor, offset_e* offset, uint16_t keypos = 0) {
     if (size == data.size()) data.resize(size * 2);
     data[size].init(cursor, offset, keypos);
@@ -374,11 +373,11 @@ struct _Stack {
 };
 
 // Base cursor with stack and core navigation functionality
-template <typename Traits_>
+template <typename Traits_, typename Derived>
 struct _CursorBase {
   typedef Traits_ Traits;
-  typedef _CursorBase<Traits_> CursorBase;
-  typedef _Stack<CursorBase> Stack;
+  typedef _CursorBase<Traits_, Derived> CursorBase;
+  typedef _Stack<Derived> Stack;
   typedef typename Traits::DB DB;
   using offset_e = typename Traits::offset_e;
   using page_ptr = typename Traits::ptr;
@@ -412,7 +411,10 @@ struct _CursorBase {
     rest_key.iadvance(size);
   }
 
-  void push(offset_e* ptr) { stack.push(this, ptr, current_key.size()); }
+  void push(offset_e* ptr) {
+    _db->prefetch(*ptr);
+    stack.push(static_cast<Derived*>(this), ptr, current_key.size());
+  }
 
   void pop() {
     assert(stack.size > 0);
@@ -427,11 +429,17 @@ struct _CursorBase {
 };
 
 // Full cursor with find, transactions, and modification operations
-template <typename Traits_>
-struct _Cursor : public _CursorBase<Traits_> {
+template <typename Traits_, typename Derived = void>
+struct _Cursor
+    : public _CursorBase<Traits_, typename std::conditional<
+                                      std::is_same<Derived, void>::value,
+                                      _Cursor<Traits_, void>, Derived>::type> {
   typedef Traits_ Traits;
-  typedef _Cursor<Traits_> Cursor;
-  typedef _CursorBase<Traits_> CursorBase;
+  typedef typename std::conditional<std::is_same<Derived, void>::value,
+                                    _Cursor<Traits_, void>, Derived>::type
+      FinalDerived;
+  typedef _Cursor<Traits_, Derived> Cursor;
+  typedef _CursorBase<Traits_, FinalDerived> CursorBase;
   using DB = typename Traits::DB;
   using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
@@ -465,7 +473,7 @@ struct _Cursor : public _CursorBase<Traits_> {
     this->rest_key.reset();
     this->current_key.clear();
     if (!*this->_root) return true;
-    this->push(this->_root);
+    static_cast<FinalDerived*>(this)->push(this->_root);
     return false;
   }
 
@@ -575,9 +583,10 @@ struct _Cursor : public _CursorBase<Traits_> {
 
 // Full cursor with find, transactions, and modification operations
 template <typename Traits_>
-struct _TransactionalCursor : public _Cursor<Traits_> {
+struct _TransactionalCursor
+    : public _Cursor<Traits_, _TransactionalCursor<Traits_>> {
   typedef Traits_ Traits;
-  typedef _Cursor<Traits_> Cursor;
+  typedef _Cursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
   typedef _BigMemory<Cursor> BigMemory;
   using DB = typename Traits::DB;
   using txn_ptr = typename DB::txn_ptr;
@@ -602,6 +611,11 @@ struct _TransactionalCursor : public _Cursor<Traits_> {
 
   bool is_transaction_active() const {
     return this->_db->txn_cursor_id() == _id;
+  }
+
+  void push(offset_e* ptr) {
+    this->_db->prefetch(*ptr, is_transaction_active() ? WRITE : READ);
+    this->stack.push(this, ptr, this->current_key.size());
   }
 
   BigMemory& get_bigmemory() {
