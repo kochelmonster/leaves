@@ -430,15 +430,15 @@ struct _CursorBase {
 
 // Full cursor with find, transactions, and modification operations
 template <typename Traits_, typename Derived = void>
-struct _Cursor
+struct _ICursor
     : public _CursorBase<Traits_, typename std::conditional<
                                       std::is_same<Derived, void>::value,
-                                      _Cursor<Traits_, void>, Derived>::type> {
+                                      _ICursor<Traits_, void>, Derived>::type> {
   typedef Traits_ Traits;
   typedef typename std::conditional<std::is_same<Derived, void>::value,
-                                    _Cursor<Traits_, void>, Derived>::type
+                                    _ICursor<Traits_, void>, Derived>::type
       FinalDerived;
-  typedef _Cursor<Traits_, Derived> Cursor;
+  typedef _ICursor<Traits_, Derived> Cursor;
   typedef _CursorBase<Traits_, FinalDerived> CursorBase;
   using DB = typename Traits::DB;
   using offset_e = typename Traits::offset_e;
@@ -449,7 +449,7 @@ struct _Cursor
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 
-  _Cursor(DB* db, offset_e* root) : CursorBase(db, root) {}
+  _ICursor(DB* db, offset_e* root) : CursorBase(db, root) {}
 
   void find(const Slice& key) {
     if (key.size() > MAX_KEY_SIZE) throw KeyTooBig();
@@ -506,7 +506,7 @@ struct _Cursor
   void* reserve(size_t size) {
     if (!this->stack.size) {
       if (!*this->_root) {
-        this->push(this->_root);
+        static_cast<Derived*>(this)->push(this->_root);
         //_LocalityInserter(&this->stack.back(), size).first_exec();
         _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
@@ -581,12 +581,19 @@ struct _Cursor
   }
 };
 
+template <typename Traits_>
+struct _Cursor : public _ICursor<Traits_, _Cursor<Traits_>> {
+  typedef Traits_ Traits;
+  typedef _ICursor<Traits_, _Cursor<Traits_>> Cursor;
+  using Cursor::Cursor;
+};
+
 // Full cursor with find, transactions, and modification operations
 template <typename Traits_>
 struct _TransactionalCursor
-    : public _Cursor<Traits_, _TransactionalCursor<Traits_>> {
+    : public _ICursor<Traits_, _TransactionalCursor<Traits_>> {
   typedef Traits_ Traits;
-  typedef _Cursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
+  typedef _ICursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
   typedef _BigMemory<Cursor> BigMemory;
   using DB = typename Traits::DB;
   using txn_ptr = typename DB::txn_ptr;
