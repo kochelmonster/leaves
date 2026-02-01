@@ -35,9 +35,6 @@ void exec_merger(
 
   // Initialize source cursor to start of tree
   src_cursor.clear();
-  if (*src_root) {
-    src_cursor.push(src_root);
-  }
   dst_cursor.start_transaction();
   
   // Note: Dumper functionality may need to be reimplemented for cursor-based
