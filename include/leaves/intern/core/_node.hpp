@@ -36,7 +36,7 @@ struct _TrieNode {
   hash_t hash;
   uint8_t _compressed_data[];
 
-  constexpr static uint16_e NULL_MASK = 0x8000;
+  static constexpr uint16_t NULL_MASK = uint16_t(1) << 15;
   constexpr static int NONE = -1;
   constexpr static int OUT_OF_RANGE = -2;
   constexpr static uint16_t MAX_SIZE =
@@ -119,10 +119,10 @@ struct _TrieNode {
     return array_start + 2 * sizeof(offset_e);
   }
 
-  // estimates the max size for a trie node with a given prefix and branches
+  // Estimates the max size for a trie node with a given prefix and branches.
+  // This is an upper-bound estimate used for allocation - actual size may be smaller
+  // due to bitmap compression of sparse branch arrays.
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
-    // TODO: calculate exact size
-
     uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
     uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
     uint16_t array_size = branches * sizeof(offset_e);
@@ -563,6 +563,44 @@ int first() const {
   if (has_none()) return NONE;
   return (bits::first(_upper) << 5) | bits::first(lower()[0]);
 }
+
+// Remove a child from this node in-place (for wire format manipulation)
+// WARNING: This modifies the node in-place and does NOT shrink the allocation.
+// Only use for temp/wire nodes where memory is discarded after use.
+// Returns true if child was removed, false if child didn't exist.
+bool remove_child(int key) {
+  if (!isset(key)) return false;
+  
+  int idx = array_index(key);
+  int cnt = count();
+  offset_e* arr = array();
+  
+  // Shift array elements forward using memmove
+  if (idx < cnt - 1) {
+    std::memmove(&arr[idx], &arr[idx + 1], (cnt - 1 - idx) * sizeof(offset_e));
+  }
+  
+  // Update bitmap
+  if (key == NONE) {
+    _array_len &= ~NULL_MASK;
+  } else {
+    uint8_t bit = ubit(key);
+    int lidx = bits::index(_upper, bit);
+    uint32_e* lower_ = lower();
+    lower_[lidx] &= ~(1 << lbit(key));
+    
+    // If this lower bucket is now empty, clear upper bit
+    // Note: we don't compact lower array since we're only manipulating wire nodes
+    if (!lower_[lidx]) {
+      _upper &= ~(1 << bit);
+    }
+  }
+  
+  // Decrement count while preserving NULL_MASK
+  _array_len = (_array_len & NULL_MASK) | ((cnt - 1) & ~NULL_MASK);
+  
+  return true;
+}
 };
 
 template <typename Traits>
@@ -574,10 +612,7 @@ struct _LeafNode {
   using uint32_e = typename Traits::uint32_e;
   using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
-  static constexpr auto BS_COUNT = Traits::PAGE_SIZES_COUNT;
-  static constexpr auto MAX_SIZE = PAGE_SIZES[BS_COUNT - 1];
-  static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
+  static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
   uint8_t key_size;
   uint16_e value_size;
@@ -604,7 +639,8 @@ struct _LeafNode {
     return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
   }
 
-  // TODO: needed?
+  // Static size calculation for allocation and serialization.
+  // Used by TransferTrie to calculate buffer sizes before copying leaf data.
   static uint16_t size(uint16_t key, size_t value) {
     return sizeof(LeafNode) + key + value;
   }
