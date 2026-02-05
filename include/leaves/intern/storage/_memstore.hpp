@@ -98,22 +98,12 @@ struct _MemoryDB {
     uint8_t slot = _mem_manager.assign_slot(space);
     return alloc_slot(slot);
   }
-  
-  // Block allocation with locality hint (ignored for in-memory storage)
-  page_ptr alloc(uint16_t space, const offset_e* /*hint*/) {
-    return alloc(space);
-  }
 
   void free(page_ptr p) { _mem_manager.free(p, *this); }
 
   // Memory manager interface
   page_ptr alloc_slot(uint8_t slot_id) {
     return _mem_manager.alloc(slot_id, *this);
-  }
-  
-  // alloc_slot with locality hint (ignored for in-memory storage)
-  page_ptr alloc_slot(uint8_t slot_id, const offset_e* /*hint*/) {
-    return alloc_slot(slot_id);
   }
 
   // Methods required by _MemManager

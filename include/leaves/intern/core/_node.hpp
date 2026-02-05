@@ -639,8 +639,6 @@ struct _LeafNode {
     return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
   }
 
-  // Static size calculation for allocation and serialization.
-  // Used by TransferTrie to calculate buffer sizes before copying leaf data.
   static uint16_t size(uint16_t key, size_t value) {
     return sizeof(LeafNode) + key + value;
   }

@@ -18,13 +18,17 @@ template <typename CursorDst, typename CursorSrc, typename OverwriteHandler>
 struct _Merger {
   typedef _Merger<CursorDst, CursorSrc, OverwriteHandler> Merger;
   using Traits = typename CursorDst::Traits;
+  using SrcTraits = typename CursorSrc::Traits;
   using Transition = typename CursorDst::Transition;
+  using SrcTransition = typename CursorSrc::Transition;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
+  using SrcTrieNode = typename SrcTransition::TrieNode;
   using page_ptr = typename Transition::page_ptr;
   using trie_ptr = typename Transition::trie_ptr;
   using leaf_ptr = typename Transition::leaf_ptr;
   using offset_e = typename Transition::offset_e;
+  using src_offset_e = typename SrcTransition::offset_e;
   using SrcLeafNode = typename CursorSrc::Transition::LeafNode;
   using BigMemory = typename CursorDst::BigMemory;
   using BigValue = typename BigMemory::BigValue;
@@ -89,12 +93,12 @@ struct _Merger {
   }
 
   template <typename T>
-  typename Traits::template Pointer<T> resolve_src(const offset_t* offset_ptr) {
+  typename SrcTraits::template Pointer<T> resolve_src(const src_offset_e* offset_ptr) {
     return src_cursor._db->template resolve<T>(offset_ptr);
   }
 
   template <typename T>
-  typename Traits::template Pointer<T> resolve_dst(const offset_t* offset_ptr) {
+  typename Traits::template Pointer<T> resolve_dst(const offset_e* offset_ptr) {
     return dst_cursor._db->template resolve<T>(offset_ptr);
   }
 
@@ -339,7 +343,7 @@ struct _Merger {
       if (dst_poffset[i] && src_poffset[i]) {
         // walk down and merge - both tries have this branch
         array[i] = *dst_poffset[i];
-        src_cursor.push(const_cast<offset_e*>(src_poffset[i]));
+        src_cursor.push(const_cast<src_offset_e*>(src_poffset[i]));
         dst_cursor.stack.clear();
         merge_node();
         continue;
@@ -395,7 +399,7 @@ struct _Merger {
   /**
    * @brief Deep copy entire subtree from source to destination
    */
-  offset_t deep_copy_subtree(const offset_t* src_offset) {
+  offset_t deep_copy_subtree(const src_offset_e* src_offset) {
     if (src_offset->type() == LEAF) return deep_copy_leaf(src_offset);
     return deep_copy_trie(src_offset);
   }
@@ -403,7 +407,7 @@ struct _Merger {
   /**
    * @brief Deep copy a leaf node from source to destination
    */
-  offset_t deep_copy_leaf(const offset_t* src_offset) {
+  offset_t deep_copy_leaf(const src_offset_e* src_offset) {
     auto src_leaf = resolve_src<SrcLeafNode>(src_offset);
     leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
     return resolve_offset(new_leaf);
@@ -412,8 +416,8 @@ struct _Merger {
   /**
    * @brief Deep copy a trie node and its subtree from source to destination
    */
-  offset_t deep_copy_trie(const offset_t* src_offset) {
-    auto src_trie = resolve_src<TrieNode>(src_offset);
+  offset_t deep_copy_trie(const src_offset_e* src_offset) {
+    auto src_trie = resolve_src<SrcTrieNode>(src_offset);
     uint16_t trie_size = src_trie->size();
     trie_ptr dst_trie = alloc_node<trie_ptr>(trie_size);
     memcpy((char*)dst_trie, (char*)src_trie, src_trie->array_start());

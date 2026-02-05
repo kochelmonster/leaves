@@ -62,16 +62,9 @@ struct _Transaction : public _TransactionBase<Traits_> {
       MemManager::assign_slot(sizeof(TransactionBase));
   uint16_t size() const { return sizeof(TransactionBase); }
 
-  // Alloc without hint
   template <typename Resolver>
   page_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
-    return alloc_slot(slot, resolver, nullptr);
-  }
-
-  // Alloc with locality hint
-  template <typename Resolver>
-  page_ptr alloc_slot(uint16_t slot, Resolver& resolver, const offset_e* hint) {
-    page_ptr result = mem_manager.alloc(slot, resolver, hint);
+    page_ptr result = mem_manager.alloc(slot, resolver);
     result->txn_id = txn_id;
     resolver.make_dirty(result);
     return result;
@@ -280,31 +273,20 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  // space without PageHeader - no hint
+  // space without PageHeader
   page_ptr alloc(uint16_t space) {
-    return alloc(space, nullptr);
-  }
-
-  // space without PageHeader - with locality hint
-  page_ptr alloc(uint16_t space, const offset_e* hint) {
     assert(space + sizeof(typename Traits::PageHeader) <=
            PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     page_ptr result = alloc_slot(
-        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)), hint);
+        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
     result->used = space;
     return result;
   }
 
-  // alloc_slot without hint
   page_ptr alloc_slot(uint16_t slot) {
-    return alloc_slot(slot, nullptr);
-  }
-
-  // alloc_slot with locality hint
-  page_ptr alloc_slot(uint16_t slot, const offset_e* hint) {
     assert(transaction_active());
     assert(_active_txn);
-    return _active_txn->alloc_slot(slot, *this, hint);
+    return _active_txn->alloc_slot(slot, *this);
   }
 
   void free(page_ptr page) {

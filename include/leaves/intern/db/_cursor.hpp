@@ -425,10 +425,6 @@ struct _CursorBase {
   // Allocation methods delegated through cursor to DB
   page_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
 
-  page_ptr alloc(uint16_t size, const offset_e* hint) {
-    return this->_db->alloc(size, hint);
-  }
-
   AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
 };
 

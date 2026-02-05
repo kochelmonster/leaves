@@ -39,23 +39,11 @@ struct _Inserter {
 
   page_ptr alloc(uint16_t size) { return back->cursor->alloc(size); }
 
-  page_ptr alloc(uint16_t size, const offset_e* hint) {
-    return back->cursor->alloc(size, hint);
-  }
-
   // Allocate node with PageHeader prefix, return pointer to node
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
     using PageHeader = typename Traits::PageHeader;
     page_ptr page = alloc(node_size);
-    return page + sizeof(PageHeader);
-  }
-
-  // Allocate node with locality hint
-  template <typename NodePtr>
-  NodePtr alloc_node(uint16_t node_size, const offset_e* hint) {
-    using PageHeader = typename Traits::PageHeader;
-    page_ptr page = alloc(node_size, hint);
     return page + sizeof(PageHeader);
   }
 
@@ -84,7 +72,6 @@ struct _Inserter {
 
     const Slice& bkey = back->key();
     if (bkey.size() > 255) {
-      // First insert, no children yet - no hint
       trie_ptr trie = alloc_node<trie_ptr>(TrieNode::size(255, 1));
       assert(trie);  // must always succeed
       *back->offset = resolve(trie);
@@ -129,9 +116,7 @@ struct _Inserter {
     // to a new slot
     uint8_t suffix_len = otrie->len() - back->prefix;
     uint16_t trie_size = otrie->changed_len(suffix_len);
-    // Use original trie's first child as hint (locality with existing children)
-    const offset_e* child_hint = otrie->count() > 0 ? &otrie->array()[0] : nullptr;
-    trie_ptr child_trie = alloc_node<trie_ptr>(trie_size, child_hint);
+    trie_ptr child_trie = alloc_node<trie_ptr>(trie_size);
     child_trie->create(*otrie,
                        Slice(&otrie->compressed()[back->prefix], suffix_len));
     assert(child_trie->size() == trie_size);
@@ -141,10 +126,8 @@ struct _Inserter {
     int key = back->key() ? (back->branch_key = (uint8_t)back->key()[0])
                           : TrieNode::NONE;
     int okey = otrie->compressed()[back->prefix];
-    // Use child_trie offset as hint (trie near its child)
-    offset_e child_trie_offset = resolve(child_trie);
     trie_ptr trie =
-        alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, key), &child_trie_offset);
+        alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, key));
 
     back->trie() = trie;
     auto idxs =
@@ -174,7 +157,6 @@ struct _Inserter {
   void create_bigkey() {
     Slice& key = back->key();
     while (key.size() > 255) {
-      // Big key chain: no child hint available yet (chain built top-down)
       trie_ptr trie = alloc_node<trie_ptr>(TrieNode::size(255, 1));
       *back->link() = resolve(trie);
       Transition& bottom = back->push();
@@ -195,17 +177,8 @@ struct _Inserter {
   }
 
   leaf_ptr fill_leaf(const Slice& key) {
-    // Get locality hint:
-    // - If at leaf: use leaf's offset (replacing existing leaf)
-    // - If at trie: use first sibling as neighbor hint
-    const offset_e* hint = nullptr;
-    if (back->is_leaf()) {
-      hint = back->offset;
-    } else if (back->is_trie() && back->trie()->count() > 0) {
-      hint = &back->trie()->array()[0];
-    }
     leaf_ptr leaf =
-        alloc_node<leaf_ptr>(LeafNode::size(key.size(), value_size), hint);
+        alloc_node<leaf_ptr>(LeafNode::size(key.size(), value_size));
     leaf->set(key, value_size);
     return leaf;
   }
@@ -215,9 +188,7 @@ struct _Inserter {
   void add_to_array() {
     int key = back->key() ? (uint8_t)back->branch_key : TrieNode::NONE;
     trie_ptr otrie = back->trie();
-    // Use existing child as hint for trie (locality with children)
-    const offset_e* child_hint = otrie->count() > 0 ? &otrie->array()[0] : nullptr;
-    trie_ptr new_trie = alloc_node<trie_ptr>(otrie->increment_size(key), child_hint);
+    trie_ptr new_trie = alloc_node<trie_ptr>(otrie->increment_size(key));
 
     back->trie() = new_trie;
     back->link_idx = new_trie->create(*otrie, key);
@@ -255,10 +226,8 @@ struct _Inserter {
     int nkey = back->key() ? (uint8_t)back->key()[0] : TrieNode::NONE;
     back->branch_key = nkey;
 
-    // Use the reduced leaf copy as hint (trie near its child)
-    offset_e copy_offset = resolve(copy);
     trie_ptr new_trie =
-        alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, nkey), &copy_offset);
+        alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, nkey));
     back->trie() = new_trie;
     auto idxs = new_trie->create(Slice(oleaf->data, back->prefix), okey, nkey);
     assert(new_trie->isset(okey));
@@ -276,9 +245,8 @@ struct _Inserter {
 
   // copy the leaf node but reduce the key size by split_pos
   leaf_ptr copy_reduced_leaf(uint8_t split_pos, leaf_ptr& oleaf) {
-    // Use original leaf as neighbor hint (same neighborhood)
     leaf_ptr copy = alloc_node<leaf_ptr>(
-        LeafNode::size(oleaf->key_size - split_pos, oleaf->vsize()), back->offset);
+        LeafNode::size(oleaf->key_size - split_pos, oleaf->vsize()));
 
     copy->key_size = oleaf->key_size - split_pos;
     copy->value_size = oleaf->value_size;
