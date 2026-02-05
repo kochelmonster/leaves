@@ -109,14 +109,9 @@ struct _GarbageSlot {
   typedef _PageContainer<Traits> PageContainer;
   using cont_ptr = typename PageContainer::ptr;
 
-  // Locality region size for cache optimization (64K boundary)
-  static constexpr uint64_t CACHE_MASK = ~(uint64_t(64 * K) - 1);
-  static constexpr uint16_t MAX_SCAN = 10;
-
   // Pop from the garbage slot queue
-  // If hint is provided, scan up to MAX_SCAN items to find a cache-local page
   template <typename Resolver>
-  ptr pop(Resolver& resolver, const offset_e* hint = nullptr) {
+  ptr pop(Resolver& resolver) {
     if (count == 0) return nullptr;
 
     assert(ostart);
@@ -126,27 +121,6 @@ struct _GarbageSlot {
 
     cont_ptr front(resolver.template resolve<PageContainer>(&ostart, WRITE));
     if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
-
-    // Scan for cache-local page if hint provided
-    if (hint && count > 1) {
-      uint64_t hint_cache = (uint64_t)(*hint) & CACHE_MASK;
-      // Hot path: check if front item is already cache-local
-      uint64_t front_cache = (uint64_t)front->blocks[istart].link & CACHE_MASK;
-      if (front_cache != hint_cache) {
-        uint16_t scan_end = std::min((uint16_t)(istart + MAX_SCAN),
-                                     (uint16_t)std::min((uint32_t)(istart + count),
-                                                        (uint32_t)PageContainer::COUNT));
-        for (uint16_t i = istart + 1; i < scan_end; ++i) {
-          if (!resolver.template may_recycle(front->blocks[i])) break;
-          uint64_t page_cache = (uint64_t)front->blocks[i].link & CACHE_MASK;
-          if (page_cache == hint_cache) {
-            // Swap found item with front
-            std::swap(front->blocks[istart], front->blocks[i]);
-            break;
-          }
-        }
-      }
-    }
 
     assert(front->blocks[istart].link != 0);
     ptr result = resolver.template resolve<PageHeader>(
@@ -281,20 +255,13 @@ struct _MemManager {
     return binary_search(&PAGE_SIZES[0], &PAGE_SIZES[COUNT], size);
   }
 
-  // Alloc without hint
   template <typename Resolver>
   page_ptr alloc(uint8_t sidx, Resolver& resolver) {
-    return alloc(sidx, resolver, nullptr);
-  }
-
-  // Alloc with locality hint - prefer pages near the hint offset
-  template <typename Resolver>
-  page_ptr alloc(uint8_t sidx, Resolver& resolver, const offset_e* hint) {
     assert(sidx < COUNT);
     uint16_t bsize = PAGE_SIZES[sidx];
 
     Slot& slot = slots[sidx];
-    page_ptr result = slot.pop(resolver, hint);
+    page_ptr result = slot.pop(resolver);
     if (result) {
       // Because of some rollback situations slot_id of result could be wrong
       // but the classification of the slot is right

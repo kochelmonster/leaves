@@ -58,7 +58,7 @@ struct _BigMemory {
   template <typename LeafNode>
   static uint16_t modify_size(uint16_t key, uint64_t size) {
     key &= 0xff;
-    if (sizeof(LeafNode) + size + key > LeafNode::MAX_SIZE)
+    if (sizeof(LeafNode) + size + key > MAX_PAGE_SIZE)
       return sizeof(BigValue);
     return size;
   }
