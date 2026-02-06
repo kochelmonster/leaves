@@ -66,8 +66,9 @@ struct WireTempTraits::DB {
   // Resolve offset to node pointer using relative addressing
   template <typename T>
   Traits::Pointer<T> resolve(const offset_e* offset) const {
-    assert(offset != nullptr);
-    assert(*offset != 0);
+    if (*offset == 0) {
+      return nullptr;  // Null pointer for zero offset
+    }
 
     // Wire format uses relative offsets from the offset's address
     int64_t rel = offset->as_signed();
@@ -423,11 +424,12 @@ inline RequestChildrenIterator request_children_iterator(
 
 // Pending trie node awaiting child transmission
 struct PendingTrieNode {
-  std::string path;    // Path to this node (nibble indices)
+  std::string path;    // Path to this node
   offset_t offset;     // Absolute offset in sender's storage
-  uint8_t next_child;  // Next child index to transmit (resume point)
+  int16_t next_child;  // Branch key to resume from (TrieNode::NONE = start, -2
+                       // = node itself not sent)
 
-  PendingTrieNode(const std::string& p, offset_t off, uint8_t next = 0)
+  PendingTrieNode(const std::string& p, offset_t off, int16_t next = -2)
       : path(p), offset(off), next_child(next) {}
 };
 
@@ -453,29 +455,30 @@ struct TransferTrieSender {
   uint64_t _session_id;
   uint64_t _snapshot_id;
   DbType _db_type;
+  size_t _max_depth;  // Maximum recursion depth for DFS
 
   TransferTrieSender(DB* db, typename DB::txn_ptr txn,
-                     size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
+                     size_t buffer_size = Transfer::DEFAULT_MAX_SIZE,
+                     size_t max_depth = 3)
       : _db(db),
         _txn(txn),
         _transfer(buffer_size),
         _session_id(Transfer::generate_session_id()),
         _snapshot_id(txn->txn_id),
-        _db_type(DbType::DB_MAIN) {}
+        _db_type(DbType::DB_MAIN),
+        _max_depth(max_depth) {}
 
   // Start from root
   void begin(DbType db_type = DbType::DB_MAIN) {
     _db_type = db_type;
     _pending.clear();
     _last_batch.clear();
-
-    if (_txn->root) {
-      _pending.emplace_back("", _txn->root, 0);
-    }
+    // Don't add root to pending - first fill_buffer() will handle it
   }
 
   // Process ACK: remove matching paths from _last_batch, then merge remaining
-  // to _pending
+  // to _pending Note: No need to prune descendants from _pending - they're only
+  // added when transmitted
   template <typename Iter>
   void process_ack(Iter iter) {
     // Build set of ACKed paths for O(1) lookup
@@ -505,59 +508,192 @@ struct TransferTrieSender {
   // Check if transfer is complete
   bool is_complete() const { return _pending.empty() && _last_batch.empty(); }
 
-  // Fill buffer with nodes from pending list in BFS order
-  // Writes nodes and adds their children to pending for next batch
-  // Child offsets are left as 0 - receiver patches them when children arrive
-  // Returns true if buffer was filled (may be empty if nothing to send)
+  // Fill buffer - writes a complete trie structure to the buffer
+  // If _pending is empty, writes the root trie
+  // If _pending has nodes, picks the first and writes a subtrie of its next
+  // child as root All written nodes go to _last_batch
   bool fill_buffer() {
-    _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
+    if (_pending.empty()) {
+      // First transmission - write root node and its descendants up to
+      // max_depth
+      std::string root_path;
+      _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
+      return _write_subtree(root_path, _txn->root, 0, nullptr);
+    }
 
-    while (!_pending.empty()) {
-      auto& node = _pending.front();
+    // Pick first pending node - it's already been transmitted, now send its
+    // next child
+    auto& pending = _pending.front();
+    auto trie = _db->template resolve<TrieNode>(&pending.offset);
+    assert(trie);  // Should always resolve since it was transmitted before
 
-      if (node.offset.type() == LEAF) {
-        // Write leaf node
-        auto leaf = _db->template resolve<LeafNode>(&node.offset);
-        if (!leaf) {
-          _pending.pop_front();
-          continue;
-        }
-        auto* dest = _transfer.add_leaf_node(&*leaf);
-        if (!dest) break;  // Buffer full
+    // Find next child to transmit
+    int branch_key = (pending.next_child == TrieNode::NONE)
+                         ? trie->first()
+                         : pending.next_child;
+    assert(branch_key !=
+           TrieNode::OUT_OF_RANGE);  // Shouldn't be here if no more children
 
-        // Move to last_batch for ACK tracking
-        _last_batch.splice(_last_batch.end(), _pending, _pending.begin());
-      } else {
-        // Write trie node
-        auto trie = _db->template resolve<TrieNode>(&node.offset);
-        if (!trie) {
-          _pending.pop_front();
-          continue;
-        }
-        auto* dest = _transfer.add_trie_node(&*trie);
-        if (!dest) break;  // Buffer full
+    // Write this child subtree as root of this buffer
+    const SrcOffset* child_src = trie->offset(branch_key);
+    offset_t child_offset(*child_src);
 
-        // Child offsets are copied as-is (absolute offsets from source DB)
-        // These will be zeroed/fixed by receiver - we just need to add children to pending
-        const SrcOffset* src_array = trie->array();
-        size_t count = trie->count();
+    size_t path_len = pending.path.size();
+    if (branch_key != TrieNode::NONE) {
+      pending.path.append((char*)trie->compressed(), trie->len());
+      pending.path += static_cast<char>(branch_key);
+    }
 
-        // Zero out child offsets in wire trie (children sent in later batches)
-        auto* wire_trie = const_cast<WireTrieNode*>(dest);
-        WireOffset* wire_array = wire_trie->array();
-        for (size_t i = 0; i < count; ++i) {
-          offset_t child_offset(src_array[i]);
-          if (child_offset) {
-            wire_array[i] = 0;  // Placeholder - receiver patches when child arrives
-            // Add child to pending for next batch
-            std::string child_path = node.path + static_cast<char>(i);
-            _pending.emplace_back(child_path, child_offset, 0);
-          }
-        }
+    _transfer.begin(_session_id, _snapshot_id, _db_type, pending.path);
+    bool result = _write_subtree(pending.path, child_offset, 0, nullptr);
+    pending.path.resize(path_len);  // Restore path for retry
 
-        // Move to last_batch for ACK tracking
-        _last_batch.splice(_last_batch.end(), _pending, _pending.begin());
+    // the child as the TransferTrie root is guaranteed to be written.
+    pending.next_child = trie->next(branch_key);
+    if (pending.next_child == TrieNode::OUT_OF_RANGE) {
+      // All children done, remove from pending
+      _pending.pop_front();
+    }
+    return result;
+  }
+
+  // Write a subtrie with DFS up to max_depth
+  // All written nodes are added to _last_batch for ACK tracking
+  // Nodes at max_depth have their children NOT written (will be handled later
+  // if not pruned)
+  // wire_link: If provided, the root node stores its relative offset here (for
+  // linking to parent)
+  bool _write_subtree(std::string& path, offset_t offset, size_t depth,
+                      WireOffset* wire_link = nullptr) {
+    if (offset.type() == LEAF) {
+      auto leaf = _db->template resolve<LeafNode>(&offset);
+      assert(leaf);
+      auto* dest = _transfer.add_leaf_node(&*leaf);
+      if (!dest) return false;
+      // Set relative offset in parent if wire_link provided
+      if (wire_link) {
+        wire_link->set_relative(dest);
+        wire_link->type(LEAF);
       }
+      // Leaves don't need tracking in _last_batch (no children to process)
+      return true;
+    }
+
+    auto trie = _db->template resolve<TrieNode>(&offset);
+    assert(trie);
+
+    auto* dest = _transfer.add_trie_node(&*trie);
+    if (!dest) return false;
+
+    // Set relative offset in parent if wire_link provided
+    if (wire_link) {
+      wire_link->set_relative(dest);
+      wire_link->type(TRIE);
+    }
+
+    // Get wire array for setting child offsets
+    auto* wire_trie = const_cast<WireTrieNode*>(dest);
+    WireOffset* wire_array = wire_trie->array();
+    memset(wire_array, 0, wire_trie->array_size());
+
+    if (depth >= _max_depth) {
+      _last_batch.emplace_back(path, offset, TrieNode::NONE);
+      return true;
+    }
+
+    // Process children
+    int branch_key = trie->first();
+    size_t orig_path_len = path.size();
+    
+    path.append((char*)trie->compressed(), trie->len());
+    size_t path_len = path.size();
+
+    bool result = true;
+    while (branch_key != TrieNode::OUT_OF_RANGE) {
+      const SrcOffset* child_src = trie->offset(branch_key);
+      offset_t child_offset(*child_src);
+      int array_idx = trie->array_index(branch_key);
+
+      if (branch_key != TrieNode::NONE) {
+        path.resize(path_len);
+        path += static_cast<char>(branch_key);
+      }
+
+      if (!_write_subtree(path, child_offset, depth + 1,
+                          &wire_array[array_idx])) {
+        result = false;
+        break;
+      }
+
+      branch_key = trie->next(branch_key);
+    }
+
+    path.resize(orig_path_len);
+
+    if (branch_key != TrieNode::OUT_OF_RANGE)
+      _last_batch.emplace_back(path, offset, branch_key);
+
+    return result;
+  }
+
+  // Write a child node recursively and set relative offset in parent's array
+  // Returns true if successful, false if buffer full
+  bool _write_child(const std::string& path, offset_t child_offset,
+                    WireOffset* wire_offset, size_t depth) {
+    if (!child_offset) return true;
+
+    if (child_offset.type() == LEAF) {
+      auto leaf = _db->template resolve<LeafNode>(&child_offset);
+      if (!leaf) return true;
+      auto* dest = _transfer.add_leaf_node(&*leaf);
+      if (!dest) return false;
+      wire_offset->set_relative(dest);
+      wire_offset->type(LEAF);
+      return true;
+    }
+
+    // Write trie node
+    auto trie = _db->template resolve<TrieNode>(&child_offset);
+    if (!trie) return true;
+    auto* dest = _transfer.add_trie_node(&*trie);
+    if (!dest) return false;
+
+    wire_offset->set_relative(dest);
+    wire_offset->type(TRIE);
+
+    // Add to _last_batch - this node has been transmitted
+    _last_batch.emplace_back(path, child_offset, TrieNode::NONE);
+
+    // Get wire array for patching child offsets
+    auto* wire_trie = const_cast<WireTrieNode*>(dest);
+    WireOffset* wire_array = wire_trie->array();
+
+    // Process children using branch key iteration
+    int branch_key = trie->first();
+    std::string grandchild_path = path;
+    size_t path_len = grandchild_path.size();
+
+    while (branch_key != TrieNode::OUT_OF_RANGE) {
+      const SrcOffset* grandchild_src = trie->offset(branch_key);
+      offset_t grandchild(*grandchild_src);
+      int array_idx = trie->array_index(branch_key);
+
+      if (branch_key != TrieNode::NONE) {
+        grandchild_path.resize(path_len);
+        grandchild_path += static_cast<char>(branch_key);
+      }
+
+      if (depth >= _max_depth) {
+        // Reached max depth - don't write grandchild
+        wire_array[array_idx] = 0;
+      } else {
+        // Recurse into grandchild
+        if (!_write_child(grandchild_path, grandchild, &wire_array[array_idx],
+                          depth + 1)) {
+          return false;
+        }
+      }
+      branch_key = trie->next(branch_key);
     }
 
     return true;

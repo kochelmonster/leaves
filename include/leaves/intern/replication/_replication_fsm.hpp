@@ -19,10 +19,11 @@ namespace leaves {
 
 // Message types for replication protocol
 enum class ReplicationMsgType : uint8_t {
-  TRIE_DATA = 0x01,         // TransferTrie buffer (sender → receiver)
-  SUBTRIE_ACK = 0x02,       // ACK subtries at paths - sender can skip (receiver → sender)
-  COMPLETE = 0x03,          // Replication complete (either side)
-  ERROR = 0x04              // Error occurred (either side)
+  TRIE_DATA = 0x01,  // TransferTrie buffer (sender → receiver)
+  SUBTRIE_ACK =
+      0x02,  // ACK subtries at paths - sender can skip (receiver → sender)
+  COMPLETE = 0x03,  // Replication complete (either side)
+  ERROR = 0x04      // Error occurred (either side)
 };
 
 constexpr uint32_t REPLICATION_MSG_MAGIC = 0x4C565250;  // "LVRP"
@@ -89,7 +90,8 @@ struct ReceiveBuffer {
       if (_received < sizeof(ReplicationMsgHeader)) {
         return sizeof(ReplicationMsgHeader) - _received;
       }
-      return 0;  // Have header but expected not set - caller should call parse_expected()
+      return 0;  // Have header but expected not set - caller should call
+                 // parse_expected()
     }
     return _expected > _received ? _expected - _received : 0;
   }
@@ -145,7 +147,9 @@ struct ReplicationTransport {
   virtual void send(const uint8_t* data, size_t size) = 0;
   virtual ~ReplicationTransport() = default;
 
-  void send(Slice s) { send(reinterpret_cast<const uint8_t*>(s.data()), s.size()); }
+  void send(Slice s) {
+    send(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+  }
 };
 
 // =============================================================================
@@ -186,8 +190,8 @@ struct ReplicationMsgBuilder {
     std::memcpy(_buffer.data() + offset, data, size);
 
     auto* hdr = reinterpret_cast<ReplicationMsgHeader*>(_buffer.data());
-    hdr->payload_size = static_cast<uint32_t>(_buffer.size() -
-                                               sizeof(ReplicationMsgHeader));
+    hdr->payload_size =
+        static_cast<uint32_t>(_buffer.size() - sizeof(ReplicationMsgHeader));
   }
 
   void append_payload(Slice s) {
@@ -203,8 +207,9 @@ struct ReplicationMsgBuilder {
 // Message Parser Helper
 // =============================================================================
 
-inline const ReplicationMsgHeader* parse_replication_msg(const uint8_t* data, size_t size,
-                                                          Slice* out_payload) {
+inline const ReplicationMsgHeader* parse_replication_msg(const uint8_t* data,
+                                                         size_t size,
+                                                         Slice* out_payload) {
   if (size < sizeof(ReplicationMsgHeader)) {
     return nullptr;
   }
@@ -221,8 +226,8 @@ inline const ReplicationMsgHeader* parse_replication_msg(const uint8_t* data, si
   }
 
   if (out_payload) {
-    *out_payload = Slice(data + sizeof(ReplicationMsgHeader),
-                         hdr->payload_size);
+    *out_payload =
+        Slice(data + sizeof(ReplicationMsgHeader), hdr->payload_size);
   }
 
   return hdr;
@@ -239,11 +244,11 @@ struct ReplicationSenderFSM {
   using Transfer = TransferTrie<Traits>;
 
   enum class State {
-    IDLE,              // Not started
-    SENDING,           // Sending trie data
-    AWAITING_RESPONSE, // Waiting for SUBTRIE_ACK or COMPLETE
-    COMPLETE,          // Replication finished
-    ERROR              // Error occurred
+    IDLE,               // Not started
+    SENDING,            // Sending trie data
+    AWAITING_RESPONSE,  // Waiting for SUBTRIE_ACK or COMPLETE
+    COMPLETE,           // Replication finished
+    ERROR               // Error occurred
   };
 
   DB* _db;
@@ -294,13 +299,13 @@ struct ReplicationSenderFSM {
 
     if (!hdr) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                          "Failed to parse message");
+                           "Failed to parse message");
       return;
     }
 
     if (hdr->session_id != _session_id) {
       _transition_to_error(ReplicationError::SESSION_MISMATCH,
-                          "Session ID mismatch");
+                           "Session ID mismatch");
       return;
     }
 
@@ -314,12 +319,12 @@ struct ReplicationSenderFSM {
       case State::SENDING:
         // Unexpected message while sending
         _transition_to_error(ReplicationError::INVALID_STATE,
-                            "Received message while sending");
+                             "Received message while sending");
         break;
 
       default:
         _transition_to_error(ReplicationError::INVALID_STATE,
-                            "Received message in invalid state");
+                             "Received message in invalid state");
         break;
     }
   }
@@ -353,7 +358,7 @@ struct ReplicationSenderFSM {
 
       default:
         _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                            "Unexpected message type");
+                             "Unexpected message type");
         break;
     }
   }
@@ -363,7 +368,7 @@ struct ReplicationSenderFSM {
     RequestChildrenHeader req_hdr;
     if (!parse_request_children(payload, &req_hdr)) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                          "Failed to parse SUBTRIE_ACK");
+                           "Failed to parse SUBTRIE_ACK");
       return;
     }
 
@@ -382,55 +387,33 @@ struct ReplicationSenderFSM {
   }
 
   void _send_next_buffer() {
-    bool sent_any = false;
-    
-    // With post-order DFS, each fill_buffer() writes complete subtries
-    // Loop until we've sent something or there's nothing left
-    while (_sender.has_pending()) {
-      _sender.fill_buffer();
-      Slice buffer = _sender.finalize();
+    // With the new strategy, each fill_buffer() produces exactly one complete
+    // subtrie The subtrie_path in the header identifies where it connects to
+    // the parent
+    _sender.fill_buffer();
+    Slice buffer = _sender.finalize();
 
-      if (buffer.size() >= sizeof(TransferTrieHeader)) {
-        // Parse to get node count
-        const TransferTrieHeader* hdr = Transfer::parse_header(buffer);
-
-        if (hdr->node_count > 0) {
-          _total_nodes += hdr->node_count;
-          _total_bytes += buffer.size();
-
-          // Wrap in message envelope and send
-          _msg_builder.begin(ReplicationMsgType::TRIE_DATA, _session_id);
-          _msg_builder.append_payload(buffer);
-          _transport->send(_msg_builder.data(), _msg_builder.size());
-          sent_any = true;
-
-          if (_events) {
-            _events->on_progress(_session_id, _total_bytes, _total_nodes);
-          }
-          break;  // Sent a buffer, wait for response
-        }
-      }
-      
-      // If fill_buffer produced nothing but has_pending is still true,
-      // the subtrie doesn't fit - this is an error condition
-      if (_sender.has_pending()) {
-        _transition_to_error(ReplicationError::INTERNAL_ERROR,
-                            "Subtrie too large for buffer");
-        return;
-      }
+    // Parse to get node count
+    const TransferTrieHeader* hdr = Transfer::parse_header(buffer);
+    if (!hdr) {
+      _transition_to_error(ReplicationError::INTERNAL_ERROR,
+                           "Failed to parse transfer header");
+      return;
     }
 
-    // If we have an empty DB, still send one empty TRIE_DATA to start session
-    if (!sent_any && !_sender.has_pending()) {
-      _sender.fill_buffer();  // Creates empty buffer
-      Slice buffer = _sender.finalize();
-      
-      _msg_builder.begin(ReplicationMsgType::TRIE_DATA, _session_id);
-      _msg_builder.append_payload(buffer);
-      _transport->send(_msg_builder.data(), _msg_builder.size());
+    _total_nodes += hdr->node_count;
+    _total_bytes += buffer.size();
+
+    // Wrap in message envelope and send
+    _msg_builder.begin(ReplicationMsgType::TRIE_DATA, _session_id);
+    _msg_builder.append_payload(buffer);
+    _transport->send(_msg_builder.data(), _msg_builder.size());
+
+    if (_events) {
+      _events->on_progress(_session_id, _total_bytes, _total_nodes);
     }
 
-    // All subtries sent, wait for response
+    // Transition to awaiting response
     _state = State::AWAITING_RESPONSE;
   }
 
@@ -494,16 +477,19 @@ struct ReplicationReceiverFSM {
   using LeafNode = _LeafNode<Traits>;
   using offset_e = typename Traits::offset_e;
   using WireCursor = _Cursor<WireTempTraits>;
-  using TempOffset = typename WireTempTraits::offset_e;  // Native offset type for temp DB
-  using TempTrieNode = _TrieNode<WireTempTraits>;  // Temp DB trie node (native layout)
-  using TempLeafNode = _LeafNode<WireTempTraits>;  // Temp DB leaf node (native layout)
+  using TempOffset =
+      typename WireTempTraits::offset_e;  // Native offset type for temp DB
+  using TempTrieNode =
+      _TrieNode<WireTempTraits>;  // Temp DB trie node (native layout)
+  using TempLeafNode =
+      _LeafNode<WireTempTraits>;  // Temp DB leaf node (native layout)
   using LocalCursor = typename DB::Cursor;
 
   enum class State {
-    IDLE,        // Not started
-    RECEIVING,   // Receiving and processing trie data
-    COMPLETE,    // Replication finished
-    ERROR        // Error occurred
+    IDLE,       // Not started
+    RECEIVING,  // Receiving and processing trie data
+    COMPLETE,   // Replication finished
+    ERROR       // Error occurred
   };
 
   DB* _db;
@@ -518,35 +504,42 @@ struct ReplicationReceiverFSM {
   size_t _total_nodes;
   size_t _total_bytes;
   ReplicationError _error;
-  std::vector<std::string> _pending_requests;  // Paths to request
-  size_t _expected_responses;  // Number of TRIE_DATA responses we're waiting for
+  std::vector<std::string>
+      _prune_paths;          // Paths where hashes match (tell sender to prune)
   std::string _path_buffer;  // Reusable buffer for path construction
+  size_t _pending_children;  // Count of 0 offsets not yet connected (receiver
+                             // completion tracking)
 
   // Receive buffer management (Temp DB)
   // ====================================
-  // Each received message buffer becomes part of the temp DB and cannot be reused.
-  // Design constraints:
+  // Each received message buffer becomes part of the temp DB and cannot be
+  // reused. Design constraints:
   // 1. _temp_buffers owns all received message memory (the "temp DB")
   // 2. This memory is freed only after replication completes or errors
   // 3. Subtries within temp DB use relative offsets (wire format)
-  // 4. When connecting subtries to persistent storage, offsets must be translated
+  // 4. When connecting subtries to persistent storage, offsets must be
+  // translated
   //    since absolute offsets from temp DB don't work in persistent storage
-  std::vector<std::vector<uint8_t>> _temp_buffers;  // Owned buffers (temp DB memory)
+  std::vector<std::vector<uint8_t>>
+      _temp_buffers;              // Owned buffers (temp DB memory)
   ReceiveBuffer _receive_buffer;  // Current receive buffer being filled
   size_t _initial_buffer_size;
-  static constexpr size_t DEFAULT_RECEIVE_BUFFER_SIZE = 64 * 1024;  // 64KB, grows as needed
+  static constexpr size_t DEFAULT_RECEIVE_BUFFER_SIZE =
+      64 * 1024;  // 64KB, grows as needed
 
   // Temp DB root tracking
-  alignas(8) TempOffset _temp_root;   // Root offset of temp DB (first received subtrie)
-  WireTempDB _wire_db;                // Stateless adapter for resolving wire offsets
-  WireCursor _wire_cursor;            // Reusable cursor for navigating temp DB
+  alignas(8)
+      TempOffset _temp_root;  // Root offset of temp DB (first received subtrie)
+  WireTempDB _wire_db;        // Stateless adapter for resolving wire offsets
+  WireCursor _wire_cursor;    // Reusable cursor for navigating temp DB
 
   // Overwrite handler for merge conflicts
   OverwriteHandler _overwrite_handler;
 
-  ReplicationReceiverFSM(DB* db, typename DB::txn_ptr txn,
-                         OverwriteHandler handler = OverwriteHandler(),
-                         size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE)
+  ReplicationReceiverFSM(
+      DB* db, typename DB::txn_ptr txn,
+      OverwriteHandler handler = OverwriteHandler(),
+      size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE)
       : _db(db),
         _txn(txn),
         _cursor(db->create_cursor()),
@@ -597,8 +590,8 @@ struct ReplicationReceiverFSM {
     _total_nodes = 0;
     _total_bytes = 0;
     _error = ReplicationError::NONE;
-    _pending_requests.clear();
-    _expected_responses = 1;  // Expecting initial root transfer
+    _prune_paths.clear();
+    _pending_children = 0;
 
     // Reset temp buffers from any previous session
     _temp_buffers.clear();
@@ -608,7 +601,7 @@ struct ReplicationReceiverFSM {
     // Start a transaction for receiving data
     if (!_cursor->start_transaction()) {
       _transition_to_error(ReplicationError::INTERNAL_ERROR,
-                          "Failed to start transaction");
+                           "Failed to start transaction");
     }
   }
 
@@ -626,8 +619,8 @@ struct ReplicationReceiverFSM {
   ReceiveBuffer& receive_buffer() { return _receive_buffer; }
 
   // Called by transport after writing data to the receive buffer
-  // Returns true if a complete message was processed (buffer is reset for next message)
-  // Returns false if more data is needed
+  // Returns true if a complete message was processed (buffer is reset for next
+  // message) Returns false if more data is needed
   bool on_data_received() {
     // Try to parse expected size if we don't have it yet
     if (!_receive_buffer.has_header()) {
@@ -637,7 +630,7 @@ struct ReplicationReceiverFSM {
     if (_receive_buffer._expected == 0) {
       if (!_receive_buffer.parse_expected()) {
         _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                            "Invalid message header");
+                             "Invalid message header");
         return true;  // Error is a "complete" state
       }
 
@@ -666,12 +659,13 @@ struct ReplicationReceiverFSM {
 
   // Process a complete message from the receive buffer
   void _process_received_message() {
-    auto* hdr = reinterpret_cast<const ReplicationMsgHeader*>(_receive_buffer._data);
+    auto* hdr =
+        reinterpret_cast<const ReplicationMsgHeader*>(_receive_buffer._data);
 
     // Validate header
     if (!hdr->is_valid()) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                          "Invalid message magic");
+                           "Invalid message magic");
       return;
     }
 
@@ -680,7 +674,7 @@ struct ReplicationReceiverFSM {
       _session_id = hdr->session_id;
     } else if (hdr->session_id != _session_id) {
       _transition_to_error(ReplicationError::SESSION_MISMATCH,
-                          "Session ID mismatch");
+                           "Session ID mismatch");
       return;
     }
 
@@ -694,7 +688,7 @@ struct ReplicationReceiverFSM {
 
       default:
         _transition_to_error(ReplicationError::INVALID_STATE,
-                            "Received message in invalid state");
+                             "Received message in invalid state");
         break;
     }
   }
@@ -710,7 +704,7 @@ struct ReplicationReceiverFSM {
 
     if (!hdr) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                          "Failed to parse message");
+                           "Failed to parse message");
       return;
     }
 
@@ -719,7 +713,7 @@ struct ReplicationReceiverFSM {
       _session_id = hdr->session_id;
     } else if (hdr->session_id != _session_id) {
       _transition_to_error(ReplicationError::SESSION_MISMATCH,
-                          "Session ID mismatch");
+                           "Session ID mismatch");
       return;
     }
 
@@ -732,7 +726,7 @@ struct ReplicationReceiverFSM {
 
       default:
         _transition_to_error(ReplicationError::INVALID_STATE,
-                            "Received message in invalid state");
+                             "Received message in invalid state");
         break;
     }
   }
@@ -748,6 +742,8 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::COMPLETE:
+        // Receiver determines completion autonomously by tracking pending
+        // children If we receive this, sender thinks we're done - just ACK it
         _state = State::COMPLETE;
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
@@ -766,18 +762,19 @@ struct ReplicationReceiverFSM {
 
       default:
         _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                            "Unexpected message type");
+                             "Unexpected message type");
         break;
     }
   }
 
   void _handle_trie_data(const Slice& payload) {
     Slice subtrie_path;
-    const TransferTrieHeader* hdr = Transfer::parse_header(payload, &subtrie_path);
+    const TransferTrieHeader* hdr =
+        Transfer::parse_header(payload, &subtrie_path);
 
     if (!hdr) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                          "Failed to parse TRIE_DATA header");
+                           "Failed to parse TRIE_DATA header");
       return;
     }
 
@@ -793,15 +790,11 @@ struct ReplicationReceiverFSM {
   }
 
   void _process_received_nodes(const Slice& payload,
-                              const TransferTrieHeader& hdr,
-                              const Slice& path) {
+                               const TransferTrieHeader& hdr,
+                               const Slice& path) {
     if (hdr.node_count == 0) {
-      // Empty transfer - decrement counter and check what to do next
-      if (_expected_responses > 0) {
-        --_expected_responses;
-      }
-      _send_pending_requests();
-      _maybe_complete();
+      // Empty transfer
+      _send_prune_ack();
       return;
     }
 
@@ -812,11 +805,11 @@ struct ReplicationReceiverFSM {
     // Note: cast to non-const since we may need to modify offsets in temp DB
     const TransferTrieHeader* transfer_hdr = Transfer::parse_header(payload);
     if (!transfer_hdr || hdr.node_count == 0) {
-      _send_pending_requests();
-      _maybe_complete();
+      _send_prune_ack();
       return;
     }
-    uint8_t* wire_root = const_cast<uint8_t*>(Transfer::nodes_data(payload, *transfer_hdr));
+    uint8_t* wire_root =
+        const_cast<uint8_t*>(Transfer::nodes_data(payload, *transfer_hdr));
 
     // Get root type from header
     auto wire_root_type = static_cast<TransferNodeType>(hdr.root_node_type);
@@ -825,7 +818,8 @@ struct ReplicationReceiverFSM {
     if (path.empty()) {
       // First subtrie - this becomes the temp DB root
       _temp_root.set_relative(wire_root);
-      NodeTypes type = (wire_root_type == TransferNodeType::LEAF_NODE) ? LEAF : TRIE;
+      NodeTypes type =
+          (wire_root_type == TransferNodeType::LEAF_NODE) ? LEAF : TRIE;
       _temp_root.type(type);
     } else {
       // Subsequent subtrie - connect to parent in temp DB
@@ -833,18 +827,23 @@ struct ReplicationReceiverFSM {
     }
 
     // Compare wire nodes with local nodes, collect paths where we differ
-    _path_buffer.assign(reinterpret_cast<const char*>(path.data()), path.size());
-    
-    const uint8_t* payload_end = reinterpret_cast<const uint8_t*>(payload.data()) + payload.size();
-    _compare_wire_with_local(wire_root, wire_root_type, payload_end, original_root, _path_buffer,
-                             nullptr, -1);  // No parent for root
+    _path_buffer.assign(reinterpret_cast<const char*>(path.data()),
+                        path.size());
 
-    // After processing, decrement expected and decide what to do next
-    if (_expected_responses > 0) {
-      --_expected_responses;
+    const uint8_t* payload_end =
+        reinterpret_cast<const uint8_t*>(payload.data()) + payload.size();
+    _compare_wire_with_local(wire_root, wire_root_type, payload_end,
+                             original_root, _path_buffer, nullptr,
+                             -1);  // No parent for root
+
+    // After processing, send ACK with prune paths
+    _send_prune_ack();
+
+    // Check if all pending children are now connected - if so, replication is
+    // complete
+    if (_pending_children == 0) {
+      _send_complete();
     }
-    _send_pending_requests();
-    _maybe_complete();
   }
 
   // Get pointer to the original offset at a path (what we had before receiving)
@@ -887,26 +886,32 @@ struct ReplicationReceiverFSM {
 
     // Set the relative offset from parent's offset slot to subtrie root
     // with the correct node type
-    NodeTypes type = (subtrie_type == TransferNodeType::LEAF_NODE) ? LEAF : TRIE;
+    NodeTypes type =
+        (subtrie_type == TransferNodeType::LEAF_NODE) ? LEAF : TRIE;
     parent_offset->set_relative(subtrie_root);
     parent_offset->type(type);
+
+    // This subtrie filled in a pending (0 offset) slot
+    if (_pending_children > 0) {
+      --_pending_children;
+    }
   }
 
   // Navigate temp DB to find the parent's child offset slot for a path
-  // path: full path (e.g., "abc"), we find parent at "ab" and return offset for 'c'
-  // Returns pointer to the TempOffset slot, or nullptr if not found
-  // Uses _Cursor with WireTempDB for navigation (handles compressed paths)
+  // path: full path (e.g., "abc"), we find parent at "ab" and return offset for
+  // 'c' Returns pointer to the TempOffset slot, or nullptr if not found Uses
+  // _Cursor with WireTempDB for navigation (handles compressed paths)
   TempOffset* _find_temp_parent_offset(const Slice& path) {
     if (path.empty() || !_temp_root) return nullptr;
     if (_temp_root.type() != TRIE) return nullptr;
 
     // Navigate to the path using member cursor (already bound to _temp_root)
     _wire_cursor.find(path);
-    
+
     // After find(), check if we found the parent's offset slot
     // The cursor navigates to where the path would be, with link_idx set
     if (_wire_cursor.stack.size == 0) return nullptr;
-    
+
     return _wire_cursor.stack.back().offset;
   }
 
@@ -914,13 +919,15 @@ struct ReplicationReceiverFSM {
   // - If hashes match: local is correct, prune from wire trie (return false)
   // - If hashes differ and wire is leaf: will be merged to local via _Merger
   // - If hashes differ and wire is trie: recurse into children
-  // - If child offset == 0 in wire: sender didn't send it, add to pending_requests
-  // Returns: true if wire node differs from local (keep it), false if matches (prune it)
-  // parent_trie: the parent trie node (for removing matched children)
-  // parent_branch_key: the branch key in parent that leads to this node
-  bool _compare_wire_with_local(const uint8_t* wire_node, TransferNodeType wire_type,
-                                const uint8_t* buffer_end, const offset_e* local_offset,
-                                std::string& path,
+  // - If child offset == 0 in wire: sender didn't send it, add to
+  // pending_requests Returns: true if wire node differs from local (keep it),
+  // false if matches (prune it) parent_trie: the parent trie node (for removing
+  // matched children) parent_branch_key: the branch key in parent that leads to
+  // this node
+  bool _compare_wire_with_local(const uint8_t* wire_node,
+                                TransferNodeType wire_type,
+                                const uint8_t* buffer_end,
+                                const offset_e* local_offset, std::string& path,
                                 TempTrieNode* parent_trie = nullptr,
                                 int parent_branch_key = -1) {
     if (!wire_node || wire_node >= buffer_end) return false;
@@ -941,7 +948,8 @@ struct ReplicationReceiverFSM {
       const uint8_t* local_hash = _get_local_hash(local_off);
       if (local_hash && wire_hash &&
           std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
-        // Hashes match - local subtrie is correct, remove from parent and prune
+        // Hashes match - local subtrie is correct, tell sender to prune it
+        _prune_paths.push_back(path);
         if (parent_trie && parent_branch_key >= -1) {
           parent_trie->remove_child(parent_branch_key);
         }
@@ -957,9 +965,10 @@ struct ReplicationReceiverFSM {
 
     // Wire is trie node - iterate through children
     // We need to cast away const since we may call remove_child
-    auto* wire_trie = const_cast<TempTrieNode*>(reinterpret_cast<const TempTrieNode*>(wire_node));
+    auto* wire_trie = const_cast<TempTrieNode*>(
+        reinterpret_cast<const TempTrieNode*>(wire_node));
     TempOffset* wire_array = const_cast<TempOffset*>(wire_trie->array());
-    
+
     // Save path length before appending compressed, so we can restore it
     size_t orig_path_len = path.size();
     path.append((char*)wire_trie->compressed(), wire_trie->len());
@@ -972,19 +981,18 @@ struct ReplicationReceiverFSM {
       // Get current array index (may change as we remove children)
       int array_idx = wire_trie->array_index(branch_key);
       assert(array_idx >= 0 && array_idx < wire_trie->count());
-      
+
       TempOffset& child_offset = wire_trie->array()[array_idx];
 
       // Check raw _offset to distinguish:
-      // - _offset == 0: sender didn't include this child, request it
+      // - _offset == 0: sender didn't include this child (max_depth limit),
+      // will send later
       // - other: valid offset, recurse
       if (child_offset._offset == 0) {
-        // Sender didn't include this child - request it
-        if (branch_key != TrieNode::NONE) {
-          path.push_back(static_cast<char>(branch_key));
-        }
-        _pending_requests.push_back(path);
-        path.resize(path_len);
+        // Sender will send this child in a future message (it's in sender's
+        // _pending) Track this as pending - when connected, we decrement the
+        // counter
+        ++_pending_children;
         continue;
       }
 
@@ -995,7 +1003,8 @@ struct ReplicationReceiverFSM {
       }
 
       int64_t relative = child_offset.as_signed();
-      const uint8_t* child_wire = reinterpret_cast<const uint8_t*>(&child_offset) + relative;
+      const uint8_t* child_wire =
+          reinterpret_cast<const uint8_t*>(&child_offset) + relative;
       if (child_wire && child_wire < buffer_end) {
         TransferNodeType child_type = child_offset.type() == LEAF
                                           ? TransferNodeType::LEAF_NODE
@@ -1005,21 +1014,23 @@ struct ReplicationReceiverFSM {
         if (branch_key != TrieNode::NONE) {
           path.push_back(static_cast<char>(branch_key));
         }
-        
+
         // Get corresponding local child by navigating to the extended path
-        // (can't use local_trie->array_index because compressed paths may differ)
+        // (can't use local_trie->array_index because compressed paths may
+        // differ)
         const offset_e* local_child = _get_original_root(Slice(path));
-        
-        bool keep = _compare_wire_with_local(child_wire, child_type, buffer_end, local_child, path,
-                                             wire_trie, branch_key);
+
+        bool keep =
+            _compare_wire_with_local(child_wire, child_type, buffer_end,
+                                     local_child, path, wire_trie, branch_key);
         // Note: if !keep, the child was already removed by the recursive call
         path.resize(path_len);
       }
     }
-    
+
     // Restore path to original length (remove compressed portion we added)
     path.resize(orig_path_len);
-    
+
     // Keep this trie node (it has differing children)
     return true;
   }
@@ -1047,27 +1058,16 @@ struct ReplicationReceiverFSM {
     merger.exec();
   }
 
-  // Send any pending ACKs immediately
-  void _send_pending_requests() {
-    if (!_pending_requests.empty()) {
-      _send_subtrie_ack();
-    }
-  }
-
-  // Check if replication is complete (no pending requests and no expected responses)
-  void _maybe_complete() {
-    if (_pending_requests.empty() && _expected_responses == 0) {
-      _send_complete();
-    }
-  }
-
-  void _send_subtrie_ack() {
+  // Send ACK with prune paths (where hashes matched)
+  // Sender will respond with next subtrie or COMPLETE
+  void _send_prune_ack() {
     _request_builder.begin(_session_id, DbType::DB_MAIN);
 
-    for (const auto& path : _pending_requests) {
+    // Add all paths where hashes matched (sender should prune these)
+    for (const auto& path : _prune_paths) {
       _request_builder.add_path(path);
     }
-    _pending_requests.clear();
+    _prune_paths.clear();
 
     _msg_builder.begin(ReplicationMsgType::SUBTRIE_ACK, _session_id);
     _msg_builder.append_payload(_request_builder.finalize());
