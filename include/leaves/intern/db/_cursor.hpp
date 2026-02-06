@@ -177,6 +177,11 @@ struct _Transition {
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void find() {
+    if (!node) {
+      cmp = NOT_FOUND;
+      return;
+    }
+
     // find the next node
     if (is_leaf()) {
       LeafNode& leaf_ = *leaf();

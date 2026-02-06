@@ -4,7 +4,9 @@
 #include <boost/endian/arithmetic.hpp>
 #include <cstdint>
 #include <cstring>
+#include <list>
 #include <random>
+#include <unordered_set>
 #include <vector>
 
 #include "../core/_node.hpp"
@@ -42,12 +44,15 @@ struct WireTempTraits {
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
 
-  struct PageHeader { uint16_e used; uint8_t slot_id; };
-  
+  struct PageHeader {
+    uint16_e used;
+    uint8_t slot_id;
+  };
+
   template <typename T, NodeTypes type = TRIE>
   using Pointer = SimplePointer<T, type>;
   using ptr = SimplePointer<PageHeader, TRIE>;
-  
+
   static constexpr size_t MAX_KEY_SIZE = 8192;
   struct DB;  // Forward declaration
 };
@@ -57,28 +62,20 @@ struct WireTempTraits {
 struct WireTempTraits::DB {
   using Traits = WireTempTraits;
   using offset_e = typename Traits::offset_e;
-  
-  // Root node pointer (absolute address) - used for initial resolution
-  // If set, root_offset should point to this and we return root_ptr directly
-  uint8_t* root_ptr = nullptr;
-  offset_e* root_offset = nullptr;
-  
+
   // Resolve offset to node pointer using relative addressing
   template <typename T>
   Traits::Pointer<T> resolve(const offset_e* offset) const {
-    if (!offset || *offset == 0) return nullptr;
-    
-    // Special case: if this is the root offset, return root_ptr directly
-    if (offset == root_offset && root_ptr) {
-      return Traits::Pointer<T>(root_ptr);
-    }
-    
+    assert(offset != nullptr);
+    assert(*offset != 0);
+
     // Wire format uses relative offsets from the offset's address
     int64_t rel = offset->as_signed();
-    uint8_t* addr = reinterpret_cast<uint8_t*>(const_cast<offset_e*>(offset)) + rel;
+    uint8_t* addr =
+        reinterpret_cast<uint8_t*>(const_cast<offset_e*>(offset)) + rel;
     return Traits::Pointer<T>(addr);
   }
-  
+
   // Prefetch is a no-op for temp DB
   void prefetch(const offset_e*, int = 0) const {}
 };
@@ -215,7 +212,7 @@ struct TransferTrie {
     size_t current_pos = _buffer.size();
     size_t aligned_pos = (current_pos + 7) & ~size_t(7);
     size_t padding = aligned_pos - current_pos;
-    
+
     if (aligned_pos + size > _max_size) {
       return nullptr;
     }
@@ -231,12 +228,12 @@ struct TransferTrie {
     uint8_t* node_dest = _buffer.data() + offset;
     std::memcpy(node_dest, data, size);
     ++_node_count;
-    
+
     // Track first node type (root is first in pre-order DFS)
     if (_node_count == 1) {
       _first_node_type = type;
     }
-    
+
     return node_dest;
   }
 
@@ -276,8 +273,8 @@ struct TransferTrie {
   // Parse header from received data
   // Returns pointer to header in buffer, sets out_subtrie_path slice
   // Returns nullptr if invalid
-  static const TransferTrieHeader* parse_header(const Slice& data,
-                                                Slice* out_subtrie_path = nullptr) {
+  static const TransferTrieHeader* parse_header(
+      const Slice& data, Slice* out_subtrie_path = nullptr) {
     if (data.size() < sizeof(TransferTrieHeader)) {
       return nullptr;
     }
@@ -294,7 +291,8 @@ struct TransferTrie {
     }
 
     if (out_subtrie_path) {
-      *out_subtrie_path = Slice(data.data() + sizeof(TransferTrieHeader), path_len);
+      *out_subtrie_path =
+          Slice(data.data() + sizeof(TransferTrieHeader), path_len);
     }
 
     return hdr;
@@ -423,8 +421,19 @@ inline RequestChildrenIterator request_children_iterator(
 // Sender Implementation
 // =============================================================================
 
-// Post-order DFS sender for transferring trie nodes with relative offsets
-// Writes children before parents so offsets can be patched correctly
+// Pending trie node awaiting child transmission
+struct PendingTrieNode {
+  std::string path;    // Path to this node (nibble indices)
+  offset_t offset;     // Absolute offset in sender's storage
+  uint8_t next_child;  // Next child index to transmit (resume point)
+
+  PendingTrieNode(const std::string& p, offset_t off, uint8_t next = 0)
+      : path(p), offset(off), next_child(next) {}
+};
+
+// Sender for transferring trie nodes with relative offsets
+// Uses pre-order DFS where children set their relative offsets in parent's
+// array
 template <typename DB>
 struct TransferTrieSender {
   using Traits = typename DB::Traits;
@@ -437,179 +446,117 @@ struct TransferTrieSender {
 
   DB* _db;
   typename DB::txn_ptr _txn;
-  typename DB::cursor_ptr _cursor;
   Transfer _transfer;
-  std::vector<std::string> _subtrie_paths;
-  size_t _current_subtrie_idx;
-  std::string _current_subtrie_path;
+  std::list<PendingTrieNode> _pending;  // Nodes awaiting transmission
+  std::list<PendingTrieNode>
+      _last_batch;  // Nodes from last batch, awaiting ACK
   uint64_t _session_id;
   uint64_t _snapshot_id;
   DbType _db_type;
-  bool _complete;
 
   TransferTrieSender(DB* db, typename DB::txn_ptr txn,
                      size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
       : _db(db),
         _txn(txn),
-        _cursor(db->create_cursor()),
         _transfer(buffer_size),
-        _current_subtrie_idx(0),
         _session_id(Transfer::generate_session_id()),
         _snapshot_id(txn->txn_id),
-        _db_type(DbType::DB_MAIN),
-        _complete(false) {}
+        _db_type(DbType::DB_MAIN) {}
 
   // Start from root
   void begin(DbType db_type = DbType::DB_MAIN) {
     _db_type = db_type;
-    _subtrie_paths.clear();
-    _current_subtrie_idx = 0;
-    _current_subtrie_path.clear();
-    _complete = false;
+    _pending.clear();
+    _last_batch.clear();
 
-    if (!_txn->root) {
-      _complete = true;
+    if (_txn->root) {
+      _pending.emplace_back("", _txn->root, 0);
     }
   }
 
-  // Continue from specific paths (response to REQUEST_CHILDREN)
-  void continue_from(std::vector<std::string> paths) {
-    _subtrie_paths = std::move(paths);
-    _current_subtrie_idx = 0;
-    _current_subtrie_path.clear();
-    _complete = _subtrie_paths.empty();
-  }
-
-  // Start processing the next subtrie from _subtrie_paths
-  bool _start_next_subtrie() {
-    if (_current_subtrie_idx >= _subtrie_paths.size()) {
-      return false;
-    }
-    _current_subtrie_path = _subtrie_paths[_current_subtrie_idx++];
-    return true;
-  }
-
-  // Get root offset for current subtrie
-  offset_t _get_subtrie_root() {
-    if (_current_subtrie_path.empty() && _subtrie_paths.empty()) {
-      // Initial transfer from root
-      return offset_t(_txn->root);
+  // Process ACK: remove matching paths from _last_batch, then merge remaining
+  // to _pending
+  template <typename Iter>
+  void process_ack(Iter iter) {
+    // Build set of ACKed paths for O(1) lookup
+    std::unordered_set<std::string> acked_paths;
+    while (iter.valid()) {
+      acked_paths.insert(iter.path());
+      iter.next();
     }
 
-    // Navigate to path
-    _cursor->find(Slice(_current_subtrie_path));
-
-    if (_cursor->stack.size > 0) {
-      auto& trans = _cursor->stack.back();
-      if (trans.offset && *trans.offset) {
-        return offset_t(*trans.offset);
+    // Remove ACKed nodes from _last_batch
+    for (auto it = _last_batch.begin(); it != _last_batch.end();) {
+      if (acked_paths.count(it->path)) {
+        it = _last_batch.erase(it);
+      } else {
+        ++it;
       }
     }
-    return offset_t(0);
+
+    // Splice remaining nodes to end of _pending
+    _pending.splice(_pending.end(), _last_batch);
+    _last_batch.clear();
   }
 
-  // Fill buffer using post-order DFS for ONE subtrie
-  // Returns true if subtrie complete, false if buffer full
+  // Check if there are pending nodes to process
+  bool has_pending() const { return !_pending.empty() || !_last_batch.empty(); }
+
+  // Check if transfer is complete
+  bool is_complete() const { return _pending.empty() && _last_batch.empty(); }
+
+  // Fill buffer with nodes from pending list in BFS order
+  // Writes nodes and adds their children to pending for next batch
+  // Child offsets are left as 0 - receiver patches them when children arrive
+  // Returns true if buffer was filled (may be empty if nothing to send)
   bool fill_buffer() {
-    // Start next subtrie if needed
-    if (!_subtrie_paths.empty() && _current_subtrie_path.empty()) {
-      if (!_start_next_subtrie()) {
-        _complete = true;
-        _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
-        return true;
-      }
-    }
+    _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
 
-    // Begin buffer
-    _transfer.begin(_session_id, _snapshot_id, _db_type,
-                    Slice(_current_subtrie_path));
+    while (!_pending.empty()) {
+      auto& node = _pending.front();
 
-    // Get root offset
-    offset_t root_offset = _get_subtrie_root();
-    if (!root_offset) {
-      // Empty or not found
-      if (_current_subtrie_idx >= _subtrie_paths.size()) {
-        _complete = true;
-      }
-      return true;
-    }
-
-    // Pre-order DFS: write parent first, then children
-    // Children set their own relative offsets in parent's array
-    bool success = _write_subtree(root_offset, nullptr);
-
-    if (!success) {
-      // Buffer full - partial write, some links zeroed
-      // For now, this is an error condition
-      return false;
-    }
-
-    // Successfully wrote this subtrie - clear path for next call
-    _current_subtrie_path.clear();
-
-    // Check if all done
-    if (_subtrie_paths.empty() || _current_subtrie_idx >= _subtrie_paths.size()) {
-      _complete = true;
-    }
-
-    return true;
-  }
-
-  // Recursively write subtree in post-order (children first)
-  // wire_offset: if non-null, the child sets its relative offset here
-  // Returns true if successful, false if buffer full
-  bool _write_subtree(offset_t offset, WireOffset* wire_offset) {
-    if (!offset) return true;
-
-    if (offset.type() == LEAF) {
-      return _write_leaf(offset, wire_offset);
-    }
-    return _write_trie(offset, wire_offset);
-  }
-
-  bool _write_leaf(offset_t offset, WireOffset* wire_offset) {
-    auto leaf = _db->template resolve<LeafNode>(&offset);
-    auto* dest = _transfer.add_leaf_node(&*leaf);
-    if (!dest) return false;
-
-    // Set relative offset in parent's array
-    if (wire_offset) {
-      wire_offset->set_relative(dest);
-      wire_offset->type(LEAF);
-    }
-    return true;
-  }
-
-  bool _write_trie(offset_t offset, WireOffset* wire_offset) {
-    auto trie = _db->template resolve<TrieNode>(&offset);
-
-    // Write trie node first to get its buffer position
-    auto* dest = _transfer.add_trie_node(&*trie);
-    if (!dest) return false;
-
-    // Set relative offset in parent's array
-    if (wire_offset) {
-      wire_offset->set_relative(dest);
-      wire_offset->type(TRIE);
-    }
-
-    // Get wire array for patching
-    auto* wire_trie = const_cast<WireTrieNode*>(dest);
-    WireOffset* wire_array = wire_trie->array();
-    const SrcOffset* src_array = trie->array();
-    size_t count = trie->count();
-
-    // Write children, passing wire offset for each to set
-    for (size_t i = 0; i < count; ++i) {
-      offset_t child_offset(src_array[i]);
-      if (child_offset) {
-        if (!_write_subtree(child_offset, &wire_array[i])) {
-          // Buffer full - zero out remaining links
-          for (size_t j = i; j < count; ++j) {
-            wire_array[j] = 0;
-          }
-          return false;
+      if (node.offset.type() == LEAF) {
+        // Write leaf node
+        auto leaf = _db->template resolve<LeafNode>(&node.offset);
+        if (!leaf) {
+          _pending.pop_front();
+          continue;
         }
+        auto* dest = _transfer.add_leaf_node(&*leaf);
+        if (!dest) break;  // Buffer full
+
+        // Move to last_batch for ACK tracking
+        _last_batch.splice(_last_batch.end(), _pending, _pending.begin());
+      } else {
+        // Write trie node
+        auto trie = _db->template resolve<TrieNode>(&node.offset);
+        if (!trie) {
+          _pending.pop_front();
+          continue;
+        }
+        auto* dest = _transfer.add_trie_node(&*trie);
+        if (!dest) break;  // Buffer full
+
+        // Child offsets are copied as-is (absolute offsets from source DB)
+        // These will be zeroed/fixed by receiver - we just need to add children to pending
+        const SrcOffset* src_array = trie->array();
+        size_t count = trie->count();
+
+        // Zero out child offsets in wire trie (children sent in later batches)
+        auto* wire_trie = const_cast<WireTrieNode*>(dest);
+        WireOffset* wire_array = wire_trie->array();
+        for (size_t i = 0; i < count; ++i) {
+          offset_t child_offset(src_array[i]);
+          if (child_offset) {
+            wire_array[i] = 0;  // Placeholder - receiver patches when child arrives
+            // Add child to pending for next batch
+            std::string child_path = node.path + static_cast<char>(i);
+            _pending.emplace_back(child_path, child_offset, 0);
+          }
+        }
+
+        // Move to last_batch for ACK tracking
+        _last_batch.splice(_last_batch.end(), _pending, _pending.begin());
       }
     }
 
@@ -617,12 +564,6 @@ struct TransferTrieSender {
   }
 
   Slice finalize() { return _transfer.finalize(); }
-
-  const std::string& current_subtrie_path() const {
-    return _current_subtrie_path;
-  }
-
-  bool is_complete() const { return _complete; }
   uint64_t session_id() const { return _session_id; }
   uint64_t snapshot_id() const { return _snapshot_id; }
 };

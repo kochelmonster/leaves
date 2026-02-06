@@ -156,8 +156,8 @@ struct ReplicationFixture {
 BOOST_AUTO_TEST_SUITE(ReplicationFSMTests)
 
 BOOST_AUTO_TEST_CASE(test_message_header_size) {
-  static_assert(sizeof(ReplicationMsgHeader) == 17);
-  BOOST_CHECK_EQUAL(sizeof(ReplicationMsgHeader), 17);
+  static_assert(sizeof(ReplicationMsgHeader) == 24);
+  BOOST_CHECK_EQUAL(sizeof(ReplicationMsgHeader), 24);
 }
 
 BOOST_AUTO_TEST_CASE(test_message_builder_parser) {
@@ -373,10 +373,6 @@ BOOST_FIXTURE_TEST_CASE(test_session_id_mismatch, ReplicationFixture) {
   BOOST_CHECK(sender_events.errored);
 }
 
-// TODO: These tests are disabled due to infinite loop bug in wire trie cursor iteration
-// They need to be fixed and re-enabled
-
-#if 0
 BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
   auto sender_path = test_temp_dir / "sender_crossbuf.lvs";
   auto receiver_path = test_temp_dir / "receiver_crossbuf.lvs";
@@ -403,7 +399,6 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
-
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -429,6 +424,7 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
   // Verify all keys were replicated
   {
     auto cursor = receiver_db.cursor();
+    //auto cursor = sender_db.cursor();
     int found = 0;
     for (int i = 0; i < 100; ++i) {
       std::string key = "key_" + std::to_string(i);
@@ -565,6 +561,5 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     BOOST_CHECK_MESSAGE(cursor.value() == Slice("sender_wins"), "Conflict not resolved correctly");
   }
 }
-#endif
 
 BOOST_AUTO_TEST_SUITE_END()
