@@ -608,7 +608,7 @@ struct _LocalityInserter {
       if (tarray[i].is_relative()) {
         tarray[i].set_relative(dest);
         offset_e* foffset = &farray[j];
-        char* src = (char*)foffset + foffset->as_signed();
+        char* src = foffset->template resolve<char>();
 
         if (tarray[i].type() == LEAF) {
           LeafNode* leaf = (LeafNode*)src;

@@ -98,7 +98,8 @@ struct TransferTrieHeader {
   boost::endian::little_uint32_t magic;
   boost::endian::little_uint16_t version;
   uint8_t db_type;
-  uint8_t root_node_type;  // TransferNodeType of root (first node in buffer)
+  WireFormatTraits::offset_e
+      root;  // Relative offset to root node (first node in buffer)
   boost::endian::little_uint32_t node_count;
   boost::endian::little_uint64_t total_size;
   boost::endian::little_uint64_t session_id;
@@ -112,8 +113,8 @@ struct TransferTrieHeader {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(TransferTrieHeader) == 38,
-              "TransferTrieHeader must be 38 bytes");
+static_assert(sizeof(TransferTrieHeader) == 45,
+              "TransferTrieHeader must be 45 bytes");
 
 // Chunk reference for CHUNK_REQ messages
 struct ChunkRef {
@@ -140,12 +141,14 @@ struct TransferTrie {
   size_t _header_size;  // Header + subtrie_path length (aligned to 8)
   TransferNodeType _first_node_type;  // Type of first (root) node added
   bool _finalized;
+  bool full;
   explicit TransferTrie(size_t max_size = DEFAULT_MAX_SIZE)
       : _max_size(max_size),
         _node_count(0),
         _header_size(0),
         _first_node_type(TransferNodeType::TRIE_NODE),
-        _finalized(false) {
+        _finalized(false),
+        full(false) {
     _buffer.reserve(max_size);
   }
 
@@ -163,6 +166,7 @@ struct TransferTrie {
     _buffer.clear();
     _node_count = 0;
     _finalized = false;
+    full = false;
 
     // Reserve space for header + subtrie_path, aligned to 8 bytes for nodes
     size_t raw_header_size = sizeof(TransferTrieHeader) + subtrie_path.size();
@@ -215,6 +219,7 @@ struct TransferTrie {
     size_t padding = aligned_pos - current_pos;
 
     if (aligned_pos + size > _max_size) {
+      full = true;
       return nullptr;
     }
 
@@ -260,7 +265,22 @@ struct TransferTrie {
     auto* hdr = reinterpret_cast<TransferTrieHeader*>(_buffer.data());
     hdr->node_count = static_cast<uint32_t>(_node_count);
     hdr->total_size = _buffer.size();
-    hdr->root_node_type = static_cast<uint8_t>(_first_node_type);
+
+    // Set root to point to first node (relative offset from header's root
+    // field)
+    if (_node_count > 0) {
+      const uint8_t* root_node_addr =
+          nodes_data(Slice(_buffer.data(), _buffer.size()), *hdr);
+      const uint8_t* root_field_addr =
+          reinterpret_cast<const uint8_t*>(&hdr->root);
+      int64_t relative_offset = root_node_addr - root_field_addr;
+      hdr->root.set_relative(root_node_addr);
+      hdr->root.type(_first_node_type == TransferNodeType::TRIE_NODE ? TRIE
+                                                                     : LEAF);
+    } else {
+      hdr->root = 0;
+    }
+
     _finalized = true;
 
     return Slice(_buffer.data(), _buffer.size());
@@ -424,12 +444,12 @@ inline RequestChildrenIterator request_children_iterator(
 
 // Pending trie node awaiting child transmission
 struct PendingTrieNode {
-  std::string path;    // Path to this node
-  offset_t offset;     // Absolute offset in sender's storage
-  int16_t next_child;  // Branch key to resume from (TrieNode::NONE = start, -2
-                       // = node itself not sent)
+  std::string path;     // Path to this node
+  offset_t* offset;     // Absolute offset in sender's storage
+  uint16_t next_child;  // Branch key to resume from (TrieNode::NONE = start, -2
+                        // = node itself not sent)
 
-  PendingTrieNode(const std::string& p, offset_t off, int16_t next = -2)
+  PendingTrieNode(const std::string& p, offset_t* off, uint16_t next = 0)
       : path(p), offset(off), next_child(next) {}
 };
 
@@ -512,49 +532,36 @@ struct TransferTrieSender {
   // If _pending is empty, writes the root trie
   // If _pending has nodes, picks the first and writes a subtrie of its next
   // child as root All written nodes go to _last_batch
-  bool fill_buffer() {
+  void fill_buffer() {
     if (_pending.empty()) {
       // First transmission - write root node and its descendants up to
       // max_depth
       std::string root_path;
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
-      return _write_subtree(root_path, _txn->root, 0, nullptr);
+      _write_subtree(root_path, &_txn->root, 0, nullptr);
+      return;
     }
 
     // Pick first pending node - it's already been transmitted, now send its
     // next child
     auto& pending = _pending.front();
-    auto trie = _db->template resolve<TrieNode>(&pending.offset);
+    auto trie = _db->template resolve<TrieNode>(pending.offset);
     assert(trie);  // Should always resolve since it was transmitted before
-
-    // Find next child to transmit
-    int branch_key = (pending.next_child == TrieNode::NONE)
-                         ? trie->first()
-                         : pending.next_child;
-    assert(branch_key !=
-           TrieNode::OUT_OF_RANGE);  // Shouldn't be here if no more children
-
-    // Write this child subtree as root of this buffer
-    const SrcOffset* child_src = trie->offset(branch_key);
-    offset_t child_offset(*child_src);
+    assert(pending.next_child < trie->count());
 
     size_t path_len = pending.path.size();
-    if (branch_key != TrieNode::NONE) {
-      pending.path.append((char*)trie->compressed(), trie->len());
-      pending.path += static_cast<char>(branch_key);
-    }
-
+    // branch_key is already in path
+    pending.path.append((char*)trie->compressed()+1, trie->len()-1); 
     _transfer.begin(_session_id, _snapshot_id, _db_type, pending.path);
-    bool result = _write_subtree(pending.path, child_offset, 0, nullptr);
+    _write_subtree(pending.path, trie->array() + pending.next_child, 0,
+                   nullptr);
     pending.path.resize(path_len);  // Restore path for retry
 
     // the child as the TransferTrie root is guaranteed to be written.
-    pending.next_child = trie->next(branch_key);
-    if (pending.next_child == TrieNode::OUT_OF_RANGE) {
-      // All children done, remove from pending
+    if (++pending.next_child >= trie->count()) {
       _pending.pop_front();
     }
-    return result;
+    return;
   }
 
   // Write a subtrie with DFS up to max_depth
@@ -563,10 +570,18 @@ struct TransferTrieSender {
   // if not pruned)
   // wire_link: If provided, the root node stores its relative offset here (for
   // linking to parent)
-  bool _write_subtree(std::string& path, offset_t offset, size_t depth,
+  // returns false if the node is not written
+  bool _write_subtree(std::string& path, offset_t* offset, size_t depth,
                       WireOffset* wire_link = nullptr) {
-    if (offset.type() == LEAF) {
-      auto leaf = _db->template resolve<LeafNode>(&offset);
+    size_t path_len = path.size();
+
+    if (offset->type() == LEAF) {
+      auto leaf = _db->template resolve<LeafNode>(offset);
+
+      path.append(leaf->key().data(), leaf->key().size());
+      std::cerr << "DEBUG: send node: " << path << " (type=leaf)\n";
+      path.resize(path_len);
+
       assert(leaf);
       auto* dest = _transfer.add_leaf_node(&*leaf);
       if (!dest) return false;
@@ -579,17 +594,20 @@ struct TransferTrieSender {
       return true;
     }
 
-    auto trie = _db->template resolve<TrieNode>(&offset);
+    auto trie = _db->template resolve<TrieNode>(offset);
     assert(trie);
 
     auto* dest = _transfer.add_trie_node(&*trie);
     if (!dest) return false;
 
-    // Set relative offset in parent if wire_link provided
     if (wire_link) {
       wire_link->set_relative(dest);
       wire_link->type(TRIE);
     }
+
+    if (wire_link) path.push_back((char)trie->compressed()[0]);
+    std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
+    path.resize(path_len);
 
     // Get wire array for setting child offsets
     auto* wire_trie = const_cast<WireTrieNode*>(dest);
@@ -597,43 +615,34 @@ struct TransferTrieSender {
     memset(wire_array, 0, wire_trie->array_size());
 
     if (depth >= _max_depth) {
-      _last_batch.emplace_back(path, offset, TrieNode::NONE);
+      _last_batch.emplace_back(path, offset, 0);
       return true;
     }
 
     // Process children
-    int branch_key = trie->first();
-    size_t orig_path_len = path.size();
-    
     path.append((char*)trie->compressed(), trie->len());
-    size_t path_len = path.size();
 
-    bool result = true;
-    while (branch_key != TrieNode::OUT_OF_RANGE) {
-      const SrcOffset* child_src = trie->offset(branch_key);
-      offset_t child_offset(*child_src);
-      int array_idx = trie->array_index(branch_key);
-
-      if (branch_key != TrieNode::NONE) {
-        path.resize(path_len);
-        path += static_cast<char>(branch_key);
-      }
-
-      if (!_write_subtree(path, child_offset, depth + 1,
-                          &wire_array[array_idx])) {
-        result = false;
+    int count = trie->count(), i;
+    offset_t* children = trie->array();
+    for (i = 0; i < count && !_transfer.full;) {
+      if (!_write_subtree(path, children + i, depth + 1, wire_array + i)) {
+        std::cerr << "DEBUG: buffer full, stop at node: \n";
         break;
       }
-
-      branch_key = trie->next(branch_key);
+      ++i;
     }
 
-    path.resize(orig_path_len);
+    path.resize(path_len);
+    if (i < count) {
+      if (wire_link) {
+        assert(trie->len() > 0);
+        path.push_back((char)trie->compressed()[0]);
+      }
+      _last_batch.emplace_back(path, offset, i);
+      path.resize(path_len);
+    }
 
-    if (branch_key != TrieNode::OUT_OF_RANGE)
-      _last_batch.emplace_back(path, offset, branch_key);
-
-    return result;
+    return true;
   }
 
   // Write a child node recursively and set relative offset in parent's array

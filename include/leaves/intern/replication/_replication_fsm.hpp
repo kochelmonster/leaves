@@ -798,9 +798,6 @@ struct ReplicationReceiverFSM {
       return;
     }
 
-    // Get pointer to the original local node at this path (before we compare)
-    const offset_e* original_root = _get_original_root(path);
-
     // Get pointer to root node in wire buffer (no copy)
     // Note: cast to non-const since we may need to modify offsets in temp DB
     const TransferTrieHeader* transfer_hdr = Transfer::parse_header(payload);
@@ -808,33 +805,24 @@ struct ReplicationReceiverFSM {
       _send_prune_ack();
       return;
     }
-    uint8_t* wire_root =
-        const_cast<uint8_t*>(Transfer::nodes_data(payload, *transfer_hdr));
-
-    // Get root type from header
-    auto wire_root_type = static_cast<TransferNodeType>(hdr.root_node_type);
 
     // Connect received subtrie to temp DB
     if (path.empty()) {
       // First subtrie - this becomes the temp DB root
+      char* wire_root = transfer_hdr->root.resolve<char>();
       _temp_root.set_relative(wire_root);
-      NodeTypes type =
-          (wire_root_type == TransferNodeType::LEAF_NODE) ? LEAF : TRIE;
-      _temp_root.type(type);
+      _temp_root.type(transfer_hdr->root.type());
     } else {
       // Subsequent subtrie - connect to parent in temp DB
-      _connect_subtrie_to_parent(path, wire_root, wire_root_type);
+      _connect_subtrie_to_parent(path, &transfer_hdr->root);
     }
 
     // Compare wire nodes with local nodes, collect paths where we differ
-    _path_buffer.assign(reinterpret_cast<const char*>(path.data()),
-                        path.size());
+    _path_buffer.assign(path.data(), path.size());
 
-    const uint8_t* payload_end =
-        reinterpret_cast<const uint8_t*>(payload.data()) + payload.size();
-    _compare_wire_with_local(wire_root, wire_root_type, payload_end,
-                             original_root, _path_buffer, nullptr,
-                             -1);  // No parent for root
+    const char* payload_end = payload.data() + payload.size();
+    _compare_wire_with_local(&transfer_hdr->root, payload_end, _path_buffer,
+                             nullptr);
 
     // After processing, send ACK with prune paths
     _send_prune_ack();
@@ -848,7 +836,7 @@ struct ReplicationReceiverFSM {
 
   // Get pointer to the original offset at a path (what we had before receiving)
   // Returns pointer to offset for future relative offset handling compatibility
-  const offset_e* _get_original_root(const Slice& path) {
+  const offset_e* _get_original_node(const Slice& path) {
     if (path.empty()) {
       return &_txn->root;
     }
@@ -868,28 +856,44 @@ struct ReplicationReceiverFSM {
     return trans.offset;
   }
 
+  int get_branch_key(offset_e* subtrie_root) {
+    if (subtrie_root->type() == TRIE) {
+      auto* temp_trie = subtrie_root->template resolve<TempTrieNode>();
+      assert(temp_trie->len() > 0 && "Received empty trie node");
+      return temp_trie->compressed()[0];
+    }
+    assert(subtrie_root->type() == LEAF);
+    auto* temp_leaf = subtrie_root->template resolve<TempLeafNode>();
+    return temp_leaf->key().size() > 0 ? temp_leaf->key()[0]
+                                       : TempTrieNode::NONE;
+  }
+
   // Connect a received subtrie to its parent in the temp DB
   // path: the full path to this subtrie (e.g., "abc")
   // subtrie_root: pointer to the received subtrie's root node
   // subtrie_type: type of the subtrie root (TRIE_NODE or LEAF_NODE)
-  void _connect_subtrie_to_parent(const Slice& path, uint8_t* subtrie_root,
-                                  TransferNodeType subtrie_type) {
+  void _connect_subtrie_to_parent(const Slice& path,
+                                  const offset_e* subtrie_root) {
     if (path.empty() || !_temp_root) return;  // _temp_root == 0 means not set
 
-    // Navigate temp DB to find the parent's child offset slot
-    TempOffset* parent_offset = _find_temp_parent_offset(path);
+    offset_e* parent_offset;
+    int key = get_branch_key(subtrie_root);
+    if (key == TempTrieNode::NONE) {
+      parent_offset = _find_temp_parent_offset(path);
+    } else {
+      _path_buffer.assign(path.data(), path.size());
+      _path_buffer.push_back((char)key);
+      parent_offset = _find_temp_parent_offset(Slice(_path_buffer));
+    }
+
     if (!parent_offset) {
       // This shouldn't happen - parent should exist in temp DB
       assert(false && "Parent not found in temp DB");
       return;
     }
 
-    // Set the relative offset from parent's offset slot to subtrie root
-    // with the correct node type
-    NodeTypes type =
-        (subtrie_type == TransferNodeType::LEAF_NODE) ? LEAF : TRIE;
-    parent_offset->set_relative(subtrie_root);
-    parent_offset->type(type);
+    parent_offset->set_relative(subtrie_root->template resolve<char>());
+    parent_offset->type(subtrie_root->type());
 
     // This subtrie filled in a pending (0 offset) slot
     if (_pending_children > 0) {
@@ -924,123 +928,98 @@ struct ReplicationReceiverFSM {
   // false if matches (prune it) parent_trie: the parent trie node (for removing
   // matched children) parent_branch_key: the branch key in parent that leads to
   // this node
-  bool _compare_wire_with_local(const uint8_t* wire_node,
-                                TransferNodeType wire_type,
-                                const uint8_t* buffer_end,
-                                const offset_e* local_offset, std::string& path,
-                                TempTrieNode* parent_trie = nullptr,
-                                int parent_branch_key = -1) {
-    if (!wire_node || wire_node >= buffer_end) return false;
+  bool _compare_wire_with_local(offset_e* wire_node, const char* buffer_end,
+                                std::string& path, TempTrieNode* parent_trie) {
+    if ((char*)wire_node >= buffer_end) return false;
 
     // Get wire node's hash
     const uint8_t* wire_hash;
-    if (wire_type == TransferNodeType::LEAF_NODE) {
-      auto* wire_leaf = reinterpret_cast<const TempLeafNode*>(wire_node);
-      wire_hash = wire_leaf->hash;
+    int branch_key;
+    if (wire_node->type() == TransferNodeType::LEAF_NODE) {
+      wire_hash = wire_node->template resolve<TempLeafNode>()->hash;
+      branch_key = get_branch_key(wire_node);
     } else {
-      auto* wire_trie = reinterpret_cast<const TempTrieNode*>(wire_node);
-      wire_hash = wire_trie->hash;
+      wire_hash = wire_node->template resolve<TempTrieNode>()->hash;
+      // path.empty() => wire_node is root => no branch_key
+      branch_key =
+          path.empty() ? TempTrieNode::NONE : get_branch_key(wire_node);
     }
 
+    size_t path_len = path.size();
+    if (branch_key != TempTrieNode::NONE) path.push_back((char)branch_key);
+
+    auto* local_offset = _get_original_node(Slice(path));
     // Compare with local
-    if (local_offset && *local_offset) {
-      offset_t local_off(*local_offset);
-      const uint8_t* local_hash = _get_local_hash(local_off);
-      if (local_hash && wire_hash &&
-          std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
+    if (local_offset) {
+      const uint8_t* local_hash = _get_local_hash(local_offset);
+      if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
+        if (parent_trie) parent_trie->remove_child(branch_key);
         // Hashes match - local subtrie is correct, tell sender to prune it
         _prune_paths.push_back(path);
-        if (parent_trie && parent_branch_key >= -1) {
-          parent_trie->remove_child(parent_branch_key);
-        }
         return false;
       }
     }
 
+    path.resize(path_len);
+
     // Hashes differ or local doesn't exist
-    if (wire_type == TransferNodeType::LEAF_NODE) {
+    if (wire_node->type() == TransferNodeType::LEAF_NODE) {
+      auto* leaf = wire_node->template resolve<TempLeafNode>();
+      path.append(leaf->key().data(), leaf->key().size());
+      std::cerr << "DEBUG: send node: " << path << " (type=leaf)\n";
+      path.resize(path_len);
+
       // Keep leaf - will be merged by _Merger
       return true;
     }
 
     // Wire is trie node - iterate through children
     // We need to cast away const since we may call remove_child
-    auto* wire_trie = const_cast<TempTrieNode*>(
-        reinterpret_cast<const TempTrieNode*>(wire_node));
-    TempOffset* wire_array = const_cast<TempOffset*>(wire_trie->array());
+    auto* wire_trie = wire_node->template resolve<TempTrieNode>();
+    TempOffset* wire_array = wire_trie->array();
+    int count = wire_trie->count();
+
+    path.append((char*)wire_trie->compressed(),
+                std::min((int)wire_trie->len(), (int)1));
+    std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
+    path.resize(path_len);
 
     // Save path length before appending compressed, so we can restore it
-    size_t orig_path_len = path.size();
     path.append((char*)wire_trie->compressed(), wire_trie->len());
+    for (int i = 0; i < count; ++i) {
+      TempOffset* child_offset = wire_array + i;
 
-    // Process children
-    size_t path_len = path.size();
-    for (int branch_key = wire_trie->first();
-         branch_key != TempTrieNode::OUT_OF_RANGE;
-         branch_key = wire_trie->next(branch_key)) {
-      // Get current array index (may change as we remove children)
-      int array_idx = wire_trie->array_index(branch_key);
-      assert(array_idx >= 0 && array_idx < wire_trie->count());
-
-      TempOffset& child_offset = wire_trie->array()[array_idx];
-
-      // Check raw _offset to distinguish:
-      // - _offset == 0: sender didn't include this child (max_depth limit),
-      // will send later
-      // - other: valid offset, recurse
-      if (child_offset._offset == 0) {
-        // Sender will send this child in a future message (it's in sender's
-        // _pending) Track this as pending - when connected, we decrement the
-        // counter
+      if (!*child_offset) {
         ++_pending_children;
         continue;
       }
 
       // Child was sent - resolve relative offset and recurse
-      if (!child_offset.is_relative()) {
+      if (!child_offset->is_relative()) {
         assert(false && "Child offsets in wire format must be relative");
         continue;
       }
 
-      int64_t relative = child_offset.as_signed();
-      const uint8_t* child_wire =
-          reinterpret_cast<const uint8_t*>(&child_offset) + relative;
-      if (child_wire && child_wire < buffer_end) {
-        TransferNodeType child_type = child_offset.type() == LEAF
-                                          ? TransferNodeType::LEAF_NODE
-                                          : TransferNodeType::TRIE_NODE;
-
-        // Extend path with branch key and recurse
-        if (branch_key != TrieNode::NONE) {
-          path.push_back(static_cast<char>(branch_key));
-        }
-
-        // Get corresponding local child by navigating to the extended path
-        // (can't use local_trie->array_index because compressed paths may
-        // differ)
-        const offset_e* local_child = _get_original_root(Slice(path));
-
-        bool keep =
-            _compare_wire_with_local(child_wire, child_type, buffer_end,
-                                     local_child, path, wire_trie, branch_key);
-        // Note: if !keep, the child was already removed by the recursive call
-        path.resize(path_len);
+      if (!_compare_wire_with_local(child_offset, buffer_end, path,
+                                    wire_trie)) {
+        count--;
+        i--;
       }
     }
 
     // Restore path to original length (remove compressed portion we added)
-    path.resize(orig_path_len);
+    path.resize(path_len);
 
     // Keep this trie node (it has differing children)
     return true;
   }
 
-  const uint8_t* _get_local_hash(offset_t offset) {
-    if (offset.type() == LEAF) {
-      auto leaf = _db->template resolve<LeafNode>(&offset);
+  const uint8_t* _get_local_hash(offset_t* offset) {
+    if (offset->type() == LEAF) {
+      auto leaf = _db->template resolve<LeafNode>(offset);
       return leaf->hash;
     } else {
-      auto trie = _db->template resolve<TrieNode>(&offset);
+      auto trie = _db->template resolve<TrieNode>(offset);
       return trie->hash;
     }
   }
