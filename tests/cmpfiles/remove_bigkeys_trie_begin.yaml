@@ -15,8 +15,8 @@ children:
 type: leaf
 id: 6025
 page: 6017
-freespace: 293
-size: 259
+freespace: 294
+size: 258
 txn: 2
 keysize: 0
 key: ""
@@ -41,8 +41,8 @@ children:
 type: leaf
 id: 11777
 page: 11769
-freespace: 292
-size: 260
+freespace: 293
+size: 259
 txn: 2
 keysize: 0
 key: ""
@@ -52,8 +52,8 @@ value: "000000000000000000000000000000"
 type: leaf
 id: 12449
 page: 12441
-freespace: 290
-size: 262
+freespace: 291
+size: 261
 txn: 2
 keysize: 1
 key: "[1]"
@@ -63,8 +63,8 @@ value: "000000000000000000000000000000"
 type: leaf
 id: 17217
 page: 17209
-freespace: 290
-size: 262
+freespace: 291
+size: 261
 txn: 2
 keysize: 1
 key: "[2]"

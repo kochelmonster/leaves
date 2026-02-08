@@ -15,8 +15,8 @@ children:
 type: leaf
 id: 10361
 page: 10353
-freespace: 100
-size: 20
+freespace: 101
+size: 19
 txn: 3
 keysize: 0
 key: ""
@@ -26,8 +26,8 @@ value: "chunk_offset=528424 chunk_size=8192 has_successor=true"
 type: leaf
 id: 14697
 page: 14689
-freespace: 97
-size: 23
+freespace: 98
+size: 22
 txn: 3
 keysize: 3
 key: "[d][e][f]"

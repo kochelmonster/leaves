@@ -15,8 +15,8 @@ children:
 type: leaf
 id: 10241
 page: 10233
-freespace: 115
-size: 5
+freespace: 116
+size: 4
 txn: 3
 keysize: 0
 key: ""
@@ -40,8 +40,8 @@ children:
 type: leaf
 id: 15249
 page: 15241
-freespace: 114
-size: 6
+freespace: 115
+size: 5
 txn: 4
 keysize: 0
 key: ""
@@ -65,8 +65,8 @@ children:
 type: leaf
 id: 5473
 page: 5465
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 5
 keysize: 0
 key: ""
@@ -90,8 +90,8 @@ children:
 type: leaf
 id: 14577
 page: 14569
-freespace: 112
-size: 8
+freespace: 113
+size: 7
 txn: 6
 keysize: 0
 key: ""
@@ -101,8 +101,8 @@ value: "abcd"
 type: leaf
 id: 17121
 page: 17113
-freespace: 110
-size: 10
+freespace: 111
+size: 9
 txn: 6
 keysize: 1
 key: "[e]"

@@ -29,8 +29,8 @@ children:
 type: leaf
 id: 10241
 page: 10233
-freespace: 111
-size: 9
+freespace: 112
+size: 8
 txn: 3
 keysize: 1
 key: "[a]"
@@ -40,8 +40,8 @@ value: "abca"
 type: leaf
 id: 14577
 page: 14569
-freespace: 111
-size: 9
+freespace: 112
+size: 8
 txn: 3
 keysize: 1
 key: "[b]"
@@ -51,8 +51,8 @@ value: "abcb"
 type: leaf
 id: 15489
 page: 15481
-freespace: 109
-size: 11
+freespace: 110
+size: 10
 txn: 4
 keysize: 3
 key: "[d][e][a]"

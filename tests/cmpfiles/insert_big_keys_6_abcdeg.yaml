@@ -41,8 +41,8 @@ children:
 type: leaf
 id: 6577
 page: 6569
-freespace: 500
-size: 556
+freespace: 501
+size: 555
 txn: 2
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -92,8 +92,8 @@ children:
 type: leaf
 id: 14057
 page: 14049
-freespace: 499
-size: 557
+freespace: 500
+size: 556
 txn: 3
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -143,8 +143,8 @@ children:
 type: leaf
 id: 21657
 page: 21649
-freespace: 498
-size: 558
+freespace: 499
+size: 557
 txn: 4
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -194,8 +194,8 @@ children:
 type: leaf
 id: 24177
 page: 24169
-freespace: 497
-size: 559
+freespace: 498
+size: 558
 txn: 5
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -246,8 +246,8 @@ children:
 type: leaf
 id: 26697
 page: 26689
-freespace: 496
-size: 560
+freespace: 497
+size: 559
 txn: 6
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -283,8 +283,8 @@ children:
 type: leaf
 id: 29217
 page: 29209
-freespace: 495
-size: 561
+freespace: 496
+size: 560
 txn: 7
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -320,8 +320,8 @@ children:
 type: leaf
 id: 31065
 page: 31057
-freespace: 495
-size: 561
+freespace: 496
+size: 560
 txn: 8
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"

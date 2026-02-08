@@ -15,8 +15,8 @@ children:
 type: leaf
 id: 12617
 page: 12609
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[C]"
@@ -26,8 +26,8 @@ value: "aC"
 type: leaf
 id: 12329
 page: 12321
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[K]"

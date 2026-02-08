@@ -15,8 +15,8 @@ children:
 type: leaf
 id: 10241
 page: 10233
-freespace: 102
-size: 18
+freespace: 103
+size: 17
 txn: 3
 keysize: 7
 key: "[a][b][c][d][e][f][g]"
@@ -26,8 +26,8 @@ value: "abcdefg"
 type: leaf
 id: 14577
 page: 14569
-freespace: 112
-size: 8
+freespace: 113
+size: 7
 txn: 3
 keysize: 2
 key: "[b][a]"

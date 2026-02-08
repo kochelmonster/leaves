@@ -19,8 +19,8 @@ children:
 type: leaf
 id: 5593
 page: 5585
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[@]"
@@ -30,8 +30,8 @@ value: "a@"
 type: leaf
 id: 10169
 page: 10161
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[A]"
@@ -41,8 +41,8 @@ value: "aA"
 type: leaf
 id: 10409
 page: 10401
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[B]"
@@ -52,8 +52,8 @@ value: "aB"
 type: leaf
 id: 10649
 page: 10641
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[D]"
@@ -63,8 +63,8 @@ value: "aD"
 type: leaf
 id: 10889
 page: 10881
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[E]"
@@ -74,8 +74,8 @@ value: "aE"
 type: leaf
 id: 11129
 page: 11121
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[F]"

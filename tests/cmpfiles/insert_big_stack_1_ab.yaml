@@ -15,8 +15,8 @@ children:
 type: leaf
 id: 10241
 page: 10233
-freespace: 115
-size: 5
+freespace: 116
+size: 4
 txn: 3
 keysize: 0
 key: ""
@@ -26,8 +26,8 @@ value: "a"
 type: leaf
 id: 14577
 page: 14569
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 3
 keysize: 1
 key: "[b]"
