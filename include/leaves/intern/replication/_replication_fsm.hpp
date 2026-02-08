@@ -321,8 +321,10 @@ struct ReplicationSenderFSM {
                              "Received message while sending");
         break;
 
-      case State::COMPLETE:
-        if (msg_type == ReplicationMsgType::COMPLETE) break;
+      case State::IDLE:
+        // Already completed, ignore any late messages
+        // This can happen if both sides send COMPLETE simultaneously
+        break;
 
       default:
         _transition_to_error(ReplicationError::INVALID_STATE,
@@ -338,10 +340,10 @@ struct ReplicationSenderFSM {
   void _handle_response(ReplicationMsgType msg_type, const Slice& payload) {
     switch (msg_type) {
       case ReplicationMsgType::COMPLETE:
-        _state = State::COMPLETE;
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
         }
+        _state = State::IDLE;
         break;
 
       case ReplicationMsgType::SUBTRIE_ACK:
@@ -426,10 +428,10 @@ struct ReplicationSenderFSM {
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
 
-    _state = State::COMPLETE;
     if (_events) {
       _events->on_complete(_session_id, _total_nodes);
     }
+    _state = State::IDLE;
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
@@ -691,6 +693,11 @@ struct ReplicationReceiverFSM {
         _handle_incoming(msg_type, payload);
         break;
 
+      case State::IDLE:
+        // Already completed, ignore any late messages
+        // This can happen if both sides send COMPLETE simultaneously
+        break;
+
       default:
         _transition_to_error(ReplicationError::INVALID_STATE,
                              "Received message in invalid state");
@@ -711,10 +718,10 @@ struct ReplicationReceiverFSM {
       case ReplicationMsgType::COMPLETE:
         // Receiver determines completion autonomously by tracking pending
         // children If we receive this, sender thinks we're done - just ACK it
-        _state = State::COMPLETE;
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
         }
+        _state = State::IDLE;
         break;
 
       case ReplicationMsgType::ERROR:
@@ -1051,10 +1058,10 @@ struct ReplicationReceiverFSM {
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
 
-    _state = State::COMPLETE;
     if (_events) {
       _events->on_complete(_session_id, _total_nodes);
     }
+    _state = State::IDLE;
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {

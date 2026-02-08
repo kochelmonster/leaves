@@ -142,9 +142,9 @@ struct ReplicationFixture {
       }
 
       // Check if both are done
-      if ((sender.state() == SenderFSM::State::COMPLETE ||
+      if ((sender.state() == SenderFSM::State::IDLE ||
            sender.state() == SenderFSM::State::ERROR) &&
-          (receiver.state() == ReceiverFSM::State::COMPLETE ||
+          (receiver.state() == ReceiverFSM::State::IDLE ||
            receiver.state() == ReceiverFSM::State::ERROR)) {
         break;
       }
@@ -226,8 +226,8 @@ BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, ReplicationFixture) {
 
   run_protocol(sender, receiver, sender_transport, receiver_transport);
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::COMPLETE);
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::COMPLETE);
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
   BOOST_CHECK(sender_events.completed);
   BOOST_CHECK(receiver_events.completed);
 }
@@ -269,8 +269,8 @@ BOOST_FIXTURE_TEST_CASE(test_single_key_replication, ReplicationFixture) {
 
   run_protocol(sender, receiver, sender_transport, receiver_transport);
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::COMPLETE);
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::COMPLETE);
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
   BOOST_CHECK(sender_events.completed);
   BOOST_CHECK(receiver_events.completed);
   BOOST_CHECK_GE(sender_events.nodes, 1);
@@ -327,8 +327,8 @@ BOOST_FIXTURE_TEST_CASE(test_multiple_keys_replication, ReplicationFixture) {
 
   run_protocol(sender, receiver, sender_transport, receiver_transport);
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::COMPLETE);
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::COMPLETE);
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
   BOOST_CHECK(sender_events.completed);
   BOOST_CHECK(receiver_events.completed);
   BOOST_CHECK_GE(sender_events.nodes, 3);
@@ -442,8 +442,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
 
   run_protocol(sender, receiver, sender_transport, receiver_transport, 200);
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::COMPLETE);
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::COMPLETE);
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
   BOOST_CHECK(sender_events.completed);
   BOOST_CHECK(receiver_events.completed);
 
@@ -564,8 +564,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
 
   run_protocol(sender, receiver, sender_transport, receiver_transport, 500);
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::COMPLETE);
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::COMPLETE);
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
   BOOST_CHECK(sender_events.completed);
   BOOST_CHECK(receiver_events.completed);
 
@@ -621,6 +621,130 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     BOOST_CHECK_MESSAGE(cursor.value() == Slice("sender_wins"),
                         "Conflict not resolved correctly");
   }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
+  // This test verifies that FSMs can transition back to IDLE state after
+  // completion, allowing the same FSM code path to be used for multiple
+  // replication rounds. In practice, each round uses fresh FSM instances
+  // with new transactions.
+  
+  auto sender_path = test_temp_dir / "sender_reuse.lvs";
+  auto receiver_path = test_temp_dir / "receiver_reuse.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  TestTransport sender_transport;
+  TestTransport receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
+  TestEvents sender_events;
+  TestEvents receiver_events;
+
+  // Round 1: Initial replication
+  {
+    auto cursor = sender_db.cursor();
+    cursor.find(Slice("key_a"));
+    cursor.value(Slice("value_a"));
+    cursor.find(Slice("key_b"));
+    cursor.value(Slice("value_b"));
+    cursor.find(Slice("key_c"));
+    cursor.value(Slice("value_c"));
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  {
+    SenderFSM sender(sender_impl, sender_impl->txn());
+    ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    run_protocol(sender, receiver, sender_transport, receiver_transport);
+
+    BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+    BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+    BOOST_CHECK(sender_events.completed);
+    BOOST_CHECK(receiver_events.completed);
+
+    // Verify first replication
+    {
+      auto cursor = receiver_db.cursor();
+      cursor.find(Slice("key_a"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_a"));
+      cursor.find(Slice("key_b"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_b"));
+      cursor.find(Slice("key_c"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_c"));
+    }
+  }  // FSMs go out of scope, demonstrating they cleanly transition to IDLE
+
+  // Clear any leftover messages in transport queues between rounds
+  while (sender_transport.has_message()) sender_transport.receive();
+  while (receiver_transport.has_message()) receiver_transport.receive();
+
+  // Reset event counters for round 2
+  sender_events.reset();
+  receiver_events.reset();
+
+  // Round 2: Add more data and replicate again with new FSM instances
+  {
+    auto cursor = sender_db.cursor();
+    cursor.find(Slice("key_d"));
+    cursor.value(Slice("value_d"));
+    cursor.find(Slice("key_e"));
+    cursor.value(Slice("value_e"));
+    cursor.commit();
+  }
+
+  // Create fresh FSM instances for second replication round
+  {
+    SenderFSM sender(sender_impl, sender_impl->txn());
+    ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    run_protocol(sender, receiver, sender_transport, receiver_transport);
+
+    BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+    BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+    BOOST_CHECK(sender_events.completed);
+    BOOST_CHECK(receiver_events.completed);
+
+    // Verify second replication - should have all keys
+    {
+      auto cursor = receiver_db.cursor();
+      cursor.find(Slice("key_a"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_a"));
+      cursor.find(Slice("key_b"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_b"));
+      cursor.find(Slice("key_c"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_c"));
+      cursor.find(Slice("key_d"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_d"));
+      cursor.find(Slice("key_e"));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK(cursor.value() == Slice("value_e"));
+    }
+  }  // FSMs cleanly complete and transition to IDLE again
 }
 
 BOOST_AUTO_TEST_SUITE_END()
