@@ -66,8 +66,8 @@ struct MergerPreparation {
 
 // Simple handler for testing - always overwrites
 struct OverwritePolicy {
-  bool check_overwrite(const std::string& key, const Slice& dst,
-                       const Slice& src) {
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src) {
     return true;  // Always overwrite
   }
 
@@ -100,8 +100,8 @@ struct OverwritePolicy {
 
 // Handler that keeps destination values
 struct KeepDestPolicy {
-  bool check_overwrite(const std::string& key, const Slice& dst,
-                       const Slice& src) {
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src) {
     return false;  // Never overwrite
   }
 
@@ -180,7 +180,7 @@ BOOST_AUTO_TEST_CASE(test_merger_single_leaf_to_empty) {
 
 BOOST_AUTO_TEST_CASE(test_merger_single_leaf_same_key) {
   // Merge single leaf into destination with same key (overwrite scenario)
-  // This tests the check_overwrite path in split_trie when both src and dst
+  // This tests the may_overwrite path in split_trie when both src and dst
   // are single-node tries with identical keys
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);

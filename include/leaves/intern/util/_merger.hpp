@@ -200,7 +200,7 @@ struct _Merger {
         assert(child1.type() == LEAF);
         auto dst_slice = dst.leaf()->value();
         auto src_slice = src.leaf()->value();
-        if (handler.check_overwrite(current_key, dst_slice, src_slice)) {
+        if (handler.may_overwrite(current_key, dst_slice, src_slice)) {
           assert(key1 == TrieNode::NONE);
           leaf_ptr old_leaf = resolve_dst<LeafNode>(&child1);
           _Inserter(&dst, src_slice.size()).change_leaf();
