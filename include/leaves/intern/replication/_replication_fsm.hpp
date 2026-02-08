@@ -457,8 +457,18 @@ struct ReplicationSenderFSM {
 // Default overwrite handler for replication - always accepts source (wire) data
 struct ReplicationMergePolicy {
   // Always overwrite local with source (wire) data
-  bool check_overwrite(const std::string& key, const Slice& dst,
-                       const Slice& src) {
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src) {
+    return true;
+  }
+
+  // Always add new leaves from source
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return true;
+  }
+
+  // Always recurse into source tries
+  bool may_add_trie(const std::string& key) {
     return true;
   }
 

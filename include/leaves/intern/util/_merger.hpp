@@ -129,8 +129,11 @@ struct _Merger {
 
     // Handle empty destination - deep copy entire source tree
     if (!dst_cursor.stack.size) {
-      // Get root from source - it's the first element in the stack
-      deep_copy_subtree(src_cursor.stack.front().offset, dst_cursor._root);
+      // Get root from source - it's the first element in the stack.
+      // Undo the prefix append above — selective_deep_copy_trie will
+      // re-append it when it resolves the root node.
+      current_key.resize(size);
+      selective_deep_copy_subtree(src_cursor.stack.front().offset, dst_cursor._root);
       return;
     }
 
@@ -199,7 +202,7 @@ struct _Merger {
         assert(child1.type() == LEAF);
         auto dst_slice = dst.leaf()->value();
         auto src_slice = src.leaf()->value();
-        if (handler.check_overwrite(current_key, dst_slice, src_slice)) {
+        if (handler.may_overwrite(current_key, dst_slice, src_slice)) {
           assert(key1 == TrieNode::NONE);
           leaf_ptr old_leaf = resolve_dst<LeafNode>(&child1);
           _Inserter(&dst, src_slice.size()).change_leaf();
@@ -211,6 +214,69 @@ struct _Merger {
       }
 
       // A new trie with two branches for the old dst and the new src
+      // But first, selectively copy the src side — if nothing survives
+      // may_add, we skip the split entirely.
+
+      if (src.is_leaf()) {
+        auto& src_leaf = src.leaf();
+        assert(src_leaf->key_size >= src_split_pos);
+        uint8_t suffix_len = src_leaf->key_size - src_split_pos;
+
+        Slice src_value;
+        if (src_leaf->is_big()) {
+          src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
+        } else {
+          src_value = src_leaf->value();
+        }
+
+        if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big())) return;  // rejected
+
+        trie_ptr new_trie =
+            alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
+        auto idxs =
+            new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
+                             key1, key);
+        new_trie->array()[idxs.first] = child1;
+        dst.trie() = new_trie;
+        dst.link_idx = idxs.second;
+        dst.update_trie_offset();
+
+        leaf_ptr new_leaf = fill_leaf(
+            Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
+        *dst.link() = resolve_offset(new_leaf);
+        return;
+      }
+
+      // src is a trie — selectively copy children and build a suffix trie
+      // with only survivors
+      auto& src_trie = src.trie();
+      assert(src_trie->len() >= src_split_pos);
+      uint8_t suffix_len = src_trie->len() - src_split_pos;
+
+      // Collect surviving children into a flat offset array
+      offset_e offsets_raw[258] = {};
+      offset_e* offsets_buf = &offsets_raw[1];
+      int surviving = 0;
+      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
+           k = src_trie->next(k)) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
+          offsets_buf[k] = child_offset;
+          surviving++;
+        }
+      }
+
+      if (!surviving) {
+        return;  // nothing from source survived may_add
+      }
+
+      // Build suffix trie from survivors
+      Slice suffix_prefix((const char*)&src_trie->compressed()[src_split_pos],
+                           suffix_len);
+      trie_ptr suffix_trie =
+          alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
+      suffix_trie->create(suffix_prefix, offsets_buf);
+
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
       auto idxs =
@@ -220,31 +286,7 @@ struct _Merger {
       dst.trie() = new_trie;
       dst.link_idx = idxs.second;
       dst.update_trie_offset();
-
-      if (src.is_leaf()) {
-        auto& src_leaf = src.leaf();
-        assert(src_leaf->key_size >= src_split_pos);
-        uint8_t suffix_len = src_leaf->key_size - src_split_pos;
-        leaf_ptr new_leaf = fill_leaf(
-            Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
-        *dst.link() = resolve_offset(new_leaf);
-        return;
-      }
-      auto& src_trie = src.trie();
-      assert(src_trie->len() >= src_split_pos);
-      uint8_t suffix_len = src_trie->len() - src_split_pos;
-
-      trie_ptr suffix_trie =
-          alloc_node<trie_ptr>(src_trie->changed_len(suffix_len));
-      suffix_trie->create(
-          *src_trie, Slice(&src_trie->compressed()[src_split_pos], suffix_len));
       *dst.link() = resolve_offset(suffix_trie);
-
-      auto dst_offset = suffix_trie->array();
-      auto src_offset = src_trie->array();
-      for (int i = 0, scount = src_trie->count(); i < scount; i++) {
-        deep_copy_subtree(&src_offset[i], &dst_offset[i]);
-      }
       return;
     }
 
@@ -254,37 +296,76 @@ struct _Merger {
 
     auto src_trie = src.trie();
     if (src_trie->isset(key1)) {
-      // copy src trie to dst and move down the branch src shares with dst
-      trie_ptr new_trie = alloc_node<trie_ptr>(src_trie->size());
-      copy(*new_trie, *src_trie);
+      // Src trie has a branch matching the dst child's key.
+      // We need to merge that branch recursively, and selectively
+      // copy all other src branches.
+
+      // Collect all surviving branch offsets into a flat array
+      offset_e offsets_raw[258] = {};
+      offset_e* offsets_buf = &offsets_raw[1];
+
+      // The key1 branch gets the dst child
+      offsets_buf[key1] = child1;
+
+      // Selectively deep copy all other src branches
+      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
+           k = src_trie->next(k)) {
+        if (k == key1) continue;
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
+          offsets_buf[k] = child_offset;
+        }
+      }
+
+      // Count surviving branches
+      int branch_count = 0;
+      if (offsets_buf[TrieNode::NONE]) branch_count++;
+      for (int i = 0; i < 256; i++) {
+        if (offsets_buf[i]) branch_count++;
+      }
+
+      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      trie_ptr new_trie = alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
+      new_trie->create(prefix, offsets_buf);
+
       dst.trie() = new_trie;
       dst.update_trie_offset();
 
-      auto dst_p = new_trie->offset(key1);
-      auto dst_offset = new_trie->array();
-      auto src_offset = src_trie->array();
-      for (int i = 0, count = new_trie->count(); i < count; i++) {
-        if (&dst_offset[i] == dst_p) {
-          dst_offset[i] = child1;
-          src_cursor.push(&src_offset[i]);
-          dst_cursor.stack.clear();
-          merge_node();
-          continue;
-        }
-        deep_copy_subtree(&src_offset[i], &dst_offset[i]);
-      }
+      // Recursively merge the shared branch
+      src_cursor.push(src_trie->offset(key1));
+      dst_cursor.stack.clear();
+      merge_node();
       return;
     }
 
-    trie_ptr new_trie = alloc(src_trie->increment_size(key1));
-    dst.trie() = new_trie;
-    dst.link_idx = new_trie->create(*src_trie, key1);
-    dst.update_trie_offset();
-    *dst.link() = child1;
-    for (int key = new_trie->first(); key != TrieNode::OUT_OF_RANGE;
-         key = new_trie->next(key)) {
-      if (key == key1) continue;
-      deep_copy_subtree(src_trie->offset(key), new_trie->offset(key));
+    // Src trie does not have key1 — add key1 as a new branch in src's structure,
+    // and selectively copy src's existing branches.
+    {
+      offset_e offsets_raw[258] = {};
+      offset_e* offsets_buf = &offsets_raw[1];
+
+      offsets_buf[key1] = child1;
+
+      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
+           k = src_trie->next(k)) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
+          offsets_buf[k] = child_offset;
+        }
+      }
+
+      int branch_count = 0;
+      if (offsets_buf[TrieNode::NONE]) branch_count++;
+      for (int i = 0; i < 256; i++) {
+        if (offsets_buf[i]) branch_count++;
+      }
+
+      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      trie_ptr new_trie = alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
+      new_trie->create(prefix, offsets_buf);
+
+      dst.trie() = new_trie;
+      dst.update_trie_offset();
     }
   }
 
@@ -299,62 +380,114 @@ struct _Merger {
     uint8_t suffix_len = current_key.size() - dst_cursor.current_key.size();
     auto dst_trie = dst.trie();
 
-    _Inserter inserter(&dst, 0);
     if (src.is_leaf()) return merge_leaf_into_trie(dst, src, suffix_len);
 
     auto& src_trie = src.trie();
     if (suffix_len) {
-      // src prefix is longer -> split src_trie and insert the suffix part
+      // src prefix is longer -> selectively copy children, then build
+      // a correctly-sized suffix trie from survivors only.
+
+      offset_e offsets_raw[258] = {};
+      offset_e* offsets_buf = &offsets_raw[1];
+      int surviving = 0;
+      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
+           k = src_trie->next(k)) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
+          offsets_buf[k] = child_offset;
+          surviving++;
+        }
+      }
+
+      if (!surviving) return;  // nothing from source survived may_add
+
+      Slice suffix_prefix(
+          (const char*)&src_trie->compressed()[src_trie->len() - suffix_len],
+          suffix_len);
+      trie_ptr suffix_trie =
+          alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
+      suffix_trie->create(suffix_prefix, offsets_buf);
+
       uint16_t loffset;
       trie_ptr new_trie = expand_trie_with_branch(dst_trie, suffix_len, &loffset);
-      trie_ptr suffix_trie = inserter.alloc(src_trie->changed_len(suffix_len));
-      suffix_trie->create(
-          *src_trie,
-          Slice(&src_trie->compressed()[src_trie->len() - suffix_len],
-                suffix_len));
 
       dst.trie() = new_trie;
       dst.link_idx = loffset;
       *dst.link() = resolve_offset(suffix_trie);
       dst.update_trie_offset();
-
-      auto dst_offset = suffix_trie->array();
-      auto src_offset = src_trie->array();
-      for (int i = 0, scount = src_trie->count(); i < scount; i++) {
-        deep_copy_subtree(&src_offset[i], &dst_offset[i]);
-      }
       return;
     }
 
-    // Merge the children of both tries
-    trie_ptr new_trie = alloc_node<trie_ptr>(DstTrieNode::size(
-        dst_trie->len(), dst_trie->count() + src_trie->count()));
+    // Merge the children of both tries.
+    // We collect all branch offsets into a flat array indexed by key value,
+    // selectively deep-copying src-only branches so may_add filtering can
+    // prune entire branches. Branches that exist in both tries are merged
+    // recursively.  Finally, a correctly-sized trie is built from survivors.
 
-    // merge src_trie into dst_trie
+    // offsets_buf[-1] = NONE slot, offsets_buf[0..255] = byte keys
+    offset_e offsets_raw[258] = {};
+    offset_e* offsets_buf = &offsets_raw[1];
+
+    // Walk dst_trie and src_trie to figure out which keys are dst-only,
+    // src-only, or shared.
+    // We also need to collect "shared" branches for recursive merge later.
+    struct SharedBranch { int key; const src_offset_e* src_off; offset_e dst_off; };
+    SharedBranch shared[257];
+    int shared_count = 0;
+
+    // Iterate dst_trie keys — all of these survive
+    for (int k = dst_trie->first(); k != DstTrieNode::OUT_OF_RANGE;
+         k = dst_trie->next(k)) {
+      offsets_buf[k] = *dst_trie->offset(k);
+    }
+
+    // Iterate src_trie keys — selectively deep copy src-only, record shared
+    for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
+         k = src_trie->next(k)) {
+      if (dst_trie->isset(k)) {
+        // Shared branch — needs recursive merge (handled below)
+        shared[shared_count++] = {k, (const src_offset_e*)src_trie->offset(k),
+                                  *dst_trie->offset(k)};
+      } else {
+        // Src-only branch — selectively deep copy
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
+          offsets_buf[k] = child_offset;
+        }
+        // else: rejected, offsets_buf[k] stays zero (branch omitted)
+      }
+    }
+
+    // Build the merged trie from the flat offset array
+    Slice prefix((const char*)dst_trie->compressed(), dst_trie->len());
+    // Count non-zero entries to size the trie
+    int branch_count = 0;
+    if (offsets_buf[TrieNode::NONE]) branch_count++;
+    for (int i = 0; i < 256; i++) {
+      if (offsets_buf[i]) branch_count++;
+    }
+    // Add shared branches (they have offsets from dst already set above,
+    // but need recursive merge so temporarily are counted)
+    // Actually shared branches are already counted via the dst_trie loop.
+
+    trie_ptr new_trie = alloc_node<trie_ptr>(DstTrieNode::size(prefix.size(), branch_count));
+    new_trie->create(prefix, offsets_buf);
+
     dst.trie() = new_trie;
     dst.update_trie_offset();
 
-    const typename DstTrieNode::offset_e* dst_poffset[257];
-    const typename SrcTrieNode::offset_e* src_poffset[257];
-    new_trie->create(*dst_trie, *src_trie, dst_poffset, src_poffset);
-    auto array = new_trie->array();
-    for (int i = 0, count = new_trie->count(); i < count; i++) {
-      if (dst_poffset[i] && src_poffset[i]) {
-        // walk down and merge - both tries have this branch
-        array[i] = *dst_poffset[i];
-        src_cursor.push(const_cast<src_offset_e*>(src_poffset[i]));
-        dst_cursor.stack.clear();
-        merge_node();
-        continue;
-      }
-      if (dst_poffset[i]) {
-        assert(!src_poffset[i]);
-        array[i] = *dst_poffset[i];
-        continue;
-      }
-      assert(src_poffset[i]);
-      assert(!dst_poffset[i]);
-      deep_copy_subtree(src_poffset[i], &array[i]);
+    // Now recursively merge shared branches
+    for (int si = 0; si < shared_count; si++) {
+      int k = shared[si].key;
+      // Set the dst offset in the new trie
+      offset_e* slot = new_trie->offset(k);
+      assert(slot);
+      *slot = shared[si].dst_off;
+
+      // Push the src side and recurse
+      src_cursor.push(const_cast<src_offset_e*>(shared[si].src_off));
+      dst_cursor.stack.clear();
+      merge_node();
     }
 
     free_node(dst_trie);
@@ -363,11 +496,20 @@ struct _Merger {
   void merge_leaf_into_trie(typename CursorDst::Transition& dst,
                             typename CursorSrc::Transition& src,
                             int suffix_len) {
-    // src is a leaf -> insert into dst trie
+    // src is a leaf -> insert into dst trie (if may_add allows)
+    auto& src_leaf = src.leaf();
+
+    Slice src_value;
+    if (src_leaf->is_big()) {
+      src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
+    } else {
+      src_value = src_leaf->value();
+    }
+
+    if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big())) return;  // rejected
+
     uint16_t loffset;
     trie_ptr new_trie = expand_trie_with_branch(dst.trie(), suffix_len, &loffset);
-
-    auto& src_leaf = src.leaf();
 
     assert(src_leaf->key_size >= suffix_len);
     uint8_t split_pos = src_leaf->key_size - suffix_len;
@@ -395,50 +537,118 @@ struct _Merger {
     return new_trie;
   }
 
+  // ── Selective (filtered) deep copy ────────────────────────────────────
+  // These variants consult handler.may_add() for every leaf and propagate
+  // rejections upward: if a whole sub-trie becomes empty, the branch is
+  // dropped from its parent.  Returns true iff at least one leaf survived.
+
   /**
-   * @brief Deep copy entire subtree from source to destination
+   * @brief Selectively deep copy an entire subtree, filtering leaves via may_add.
    * @param src_offset Source offset to copy from
-   * @param parent_link Pointer to parent's offset slot to set
+   * @param parent_link Pointer to parent's offset slot to set (zeroed when rejected)
+   * @return true if at least one leaf was copied into the destination
    */
-  void deep_copy_subtree(const src_offset_e* src_offset, offset_e* parent_link) {
+  bool selective_deep_copy_subtree(const src_offset_e* src_offset,
+                                   offset_e* parent_link) {
+    if (*src_offset == 0) {
+      *parent_link = offset_e();
+      return false;
+    }
+
     if (src_offset->type() == LEAF) {
-      deep_copy_leaf(src_offset, parent_link);
+      return selective_deep_copy_leaf(src_offset, parent_link);
     } else {
-      deep_copy_trie(src_offset, parent_link);
+      return selective_deep_copy_trie(src_offset, parent_link);
     }
   }
 
   /**
-   * @brief Deep copy a leaf node from source to destination
-   * @param src_offset Source offset to copy from
-   * @param parent_link Pointer to parent's offset slot to set
+   * @brief Selectively deep copy a single leaf, consulting may_add.
+   *
+   * Reconstructs the full key from current_key + the leaf's own suffix,
+   * calls handler.may_add_leaf(), and only copies the leaf if allowed.
    */
-  void deep_copy_leaf(const src_offset_e* src_offset, offset_e* parent_link) {
+  bool selective_deep_copy_leaf(const src_offset_e* src_offset,
+                                offset_e* parent_link) {
     auto src_leaf = resolve_src<SrcLeafNode>(src_offset);
+    size_t saved = current_key.size();
+    current_key.append((const char*)src_leaf->data, src_leaf->key_size);
+
+    bool accepted = handler.may_add_leaf(current_key, src_leaf->value(), src_leaf->is_big());
+    current_key.resize(saved);
+
+    if (!accepted) {
+      *parent_link = offset_e();
+      return false;
+    }
+
+    Slice src_value;
+    if (src_leaf->is_big()) {
+      src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
+    } else {
+      src_value = src_leaf->value();
+    }
+
     leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
     *parent_link = resolve_offset(new_leaf);
+    return true;
   }
 
   /**
-   * @brief Deep copy a trie node and its subtree from source to destination
-   * @param src_offset Source offset to copy from
-   * @param parent_link Pointer to parent's offset slot to set
+   * @brief Selectively deep copy a trie and its subtree, dropping rejected leaves.
+   *
+   * Two-pass approach:
+   *  1. Recurse into every child, accumulate offsets for survivors.
+   *  2. Build a correctly-sized trie from survivors only.
+   * Returns false (and writes a zero offset) when no child survives.
    */
-  void deep_copy_trie(const src_offset_e* src_offset, offset_e* parent_link) {
+  bool selective_deep_copy_trie(const src_offset_e* src_offset,
+                                offset_e* parent_link) {
     auto src_trie = resolve_src<SrcTrieNode>(src_offset);
-    uint16_t trie_size = src_trie->size();
-    trie_ptr dst_trie = alloc_node<trie_ptr>(trie_size);
-    memcpy((char*)dst_trie, (char*)src_trie, src_trie->array_start());
 
-    // Set parent link first
-    *parent_link = resolve_offset(dst_trie);
+    // Append this trie's compressed prefix to current_key for descendants
+    size_t saved = current_key.size();
+    current_key.append((const char*)src_trie->compressed(), src_trie->len());
 
-    // Recursively copy all children and update offsets
-    auto dst_array = dst_trie->array();
-    auto src_array = src_trie->array();
-    for (int i = 0, count = dst_trie->count(); i < count; i++) {
-      deep_copy_subtree(&src_array[i], &dst_array[i]);
+    // Early-out: let the policy reject the entire subtree by prefix
+    if (!handler.may_add_trie(current_key)) {
+      current_key.resize(saved);
+      *parent_link = offset_e();
+      return false;
     }
+
+    // ── Pass 1: recurse children, collect survivors ──────────────────
+    // offsets_buf is indexed as: NONE → index (-1+1)=0, byte 0 → 1, …, 255 → 256
+    // We offset the pointer so that offsets_buf[NONE] (i.e. [-1]) works.
+    offset_e offsets_raw[258] = {};  // all zero-initialised
+    offset_e* offsets_buf = &offsets_raw[1];  // now [-1] is valid
+
+    int surviving = 0;
+    auto src_array = src_trie->array();
+    for (int i = 0, k = src_trie->first(), scount = src_trie->count();
+         i < scount; i++, k = src_trie->next(k)) {
+      offset_e child_offset;
+      if (selective_deep_copy_subtree(&src_array[i], &child_offset)) {
+        offsets_buf[k] = child_offset;
+        surviving++;
+      }
+    }
+
+    current_key.resize(saved);
+
+    if (surviving == 0) {
+      *parent_link = offset_e();
+      return false;
+    }
+
+    // ── Pass 2: build destination trie with only survivors ───────────
+    Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+    uint16_t new_size = TrieNode::size(prefix.size(), surviving);
+    trie_ptr dst_trie = alloc_node<trie_ptr>(new_size);
+    dst_trie->create(prefix, offsets_buf);
+
+    *parent_link = resolve_offset(dst_trie);
+    return true;
   }
 };
 
