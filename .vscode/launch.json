@@ -430,12 +430,12 @@
             ]
         },
         {
-            "name": "(gdb) test_replication_fsm - cross_buffer_subtrie (HANGS)",
+            "name": "(gdb) test_replication_fsm",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_replication_fsm",
             "args": [
-                "--run_test=ReplicationFSMTests/test_cross_buffer_subtrie"
+                "--run_test=ReplicationFSMTests/test_empty_db_replication"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",

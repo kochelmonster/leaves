@@ -922,6 +922,7 @@ struct ReplicationReceiverFSM {
         if (parent_trie) parent_trie->remove_child(branch_key);
         // Hashes match - local subtrie is correct, tell sender to prune it
         _prune_paths.push_back(path);
+        path.resize(path_len);
         return false;
       }
     }
@@ -929,25 +930,13 @@ struct ReplicationReceiverFSM {
     path.resize(path_len);
 
     // Hashes differ or local doesn't exist
-    if (wire_node->type() == LEAF) {
-      auto* leaf = wire_node->template resolve<TempLeafNode>();
-      path.append(leaf->key().data(), leaf->key().size());
-      std::cerr << "DEBUG: receive node: " << path << " (type=leaf) " << leaf->key().size() << "\n";
-      path.resize(path_len);
-
-      // Keep leaf - will be merged by _Merger
-      return true;
-    }
+    if (wire_node->type() == LEAF) return true;
 
     // Wire is trie node - iterate through children
     // We need to cast away const since we may call remove_child
     auto* wire_trie = wire_node->template resolve<TempTrieNode>();
     TempOffset* wire_array = wire_trie->array();
     int count = wire_trie->count();
-
-    if (!path.empty() || parent_trie) path.push_back((char)wire_trie->compressed()[0]);
-    std::cerr << "DEBUG: receive node: " << path << " (type=trie)\n";
-    path.resize(path_len);
 
     // Save path length before appending compressed, so we can restore it
     path.append((char*)wire_trie->compressed(), wire_trie->len());
@@ -990,8 +979,8 @@ struct ReplicationReceiverFSM {
   void _merge_temp_to_local() {
     if (!_temp_root) return;
 
-    // Position member cursor at first leaf
-    _wire_cursor.first();
+    // set position to root
+    _wire_cursor.clear();
 
     // Use _Merger to merge wire trie into local DB
     _Merger<LocalCursor, WireCursor, OverwriteHandler> merger(

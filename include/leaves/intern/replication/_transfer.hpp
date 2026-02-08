@@ -37,10 +37,10 @@ constexpr uint32_t TRANSFER_MAGIC = 0x4C565354;  // "LVST" little-endian
 constexpr uint16_t TRANSFER_VERSION = 0x0001;
 
 // WireTempTraits: Traits for navigating temp DB nodes with _Cursor
-// Inherits little-endian types from WireFormatTraits for cross-platform compatibility.
-// TransferTrie nodes are stored in wire format with explicit endian conversion.
+// Inherits little-endian types from WireFormatTraits for cross-platform
+// compatibility. TransferTrie nodes are stored in wire format with explicit
+// endian conversion.
 struct WireTempTraits : public WireFormatTraits {
-
   struct PageHeader {
     uint16_e used;
     uint8_t slot_id;
@@ -200,7 +200,8 @@ struct TransferTrie {
   // Add a source trie node to the buffer (converts to wire format)
   // Returns pointer to copied wire-format node, or nullptr if doesn't fit
   const TrieNode* add_trie_node(const SrcTrieNode* src) {
-    const uint8_t* dest_ptr = add_node(TRIE, reinterpret_cast<const uint8_t*>(src), src->size());
+    const uint8_t* dest_ptr =
+        add_node(TRIE, reinterpret_cast<const uint8_t*>(src), src->size());
     if (!dest_ptr) return nullptr;
 
     auto* dest = reinterpret_cast<TrieNode*>(const_cast<uint8_t*>(dest_ptr));
@@ -224,10 +225,12 @@ struct TransferTrie {
   // Add a source leaf node to the buffer (converts to wire format)
   // Returns pointer to copied data, or nullptr if doesn't fit
   const uint8_t* add_leaf_node(const SrcLeafNode* src) {
-    const uint8_t* dest_ptr = add_node(LEAF, reinterpret_cast<const uint8_t*>(src), src->size());
+    const uint8_t* dest_ptr =
+        add_node(LEAF, reinterpret_cast<const uint8_t*>(src), src->size());
     if (!dest_ptr) return nullptr;
 
-    auto* dest = reinterpret_cast<WireLeafNode*>(const_cast<uint8_t*>(dest_ptr));
+    auto* dest =
+        reinterpret_cast<WireLeafNode*>(const_cast<uint8_t*>(dest_ptr));
 
     // Overwrite endian-aware field with explicit conversion
     dest->value_size = static_cast<uint16_t>(src->value_size);
@@ -236,11 +239,11 @@ struct TransferTrie {
   }
 
   // Add raw node data with specified type (base method)
-  // Performs memcpy without endian conversion - used by add_trie_node/add_leaf_node
-  // Returns pointer to copied node data, or nullptr if doesn't fit
-  // Nodes are aligned to 8 bytes for relative offset compatibility
-  const uint8_t* add_node(NodeTypes type, const uint8_t* data,
-                          uint16_t size) {
+  // Performs memcpy without endian conversion - used by
+  // add_trie_node/add_leaf_node Returns pointer to copied node data, or nullptr
+  // if doesn't fit Nodes are aligned to 8 bytes for relative offset
+  // compatibility
+  const uint8_t* add_node(NodeTypes type, const uint8_t* data, uint16_t size) {
     if (_finalized) return nullptr;
 
     // Align current position to 8 bytes
@@ -298,21 +301,6 @@ struct TransferTrie {
     hdr->node_count = static_cast<uint32_t>(_node_count);
     hdr->total_size = _buffer.size();
     _finalized = true;
-
-    // Dump to /tmp/sb.yaml for debugging
-    {
-      std::ofstream out("/tmp/sb.yaml");
-      WireTempDB db;
-      struct DumpContainer {
-        using db_type = WireTempDB;
-        struct Cursor {};  // Dummy cursor type
-        const WireTempDB& _db;
-        const WireTempDB* _internal() const { return &_db; }
-      } container{db};
-      _Dumper<DumpContainer, false> dumper(container, &hdr->root, true);
-      dumper.dump(out);
-    }
-
     return Slice(_buffer.data(), _buffer.size());
   }
 
@@ -568,7 +556,7 @@ struct TransferTrieSender {
       // max_depth
       std::string root_path;
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
-      _write_subtree(root_path, &_txn->root, 0, nullptr);
+      if (_txn->root) _write_subtree(root_path, &_txn->root, 0, nullptr);
       return;
     }
 
@@ -611,18 +599,13 @@ struct TransferTrieSender {
 
     if (offset->type() == LEAF) {
       auto leaf = _db->template resolve<LeafNode>(offset);
-
-      path.append(leaf->key().data(), leaf->key().size());
-      std::cerr << "DEBUG: send node: " << path << " (type=leaf) "
-                << leaf->key().size() << "\n";
-      ;
-      path.resize(path_len);
-
       assert(leaf);
       auto* dest = _transfer.add_leaf_node(&*leaf);
+      if (!dest) return false;
+
       WireLeafNode* dest_node = (WireLeafNode*)dest;
       Slice debug_key_slice = dest_node->key();
-      if (!dest) return false;
+
       // Set relative offset in parent if wire_link provided
       if (wire_link) {
         wire_link->set_relative(dest);
@@ -643,10 +626,6 @@ struct TransferTrieSender {
       wire_link->type(TRIE);
     }
 
-    if (!root) path.push_back((char)trie->compressed()[0]);
-    std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
-    path.resize(path_len);
-
     // Get wire array for setting child offsets
     auto* wire_trie = const_cast<WireTrieNode*>(dest);
     WireOffset* wire_array = wire_trie->array();
@@ -662,10 +641,7 @@ struct TransferTrieSender {
     int count = trie->count(), i;
     offset_t* children = trie->array();
     for (i = 0; i < count && !_transfer.full;) {
-      if (!_write_subtree(path, children + i, depth + 1, wire_array + i)) {
-        std::cerr << "DEBUG: buffer full, stop at node: \n";
-        break;
-      }
+      if (!_write_subtree(path, children + i, depth + 1, wire_array + i)) break;
       ++i;
     }
 

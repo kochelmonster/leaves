@@ -2,20 +2,19 @@
 #define BOOST_TEST_MODULE ReplicationFSMTest
 
 #include <boost/test/included/unit_test.hpp>
-
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <queue>
 #include <vector>
-#include <fstream>
 
 #ifndef TESTING
 #define TESTING
 #endif
 
 #include "leaves/replicating_mmap.hpp"
-#include "leaves/intern/replication/_replication_fsm.hpp"
 #include "leaves/intern/db/_check.hpp"
+#include "leaves/intern/replication/_replication_fsm.hpp"
 
 using namespace leaves;
 
@@ -70,7 +69,8 @@ struct TestEvents : ReplicationEvents {
     nodes = nodes_transferred;
   }
 
-  void on_error(uint64_t sid, ReplicationError err, const char* reason) override {
+  void on_error(uint64_t sid, ReplicationError err,
+                const char* reason) override {
     errored = true;
     session_id = sid;
     error = err;
@@ -101,14 +101,13 @@ struct ReplicationFixture {
   std::filesystem::path test_temp_dir;
 
   ReplicationFixture() {
-    test_temp_dir = std::filesystem::temp_directory_path() / "test_replication_fsm";
+    test_temp_dir =
+        std::filesystem::temp_directory_path() / "test_replication_fsm";
     std::filesystem::remove_all(test_temp_dir);
     std::filesystem::create_directory(test_temp_dir);
   }
 
-  ~ReplicationFixture() {
-    std::filesystem::remove_all(test_temp_dir);
-  }
+  ~ReplicationFixture() { std::filesystem::remove_all(test_temp_dir); }
 
   // Run the FSM protocol until both sides complete or error
   static void run_protocol(SenderFSM& sender, ReceiverFSM& receiver,
@@ -122,14 +121,14 @@ struct ReplicationFixture {
       // Process messages for receiver
       while (receiver_transport.has_message()) {
         auto msg = receiver_transport.receive();
-        
+
         // Use zero-copy interface
         auto& buf = receiver.receive_buffer();
         size_t to_copy = std::min(msg.size(), buf.available());
         std::memcpy(buf.write_ptr(), msg.data(), to_copy);
         buf.advance(to_copy);
         receiver.on_data_received();
-        
+
         activity = true;
       }
 
@@ -172,25 +171,28 @@ BOOST_AUTO_TEST_CASE(test_message_header_size) {
 BOOST_AUTO_TEST_CASE(test_message_builder_parser) {
   ReplicationMsgBuilder builder;
   builder.begin(ReplicationMsgType::TRIE_DATA, 0x123456789ABCDEF0ULL);
-  
+
   uint8_t payload[] = {0x01, 0x02, 0x03, 0x04};
   builder.append_payload(payload, sizeof(payload));
-  
+
   Slice result = builder.finalize();
-  BOOST_CHECK_EQUAL(result.size(), sizeof(ReplicationMsgHeader) + sizeof(payload));
+  BOOST_CHECK_EQUAL(result.size(),
+                    sizeof(ReplicationMsgHeader) + sizeof(payload));
 
   Slice parsed_payload;
-  const auto* hdr = parse_replication_msg(
-      reinterpret_cast<const uint8_t*>(result.data()), result.size(),
-      &parsed_payload);
+  const auto* hdr =
+      parse_replication_msg(reinterpret_cast<const uint8_t*>(result.data()),
+                            result.size(), &parsed_payload);
 
   BOOST_REQUIRE(hdr);
   BOOST_CHECK(hdr->is_valid());
-  BOOST_CHECK_EQUAL(hdr->msg_type, static_cast<uint8_t>(ReplicationMsgType::TRIE_DATA));
+  BOOST_CHECK_EQUAL(hdr->msg_type,
+                    static_cast<uint8_t>(ReplicationMsgType::TRIE_DATA));
   BOOST_CHECK_EQUAL(hdr->session_id, 0x123456789ABCDEF0ULL);
   BOOST_CHECK_EQUAL(hdr->payload_size, sizeof(payload));
   BOOST_CHECK_EQUAL(parsed_payload.size(), sizeof(payload));
-  BOOST_CHECK_EQUAL(std::memcmp(parsed_payload.data(), payload, sizeof(payload)), 0);
+  BOOST_CHECK_EQUAL(
+      std::memcmp(parsed_payload.data(), payload, sizeof(payload)), 0);
 }
 
 BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, ReplicationFixture) {
@@ -275,8 +277,10 @@ BOOST_FIXTURE_TEST_CASE(test_single_key_replication, ReplicationFixture) {
   {
     auto cursor = receiver_db.cursor();
     cursor.find(Slice("hello"));
-    BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Key 'hello' not found in receiver");
-    BOOST_CHECK_MESSAGE(cursor.value() == Slice("world"), "Value mismatch for 'hello'");
+    BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                          "Key 'hello' not found in receiver");
+    BOOST_CHECK_MESSAGE(cursor.value() == Slice("world"),
+                        "Value mismatch for 'hello'");
   }
 }
 
@@ -330,18 +334,21 @@ BOOST_FIXTURE_TEST_CASE(test_multiple_keys_replication, ReplicationFixture) {
   // Verify data was actually replicated
   {
     auto cursor = receiver_db.cursor();
-    
+
     cursor.find(Slice("aaa"));
     BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Key 'aaa' not found in receiver");
-    BOOST_CHECK_MESSAGE(cursor.value() == Slice("value_a"), "Value mismatch for 'aaa'");
-    
+    BOOST_CHECK_MESSAGE(cursor.value() == Slice("value_a"),
+                        "Value mismatch for 'aaa'");
+
     cursor.find(Slice("bbb"));
     BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Key 'bbb' not found in receiver");
-    BOOST_CHECK_MESSAGE(cursor.value() == Slice("value_b"), "Value mismatch for 'bbb'");
-    
+    BOOST_CHECK_MESSAGE(cursor.value() == Slice("value_b"),
+                        "Value mismatch for 'bbb'");
+
     cursor.find(Slice("ccc"));
     BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Key 'ccc' not found in receiver");
-    BOOST_CHECK_MESSAGE(cursor.value() == Slice("value_c"), "Value mismatch for 'ccc'");
+    BOOST_CHECK_MESSAGE(cursor.value() == Slice("value_c"),
+                        "Value mismatch for 'ccc'");
   }
 }
 
@@ -399,7 +406,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
     auto cursor = sender_db.cursor();
     for (int i = 0; i < 100; ++i) {
       std::string key = "key_" + std::to_string(i);
-      std::string value = "value_" + std::to_string(i) + "_with_extra_padding_to_make_it_larger";
+      std::string value = "value_" + std::to_string(i) +
+                          "_with_extra_padding_to_make_it_larger";
       cursor.find(Slice(key));
       cursor.value(Slice(value));
     }
@@ -423,7 +431,7 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
 
   // Use a small buffer size to force multiple round trips
   constexpr size_t SMALL_BUFFER = 512;
-  
+
   SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
   ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
 
@@ -440,11 +448,12 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
   // Verify all keys were replicated
   {
     auto cursor = receiver_db.cursor();
-    //auto cursor = sender_db.cursor();
+    // auto cursor = sender_db.cursor();
     int found = 0;
     for (int i = 0; i < 100; ++i) {
       std::string key = "key_" + std::to_string(i);
-      std::string expected = "value_" + std::to_string(i) + "_with_extra_padding_to_make_it_larger";
+      std::string expected = "value_" + std::to_string(i) +
+                             "_with_extra_padding_to_make_it_larger";
       cursor.find(Slice(key));
       if (cursor.is_valid() && cursor.value() == Slice(expected)) {
         ++found;
@@ -470,7 +479,7 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   {
     auto sender_cursor = sender_db.cursor();
     auto receiver_cursor = receiver_db.cursor();
-    
+
     for (int i = 0; i < 10; ++i) {
       std::string key = "common_" + std::to_string(i);
       std::string value = "shared_value_" + std::to_string(i);
@@ -527,7 +536,6 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     dumper.dump(out);
   }
 
-
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
@@ -552,13 +560,20 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   {
     auto cursor = receiver_db.cursor();
 
+    {
+      std::ofstream out("/tmp/receiver.yaml");
+      _Dumper dumper(receiver_db, &receiver_db._internal()->txn()->root, false);
+      dumper.dump(out);
+    }
+
     // Common keys should still exist with same values
     for (int i = 0; i < 10; ++i) {
       std::string key = "common_" + std::to_string(i);
       std::string expected = "shared_value_" + std::to_string(i);
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Common key missing: " + key);
-      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected), "Common key value mismatch: " + key);
+      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                          "Common key value mismatch: " + key);
     }
 
     // Sender-only keys should now exist in receiver
@@ -566,8 +581,10 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
       std::string key = "sender_only_" + std::to_string(i);
       std::string expected = "new_value_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Sender-only key not replicated: " + key);
-      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected), "Sender-only key value mismatch: " + key);
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Sender-only key not replicated: " + key);
+      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                          "Sender-only key value mismatch: " + key);
     }
 
     // Receiver-only keys should still exist (merge, not replace)
@@ -575,14 +592,17 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
       std::string key = "receiver_only_" + std::to_string(i);
       std::string expected = "local_value_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Receiver-only key was deleted: " + key);
-      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected), "Receiver-only key value changed: " + key);
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Receiver-only key was deleted: " + key);
+      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                          "Receiver-only key value changed: " + key);
     }
 
     // Conflict key should have sender's value (sender wins)
     cursor.find(Slice("conflict_key"));
     BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Conflict key missing");
-    BOOST_CHECK_MESSAGE(cursor.value() == Slice("sender_wins"), "Conflict not resolved correctly");
+    BOOST_CHECK_MESSAGE(cursor.value() == Slice("sender_wins"),
+                        "Conflict not resolved correctly");
   }
 }
 

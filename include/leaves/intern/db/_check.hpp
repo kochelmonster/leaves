@@ -84,10 +84,11 @@ struct _Dumper {
       : _db(*container._internal()), _id(0), _root(root), _simple(simple) {}
 
   void dump(std::ostream& out) {
-    if (_root && *_root) dump_link(out, _root, _root, _id++);
+    dump_link(out, _root, _root, _id++);
   }
 
   void dump_link(std::ostream& out, offset_e* link, offset_e* parent, int id) {
+    if(!link || !*link) return;
     if (link->type() == TRIE)
       dump_trie(out, link, parent, id);
     else

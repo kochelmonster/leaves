@@ -576,9 +576,14 @@ bool remove_child(int key) {
   int cnt = count();
   offset_e* arr = array();
   
-  // Shift array elements forward using memmove
+  // Shift array elements forward, adjusting relative offsets
   if (idx < cnt - 1) {
-    std::memmove(&arr[idx], &arr[idx + 1], (cnt - 1 - idx) * sizeof(offset_e));
+    for (int i = idx; i < cnt - 1; i++) {
+      arr[i] = arr[i + 1];
+      if (arr[i].is_relative()) {
+        arr[i]._offset += sizeof(offset_e);
+      }
+    }
   }
   
   // Update bitmap
@@ -598,8 +603,7 @@ bool remove_child(int key) {
   }
   
   // Decrement count while preserving NULL_MASK
-  _array_len = (_array_len & NULL_MASK) | ((cnt - 1) & ~NULL_MASK);
-  
+  _array_len = (_array_len & NULL_MASK) | uint16_t((cnt - 1) & uint16_t(~NULL_MASK));
   return true;
 }
 };
