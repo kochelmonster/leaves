@@ -322,6 +322,9 @@ struct ReplicationSenderFSM {
                              "Received message while sending");
         break;
 
+      case State::COMPLETE:
+        if (msg_type == ReplicationMsgType::COMPLETE) break;
+
       default:
         _transition_to_error(ReplicationError::INVALID_STATE,
                              "Received message in invalid state");
@@ -693,44 +696,6 @@ struct ReplicationReceiverFSM {
     }
   }
 
-  // ==========================================================================
-  // Legacy Interface (copies data)
-  // ==========================================================================
-
-  // Called by transport layer when a message is received (legacy, copies data)
-  void on_message_received(const uint8_t* data, size_t size) {
-    Slice payload;
-    const auto* hdr = parse_replication_msg(data, size, &payload);
-
-    if (!hdr) {
-      _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                           "Failed to parse message");
-      return;
-    }
-
-    // First message sets session ID
-    if (_session_id == 0) {
-      _session_id = hdr->session_id;
-    } else if (hdr->session_id != _session_id) {
-      _transition_to_error(ReplicationError::SESSION_MISMATCH,
-                           "Session ID mismatch");
-      return;
-    }
-
-    auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
-
-    switch (_state) {
-      case State::RECEIVING:
-        _handle_incoming(msg_type, payload);
-        break;
-
-      default:
-        _transition_to_error(ReplicationError::INVALID_STATE,
-                             "Received message in invalid state");
-        break;
-    }
-  }
-
   State state() const { return _state; }
   uint64_t session_id() const { return _session_id; }
   ReplicationError error() const { return _error; }
@@ -814,15 +779,15 @@ struct ReplicationReceiverFSM {
       _temp_root.type(transfer_hdr->root.type());
     } else {
       // Subsequent subtrie - connect to parent in temp DB
-      _connect_subtrie_to_parent(path, &transfer_hdr->root);
+      _connect_subtrie_to_parent(path, (TempOffset*)&transfer_hdr->root);
     }
 
     // Compare wire nodes with local nodes, collect paths where we differ
     _path_buffer.assign(path.data(), path.size());
 
     const char* payload_end = payload.data() + payload.size();
-    _compare_wire_with_local(&transfer_hdr->root, payload_end, _path_buffer,
-                             nullptr);
+    _compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_end,
+                             _path_buffer, nullptr);
 
     // After processing, send ACK with prune paths
     _send_prune_ack();
@@ -836,7 +801,7 @@ struct ReplicationReceiverFSM {
 
   // Get pointer to the original offset at a path (what we had before receiving)
   // Returns pointer to offset for future relative offset handling compatibility
-  const offset_e* _get_original_node(const Slice& path) {
+  const offset_t* _get_original_node(const Slice& path) {
     if (path.empty()) {
       return &_txn->root;
     }
@@ -856,7 +821,7 @@ struct ReplicationReceiverFSM {
     return trans.offset;
   }
 
-  int get_branch_key(offset_e* subtrie_root) {
+  int get_branch_key(const TempOffset* subtrie_root) {
     if (subtrie_root->type() == TRIE) {
       auto* temp_trie = subtrie_root->template resolve<TempTrieNode>();
       assert(temp_trie->len() > 0 && "Received empty trie node");
@@ -872,17 +837,18 @@ struct ReplicationReceiverFSM {
   // path: the full path to this subtrie (e.g., "abc")
   // subtrie_root: pointer to the received subtrie's root node
   // subtrie_type: type of the subtrie root (TRIE_NODE or LEAF_NODE)
-  void _connect_subtrie_to_parent(const Slice& path,
-                                  const offset_e* subtrie_root) {
+  void _connect_subtrie_to_parent(const Slice& path, TempOffset* subtrie_root) {
     if (path.empty() || !_temp_root) return;  // _temp_root == 0 means not set
 
-    offset_e* parent_offset;
+    TempOffset* parent_offset;
     int key = get_branch_key(subtrie_root);
     if (key == TempTrieNode::NONE) {
       parent_offset = _find_temp_parent_offset(path);
     } else {
       _path_buffer.assign(path.data(), path.size());
       _path_buffer.push_back((char)key);
+
+      WireTrieNode* temp_trie = _temp_root.template resolve<WireTrieNode>();
       parent_offset = _find_temp_parent_offset(Slice(_path_buffer));
     }
 
@@ -928,14 +894,14 @@ struct ReplicationReceiverFSM {
   // false if matches (prune it) parent_trie: the parent trie node (for removing
   // matched children) parent_branch_key: the branch key in parent that leads to
   // this node
-  bool _compare_wire_with_local(offset_e* wire_node, const char* buffer_end,
+  bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_end,
                                 std::string& path, TempTrieNode* parent_trie) {
     if ((char*)wire_node >= buffer_end) return false;
 
     // Get wire node's hash
     const uint8_t* wire_hash;
     int branch_key;
-    if (wire_node->type() == TransferNodeType::LEAF_NODE) {
+    if (wire_node->type() == LEAF) {
       wire_hash = wire_node->template resolve<TempLeafNode>()->hash;
       branch_key = get_branch_key(wire_node);
     } else {
@@ -963,10 +929,10 @@ struct ReplicationReceiverFSM {
     path.resize(path_len);
 
     // Hashes differ or local doesn't exist
-    if (wire_node->type() == TransferNodeType::LEAF_NODE) {
+    if (wire_node->type() == LEAF) {
       auto* leaf = wire_node->template resolve<TempLeafNode>();
       path.append(leaf->key().data(), leaf->key().size());
-      std::cerr << "DEBUG: send node: " << path << " (type=leaf)\n";
+      std::cerr << "DEBUG: receive node: " << path << " (type=leaf) " << leaf->key().size() << "\n";
       path.resize(path_len);
 
       // Keep leaf - will be merged by _Merger
@@ -979,9 +945,8 @@ struct ReplicationReceiverFSM {
     TempOffset* wire_array = wire_trie->array();
     int count = wire_trie->count();
 
-    path.append((char*)wire_trie->compressed(),
-                std::min((int)wire_trie->len(), (int)1));
-    std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
+    if (!path.empty() || parent_trie) path.push_back((char)wire_trie->compressed()[0]);
+    std::cerr << "DEBUG: receive node: " << path << " (type=trie)\n";
     path.resize(path_len);
 
     // Save path length before appending compressed, so we can restore it
@@ -1014,14 +979,11 @@ struct ReplicationReceiverFSM {
     return true;
   }
 
-  const uint8_t* _get_local_hash(offset_t* offset) {
-    if (offset->type() == LEAF) {
-      auto leaf = _db->template resolve<LeafNode>(offset);
-      return leaf->hash;
-    } else {
-      auto trie = _db->template resolve<TrieNode>(offset);
-      return trie->hash;
-    }
+  const uint8_t* _get_local_hash(const offset_t* offset) {
+    if (offset->type() == LEAF)
+      return _db->template resolve<LeafNode>(offset)->hash;
+
+    return _db->template resolve<TrieNode>(offset)->hash;
   }
 
   // Merge temp DB (received wire nodes) into local DB using _Merger

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <queue>
 #include <vector>
+#include <fstream>
 
 #ifndef TESTING
 #define TESTING
@@ -14,6 +15,7 @@
 
 #include "leaves/replicating_mmap.hpp"
 #include "leaves/intern/replication/_replication_fsm.hpp"
+#include "leaves/intern/db/_check.hpp"
 
 using namespace leaves;
 
@@ -120,7 +122,14 @@ struct ReplicationFixture {
       // Process messages for receiver
       while (receiver_transport.has_message()) {
         auto msg = receiver_transport.receive();
-        receiver.on_message_received(msg.data(), msg.size());
+        
+        // Use zero-copy interface
+        auto& buf = receiver.receive_buffer();
+        size_t to_copy = std::min(msg.size(), buf.available());
+        std::memcpy(buf.write_ptr(), msg.data(), to_copy);
+        buf.advance(to_copy);
+        receiver.on_data_received();
+        
         activity = true;
       }
 
@@ -397,6 +406,13 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
     cursor.commit();
   }
 
+  // Dump sender_db for debugging
+  {
+    std::ofstream out("/tmp/sender.yaml");
+    _Dumper dumper(sender_db, &sender_db._internal()->txn()->root, false);
+    dumper.dump(out);
+  }
+
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
   TestTransport sender_transport, receiver_transport;
@@ -503,6 +519,14 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     receiver_cursor.value(Slice("receiver_loses"));
     receiver_cursor.commit();
   }
+
+  // Dump sender_db for debugging
+  {
+    std::ofstream out("/tmp/sender.yaml");
+    _Dumper dumper(sender_db, &sender_db._internal()->txn()->root, false);
+    dumper.dump(out);
+  }
+
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();

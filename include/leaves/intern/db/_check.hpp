@@ -24,7 +24,8 @@ template <typename T, typename = void>
 struct has_txn_id : std::false_type {};
 
 template <typename T>
-struct has_txn_id<T, std::void_t<decltype(std::declval<T>().txn_id)>> : std::true_type {};
+struct has_txn_id<T, std::void_t<decltype(std::declval<T>().txn_id)>>
+    : std::true_type {};
 
 // Helper to conditionally output txn_id if PageHeader has it
 template <typename PageHeader>
@@ -59,9 +60,10 @@ template <typename T, typename = void>
 struct has_big_memory : std::false_type {};
 
 template <typename T>
-struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {};
+struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
+};
 
-template <typename Container>
+template <typename Container, bool with_headers = true>
 struct _Dumper {
   using DB = typename Container::db_type;
   using Traits = typename DB::Traits;
@@ -73,19 +75,16 @@ struct _Dumper {
   using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
   using page_ptr = typename Traits::ptr;
 
-  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
-  static constexpr auto& AREA_SIZE = Traits::AREA_SIZE;
-
   const DB& _db;
   int _id;
-  offset_e _root;
+  offset_e* _root;
   bool _simple;
 
-  _Dumper(const Container& container, offset_e root, bool simple = false)
+   _Dumper(const Container& container, offset_e* root, bool simple = false)
       : _db(*container._internal()), _id(0), _root(root), _simple(simple) {}
 
   void dump(std::ostream& out) {
-    if (_root) dump_link(out, &_root, &_root, _id++);
+    if (_root) dump_link(out, _root, _root, _id++);
   }
 
   void dump_link(std::ostream& out, offset_e* link, offset_e* parent, int id) {
@@ -118,8 +117,8 @@ struct _Dumper {
     // Read chunk header to get size and has_successor flag
     offset_e header_offset = bv->chunk_offset;
     header_offset._offset -= sizeof(FreeKey);
-    auto header_ptr = (FreeKey*)(char*)_db.template resolve<PageHeader>(
-        &header_offset, READ);
+    auto header_ptr =
+        (FreeKey*)(char*)_db.template resolve<PageHeader>(&header_offset, READ);
     uint64_t chunk_size = header_ptr->size;
     bool has_successor = (header_ptr->offset & 1) != 0;
 
@@ -139,23 +138,32 @@ struct _Dumper {
                  int id) {
     using PageHeader = typename Traits::PageHeader;
     leaf_ptr leaf = _db.template resolve<LeafNode>(offset);
-    // If relative, use parent to find page; otherwise use offset itself
-    offset_e* page_link = offset->is_relative() ? parent : offset;
-    offset_e header_offset;
-    header_offset._offset = page_link->_offset - sizeof(PageHeader);
-    page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
     uint16_t size = leaf->size();
     out << "type: leaf" << std::endl;
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
       out << "id: " << to_absolute(offset) << std::endl;
-      out << "page: " << header_offset._offset << std::endl;
-      out << "freespace: " << PAGE_SIZES[header->slot_id] - header->used
-          << std::endl;
+      if constexpr (with_headers) {
+        // If relative, use parent to find page; otherwise use offset itself
+        offset_e* page_link = offset->is_relative() ? parent : offset;
+        offset_e header_offset;
+        header_offset._offset = page_link->_offset - sizeof(PageHeader);
+        page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
+        out << "page: " << header_offset._offset << std::endl;
+        out << "freespace: "
+            << Traits::PAGE_SIZES[header->slot_id] - header->used << std::endl;
+      }
     }
     out << "size: " << size << std::endl;
-    dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
+    if constexpr (with_headers) {
+      // If relative, use parent to find page; otherwise use offset itself
+      offset_e* page_link = offset->is_relative() ? parent : offset;
+      offset_e header_offset;
+      header_offset._offset = page_link->_offset - sizeof(PageHeader);
+      page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
+      dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
+    }
     out << "keysize: " << (uint16_t)leaf->key_size << std::endl;
     out << "key: \"";
     for (int i = 0; i < leaf->key_size; i++) {
@@ -175,7 +183,8 @@ struct _Dumper {
     } else {
       using InternalCursor =
           typename ExtractInternalCursor<typename Container::Cursor>::type;
-      dump_big_value_impl<InternalCursor>(out, leaf, has_big_memory<InternalCursor>{});
+      dump_big_value_impl<InternalCursor>(out, leaf,
+                                          has_big_memory<InternalCursor>{});
     }
 
     out << "---" << std::endl;
@@ -185,22 +194,31 @@ struct _Dumper {
                  int id) {
     using PageHeader = typename Traits::PageHeader;
     trie_ptr trie = _db.template resolve<TrieNode>(offset);
-    // If relative, use parent to find page; otherwise use offset itself
-    offset_e* page_link = offset->is_relative() ? parent : offset;
-    offset_e header_offset;
-    header_offset._offset = page_link->_offset - sizeof(PageHeader);
-    page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
     uint16_t size = trie->size();
     out << "type: trie" << std::endl;
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
       out << "id: " << to_absolute(offset) << std::endl;
-      out << "page: " << header_offset._offset << std::endl;
-      out << "freespace: " << PAGE_SIZES[header->slot_id] - header->used
-          << std::endl;
+      if constexpr (with_headers) {
+        // If relative, use parent to find page; otherwise use offset itself
+        offset_e* page_link = offset->is_relative() ? parent : offset;
+        offset_e header_offset;
+        header_offset._offset = page_link->_offset - sizeof(PageHeader);
+        page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
+        out << "page: " << header_offset._offset << std::endl;
+        out << "freespace: "
+            << Traits::PAGE_SIZES[header->slot_id] - header->used << std::endl;
+      }
     }
-    dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
+    if constexpr (with_headers) {
+      // If relative, use parent to find page; otherwise use offset itself
+      offset_e* page_link = offset->is_relative() ? parent : offset;
+      offset_e header_offset;
+      header_offset._offset = page_link->_offset - sizeof(PageHeader);
+      page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
+      dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
+    }
     out << "size: " << size << std::endl;
     out << "compressed: " << std::endl;
     out << "  size: " << (int)trie->len() << std::endl;
@@ -242,8 +260,7 @@ struct _Dumper {
     int id_repeat = id_start;
     for (offset_e* iter = start; iter < end; iter++) {
       // Pass current offset as parent for children
-      if (offset)
-        dump_link(out, iter, offset, id_repeat++);
+      if (offset) dump_link(out, iter, offset, id_repeat++);
     }
   }
 };

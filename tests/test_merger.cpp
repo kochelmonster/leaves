@@ -46,7 +46,7 @@ void exec_merger(
 
   if (!dump_filename.empty()) {
     std::ofstream out(dump_filename);
-    _Dumper(dst_db, dst_db.txn()->root, false).dump(out);
+    _Dumper(dst_db, &dst_db.txn()->root, false).dump(out);
     out.close();
     std::cout << "Final tree dumped to: " << dump_filename << std::endl;
   }

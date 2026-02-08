@@ -20,6 +20,7 @@ A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
 parent node) This makes the implmentation of many operations easier.
 */
+#pragma pack(push, 1)
 template <typename Traits>
 struct _TrieNode {
   typedef _TrieNode<Traits> TrieNode;
@@ -163,7 +164,7 @@ struct _TrieNode {
       }
     } else {
       _upper = 1 << ubit(key2);
-      _array_len |= NULL_MASK;
+      _array_len = _array_len | NULL_MASK;
       lower_[0] = 1 << lbit(key2);
       array_start_ = align(lower_start_ + sizeof(uint32_e));
     }
@@ -199,7 +200,7 @@ struct _TrieNode {
     } else {
       _upper = 0;
       array_start_ = align(lower_start_);
-      _array_len |= NULL_MASK;
+      _array_len = _array_len | NULL_MASK;
     }
 
     _array_offset = array_start_ / sizeof(offset_e);
@@ -281,7 +282,7 @@ struct _TrieNode {
       for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
     } else {
       assert((src._array_len & NULL_MASK) == 0);
-      _array_len |= NULL_MASK;
+      _array_len = _array_len | NULL_MASK;
       memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
       oidx = 0;
     }
@@ -335,7 +336,7 @@ struct _TrieNode {
       }
     } else {
       assert(src._array_len & NULL_MASK);
-      _array_len &= ~NULL_MASK;
+      _array_len = _array_len & uint16_t(~NULL_MASK);
       memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
       oidx = 0;
     }
@@ -582,7 +583,7 @@ bool remove_child(int key) {
   
   // Update bitmap
   if (key == NONE) {
-    _array_len &= ~NULL_MASK;
+    _array_len = _array_len & uint16_t(~NULL_MASK);
   } else {
     uint8_t bit = ubit(key);
     int lidx = bits::index(_upper, bit);
@@ -602,7 +603,9 @@ bool remove_child(int key) {
   return true;
 }
 };
+#pragma pack(pop)
 
+#pragma pack(push, 1)
 template <typename Traits>
 struct _LeafNode {
   typedef _LeafNode<Traits> LeafNode;
@@ -614,8 +617,8 @@ struct _LeafNode {
   using offset_e = typename Traits::offset_e;
   static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
-  uint8_t key_size;
   uint16_e value_size;
+  uint8_t key_size;
   hash_t hash;
   uint8_t data[];
   uint8_t* vdata() { return data + key_size; }
@@ -647,6 +650,7 @@ struct _LeafNode {
     return size(key.size(), value.size());
   }
 };
+#pragma pack(pop)
 
 }  // namespace leaves
 

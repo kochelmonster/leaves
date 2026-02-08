@@ -28,7 +28,7 @@ void test_header_size() {
   std::cout << "test_header_size... ";
   
   // Verify header sizes match wire format spec
-  static_assert(sizeof(TransferTrieHeader) == 38);
+  static_assert(sizeof(TransferTrieHeader) == 45);
   static_assert(sizeof(RequestChildrenHeader) == 17);
   static_assert(sizeof(ChunkRef) == 40);  // 8 + 32
   
@@ -127,8 +127,8 @@ void test_add_raw_nodes() {
   fake_leaf[2] = 0x00;  // value_size high byte: 0
   // hash[3..34] = zeros
   
-  assert(transfer.add_node(TransferNodeType::TRIE_NODE, fake_trie, sizeof(fake_trie)) != nullptr);
-  assert(transfer.add_node(TransferNodeType::LEAF_NODE, fake_leaf, sizeof(fake_leaf)) != nullptr);
+  assert(transfer.add_node(TRIE, fake_trie, sizeof(fake_trie)) != nullptr);
+  assert(transfer.add_node(LEAF, fake_leaf, sizeof(fake_leaf)) != nullptr);
   
   assert(transfer.node_count() == 2);
   
@@ -141,8 +141,7 @@ void test_add_raw_nodes() {
   // Verify nodes data directly
   const uint8_t* nodes = TransferBuffer::nodes_data(result, *parsed_hdr);
   
-  // root_node_type is the FIRST node (pre-order DFS semantics)
-  assert(parsed_hdr->root_node_type == static_cast<uint8_t>(TransferNodeType::TRIE_NODE));
+  // Root can be resolved using header's root offset
   // Note: nodes are 8-byte aligned, so first node should be at aligned position
   assert(std::memcmp(nodes, fake_trie, sizeof(fake_trie)) == 0);
   
@@ -170,7 +169,7 @@ void test_capacity_limit() {
   std::memset(data, 0x42, sizeof(data));
   
   int added = 0;
-  while (transfer.add_node(TransferNodeType::TRIE_NODE, data, sizeof(data))) {
+  while (transfer.add_node(TRIE, data, sizeof(data))) {
     added++;
   }
   
@@ -281,8 +280,7 @@ void test_sender_empty_db() {
   sender.begin();
   
   // Empty DB should complete immediately
-  bool complete = sender.fill_buffer();
-  assert(complete);
+  sender.fill_buffer();
   assert(sender.is_complete());
   
   Slice buffer = sender.finalize();
@@ -314,8 +312,7 @@ void test_sender_single_leaf() {
   Sender sender(db_impl, txn);
   sender.begin();
   
-  bool complete = sender.fill_buffer();
-  assert(complete);
+  sender.fill_buffer();
   assert(sender.is_complete());
   
   Slice buffer = sender.finalize();
@@ -323,9 +320,6 @@ void test_sender_single_leaf() {
   const TransferTrieHeader* hdr = TransferBuffer::parse_header(buffer);
   assert(hdr != nullptr);
   assert(hdr->node_count == 1);  // Just the leaf
-  
-  // Verify root node type from header
-  assert(hdr->root_node_type == static_cast<uint8_t>(TransferNodeType::LEAF_NODE));
   
   std::cout << "OK\n";
 }
