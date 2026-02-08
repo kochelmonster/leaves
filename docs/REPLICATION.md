@@ -529,7 +529,6 @@ auto merged_value = app.merge_conflict(
 2. Enable disk-based temporary storage
 3. Limit concurrent range requests
 
-- FSM back to idle
 - Replication Coordinator
 - Delete Database
 - Big Value Handlung
