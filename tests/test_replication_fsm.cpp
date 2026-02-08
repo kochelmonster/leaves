@@ -8,6 +8,8 @@
 #include <queue>
 #include <vector>
 
+#define LEAVES_DEBUG
+
 #ifndef TESTING
 #define TESTING
 #endif
@@ -475,14 +477,20 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   auto sender_db = (*sender_storage)["testdb"];
   auto receiver_db = (*receiver_storage)["testdb"];
 
-  // Insert some keys that are the SAME in both sender and receiver
+  // Create a larger dataset with common data distributed throughout the tree
+  // This ensures pruning happens across multiple buffer transmissions
+  
+  // Insert common keys with various prefixes to spread them across trie
+  // Use larger values to ensure we need multiple buffers
   {
     auto sender_cursor = sender_db.cursor();
     auto receiver_cursor = receiver_db.cursor();
 
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 100; ++i) {
       std::string key = "common_" + std::to_string(i);
-      std::string value = "shared_value_" + std::to_string(i);
+      // Make values large enough to force multiple buffers
+      std::string value = "shared_value_" + std::to_string(i) + 
+                         "_padding_to_increase_size_" + std::string(200, 'x');
       sender_cursor.find(Slice(key));
       sender_cursor.value(Slice(value));
       receiver_cursor.find(Slice(key));
@@ -493,11 +501,12 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   }
 
   // Insert keys that are DIFFERENT (sender has, receiver doesn't)
+  // Spread these throughout the tree
   {
     auto cursor = sender_db.cursor();
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 50; ++i) {
       std::string key = "sender_only_" + std::to_string(i);
-      std::string value = "new_value_" + std::to_string(i);
+      std::string value = "new_value_" + std::to_string(i) + std::string(200, 'y');
       cursor.find(Slice(key));
       cursor.value(Slice(value));
     }
@@ -507,9 +516,9 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   // Insert keys that receiver has but sender doesn't (should remain after sync)
   {
     auto cursor = receiver_db.cursor();
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 30; ++i) {
       std::string key = "receiver_only_" + std::to_string(i);
-      std::string value = "local_value_" + std::to_string(i);
+      std::string value = "local_value_" + std::to_string(i) + std::string(200, 'z');
       cursor.find(Slice(key));
       cursor.value(Slice(value));
     }
@@ -545,16 +554,23 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
 
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(sender_impl, sender_impl->txn());
+  // Use a small buffer size to force multiple round trips and test pruning
+  constexpr size_t SMALL_BUFFER = 8192;  // 8KB buffer forces multiple transmissions
+  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
   ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
 
-  run_protocol(sender, receiver, sender_transport, receiver_transport);
+  run_protocol(sender, receiver, sender_transport, receiver_transport, 500);
 
   BOOST_CHECK(sender.state() == SenderFSM::State::COMPLETE);
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::COMPLETE);
+  BOOST_CHECK(sender_events.completed);
+  BOOST_CHECK(receiver_events.completed);
+
+  // Verify progress callbacks were made (indicating multiple buffer transmissions)
+  BOOST_CHECK_GT(sender_events.progress_calls, 0);
 
   // Verify results in receiver
   {
@@ -567,9 +583,10 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     }
 
     // Common keys should still exist with same values
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 100; ++i) {
       std::string key = "common_" + std::to_string(i);
-      std::string expected = "shared_value_" + std::to_string(i);
+      std::string expected = "shared_value_" + std::to_string(i) + 
+                            "_padding_to_increase_size_" + std::string(200, 'x');
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Common key missing: " + key);
       BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
@@ -577,9 +594,9 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     }
 
     // Sender-only keys should now exist in receiver
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 50; ++i) {
       std::string key = "sender_only_" + std::to_string(i);
-      std::string expected = "new_value_" + std::to_string(i);
+      std::string expected = "new_value_" + std::to_string(i) + std::string(200, 'y');
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
                             "Sender-only key not replicated: " + key);
@@ -588,9 +605,9 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     }
 
     // Receiver-only keys should still exist (merge, not replace)
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 30; ++i) {
       std::string key = "receiver_only_" + std::to_string(i);
-      std::string expected = "local_value_" + std::to_string(i);
+      std::string expected = "local_value_" + std::to_string(i) + std::string(200, 'z');
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
                             "Receiver-only key was deleted: " + key);

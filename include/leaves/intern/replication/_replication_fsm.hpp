@@ -189,13 +189,12 @@ struct ReplicationMsgBuilder {
     _buffer.resize(offset + size);
     std::memcpy(_buffer.data() + offset, data, size);
 
-    auto* hdr = reinterpret_cast<ReplicationMsgHeader*>(_buffer.data());
-    hdr->payload_size =
-        static_cast<uint32_t>(_buffer.size() - sizeof(ReplicationMsgHeader));
+    auto* hdr = (ReplicationMsgHeader*)_buffer.data();
+    hdr->payload_size = _buffer.size() - sizeof(ReplicationMsgHeader);
   }
 
   void append_payload(Slice s) {
-    append_payload(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+    append_payload((uint8_t*)s.data(), s.size());
   }
 
   Slice finalize() { return Slice(_buffer.data(), _buffer.size()); }
@@ -395,6 +394,9 @@ struct ReplicationSenderFSM {
     // the parent
     _sender.fill_buffer();
     Slice buffer = _sender.finalize();
+#ifdef LEAVES_DEBUG
+    std::cerr << "DEBUG: Sending buffer with " << buffer.size() << " bytes\n";
+#endif
 
     // Parse to get node count
     const TransferTrieHeader* hdr = Transfer::parse_header(buffer);
@@ -930,13 +932,27 @@ struct ReplicationReceiverFSM {
     path.resize(path_len);
 
     // Hashes differ or local doesn't exist
-    if (wire_node->type() == LEAF) return true;
+    if (wire_node->type() == LEAF) {
+#ifdef LEAVES_DEBUG
+      auto* leaf = wire_node->template resolve<TempLeafNode>();
+      path.append(leaf->key().data(), leaf->key().size());
+      std::cerr << "DEBUG: receive node: " << path << " (type=leaf) " << leaf->key().size() << "\n";
+      path.resize(path_len);
+#endif
+      return true;
+    }
 
     // Wire is trie node - iterate through children
     // We need to cast away const since we may call remove_child
     auto* wire_trie = wire_node->template resolve<TempTrieNode>();
     TempOffset* wire_array = wire_trie->array();
     int count = wire_trie->count();
+
+#ifdef LEAVES_DEBUG
+    if (!path.empty() || parent_trie) path.push_back((char)wire_trie->compressed()[0]);
+    std::cerr << "DEBUG: receive node: " << path << " (type=trie)\n";
+    path.resize(path_len);
+#endif
 
     // Save path length before appending compressed, so we can restore it
     path.append((char*)wire_trie->compressed(), wire_trie->len());
@@ -978,6 +994,22 @@ struct ReplicationReceiverFSM {
   // Merge temp DB (received wire nodes) into local DB using _Merger
   void _merge_temp_to_local() {
     if (!_temp_root) return;
+
+#ifdef LEAVES_DEBUG
+    // Dump to /tmp/sb.yaml for debugging
+    {
+      std::ofstream out("/tmp/rb.yaml");
+      WireTempDB db;
+      struct DumpContainer {
+        using db_type = WireTempDB;
+        struct Cursor {};  // Dummy cursor type
+        const WireTempDB& _db;
+        const WireTempDB* _internal() const { return &_db; }
+      } container{db};
+      _Dumper<DumpContainer, false> dumper(container, _wire_cursor._root, false);
+      dumper.dump(out);
+    }
+#endif
 
     // set position to root
     _wire_cursor.clear();

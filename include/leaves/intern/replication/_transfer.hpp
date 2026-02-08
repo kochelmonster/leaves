@@ -301,6 +301,23 @@ struct TransferTrie {
     hdr->node_count = static_cast<uint32_t>(_node_count);
     hdr->total_size = _buffer.size();
     _finalized = true;
+
+#ifdef LEAVES_DEBUG
+    // Dump to /tmp/sb.yaml for debugging
+    {
+      std::ofstream out("/tmp/sb.yaml");
+      WireTempDB db;
+      struct DumpContainer {
+        using db_type = WireTempDB;
+        struct Cursor {};  // Dummy cursor type
+        const WireTempDB& _db;
+        const WireTempDB* _internal() const { return &_db; }
+      } container{db};
+      _Dumper<DumpContainer, false> dumper(container, &hdr->root, true);
+      dumper.dump(out);
+    }
+#endif
+
     return Slice(_buffer.data(), _buffer.size());
   }
 
@@ -376,18 +393,26 @@ struct RequestChildrenBuilder {
     hdr->session_id = session_id;
     hdr->db_type = static_cast<uint8_t>(db_type);
     hdr->path_count = 0;
+
+    // Add padding byte after header to align first path_len to 2 bytes
+    // Header is 17 bytes (odd), so we need 1 byte padding
+    if (sizeof(RequestChildrenHeader) & 1) {
+      _buffer.push_back(0);
+    }
   }
 
   void add_path(const std::string& path) {
-    // path_len (2 bytes) + path data
+    // path_len (2 bytes, aligned) + path data
     size_t offset = _buffer.size();
     _buffer.resize(offset + 2 + path.size());
 
-    boost::endian::little_uint16_t path_len =
-        static_cast<uint16_t>(path.size());
+    boost::endian::little_uint16_t path_len = (uint16_t)path.size();
     std::memcpy(_buffer.data() + offset, &path_len, 2);
-    if (!path.empty()) {
-      std::memcpy(_buffer.data() + offset + 2, path.data(), path.size());
+    std::memcpy(_buffer.data() + offset + 2, path.data(), path.size());
+
+    // Add padding if path length is odd to keep next path_len aligned
+    if (path.size() & 1) {
+      _buffer.push_back(0);
     }
 
     // Increment path count
@@ -415,23 +440,24 @@ struct RequestChildrenIterator {
   bool valid() const { return _current + 2 <= _end; }
 
   uint16_t path_len() const {
-    boost::endian::little_uint16_t len;
-    std::memcpy(&len, _current, 2);
-    return len;
+    // _current is guaranteed to be 2-byte aligned
+    return *(boost::endian::little_uint16_t*)_current;
   }
 
-  std::string path() const {
+  Slice path() const {
     uint16_t len = path_len();
-    std::string result(len, '\0');
-    if (len > 0) {
-      std::memcpy(result.data(), _current + 2, len);
-    }
-    return result;
+    return Slice(_current + 2, len);
   }
 
   bool next() {
     if (!valid()) return false;
-    _current += 2 + path_len();
+    uint16_t len = path_len();
+    _current += 2 + len;
+    // Align to next 2-byte boundary for next path_len
+    // Check if len is odd (then we need to skip padding byte)
+    if (len & 1) {
+      _current++;
+    }
     return valid();
   }
 
@@ -451,9 +477,13 @@ inline bool parse_request_children(const Slice& data,
 // Get iterator over paths in REQUEST_CHILDREN message
 inline RequestChildrenIterator request_children_iterator(
     const Slice& data, const RequestChildrenHeader& header) {
-  return RequestChildrenIterator(reinterpret_cast<const uint8_t*>(data.data()) +
-                                     sizeof(RequestChildrenHeader),
-                                 data.size() - sizeof(RequestChildrenHeader));
+  size_t offset = sizeof(RequestChildrenHeader);
+  // Skip padding byte after header if present
+  if (sizeof(RequestChildrenHeader) & 1) {
+    offset++;
+  }
+  return RequestChildrenIterator((uint8_t*)data.data() + offset,
+                                 data.size() - offset);
 }
 
 // =============================================================================
@@ -519,16 +549,25 @@ struct TransferTrieSender {
   // added when transmitted
   template <typename Iter>
   void process_ack(Iter iter) {
-    // Build set of ACKed paths for O(1) lookup
-    std::unordered_set<std::string> acked_paths;
-    while (iter.valid()) {
-      acked_paths.insert(iter.path());
-      iter.next();
-    }
-
-    // Remove ACKed nodes from _last_batch
+    // Remove ACKed nodes and their descendants from _last_batch
+    // A node should be removed if its path equals or begins with any acked_path
     for (auto it = _last_batch.begin(); it != _last_batch.end();) {
-      if (acked_paths.count(it->path)) {
+      bool should_remove = false;
+
+      // Check against each acked path
+      iter.reset();
+      while (iter.valid()) {
+        Slice acked_path = iter.path();
+        // Check if it->path begins with acked_path
+        if (it->path.size() >= acked_path.size() &&
+            it->path.compare(0, acked_path.size(), acked_path.data()) == 0) {
+          should_remove = true;
+          break;
+        }
+        iter.next();
+      }
+
+      if (should_remove) {
         it = _last_batch.erase(it);
       } else {
         ++it;
@@ -599,6 +638,14 @@ struct TransferTrieSender {
 
     if (offset->type() == LEAF) {
       auto leaf = _db->template resolve<LeafNode>(offset);
+
+#ifdef LEAVES_DEBUG
+      path.append(leaf->key().data(), leaf->key().size());
+      std::cerr << "DEBUG: send node: " << path << " (type=leaf) "
+                << leaf->key().size() << "\n";
+      path.resize(path_len);
+#endif
+
       assert(leaf);
       auto* dest = _transfer.add_leaf_node(&*leaf);
       if (!dest) return false;
@@ -626,17 +673,24 @@ struct TransferTrieSender {
       wire_link->type(TRIE);
     }
 
+#ifdef LEAVES_DEBUG
+    if (!root) path.push_back((char)trie->compressed()[0]);
+    std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
+    path.resize(path_len);
+#endif
+
     // Get wire array for setting child offsets
     auto* wire_trie = const_cast<WireTrieNode*>(dest);
     WireOffset* wire_array = wire_trie->array();
 
-    if (depth >= _max_depth) {
-      _last_batch.emplace_back(path, offset, 0);
-      return true;
-    }
-
     // Process children
     path.append((char*)trie->compressed(), trie->len());
+
+    if (depth >= _max_depth) {
+      _last_batch.emplace_back(path, offset, 0);
+      path.resize(path_len);
+      return true;
+    }
 
     int count = trie->count(), i;
     offset_t* children = trie->array();
