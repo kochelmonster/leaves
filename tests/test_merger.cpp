@@ -1,6 +1,6 @@
 #define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE merger
-#define GENERATE
+// #define GENERATE
 #include <boost/test/included/unit_test.hpp>
 
 #include "../include/leaves/intern/db/_cursor.hpp"
@@ -71,6 +71,14 @@ struct OverwritePolicy {
     return true;  // Always overwrite
   }
 
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return true;  // Always add
+  }
+
+  bool may_add_trie(const std::string& key) {
+    return true;  // Always recurse
+  }
+
   template <typename LeafNode>
   void free_big(LeafNode& leaf) {
     // No-op for testing - in real usage would free big value memory
@@ -103,6 +111,14 @@ struct KeepDestPolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
                      const Slice& src) {
     return false;  // Never overwrite
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return true;  // Always add
+  }
+
+  bool may_add_trie(const std::string& key) {
+    return true;  // Always recurse
   }
 
   template <typename LeafNode>
@@ -1125,7 +1141,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_trie_split) {
 }
 
 BOOST_AUTO_TEST_CASE(test_merger_keep_dest_deep_copy) {
-  // Test KeepDestPolicy with deep copy scenarios to trigger deep_copy_trie
+  // Test KeepDestPolicy with deep copy scenarios
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
@@ -1237,7 +1253,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_big_value) {
 }
 
 BOOST_AUTO_TEST_CASE(test_merger_keep_dest_empty_to_populated) {
-  // Test KeepDestPolicy merging into empty destination to trigger deep_copy_subtree
+  // Test KeepDestPolicy merging into empty destination
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
@@ -1274,4 +1290,544 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_empty_to_populated) {
   BOOST_CHECK(verify_cursor.is_valid());
   verify_cursor.find("c1");
   BOOST_CHECK(verify_cursor.is_valid());
+}
+
+// ── Selective merge (may_add filtering) tests ──────────────────────────
+
+// Policy that only allows keys starting with a given prefix
+struct PrefixFilterPolicy {
+  std::string allowed_prefix;
+
+  PrefixFilterPolicy(const std::string& prefix) : allowed_prefix(prefix) {}
+
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src) {
+    return true;
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return key.substr(0, allowed_prefix.size()) == allowed_prefix;
+  }
+
+  bool may_add_trie(const std::string& key) {
+    // Allow recursion if the trie path is a prefix of (or starts with) the allowed prefix
+    if (key.size() <= allowed_prefix.size())
+      return allowed_prefix.substr(0, key.size()) == key;
+    return key.substr(0, allowed_prefix.size()) == allowed_prefix;
+  }
+
+  template <typename LeafNode>
+  void free_big(LeafNode& leaf) {}
+
+  template <typename LeafNode, typename DB>
+  Slice migrate_big_value(LeafNode& leaf, DB& db) {
+    using Traits = typename DB::CursorTraits;
+    using uint64_e = typename Traits::uint64_e;
+    using uint32_e = typename Traits::uint32_e;
+    struct BigValueT {
+      uint64_e chunk_offset;
+      uint32_e value_size;
+    };
+    BigValueT* bvalue = (BigValueT*)leaf.vdata();
+    offset_t temp_offset(bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
+    return Slice((char*)data_ptr, bvalue->value_size);
+  }
+};
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_into_empty) {
+  // Merge with filter into empty destination — only "a*" keys should survive
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("apple");
+  src_cursor_pub.value("v_apple");
+  src_cursor_pub.find("avocado");
+  src_cursor_pub.value("v_avocado");
+  src_cursor_pub.find("banana");
+  src_cursor_pub.value("v_banana");
+  src_cursor_pub.find("cherry");
+  src_cursor_pub.value("v_cherry");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  PrefixFilterPolicy handler("a");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("apple");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_apple"));
+  v.find("avocado");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_avocado"));
+  v.find("banana");
+  BOOST_CHECK(!v.is_valid());
+  v.find("cherry");
+  BOOST_CHECK(!v.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_with_existing_keys) {
+  // Destination already has keys; source adds new keys but only some pass filter
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // Populate destination
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("apple");
+  dst_cursor_pub.value("dst_apple");
+  dst_cursor_pub.find("date");
+  dst_cursor_pub.value("dst_date");
+  dst_cursor_pub.commit();
+
+  // Populate source with overlapping and new keys
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("banana");
+  src_cursor_pub.value("src_banana");
+  src_cursor_pub.find("blueberry");
+  src_cursor_pub.value("src_blueberry");
+  src_cursor_pub.find("cherry");
+  src_cursor_pub.value("src_cherry");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  // Only allow keys starting with "b"
+  PrefixFilterPolicy handler("b");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  // Original dst keys should still be present
+  v.find("apple");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("dst_apple"));
+  v.find("date");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("dst_date"));
+  // Accepted source keys
+  v.find("banana");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("src_banana"));
+  v.find("blueberry");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("src_blueberry"));
+  // Rejected source key
+  v.find("cherry");
+  BOOST_CHECK(!v.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all) {
+  // Filter rejects everything from source — destination should be unchanged
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // Populate destination
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("keep1");
+  dst_cursor_pub.value("v_keep1");
+  dst_cursor_pub.find("keep2");
+  dst_cursor_pub.value("v_keep2");
+  dst_cursor_pub.commit();
+
+  // Populate source
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("reject1");
+  src_cursor_pub.value("v_reject1");
+  src_cursor_pub.find("reject2");
+  src_cursor_pub.value("v_reject2");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  // Prefix "NOMATCH" won't match anything
+  PrefixFilterPolicy handler("NOMATCH");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("keep1");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_keep1"));
+  v.find("keep2");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_keep2"));
+  v.find("reject1");
+  BOOST_CHECK(!v.is_valid());
+  v.find("reject2");
+  BOOST_CHECK(!v.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all_into_empty) {
+  // Filter rejects everything and destination is empty — result should be empty
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("nope1");
+  src_cursor_pub.value("v1");
+  src_cursor_pub.find("nope2");
+  src_cursor_pub.value("v2");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  PrefixFilterPolicy handler("NOMATCH");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.first();
+  BOOST_CHECK(!v.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_single_leaf_rejected) {
+  // Single leaf source, filter rejects it — destination unchanged
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("existing");
+  dst_cursor_pub.value("v_existing");
+  dst_cursor_pub.commit();
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("newkey");
+  src_cursor_pub.value("v_newkey");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  PrefixFilterPolicy handler("NOMATCH");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("existing");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_existing"));
+  v.find("newkey");
+  BOOST_CHECK(!v.is_valid());
+}
+
+// ── may_add_trie early rejection tests ─────────────────────────────────
+
+// Policy that tracks may_add_trie/may_add_leaf calls to verify pruning
+struct TrackingFilterPolicy {
+  std::string allowed_prefix;
+  mutable int trie_calls = 0;
+  mutable int leaf_calls = 0;
+
+  TrackingFilterPolicy(const std::string& prefix) : allowed_prefix(prefix) {}
+
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src) {
+    return true;
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    leaf_calls++;
+    return key.substr(0, allowed_prefix.size()) == allowed_prefix;
+  }
+
+  bool may_add_trie(const std::string& key) {
+    trie_calls++;
+    if (key.size() <= allowed_prefix.size())
+      return allowed_prefix.substr(0, key.size()) == key;
+    return key.substr(0, allowed_prefix.size()) == allowed_prefix;
+  }
+
+  template <typename LeafNode>
+  void free_big(LeafNode& leaf) {}
+
+  template <typename LeafNode, typename DB>
+  Slice migrate_big_value(LeafNode& leaf, DB& db) {
+    using Traits = typename DB::CursorTraits;
+    using uint64_e = typename Traits::uint64_e;
+    using uint32_e = typename Traits::uint32_e;
+    struct BigValueT {
+      uint64_e chunk_offset;
+      uint32_e value_size;
+    };
+    BigValueT* bvalue = (BigValueT*)leaf.vdata();
+    offset_t temp_offset(bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
+    return Slice((char*)data_ptr, bvalue->value_size);
+  }
+};
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_prunes_subtree) {
+  // Verify that may_add_trie can reject entire subtrees without visiting leaves.
+  // Source has keys under "aa*" and "bb*" prefixes. Filter allows only "aa".
+  // may_add_trie should reject the "bb" subtree early, so no leaf_calls for "bb*".
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("aa1");
+  src_cursor_pub.value("v_aa1");
+  src_cursor_pub.find("aa2");
+  src_cursor_pub.value("v_aa2");
+  src_cursor_pub.find("bb1");
+  src_cursor_pub.value("v_bb1");
+  src_cursor_pub.find("bb2");
+  src_cursor_pub.value("v_bb2");
+  src_cursor_pub.find("bb3");
+  src_cursor_pub.value("v_bb3");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  TrackingFilterPolicy handler("aa");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("aa1");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_aa1"));
+  v.find("aa2");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_aa2"));
+  v.find("bb1");
+  BOOST_CHECK(!v.is_valid());
+  v.find("bb2");
+  BOOST_CHECK(!v.is_valid());
+  v.find("bb3");
+  BOOST_CHECK(!v.is_valid());
+
+  // Verify that leaf_calls were NOT made for bb* keys (pruned at trie level)
+  BOOST_CHECK_EQUAL(handler.leaf_calls, 2);  // only aa1, aa2
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_rejects_all_subtrees) {
+  // may_add_trie rejects every subtree — destination should be empty.
+  // Use paired keys so every root branch is a trie (not a leaf),
+  // ensuring may_add_trie prunes at the trie level without visiting leaves.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("aa1");
+  src_cursor_pub.value("v1");
+  src_cursor_pub.find("aa2");
+  src_cursor_pub.value("v2");
+  src_cursor_pub.find("bb1");
+  src_cursor_pub.value("v3");
+  src_cursor_pub.find("bb2");
+  src_cursor_pub.value("v4");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  TrackingFilterPolicy handler("ZZZZZ");  // matches nothing
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.first();
+  BOOST_CHECK(!v.is_valid());
+
+  // No leaves should have been consulted — trie-level rejection
+  BOOST_CHECK_EQUAL(handler.leaf_calls, 0);
+}
+
+// ── is_big parameter tests ─────────────────────────────────────────────
+
+// Policy that rejects big values but accepts small ones
+struct RejectBigPolicy {
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src) {
+    return true;
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return !is_big;  // reject big values
+  }
+
+  bool may_add_trie(const std::string& key) {
+    return true;
+  }
+
+  template <typename LeafNode>
+  void free_big(LeafNode& leaf) {}
+
+  template <typename LeafNode, typename DB>
+  Slice migrate_big_value(LeafNode& leaf, DB& db) {
+    using Traits = typename DB::CursorTraits;
+    using uint64_e = typename Traits::uint64_e;
+    using uint32_e = typename Traits::uint32_e;
+    struct BigValueT {
+      uint64_e chunk_offset;
+      uint32_e value_size;
+    };
+    BigValueT* bvalue = (BigValueT*)leaf.vdata();
+    offset_t temp_offset(bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
+    return Slice((char*)data_ptr, bvalue->value_size);
+  }
+};
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_leaf_is_big_param) {
+  // All source values are small (non-big), so is_big=false → all accepted.
+  // This verifies the is_big parameter is correctly passed through.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("key1");
+  src_cursor_pub.value("small_val1");
+  src_cursor_pub.find("key2");
+  src_cursor_pub.value("small_val2");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  RejectBigPolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("key1");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("small_val1"));
+  v.find("key2");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("small_val2"));
+}
+
+// ── may_add_trie with existing destination tests ───────────────────────
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_with_existing_dst) {
+  // Destination has keys. Source adds keys in multiple subtrees.
+  // may_add_trie prunes one subtree; the other merges normally.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // Destination has keys under "data_"
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("data_existing");
+  dst_cursor_pub.value("v_existing");
+  dst_cursor_pub.commit();
+
+  // Source has keys under "data_" (should merge) and "meta_" (should be pruned)
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("data_new1");
+  src_cursor_pub.value("v_new1");
+  src_cursor_pub.find("data_new2");
+  src_cursor_pub.value("v_new2");
+  src_cursor_pub.find("meta_info1");
+  src_cursor_pub.value("v_info1");
+  src_cursor_pub.find("meta_info2");
+  src_cursor_pub.value("v_info2");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  PrefixFilterPolicy handler("data_");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  // Original dst key preserved
+  v.find("data_existing");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_existing"));
+  // Accepted source keys
+  v.find("data_new1");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_new1"));
+  v.find("data_new2");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_new2"));
+  // Rejected source keys
+  v.find("meta_info1");
+  BOOST_CHECK(!v.is_valid());
+  v.find("meta_info2");
+  BOOST_CHECK(!v.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
+  // Test may_add_trie with a long prefix to exercise pruning at deeper trie levels.
+  // Source keys share a long common prefix with divergence deep in the trie.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  // Keys that share "prefix_ab" but diverge after
+  src_cursor_pub.find("prefix_abc_key1");
+  src_cursor_pub.value("v1");
+  src_cursor_pub.find("prefix_abc_key2");
+  src_cursor_pub.value("v2");
+  src_cursor_pub.find("prefix_abd_key1");
+  src_cursor_pub.value("v3");
+  src_cursor_pub.find("prefix_abd_key2");
+  src_cursor_pub.value("v4");
+  src_cursor_pub.find("prefix_xyz_key1");
+  src_cursor_pub.value("v5");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  // Only allow keys starting with "prefix_abc"
+  PrefixFilterPolicy handler("prefix_abc");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("prefix_abc_key1");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v1"));
+  v.find("prefix_abc_key2");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v2"));
+  // abd and xyz should be rejected
+  v.find("prefix_abd_key1");
+  BOOST_CHECK(!v.is_valid());
+  v.find("prefix_abd_key2");
+  BOOST_CHECK(!v.is_valid());
+  v.find("prefix_xyz_key1");
+  BOOST_CHECK(!v.is_valid());
+
+  // Verify total key count
+  int count = 0;
+  v.first();
+  while (v.is_valid()) { count++; v.next(); }
+  BOOST_CHECK_EQUAL(count, 2);
 }

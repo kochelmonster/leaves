@@ -462,6 +462,16 @@ struct ReplicationMergePolicy {
     return true;
   }
 
+  // Always add new leaves from source
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return true;
+  }
+
+  // Always recurse into source tries
+  bool may_add_trie(const std::string& key) {
+    return true;
+  }
+
   // Free big value - no-op for wire format (source doesn't own big memory)
   template <typename LeafNode>
   void free_big(LeafNode& leaf) {
