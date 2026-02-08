@@ -453,7 +453,7 @@ struct ReplicationSenderFSM {
 // =============================================================================
 
 // Default overwrite handler for replication - always accepts source (wire) data
-struct ReplicationOverwriteHandler {
+struct ReplicationMergePolicy {
   // Always overwrite local with source (wire) data
   bool check_overwrite(const std::string& key, const Slice& dst,
                        const Slice& src) {
@@ -474,7 +474,7 @@ struct ReplicationOverwriteHandler {
   }
 };
 
-template <typename DB, typename OverwriteHandler = ReplicationOverwriteHandler>
+template <typename DB, typename MergePolicy = ReplicationMergePolicy>
 struct ReplicationReceiverFSM {
   using Traits = typename DB::Traits;
   using Transfer = TransferTrie<Traits>;
@@ -539,11 +539,11 @@ struct ReplicationReceiverFSM {
   WireCursor _wire_cursor;    // Reusable cursor for navigating temp DB
 
   // Overwrite handler for merge conflicts
-  OverwriteHandler _overwrite_handler;
+  MergePolicy _merge_policy;
 
   ReplicationReceiverFSM(
       DB* db, typename DB::txn_ptr txn,
-      OverwriteHandler handler = OverwriteHandler(),
+      MergePolicy handler = MergePolicy(),
       size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE)
       : _db(db),
         _txn(txn),
@@ -558,7 +558,7 @@ struct ReplicationReceiverFSM {
         _initial_buffer_size(receive_buffer_size),
         _temp_root(0),
         _wire_cursor(&_wire_db, &_temp_root),
-        _overwrite_handler(std::move(handler)) {
+        _merge_policy(std::move(handler)) {
     // Allocate first receive buffer
     _alloc_receive_buffer();
   }
@@ -1015,8 +1015,8 @@ struct ReplicationReceiverFSM {
     _wire_cursor.clear();
 
     // Use _Merger to merge wire trie into local DB
-    _Merger<LocalCursor, WireCursor, OverwriteHandler> merger(
-        *_cursor, _wire_cursor, _overwrite_handler);
+    _Merger<LocalCursor, WireCursor, MergePolicy> merger(
+        *_cursor, _wire_cursor, _merge_policy);
     merger.exec();
   }
 
