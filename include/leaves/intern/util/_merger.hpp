@@ -14,9 +14,9 @@ namespace leaves {
  *
  * Merges trie A into trie B,
  */
-template <typename CursorDst, typename CursorSrc, typename OverwriteHandler>
+template <typename CursorDst, typename CursorSrc, typename MergePolicy>
 struct _Merger {
-  typedef _Merger<CursorDst, CursorSrc, OverwriteHandler> Merger;
+  typedef _Merger<CursorDst, CursorSrc, MergePolicy> Merger;
   using Traits = typename CursorDst::Traits;
   using Transition = typename CursorDst::Transition;
   using TrieNode = typename Transition::TrieNode;
@@ -34,10 +34,10 @@ struct _Merger {
 
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
-  OverwriteHandler& handler;
+  MergePolicy& handler;
   std::string current_key;
 
-  _Merger(CursorDst& dest, CursorSrc& src, OverwriteHandler& handler)
+  _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
   // Helper methods for memory management
