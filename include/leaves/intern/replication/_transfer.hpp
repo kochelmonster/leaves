@@ -124,12 +124,6 @@ struct TransferTrieHeader {
 static_assert(sizeof(TransferTrieHeader) == 45,
               "TransferTrieHeader must be 45 bytes");
 
-// Chunk reference for CHUNK_REQ messages
-struct ChunkRef {
-  boost::endian::little_uint64_t offset;
-  uint8_t security_token[32];  // HASH_SIZE
-};
-
 // TransferTrie buffer for serializing/deserializing trie nodes
 // Used by sender to build transfer messages and receiver to parse them
 // SrcTraits: The source database traits (platform-native format)
@@ -146,13 +140,11 @@ struct TransferTrie {
   std::vector<uint8_t> _buffer;
   size_t _max_size;
   size_t _node_count;
-  size_t _header_size;  // Header + subtrie_path length (aligned to 8)
   bool _finalized;
   bool full;
   explicit TransferTrie(size_t max_size = DEFAULT_MAX_SIZE)
       : _max_size(max_size),
         _node_count(0),
-        _header_size(0),
         _finalized(false),
         full(false) {
     _buffer.reserve(max_size);
@@ -176,8 +168,8 @@ struct TransferTrie {
 
     // Reserve space for header + subtrie_path, aligned to 8 bytes for nodes
     size_t raw_header_size = sizeof(TransferTrieHeader) + subtrie_path.size();
-    _header_size = (raw_header_size + 7) & ~size_t(7);  // Align to 8
-    _buffer.resize(_header_size, 0);  // Zero-pad alignment bytes
+    size_t header_size = (raw_header_size + 7) & ~size_t(7);  // Align to 8
+    _buffer.resize(header_size, 0);  // Zero-pad alignment bytes
 
     // Write header (node_count and total_size will be updated in finalize)
     auto* hdr = reinterpret_cast<TransferTrieHeader*>(_buffer.data());
@@ -649,9 +641,6 @@ struct TransferTrieSender {
       assert(leaf);
       auto* dest = _transfer.add_leaf_node(&*leaf);
       if (!dest) return false;
-
-      WireLeafNode* dest_node = (WireLeafNode*)dest;
-      Slice debug_key_slice = dest_node->key();
 
       // Set relative offset in parent if wire_link provided
       if (wire_link) {

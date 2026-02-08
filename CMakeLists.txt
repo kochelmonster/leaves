@@ -103,9 +103,6 @@ target_sources(test_mmap INTERFACE
     include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC test)
 
-add_executable(test_sync tests/test_sync.cpp)
-target_link_libraries(test_sync PUBLIC core test blake3)
-
 add_executable(test_transfer tests/test_transfer.cpp)
 target_link_libraries(test_transfer PUBLIC core test blake3)
 

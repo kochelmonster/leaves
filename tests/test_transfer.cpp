@@ -30,7 +30,6 @@ void test_header_size() {
   // Verify header sizes match wire format spec
   static_assert(sizeof(TransferTrieHeader) == 45);
   static_assert(sizeof(RequestChildrenHeader) == 17);
-  static_assert(sizeof(ChunkRef) == 40);  // 8 + 32
   
   std::cout << "OK\n";
 }
@@ -353,7 +352,7 @@ void test_sender_multiple_keys() {
   size_t total_nodes = 0;
   int rounds = 0;
   
-  while (sender.has_pending() && rounds < 20) {
+  do {
     sender.fill_buffer();
     Slice buffer = sender.finalize();
     
@@ -371,7 +370,7 @@ void test_sender_multiple_keys() {
     sender.process_ack(request_children_iterator(ack_data, ack_hdr));
     
     rounds++;
-  }
+  } while (sender.has_pending() && rounds < 20);
   
   assert(sender.is_complete());
   // Should have trie nodes + leaf nodes
@@ -410,7 +409,7 @@ void test_sender_buffer_overflow() {
   size_t total_nodes = 0;
   int rounds = 0;
   
-  while (sender.has_pending() && rounds < 10) {
+  do {
     sender.fill_buffer();
     Slice buffer = sender.finalize();
     
@@ -420,7 +419,7 @@ void test_sender_buffer_overflow() {
     }
     
     rounds++;
-  }
+  } while (sender.has_pending() && rounds < 10);
   
   assert(sender.is_complete());
   assert(total_nodes >= 100);  // At least 100 leaves
@@ -500,7 +499,7 @@ void test_relative_offsets() {
   size_t total_nodes = 0;
   Slice last_buffer;
   
-  while (sender.has_pending()) {
+  do {
     sender.fill_buffer();
     last_buffer = sender.finalize();
     
@@ -516,7 +515,7 @@ void test_relative_offsets() {
     RequestChildrenHeader ack_hdr;
     parse_request_children(ack_data, &ack_hdr);
     sender.process_ack(request_children_iterator(ack_data, ack_hdr));
-  }
+  } while (sender.has_pending());
   
   assert(sender.is_complete());
   assert(total_nodes >= 3);  // At least 3 leaves
