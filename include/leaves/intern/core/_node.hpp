@@ -565,47 +565,6 @@ int first() const {
   return (bits::first(_upper) << 5) | bits::first(lower()[0]);
 }
 
-// Remove a child from this node in-place (for wire format manipulation)
-// WARNING: This modifies the node in-place and does NOT shrink the allocation.
-// Only use for temp/wire nodes where memory is discarded after use.
-// Returns true if child was removed, false if child didn't exist.
-bool remove_child(int key) {
-  if (!isset(key)) return false;
-  
-  int idx = array_index(key);
-  int cnt = count();
-  offset_e* arr = array();
-  
-  // Shift array elements forward, adjusting relative offsets
-  if (idx < cnt - 1) {
-    for (int i = idx; i < cnt - 1; i++) {
-      arr[i] = arr[i + 1];
-      if (arr[i].is_relative()) {
-        arr[i]._offset += sizeof(offset_e);
-      }
-    }
-  }
-  
-  // Update bitmap
-  if (key == NONE) {
-    _array_len = _array_len & uint16_t(~NULL_MASK);
-  } else {
-    uint8_t bit = ubit(key);
-    int lidx = bits::index(_upper, bit);
-    uint32_e* lower_ = lower();
-    lower_[lidx] &= ~(1 << lbit(key));
-    
-    // If this lower bucket is now empty, clear upper bit
-    // Note: we don't compact lower array since we're only manipulating wire nodes
-    if (!lower_[lidx]) {
-      _upper &= ~(1 << bit);
-    }
-  }
-  
-  // Decrement count while preserving NULL_MASK
-  _array_len = (_array_len & NULL_MASK) | uint16_t((cnt - 1) & uint16_t(~NULL_MASK));
-  return true;
-}
 };
 #pragma pack(pop)
 

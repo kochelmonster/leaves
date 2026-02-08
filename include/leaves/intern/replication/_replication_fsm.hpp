@@ -193,9 +193,7 @@ struct ReplicationMsgBuilder {
     hdr->payload_size = _buffer.size() - sizeof(ReplicationMsgHeader);
   }
 
-  void append_payload(Slice s) {
-    append_payload((uint8_t*)s.data(), s.size());
-  }
+  void append_payload(Slice s) { append_payload((uint8_t*)s.data(), s.size()); }
 
   Slice finalize() { return Slice(_buffer.data(), _buffer.size()); }
   const uint8_t* data() const { return _buffer.data(); }
@@ -468,9 +466,7 @@ struct ReplicationMergePolicy {
   }
 
   // Always recurse into source tries
-  bool may_add_trie(const std::string& key) {
-    return true;
-  }
+  bool may_add_trie(const std::string& key) { return true; }
 
   // Free big value - no-op for wire format (source doesn't own big memory)
   template <typename LeafNode>
@@ -554,8 +550,7 @@ struct ReplicationReceiverFSM {
   MergePolicy _merge_policy;
 
   ReplicationReceiverFSM(
-      DB* db, typename DB::txn_ptr txn,
-      MergePolicy handler = MergePolicy(),
+      DB* db, typename DB::txn_ptr txn, MergePolicy handler = MergePolicy(),
       size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE)
       : _db(db),
         _txn(txn),
@@ -676,8 +671,7 @@ struct ReplicationReceiverFSM {
 
   // Process a complete message from the receive buffer
   void _process_received_message() {
-    auto* hdr =
-        reinterpret_cast<const ReplicationMsgHeader*>(_receive_buffer._data);
+    auto* hdr = (ReplicationMsgHeader*)_receive_buffer._data;
 
     // Validate header
     if (!hdr->is_valid()) {
@@ -804,9 +798,16 @@ struct ReplicationReceiverFSM {
     // Compare wire nodes with local nodes, collect paths where we differ
     _path_buffer.assign(path.data(), path.size());
 
+    // For the root subtrie, count it as pending so the decrement at
+    // _compare_wire_with_local entry balances. Subsequent subtries were
+    // already counted as pending children of their parent trie.
+    if (path.empty()) {
+      ++_pending_children;
+    }
+
     const char* payload_end = payload.data() + payload.size();
     _compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_end,
-                             _path_buffer, nullptr);
+                             _path_buffer);
 
     // After processing, send ACK with prune paths
     _send_prune_ack();
@@ -871,19 +872,10 @@ struct ReplicationReceiverFSM {
       parent_offset = _find_temp_parent_offset(Slice(_path_buffer));
     }
 
-    if (!parent_offset) {
-      // This shouldn't happen - parent should exist in temp DB
-      assert(false && "Parent not found in temp DB");
-      return;
-    }
+    assert(parent_offset && "Parent not found in temp DB");
 
     parent_offset->set_relative(subtrie_root->template resolve<char>());
     parent_offset->type(subtrie_root->type());
-
-    // This subtrie filled in a pending (0 offset) slot
-    if (_pending_children > 0) {
-      --_pending_children;
-    }
   }
 
   // Navigate temp DB to find the parent's child offset slot for a path
@@ -905,17 +897,15 @@ struct ReplicationReceiverFSM {
   }
 
   // Compare wire node with local node, collect paths where we need more data
-  // - If hashes match: local is correct, prune from wire trie (return false)
+  // - If hashes match: tell sender to prune, _Merger handles identical subtrees
   // - If hashes differ and wire is leaf: will be merged to local via _Merger
   // - If hashes differ and wire is trie: recurse into children
-  // - If child offset == 0 in wire: sender didn't send it, add to
-  // pending_requests Returns: true if wire node differs from local (keep it),
-  // false if matches (prune it) parent_trie: the parent trie node (for removing
-  // matched children) parent_branch_key: the branch key in parent that leads to
-  // this node
+  // - If child offset == 0 in wire: sender hasn't sent it yet, stays pending
   bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_end,
-                                std::string& path, TempTrieNode* parent_trie) {
+                                std::string& path) {
     if ((char*)wire_node >= buffer_end) return false;
+
+    --_pending_children; 
 
     // Get wire node's hash
     const uint8_t* wire_hash;
@@ -938,11 +928,10 @@ struct ReplicationReceiverFSM {
     if (local_offset) {
       const uint8_t* local_hash = _get_local_hash(local_offset);
       if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
-        if (parent_trie) parent_trie->remove_child(branch_key);
-        // Hashes match - local subtrie is correct, tell sender to prune it
+        // Hashes match - tell sender to prune, _Merger handles identical data
         _prune_paths.push_back(path);
         path.resize(path_len);
-        return false;
+        return true;
       }
     }
 
@@ -953,51 +942,46 @@ struct ReplicationReceiverFSM {
 #ifdef LEAVES_DEBUG
       auto* leaf = wire_node->template resolve<TempLeafNode>();
       path.append(leaf->key().data(), leaf->key().size());
-      std::cerr << "DEBUG: receive node: " << path << " (type=leaf) " << leaf->key().size() << "\n";
+      std::cerr << "DEBUG: receive node: " << path << " (type=leaf) "
+                << leaf->key().size() << "\n";
       path.resize(path_len);
 #endif
       return true;
     }
 
     // Wire is trie node - iterate through children
-    // We need to cast away const since we may call remove_child
     auto* wire_trie = wire_node->template resolve<TempTrieNode>();
     TempOffset* wire_array = wire_trie->array();
     int count = wire_trie->count();
 
 #ifdef LEAVES_DEBUG
-    if (!path.empty() || parent_trie) path.push_back((char)wire_trie->compressed()[0]);
+    if (!path.empty())
+      path.push_back((char)wire_trie->compressed()[0]);
     std::cerr << "DEBUG: receive node: " << path << " (type=trie)\n";
     path.resize(path_len);
 #endif
 
-    // Save path length before appending compressed, so we can restore it
+    // All children start as pending; decrement as each is handled
+    _pending_children += count;
+
     path.append((char*)wire_trie->compressed(), wire_trie->len());
     for (int i = 0; i < count; ++i) {
       TempOffset* child_offset = wire_array + i;
 
       if (!*child_offset) {
-        ++_pending_children;
-        continue;
+        continue;  // Not yet received, stays pending
       }
 
-      // Child was sent - resolve relative offset and recurse
-      if (!child_offset->is_relative()) {
-        assert(false && "Child offsets in wire format must be relative");
-        continue;
-      }
+      assert(child_offset->is_relative() && "Child offsets in wire format must be relative");
 
-      if (!_compare_wire_with_local(child_offset, buffer_end, path,
-                                    wire_trie)) {
-        count--;
-        i--;
+      if (!_compare_wire_with_local(child_offset, buffer_end, path)) {
+        path.resize(path_len);
+        return false;
       }
     }
 
     // Restore path to original length (remove compressed portion we added)
     path.resize(path_len);
-
-    // Keep this trie node (it has differing children)
     return true;
   }
 
@@ -1023,7 +1007,8 @@ struct ReplicationReceiverFSM {
         const WireTempDB& _db;
         const WireTempDB* _internal() const { return &_db; }
       } container{db};
-      _Dumper<DumpContainer, false> dumper(container, _wire_cursor._root, false);
+      _Dumper<DumpContainer, false> dumper(container, _wire_cursor._root,
+                                           false);
       dumper.dump(out);
     }
 #endif
@@ -1032,8 +1017,8 @@ struct ReplicationReceiverFSM {
     _wire_cursor.clear();
 
     // Use _Merger to merge wire trie into local DB
-    _Merger<LocalCursor, WireCursor, MergePolicy> merger(
-        *_cursor, _wire_cursor, _merge_policy);
+    _Merger<LocalCursor, WireCursor, MergePolicy> merger(*_cursor, _wire_cursor,
+                                                         _merge_policy);
     merger.exec();
   }
 
