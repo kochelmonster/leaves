@@ -765,15 +765,21 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   auto sender_db = (*sender_storage)["testdb"];
   auto receiver_db = (*receiver_storage)["testdb"];
 
-  // Insert enough keys that the temp DB will exceed a small budget
+  // Insert keys with varied prefixes so that completed subtrees can be
+  // pruned by hash comparison on subsequent fraction rounds.
+  // 26 letters × 8 keys each = 208 keys spread across distinct root branches.
+  constexpr int KEYS_PER_PREFIX = 8;
+  constexpr int TOTAL_KEYS = 26 * KEYS_PER_PREFIX;  // 208
   {
     auto cursor = sender_db.cursor();
-    for (int i = 0; i < 200; ++i) {
-      std::string key = "fkey_" + std::to_string(i);
-      std::string value =
-          "fval_" + std::to_string(i) + std::string(100, 'x');
-      cursor.find(Slice(key));
-      cursor.value(Slice(value));
+    for (int letter = 0; letter < 26; ++letter) {
+      for (int j = 0; j < KEYS_PER_PREFIX; ++j) {
+        std::string key(1, 'a' + letter);
+        key += "_key_" + std::to_string(j);
+        std::string value = "val_" + key + std::string(100, 'x');
+        cursor.find(Slice(key));
+        cursor.value(Slice(value));
+      }
     }
     cursor.commit();
   }
@@ -787,15 +793,17 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
 
   TestEvents sender_events, receiver_events;
 
-  // Small send buffer so many nodes arrive per round,
-  // and a very tight memory budget so fractions are triggered.
-  constexpr size_t SMALL_BUFFER = 4096;
-  constexpr size_t MEMORY_BUDGET = 8192;  // 8 KB — will force multiple fractions
+  // Send buffer large enough for one subtree (~8 keys), but small enough
+  // that we can't fit all 208 keys in one round.  Receive buffer matches
+  // the send buffer so _temp_buffer_memory() tracks actual data.
+  constexpr size_t SEND_BUFFER = 16 * 1024;  // 16 KB
+  constexpr size_t RECV_BUFFER = SEND_BUFFER;
+  constexpr size_t MEMORY_BUDGET = RECV_BUFFER * 3;  // ~48 KB — a few subtrees before fraction
 
-  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
+  SenderFSM sender(sender_impl, sender_impl->txn(), SEND_BUFFER);
   ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
                        ReplicationMergePolicy{},
-                       ReceiverFSM::DEFAULT_RECEIVE_BUFFER_SIZE,
+                       RECV_BUFFER,
                        MEMORY_BUDGET);
 
   receiver.begin(&receiver_transport, &receiver_events);
@@ -812,16 +820,18 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   {
     auto cursor = receiver_db.cursor();
     int found = 0;
-    for (int i = 0; i < 200; ++i) {
-      std::string key = "fkey_" + std::to_string(i);
-      std::string expected =
-          "fval_" + std::to_string(i) + std::string(100, 'x');
-      cursor.find(Slice(key));
-      if (cursor.is_valid() && cursor.value() == Slice(expected)) {
-        ++found;
+    for (int letter = 0; letter < 26; ++letter) {
+      for (int j = 0; j < KEYS_PER_PREFIX; ++j) {
+        std::string key(1, 'a' + letter);
+        key += "_key_" + std::to_string(j);
+        std::string expected = "val_" + key + std::string(100, 'x');
+        cursor.find(Slice(key));
+        if (cursor.is_valid() && cursor.value() == Slice(expected)) {
+          ++found;
+        }
       }
     }
-    BOOST_CHECK_EQUAL(found, 200);
+    BOOST_CHECK_EQUAL(found, TOTAL_KEYS);
   }
 }
 
@@ -891,13 +901,14 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
 
   TestEvents sender_events, receiver_events;
 
-  constexpr size_t SMALL_BUFFER = 4096;
-  constexpr size_t MEMORY_BUDGET = 8192;
+  constexpr size_t SEND_BUFFER = 16 * 1024;  // 16 KB
+  constexpr size_t RECV_BUFFER = SEND_BUFFER;
+  constexpr size_t MEMORY_BUDGET = RECV_BUFFER * 3;  // ~48 KB
 
-  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
+  SenderFSM sender(sender_impl, sender_impl->txn(), SEND_BUFFER);
   ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
                        ReplicationMergePolicy{},
-                       ReceiverFSM::DEFAULT_RECEIVE_BUFFER_SIZE,
+                       RECV_BUFFER,
                        MEMORY_BUDGET);
 
   receiver.begin(&receiver_transport, &receiver_events);

@@ -295,9 +295,10 @@ struct TransferTrie {
     _finalized = true;
 
 #ifdef LEAVES_DEBUG
-    // Dump to /tmp/sb.yaml for debugging
+    // Dump to /tmp/sb-<N>.yaml for debugging
     {
-      std::ofstream out("/tmp/sb.yaml");
+      static int _sb_round = 0;
+      std::ofstream out("/tmp/sb-" + std::to_string(_sb_round++) + ".yaml");
       WireTempDB db;
       struct DumpContainer {
         using db_type = WireTempDB;
@@ -634,7 +635,7 @@ struct TransferTrieSender {
       // max_depth
       _path_buffer.clear();
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
-      if (_txn->root) _write_subtree(_path_buffer, &_txn->root, 0, nullptr);
+      if (_txn->root) _write_subtree(_path_buffer, &_txn->root, 0, nullptr, true);
       return;
     }
 

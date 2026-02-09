@@ -636,12 +636,6 @@ struct ReplicationReceiverFSM {
     _temp_buffers.clear();
     _alloc_receive_buffer();
     _temp_root = 0;
-
-    // Start a transaction for receiving data
-    if (!_cursor->start_transaction()) {
-      _transition_to_error(ReplicationError::INTERNAL_ERROR,
-                           "Failed to start transaction");
-    }
   }
 
   // ==========================================================================
@@ -861,7 +855,9 @@ struct ReplicationReceiverFSM {
 
   // Get pointer to the original offset at a path (what we had before receiving)
   // Returns pointer to offset for future relative offset handling compatibility
-  const offset_t* _get_original_node(const Slice& path) {
+  // expected_type: the wire node's type (LEAF or TRIE) — used to disambiguate
+  // NONE-branch leaves from their parent trie node which share the same path.
+  const offset_t* _get_original_node(const Slice& path, uint8_t expected_type) {
     if (path.empty()) {
       return _cursor->_root;
     }
@@ -876,6 +872,15 @@ struct ReplicationReceiverFSM {
     auto& trans = _cursor->stack.back();
     if (!trans.offset || !*trans.offset) {
       return nullptr;  // No node at this path
+    }
+
+    // Wire node is a NONE-branch leaf but cursor landed on the parent trie
+    // (they share the same path).  Resolve the trie's NONE child instead.
+    if (expected_type == LEAF && trans.offset->type() == TRIE) {
+      auto trie = _db->template resolve<TrieNode>(trans.offset);
+      auto* none_child = trie->offset(TrieNode::NONE);
+      return none_child ? reinterpret_cast<const offset_t*>(none_child)
+                        : nullptr;
     }
 
     return trans.offset;
@@ -963,7 +968,7 @@ struct ReplicationReceiverFSM {
     size_t path_len = path.size();
     if (branch_key != TempTrieNode::NONE) path.push_back((char)branch_key);
 
-    auto* local_offset = _get_original_node(Slice(path));
+    auto* local_offset = _get_original_node(Slice(path), wire_node->type());
     // Compare with local
     if (local_offset) {
       const uint8_t* local_hash = _get_local_hash(local_offset);
@@ -1020,7 +1025,17 @@ struct ReplicationReceiverFSM {
         return false;
       }
     }
-
+#if 0
+    // If every child was pruned (zeroed), this trie node is an empty
+    // skeleton — zero it out so the merger doesn't try to merge it.
+    {
+      bool all_zero = true;
+      for (int i = 0; i < count; ++i) {
+        if (wire_array[i]) { all_zero = false; break; }
+      }
+      if (all_zero) *wire_node = 0;
+    }
+#endif 
     // Restore path to original length (remove compressed portion we added)
     path.resize(path_len);
     return true;
@@ -1038,9 +1053,10 @@ struct ReplicationReceiverFSM {
     if (!_temp_root) return;
 
 #ifdef LEAVES_DEBUG
-    // Dump to /tmp/sb.yaml for debugging
+    // Dump to /tmp/rb-<N>.yaml for debugging
     {
-      std::ofstream out("/tmp/rb.yaml");
+      static int _rb_round = 0;
+      std::ofstream out("/tmp/rb-" + std::to_string(_rb_round++) + ".yaml");
       WireTempDB db;
       struct DumpContainer {
         using db_type = WireTempDB;
@@ -1051,6 +1067,11 @@ struct ReplicationReceiverFSM {
       _Dumper<DumpContainer, false> dumper(container, _wire_cursor._root,
                                            false);
       dumper.dump(out);
+
+      // Dump local (destination) DB state
+      std::ofstream dst_out("/tmp/rb-dst-" + std::to_string(_rb_round - 1) + ".yaml");
+      _Dumper<DB, false> dst_dumper(*_db, _cursor->_root, false);
+      dst_dumper.dump(dst_out);
     }
 #endif
 
@@ -1087,9 +1108,6 @@ struct ReplicationReceiverFSM {
       _merge_temp_to_local();
     }
 
-    // Commit so _get_original_node sees the merged data in the next round
-    _cursor->commit();
-    
     // Reset temp DB for the next fraction
     _free_temp_buffers();
     _temp_root = 0;
