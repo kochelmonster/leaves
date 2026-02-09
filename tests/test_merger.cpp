@@ -2066,3 +2066,153 @@ BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_all_branches_zero) {
   v.first();
   BOOST_CHECK(!v.is_valid());
 }
+
+BOOST_AUTO_TEST_CASE(test_merger_replication_incomplete_multi_branch) {
+  // Reproduces a real replication scenario (rb-4.yaml → rb-dst-4.yaml):
+  //
+  // Source (rb-4.yaml): incomplete trie from partial replication.
+  //   Root branches [a-z], but [n-z] have offset 0.
+  //   [a-l] subtries ("X_key_" prefix, branches [0-7]) — ALL children are 0.
+  //   [m] subtrie ("m_key_" prefix, branches [0-7]) — [0,1] have real leaves,
+  //       [2-7] are 0.
+  //   → Only m_key_0 and m_key_1 are actual data.
+  //
+  // Destination (rb-dst-4.yaml): complete trie.
+  //   Root branches [a-m].  [a-l] each have 8 leaves (X_key_0..X_key_7).
+  //   [m] has 3 leaves (m_key_0, m_key_1, m_key_2).
+  //   → 99 total keys.
+  //
+  // After merge with OverwritePolicy:
+  //   - [a-l]: src subtries have all-zero children → dst data preserved (96 keys)
+  //   - m_key_0, m_key_1: src has real leaves → overwrites dst
+  //   - m_key_2: src offset is 0 → dst preserved
+  //   - [n-z]: src root offsets are 0 → no effect
+  //   → 99 total keys.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  const size_t VSIZE = 111;
+  auto padval = [&](const std::string& prefix) -> std::string {
+    std::string r = prefix;
+    while (r.size() < VSIZE) r += 'x';
+    return r;
+  };
+
+  // ── Build destination (complete, 99 keys) ──
+  {
+    auto dst_db = (*dest_storage)["test"];
+    auto d = dst_db.cursor();
+    for (char ch = 'a'; ch <= 'l'; ++ch) {
+      for (char digit = '0'; digit <= '7'; ++digit) {
+        std::string key = std::string(1, ch) + "_key_" + digit;
+        d.find(key);
+        d.value(padval("dst_" + key));
+      }
+    }
+    for (char digit = '0'; digit <= '2'; ++digit) {
+      std::string key = std::string("m_key_") + digit;
+      d.find(key);
+      d.value(padval("dst_" + key));
+    }
+    d.commit();
+  }
+
+  // ── Build source (insert full then zero out to make incomplete) ──
+  {
+    auto src_db = (*src_storage)["test"];
+    auto c = src_db.cursor();
+    // Insert keys for all 26 letters [a-z] × digits [0-7] to get the full
+    // [a-z] bitmap at the root.
+    for (char ch = 'a'; ch <= 'z'; ++ch) {
+      for (char digit = '0'; digit <= '7'; ++digit) {
+        std::string key = std::string(1, ch) + "_key_" + digit;
+        c.find(key);
+        c.value(padval("src_" + key));
+      }
+    }
+    c.commit();
+  }
+
+
+
+  // Zero out source branches to match the incomplete rb-4.yaml structure.
+  auto src_db = (*src_storage)["test"];
+  auto src_internal = src_db._internal();
+
+  // [n-z] at root: zero out
+  for (char ch = 'n'; ch <= 'z'; ++ch) {
+    zero_trie_branch(src_internal, "", ch);
+  }
+  // [a-l] subtries: zero ALL branches [0-7] (tries exist but have no data)
+  for (char ch = 'a'; ch <= 'l'; ++ch) {
+    std::string path(1, ch);
+    for (char digit = '0'; digit <= '7'; ++digit) {
+      zero_trie_branch(src_internal, path, digit);
+    }
+  }
+  // [m] subtrie: zero branches [2-7], keep [0,1] as real leaves
+  for (char digit = '2'; digit <= '7'; ++digit) {
+    zero_trie_branch(src_internal, "m", digit);
+  }
+
+  // Dump tries for comparison with /tmp/rb-4.yaml and /tmp/rb-dst-4.yaml
+  dump_graph("/tmp/test-rb-4.yaml", src_db);
+  {
+    auto dst_db_dump = (*dest_storage)["test"];
+    dump_graph("/tmp/test-rb-dst-4.yaml", dst_db_dump);
+  }
+
+  // ── Merge ──
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_internal = dst_db._internal();
+  OverwritePolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // ── Verify ──
+  auto v = (*dest_storage)["test"].cursor();
+
+  // All [a-l]_key_[0-7] should be preserved from dst (96 keys)
+  for (char ch = 'a'; ch <= 'l'; ++ch) {
+    for (char digit = '0'; digit <= '7'; ++digit) {
+      std::string key = std::string(1, ch) + "_key_" + digit;
+      v.find(key);
+      BOOST_CHECK_MESSAGE(v.is_valid(), "Key " + key + " should exist");
+      if (v.is_valid()) {
+        BOOST_CHECK_EQUAL(v.value(), Slice(padval("dst_" + key)));
+      }
+    }
+  }
+
+  // m_key_0 and m_key_1: overwritten by src (src had real leaves)
+  v.find("m_key_0");
+  BOOST_CHECK(v.is_valid());
+  if (v.is_valid())
+    BOOST_CHECK_EQUAL(v.value(), Slice(padval("src_m_key_0")));
+
+  v.find("m_key_1");
+  BOOST_CHECK(v.is_valid());
+  if (v.is_valid())
+    BOOST_CHECK_EQUAL(v.value(), Slice(padval("src_m_key_1")));
+
+  // m_key_2: preserved from dst (src's branch [2] was zero)
+  v.find("m_key_2");
+  BOOST_CHECK(v.is_valid());
+  if (v.is_valid())
+    BOOST_CHECK_EQUAL(v.value(), Slice(padval("dst_m_key_2")));
+
+  // No [n-z] keys should appear (src offsets were 0)
+  v.find("n_key_0");
+  BOOST_CHECK(!v.is_valid());
+  v.find("z_key_0");
+  BOOST_CHECK(!v.is_valid());
+
+  // Total key count must be 99
+  int count = 0;
+  v.first();
+  while (v.is_valid()) {
+    count++;
+    v.next();
+  }
+  BOOST_CHECK_EQUAL(count, 99);
+}
