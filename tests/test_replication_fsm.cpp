@@ -747,4 +747,208 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
   }  // FSMs cleanly complete and transition to IDLE again
 }
 
+// =============================================================================
+// Fractional Replication Tests
+// =============================================================================
+
+BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
+  // Verify that setting a tight memory budget forces fraction rounds,
+  // and the final result is identical to a normal (unlimited) replication.
+  auto sender_path = test_temp_dir / "sender_frac.lvs";
+  auto receiver_path = test_temp_dir / "receiver_frac.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  // Insert enough keys that the temp DB will exceed a small budget
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 200; ++i) {
+      std::string key = "fkey_" + std::to_string(i);
+      std::string value =
+          "fval_" + std::to_string(i) + std::string(100, 'x');
+      cursor.find(Slice(key));
+      cursor.value(Slice(value));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
+  TestEvents sender_events, receiver_events;
+
+  // Small send buffer so many nodes arrive per round,
+  // and a very tight memory budget so fractions are triggered.
+  constexpr size_t SMALL_BUFFER = 4096;
+  constexpr size_t MEMORY_BUDGET = 8192;  // 8 KB — will force multiple fractions
+
+  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
+  ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+                       ReplicationMergePolicy{},
+                       ReceiverFSM::DEFAULT_RECEIVE_BUFFER_SIZE,
+                       MEMORY_BUDGET);
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  run_protocol(sender, receiver, sender_transport, receiver_transport, 1000);
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+  BOOST_CHECK(sender_events.completed);
+  BOOST_CHECK(receiver_events.completed);
+
+  // Verify every key was replicated
+  {
+    auto cursor = receiver_db.cursor();
+    int found = 0;
+    for (int i = 0; i < 200; ++i) {
+      std::string key = "fkey_" + std::to_string(i);
+      std::string expected =
+          "fval_" + std::to_string(i) + std::string(100, 'x');
+      cursor.find(Slice(key));
+      if (cursor.is_valid() && cursor.value() == Slice(expected)) {
+        ++found;
+      }
+    }
+    BOOST_CHECK_EQUAL(found, 200);
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
+                        ReplicationFixture) {
+  // Both sides share some data, differ on other data.
+  // With a tight budget the receiver will merge fractions mid-stream.
+  // The diff nature of the protocol must skip already-replicated subtrees
+  // when the sender restarts from root after FRACTION_COMPLETE.
+  auto sender_path = test_temp_dir / "sender_fracdiff.lvs";
+  auto receiver_path = test_temp_dir / "receiver_fracdiff.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  // Common keys on both sides
+  {
+    auto sc = sender_db.cursor();
+    auto rc = receiver_db.cursor();
+    for (int i = 0; i < 100; ++i) {
+      std::string key = "shared_" + std::to_string(i);
+      std::string value = "common_" + std::to_string(i) + std::string(150, 'c');
+      sc.find(Slice(key));
+      sc.value(Slice(value));
+      rc.find(Slice(key));
+      rc.value(Slice(value));
+    }
+    sc.commit();
+    rc.commit();
+  }
+
+  // Sender-only keys
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 80; ++i) {
+      std::string key = "sender_" + std::to_string(i);
+      std::string value = "sval_" + std::to_string(i) + std::string(150, 's');
+      cursor.find(Slice(key));
+      cursor.value(Slice(value));
+    }
+    cursor.commit();
+  }
+
+  // Receiver-only keys (should survive the merge)
+  {
+    auto cursor = receiver_db.cursor();
+    for (int i = 0; i < 40; ++i) {
+      std::string key = "local_" + std::to_string(i);
+      std::string value = "lval_" + std::to_string(i) + std::string(150, 'l');
+      cursor.find(Slice(key));
+      cursor.value(Slice(value));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
+  TestEvents sender_events, receiver_events;
+
+  constexpr size_t SMALL_BUFFER = 4096;
+  constexpr size_t MEMORY_BUDGET = 8192;
+
+  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
+  ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+                       ReplicationMergePolicy{},
+                       ReceiverFSM::DEFAULT_RECEIVE_BUFFER_SIZE,
+                       MEMORY_BUDGET);
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  run_protocol(sender, receiver, sender_transport, receiver_transport, 2000);
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+  BOOST_CHECK(sender_events.completed);
+  BOOST_CHECK(receiver_events.completed);
+
+  // Verify
+  {
+    auto cursor = receiver_db.cursor();
+
+    // Shared keys intact
+    for (int i = 0; i < 100; ++i) {
+      std::string key = "shared_" + std::to_string(i);
+      std::string expected =
+          "common_" + std::to_string(i) + std::string(150, 'c');
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Shared key missing: " + key);
+      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                          "Shared key value mismatch: " + key);
+    }
+
+    // Sender-only keys replicated
+    for (int i = 0; i < 80; ++i) {
+      std::string key = "sender_" + std::to_string(i);
+      std::string expected =
+          "sval_" + std::to_string(i) + std::string(150, 's');
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Sender key not replicated: " + key);
+      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                          "Sender key value mismatch: " + key);
+    }
+
+    // Receiver-only keys survived
+    for (int i = 0; i < 40; ++i) {
+      std::string key = "local_" + std::to_string(i);
+      std::string expected =
+          "lval_" + std::to_string(i) + std::string(150, 'l');
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Local key was deleted: " + key);
+      BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                          "Local key value changed: " + key);
+    }
+  }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

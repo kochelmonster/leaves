@@ -22,8 +22,10 @@ enum class ReplicationMsgType : uint8_t {
   TRIE_DATA = 0x01,  // TransferTrie buffer (sender → receiver)
   SUBTRIE_ACK =
       0x02,  // ACK subtries at paths - sender can skip (receiver → sender)
-  COMPLETE = 0x03,  // Replication complete (either side)
-  ERROR = 0x04      // Error occurred (either side)
+  COMPLETE = 0x03,           // Replication complete (either side)
+  ERROR = 0x04,              // Error occurred (either side)
+  FRACTION_COMPLETE = 0x05,  // Fraction merged, restart from root
+                             // (receiver → sender)
 };
 
 constexpr uint32_t REPLICATION_MSG_MAGIC = 0x4C565250;  // "LVRP"
@@ -259,6 +261,7 @@ struct ReplicationSenderFSM {
   size_t _total_nodes;
   size_t _total_bytes;
   ReplicationError _error;
+  DbType _db_type;
 
   ReplicationSenderFSM(DB* db, typename DB::txn_ptr txn,
                        size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
@@ -271,7 +274,8 @@ struct ReplicationSenderFSM {
         _session_id(0),
         _total_nodes(0),
         _total_bytes(0),
-        _error(ReplicationError::NONE) {}
+        _error(ReplicationError::NONE),
+        _db_type(DbType::DB_MAIN) {}
 
   // Start replication
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
@@ -282,6 +286,7 @@ struct ReplicationSenderFSM {
     _total_nodes = 0;
     _total_bytes = 0;
     _error = ReplicationError::NONE;
+    _db_type = db_type;
 
     _sender.begin(db_type);
     _session_id = _sender.session_id();
@@ -346,6 +351,17 @@ struct ReplicationSenderFSM {
 
       case ReplicationMsgType::SUBTRIE_ACK:
         _handle_subtrie_ack(payload);
+        break;
+
+      case ReplicationMsgType::FRACTION_COMPLETE:
+        // Receiver merged what it had and wants a fresh round.
+        // Refresh _txn to latest read txn so the sender reads the
+        // current snapshot when restarting from root.
+        _txn = _db->txn();
+        _sender._txn = _txn;
+        _sender.begin(_db_type);
+        _state = State::SENDING;
+        _send_next_buffer();
         break;
 
       case ReplicationMsgType::ERROR:
@@ -522,6 +538,8 @@ struct ReplicationReceiverFSM {
   std::string _path_buffer;  // Reusable buffer for path construction
   size_t _pending_children;  // Count of 0 offsets not yet connected (receiver
                              // completion tracking)
+  size_t _memory_budget;     // Max temp DB bytes before forcing a fraction
+                             // merge. SIZE_MAX = unlimited (single round).
 
   // Receive buffer management (Temp DB)
   // ====================================
@@ -551,7 +569,8 @@ struct ReplicationReceiverFSM {
 
   ReplicationReceiverFSM(
       DB* db, typename DB::txn_ptr txn, MergePolicy handler = MergePolicy(),
-      size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE)
+      size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE,
+      size_t memory_budget = SIZE_MAX)
       : _db(db),
         _txn(txn),
         _cursor(db->create_cursor()),
@@ -562,6 +581,7 @@ struct ReplicationReceiverFSM {
         _total_nodes(0),
         _total_bytes(0),
         _error(ReplicationError::NONE),
+        _memory_budget(memory_budget),
         _initial_buffer_size(receive_buffer_size),
         _temp_root(0),
         _wire_cursor(&_wire_db, &_temp_root),
@@ -591,6 +611,13 @@ struct ReplicationReceiverFSM {
     _temp_buffers.shrink_to_fit();
     // Re-allocate a single buffer for potential future use
     _alloc_receive_buffer();
+  }
+
+  // Total bytes held in temp DB buffers
+  size_t _temp_buffer_memory() const {
+    size_t total = 0;
+    for (const auto& buf : _temp_buffers) total += buf.size();
+    return total;
   }
 
   // Start receiving - called when ready to accept data
@@ -786,6 +813,10 @@ struct ReplicationReceiverFSM {
 
     // Connect received subtrie to temp DB
     if (path.empty()) {
+      // Beginning of a new round — refresh cursor to latest committed
+      // state so hash comparisons see previously merged data.
+      _cursor->update();
+
       // First subtrie - this becomes the temp DB root
       char* wire_root = transfer_hdr->root.resolve<char>();
       _temp_root.set_relative(wire_root);
@@ -809,21 +840,30 @@ struct ReplicationReceiverFSM {
     _compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_end,
                              _path_buffer);
 
-    // After processing, send ACK with prune paths
-    _send_prune_ack();
-
     // Check if all pending children are now connected - if so, replication is
     // complete
     if (_pending_children == 0) {
       _send_complete();
+      return;
     }
+
+    // If temp DB exceeds memory budget, merge what we have and ask the
+    // sender to restart from root.  The next round's hash comparisons
+    // will prune already-replicated subtrees automatically.
+    if (_temp_buffer_memory() > _memory_budget) {
+      _send_fraction_complete();
+      return;
+    }
+
+    // Normal path: send ACK with prune paths
+    _send_prune_ack();
   }
 
   // Get pointer to the original offset at a path (what we had before receiving)
   // Returns pointer to offset for future relative offset handling compatibility
   const offset_t* _get_original_node(const Slice& path) {
     if (path.empty()) {
-      return &_txn->root;
+      return _cursor->_root;
     }
 
     // Navigate to path in local trie using cursor
@@ -928,7 +968,8 @@ struct ReplicationReceiverFSM {
     if (local_offset) {
       const uint8_t* local_hash = _get_local_hash(local_offset);
       if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
-        // Hashes match - tell sender to prune, _Merger handles identical data
+        // Hashes match - tell sender to prune, set the offset 0 to avoid merging
+        *wire_node = 0;
         _prune_paths.push_back(path);
         path.resize(path_len);
         return true;
@@ -1015,11 +1056,12 @@ struct ReplicationReceiverFSM {
 
     // set position to root
     _wire_cursor.clear();
-
+    _cursor->start_transaction();
     // Use _Merger to merge wire trie into local DB
     _Merger<LocalCursor, WireCursor, MergePolicy> merger(*_cursor, _wire_cursor,
                                                          _merge_policy);
     merger.exec();
+    _cursor->commit();
   }
 
   // Send ACK with prune paths (where hashes matched)
@@ -1038,14 +1080,31 @@ struct ReplicationReceiverFSM {
     _transport->send(_msg_builder.data(), _msg_builder.size());
   }
 
+  // Merge current fraction, commit so next round sees updated hashes,
+  // reset temp state, and tell sender to restart from root.
+  void _send_fraction_complete() {
+    if (_temp_root) {
+      _merge_temp_to_local();
+    }
+
+    // Commit so _get_original_node sees the merged data in the next round
+    _cursor->commit();
+    
+    // Reset temp DB for the next fraction
+    _free_temp_buffers();
+    _temp_root = 0;
+    _pending_children = 0;
+    _prune_paths.clear();
+
+    _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
+    _transport->send(_msg_builder.data(), _msg_builder.size());
+  }
+
   void _send_complete() {
     // Merge temp DB into local DB using _Merger
     if (_temp_root) {  // _temp_root != 0 means it was set
       _merge_temp_to_local();
     }
-
-    // Commit the transaction after merge
-    _cursor->commit();
 
     // Free temp buffers - data has been integrated into persistent storage
     _free_temp_buffers();
