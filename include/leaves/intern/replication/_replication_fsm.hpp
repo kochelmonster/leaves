@@ -1072,6 +1072,10 @@ struct ReplicationReceiverFSM {
       std::ofstream dst_out("/tmp/rb-dst-" + std::to_string(_rb_round - 1) + ".yaml");
       _Dumper<DB, false> dst_dumper(*_db, _cursor->_root, false);
       dst_dumper.dump(dst_out);
+
+      std::cerr << "DEBUG: dumped replication buffers to /tmp/rb-"
+                << (_rb_round - 1) << ".yaml and rb-dst-" << (_rb_round - 1)
+                << ".yaml\n";
     }
 #endif
 
