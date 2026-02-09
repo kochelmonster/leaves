@@ -538,6 +538,8 @@ struct ReplicationReceiverFSM {
   std::string _path_buffer;  // Reusable buffer for path construction
   size_t _pending_children;  // Count of 0 offsets not yet connected (receiver
                              // completion tracking)
+  size_t _new_leaves;        // Count of new/changed leaf nodes in current
+                             // round (must be > 0 before FRACTION_COMPLETE).
   size_t _memory_budget;     // Max temp DB bytes before forcing a fraction
                              // merge. SIZE_MAX = unlimited (single round).
 
@@ -631,6 +633,7 @@ struct ReplicationReceiverFSM {
     _error = ReplicationError::NONE;
     _prune_paths.clear();
     _pending_children = 0;
+    _new_leaves = 0;
 
     // Reset temp buffers from any previous session
     _temp_buffers.clear();
@@ -805,22 +808,17 @@ struct ReplicationReceiverFSM {
       return;
     }
 
-    // Connect received subtrie to temp DB
+    // Beginning of a new round — refresh cursor to latest committed
+    // state so hash comparisons see previously merged data.
     if (path.empty()) {
-      // Beginning of a new round — refresh cursor to latest committed
-      // state so hash comparisons see previously merged data.
       _cursor->update();
-
-      // First subtrie - this becomes the temp DB root
-      char* wire_root = transfer_hdr->root.resolve<char>();
-      _temp_root.set_relative(wire_root);
-      _temp_root.type(transfer_hdr->root.type());
-    } else {
-      // Subsequent subtrie - connect to parent in temp DB
-      _connect_subtrie_to_parent(path, (TempOffset*)&transfer_hdr->root);
     }
 
-    // Compare wire nodes with local nodes, collect paths where we differ
+    // Compare wire nodes with local nodes *before* connecting to
+    // the temp trie.  If the subtrie root's hash already matches
+    // local, _compare_wire_with_local zeroes it and there is
+    // nothing to connect (avoids feeding skeleton/identical data
+    // to the merger).
     _path_buffer.assign(path.data(), path.size());
 
     // For the root subtrie, count it as pending so the decrement at
@@ -834,6 +832,19 @@ struct ReplicationReceiverFSM {
     _compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_end,
                              _path_buffer);
 
+    // Now connect to temp DB — but only if the root wasn't pruned.
+    if (transfer_hdr->root) {
+      if (path.empty()) {
+        // First subtrie - this becomes the temp DB root
+        char* wire_root = transfer_hdr->root.resolve<char>();
+        _temp_root.set_relative(wire_root);
+        _temp_root.type(transfer_hdr->root.type());
+      } else {
+        // Subsequent subtrie - connect to parent in temp DB
+        _connect_subtrie_to_parent(path, (TempOffset*)&transfer_hdr->root);
+      }
+    }
+
     // Check if all pending children are now connected - if so, replication is
     // complete
     if (_pending_children == 0) {
@@ -844,7 +855,9 @@ struct ReplicationReceiverFSM {
     // If temp DB exceeds memory budget, merge what we have and ask the
     // sender to restart from root.  The next round's hash comparisons
     // will prune already-replicated subtrees automatically.
-    if (_temp_buffer_memory() > _memory_budget) {
+    // Guard: at least one new leaf must have been received, otherwise
+    // a fraction merge would make no progress and loop forever.
+    if (_temp_buffer_memory() > _memory_budget && _new_leaves > 0) {
       _send_fraction_complete();
       return;
     }
@@ -985,6 +998,7 @@ struct ReplicationReceiverFSM {
 
     // Hashes differ or local doesn't exist
     if (wire_node->type() == LEAF) {
+      ++_new_leaves;
 #ifdef LEAVES_DEBUG
       auto* leaf = wire_node->template resolve<TempLeafNode>();
       path.append(leaf->key().data(), leaf->key().size());
@@ -1070,7 +1084,7 @@ struct ReplicationReceiverFSM {
 
       // Dump local (destination) DB state
       std::ofstream dst_out("/tmp/rb-dst-" + std::to_string(_rb_round - 1) + ".yaml");
-      _Dumper<DB, false> dst_dumper(*_db, _cursor->_root, false);
+      _Dumper<DB, true> dst_dumper(*_db, _cursor->_root, false);
       dst_dumper.dump(dst_out);
 
       std::cerr << "DEBUG: dumped replication buffers to /tmp/rb-"
@@ -1116,6 +1130,7 @@ struct ReplicationReceiverFSM {
     _free_temp_buffers();
     _temp_root = 0;
     _pending_children = 0;
+    _new_leaves = 0;
     _prune_paths.clear();
 
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
