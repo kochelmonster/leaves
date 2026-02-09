@@ -534,3 +534,9 @@ auto merged_value = app.merge_conflict(
 - Big Value Handlung
 - Partitioned replication
 - Merger selective merging (hash validation)
+
+
+For memory_budget too small, there shall be another condition: At least one new leafnode has to be iin TempDb. before FRACTION_COMPLETE can be send.
+Two Questions:
+In the /tmp/rb-5.yaml file and successors, the leavenode with value "fval_11xxxxxxxxxxxxxxxxxxxxxxx" is not pruned. (This is a bug it was was merged in round 4
+Do you have a better Idea?

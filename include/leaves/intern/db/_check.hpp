@@ -80,30 +80,24 @@ struct _Dumper {
   offset_e* _root;
   bool _simple;
 
-   _Dumper(const Container& container, offset_e* root, bool simple = false)
+  _Dumper(const Container& container, offset_e* root, bool simple = false)
       : _db(*container._internal()), _id(0), _root(root), _simple(simple) {}
 
-  void dump(std::ostream& out) {
-    dump_link(out, _root, _root, _id++);
-  }
+  void dump(std::ostream& out) { dump_link(out, _root, _root, _id++); }
 
   void dump_link(std::ostream& out, offset_e* link, offset_e* parent, int id) {
-    if(!link || !*link) return;
+    if (!link || !*link) return;
     if (link->type() == TRIE)
       dump_trie(out, link, parent, id);
     else
       dump_leaf(out, link, parent, id);
   }
 
-  uint64_t to_absolute(offset_e* offset) {
-    if (!offset->is_relative()) return offset->_offset;
-    if (offset->type() == TRIE) {
-      trie_ptr node = _db.template resolve<TrieNode>(offset);
-      return _db.resolve(node)._offset;
-    } else {
-      leaf_ptr node = _db.template resolve<LeafNode>(offset);
-      return _db.resolve(node)._offset;
-    }
+  uint64_t to_id(offset_e* offset) {
+    if (offset->is_relative())
+      return *offset ? (uint64_t)offset->template resolve<char>() : 0;
+
+    return *offset;
   }
 
   template <typename InternalCursor>
@@ -144,7 +138,7 @@ struct _Dumper {
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
-      out << "id: " << to_absolute(offset) << std::endl;
+      out << "id: " << to_id(offset) << std::endl;
       if constexpr (with_headers) {
         // If relative, use parent to find page; otherwise use offset itself
         offset_e* page_link = offset->is_relative() ? parent : offset;
@@ -200,7 +194,7 @@ struct _Dumper {
     if (_simple) {
       out << "id: " << id << std::endl;
     } else {
-      out << "id: " << to_absolute(offset) << std::endl;
+      out << "id: " << to_id(offset) << std::endl;
       if constexpr (with_headers) {
         // If relative, use parent to find page; otherwise use offset itself
         offset_e* page_link = offset->is_relative() ? parent : offset;
@@ -252,7 +246,7 @@ struct _Dumper {
       }
     } else {
       for (offset_e* iter = start; iter < end; iter++) {
-        out << "  - " << to_absolute(iter) << std::endl;
+        out << "  - " << to_id(iter) << std::endl;
         _id++;
       }
     }
