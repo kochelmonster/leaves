@@ -331,10 +331,12 @@ struct _Merger {
       dst.trie() = new_trie;
       dst.update_trie_offset();
 
-      // Recursively merge the shared branch
-      src_cursor.push(src_trie->offset(key1));
-      dst_cursor.stack.clear();
-      merge_node();
+      // Recursively merge the shared branch (skip if src offset is incomplete)
+      if (*src_trie->offset(key1) != 0) {
+        src_cursor.push(src_trie->offset(key1));
+        dst_cursor.stack.clear();
+        merge_node();
+      }
       return;
     }
 
@@ -446,8 +448,11 @@ struct _Merger {
          k = src_trie->next(k)) {
       if (dst_trie->isset(k)) {
         // Shared branch — needs recursive merge (handled below)
-        shared[shared_count++] = {k, (const src_offset_e*)src_trie->offset(k),
-                                  *dst_trie->offset(k)};
+        // Skip if src offset is incomplete (zero) — dst version stands unchanged
+        if (*src_trie->offset(k) != 0) {
+          shared[shared_count++] = {k, (const src_offset_e*)src_trie->offset(k),
+                                    *dst_trie->offset(k)};
+        }
       } else {
         // Src-only branch — selectively deep copy
         offset_e child_offset;
