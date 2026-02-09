@@ -40,15 +40,12 @@ struct _Merger {
   _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
-  // Helper methods for memory management
-  page_ptr alloc(uint16_t size) { return dst_cursor.alloc(size); }
-
   // Allocate node with PageHeader prefix, return pointer to node
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
     using PageHeader = typename Traits::PageHeader;
-    page_ptr page = alloc(sizeof(PageHeader) + node_size);
-    return NodePtr((char*)page + sizeof(PageHeader));
+    page_ptr page = dst_cursor.alloc(sizeof(PageHeader) + node_size);
+    return page + sizeof(PageHeader);
   }
 
   // Free node by computing PageHeader pointer
@@ -541,7 +538,7 @@ struct _Merger {
                                           : dst_trie->isset(branch_key)));
     // otherwise find would have walked down
 
-    trie_ptr new_trie = alloc(dst_trie->increment_size(branch_key));
+    trie_ptr new_trie = alloc_node<trie_ptr>(dst_trie->increment_size(branch_key));
     *loffset = new_trie->create(*dst_trie, branch_key);
     free_node(dst_trie);
     return new_trie;

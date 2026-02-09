@@ -359,7 +359,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/test_merger",
             "args": [
-                "--run_test=test_merger_single_leaf_same_key"
+                "--run_test=test_merger_replication_incomplete_multi_branch"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
