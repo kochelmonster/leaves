@@ -16,9 +16,8 @@ typedef _TransactionalCursor<CursorTraits> InternalCursor;
 
 // Version with dumper
 template <typename DBDst, typename DBSrc, typename MergePolicy>
-void exec_merger(
-    DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
-    const std::string& dump_filename = "") {
+void exec_merger(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
+                 const std::string& dump_filename = "") {
   using DstCursorTraits = typename DBDst::CursorTraits;
   using SrcCursorTraits = typename DBSrc::CursorTraits;
   using DstCursor = _TransactionalCursor<DstCursorTraits>;
@@ -28,7 +27,7 @@ void exec_merger(
   auto dst_root = &dst_db.txn()->root;
 
   uint64_t cursor_id = dst_db.new_cursor_id();
-  
+
   // Create cursors
   DstCursor dst_cursor(&dst_db, dst_root);
   SrcCursor src_cursor(&src_db, src_root);
@@ -36,7 +35,7 @@ void exec_merger(
   // Initialize source cursor to start of tree
   src_cursor.clear();
   dst_cursor.start_transaction();
-  
+
   // Note: Dumper functionality may need to be reimplemented for cursor-based
   // API
   _Merger<DstCursor, SrcCursor, MergePolicy> merger(dst_cursor, src_cursor,
@@ -147,7 +146,6 @@ struct KeepDestPolicy {
   }
 };
 
-
 // Test actual _Merger functionality
 
 BOOST_AUTO_TEST_CASE(test_merger_empty_to_empty) {
@@ -186,7 +184,7 @@ BOOST_AUTO_TEST_CASE(test_merger_single_leaf_to_empty) {
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
-  
+
   // Verify destination has the value
   auto dst_cursor_pub = (*dest_storage)["test"].cursor();
   dst_cursor_pub.find("key1");
@@ -1062,7 +1060,8 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_complex_trie) {
 }
 
 BOOST_AUTO_TEST_CASE(test_merger_keep_dest_leaf_into_trie) {
-  // Test KeepDestPolicy with leaf merging into trie to trigger merge_leaf_into_trie
+  // Test KeepDestPolicy with leaf merging into trie to trigger
+  // merge_leaf_into_trie
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
@@ -1310,7 +1309,8 @@ struct PrefixFilterPolicy {
   }
 
   bool may_add_trie(const std::string& key) {
-    // Allow recursion if the trie path is a prefix of (or starts with) the allowed prefix
+    // Allow recursion if the trie path is a prefix of (or starts with) the
+    // allowed prefix
     if (key.size() <= allowed_prefix.size())
       return allowed_prefix.substr(0, key.size()) == key;
     return key.substr(0, allowed_prefix.size()) == allowed_prefix;
@@ -1330,7 +1330,9 @@ struct PrefixFilterPolicy {
     };
     BigValueT* bvalue = (BigValueT*)leaf.vdata();
     offset_t temp_offset(bvalue->chunk_offset);
-    struct ChunkData { char data; };
+    struct ChunkData {
+      char data;
+    };
     auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
     return Slice((char*)data_ptr, bvalue->value_size);
   }
@@ -1375,7 +1377,8 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_into_empty) {
 }
 
 BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_with_existing_keys) {
-  // Destination already has keys; source adds new keys but only some pass filter
+  // Destination already has keys; source adds new keys but only some pass
+  // filter
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
@@ -1570,16 +1573,19 @@ struct TrackingFilterPolicy {
     };
     BigValueT* bvalue = (BigValueT*)leaf.vdata();
     offset_t temp_offset(bvalue->chunk_offset);
-    struct ChunkData { char data; };
+    struct ChunkData {
+      char data;
+    };
     auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
     return Slice((char*)data_ptr, bvalue->value_size);
   }
 };
 
 BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_prunes_subtree) {
-  // Verify that may_add_trie can reject entire subtrees without visiting leaves.
-  // Source has keys under "aa*" and "bb*" prefixes. Filter allows only "aa".
-  // may_add_trie should reject the "bb" subtree early, so no leaf_calls for "bb*".
+  // Verify that may_add_trie can reject entire subtrees without visiting
+  // leaves. Source has keys under "aa*" and "bb*" prefixes. Filter allows only
+  // "aa". may_add_trie should reject the "bb" subtree early, so no leaf_calls
+  // for "bb*".
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
@@ -1671,9 +1677,7 @@ struct RejectBigPolicy {
     return !is_big;  // reject big values
   }
 
-  bool may_add_trie(const std::string& key) {
-    return true;
-  }
+  bool may_add_trie(const std::string& key) { return true; }
 
   template <typename LeafNode>
   void free_big(LeafNode& leaf) {}
@@ -1689,7 +1693,9 @@ struct RejectBigPolicy {
     };
     BigValueT* bvalue = (BigValueT*)leaf.vdata();
     offset_t temp_offset(bvalue->chunk_offset);
-    struct ChunkData { char data; };
+    struct ChunkData {
+      char data;
+    };
     auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
     return Slice((char*)data_ptr, bvalue->value_size);
   }
@@ -1781,8 +1787,9 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_with_existing_dst) {
 }
 
 BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
-  // Test may_add_trie with a long prefix to exercise pruning at deeper trie levels.
-  // Source keys share a long common prefix with divergence deep in the trie.
+  // Test may_add_trie with a long prefix to exercise pruning at deeper trie
+  // levels. Source keys share a long common prefix with divergence deep in the
+  // trie.
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
@@ -1828,7 +1835,10 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
   // Verify total key count
   int count = 0;
   v.first();
-  while (v.is_valid()) { count++; v.next(); }
+  while (v.is_valid()) {
+    count++;
+    v.next();
+  }
   BOOST_CHECK_EQUAL(count, 2);
 }
 
@@ -1840,7 +1850,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
 // 'path' as branch keys, then zero out 'branch_key' in the reached trie.
 // With path="", operates on the root trie directly.
 static void zero_trie_branch(InternalDB* db, const std::string& path,
-                              int branch_key) {
+                             int branch_key) {
   using TrieNodeT = typename InternalCursor::Transition::TrieNode;
   auto* off = &db->txn()->root;
   for (unsigned char c : path) {
@@ -1850,8 +1860,7 @@ static void zero_trie_branch(InternalDB* db, const std::string& path,
     off = trie->offset(c);
     BOOST_REQUIRE_MESSAGE(off != nullptr, "Branch not found in path");
   }
-  BOOST_REQUIRE_MESSAGE(off->type() == TRIE,
-                        "Target node must be a trie");
+  BOOST_REQUIRE_MESSAGE(off->type() == TRIE, "Target node must be a trie");
   auto trie = db->resolve<TrieNodeT>(off, WRITE);
   auto* target = trie->offset(branch_key);
   BOOST_REQUIRE_MESSAGE(target != nullptr, "Branch to zero must exist");
@@ -1868,10 +1877,14 @@ BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_into_empty) {
 
   auto src_db = (*src_storage)["test"];
   auto c = src_db.cursor();
-  c.find("a1"); c.value("va1");
-  c.find("a2"); c.value("va2");
-  c.find("b1"); c.value("vb1");
-  c.find("b2"); c.value("vb2");
+  c.find("a1");
+  c.value("va1");
+  c.find("a2");
+  c.value("va2");
+  c.find("b1");
+  c.value("vb1");
+  c.find("b2");
+  c.value("vb2");
   c.commit();
 
   // Zero out the 'b' branch at root to simulate incomplete trie
@@ -1905,14 +1918,18 @@ BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_shared_branch) {
 
   auto dst_db = (*dest_storage)["test"];
   auto d = dst_db.cursor();
-  d.find("ka"); d.value("dst_ka");
-  d.find("la"); d.value("dst_la");
+  d.find("ka");
+  d.value("dst_ka");
+  d.find("la");
+  d.value("dst_la");
   d.commit();
 
   auto src_db = (*src_storage)["test"];
   auto c = src_db.cursor();
-  c.find("ka"); c.value("src_ka");
-  c.find("ma"); c.value("src_ma");
+  c.find("ka");
+  c.value("src_ka");
+  c.find("ma");
+  c.value("src_ma");
   c.commit();
 
   // Zero out src's 'k' branch (shared with dst)
@@ -1948,13 +1965,16 @@ BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_divergence) {
 
   auto dst_db = (*dest_storage)["test"];
   auto d = dst_db.cursor();
-  d.find("abx"); d.value("dst_abx");
+  d.find("abx");
+  d.value("dst_abx");
   d.commit();
 
   auto src_db = (*src_storage)["test"];
   auto c = src_db.cursor();
-  c.find("abp"); c.value("src_abp");
-  c.find("abx"); c.value("src_abx");
+  c.find("abp");
+  c.value("src_abp");
+  c.find("abx");
+  c.value("src_abx");
   c.commit();
 
   // Zero out src's 'x' branch — matches dst's key suffix.
@@ -1987,10 +2007,14 @@ BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_deep_subtree) {
   auto src_db = (*src_storage)["test"];
   auto c = src_db.cursor();
   // Root branches 'a','b'; under 'a': subtrie with branches '1','2','3'
-  c.find("a1"); c.value("va1");
-  c.find("a2"); c.value("va2");
-  c.find("a3"); c.value("va3");
-  c.find("b1"); c.value("vb1");
+  c.find("a1");
+  c.value("va1");
+  c.find("a2");
+  c.value("va2");
+  c.find("a3");
+  c.value("va3");
+  c.find("b1");
+  c.value("vb1");
   c.commit();
 
   // Zero out branch '2' inside the 'a' subtrie
@@ -2024,8 +2048,10 @@ BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_all_branches_zero) {
 
   auto src_db = (*src_storage)["test"];
   auto c = src_db.cursor();
-  c.find("a1"); c.value("va1");
-  c.find("b1"); c.value("vb1");
+  c.find("a1");
+  c.value("va1");
+  c.find("b1");
+  c.value("vb1");
   c.commit();
 
   auto src_internal = src_db._internal();
