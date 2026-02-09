@@ -529,14 +529,17 @@ auto merged_value = app.merge_conflict(
 2. Enable disk-based temporary storage
 3. Limit concurrent range requests
 
+
+## TODOS
+
 - Replication Coordinator
 - Delete Database
 - Big Value Handlung
 - Partitioned replication
 - Merger selective merging (hash validation)
 
+## TODOS _Merger
 
-For memory_budget too small, there shall be another condition: At least one new leafnode has to be iin TempDb. before FRACTION_COMPLETE can be send.
-Two Questions:
-In the /tmp/rb-5.yaml file and successors, the leavenode with value "fval_11xxxxxxxxxxxxxxxxxxxxxxx" is not pruned. (This is a bug it was was merged in round 4
-Do you have a better Idea?
+- may_overwrite: big_flags müssen mit gegegen werden
+- test: merge in ein empty leaf in dst.
+- merge_into_trie: branch_count vereinfachen

@@ -461,7 +461,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/test_replication_fsm",
             "args": [
-                "--run_test=ReplicationFSMTests/test_fractional_replication_basic"
+                "--run_test=ReplicationFSMTests/test_fractional_replication_differential"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",

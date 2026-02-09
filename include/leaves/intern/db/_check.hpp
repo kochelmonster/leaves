@@ -97,7 +97,7 @@ struct _Dumper {
     if (offset->is_relative())
       return *offset ? (uint64_t)offset->template resolve<char>() : 0;
 
-    return *offset;
+    return offset->_offset;
   }
 
   template <typename InternalCursor>
