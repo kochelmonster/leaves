@@ -200,15 +200,19 @@ struct _Merger {
       if (key == TrieNode::NONE && key1 == TrieNode::NONE) {
         assert(src.is_leaf());
         assert(child1.type() == LEAF);
-        auto dst_slice = dst.leaf()->value();
+        // child1 is the reduced dst leaf (key_size=0); original was already freed
+        leaf_ptr reduced_leaf = resolve_dst<LeafNode>(&child1);
+        auto dst_slice = reduced_leaf->value();
         auto src_slice = src.leaf()->value();
         if (handler.may_overwrite(current_key, dst_slice, src_slice)) {
-          assert(key1 == TrieNode::NONE);
-          leaf_ptr old_leaf = resolve_dst<LeafNode>(&child1);
-          _Inserter(&dst, src_slice.size()).change_leaf();
-          auto& new_leaf = dst.leaf();
-          memcpy(new_leaf->vdata(), src_slice.data(), src_slice.size());
-          free_node(old_leaf);
+          // Caution: the key == key1 == NONE is a trick (see merge_leaf_node)
+          // it just shows dst->key_size == src->key_size
+          leaf_ptr new_leaf = fill_leaf(src.leaf()->key(), *src.leaf());
+          *dst.offset = resolve_offset(new_leaf);
+          free_node(reduced_leaf);
+        } else {
+          // Keep dst value — link the reduced copy into the tree
+          *dst.offset = child1;
         }
         return;
       }
