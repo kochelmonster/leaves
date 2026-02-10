@@ -472,7 +472,7 @@ struct ReplicationSenderFSM {
 struct ReplicationMergePolicy {
   // Always overwrite local with source (wire) data
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 

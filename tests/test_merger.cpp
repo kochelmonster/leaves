@@ -66,7 +66,7 @@ struct MergerPreparation {
 // Simple handler for testing - always overwrites
 struct OverwritePolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;  // Always overwrite
   }
 
@@ -108,7 +108,7 @@ struct OverwritePolicy {
 // Handler that keeps destination values
 struct KeepDestPolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return false;  // Never overwrite
   }
 
@@ -1300,7 +1300,7 @@ struct PrefixFilterPolicy {
   PrefixFilterPolicy(const std::string& prefix) : allowed_prefix(prefix) {}
 
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 
@@ -1543,7 +1543,7 @@ struct TrackingFilterPolicy {
   TrackingFilterPolicy(const std::string& prefix) : allowed_prefix(prefix) {}
 
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 
@@ -1669,7 +1669,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_rejects_all_subtrees) {
 // Policy that rejects big values but accepts small ones
 struct RejectBigPolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 
@@ -1842,377 +1842,121 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
   BOOST_CHECK_EQUAL(count, 2);
 }
 
-// ── Incomplete source trie tests (branches with zero offsets) ──────────
-// An "incomplete" trie has branches in its bitmap but with zero offsets,
-// as can happen during partial replication.  The merger must skip these.
-
-// Helper: navigate the source trie from root, following each character in
-// 'path' as branch keys, then zero out 'branch_key' in the reached trie.
-// With path="", operates on the root trie directly.
-static void zero_trie_branch(InternalDB* db, const std::string& path,
-                             int branch_key) {
-  using TrieNodeT = typename InternalCursor::Transition::TrieNode;
-  auto* off = &db->txn()->root;
-  for (unsigned char c : path) {
-    BOOST_REQUIRE_MESSAGE(off->type() == TRIE,
-                          "Expected trie while navigating path");
-    auto trie = db->resolve<TrieNodeT>(off, WRITE);
-    off = trie->offset(c);
-    BOOST_REQUIRE_MESSAGE(off != nullptr, "Branch not found in path");
-  }
-  BOOST_REQUIRE_MESSAGE(off->type() == TRIE, "Target node must be a trie");
-  auto trie = db->resolve<TrieNodeT>(off, WRITE);
-  auto* target = trie->offset(branch_key);
-  BOOST_REQUIRE_MESSAGE(target != nullptr, "Branch to zero must exist");
-  memset(target, 0, sizeof(*target));
-}
-
-BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_into_empty) {
-  // Source has a root trie with one branch zeroed out (incomplete).
-  // Merge into empty destination — zeroed branch should be skipped.
-  // Exercises the selective_deep_copy_subtree zero-offset guard.
+BOOST_AUTO_TEST_CASE(test_merger_into_empty_leaf_root) {
+  // Test merging into a trie that has only an empty leaf at its root
+  // dst: "" -> "root_value" (leaf with key_size=0)
+  // src: "abc" -> "abc_value"
+  // Result: trie with NONE branch (dst) and 'a' branch (src)
   MergerPreparation p;
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
-  auto c = src_db.cursor();
-  c.find("a1");
-  c.value("va1");
-  c.find("a2");
-  c.value("va2");
-  c.find("b1");
-  c.value("vb1");
-  c.find("b2");
-  c.value("vb2");
-  c.commit();
-
-  // Zero out the 'b' branch at root to simulate incomplete trie
-  auto src_internal = src_db._internal();
-  zero_trie_branch(src_internal, "", 'b');
-
-  auto dst_internal = (*dest_storage)["test"]._internal();
-  OverwritePolicy handler;
-  exec_merger(*dst_internal, *src_internal, handler);
-
-  auto v = (*dest_storage)["test"].cursor();
-  v.find("a1");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("va1"));
-  v.find("a2");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("va2"));
-  v.find("b1");
-  BOOST_CHECK(!v.is_valid());
-  v.find("b2");
-  BOOST_CHECK(!v.is_valid());
-}
-
-BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_shared_branch) {
-  // Both src and dst share branch 'k', but src's 'k' offset is zero.
-  // The merger should skip the shared branch merge — dst's 'k' subtree
-  // is preserved unchanged.  Exercises the merge_into_trie guard.
-  MergerPreparation p;
-  auto src_storage = Storage::create(TEST_FILE);
-  auto dest_storage = Storage::create(TEST_FILE "2");
-
+  // Create dst with only empty key
   auto dst_db = (*dest_storage)["test"];
-  auto d = dst_db.cursor();
-  d.find("ka");
-  d.value("dst_ka");
-  d.find("la");
-  d.value("dst_la");
-  d.commit();
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("");
+  dst_cursor_pub.value("root_value");
+  dst_cursor_pub.commit();
 
+  // Create src with a normal key
   auto src_db = (*src_storage)["test"];
-  auto c = src_db.cursor();
-  c.find("ka");
-  c.value("src_ka");
-  c.find("ma");
-  c.value("src_ma");
-  c.commit();
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("abc");
+  src_cursor_pub.value("abc_value");
+  src_cursor_pub.commit();
 
-  // Zero out src's 'k' branch (shared with dst)
   auto src_internal = src_db._internal();
-  zero_trie_branch(src_internal, "", 'k');
-
   auto dst_internal = dst_db._internal();
+
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
+  // Verify both keys exist
   auto v = (*dest_storage)["test"].cursor();
-  // dst's "ka" preserved (src's 'k' was incomplete, merge skipped)
-  v.find("ka");
+  v.find("");
   BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("dst_ka"));
-  // dst's "la" preserved
-  v.find("la");
+  BOOST_CHECK_EQUAL(v.value(), Slice("root_value"));
+
+  v.find("abc");
   BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("dst_la"));
-  // src's "ma" copied normally
-  v.find("ma");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("src_ma"));
-}
+  BOOST_CHECK_EQUAL(v.value(), Slice("abc_value"));
 
-BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_divergence) {
-  // src trie and dst leaf diverge; the src trie has a branch matching
-  // the dst key's suffix char, but that branch offset is zero.
-  // Exercises the resolve_divergence guard.
-  MergerPreparation p;
-  auto src_storage = Storage::create(TEST_FILE);
-  auto dest_storage = Storage::create(TEST_FILE "2");
-
-  auto dst_db = (*dest_storage)["test"];
-  auto d = dst_db.cursor();
-  d.find("abx");
-  d.value("dst_abx");
-  d.commit();
-
-  auto src_db = (*src_storage)["test"];
-  auto c = src_db.cursor();
-  c.find("abp");
-  c.value("src_abp");
-  c.find("abx");
-  c.value("src_abx");
-  c.commit();
-
-  // Zero out src's 'x' branch — matches dst's key suffix.
-  // Root trie has prefix "ab", branches 'p','x'.
-  auto src_internal = src_db._internal();
-  zero_trie_branch(src_internal, "", 'x');
-
-  auto dst_internal = dst_db._internal();
-  OverwritePolicy handler;
-  exec_merger(*dst_internal, *src_internal, handler);
-
-  auto v = (*dest_storage)["test"].cursor();
-  // src's "abp" should be copied
-  v.find("abp");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("src_abp"));
-  // dst's "abx" preserved (src's 'x' branch was incomplete)
-  v.find("abx");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("dst_abx"));
-}
-
-BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_deep_subtree) {
-  // Source has a deeper trie with a zero offset at a non-root level.
-  // Tests that selective_deep_copy handles zero offsets at any depth.
-  MergerPreparation p;
-  auto src_storage = Storage::create(TEST_FILE);
-  auto dest_storage = Storage::create(TEST_FILE "2");
-
-  auto src_db = (*src_storage)["test"];
-  auto c = src_db.cursor();
-  // Root branches 'a','b'; under 'a': subtrie with branches '1','2','3'
-  c.find("a1");
-  c.value("va1");
-  c.find("a2");
-  c.value("va2");
-  c.find("a3");
-  c.value("va3");
-  c.find("b1");
-  c.value("vb1");
-  c.commit();
-
-  // Zero out branch '2' inside the 'a' subtrie
-  auto src_internal = src_db._internal();
-  zero_trie_branch(src_internal, "a", '2');
-
-  auto dst_internal = (*dest_storage)["test"]._internal();
-  OverwritePolicy handler;
-  exec_merger(*dst_internal, *src_internal, handler);
-
-  auto v = (*dest_storage)["test"].cursor();
-  v.find("a1");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("va1"));
-  v.find("a2");
-  BOOST_CHECK(!v.is_valid());  // zeroed out
-  v.find("a3");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("va3"));
-  v.find("b1");
-  BOOST_CHECK(v.is_valid());
-  BOOST_CHECK_EQUAL(v.value(), Slice("vb1"));
-}
-
-BOOST_AUTO_TEST_CASE(test_merger_incomplete_src_all_branches_zero) {
-  // All branches in the source root trie are zeroed out.
-  // Merge into empty dest — result should be empty.
-  MergerPreparation p;
-  auto src_storage = Storage::create(TEST_FILE);
-  auto dest_storage = Storage::create(TEST_FILE "2");
-
-  auto src_db = (*src_storage)["test"];
-  auto c = src_db.cursor();
-  c.find("a1");
-  c.value("va1");
-  c.find("b1");
-  c.value("vb1");
-  c.commit();
-
-  auto src_internal = src_db._internal();
-  zero_trie_branch(src_internal, "", 'a');
-  zero_trie_branch(src_internal, "", 'b');
-
-  auto dst_internal = (*dest_storage)["test"]._internal();
-  OverwritePolicy handler;
-  exec_merger(*dst_internal, *src_internal, handler);
-
-  auto v = (*dest_storage)["test"].cursor();
-  v.first();
-  BOOST_CHECK(!v.is_valid());
-}
-
-BOOST_AUTO_TEST_CASE(test_merger_replication_incomplete_multi_branch) {
-  // Reproduces a real replication scenario (rb-4.yaml → rb-dst-4.yaml):
-  //
-  // Source (rb-4.yaml): incomplete trie from partial replication.
-  //   Root branches [a-z], but [n-z] have offset 0.
-  //   [a-l] subtries ("X_key_" prefix, branches [0-7]) — ALL children are 0.
-  //   [m] subtrie ("m_key_" prefix, branches [0-7]) — [0,1] have real leaves,
-  //       [2-7] are 0.
-  //   → Only m_key_0 and m_key_1 are actual data.
-  //
-  // Destination (rb-dst-4.yaml): complete trie.
-  //   Root branches [a-m].  [a-l] each have 8 leaves (X_key_0..X_key_7).
-  //   [m] has 3 leaves (m_key_0, m_key_1, m_key_2).
-  //   → 99 total keys.
-  //
-  // After merge with OverwritePolicy:
-  //   - [a-l]: src subtries have all-zero children → dst data preserved (96 keys)
-  //   - m_key_0, m_key_1: src has real leaves → overwrites dst
-  //   - m_key_2: src offset is 0 → dst preserved
-  //   - [n-z]: src root offsets are 0 → no effect
-  //   → 99 total keys.
-  MergerPreparation p;
-  auto src_storage = Storage::create(TEST_FILE);
-  auto dest_storage = Storage::create(TEST_FILE "2");
-
-  const size_t VSIZE = 111;
-  auto padval = [&](const std::string& prefix) -> std::string {
-    std::string r = prefix;
-    while (r.size() < VSIZE) r += 'x';
-    return r;
-  };
-
-  // ── Build destination (complete, 99 keys) ──
-  {
-    auto dst_db = (*dest_storage)["test"];
-    auto d = dst_db.cursor();
-    for (char ch = 'a'; ch <= 'l'; ++ch) {
-      for (char digit = '0'; digit <= '7'; ++digit) {
-        std::string key = std::string(1, ch) + "_key_" + digit;
-        d.find(key);
-        d.value(padval("dst_" + key));
-      }
-    }
-    for (char digit = '0'; digit <= '2'; ++digit) {
-      std::string key = std::string("m_key_") + digit;
-      d.find(key);
-      d.value(padval("dst_" + key));
-    }
-    d.commit();
-  }
-
-  // ── Build source (insert full then zero out to make incomplete) ──
-  {
-    auto src_db = (*src_storage)["test"];
-    auto c = src_db.cursor();
-    // Insert keys for all 26 letters [a-z] × digits [0-7] to get the full
-    // [a-z] bitmap at the root.
-    for (char ch = 'a'; ch <= 'z'; ++ch) {
-      for (char digit = '0'; digit <= '7'; ++digit) {
-        std::string key = std::string(1, ch) + "_key_" + digit;
-        c.find(key);
-        c.value(padval("src_" + key));
-      }
-    }
-    c.commit();
-  }
-
-
-
-  // Zero out source branches to match the incomplete rb-4.yaml structure.
-  auto src_db = (*src_storage)["test"];
-  auto src_internal = src_db._internal();
-
-  // [n-z] at root: zero out
-  for (char ch = 'n'; ch <= 'z'; ++ch) {
-    zero_trie_branch(src_internal, "", ch);
-  }
-  // [a-l] subtries: zero ALL branches [0-7] (tries exist but have no data)
-  for (char ch = 'a'; ch <= 'l'; ++ch) {
-    std::string path(1, ch);
-    for (char digit = '0'; digit <= '7'; ++digit) {
-      zero_trie_branch(src_internal, path, digit);
-    }
-  }
-  // [m] subtrie: zero branches [2-7], keep [0,1] as real leaves
-  for (char digit = '2'; digit <= '7'; ++digit) {
-    zero_trie_branch(src_internal, "m", digit);
-  }
-
-  // Dump tries for comparison with /tmp/rb-4.yaml and /tmp/rb-dst-4.yaml
-  dump_graph("/tmp/test-rb-4.yaml", src_db);
-  {
-    auto dst_db_dump = (*dest_storage)["test"];
-    dump_graph("/tmp/test-rb-dst-4.yaml", dst_db_dump);
-  }
-
-  // ── Merge ──
-  auto dst_db = (*dest_storage)["test"];
-  auto dst_internal = dst_db._internal();
-  OverwritePolicy handler;
-  exec_merger(*dst_internal, *src_internal, handler);
-
-  // ── Verify ──
-  auto v = (*dest_storage)["test"].cursor();
-
-  // All [a-l]_key_[0-7] should be preserved from dst (96 keys)
-  for (char ch = 'a'; ch <= 'l'; ++ch) {
-    for (char digit = '0'; digit <= '7'; ++digit) {
-      std::string key = std::string(1, ch) + "_key_" + digit;
-      v.find(key);
-      BOOST_CHECK_MESSAGE(v.is_valid(), "Key " + key + " should exist");
-      if (v.is_valid()) {
-        BOOST_CHECK_EQUAL(v.value(), Slice(padval("dst_" + key)));
-      }
-    }
-  }
-
-  // m_key_0 and m_key_1: overwritten by src (src had real leaves)
-  v.find("m_key_0");
-  BOOST_CHECK(v.is_valid());
-  if (v.is_valid())
-    BOOST_CHECK_EQUAL(v.value(), Slice(padval("src_m_key_0")));
-
-  v.find("m_key_1");
-  BOOST_CHECK(v.is_valid());
-  if (v.is_valid())
-    BOOST_CHECK_EQUAL(v.value(), Slice(padval("src_m_key_1")));
-
-  // m_key_2: preserved from dst (src's branch [2] was zero)
-  v.find("m_key_2");
-  BOOST_CHECK(v.is_valid());
-  if (v.is_valid())
-    BOOST_CHECK_EQUAL(v.value(), Slice(padval("dst_m_key_2")));
-
-  // No [n-z] keys should appear (src offsets were 0)
-  v.find("n_key_0");
-  BOOST_CHECK(!v.is_valid());
-  v.find("z_key_0");
-  BOOST_CHECK(!v.is_valid());
-
-  // Total key count must be 99
+  // Verify exactly 2 entries
   int count = 0;
   v.first();
   while (v.is_valid()) {
     count++;
     v.next();
   }
-  BOOST_CHECK_EQUAL(count, 99);
+  BOOST_CHECK_EQUAL(count, 2);
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
+  // Test merging when dst has a NONE branch leaf (key_size=0) that is NOT at root,
+  // and src is a trie. This exercises _merger.hpp lines 154-156:
+  //   dst_cursor.pop();
+  //   merge_trie_node(dst, src);
+  //
+  // dst structure: trie "ab" with NONE branch -> leaf("ab_value")
+  //                           and 'c' branch  -> leaf("abc_value")
+  // src structure: trie "ab" with 'd' branch  -> leaf("abd_value")
+  //                           and 'e' branch  -> leaf("abe_value")
+  //
+  // When merging src "ab" trie into dst's NONE branch leaf at "ab",
+  // we should pop the leaf and merge the trie instead.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // Create dst with "ab" (NONE branch) and "abc"
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("ab");
+  dst_cursor_pub.value("ab_value");
+  dst_cursor_pub.find("abc");
+  dst_cursor_pub.value("abc_value");
+  dst_cursor_pub.commit();
+
+  // Create src with "abd" and "abe" (forms a trie at "ab")
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("abd");
+  src_cursor_pub.value("abd_value");
+  src_cursor_pub.find("abe");
+  src_cursor_pub.value("abe_value");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // Verify all keys exist after merge
+  auto v = (*dest_storage)["test"].cursor();
+  
+  v.find("ab");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("ab_value"));
+
+  v.find("abc");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abc_value"));
+
+  v.find("abd");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abd_value"));
+
+  v.find("abe");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abe_value"));
+
+  // Verify exactly 4 entries
+  int count = 0;
+  v.first();
+  while (v.is_valid()) {
+    count++;
+    v.next();
+  }
+  BOOST_CHECK_EQUAL(count, 4);
 }
