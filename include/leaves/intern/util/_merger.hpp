@@ -170,7 +170,8 @@ struct _Merger {
       auto& src_leaf = src.leaf();
       // Exact match — check may_overwrite before touching anything
       if (!handler.may_overwrite(current_key, dst_leaf->value(),
-                                 src_leaf->value())) {
+                                 src_leaf->value(), dst_leaf->is_big(),
+                                 src_leaf->is_big())) {
         return;  // Keep dst unchanged
       }
       // Overwrite: create new leaf with src key/value, replace dst

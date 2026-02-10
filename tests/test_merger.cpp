@@ -66,7 +66,7 @@ struct MergerPreparation {
 // Simple handler for testing - always overwrites
 struct OverwritePolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;  // Always overwrite
   }
 
@@ -108,7 +108,7 @@ struct OverwritePolicy {
 // Handler that keeps destination values
 struct KeepDestPolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return false;  // Never overwrite
   }
 
@@ -1300,7 +1300,7 @@ struct PrefixFilterPolicy {
   PrefixFilterPolicy(const std::string& prefix) : allowed_prefix(prefix) {}
 
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 
@@ -1543,7 +1543,7 @@ struct TrackingFilterPolicy {
   TrackingFilterPolicy(const std::string& prefix) : allowed_prefix(prefix) {}
 
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 
@@ -1669,7 +1669,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_rejects_all_subtrees) {
 // Policy that rejects big values but accepts small ones
 struct RejectBigPolicy {
   bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src) {
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
     return true;
   }
 
