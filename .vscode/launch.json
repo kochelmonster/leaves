@@ -359,7 +359,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/test_merger",
             "args": [
-                "--run_test=test_merger_src_trie_with_none_branch"
+                "--run_test=test_merger_none_branch_leaf_with_src_trie"
+                // test_merger_into_empty_leaf_root
+                // test_merger_src_trie_with_none_branch
                 // test_merger_keep_destination
                 // test_merger_keep_dest_big_value
             ],

@@ -148,7 +148,13 @@ struct _Merger {
     if (dst.is_trie()) {
       merge_trie_node(dst, src);
     } else {
-      merge_leaf_node(dst, src);
+      if (!dst.leaf()->key_size && src.is_trie() && !dst.is_root()) {
+        // dst is a none branch leaf and src is a trie -> we want to merge the
+        // trie
+        dst_cursor.pop();
+        merge_trie_node(dst_cursor.stack.back(), src);
+      } else
+        merge_leaf_node(dst, src);
     }
     current_key.resize(size);
     src_cursor.pop();
@@ -160,28 +166,27 @@ struct _Merger {
     assert(dst.prefix <= dst_leaf->key_size);
 
     // Check for exact key match: src is leaf and both keys end at split point
-    if (src.is_leaf() && dst.prefix == dst_leaf->key_size) {
-      uint16_t split_pos = dst.keypos + dst.prefix;
-      uint16_t src_split_pos = split_pos - src.keypos;
+    if (src.is_leaf() && dst.cmp == 0) {
       auto& src_leaf = src.leaf();
-      if (src_leaf->key_size == src_split_pos) {
-        // Exact match — check may_overwrite before touching anything
-        if (!handler.may_overwrite(current_key, dst_leaf->value(),
-                                   src_leaf->value())) {
-          return;  // Keep dst unchanged
-        }
-        // Overwrite: create new leaf with src key/value, replace dst
-        leaf_ptr new_leaf = fill_leaf(src_leaf->key(), *src_leaf);
-        *dst.offset = resolve_offset(new_leaf);
-        free_node(dst_leaf);
-        return;
+      // Exact match — check may_overwrite before touching anything
+      if (!handler.may_overwrite(current_key, dst_leaf->value(),
+                                 src_leaf->value())) {
+        return;  // Keep dst unchanged
       }
+      // Overwrite: create new leaf with src key/value, replace dst
+      leaf_ptr new_leaf = fill_leaf(src_leaf->key(), *src_leaf);
+      *dst.offset = resolve_offset(new_leaf);
+      free_node(dst_leaf);
+      return;
     }
 
     // Not an exact match — need to create reduced copy for split
-    leaf_ptr new_leaf =
-        _Inserter(&dst, 0).copy_reduced_leaf(dst.prefix, dst_leaf);
-    free_node(dst_leaf);
+    leaf_ptr new_leaf = dst_leaf;
+    if (dst.prefix) {
+      new_leaf = _Inserter(&dst, 0).copy_reduced_leaf(dst.prefix, dst_leaf);
+      free_node(dst_leaf);
+    }
+
     resolve_divergence(dst, src,
                        new_leaf->key_size ? new_leaf->data[0] : TrieNode::NONE,
                        resolve_offset(new_leaf));

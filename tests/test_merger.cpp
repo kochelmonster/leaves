@@ -1,6 +1,6 @@
 #define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE merger
-#define GENERATE
+// #define GENERATE
 #include <boost/test/included/unit_test.hpp>
 
 #include "../include/leaves/intern/db/_cursor.hpp"
@@ -1840,4 +1840,123 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
     v.next();
   }
   BOOST_CHECK_EQUAL(count, 2);
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_into_empty_leaf_root) {
+  // Test merging into a trie that has only an empty leaf at its root
+  // dst: "" -> "root_value" (leaf with key_size=0)
+  // src: "abc" -> "abc_value"
+  // Result: trie with NONE branch (dst) and 'a' branch (src)
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // Create dst with only empty key
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("");
+  dst_cursor_pub.value("root_value");
+  dst_cursor_pub.commit();
+
+  // Create src with a normal key
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("abc");
+  src_cursor_pub.value("abc_value");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // Verify both keys exist
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("root_value"));
+
+  v.find("abc");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abc_value"));
+
+  // Verify exactly 2 entries
+  int count = 0;
+  v.first();
+  while (v.is_valid()) {
+    count++;
+    v.next();
+  }
+  BOOST_CHECK_EQUAL(count, 2);
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
+  // Test merging when dst has a NONE branch leaf (key_size=0) that is NOT at root,
+  // and src is a trie. This exercises _merger.hpp lines 154-156:
+  //   dst_cursor.pop();
+  //   merge_trie_node(dst, src);
+  //
+  // dst structure: trie "ab" with NONE branch -> leaf("ab_value")
+  //                           and 'c' branch  -> leaf("abc_value")
+  // src structure: trie "ab" with 'd' branch  -> leaf("abd_value")
+  //                           and 'e' branch  -> leaf("abe_value")
+  //
+  // When merging src "ab" trie into dst's NONE branch leaf at "ab",
+  // we should pop the leaf and merge the trie instead.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // Create dst with "ab" (NONE branch) and "abc"
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("ab");
+  dst_cursor_pub.value("ab_value");
+  dst_cursor_pub.find("abc");
+  dst_cursor_pub.value("abc_value");
+  dst_cursor_pub.commit();
+
+  // Create src with "abd" and "abe" (forms a trie at "ab")
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("abd");
+  src_cursor_pub.value("abd_value");
+  src_cursor_pub.find("abe");
+  src_cursor_pub.value("abe_value");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // Verify all keys exist after merge
+  auto v = (*dest_storage)["test"].cursor();
+  
+  v.find("ab");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("ab_value"));
+
+  v.find("abc");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abc_value"));
+
+  v.find("abd");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abd_value"));
+
+  v.find("abe");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("abe_value"));
+
+  // Verify exactly 4 entries
+  int count = 0;
+  v.first();
+  while (v.is_valid()) {
+    count++;
+    v.next();
+  }
+  BOOST_CHECK_EQUAL(count, 4);
 }
