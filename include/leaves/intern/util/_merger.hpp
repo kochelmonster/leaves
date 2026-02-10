@@ -2,8 +2,8 @@
 #define _LEAVES_MERGER_HPP
 
 #include "../core/_bits.hpp"
-#include "../db/_cursor.hpp"
 #include "../core/_node.hpp"
+#include "../db/_cursor.hpp"
 
 namespace leaves {
 
@@ -81,7 +81,8 @@ struct _Merger {
       leaf->set_big();
       BigValue* bvalue = (BigValue*)leaf->vdata();
       dst_cursor.get_bigmemory().alloc(vsize, bvalue);
-      optimized_memcpy((char*)bvalue->data(dst_cursor._db), src_value.data(), vsize);
+      optimized_memcpy((char*)bvalue->data(dst_cursor._db), src_value.data(),
+                       vsize);
     } else
       memcpy(leaf->vdata(), src_value.data(), src_value.size());
 
@@ -91,7 +92,8 @@ struct _Merger {
   using SrcTraits = typename CursorSrc::Traits;
 
   template <typename T>
-  typename SrcTraits::template Pointer<T> resolve_src(const src_offset_e* offset_ptr) {
+  typename SrcTraits::template Pointer<T> resolve_src(
+      const src_offset_e* offset_ptr) {
     return src_cursor._db->template resolve<T>(offset_ptr);
   }
 
@@ -131,7 +133,8 @@ struct _Merger {
       // Undo the prefix append above — selective_deep_copy_trie will
       // re-append it when it resolves the root node.
       current_key.resize(size);
-      selective_deep_copy_subtree(src_cursor.stack.front().offset, dst_cursor._root);
+      selective_deep_copy_subtree(src_cursor.stack.front().offset,
+                                  dst_cursor._root);
       return;
     }
 
@@ -154,8 +157,28 @@ struct _Merger {
   void merge_leaf_node(typename CursorDst::Transition& dst,
                        typename CursorSrc::Transition& src) {
     auto& dst_leaf = dst.leaf();
-    // check if dst_leaf must split
     assert(dst.prefix <= dst_leaf->key_size);
+
+    // Check for exact key match: src is leaf and both keys end at split point
+    if (src.is_leaf() && dst.prefix == dst_leaf->key_size) {
+      uint16_t split_pos = dst.keypos + dst.prefix;
+      uint16_t src_split_pos = split_pos - src.keypos;
+      auto& src_leaf = src.leaf();
+      if (src_leaf->key_size == src_split_pos) {
+        // Exact match — check may_overwrite before touching anything
+        if (!handler.may_overwrite(current_key, dst_leaf->value(),
+                                   src_leaf->value())) {
+          return;  // Keep dst unchanged
+        }
+        // Overwrite: create new leaf with src key/value, replace dst
+        leaf_ptr new_leaf = fill_leaf(src_leaf->key(), *src_leaf);
+        *dst.offset = resolve_offset(new_leaf);
+        free_node(dst_leaf);
+        return;
+      }
+    }
+
+    // Not an exact match — need to create reduced copy for split
     leaf_ptr new_leaf =
         _Inserter(&dst, 0).copy_reduced_leaf(dst.prefix, dst_leaf);
     free_node(dst_leaf);
@@ -179,7 +202,8 @@ struct _Merger {
                        Slice(&dst_trie->compressed()[dst.prefix], suffix_len));
       free_node(dst_trie);
       assert(new_trie->len() > 0);
-      resolve_divergence(dst, src, new_trie->compressed()[0], resolve_offset(new_trie));
+      resolve_divergence(dst, src, new_trie->compressed()[0],
+                         resolve_offset(new_trie));
     }
   }
 
@@ -191,63 +215,43 @@ struct _Merger {
     uint16_t src_split_pos = split_pos - src.keypos;
     assert(src_split_pos < 256);
 
-    int key = split_pos < current_key.size() ? current_key[split_pos]
-                                             : TrieNode::NONE;
+    if (src.is_leaf()) {
+      int key = split_pos < current_key.size() ? current_key[split_pos]
+                                               : TrieNode::NONE;
+      auto& src_leaf = src.leaf();
+      assert(src_leaf->key_size >= src_split_pos);
+      uint8_t suffix_len = src_leaf->key_size - src_split_pos;
 
-    if (key != TrieNode::NONE || src.is_leaf()) {
-      if (key == TrieNode::NONE && key1 == TrieNode::NONE) {
-        assert(src.is_leaf());
-        assert(child1.type() == LEAF);
-        // child1 is the reduced dst leaf (key_size=0); original was already freed
-        leaf_ptr reduced_leaf = resolve_dst<LeafNode>(&child1);
-        auto dst_slice = reduced_leaf->value();
-        auto src_slice = src.leaf()->value();
-        if (handler.may_overwrite(current_key, dst_slice, src_slice)) {
-          // Caution: the key == key1 == NONE is a trick (see merge_leaf_node)
-          // it just shows dst->key_size == src->key_size
-          leaf_ptr new_leaf = fill_leaf(src.leaf()->key(), *src.leaf());
-          *dst.offset = resolve_offset(new_leaf);
-          free_node(reduced_leaf);
-        } else {
-          // Keep dst value — link the reduced copy into the tree
-          *dst.offset = child1;
-        }
-        return;
+      Slice src_value(src_leaf->value());
+      if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big()))
+        return;  // rejected
+
+      if (src_leaf->is_big()) {
+        src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
       }
+
+      trie_ptr new_trie =
+          alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
+      auto idxs = new_trie->create(
+          Slice(current_key.data() + dst.keypos, dst.prefix), key1, key);
+      new_trie->array()[idxs.first] = child1;
+      dst.trie() = new_trie;
+      dst.link_idx = idxs.second;
+      dst.update_trie_offset();
+
+      leaf_ptr new_leaf = fill_leaf(
+          Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
+      *dst.link() = resolve_offset(new_leaf);
+      return;
+    }
+
+    if (split_pos < current_key.size()) {
+      assert(src.is_trie());
+      int key = current_key[split_pos];
 
       // A new trie with two branches for the old dst and the new src
       // But first, selectively copy the src side — if nothing survives
       // may_add, we skip the split entirely.
-
-      if (src.is_leaf()) {
-        auto& src_leaf = src.leaf();
-        assert(src_leaf->key_size >= src_split_pos);
-        uint8_t suffix_len = src_leaf->key_size - src_split_pos;
-
-        Slice src_value;
-        if (src_leaf->is_big()) {
-          src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
-        } else {
-          src_value = src_leaf->value();
-        }
-
-        if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big())) return;  // rejected
-
-        trie_ptr new_trie =
-            alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
-        auto idxs =
-            new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
-                             key1, key);
-        new_trie->array()[idxs.first] = child1;
-        dst.trie() = new_trie;
-        dst.link_idx = idxs.second;
-        dst.update_trie_offset();
-
-        leaf_ptr new_leaf = fill_leaf(
-            Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
-        *dst.link() = resolve_offset(new_leaf);
-        return;
-      }
 
       // src is a trie — selectively copy children and build a suffix trie
       // with only survivors
@@ -274,16 +278,15 @@ struct _Merger {
 
       // Build suffix trie from survivors
       Slice suffix_prefix((const char*)&src_trie->compressed()[src_split_pos],
-                           suffix_len);
+                          suffix_len);
       trie_ptr suffix_trie =
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
       suffix_trie->create(suffix_prefix, offsets_buf);
 
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
-      auto idxs =
-          new_trie->create(Slice(current_key.data() + dst.keypos, dst.prefix),
-                           key1, key);
+      auto idxs = new_trie->create(
+          Slice(current_key.data() + dst.keypos, dst.prefix), key1, key);
       new_trie->array()[idxs.first] = child1;
       dst.trie() = new_trie;
       dst.link_idx = idxs.second;
@@ -327,7 +330,8 @@ struct _Merger {
       }
 
       Slice prefix((const char*)src_trie->compressed(), src_trie->len());
-      trie_ptr new_trie = alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
+      trie_ptr new_trie =
+          alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf);
 
       dst.trie() = new_trie;
@@ -342,8 +346,8 @@ struct _Merger {
       return;
     }
 
-    // Src trie does not have key1 — add key1 as a new branch in src's structure,
-    // and selectively copy src's existing branches.
+    // Src trie does not have key1 — add key1 as a new branch in src's
+    // structure, and selectively copy src's existing branches.
     {
       offset_e offsets_raw[258] = {};
       offset_e* offsets_buf = &offsets_raw[1];
@@ -365,7 +369,8 @@ struct _Merger {
       }
 
       Slice prefix((const char*)src_trie->compressed(), src_trie->len());
-      trie_ptr new_trie = alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
+      trie_ptr new_trie =
+          alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf);
 
       dst.trie() = new_trie;
@@ -413,7 +418,8 @@ struct _Merger {
       suffix_trie->create(suffix_prefix, offsets_buf);
 
       uint16_t loffset;
-      trie_ptr new_trie = expand_trie_with_branch(dst_trie, suffix_len, &loffset);
+      trie_ptr new_trie =
+          expand_trie_with_branch(dst_trie, suffix_len, &loffset);
 
       dst.trie() = new_trie;
       dst.link_idx = loffset;
@@ -435,7 +441,11 @@ struct _Merger {
     // Walk dst_trie and src_trie to figure out which keys are dst-only,
     // src-only, or shared.
     // We also need to collect "shared" branches for recursive merge later.
-    struct SharedBranch { int key; const src_offset_e* src_off; offset_e dst_off; };
+    struct SharedBranch {
+      int key;
+      const src_offset_e* src_off;
+      offset_e dst_off;
+    };
     SharedBranch shared[257];
     int shared_count = 0;
 
@@ -450,7 +460,8 @@ struct _Merger {
          k = src_trie->next(k)) {
       if (dst_trie->isset(k)) {
         // Shared branch — needs recursive merge (handled below)
-        // Skip if src offset is incomplete (zero) — dst version stands unchanged
+        // Skip if src offset is incomplete (zero) — dst version stands
+        // unchanged
         if (*src_trie->offset(k) != 0) {
           shared[shared_count++] = {k, (const src_offset_e*)src_trie->offset(k),
                                     *dst_trie->offset(k)};
@@ -477,7 +488,8 @@ struct _Merger {
     // but need recursive merge so temporarily are counted)
     // Actually shared branches are already counted via the dst_trie loop.
 
-    trie_ptr new_trie = alloc_node<trie_ptr>(DstTrieNode::size(prefix.size(), branch_count));
+    trie_ptr new_trie =
+        alloc_node<trie_ptr>(DstTrieNode::size(prefix.size(), branch_count));
     new_trie->create(prefix, offsets_buf);
 
     dst.trie() = new_trie;
@@ -513,10 +525,12 @@ struct _Merger {
       src_value = src_leaf->value();
     }
 
-    if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big())) return;  // rejected
+    if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big()))
+      return;  // rejected
 
     uint16_t loffset;
-    trie_ptr new_trie = expand_trie_with_branch(dst.trie(), suffix_len, &loffset);
+    trie_ptr new_trie =
+        expand_trie_with_branch(dst.trie(), suffix_len, &loffset);
 
     assert(src_leaf->key_size >= suffix_len);
     uint8_t split_pos = src_leaf->key_size - suffix_len;
@@ -538,7 +552,8 @@ struct _Merger {
                                           : dst_trie->isset(branch_key)));
     // otherwise find would have walked down
 
-    trie_ptr new_trie = alloc_node<trie_ptr>(dst_trie->increment_size(branch_key));
+    trie_ptr new_trie =
+        alloc_node<trie_ptr>(dst_trie->increment_size(branch_key));
     *loffset = new_trie->create(*dst_trie, branch_key);
     free_node(dst_trie);
     return new_trie;
@@ -550,9 +565,11 @@ struct _Merger {
   // dropped from its parent.  Returns true iff at least one leaf survived.
 
   /**
-   * @brief Selectively deep copy an entire subtree, filtering leaves via may_add.
+   * @brief Selectively deep copy an entire subtree, filtering leaves via
+   * may_add.
    * @param src_offset Source offset to copy from
-   * @param parent_link Pointer to parent's offset slot to set (zeroed when rejected)
+   * @param parent_link Pointer to parent's offset slot to set (zeroed when
+   * rejected)
    * @return true if at least one leaf was copied into the destination
    */
   bool selective_deep_copy_subtree(const src_offset_e* src_offset,
@@ -581,7 +598,8 @@ struct _Merger {
     size_t saved = current_key.size();
     current_key.append((const char*)src_leaf->data, src_leaf->key_size);
 
-    bool accepted = handler.may_add_leaf(current_key, src_leaf->value(), src_leaf->is_big());
+    bool accepted = handler.may_add_leaf(current_key, src_leaf->value(),
+                                         src_leaf->is_big());
     current_key.resize(saved);
 
     if (!accepted) {
@@ -602,7 +620,8 @@ struct _Merger {
   }
 
   /**
-   * @brief Selectively deep copy a trie and its subtree, dropping rejected leaves.
+   * @brief Selectively deep copy a trie and its subtree, dropping rejected
+   * leaves.
    *
    * Two-pass approach:
    *  1. Recurse into every child, accumulate offsets for survivors.
@@ -625,9 +644,9 @@ struct _Merger {
     }
 
     // ── Pass 1: recurse children, collect survivors ──────────────────
-    // offsets_buf is indexed as: NONE → index (-1+1)=0, byte 0 → 1, …, 255 → 256
-    // We offset the pointer so that offsets_buf[NONE] (i.e. [-1]) works.
-    offset_e offsets_raw[258] = {};  // all zero-initialised
+    // offsets_buf is indexed as: NONE → index (-1+1)=0, byte 0 → 1, …, 255 →
+    // 256 We offset the pointer so that offsets_buf[NONE] (i.e. [-1]) works.
+    offset_e offsets_raw[258] = {};           // all zero-initialised
     offset_e* offsets_buf = &offsets_raw[1];  // now [-1] is valid
 
     int surviving = 0;
