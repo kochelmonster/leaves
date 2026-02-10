@@ -346,6 +346,7 @@ struct Area : public AreaSlice {
 
   template <typename Resolver>
   static offset_t get_end(offset_t cur, const Resolver& resolver) {
+    if (!cur) return 0;  // Handle empty list
     // Use resolver to get the area from offset
     auto area = resolver.template resolve<Area>(&cur, READ);
     while (area->next) {
