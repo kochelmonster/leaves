@@ -535,11 +535,5 @@ auto merged_value = app.merge_conflict(
 - Replication Coordinator
 - Delete Database
 - Big Value Handlung
-- Partitioned replication
-- Merger selective merging (hash validation)
 
-## TODOS _Merger
 
-- may_overwrite: big_flags müssen mit gegegen werden
-- test: merge in ein empty leaf in dst.
-- merge_into_trie: branch_count vereinfachen
