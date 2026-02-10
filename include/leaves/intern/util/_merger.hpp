@@ -138,11 +138,9 @@ struct _Merger {
       return;
     }
 
-    auto dst_key = dst_cursor.current_key;
-    auto src_key = current_key;
-
-    assert(dst_key.size() <= src_key.size());
-    assert(dst_key == src_key.substr(0, dst_key.size()));
+    assert(dst_cursor.current_key.size() <= current_key.size());
+    assert(dst_cursor.current_key ==
+           current_key.substr(0, dst_cursor.current_key.size()));
 
     auto& dst = dst_cursor.stack.back();
     if (dst.is_trie()) {
@@ -311,11 +309,10 @@ struct _Merger {
       // We need to merge that branch recursively, and selectively
       // copy all other src branches.
 
-      // Collect all surviving branch offsets into a flat array
       offset_e offsets_raw[258] = {};
       offset_e* offsets_buf = &offsets_raw[1];
+      int branch_count = 1;  // key1 branch
 
-      // The key1 branch gets the dst child
       offsets_buf[key1] = child1;
 
       // Selectively deep copy all other src branches
@@ -325,14 +322,8 @@ struct _Merger {
         offset_e child_offset;
         if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
           offsets_buf[k] = child_offset;
+          branch_count++;
         }
-      }
-
-      // Count surviving branches
-      int branch_count = 0;
-      if (offsets_buf[TrieNode::NONE]) branch_count++;
-      for (int i = 0; i < 256; i++) {
-        if (offsets_buf[i]) branch_count++;
       }
 
       Slice prefix((const char*)src_trie->compressed(), src_trie->len());
@@ -357,6 +348,7 @@ struct _Merger {
     {
       offset_e offsets_raw[258] = {};
       offset_e* offsets_buf = &offsets_raw[1];
+      int branch_count = 1;  // key1 branch
 
       offsets_buf[key1] = child1;
 
@@ -365,13 +357,8 @@ struct _Merger {
         offset_e child_offset;
         if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
           offsets_buf[k] = child_offset;
+          branch_count++;
         }
-      }
-
-      int branch_count = 0;
-      if (offsets_buf[TrieNode::NONE]) branch_count++;
-      for (int i = 0; i < 256; i++) {
-        if (offsets_buf[i]) branch_count++;
       }
 
       Slice prefix((const char*)src_trie->compressed(), src_trie->len());
@@ -434,19 +421,12 @@ struct _Merger {
       return;
     }
 
-    // Merge the children of both tries.
-    // We collect all branch offsets into a flat array indexed by key value,
-    // selectively deep-copying src-only branches so may_add filtering can
-    // prune entire branches. Branches that exist in both tries are merged
-    // recursively.  Finally, a correctly-sized trie is built from survivors.
+    // Merge children of both tries into a flat offset array.
+    // Shared branches are merged recursively after building the new trie.
 
-    // offsets_buf[-1] = NONE slot, offsets_buf[0..255] = byte keys
     offset_e offsets_raw[258] = {};
     offset_e* offsets_buf = &offsets_raw[1];
 
-    // Walk dst_trie and src_trie to figure out which keys are dst-only,
-    // src-only, or shared.
-    // We also need to collect "shared" branches for recursive merge later.
     struct SharedBranch {
       int key;
       const src_offset_e* src_off;
@@ -454,46 +434,35 @@ struct _Merger {
     };
     SharedBranch shared[257];
     int shared_count = 0;
+    int branch_count = 0;
 
-    // Iterate dst_trie keys — all of these survive
+    // Copy all dst branches (they all survive)
     for (int k = dst_trie->first(); k != DstTrieNode::OUT_OF_RANGE;
          k = dst_trie->next(k)) {
       offsets_buf[k] = *dst_trie->offset(k);
+      branch_count++;
     }
 
-    // Iterate src_trie keys — selectively deep copy src-only, record shared
+    // Process src branches: record shared for later merge, selectively copy src-only
     for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
          k = src_trie->next(k)) {
       if (dst_trie->isset(k)) {
-        // Shared branch — needs recursive merge (handled below)
-        // Skip if src offset is incomplete (zero) — dst version stands
-        // unchanged
+        // Shared branch — merge recursively later (skip incomplete src)
         if (*src_trie->offset(k) != 0) {
-          shared[shared_count++] = {k, (const src_offset_e*)src_trie->offset(k),
-                                    *dst_trie->offset(k)};
+          shared[shared_count++] = {k, src_trie->offset(k), *dst_trie->offset(k)};
         }
       } else {
-        // Src-only branch — selectively deep copy
+        // Src-only — selectively deep copy
         offset_e child_offset;
         if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
           offsets_buf[k] = child_offset;
+          branch_count++;
         }
-        // else: rejected, offsets_buf[k] stays zero (branch omitted)
       }
     }
 
-    // Build the merged trie from the flat offset array
+    // Build merged trie
     Slice prefix((const char*)dst_trie->compressed(), dst_trie->len());
-    // Count non-zero entries to size the trie
-    int branch_count = 0;
-    if (offsets_buf[TrieNode::NONE]) branch_count++;
-    for (int i = 0; i < 256; i++) {
-      if (offsets_buf[i]) branch_count++;
-    }
-    // Add shared branches (they have offsets from dst already set above,
-    // but need recursive merge so temporarily are counted)
-    // Actually shared branches are already counted via the dst_trie loop.
-
     trie_ptr new_trie =
         alloc_node<trie_ptr>(DstTrieNode::size(prefix.size(), branch_count));
     new_trie->create(prefix, offsets_buf);
@@ -501,15 +470,11 @@ struct _Merger {
     dst.trie() = new_trie;
     dst.update_trie_offset();
 
-    // Now recursively merge shared branches
+    // Recursively merge shared branches
     for (int si = 0; si < shared_count; si++) {
       int k = shared[si].key;
-      // Set the dst offset in the new trie
-      offset_e* slot = new_trie->offset(k);
-      assert(slot);
-      *slot = shared[si].dst_off;
+      *new_trie->offset(k) = shared[si].dst_off;
 
-      // Push the src side and recurse
       src_cursor.push(const_cast<src_offset_e*>(shared[si].src_off));
       dst_cursor.stack.clear();
       merge_node();
