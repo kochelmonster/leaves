@@ -14,6 +14,7 @@
 #include "../core/_traits.hpp"
 #include "../core/_util.hpp"
 #include "../db/_check.hpp"
+#include "../memory/_bigmemory.hpp"
 
 namespace leaves {
 
@@ -143,10 +144,7 @@ struct TransferTrie {
   bool _finalized;
   bool full;
   explicit TransferTrie(size_t max_size = DEFAULT_MAX_SIZE)
-      : _max_size(max_size),
-        _node_count(0),
-        _finalized(false),
-        full(false) {
+      : _max_size(max_size), _node_count(0), _finalized(false), full(false) {
     _buffer.reserve(max_size);
   }
 
@@ -191,13 +189,11 @@ struct TransferTrie {
 
   // Add a source trie node to the buffer (converts to wire format)
   // Returns pointer to copied wire-format node, or nullptr if doesn't fit
-  const TrieNode* add_trie_node(const SrcTrieNode* src) {
-    const uint8_t* dest_ptr =
-        add_node(TRIE, reinterpret_cast<const uint8_t*>(src), src->size());
+  TrieNode* add_trie_node(const SrcTrieNode* src) {
+    uint8_t* dest_ptr = add_node(TRIE, (const uint8_t*)src, src->size());
     if (!dest_ptr) return nullptr;
 
-    auto* dest = reinterpret_cast<TrieNode*>(const_cast<uint8_t*>(dest_ptr));
-
+    auto* dest = (TrieNode*)dest_ptr;
     // Overwrite endian-aware fields with explicit conversion
     dest->_array_len = static_cast<uint16_t>(src->_array_len);
 
@@ -216,17 +212,14 @@ struct TransferTrie {
 
   // Add a source leaf node to the buffer (converts to wire format)
   // Returns pointer to copied data, or nullptr if doesn't fit
-  const uint8_t* add_leaf_node(const SrcLeafNode* src) {
-    const uint8_t* dest_ptr =
-        add_node(LEAF, reinterpret_cast<const uint8_t*>(src), src->size());
+  uint8_t* add_leaf_node(const SrcLeafNode* src) {
+    uint8_t* dest_ptr = add_node(LEAF, (const uint8_t*)src, src->size());
     if (!dest_ptr) return nullptr;
 
-    auto* dest =
-        reinterpret_cast<WireLeafNode*>(const_cast<uint8_t*>(dest_ptr));
+    auto* dest = (WireLeafNode*)dest_ptr;
 
     // Overwrite endian-aware field with explicit conversion
-    dest->value_size = static_cast<uint16_t>(src->value_size);
-
+    dest->value_size = src->value_size;
     return dest_ptr;
   }
 
@@ -235,7 +228,7 @@ struct TransferTrie {
   // add_trie_node/add_leaf_node Returns pointer to copied node data, or nullptr
   // if doesn't fit Nodes are aligned to 8 bytes for relative offset
   // compatibility
-  const uint8_t* add_node(NodeTypes type, const uint8_t* data, uint16_t size) {
+  uint8_t* add_node(NodeTypes type, const uint8_t* data, uint16_t size) {
     if (_finalized) return nullptr;
 
     // Align current position to 8 bytes
@@ -492,24 +485,22 @@ class PathArena {
   size_t _used;
   static constexpr size_t DEFAULT_CAPACITY = 8192;  // 8KB per batch
 
-public:
-  PathArena() : _used(0) {
-    _buffer.reserve(DEFAULT_CAPACITY);
-  }
+ public:
+  PathArena() : _used(0) { _buffer.reserve(DEFAULT_CAPACITY); }
 
   // Allocate space for a string and copy it
   std::string_view allocate(const std::string_view& str) {
     size_t offset = _used;
     size_t needed = str.size();
-    
+
     if (_used + needed > _buffer.capacity()) {
       _buffer.reserve(std::max(_buffer.capacity() * 2, _used + needed));
     }
-    
+
     _buffer.resize(_used + needed);
     std::memcpy(_buffer.data() + offset, str.data(), needed);
     _used += needed;
-    
+
     return std::string_view(_buffer.data() + offset, needed);
   }
 
@@ -526,11 +517,22 @@ public:
 struct PendingTrieNode {
   std::string_view path;  // Path to this node (points into PathArena)
   offset_t* offset;       // Absolute offset in sender's storage
-  uint16_t next_child;    // Branch key to resume from (TrieNode::NONE = start, -2
-                          // = node itself not sent)
+  uint16_t next_child;  // Branch key to resume from (TrieNode::NONE = start, -2
+                        // = node itself not sent)
 
   PendingTrieNode(std::string_view p, offset_t* off, uint16_t next = 0)
       : path(p), offset(off), next_child(next) {}
+};
+
+// Pending big value awaiting transmission after trie sync
+struct PendingBigValue {
+  offset_t leaf_offset;  // Source leaf offset for resolving data
+  uint64_t
+      wire_chunk_offset;  // The chunk_offset sent in wire format (for lookup)
+  uint32_t value_size;    // Size of the actual value
+
+  PendingBigValue(offset_t off, uint64_t wire_off, uint32_t size)
+      : leaf_offset(off), wire_chunk_offset(wire_off), value_size(size) {}
 };
 
 // Sender for transferring trie nodes with relative offsets
@@ -546,13 +548,26 @@ struct TransferTrieSender {
   using Transfer = TransferTrie<Traits>;
   using WireOffset = typename WireFormatTraits::offset_e;
 
+  // Chunk placeholder for big value data
+  struct Chunk {
+    char data[1];
+  };
+  using chunk_ptr = typename Traits::template Pointer<Chunk>;
+
+  // BigValue uses the standalone _BigValue with fixed little-endian layout
+  using BigValue = _BigValue;
+
   DB* _db;
   typename DB::txn_ptr _txn;
   Transfer _transfer;
   std::list<PendingTrieNode> _pending;  // Nodes awaiting transmission
   std::list<PendingTrieNode>
       _last_batch;  // Nodes from last batch, awaiting ACK
-  PathArena _path_arena;  // Arena allocator for path strings
+  std::vector<PendingBigValue>
+      _pending_big_values;  // Big values to send after trie sync
+  std::vector<PendingBigValue>
+      _last_big_values;      // Big values from last batch, awaiting ACK
+  PathArena _path_arena;     // Arena allocator for path strings
   std::string _path_buffer;  // Reusable buffer for path manipulation
   uint64_t _session_id;
   uint64_t _snapshot_id;
@@ -578,6 +593,8 @@ struct TransferTrieSender {
     _db_type = db_type;
     _pending.clear();
     _last_batch.clear();
+    _pending_big_values.clear();
+    _last_big_values.clear();
     _path_arena.reset();
     // Don't add root to pending - first fill_buffer() will handle it
   }
@@ -598,7 +615,8 @@ struct TransferTrieSender {
         Slice acked_path = iter.path();
         // Check if it->path begins with acked_path
         if (it->path.size() >= acked_path.size() &&
-            it->path.compare(0, acked_path.size(), acked_path.data(), acked_path.size()) == 0) {
+            it->path.compare(0, acked_path.size(), acked_path.data(),
+                             acked_path.size()) == 0) {
           should_remove = true;
           break;
         }
@@ -615,6 +633,15 @@ struct TransferTrieSender {
     // Splice remaining nodes to end of _pending
     _pending.splice(_pending.end(), _last_batch);
     _last_batch.clear();
+
+    // Move non-pruned big values to pending
+    // Note: Big values are identified by wire_chunk_offset - pruning is done
+    // when the containing leaf's subtrie is pruned (hash matched)
+    _pending_big_values.insert(_pending_big_values.end(),
+                               _last_big_values.begin(),
+                               _last_big_values.end());
+    _last_big_values.clear();
+
     // Note: Don't reset arena here - pending nodes still reference it
     // Arena will be reset at start of next fill_buffer() after paths are copied
   }
@@ -622,8 +649,39 @@ struct TransferTrieSender {
   // Check if there are pending nodes to process
   bool has_pending() const { return !_pending.empty() || !_last_batch.empty(); }
 
-  // Check if transfer is complete
-  bool is_complete() const { return _pending.empty() && _last_batch.empty(); }
+  // Check if there are pending big values to send
+  bool has_pending_big_values() const {
+    return !_pending_big_values.empty() || !_last_big_values.empty();
+  }
+
+  // Check if transfer is complete (trie + big values)
+  bool is_complete() const {
+    return _pending.empty() && _last_batch.empty() &&
+           _pending_big_values.empty() && _last_big_values.empty();
+  }
+
+  // Get pending big values for transmission
+  const std::vector<PendingBigValue>& pending_big_values() const {
+    return _pending_big_values;
+  }
+
+  // Clear pending big values after they've been sent and ACKed
+  void clear_pending_big_values() { _pending_big_values.clear(); }
+
+  // Resolve big value data from leaf offset
+  // Returns pointer to actual value data and size
+  std::pair<const uint8_t*, uint32_t> resolve_big_value(
+      const PendingBigValue& bv) {
+    offset_t off = bv.leaf_offset;
+    auto leaf = _db->template resolve<LeafNode>(&off);
+    BigValue* big_val = (BigValue*)leaf->vdata();
+
+    // Resolve the chunk pointer
+    offset_t chunk_offset(big_val->chunk_offset);
+    chunk_ptr chunk = _db->template resolve<Chunk>(&chunk_offset, READ);
+    const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(&*chunk);
+    return {data_ptr, bv.value_size};
+  }
 
   // Fill buffer - writes a complete trie structure to the buffer
   // If _pending is empty, writes the root trie
@@ -635,7 +693,8 @@ struct TransferTrieSender {
       // max_depth
       _path_buffer.clear();
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
-      if (_txn->root) _write_subtree(_path_buffer, &_txn->root, 0, nullptr, true);
+      if (_txn->root)
+        _write_subtree(_path_buffer, &_txn->root, 0, nullptr, true);
       return;
     }
 
@@ -648,15 +707,15 @@ struct TransferTrieSender {
 
     // Convert string_view to std::string for manipulation
     _path_buffer.assign(pending.path.data(), pending.path.size());
-    
+
     // Now safe to reset arena - we've copied the path we need
     if (pending.next_child == 0) {
       // First child of this pending node - safe to reset arena
       _path_arena.reset();
     }
-    
+
     size_t path_len = _path_buffer.size();
-    
+
     // branch_key is already in path
     if (path_len)
       _path_buffer.append((char*)trie->compressed() + 1, trie->len() - 1);
@@ -665,8 +724,10 @@ struct TransferTrieSender {
       _path_buffer.append((char*)trie->compressed(), trie->len());
 
     _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
+    // Note: root=false because we're writing a CHILD of the pending node, not
+    // the root
     _write_subtree(_path_buffer, trie->array() + pending.next_child, 0, nullptr,
-                   path_len == 0);
+                   false);
     _path_buffer.resize(path_len);  // Restore path for retry
 
     // the child as the TransferTrie root is guaranteed to be written.
@@ -699,6 +760,13 @@ struct TransferTrieSender {
       assert(leaf);
       auto* dest = _transfer.add_leaf_node(&*leaf);
       if (!dest) return false;
+
+      // Track big values for later transmission
+      if (leaf->is_big()) {
+        BigValue* bv = (BigValue*)leaf->vdata();
+        _last_big_values.emplace_back(*offset, bv->chunk_offset,
+                                      bv->value_size);
+      }
 
       // Set relative offset in parent if wire_link provided
       if (wire_link) {

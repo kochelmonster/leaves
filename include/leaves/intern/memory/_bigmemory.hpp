@@ -9,10 +9,36 @@
 
 namespace leaves {
 
+struct _FreeKey {
+  boost::endian::big_uint64_t size;
+  uint64_t offset;
+};
+
+// Dummy structure for big value chunk pointers
+struct _BigValueChunk {};
+
+/**
+ * @brief Endian-safe big value reference stored in leaf nodes.
+ *
+ * Uses fixed little-endian types for cross-platform compatibility.
+ * This struct is stored inline in the leaf's value area when the value
+ * is too large for inline storage. The actual data lives in chunk storage
+ * at chunk_offset.
+ */
+struct _BigValue {
+  boost::endian::little_uint64_t chunk_offset;  // offset into chunk storage
+  boost::endian::little_uint32_t value_size;    // size of the actual value data
+
+  template <typename DB_>
+  auto data(DB_* db) {
+    offset_t temp_offset(chunk_offset);
+    return db->template resolve<_BigValueChunk>(&temp_offset, READ);
+  }
+};
+
 template <typename TCursor>
 struct _BigMemory {
-  // Dummy structure for chunk pointers
-  struct Chunk {};
+  using Chunk = _BigValueChunk;
 
   using Traits = typename TCursor::Traits;
   using DB = typename Traits::DB;
@@ -25,25 +51,11 @@ struct _BigMemory {
       Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
   static constexpr auto BIG_VALUE_FLAG = uint16_t(1) << 15;
 
-  struct FreeKey {
-    boost::endian::big_uint64_t size;
-    uint64_t offset;
-  };
+  using FreeKey = _FreeKey;
+  using BigValue = _BigValue;
 
   struct ValueBlock {
     tid_t txn_id;
-  };
-
-  struct BigValue {
-    using uint32_e = typename Traits::uint32_e;
-    using uint64_e = typename Traits::uint64_e;
-    uint64_e chunk_offset;
-    uint32_e value_size;
-    template <typename DB_>
-    chunk_ptr data(DB_* db) {
-      offset_t temp_offset(chunk_offset);
-      return db->template resolve<Chunk>(&temp_offset, READ);
-    }
   };
 
   struct CursorTraits : public Traits {

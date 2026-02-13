@@ -85,5 +85,9 @@
         "expected": "cpp"
     },
     "cmake.configureOnOpen": true,
-    "C_Cpp.default.compilerPath": "/usr/bin/g++"
+    "C_Cpp.default.compilerPath": "/usr/bin/g++",
+    "chat.tools.terminal.autoApprove": {
+        "./build/test_lsm": true,
+        "./build/test_db": true
+    }
 }

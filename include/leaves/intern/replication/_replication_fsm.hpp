@@ -3,8 +3,8 @@
 
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../db/_cursor.hpp"
@@ -26,6 +26,11 @@ enum class ReplicationMsgType : uint8_t {
   ERROR = 0x04,              // Error occurred (either side)
   FRACTION_COMPLETE = 0x05,  // Fraction merged, restart from root
                              // (receiver → sender)
+  BIG_VALUE_DATA = 0x06,     // Big value data transfer (sender → receiver)
+  BIG_VALUE_ACK =
+      0x07,  // Big value received acknowledgement (receiver → sender)
+  BIG_VALUE_START = 0x08,  // Big value transfer start with total size
+                           // (sender → receiver)
 };
 
 constexpr uint32_t REPLICATION_MSG_MAGIC = 0x4C565250;  // "LVRP"
@@ -46,6 +51,33 @@ struct ReplicationMsgHeader {
 
 static_assert(sizeof(ReplicationMsgHeader) == 24,
               "ReplicationMsgHeader must be 24 bytes");
+
+// Big value data header - sent in BIG_VALUE_DATA messages
+// Multiple big values can be batched in one message
+#pragma pack(push, 1)
+struct BigValueDataHeader {
+  boost::endian::little_uint64_t
+      wire_chunk_offset;                      // Original offset (lookup key)
+  boost::endian::little_uint32_t value_size;  // Size of value data
+  // Followed by: value_size bytes of data
+};
+#pragma pack(pop)
+
+static_assert(sizeof(BigValueDataHeader) == 12,
+              "BigValueDataHeader must be 12 bytes");
+
+// Big value start header - sent in BIG_VALUE_START messages
+// Announces total count and aligned size so receiver can pre-allocate
+#pragma pack(push, 1)
+struct BigValueStartHeader {
+  boost::endian::little_uint32_t count;  // Number of big values to follow
+  boost::endian::little_uint64_t
+      total_aligned_size;  // Total size with MAX_PAGE_SIZE alignment
+};
+#pragma pack(pop)
+
+static_assert(sizeof(BigValueStartHeader) == 12,
+              "BigValueStartHeader must be 12 bytes");
 
 // Error codes for ERROR messages
 enum class ReplicationError : uint8_t {
@@ -243,12 +275,18 @@ struct ReplicationSenderFSM {
   using Transfer = TransferTrie<Traits>;
 
   enum class State {
-    IDLE,               // Not started
-    SENDING,            // Sending trie data
-    AWAITING_RESPONSE,  // Waiting for SUBTRIE_ACK or COMPLETE
-    COMPLETE,           // Replication finished
-    ERROR               // Error occurred
+    IDLE,                          // Not started
+    SENDING,                       // Sending trie data
+    AWAITING_RESPONSE,             // Waiting for SUBTRIE_ACK or COMPLETE
+    AWAITING_BIG_VALUE_START_ACK,  // Waiting for BIG_VALUE_ACK after START
+    SENDING_BIG_VALUES,            // Sending big value data
+    AWAITING_BIG_VALUE_ACK,        // Waiting for BIG_VALUE_ACK
+    COMPLETE,                      // Replication finished
+    ERROR                          // Error occurred
   };
+
+  // Constants for big value streaming
+  static constexpr size_t BIG_VALUE_CHUNK_SIZE = 1024 * 1024;  // 1MB per chunk
 
   DB* _db;
   typename DB::txn_ptr _txn;
@@ -263,6 +301,11 @@ struct ReplicationSenderFSM {
   ReplicationError _error;
   DbType _db_type;
 
+  // Big value streaming state
+  size_t _bv_current_idx;     // Current big value index being sent
+  size_t _bv_current_offset;  // Offset within current big value's data
+  bool _bv_header_sent;       // Whether header for current value was sent
+
   ReplicationSenderFSM(DB* db, typename DB::txn_ptr txn,
                        size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
       : _db(db),
@@ -275,7 +318,10 @@ struct ReplicationSenderFSM {
         _total_nodes(0),
         _total_bytes(0),
         _error(ReplicationError::NONE),
-        _db_type(DbType::DB_MAIN) {}
+        _db_type(DbType::DB_MAIN),
+        _bv_current_idx(0),
+        _bv_current_offset(0),
+        _bv_header_sent(false) {}
 
   // Start replication
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
@@ -315,10 +361,13 @@ struct ReplicationSenderFSM {
 
     switch (_state) {
       case State::AWAITING_RESPONSE:
+      case State::AWAITING_BIG_VALUE_START_ACK:
+      case State::AWAITING_BIG_VALUE_ACK:
         _handle_response(msg_type, payload);
         break;
 
       case State::SENDING:
+      case State::SENDING_BIG_VALUES:
         // Unexpected message while sending
         _transition_to_error(ReplicationError::INVALID_STATE,
                              "Received message while sending");
@@ -351,6 +400,10 @@ struct ReplicationSenderFSM {
 
       case ReplicationMsgType::SUBTRIE_ACK:
         _handle_subtrie_ack(payload);
+        break;
+
+      case ReplicationMsgType::BIG_VALUE_ACK:
+        _handle_big_value_ack();
         break;
 
       case ReplicationMsgType::FRACTION_COMPLETE:
@@ -398,6 +451,9 @@ struct ReplicationSenderFSM {
     if (_sender.has_pending()) {
       _state = State::SENDING;
       _send_next_buffer();
+    } else if (_sender.has_pending_big_values()) {
+      // Trie sync done, now send big value start announcement
+      _send_big_value_start();
     } else {
       // All done
       _send_complete();
@@ -438,6 +494,145 @@ struct ReplicationSenderFSM {
     _state = State::AWAITING_RESPONSE;
   }
 
+  // Send BIG_VALUE_START message with total count and aligned size
+  void _send_big_value_start() {
+    const auto& big_values = _sender.pending_big_values();
+    if (big_values.empty()) {
+      _send_complete();
+      return;
+    }
+
+    // Calculate total aligned size
+    // Each big value in BigMemory is stored as:
+    //   _FreeKey header + value_data, aligned to MAX_PAGE_SIZE
+    constexpr size_t MAX_PAGE_SIZE =
+        Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
+    constexpr size_t FREE_KEY_SIZE = sizeof(_FreeKey);
+
+    uint64_t total_aligned_size = 0;
+    for (const auto& bv : big_values) {
+      // Each value needs: FreeKey header + value data, aligned to MAX_PAGE_SIZE
+      size_t chunk_size = FREE_KEY_SIZE + bv.value_size;
+      total_aligned_size += padding(chunk_size, MAX_PAGE_SIZE);
+    }
+
+    // Send BIG_VALUE_START message
+    _msg_builder.begin(ReplicationMsgType::BIG_VALUE_START, _session_id);
+    BigValueStartHeader hdr;
+    hdr.count = big_values.size();
+    hdr.total_aligned_size = total_aligned_size;
+    _msg_builder.append_payload((const uint8_t*)&hdr, sizeof(hdr));
+    _transport->send(_msg_builder.data(), _msg_builder.size());
+
+    // Reset streaming state for chunked sending
+    _bv_current_idx = 0;
+    _bv_current_offset = 0;
+    _bv_header_sent = false;
+    _state = State::AWAITING_BIG_VALUE_START_ACK;
+  }
+
+  // Handle BIG_VALUE_ACK - either continue sending or complete
+  void _handle_big_value_ack() {
+    const auto& big_values = _sender.pending_big_values();
+
+    if (_state == State::AWAITING_BIG_VALUE_START_ACK) {
+      // START was ACKed, begin sending data in chunks
+      _state = State::SENDING_BIG_VALUES;
+      _send_big_value_chunk();
+    } else if (_state == State::AWAITING_BIG_VALUE_ACK) {
+      // A chunk was ACKed
+      if (_bv_current_idx >= big_values.size()) {
+        // All chunks sent, complete
+        _sender.clear_pending_big_values();
+        _send_complete();
+      } else {
+        // Send next chunk
+        _state = State::SENDING_BIG_VALUES;
+        _send_big_value_chunk();
+      }
+    }
+  }
+
+  // Send a chunk of the big value stream (up to BIG_VALUE_CHUNK_SIZE bytes)
+  // Stream format: [header1][data1][header2][data2]...
+  // Headers and values may span chunk boundaries
+  void _send_big_value_chunk() {
+    const auto& big_values = _sender.pending_big_values();
+    if (_bv_current_idx >= big_values.size()) {
+      // All values sent
+      _sender.clear_pending_big_values();
+      _send_complete();
+      return;
+    }
+
+    _msg_builder.begin(ReplicationMsgType::BIG_VALUE_DATA, _session_id);
+
+    size_t chunk_bytes = 0;
+    while (_bv_current_idx < big_values.size() &&
+           chunk_bytes < BIG_VALUE_CHUNK_SIZE) {
+      const auto& bv = big_values[_bv_current_idx];
+
+      // First, send the header if not already sent
+      if (!_bv_header_sent) {
+        auto [data_ptr, size] = _sender.resolve_big_value(bv);
+
+        BigValueDataHeader hdr;
+        hdr.wire_chunk_offset = bv.wire_chunk_offset;
+        hdr.value_size = size;
+
+        // How much of the header can we send?
+        size_t header_remaining = sizeof(hdr);
+        size_t header_space = BIG_VALUE_CHUNK_SIZE - chunk_bytes;
+        size_t header_to_send = std::min(header_remaining, header_space);
+
+        _msg_builder.append_payload((const uint8_t*)&hdr, header_to_send);
+        chunk_bytes += header_to_send;
+
+        if (header_to_send < sizeof(hdr)) {
+          // Header spans chunk boundary - this shouldn't happen with 1MB chunks
+          // but we handle it for correctness. Send what we can.
+          // Note: We always send the full header since it's only 12 bytes
+          // and our minimum chunk is much larger
+        }
+
+        _bv_header_sent = true;
+        _bv_current_offset = 0;
+      }
+
+      // Now send value data
+      auto [data_ptr, size] = _sender.resolve_big_value(bv);
+      size_t data_remaining = size - _bv_current_offset;
+      size_t data_space = BIG_VALUE_CHUNK_SIZE - chunk_bytes;
+      size_t data_to_send = std::min(data_remaining, data_space);
+
+      if (data_to_send > 0) {
+        _msg_builder.append_payload(data_ptr + _bv_current_offset,
+                                    data_to_send);
+        chunk_bytes += data_to_send;
+        _bv_current_offset += data_to_send;
+        _total_bytes += data_to_send;
+      }
+
+      // Check if we finished this value
+      if (_bv_current_offset >= size) {
+        ++_bv_current_idx;
+        _bv_current_offset = 0;
+        _bv_header_sent = false;
+      } else {
+        // Value spans to next chunk
+        break;
+      }
+    }
+
+    _transport->send(_msg_builder.data(), _msg_builder.size());
+
+    if (_events) {
+      _events->on_progress(_session_id, _total_bytes, _total_nodes);
+    }
+
+    _state = State::AWAITING_BIG_VALUE_ACK;
+  }
+
   void _send_complete() {
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
@@ -469,42 +664,63 @@ struct ReplicationSenderFSM {
 // =============================================================================
 
 // Default overwrite handler for replication - always accepts source (wire) data
-struct ReplicationMergePolicy {
-  // Always overwrite local with source (wire) data
-  bool may_overwrite(const std::string& key, const Slice& dst,
-                     const Slice& src, bool dst_is_big, bool src_is_big) {
-    return true;
+// Inherits free_big from StandardMergePolicy; overrides migrate_big_value for
+// wire format
+template <typename DstDB>
+struct ReplicationMergePolicy : public StandardMergePolicy {
+  // Dummy struct for raw pointer resolution
+  struct Chunk {};
+
+  // Big value mapping: wire_offset -> offset_t in persistent storage
+  const std::unordered_map<uint64_t, offset_t>* big_value_offsets = nullptr;
+  DstDB* db = nullptr;
+
+  // Set the big value mapping (called before merge)
+  void set_big_value_storage(
+      const std::unordered_map<uint64_t, offset_t>* offsets, DstDB* dst_db) {
+    big_value_offsets = offsets;
+    db = dst_db;
   }
 
-  // Always add new leaves from source
-  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
-    return true;
-  }
+  // Migrate big value from source to destination
+  // Returns a MigratedValue with the pre-allocated destination offset
+  // Overrides StandardMergePolicy::migrate_big_value for wire format big values
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor,
+                                  DstCursor& dst_cursor) {
+    _BigValue* dst_bvalue = &_big_value_storage;
 
-  // Always recurse into source tries
-  bool may_add_trie(const std::string& key) { return true; }
+    if (!big_value_offsets) {
+      return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+    }
 
-  // Free big value - no-op for wire format (source doesn't own big memory)
-  template <typename LeafNode>
-  void free_big(LeafNode& leaf) {
-    // Wire format leaves don't have big values that need freeing
-  }
+    const auto* bv = reinterpret_cast<const BigValueDataHeader*>(leaf.vdata());
+    uint64_t wire_offset = bv->wire_chunk_offset;
+    uint32_t value_size = bv->value_size;
 
-  // Migrate big value from source - wire format doesn't have big values
-  template <typename LeafNode, typename DB>
-  Slice migrate_big_value(LeafNode& leaf, DB& db) {
-    // Wire format doesn't use big values, return regular value
-    return leaf.value();
+    auto it = big_value_offsets->find(wire_offset);
+    if (it == big_value_offsets->end()) {
+      return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+    }
+
+    // Return a MigratedValue pointing to the _BigValue with pre-allocated
+    // destination offset. The data was already copied during
+    // _handle_big_value_data
+    dst_bvalue->chunk_offset = (uint64_t)it->second;
+    dst_bvalue->value_size = value_size;
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
 };
 
-template <typename DB, typename MergePolicy = ReplicationMergePolicy>
+template <typename DB, typename MergePolicy = ReplicationMergePolicy<DB>>
 struct ReplicationReceiverFSM {
   using Traits = typename DB::Traits;
   using Transfer = TransferTrie<Traits>;
   using TrieNode = _TrieNode<Traits>;
   using LeafNode = _LeafNode<Traits>;
   using offset_e = typename Traits::offset_e;
+  using offset_t = leaves::offset_t;
   using WireCursor = _Cursor<WireTempTraits>;
   using TempOffset =
       typename WireTempTraits::offset_e;  // Native offset type for temp DB
@@ -514,11 +730,17 @@ struct ReplicationReceiverFSM {
       _LeafNode<WireTempTraits>;  // Temp DB leaf node (native layout)
   using LocalCursor = typename DB::Cursor;
 
+  // Dummy struct for raw data pointers (similar to BigMemory::Chunk)
+  struct Chunk {};
+  using chunk_ptr = typename Traits::template Pointer<Chunk>;
+
   enum class State {
-    IDLE,       // Not started
-    RECEIVING,  // Receiving and processing trie data
-    COMPLETE,   // Replication finished
-    ERROR       // Error occurred
+    IDLE,                  // Not started
+    RECEIVING,             // Receiving and processing trie data
+    AWAITING_BIG_VALUES,   // Received BIG_VALUE_START, awaiting data
+    RECEIVING_BIG_VALUES,  // Receiving big value data
+    COMPLETE,              // Replication finished
+    ERROR                  // Error occurred
   };
 
   DB* _db;
@@ -569,6 +791,41 @@ struct ReplicationReceiverFSM {
   // Overwrite handler for merge conflicts
   MergePolicy _merge_policy;
 
+  // Big value storage
+  // ====================================
+  // Maps wire_chunk_offset (sender's offset) -> offset_t in persistent storage
+  // Big values are allocated directly from storage (bypassing transaction) and
+  // written as they arrive. The multi-area is linked to the transaction only
+  // during merge, keeping transaction lifetime short. Receiver detects
+  // completion when all expected big values are received, then merges
+  // immediately.
+  std::unordered_map<uint64_t, offset_t> _big_value_offsets;
+  typename DB::Storage::area_ptr
+      _big_value_multi_area;        // Multi-area from storage
+  chunk_ptr _big_value_area;        // Pointer to allocated multi_area storage
+  offset_t _big_value_area_offset;  // Base offset in persistent storage
+  size_t _big_value_area_size;      // Total allocated size
+  size_t _big_value_write_pos;      // Current write position in area
+  uint32_t _big_value_expected_count;  // Expected count from BIG_VALUE_START
+  uint32_t _big_value_received_count;  // Count of big values received so far
+  uint32_t _big_value_trie_count;  // Count of big values found in received trie
+
+  // Big value stream parsing state
+  // ====================================
+  // The sender sends a virtual stream of [header1][data1][header2][data2]...
+  // in fixed-size chunks. Headers/values may span chunk boundaries.
+  uint8_t _bv_header_buf[sizeof(BigValueDataHeader)];  // Partial header buffer
+  size_t _bv_header_pos;             // Bytes of header received so far
+  uint64_t _bv_current_wire_offset;  // Current value's wire_chunk_offset
+  uint32_t _bv_current_size;         // Current value's total size
+  size_t _bv_current_received;       // Bytes received for current value
+  bool _bv_parsing_header;  // true = parsing header, false = parsing data
+
+  // Constants for big value alignment (must match BigMemory)
+  static constexpr size_t MAX_PAGE_SIZE =
+      Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
+  static constexpr size_t FREE_KEY_SIZE = sizeof(_FreeKey);
+
   ReplicationReceiverFSM(
       DB* db, typename DB::txn_ptr txn, MergePolicy handler = MergePolicy(),
       size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE,
@@ -587,7 +844,20 @@ struct ReplicationReceiverFSM {
         _initial_buffer_size(receive_buffer_size),
         _temp_root(0),
         _wire_cursor(&_wire_db, &_temp_root),
-        _merge_policy(std::move(handler)) {
+        _merge_policy(std::move(handler)),
+        _big_value_multi_area(nullptr),
+        _big_value_area(nullptr),
+        _big_value_area_offset(0),
+        _big_value_area_size(0),
+        _big_value_write_pos(0),
+        _big_value_expected_count(0),
+        _big_value_received_count(0),
+        _big_value_trie_count(0),
+        _bv_header_pos(0),
+        _bv_current_wire_offset(0),
+        _bv_current_size(0),
+        _bv_current_received(0),
+        _bv_parsing_header(true) {
     // Allocate first receive buffer
     _alloc_receive_buffer();
   }
@@ -634,11 +904,20 @@ struct ReplicationReceiverFSM {
     _prune_paths.clear();
     _pending_children = 0;
     _new_leaves = 0;
+    _big_value_trie_count = 0;
 
     // Reset temp buffers from any previous session
     _temp_buffers.clear();
     _alloc_receive_buffer();
     _temp_root = 0;
+
+    // Reset big value storage
+    _big_value_offsets.clear();
+    _big_value_multi_area = nullptr;
+    _big_value_area = nullptr;
+    _big_value_area_offset = 0;
+    _big_value_area_size = 0;
+    _big_value_write_pos = 0;
   }
 
   // ==========================================================================
@@ -718,6 +997,8 @@ struct ReplicationReceiverFSM {
 
     switch (_state) {
       case State::RECEIVING:
+      case State::AWAITING_BIG_VALUES:
+      case State::RECEIVING_BIG_VALUES:
         _handle_incoming(msg_type, payload);
         break;
 
@@ -743,9 +1024,20 @@ struct ReplicationReceiverFSM {
         _handle_trie_data(payload);
         break;
 
+      case ReplicationMsgType::BIG_VALUE_START:
+        _handle_big_value_start(payload);
+        break;
+
+      case ReplicationMsgType::BIG_VALUE_DATA:
+        _handle_big_value_data(payload);
+        break;
+
       case ReplicationMsgType::COMPLETE:
-        // Receiver determines completion autonomously by tracking pending
-        // children If we receive this, sender thinks we're done - just ACK it
+        // Sender indicates sync is complete - merge temp DB and finish
+        if (_temp_root) {
+          _merge_temp_to_local();
+        }
+        _free_temp_buffers();
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
         }
@@ -789,6 +1081,171 @@ struct ReplicationReceiverFSM {
 
     // Process nodes: compare hashes and collect paths where we differ
     _process_received_nodes(payload, *hdr, subtrie_path);
+  }
+
+  void _handle_big_value_start(const Slice& payload) {
+    // Parse BIG_VALUE_START header
+    if (payload.size() < sizeof(BigValueStartHeader)) {
+      _transition_to_error(ReplicationError::INVALID_MESSAGE,
+                           "BIG_VALUE_START payload too small");
+      return;
+    }
+
+    const auto* hdr = (const BigValueStartHeader*)payload.data();
+
+    _big_value_expected_count = hdr->count;
+    _big_value_received_count = 0;
+    uint64_t total_aligned_size = hdr->total_aligned_size;
+
+    // Allocate persistent storage directly from storage layer (bypasses
+    // transaction) The area is allocated now but only linked to transaction
+    // during merge
+    static constexpr size_t AREA_SIZE = Traits::AREA_SIZE;
+    size_t alloc_size = padding(total_aligned_size, AREA_SIZE);
+    _big_value_multi_area = _db->_storage.alloc_multi_area(alloc_size);
+
+    _big_value_area_offset = _big_value_multi_area->content_offset();
+    _big_value_area_size = total_aligned_size;
+    _big_value_area =
+        _db->template resolve<Chunk>(&_big_value_area_offset, WRITE);
+    _big_value_write_pos = 0;
+    _big_value_offsets.clear();
+
+    // Reset stream parsing state
+    _bv_header_pos = 0;
+    _bv_current_wire_offset = 0;
+    _bv_current_size = 0;
+    _bv_current_received = 0;
+    _bv_parsing_header = true;
+
+    _state = State::AWAITING_BIG_VALUES;
+
+    // Send ACK to indicate we're ready to receive data
+    _send_big_value_ack();
+  }
+
+  void _handle_big_value_data(const Slice& payload) {
+    // Parse streaming big value data - format is a continuous stream of
+    // [header][data][header][data]... that may span chunk boundaries
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(payload.data());
+    const uint8_t* end = ptr + payload.size();
+
+    _state = State::RECEIVING_BIG_VALUES;
+
+    while (ptr < end) {
+      if (_bv_parsing_header) {
+        // Parse header (may be partial from previous chunk)
+        size_t header_needed = sizeof(BigValueDataHeader) - _bv_header_pos;
+        size_t header_available = end - ptr;
+        size_t header_to_read = std::min(header_needed, header_available);
+
+        std::memcpy(_bv_header_buf + _bv_header_pos, ptr, header_to_read);
+        _bv_header_pos += header_to_read;
+        ptr += header_to_read;
+
+        if (_bv_header_pos < sizeof(BigValueDataHeader)) {
+          // Header incomplete, wait for next chunk
+          break;
+        }
+
+        // Header complete, parse it
+        const auto* hdr = (const BigValueDataHeader*)_bv_header_buf;
+        _bv_current_wire_offset = hdr->wire_chunk_offset;
+        _bv_current_size = hdr->value_size;
+        _bv_current_received = 0;
+        _bv_parsing_header = false;
+
+        // Calculate space for this value with MAX_PAGE_SIZE alignment
+        size_t chunk_size = FREE_KEY_SIZE + _bv_current_size;
+        size_t aligned_size = padding(chunk_size, MAX_PAGE_SIZE);
+
+        // Check that pre-allocated area has enough space
+        size_t needed = _big_value_write_pos + aligned_size;
+        if (needed > _big_value_area_size) {
+          _transition_to_error(ReplicationError::INTERNAL_ERROR,
+                               "Big value area overflow");
+          return;
+        }
+
+        // Write _FreeKey header at the current position in persistent storage
+        // _FreeKey layout: { big_uint64_t size, uint64_t offset }
+        // The size is the aligned chunk size (header + data + padding)
+        // The offset is the chunk's own offset with has_successor flag in bit 0
+        char* chunk_ptr = (char*)_big_value_area + _big_value_write_pos;
+
+        // Calculate offset_t for this chunk header
+        offset_t header_offset = _big_value_area_offset + _big_value_write_pos;
+
+        // Write the _FreeKey header directly
+        _FreeKey* header = (_FreeKey*)chunk_ptr;
+        header->size = aligned_size;
+        // Set has_successor flag (bit 0) for all chunks except the last one
+        // This allows BigMemory to merge adjacent freed chunks
+        bool has_successor =
+            (_big_value_received_count + 1) < _big_value_expected_count;
+        header->offset = header_offset._offset | (has_successor ? 1 : 0);
+
+        // Record mapping: wire_offset -> offset_t in persistent storage
+        // The offset points to the data (past _FreeKey header)
+        offset_t data_offset = header_offset + FREE_KEY_SIZE;
+        _big_value_offsets[_bv_current_wire_offset] = data_offset;
+      }
+
+      // Parse data (may be partial)
+      size_t data_needed = _bv_current_size - _bv_current_received;
+      size_t data_available = end - ptr;
+      size_t data_to_read = std::min(data_needed, data_available);
+
+      if (data_to_read > 0) {
+        // Copy data after _FreeKey header into persistent storage
+        char* chunk_ptr = (char*)_big_value_area + _big_value_write_pos;
+        std::memcpy(chunk_ptr + FREE_KEY_SIZE + _bv_current_received, ptr,
+                    data_to_read);
+        _bv_current_received += data_to_read;
+        ptr += data_to_read;
+        _total_bytes += data_to_read;
+      }
+
+      if (_bv_current_received >= _bv_current_size) {
+        // Value complete - advance write position by aligned size
+        size_t chunk_size = FREE_KEY_SIZE + _bv_current_size;
+        _big_value_write_pos += padding(chunk_size, MAX_PAGE_SIZE);
+
+        ++_big_value_received_count;
+
+        // Reset for next value
+        _bv_header_pos = 0;
+        _bv_parsing_header = true;
+      }
+    }
+
+    if (_events) {
+      _events->on_progress(_session_id, _total_bytes, _total_nodes);
+    }
+
+    // Check if all big values have been received
+    if (_big_value_received_count >= _big_value_expected_count) {
+      // All big values received - merge and complete
+      if (_temp_root) {
+        _merge_temp_to_local();
+      }
+      _free_temp_buffers();
+      // Send ACK so sender can proceed to COMPLETE
+      _send_big_value_ack();
+      if (_events) {
+        _events->on_complete(_session_id, _total_nodes);
+      }
+      _state = State::IDLE;
+      return;
+    }
+
+    // Send ACK to sender
+    _send_big_value_ack();
+  }
+
+  void _send_big_value_ack() {
+    _msg_builder.begin(ReplicationMsgType::BIG_VALUE_ACK, _session_id);
+    _transport->send(_msg_builder.data(), _msg_builder.size());
   }
 
   void _process_received_nodes(const Slice& payload,
@@ -845,10 +1302,15 @@ struct ReplicationReceiverFSM {
       }
     }
 
-    // Check if all pending children are now connected - if so, replication is
-    // complete
+    // Check if all pending children are now connected
     if (_pending_children == 0) {
-      _send_complete();
+      // If no big values in trie, we can complete immediately
+      if (_big_value_trie_count == 0) {
+        _send_complete();  // Handles merge and cleanup
+        return;
+      }
+      // Big values expected - just ACK and wait for BIG_VALUE_START
+      _send_prune_ack();
       return;
     }
 
@@ -963,7 +1425,7 @@ struct ReplicationReceiverFSM {
                                 std::string& path) {
     if ((char*)wire_node >= buffer_end) return false;
 
-    --_pending_children; 
+    --_pending_children;
 
     // Get wire node's hash
     const uint8_t* wire_hash;
@@ -986,7 +1448,8 @@ struct ReplicationReceiverFSM {
     if (local_offset) {
       const uint8_t* local_hash = _get_local_hash(local_offset);
       if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
-        // Hashes match - tell sender to prune, set the offset 0 to avoid merging
+        // Hashes match - tell sender to prune, set the offset 0 to avoid
+        // merging
         *wire_node = 0;
         _prune_paths.push_back(path);
         path.resize(path_len);
@@ -999,8 +1462,11 @@ struct ReplicationReceiverFSM {
     // Hashes differ or local doesn't exist
     if (wire_node->type() == LEAF) {
       ++_new_leaves;
-#ifdef LEAVES_DEBUG
       auto* leaf = wire_node->template resolve<TempLeafNode>();
+      if (leaf->is_big()) {
+        ++_big_value_trie_count;
+      }
+#ifdef LEAVES_DEBUG
       path.append(leaf->key().data(), leaf->key().size());
       std::cerr << "DEBUG: receive node: " << path << " (type=leaf) "
                 << leaf->key().size() << "\n";
@@ -1015,8 +1481,7 @@ struct ReplicationReceiverFSM {
     int count = wire_trie->count();
 
 #ifdef LEAVES_DEBUG
-    if (!path.empty())
-      path.push_back((char)wire_trie->compressed()[0]);
+    if (!path.empty()) path.push_back((char)wire_trie->compressed()[0]);
     std::cerr << "DEBUG: receive node: " << path << " (type=trie)\n";
     path.resize(path_len);
 #endif
@@ -1032,7 +1497,8 @@ struct ReplicationReceiverFSM {
         continue;  // Not yet received, stays pending
       }
 
-      assert(child_offset->is_relative() && "Child offsets in wire format must be relative");
+      assert(child_offset->is_relative() &&
+             "Child offsets in wire format must be relative");
 
       if (!_compare_wire_with_local(child_offset, buffer_end, path)) {
         path.resize(path_len);
@@ -1049,7 +1515,7 @@ struct ReplicationReceiverFSM {
       }
       if (all_zero) *wire_node = 0;
     }
-#endif 
+#endif
     // Restore path to original length (remove compressed portion we added)
     path.resize(path_len);
     return true;
@@ -1083,7 +1549,8 @@ struct ReplicationReceiverFSM {
       dumper.dump(out);
 
       // Dump local (destination) DB state
-      std::ofstream dst_out("/tmp/rb-dst-" + std::to_string(_rb_round - 1) + ".yaml");
+      std::ofstream dst_out("/tmp/rb-dst-" + std::to_string(_rb_round - 1) +
+                            ".yaml");
       _Dumper<DB, true> dst_dumper(*_db, _cursor->_root, false);
       dst_dumper.dump(dst_out);
 
@@ -1096,11 +1563,43 @@ struct ReplicationReceiverFSM {
     // set position to root
     _wire_cursor.clear();
     _cursor->start_transaction();
+
+    // Link pre-allocated big value multi-area to this transaction
+    if (_big_value_multi_area) {
+      _big_value_multi_area->next = 0;
+      // Append to transaction's area list tail
+      if (_db->_active_txn->area_list_tail_multi) {
+        auto tail = _db->template resolve<Area>(
+            &_db->_active_txn->area_list_tail_multi);
+        tail->next = _db->resolve(_big_value_multi_area);
+        _db->make_dirty(tail);
+      } else {
+        // First area in this transaction - update head
+        _db->_header->area_list_head_multi =
+            _db->resolve(_big_value_multi_area);
+        _db->make_dirty(_db->_header);
+      }
+      _db->_active_txn->area_list_tail_multi =
+          _db->resolve(_big_value_multi_area);
+      _db->make_dirty(_big_value_multi_area);
+    }
+
+    // Set big value storage on merge policy before merging
+    _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
+
     // Use _Merger to merge wire trie into local DB
     _Merger<LocalCursor, WireCursor, MergePolicy> merger(*_cursor, _wire_cursor,
                                                          _merge_policy);
     merger.exec();
     _cursor->commit();
+
+    // Clear big value storage after merge (data is in persistent storage)
+    _big_value_offsets.clear();
+    _big_value_multi_area = nullptr;
+    _big_value_area = nullptr;
+    _big_value_area_offset = 0;
+    _big_value_area_size = 0;
+    _big_value_write_pos = 0;
   }
 
   // Send ACK with prune paths (where hashes matched)

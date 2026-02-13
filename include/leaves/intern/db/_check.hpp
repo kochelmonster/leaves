@@ -110,7 +110,7 @@ struct _Dumper {
     out << "valuesize: " << bv->value_size << std::endl;
 
     // Read chunk header to get size and has_successor flag
-    offset_e header_offset = bv->chunk_offset;
+    offset_e header_offset((uint64_t)bv->chunk_offset);
     header_offset._offset -= sizeof(FreeKey);
     auto header_ptr =
         (FreeKey*)(char*)_db.template resolve<PageHeader>(&header_offset, READ);

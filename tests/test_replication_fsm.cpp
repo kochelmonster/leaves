@@ -802,7 +802,7 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
 
   SenderFSM sender(sender_impl, sender_impl->txn(), SEND_BUFFER);
   ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
-                       ReplicationMergePolicy{},
+                       ReplicationMergePolicy<DBImpl>{},
                        RECV_BUFFER,
                        MEMORY_BUDGET);
 
@@ -907,7 +907,7 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
 
   SenderFSM sender(sender_impl, sender_impl->txn(), SEND_BUFFER);
   ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
-                       ReplicationMergePolicy{},
+                       ReplicationMergePolicy<DBImpl>{},
                        RECV_BUFFER,
                        MEMORY_BUDGET);
 
@@ -959,6 +959,182 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
       BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
                           "Local key value changed: " + key);
     }
+  }
+}
+
+// =============================================================================
+// Test big value replication and memory management
+// =============================================================================
+
+BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixture) {
+  // Create sender and receiver databases
+  auto sender_path = test_temp_dir / "sender_bigval.lvs";
+  auto receiver_path = test_temp_dir / "receiver_bigval.lvs";
+
+  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
+  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  // Big value size - must exceed MAX_PAGE_SIZE (4K) minus leaf overhead
+  // to trigger big value storage
+  const size_t BIG_VALUE_SIZE = 8 * 1024;  // 8KB - definitely triggers big value
+
+  // Insert multiple big values on sender
+  {
+    auto cursor = sender_db.cursor();
+    cursor.start_transaction();
+    
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "bigkey_" + std::to_string(i);
+      std::vector<char> value(BIG_VALUE_SIZE, 'A' + i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(value.data(), value.size()));
+    }
+    
+    cursor.commit();
+  }
+
+  // Verify sender has big values
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "bigkey_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Sender missing big key: " + key);
+      BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+      BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A' + i);
+    }
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  // Run replication (in separate scope so FSMs release their cursors)
+  {
+    TestTransport sender_transport, receiver_transport;
+    sender_transport.set_peer(&receiver_transport);
+    receiver_transport.set_peer(&sender_transport);
+
+    TestEvents sender_events, receiver_events;
+
+    SenderFSM sender(sender_impl, sender_impl->txn());
+    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+                         ReplicationMergePolicy<DBImpl>{});
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    run_protocol(sender, receiver, sender_transport, receiver_transport, 100);
+
+    BOOST_REQUIRE(sender.state() == SenderFSM::State::IDLE);
+    BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::IDLE);
+    BOOST_CHECK(sender_events.completed);
+    BOOST_CHECK(receiver_events.completed);
+  }
+
+  // Verify receiver has all big values with correct content
+  {
+    auto cursor = receiver_db.cursor();
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "bigkey_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), 
+                            "Receiver missing big key after replication: " + key);
+      BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+      BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A' + i);
+      // Check entire value content
+      std::vector<char> expected(BIG_VALUE_SIZE, 'A' + i);
+      BOOST_CHECK_MESSAGE(
+          std::memcmp(cursor.value().data(), expected.data(), BIG_VALUE_SIZE) == 0,
+          "Big value content mismatch for key: " + key);
+    }
+  }
+
+  // Save the data pointer of bigkey_0 before deleting - we'll verify defrag
+  // merged the freed chunks by checking the new allocation uses this address
+  const char* bigkey_0_data_ptr = nullptr;
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find("bigkey_0");
+    BOOST_REQUIRE(cursor.is_valid());
+    bigkey_0_data_ptr = cursor.value().data();
+    BOOST_REQUIRE(bigkey_0_data_ptr != nullptr);
+  }
+
+  // Now delete some big values to create freed chunks
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.start_transaction();
+    
+    // Delete consecutive big values (0, 1, 2) to test has_successor merging
+    for (int i = 0; i < 3; ++i) {
+      std::string key = "bigkey_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE(cursor.is_valid());
+      cursor.remove();
+    }
+    
+    cursor.commit();
+  }
+
+  // Advance transaction multiple times to allow may_recycle to work
+  // may_recycle requires txn_id < _start_txn_id, so we need to advance past
+  // the transaction where the big values were freed
+  for (int i = 0; i < 3; ++i) {
+    auto cursor = receiver_db.cursor();
+    cursor.start_transaction();
+    std::string key = "barrier_key_" + std::to_string(i);
+    cursor.find(Slice(key));
+    const char barrier = 'X';
+    cursor.value(Slice(&barrier, 1));
+    cursor.commit();
+  }
+
+  // Run defrag - this should merge the 3 consecutive freed chunks
+  // because we set has_successor correctly in replication
+  receiver_impl->defrag();
+
+  // Verify remaining big values are still intact after defrag
+  {
+    auto cursor = receiver_db.cursor();
+    for (int i = 3; i < 5; ++i) {
+      std::string key = "bigkey_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), 
+                            "Big key missing after defrag: " + key);
+      BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+      BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A' + i);
+    }
+  }
+
+  // Allocate a large value that should fit in the merged space
+  // 3 chunks of 8KB aligned to 4KB = merged space should be able to hold a larger value
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.start_transaction();
+    
+    const size_t LARGE_SIZE = 20 * 1024;  // 20KB should fit in merged 24KB+ space
+    std::vector<char> large_value(LARGE_SIZE, 'Z');
+    cursor.find("large_after_defrag");
+    cursor.value(Slice(large_value.data(), large_value.size()));
+    
+    cursor.commit();
+  }
+
+  // Verify the large allocation succeeded and uses the merged space
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find("large_after_defrag");
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.value().size(), 20 * 1024);
+    BOOST_CHECK_EQUAL(cursor.value().data()[0], 'Z');
+    
+    // Verify defrag actually merged the chunks - the new allocation should
+    // start at the same address as the former bigkey_0's data
+    BOOST_CHECK_MESSAGE(cursor.value().data() == bigkey_0_data_ptr,
+                        "Defrag did not merge freed chunks - new allocation at different address");
   }
 }
 
