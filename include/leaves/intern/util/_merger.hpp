@@ -10,14 +10,103 @@ namespace leaves {
 // _NodeIterator is now defined in _cursor.hpp
 
 /**
+ * @brief Result of migrate_big_value
+ *
+ * Contains the value data to store and whether it should be marked as big.
+ * This allows policies to convert big values to small values during migration.
+ */
+struct MigratedValue {
+  Slice data;   // Value data (BigValue struct if is_big, actual data if not)
+  bool is_big;  // Whether destination leaf should be marked as big
+};
+
+/**
+ * @brief Standard MergePolicy with default big value migration
+ *
+ * Provides a default implementation for migrate_big_value that allocates
+ * space in the destination BigMemory and copies the value data.
+ * Policies can inherit from this or implement their own migrate_big_value.
+ */
+struct StandardMergePolicy {
+  // Always overwrite destination with source
+  bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
+                     bool dst_is_big, bool src_is_big) {
+    return true;
+  }
+
+  // Always add new leaves from source
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return true;
+  }
+
+  // Always recurse into source tries
+  bool may_add_trie(const std::string& key) { return true; }
+
+  // Free big value from destination BigMemory
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {
+    _BigValue* bvalue = (_BigValue*)leaf->vdata();
+    dst_cursor.get_bigmemory().free(bvalue);
+  }
+
+  // Storage for the _BigValue returned by migrate_big_value
+  mutable _BigValue _big_value_storage;
+
+  /**
+   * @brief Migrate a big value from source to destination
+   *
+   * Reads the big value data from the source, allocates space in the
+   * destination BigMemory, copies the data, and returns a MigratedValue
+   * containing the new _BigValue struct.
+   *
+   * Since _BigValue uses fixed little-endian types, no endian conversion
+   * is needed between source and destination — the layout is always the same.
+   *
+   * @param leaf Source leaf containing the big value reference
+   * @param src_cursor Source cursor for resolving the big value data
+   * @param dst_cursor Destination cursor for allocating new big value
+   * @return MigratedValue with data pointing to _BigValue and is_big=true
+   */
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor,
+                                  DstCursor& dst_cursor) {
+    // Source BigValue uses fixed little-endian layout
+    _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
+    offset_t src_offset(src_bvalue->chunk_offset);
+    struct ChunkData {
+      char data;
+    };
+    auto src_data =
+        src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
+    uint32_t value_size = src_bvalue->value_size;
+
+    // Allocate in destination BigMemory and copy data
+    _BigValue* dst_bvalue = &_big_value_storage;
+    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+    offset_t dst_offset(dst_bvalue->chunk_offset);
+    auto dst_data =
+        dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+    optimized_memcpy((char*)dst_data, (char*)src_data, value_size);
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+  }
+};
+
+/**
  * @brief Merger for combining two tries
  *
- * Merges trie A into trie B,
+ * Merges source trie into destination trie, using a MergePolicy to control
+ * which nodes are copied, overwritten, or filtered. The policy's may_add_leaf,
+ * may_add_trie, and may_overwrite methods determine merge behavior.
+ *
+ * Big values are migrated via the policy's migrate_big_value method, which
+ * can copy them to the destination's BigMemory or convert them to small values.
  */
 template <typename CursorDst, typename CursorSrc, typename MergePolicy>
 struct _Merger {
   typedef _Merger<CursorDst, CursorSrc, MergePolicy> Merger;
   using Traits = typename CursorDst::Traits;
+  using SrcTraits = typename CursorSrc::Traits;
   using Transition = typename CursorDst::Transition;
   using TrieNode = typename Transition::TrieNode;
   using LeafNode = typename Transition::LeafNode;
@@ -57,7 +146,7 @@ struct _Merger {
         "free_node must be called with node pointers, not page pointers");
 
     if constexpr (NodePtr::type == LEAF) {
-      if (node->is_big()) handler.free_big(node);
+      if (node->is_big()) handler.free_big(node, dst_cursor);
     }
 
     page_ptr page((char*)node - sizeof(PageHeader));
@@ -66,30 +155,28 @@ struct _Merger {
 
   leaf_ptr fill_leaf(const Slice& key, SrcLeafNode& src_leaf) {
     Slice src_value;
+    bool is_big = false;
     if (src_leaf.is_big()) {
-      src_value = handler.migrate_big_value(src_leaf, *src_cursor._db);
+      // migrate_big_value reads from src, allocates in dst, returns
+      // MigratedValue
+      auto migrated =
+          handler.migrate_big_value(src_leaf, src_cursor, dst_cursor);
+      src_value = migrated.data;
+      is_big = migrated.is_big;
     } else {
       src_value = src_leaf.value();
     }
 
-    uint64_t vsize = src_value.size();
-    uint16_t msize =
-        BigMemory::template modify_size<LeafNode>(key.size(), vsize);
-    leaf_ptr leaf = alloc_node<leaf_ptr>(LeafNode::size(key.size(), msize));
-    leaf->set(key, src_value.size());
-    if (msize != vsize) {
+    uint16_t vsize = src_value.size();
+    leaf_ptr leaf = alloc_node<leaf_ptr>(LeafNode::size(key.size(), vsize));
+    leaf->set(key, vsize);
+    if (is_big) {
       leaf->set_big();
-      BigValue* bvalue = (BigValue*)leaf->vdata();
-      dst_cursor.get_bigmemory().alloc(vsize, bvalue);
-      optimized_memcpy((char*)bvalue->data(dst_cursor._db), src_value.data(),
-                       vsize);
-    } else
-      memcpy(leaf->vdata(), src_value.data(), src_value.size());
+    }
+    memcpy(leaf->vdata(), src_value.data(), vsize);
 
     return leaf;
   }
-
-  using SrcTraits = typename CursorSrc::Traits;
 
   template <typename T>
   typename SrcTraits::template Pointer<T> resolve_src(
@@ -230,10 +317,6 @@ struct _Merger {
       if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big()))
         return;  // rejected
 
-      if (src_leaf->is_big()) {
-        src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
-      }
-
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
       auto idxs = new_trie->create(
@@ -262,9 +345,22 @@ struct _Merger {
       auto& src_trie = src.trie();
       assert(src_trie->len() >= src_split_pos);
       uint8_t suffix_len = src_trie->len() - src_split_pos;
+      Slice suffix_prefix((const char*)&src_trie->compressed()[src_split_pos],
+                          suffix_len);
+
+      // Append suffix to current_key so may_add_trie/may_add_leaf see correct keys
+      size_t saved_key_len = current_key.size();
+      current_key.append((const char*)suffix_prefix.data(), suffix_len);
+
+      // Early-out: let the policy reject the entire subtree by prefix
+      if (!handler.may_add_trie(current_key)) {
+        current_key.resize(saved_key_len);
+        return;
+      }
 
       // Collect surviving children into a flat offset array
-      offset_e offsets_raw[258] = {};
+      // +1 offset so offsets_buf[-1] (NONE) is valid
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
       int surviving = 0;
       for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
@@ -276,13 +372,13 @@ struct _Merger {
         }
       }
 
+      current_key.resize(saved_key_len);
+
       if (!surviving) {
         return;  // nothing from source survived may_add
       }
 
       // Build suffix trie from survivors
-      Slice suffix_prefix((const char*)&src_trie->compressed()[src_split_pos],
-                          suffix_len);
       trie_ptr suffix_trie =
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
       suffix_trie->create(suffix_prefix, offsets_buf);
@@ -309,7 +405,7 @@ struct _Merger {
       // We need to merge that branch recursively, and selectively
       // copy all other src branches.
 
-      offset_e offsets_raw[258] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 1;  // key1 branch
 
@@ -346,7 +442,7 @@ struct _Merger {
     // Src trie does not have key1 — add key1 as a new branch in src's
     // structure, and selectively copy src's existing branches.
     {
-      offset_e offsets_raw[258] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 1;  // key1 branch
 
@@ -389,7 +485,7 @@ struct _Merger {
       // src prefix is longer -> selectively copy children, then build
       // a correctly-sized suffix trie from survivors only.
 
-      offset_e offsets_raw[258] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
       int surviving = 0;
       for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
@@ -424,12 +520,13 @@ struct _Merger {
     // Merge children of both tries into a flat offset array.
     // Shared branches are merged recursively after building the new trie.
 
-    offset_e offsets_raw[258] = {};
+    // +1 offset so offsets_buf[-1] (NONE) is valid
+    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
     offset_e* offsets_buf = &offsets_raw[1];
 
     struct SharedBranch {
       int key;
-      const src_offset_e* src_off;
+      src_offset_e* src_off;  // non-const: push() takes mutable pointer
       offset_e dst_off;
     };
     SharedBranch shared[257];
@@ -443,13 +540,16 @@ struct _Merger {
       branch_count++;
     }
 
-    // Process src branches: record shared for later merge, selectively copy src-only
+    // Process src branches: record shared for later merge, selectively copy
+    // src-only
     for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
          k = src_trie->next(k)) {
       if (dst_trie->isset(k)) {
         // Shared branch — merge recursively later (skip incomplete src)
         if (*src_trie->offset(k) != 0) {
-          shared[shared_count++] = {k, src_trie->offset(k), *dst_trie->offset(k)};
+          shared[shared_count++] = {
+              k, const_cast<src_offset_e*>(src_trie->offset(k)),
+              *dst_trie->offset(k)};
         }
       } else {
         // Src-only — selectively deep copy
@@ -475,7 +575,7 @@ struct _Merger {
       int k = shared[si].key;
       *new_trie->offset(k) = shared[si].dst_off;
 
-      src_cursor.push(const_cast<src_offset_e*>(shared[si].src_off));
+      src_cursor.push(shared[si].src_off);
       dst_cursor.stack.clear();
       merge_node();
     }
@@ -489,14 +589,8 @@ struct _Merger {
     // src is a leaf -> insert into dst trie (if may_add allows)
     auto& src_leaf = src.leaf();
 
-    Slice src_value;
-    if (src_leaf->is_big()) {
-      src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
-    } else {
-      src_value = src_leaf->value();
-    }
-
-    if (!handler.may_add_leaf(current_key, src_value, src_leaf->is_big()))
+    if (!handler.may_add_leaf(current_key, src_leaf->value(),
+                              src_leaf->is_big()))
       return;  // rejected
 
     uint16_t loffset;
@@ -578,13 +672,6 @@ struct _Merger {
       return false;
     }
 
-    Slice src_value;
-    if (src_leaf->is_big()) {
-      src_value = handler.migrate_big_value(*src_leaf, *src_cursor._db);
-    } else {
-      src_value = src_leaf->value();
-    }
-
     leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
     *parent_link = resolve_offset(new_leaf);
     return true;
@@ -617,7 +704,7 @@ struct _Merger {
     // ── Pass 1: recurse children, collect survivors ──────────────────
     // offsets_buf is indexed as: NONE → index (-1+1)=0, byte 0 → 1, …, 255 →
     // 256 We offset the pointer so that offsets_buf[NONE] (i.e. [-1]) works.
-    offset_e offsets_raw[258] = {};           // all zero-initialised
+    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};  // all zero-initialised
     offset_e* offsets_buf = &offsets_raw[1];  // now [-1] is valid
 
     int surviving = 0;

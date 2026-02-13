@@ -45,7 +45,7 @@ void exec_merger(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
 
   if (!dump_filename.empty()) {
     std::ofstream out(dump_filename);
-    _Dumper(dst_db, dst_db.txn()->root, false).dump(out);
+    _Dumper(dst_db, &dst_db.txn()->root, false).dump(out);
     out.close();
     std::cout << "Final tree dumped to: " << dump_filename << std::endl;
   }
@@ -78,30 +78,29 @@ struct OverwritePolicy {
     return true;  // Always recurse
   }
 
-  template <typename LeafNode>
-  void free_big(LeafNode& leaf) {
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {
     // No-op for testing - in real usage would free big value memory
   }
 
-  template <typename LeafNode, typename DB>
-  Slice migrate_big_value(LeafNode& leaf, DB& db) {
-    // For big values, need to dereference the BigValue pointer
-    // BigValue is defined in _bigmemory.hpp - use traits to access it
-    using Traits = typename DB::CursorTraits;
-    using uint64_e = typename Traits::uint64_e;
-    using uint32_e = typename Traits::uint32_e;
-    struct BigValueT {
-      uint64_e chunk_offset;
-      uint32_e value_size;
-    };
-    BigValueT* bvalue = (BigValueT*)leaf.vdata();
-    offset_t temp_offset(bvalue->chunk_offset);
-    // Use a unique struct type to avoid SimplePointer operator conflicts
-    struct ChunkData {
-      char data;
-    };
-    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
-    return Slice((char*)data_ptr, bvalue->value_size);
+  // Storage for the _BigValue returned by migrate_big_value
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
+    offset_t src_offset(src_bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
+    uint32_t value_size = src_bvalue->value_size;
+
+    _BigValue* dst_bvalue = &_big_value_storage;
+    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+    offset_t dst_offset(dst_bvalue->chunk_offset);
+    auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+    memcpy((char*)dst_data, (char*)src_data, value_size);
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
 };
 
@@ -120,29 +119,29 @@ struct KeepDestPolicy {
     return true;  // Always recurse
   }
 
-  template <typename LeafNode>
-  void free_big(LeafNode& leaf) {
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {
     // No-op for testing
   }
 
-  template <typename LeafNode, typename DB>
-  Slice migrate_big_value(LeafNode& leaf, DB& db) {
-    // For big values, need to dereference the BigValue pointer
-    using Traits = typename DB::CursorTraits;
-    using uint64_e = typename Traits::uint64_e;
-    using uint32_e = typename Traits::uint32_e;
-    struct BigValueT {
-      uint64_e chunk_offset;
-      uint32_e value_size;
-    };
-    BigValueT* bvalue = (BigValueT*)leaf.vdata();
-    offset_t temp_offset(bvalue->chunk_offset);
-    // Use a unique struct type to avoid SimplePointer operator conflicts
-    struct ChunkData {
-      char data;
-    };
-    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
-    return Slice((char*)data_ptr, bvalue->value_size);
+  // Storage for the _BigValue returned by migrate_big_value
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
+    offset_t src_offset(src_bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
+    uint32_t value_size = src_bvalue->value_size;
+
+    _BigValue* dst_bvalue = &_big_value_storage;
+    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+    offset_t dst_offset(dst_bvalue->chunk_offset);
+    auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+    memcpy((char*)dst_data, (char*)src_data, value_size);
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
 };
 
@@ -1316,25 +1315,27 @@ struct PrefixFilterPolicy {
     return key.substr(0, allowed_prefix.size()) == allowed_prefix;
   }
 
-  template <typename LeafNode>
-  void free_big(LeafNode& leaf) {}
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
 
-  template <typename LeafNode, typename DB>
-  Slice migrate_big_value(LeafNode& leaf, DB& db) {
-    using Traits = typename DB::CursorTraits;
-    using uint64_e = typename Traits::uint64_e;
-    using uint32_e = typename Traits::uint32_e;
-    struct BigValueT {
-      uint64_e chunk_offset;
-      uint32_e value_size;
-    };
-    BigValueT* bvalue = (BigValueT*)leaf.vdata();
-    offset_t temp_offset(bvalue->chunk_offset);
-    struct ChunkData {
-      char data;
-    };
-    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
-    return Slice((char*)data_ptr, bvalue->value_size);
+  // Storage for the _BigValue returned by migrate_big_value
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
+    offset_t src_offset(src_bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
+    uint32_t value_size = src_bvalue->value_size;
+
+    _BigValue* dst_bvalue = &_big_value_storage;
+    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+    offset_t dst_offset(dst_bvalue->chunk_offset);
+    auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+    memcpy((char*)dst_data, (char*)src_data, value_size);
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
 };
 
@@ -1559,25 +1560,27 @@ struct TrackingFilterPolicy {
     return key.substr(0, allowed_prefix.size()) == allowed_prefix;
   }
 
-  template <typename LeafNode>
-  void free_big(LeafNode& leaf) {}
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
 
-  template <typename LeafNode, typename DB>
-  Slice migrate_big_value(LeafNode& leaf, DB& db) {
-    using Traits = typename DB::CursorTraits;
-    using uint64_e = typename Traits::uint64_e;
-    using uint32_e = typename Traits::uint32_e;
-    struct BigValueT {
-      uint64_e chunk_offset;
-      uint32_e value_size;
-    };
-    BigValueT* bvalue = (BigValueT*)leaf.vdata();
-    offset_t temp_offset(bvalue->chunk_offset);
-    struct ChunkData {
-      char data;
-    };
-    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
-    return Slice((char*)data_ptr, bvalue->value_size);
+  // Storage for the _BigValue returned by migrate_big_value
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
+    offset_t src_offset(src_bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
+    uint32_t value_size = src_bvalue->value_size;
+
+    _BigValue* dst_bvalue = &_big_value_storage;
+    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+    offset_t dst_offset(dst_bvalue->chunk_offset);
+    auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+    memcpy((char*)dst_data, (char*)src_data, value_size);
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
 };
 
@@ -1679,25 +1682,27 @@ struct RejectBigPolicy {
 
   bool may_add_trie(const std::string& key) { return true; }
 
-  template <typename LeafNode>
-  void free_big(LeafNode& leaf) {}
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
 
-  template <typename LeafNode, typename DB>
-  Slice migrate_big_value(LeafNode& leaf, DB& db) {
-    using Traits = typename DB::CursorTraits;
-    using uint64_e = typename Traits::uint64_e;
-    using uint32_e = typename Traits::uint32_e;
-    struct BigValueT {
-      uint64_e chunk_offset;
-      uint32_e value_size;
-    };
-    BigValueT* bvalue = (BigValueT*)leaf.vdata();
-    offset_t temp_offset(bvalue->chunk_offset);
-    struct ChunkData {
-      char data;
-    };
-    auto data_ptr = db.template resolve<ChunkData>(&temp_offset, READ);
-    return Slice((char*)data_ptr, bvalue->value_size);
+  // Storage for the _BigValue returned by migrate_big_value
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
+    offset_t src_offset(src_bvalue->chunk_offset);
+    struct ChunkData { char data; };
+    auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
+    uint32_t value_size = src_bvalue->value_size;
+
+    _BigValue* dst_bvalue = &_big_value_storage;
+    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+    offset_t dst_offset(dst_bvalue->chunk_offset);
+    auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+    memcpy((char*)dst_data, (char*)src_data, value_size);
+
+    return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
 };
 
