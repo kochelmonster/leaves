@@ -1,6 +1,7 @@
 #ifndef _LEAVES__REPLICATION_FSM_HPP
 #define _LEAVES__REPLICATION_FSM_HPP
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -945,6 +946,14 @@ struct ReplicationReceiverFSM {
   uint8_t _deferred_wire_root_type;   // Type of deferred root (TRIE or LEAF)
   std::vector<std::vector<uint8_t>> _deferred_temp_buffers;  // Keeps deferred wire data alive
 
+  // Replication slot — crash-safe tracking of pre-merge multi-areas
+  // ====================================
+  // The FSM claims one slot in _header->replication_slots[].  The slot
+  // holds the offset of the multi-area currently being filled for a big
+  // value.  On merge, the area is handed to the transaction and the slot
+  // is cleared.  On crash, sanitize() returns all non-zero slots to the pool.
+  int16_t _replication_slot;  // -1 = no slot claimed
+
   // Constants for big value alignment (must match BigMemory)
   static constexpr size_t MAX_PAGE_SIZE =
       Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
@@ -996,6 +1005,7 @@ struct ReplicationReceiverFSM {
         _bv_parsing_header(true),
         _deferred_wire_root(nullptr),
         _deferred_wire_root_type(0),
+        _replication_slot(-1),
         _last_activity(std::chrono::steady_clock::now()) {
     // Allocate first receive buffer
     _alloc_receive_buffer();
@@ -1067,6 +1077,9 @@ struct ReplicationReceiverFSM {
     _deferred_wire_root = nullptr;
     _deferred_wire_root_type = 0;
     _deferred_temp_buffers.clear();
+
+    // Claim a replication slot for crash-safe area tracking
+    _claim_slot();
   }
 
   // ==========================================================================
@@ -1201,6 +1214,7 @@ struct ReplicationReceiverFSM {
         // Sender indicates sync is complete — merge all deferred and
         // current temp data in one short atomic transaction.
         _merge_all_phases();
+        _release_slot();
         _free_temp_buffers();
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
@@ -1289,6 +1303,10 @@ struct ReplicationReceiverFSM {
     }
     size_t alloc_size = static_cast<size_t>(alloc_size_64);
     _big_value_multi_area = _db->_storage.alloc_multi_area(alloc_size);
+
+    // Track the newly allocated multi-area in the replication slot
+    // so it can be reclaimed on crash before merge completes
+    _track_area_in_slot(_big_value_multi_area);
 
     _big_value_area_offset = _big_value_multi_area->content_offset();
     _big_value_area_size = total_aligned_size;
@@ -1919,24 +1937,31 @@ struct ReplicationReceiverFSM {
     _clear_big_value_state();
   }
 
-  // Link pre-allocated big value multi-area to the active transaction
+  // Link pre-allocated big value multi-area to the active transaction.
+  // Uses _big_value_multi_area directly, then clears the replication slot.
   void _link_big_value_area() {
     if (!_big_value_multi_area) return;
 
     _big_value_multi_area->next = 0;
+    offset_t area_off = _db->resolve(_big_value_multi_area);
     if (_db->_active_txn->area_list_tail_multi) {
       auto tail = _db->template resolve<Area>(
           &_db->_active_txn->area_list_tail_multi);
-      tail->next = _db->resolve(_big_value_multi_area);
+      tail->next = area_off;
       _db->make_dirty(tail);
     } else {
-      _db->_header->area_list_head_multi =
-          _db->resolve(_big_value_multi_area);
+      _db->_header->area_list_head_multi = area_off;
       _db->make_dirty(_db->_header);
     }
-    _db->_active_txn->area_list_tail_multi =
-        _db->resolve(_big_value_multi_area);
+    _db->_active_txn->area_list_tail_multi = area_off;
     _db->make_dirty(_big_value_multi_area);
+
+    // Clear the slot — the area is now owned by the transaction
+    if (_replication_slot >= 0) {
+      _db->_header->replication_slots[_replication_slot] = 0;
+      _db->make_dirty(_db->_header);
+      _db->flush();
+    }
   }
 
   // Clear big value state after merge
@@ -1947,6 +1972,65 @@ struct ReplicationReceiverFSM {
     _big_value_area_offset = 0;
     _big_value_area_size = 0;
     _big_value_write_pos = 0;
+  }
+
+  // Claim a replication slot in _header->replication_slots[].
+  // Uses atomic CAS (0 → sentinel) to claim without file_lock().
+  void _claim_slot() {
+    constexpr auto N = DB::Header::MAX_REPLICATION_SLOTS;
+    constexpr uint64_t SENTINEL = DB::Header::REPLICATION_SLOT_SENTINEL;
+    for (uint16_t i = 0; i < N; ++i) {
+      auto& slot = _db->_header->replication_slots[i];
+      uint64_t expected = 0;
+      if (std::atomic_ref<uint64_t>(slot._offset)
+              .compare_exchange_strong(expected, SENTINEL,
+                                      std::memory_order_acq_rel,
+                                      std::memory_order_relaxed)) {
+        _replication_slot = static_cast<int16_t>(i);
+        return;
+      }
+    }
+    // All slots occupied — proceed without crash-safety tracking.
+    // This is a soft failure: the session will work but a crash could
+    // leak one multi-area.
+    _replication_slot = -1;
+  }
+
+  // Store the multi-area offset in the claimed slot and flush.
+  // Sole-owner operation — no lock needed; atomic store for visibility.
+  void _track_area_in_slot(typename DB::Storage::area_ptr area) {
+    if (_replication_slot < 0) return;
+
+    auto& slot = _db->_header->replication_slots[_replication_slot];
+    offset_t off = _db->resolve(area);
+    std::atomic_ref<uint64_t>(slot._offset)
+        .store(off._offset, std::memory_order_release);
+    _db->make_dirty(_db->_header);
+    _db->flush();
+  }
+
+  // Release the replication slot.  If it still holds a non-zero offset
+  // (error path — area was never merged), return it to the pool first.
+  // Sole-owner operation — no lock needed; atomic store for visibility.
+  void _release_slot() {
+    if (_replication_slot < 0) return;
+
+    constexpr uint64_t SENTINEL = DB::Header::REPLICATION_SLOT_SENTINEL;
+    auto& slot = _db->_header->replication_slots[_replication_slot];
+    uint64_t raw = std::atomic_ref<uint64_t>(slot._offset)
+                       .load(std::memory_order_acquire);
+    if (raw && raw != SENTINEL) {
+      offset_t off;
+      off._offset = raw;
+      _db->_storage.return_multi_areas(off, off);
+    }
+    if (raw) {
+      std::atomic_ref<uint64_t>(slot._offset)
+          .store(0, std::memory_order_release);
+      _db->make_dirty(_db->_header);
+      _db->flush();
+    }
+    _replication_slot = -1;
   }
 
   // Merge temp DB (received wire nodes) into local DB using _Merger.
@@ -2063,6 +2147,9 @@ struct ReplicationReceiverFSM {
     _deferred_wire_root = nullptr;
     _deferred_wire_root_type = 0;
     _deferred_temp_buffers.clear();
+
+    // Release slot — returns any un-merged big value areas to the pool
+    _release_slot();
 
     // Free temp buffers on error
     _free_temp_buffers();

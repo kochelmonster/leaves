@@ -246,7 +246,7 @@ struct _MemoryMapFile {
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset) {
         assert(!_dbs[i]);
-        _DB(*this, _memory->dbs[i].offset, i).sanitize();
+        DB(_self(), _memory->dbs[i].offset, i).sanitize();
       }
     }
   }

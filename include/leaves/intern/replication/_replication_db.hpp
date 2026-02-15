@@ -8,6 +8,39 @@
 
 namespace leaves {
 
+// Replication-specific DB header — extends _DBHeader with a fixed-size
+// slot array for crash-safe tracking of pre-merge big-value multi-areas.
+// Each active ReplicationReceiverFSM claims one slot.  The slot holds the
+// offset of the multi-area currently being filled.  On crash recovery,
+// sanitize() returns all non-zero slots to the pool.
+//
+// MAX_REPLICATION_SLOTS is read from Storage_::Traits if available,
+// defaulting to 8 (= 64 bytes of offset_t).
+template <typename Storage_>
+struct _ReplicationDBHeader : public _DBHeader<Storage_> {
+  using Traits = typename Storage_::Traits;
+
+  // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
+  template <typename T, typename = void>
+  struct get_max_replication_slots
+      : std::integral_constant<uint16_t, 8> {};
+
+  template <typename T>
+  struct get_max_replication_slots<T, std::void_t<decltype(T::MAX_REPLICATION_SLOTS)>>
+      : std::integral_constant<uint16_t, T::MAX_REPLICATION_SLOTS> {};
+
+  static constexpr uint16_t MAX_REPLICATION_SLOTS =
+      get_max_replication_slots<Traits>::value;
+
+  // Sentinel value written by _claim_slot() via atomic CAS before the
+  // real area offset is known.  sanitize() must skip these.
+  static constexpr uint64_t REPLICATION_SLOT_SENTINEL = 1;
+
+  // Each slot holds the offset of one pre-merge multi-area.
+  // 0 = slot is free, SENTINEL = claimed but no area yet.
+  offset_t replication_slots[MAX_REPLICATION_SLOTS];
+};
+
 // =============================================================================
 // _ReplicationTransaction: Extends _Transaction with a deletion_root
 // =============================================================================
@@ -62,9 +95,11 @@ struct _ReplicationCursor;  // forward declaration
 template <typename Storage_>
 struct _ReplicationDB
     : public _DB<Storage_,
-                 _ReplicationTransaction<typename Storage_::Traits>> {
+                 _ReplicationTransaction<typename Storage_::Traits>,
+                 _ReplicationDBHeader<Storage_>> {
   using Base =
-      _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>>;
+      _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
+          _ReplicationDBHeader<Storage_>>;
   using CursorTraits = typename Base::CursorTraits;
   using Transaction = typename Base::Transaction;
   using Aspect = typename Base::Aspect;
@@ -119,6 +154,13 @@ struct _ReplicationDB
       this->_storage.wait_all();
   }
 
+  // Override sanitize() to also recover orphaned replication anchors.
+  void sanitize() {
+    Base::sanitize();
+    _sanitize_replication_anchors();
+    this->flush();
+  }
+
   // Override: signal background purge to stop before acquiring txn_lock
   // so the purge commits quickly and releases the lock.
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
@@ -126,6 +168,22 @@ struct _ReplicationDB
       _purge_interrupt.store(true, std::memory_order_release);
     }
     return Base::start_transaction(cursor_id, nonblocking);
+  }
+
+  void _sanitize_replication_anchors() {
+    constexpr auto N = Base::Header::MAX_REPLICATION_SLOTS;
+    constexpr uint64_t SENTINEL = Base::Header::REPLICATION_SLOT_SENTINEL;
+    for (uint16_t i = 0; i < N; ++i) {
+      auto& slot = this->_header->replication_slots[i];
+      if (slot._offset == SENTINEL) {
+        // Sentinel: slot was claimed but no area allocated yet — just clear.
+        slot = 0;
+      } else if (slot) {
+        this->_storage.return_multi_areas(slot, slot);
+        slot = 0;
+      }
+    }
+    this->make_dirty(this->_header);
   }
 
  private:

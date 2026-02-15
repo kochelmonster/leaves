@@ -2207,4 +2207,333 @@ BOOST_AUTO_TEST_CASE(test_request_children_parse_bad_magic) {
       Slice(reinterpret_cast<const char*>(&raw), sizeof(raw)), &out));
 }
 
+// =============================================================================
+// Replication Slot Tests — crash-safe big-value area tracking
+// =============================================================================
+
+// Test 1: After a successful big-value replication, all replication slots
+// must be zero (the slot is claimed during begin(), filled during
+// BIG_VALUE_START, and cleared when the area is linked to the transaction
+// at merge time).
+BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
+                        ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_slot_lifecycle.lvs";
+  auto receiver_path = test_temp_dir / "receiver_slot_lifecycle.lvs";
+
+  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
+  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  const size_t BIG_VALUE_SIZE = 8 * 1024;
+
+  // Insert big values on sender
+  {
+    auto cursor = sender_db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 3; ++i) {
+      std::string key = "slot_bigkey_" + std::to_string(i);
+      std::vector<char> value(BIG_VALUE_SIZE, 'A' + i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(value.data(), value.size()));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
+
+  // Verify all slots start at zero
+  for (uint16_t i = 0; i < N; ++i) {
+    BOOST_CHECK_EQUAL(receiver_impl->_header->replication_slots[i]._offset, 0u);
+  }
+
+  // Run full replication
+  {
+    TestTransport sender_transport, receiver_transport;
+    sender_transport.set_peer(&receiver_transport);
+    receiver_transport.set_peer(&sender_transport);
+
+    TestEvents sender_events, receiver_events;
+
+    SenderFSM sender(sender_impl, sender_impl->txn());
+    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+                         ReplicationMergePolicy<DBImpl>{});
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    // After begin(), receiver should have claimed a slot (sentinel)
+    BOOST_CHECK_GE(receiver._replication_slot, 0);
+    int16_t claimed_slot = receiver._replication_slot;
+    BOOST_CHECK_EQUAL(
+        receiver_impl->_header->replication_slots[claimed_slot]._offset,
+        DBImpl::Header::REPLICATION_SLOT_SENTINEL);
+
+    run_protocol(sender, receiver, sender_transport, receiver_transport, 100);
+
+    BOOST_REQUIRE(sender.state() == SenderFSM::State::IDLE);
+    BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::IDLE);
+    BOOST_CHECK(sender_events.completed);
+    BOOST_CHECK(receiver_events.completed);
+  }
+
+  // After successful replication, ALL slots must be zero
+  for (uint16_t i = 0; i < N; ++i) {
+    BOOST_CHECK_MESSAGE(
+        receiver_impl->_header->replication_slots[i]._offset == 0,
+        "Replication slot " + std::to_string(i) +
+            " is non-zero after successful replication: " +
+            std::to_string(
+                receiver_impl->_header->replication_slots[i]._offset));
+  }
+
+  // Verify data actually arrived
+  {
+    auto cursor = receiver_db.cursor();
+    for (int i = 0; i < 3; ++i) {
+      std::string key = "slot_bigkey_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+    }
+  }
+}
+
+// Test 2: Crash recovery — simulate a crash after BIG_VALUE_START has been
+// processed (multi-area allocated, slot populated) but before COMPLETE.
+// Destroy the FSMs, then call sanitize().  The slot must be cleared and
+// the orphaned multi-area returned to the pool.  The DB must remain usable.
+BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
+                        ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_crash_slot.lvs";
+  auto receiver_path = test_temp_dir / "receiver_crash_slot.lvs";
+
+  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
+  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  const size_t BIG_VALUE_SIZE = 8 * 1024;
+
+  // Insert big values on sender
+  {
+    auto cursor = sender_db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 2; ++i) {
+      std::string key = "crash_bigkey_" + std::to_string(i);
+      std::vector<char> value(BIG_VALUE_SIZE, 'X' + i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(value.data(), value.size()));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
+
+  int16_t claimed_slot = -1;
+
+  // Partially run the protocol — stop after BIG_VALUE_START is processed
+  {
+    TestTransport sender_transport, receiver_transport;
+    sender_transport.set_peer(&receiver_transport);
+    receiver_transport.set_peer(&sender_transport);
+
+    TestEvents sender_events, receiver_events;
+
+    SenderFSM sender(sender_impl, sender_impl->txn());
+    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+                         ReplicationMergePolicy<DBImpl>{});
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    // Run protocol round by round, checking for the slot to get a
+    // real offset (i.e. BIG_VALUE_START was processed)
+    for (int round = 0; round < 100; ++round) {
+      // Process one round of messages
+      while (receiver_transport.has_message()) {
+        auto msg = receiver_transport.receive();
+        auto& buf = receiver.receive_buffer();
+        size_t to_copy = std::min(msg.size(), buf.available());
+        std::memcpy(buf.write_ptr(), msg.data(), to_copy);
+        buf.advance(to_copy);
+        receiver.on_data_received();
+      }
+
+      while (sender_transport.has_message()) {
+        auto msg = sender_transport.receive();
+        sender.on_message_received(msg.data(), msg.size());
+      }
+
+      // Check if the receiver's slot now has a real offset
+      // (not sentinel and not zero)
+      claimed_slot = receiver._replication_slot;
+      if (claimed_slot >= 0) {
+        uint64_t slot_val =
+            receiver_impl->_header->replication_slots[claimed_slot]._offset;
+        constexpr uint64_t SENTINEL =
+            DBImpl::Header::REPLICATION_SLOT_SENTINEL;
+        if (slot_val != 0 && slot_val != SENTINEL) {
+          // BIG_VALUE_START was processed — the slot holds a real area offset.
+          // Stop here to simulate a crash.
+          break;
+        }
+      }
+
+      if (sender.state() == SenderFSM::State::IDLE ||
+          sender.state() == SenderFSM::State::ERROR ||
+          receiver.state() == ReceiverFSM::State::IDLE ||
+          receiver.state() == ReceiverFSM::State::ERROR)
+        break;
+    }
+
+    BOOST_REQUIRE_GE(claimed_slot, 0);
+    uint64_t slot_val =
+        receiver_impl->_header->replication_slots[claimed_slot]._offset;
+    BOOST_CHECK_MESSAGE(
+        slot_val != 0 && slot_val != DBImpl::Header::REPLICATION_SLOT_SENTINEL,
+        "Expected a real area offset in the slot, got: " +
+            std::to_string(slot_val));
+
+    // --- "Crash" ---
+    // The FSMs and their cursors are destroyed here without completing
+    // the protocol.  The receiver's _release_slot() will be called in the
+    // destructor or not — but even if it isn't, sanitize() must handle
+    // cleanup.  To truly simulate a crash (no destructors), we detach:
+    // We deliberately do NOT let _release_slot run. Write a non-zero
+    // value directly to the slot to persist the orphaned area.
+    // (The FSM destructor doesn't call _release_slot; only COMPLETE and
+    // _transition_to_error do.)
+  }
+
+  // At this point the FSMs are destroyed.  The slot should still be
+  // non-zero (orphaned area).
+  // Note: _release_slot is only called from COMPLETE and error paths,
+  // not from the destructor — so the slot remains populated after a crash.
+  uint64_t orphaned_val =
+      receiver_impl->_header->replication_slots[claimed_slot]._offset;
+
+  // It's possible _release_slot was called if the receiver errored during
+  // partial protocol.  If not, the slot is non-zero and sanitize cleans it.
+  // If yes, the slot is already zero and sanitize is a no-op.
+  // Either way, after sanitize() ALL slots must be zero.
+
+  // Call sanitize() — this is what happens on crash recovery
+  receiver_impl->sanitize();
+
+  // All slots must now be zero
+  for (uint16_t i = 0; i < N; ++i) {
+    BOOST_CHECK_MESSAGE(
+        receiver_impl->_header->replication_slots[i]._offset == 0,
+        "Slot " + std::to_string(i) +
+            " is non-zero after sanitize(): " +
+            std::to_string(
+                receiver_impl->_header->replication_slots[i]._offset));
+  }
+
+  // Verify the DB is still usable after sanitize — insert and read a key
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.start_transaction();
+    cursor.find("post_crash_key");
+    const char* val = "post_crash_value";
+    cursor.value(Slice(val, strlen(val)));
+    cursor.commit();
+  }
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find("post_crash_key");
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(
+        std::string(cursor.value().data(), cursor.value().size()),
+        "post_crash_value");
+  }
+}
+
+// Test 3: Slot exhaustion — create MAX_REPLICATION_SLOTS receivers
+// simultaneously.  The last one that exceeds the limit should still work
+// (soft failure: _replication_slot == -1) but without crash-safety tracking.
+BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_slot_exhaust.lvs";
+  auto receiver_path = test_temp_dir / "receiver_slot_exhaust.lvs";
+
+  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
+  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
+
+  // Insert a small key on sender so there's something to replicate
+  {
+    auto cursor = sender_db.cursor();
+    cursor.start_transaction();
+    cursor.find("exhaust_key");
+    const char* val = "exhaust_value";
+    cursor.value(Slice(val, strlen(val)));
+    cursor.commit();
+  }
+
+  // Create N receivers, each claiming one slot via begin()
+  struct ReceiverContext {
+    TestTransport transport;
+    TestEvents events;
+    std::unique_ptr<ReceiverFSM> fsm;
+  };
+
+  // Create a single sender transport (we only need to trigger begin(), not
+  // run the full protocol)
+  std::vector<ReceiverContext> receivers(N);
+  for (uint16_t i = 0; i < N; ++i) {
+    receivers[i].fsm = std::make_unique<ReceiverFSM>(
+        receiver_impl, receiver_impl->txn(),
+        ReplicationMergePolicy<DBImpl>{});
+    receivers[i].fsm->begin(&receivers[i].transport, &receivers[i].events);
+
+    // Each should have claimed a unique slot
+    BOOST_CHECK_GE(receivers[i].fsm->_replication_slot, 0);
+  }
+
+  // Verify all N slots are occupied (sentinel value since no BIG_VALUE_START)
+  for (uint16_t i = 0; i < N; ++i) {
+    BOOST_CHECK_EQUAL(
+        receiver_impl->_header->replication_slots[i]._offset,
+        DBImpl::Header::REPLICATION_SLOT_SENTINEL);
+  }
+
+  // Create one more receiver — should fail to claim a slot
+  TestTransport extra_transport;
+  TestEvents extra_events;
+  ReceiverFSM extra_receiver(receiver_impl, receiver_impl->txn(),
+                             ReplicationMergePolicy<DBImpl>{});
+  extra_receiver.begin(&extra_transport, &extra_events);
+
+  BOOST_CHECK_EQUAL(extra_receiver._replication_slot, -1);
+
+  // Clean up: destroy all receivers (slots released via _release_slot
+  // in _transition_to_error or COMPLETE — but since we're just destroying,
+  // slots remain occupied.  Clear them manually for the extra receiver test.)
+  receivers.clear();
+
+  // After destroying receivers (which don't call _release_slot in dtor),
+  // sanitize() should clean up all orphaned sentinel slots
+  receiver_impl->sanitize();
+
+  for (uint16_t i = 0; i < N; ++i) {
+    BOOST_CHECK_EQUAL(receiver_impl->_header->replication_slots[i]._offset, 0u);
+  }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
