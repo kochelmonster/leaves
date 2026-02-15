@@ -1138,4 +1138,1073 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
   }
 }
 
+// =============================================================================
+// Deletion Database Tests
+// =============================================================================
+
+BOOST_FIXTURE_TEST_CASE(test_deletion_trie_tracks_removes, ReplicationFixture) {
+  // Test that _ReplicationCursor records deleted keys in deletion_root
+  auto src_path = (test_temp_dir / "del_src.lvs").string();
+  auto storage = Storage::create(src_path.c_str());
+  auto db = storage->operator[]("test");
+
+  // Insert some keys
+  {
+    auto cursor = db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 10; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string val = "val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val));
+    }
+    cursor.commit();
+  }
+
+  // Delete some keys — these should appear in deletion_root
+  {
+    auto cursor = db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE(cursor.is_valid());
+      cursor.remove();
+    }
+    cursor.commit();
+  }
+
+  // Verify main trie only has keys 5-9
+  {
+    auto cursor = db.cursor();
+    int count = 0;
+    cursor.first();
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
+    BOOST_CHECK_EQUAL(count, 5);
+  }
+
+  // Verify deletion trie has the 5 deleted keys
+  // Access deletion_root through the internal DB
+  {
+    auto* impl = db._internal();
+    auto txn = impl->txn();
+    BOOST_REQUIRE(txn->deletion_root);
+
+    // Create a cursor pointing at deletion_root
+    using CursorTraits = typename DBImpl::CursorTraits;
+    _Cursor<CursorTraits> del_cursor(impl, &txn->deletion_root);
+
+    int del_count = 0;
+    del_cursor.first();
+    while (del_cursor.is_valid()) {
+      // Each deleted key should have a timestamp value (uint64_t LE)
+      BOOST_CHECK_EQUAL(del_cursor.value().size(), sizeof(uint64_t));
+      del_count++;
+      del_cursor.next();
+    }
+    BOOST_CHECK_EQUAL(del_count, 5);
+
+    // Check specific deleted keys exist
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      del_cursor.find(Slice(key));
+      BOOST_CHECK_MESSAGE(del_cursor.is_valid(),
+                          "Deleted key not in deletion trie: " + key);
+    }
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_deletion_trie_replication, ReplicationFixture) {
+  // Test that deletion trie is replicated from sender to receiver
+  auto src_path = (test_temp_dir / "rep_del_src.lvs").string();
+  auto dst_path = (test_temp_dir / "rep_del_dst.lvs").string();
+
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src_db = src_storage->operator[]("test");
+  auto dst_db = dst_storage->operator[]("test");
+
+  // Insert keys on source
+  {
+    auto cursor = src_db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 10; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string val = "val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val));
+    }
+    cursor.commit();
+  }
+
+  // Also insert the same keys on destination (simulate pre-existing data)
+  {
+    auto cursor = dst_db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 10; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string val = "val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val));
+    }
+    cursor.commit();
+  }
+
+  // Delete some keys on source — creates deletion trie entries
+  {
+    auto cursor = src_db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE(cursor.is_valid());
+      cursor.remove();
+    }
+    cursor.commit();
+  }
+
+  // Replicate: sender sends main trie + deletion trie
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents sender_events, receiver_events;
+
+  SenderFSM sender(src_impl, src_impl->txn());
+  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+
+  sender.begin(&sender_transport, &sender_events);
+  receiver.begin(&receiver_transport, &receiver_events);
+
+  run_protocol(sender, receiver, sender_transport, receiver_transport);
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+
+  // Verify main trie on receiver: the merger automatically applies deletions
+  // from the deletion trie during the merge, so only keys 5-9 should remain
+  {
+    auto cursor = dst_db.cursor();
+    int count = 0;
+    cursor.first();
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
+    BOOST_CHECK_EQUAL(count, 5);
+
+    // Verify the deleted keys (0-4) are really gone
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_CHECK_MESSAGE(!cursor.is_valid(), "Deleted key still present: " + key);
+    }
+
+    // Verify the correct keys remain (5-9)
+    for (int i = 5; i < 10; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_CHECK_MESSAGE(cursor.is_valid(), "Missing key after applying deletes: " + key);
+    }
+  }
+
+  // Verify deletion trie was replicated to receiver
+  {
+    auto txn = dst_impl->txn();
+    BOOST_REQUIRE_MESSAGE(txn->deletion_root,
+                          "Receiver should have a non-zero deletion_root");
+
+    using CursorTraits = typename DBImpl::CursorTraits;
+    _Cursor<CursorTraits> del_cursor(dst_impl, &txn->deletion_root);
+
+    int del_count = 0;
+    del_cursor.first();
+    while (del_cursor.is_valid()) {
+      // Deletion trie entries now store a timestamp (uint64_t LE)
+      BOOST_CHECK_EQUAL(del_cursor.value().size(), sizeof(uint64_t));
+      del_count++;
+      del_cursor.next();
+    }
+    BOOST_CHECK_EQUAL(del_count, 5);
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, ReplicationFixture) {
+  // Verify that re-inserting a previously deleted key survives replication.
+  // The deletion trie still contains the key, but because the deletion trie
+  // is merged BEFORE the main trie (phase order), the main trie merge
+  // re-inserts the key after deletion — so the re-inserted key survives.
+  auto src_path = (test_temp_dir / "reinsert_src.lvs").string();
+  auto dst_path = (test_temp_dir / "reinsert_dst.lvs").string();
+
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src_db = src_storage->operator[]("test");
+  auto dst_db = dst_storage->operator[]("test");
+
+  // Insert keys on source and destination
+  {
+    auto sc = src_db.cursor();
+    auto dc = dst_db.cursor();
+    sc.start_transaction();
+    dc.start_transaction();
+    for (int i = 0; i < 10; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string val = "val_" + std::to_string(i);
+      sc.find(Slice(key));
+      sc.value(Slice(val));
+      dc.find(Slice(key));
+      dc.value(Slice(val));
+    }
+    sc.commit();
+    dc.commit();
+  }
+
+  // Delete keys 0-4, then re-insert keys 0-2 with new values
+  {
+    auto cursor = src_db.cursor();
+    cursor.start_transaction();
+    for (int i = 0; i < 5; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE(cursor.is_valid());
+      cursor.remove();
+    }
+    // Re-insert keys 0-2
+    for (int i = 0; i < 3; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string val = "new_val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val));
+    }
+    cursor.commit();
+  }
+
+  // Verify source state: main trie has 8 keys (5-9 original + 0-2 reinserted)
+  {
+    auto cursor = src_db.cursor();
+    int count = 0;
+    cursor.first();
+    while (cursor.is_valid()) { count++; cursor.next(); }
+    BOOST_CHECK_EQUAL(count, 8);
+  }
+
+  // Verify source deletion trie has 5 keys (0-4) — re-insert does NOT
+  // clear the deletion record; the merge order handles correctness instead.
+  {
+    auto* impl = src_db._internal();
+    auto txn = impl->txn();
+    BOOST_REQUIRE(txn->deletion_root);
+
+    using CursorTraits = typename DBImpl::CursorTraits;
+    _Cursor<CursorTraits> del_cursor(impl, &txn->deletion_root);
+
+    int del_count = 0;
+    del_cursor.first();
+    while (del_cursor.is_valid()) { del_count++; del_cursor.next(); }
+    BOOST_CHECK_EQUAL(del_count, 5);
+  }
+
+  // Replicate
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents sender_events, receiver_events;
+
+  SenderFSM sender(src_impl, src_impl->txn());
+  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+
+  sender.begin(&sender_transport, &sender_events);
+  receiver.begin(&receiver_transport, &receiver_events);
+
+  run_protocol(sender, receiver, sender_transport, receiver_transport);
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::IDLE);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+
+  // Verify receiver: 8 keys — re-inserted keys must survive, deleted keys gone
+  {
+    auto cursor = dst_db.cursor();
+    int count = 0;
+    cursor.first();
+    while (cursor.is_valid()) { count++; cursor.next(); }
+    BOOST_CHECK_EQUAL(count, 8);
+
+    // Re-inserted keys 0-2 should be present with new values
+    for (int i = 0; i < 3; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string expected = "new_val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_CHECK_MESSAGE(cursor.is_valid(), "Re-inserted key missing: " + key);
+      if (cursor.is_valid()) {
+        BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
+                            "Re-inserted key has wrong value: " + key);
+      }
+    }
+
+    // Deleted keys 3-4 should be gone
+    for (int i = 3; i < 5; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_CHECK_MESSAGE(!cursor.is_valid(), "Deleted key still present: " + key);
+    }
+
+    // Original keys 5-9 should remain
+    for (int i = 5; i < 10; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_CHECK_MESSAGE(cursor.is_valid(), "Original key missing: " + key);
+    }
+  }
+}
+
+// =============================================================================
+// Security Tests — Malicious Peer Scenarios
+// =============================================================================
+// These tests verify that the FSM correctly rejects crafted/malicious messages
+// and transitions to ERROR state without crashing or corrupting data.
+
+// Helper: build a raw message with arbitrary bytes (bypasses builder validation)
+static std::vector<uint8_t> build_raw_msg(ReplicationMsgType type,
+                                          uint64_t session_id,
+                                          const uint8_t* payload,
+                                          size_t payload_size) {
+  std::vector<uint8_t> buf(sizeof(ReplicationMsgHeader) + payload_size);
+  auto* hdr = reinterpret_cast<ReplicationMsgHeader*>(buf.data());
+  hdr->magic = REPLICATION_MSG_MAGIC;
+  hdr->msg_type = static_cast<uint8_t>(type);
+  hdr->session_id = session_id;
+  hdr->payload_size = payload_size;
+  hdr->version = REPLICATION_PROTOCOL_VERSION;
+  std::memset(hdr->reserved, 0, sizeof(hdr->reserved));
+  if (payload_size > 0)
+    std::memcpy(buf.data() + sizeof(ReplicationMsgHeader), payload, payload_size);
+  return buf;
+}
+
+// Helper: feed raw bytes into a receiver's zero-copy interface
+static void feed_receiver(ReceiverFSM& receiver, const uint8_t* data,
+                          size_t size) {
+  auto& buf = receiver.receive_buffer();
+  size_t to_copy = std::min(size, buf.available());
+  std::memcpy(buf.write_ptr(), data, to_copy);
+  buf.advance(to_copy);
+  receiver.on_data_received();
+}
+
+// ---------------------------------------------------------------------------
+// 1. Message Envelope Validation
+// ---------------------------------------------------------------------------
+
+BOOST_AUTO_TEST_CASE(test_parse_msg_too_small) {
+  // Message smaller than ReplicationMsgHeader -> parse returns nullptr
+  uint8_t tiny[] = {0x01, 0x02, 0x03};
+  Slice payload;
+  const auto* hdr = parse_replication_msg(tiny, sizeof(tiny), &payload);
+  BOOST_CHECK(hdr == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_msg_bad_magic) {
+  // Valid size but wrong magic -> parse returns nullptr
+  ReplicationMsgHeader raw{};
+  raw.magic = 0xDEADBEEF;
+  raw.version = REPLICATION_PROTOCOL_VERSION;
+  raw.payload_size = 0;
+  raw.msg_type = static_cast<uint8_t>(ReplicationMsgType::COMPLETE);
+  Slice payload;
+  const auto* hdr = parse_replication_msg(
+      reinterpret_cast<const uint8_t*>(&raw), sizeof(raw), &payload);
+  BOOST_CHECK(hdr == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_msg_bad_version) {
+  // Correct magic but wrong version -> parse returns nullptr
+  ReplicationMsgHeader raw{};
+  raw.magic = REPLICATION_MSG_MAGIC;
+  raw.version = 99;
+  raw.payload_size = 0;
+  raw.msg_type = static_cast<uint8_t>(ReplicationMsgType::COMPLETE);
+  Slice payload;
+  const auto* hdr = parse_replication_msg(
+      reinterpret_cast<const uint8_t*>(&raw), sizeof(raw), &payload);
+  BOOST_CHECK(hdr == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_msg_payload_size_lie) {
+  // Header claims 1000 bytes of payload but buffer only has the header
+  ReplicationMsgHeader raw{};
+  raw.magic = REPLICATION_MSG_MAGIC;
+  raw.version = REPLICATION_PROTOCOL_VERSION;
+  raw.payload_size = 1000;
+  raw.msg_type = static_cast<uint8_t>(ReplicationMsgType::COMPLETE);
+  Slice payload;
+  const auto* hdr = parse_replication_msg(
+      reinterpret_cast<const uint8_t*>(&raw), sizeof(raw), &payload);
+  BOOST_CHECK(hdr == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// 2. Sender: invalid message handling
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_sender_receives_garbage, ReplicationFixture) {
+  // Sender receives completely invalid bytes -> ERROR
+  auto path = test_temp_dir / "sender_garbage.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents events;
+
+  SenderFSM sender(impl, impl->txn());
+  sender.begin(&sender_transport, &events);
+
+  // Feed garbage
+  uint8_t garbage[] = {0xFF, 0xFE, 0xFD, 0xFC, 0x00};
+  sender.on_message_received(garbage, sizeof(garbage));
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
+  BOOST_CHECK(events.errored);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_sender_wrong_state_message, ReplicationFixture) {
+  // Sender in SENDING state receives a message -> INVALID_STATE
+  auto path = test_temp_dir / "sender_wrongstate.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  // Insert a key so sending doesn't complete immediately
+  {
+    auto cursor = db.cursor();
+    cursor.find(Slice("key"));
+    cursor.value(Slice("value"));
+    cursor.commit();
+  }
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents events;
+
+  SenderFSM sender(impl, impl->txn());
+  sender.begin(&sender_transport, &events);
+
+  // Sender is now in AWAITING_RESPONSE after sending first buffer.
+  // Drain the receiver transport so we get the sender's session_id
+  // from the first message it sent.
+  BOOST_CHECK(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
+
+  // Now craft a valid message with the sender's session but an unexpected type
+  // (TRIE_DATA from receiver doesn't make sense)
+  auto bad = build_raw_msg(ReplicationMsgType::TRIE_DATA, sender.session_id(),
+                           nullptr, 0);
+  sender.on_message_received(bad.data(), bad.size());
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload, ReplicationFixture) {
+  // Sender receives SUBTRIE_ACK with malformed RequestChildren payload
+  auto path = test_temp_dir / "sender_badack.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  {
+    auto cursor = db.cursor();
+    cursor.find(Slice("key"));
+    cursor.value(Slice("value"));
+    cursor.commit();
+  }
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents events;
+
+  SenderFSM sender(impl, impl->txn());
+  sender.begin(&sender_transport, &events);
+  BOOST_CHECK(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
+
+  // Send SUBTRIE_ACK with garbage payload (wrong magic for RequestChildrenHeader)
+  uint8_t garbage_payload[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                               0x00};
+  auto bad = build_raw_msg(ReplicationMsgType::SUBTRIE_ACK, sender.session_id(),
+                           garbage_payload, sizeof(garbage_payload));
+  sender.on_message_received(bad.data(), bad.size());
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+// ---------------------------------------------------------------------------
+// 3. Receiver: message envelope validation (zero-copy interface)
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_bad_magic, ReplicationFixture) {
+  // Receiver gets a message with wrong magic -> ERROR
+  auto path = test_temp_dir / "recv_badmagic.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // Build a header-sized message with bad magic
+  ReplicationMsgHeader raw{};
+  raw.magic = 0xDEADBEEF;
+  raw.version = REPLICATION_PROTOCOL_VERSION;
+  raw.payload_size = 0;
+  raw.msg_type = static_cast<uint8_t>(ReplicationMsgType::COMPLETE);
+  std::memset(raw.reserved, 0, sizeof(raw.reserved));
+
+  feed_receiver(receiver, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+  BOOST_CHECK(events.errored);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
+  // First message sets session; second message with different session -> ERROR
+  auto src_path = test_temp_dir / "recv_sess_src.lvs";
+  auto dst_path = test_temp_dir / "recv_sess_dst.lvs";
+
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src_db = (*src_storage)["testdb"];
+  auto dst_db = (*dst_storage)["testdb"];
+
+  {
+    auto cursor = src_db.cursor();
+    cursor.find(Slice("key"));
+    cursor.value(Slice("value"));
+    cursor.commit();
+  }
+
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents sender_events, receiver_events;
+
+  SenderFSM sender(src_impl, src_impl->txn());
+  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  // Process the first message from sender to receiver (sets session)
+  BOOST_REQUIRE(receiver_transport.has_message());
+  {
+    auto msg = receiver_transport.receive();
+    auto& buf = receiver.receive_buffer();
+    std::memcpy(buf.write_ptr(), msg.data(), msg.size());
+    buf.advance(msg.size());
+    receiver.on_data_received();
+  }
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+
+  // Now inject a message with a different session ID
+  uint64_t wrong_session = sender.session_id() ^ 0xFFFFFFFF;
+  auto bad = build_raw_msg(ReplicationMsgType::COMPLETE, wrong_session,
+                           nullptr, 0);
+  feed_receiver(receiver, bad.data(), bad.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::SESSION_MISMATCH);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Receiver: payload size limit
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_payload_too_large, ReplicationFixture) {
+  // Receiver rejects message whose payload_size exceeds _max_payload_size
+  auto path = test_temp_dir / "recv_toolarge.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  // Create receiver with very small max_payload_size (256 bytes)
+  ReceiverFSM receiver(impl, impl->txn(), {}, 64 * 1024, 256 * 1024 * 1024,
+                       256);
+
+  receiver.begin(&transport, &events);
+
+  // Build a header that claims 1000 bytes of payload (exceeds 256 limit)
+  ReplicationMsgHeader raw{};
+  raw.magic = REPLICATION_MSG_MAGIC;
+  raw.version = REPLICATION_PROTOCOL_VERSION;
+  raw.payload_size = 1000;
+  raw.msg_type = static_cast<uint8_t>(ReplicationMsgType::TRIE_DATA);
+  raw.session_id = 42;
+  std::memset(raw.reserved, 0, sizeof(raw.reserved));
+
+  feed_receiver(receiver, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::PAYLOAD_TOO_LARGE);
+  BOOST_CHECK(events.errored);
+}
+
+// ---------------------------------------------------------------------------
+// 5. Receiver: wrong state messages
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_msg_in_idle_state, ReplicationFixture) {
+  // Receiver in IDLE state ignores incoming messages (doesn't crash)
+  auto path = test_temp_dir / "recv_idle.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  // Don't call begin() — receiver stays IDLE
+
+  auto msg = build_raw_msg(ReplicationMsgType::COMPLETE, 42, nullptr, 0);
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  // Should stay IDLE (IDLE state ignores messages), not crash
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Receiver: unexpected message types
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_unexpected_msg_type, ReplicationFixture) {
+  // Receiver gets an unknown or inappropriate msg_type -> ERROR
+  auto path = test_temp_dir / "recv_badtype.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // Send SUBTRIE_ACK to receiver — this is a receiver->sender message type,
+  // receiver should reject it
+  auto msg = build_raw_msg(ReplicationMsgType::SUBTRIE_ACK,
+                           receiver.session_id(), nullptr, 0);
+  // Session is 0 initially, first message sets it; use that property
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+// ---------------------------------------------------------------------------
+// 7. Receiver: malformed TRIE_DATA payload
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header, ReplicationFixture) {
+  // Receiver gets TRIE_DATA with truncated/invalid TransferTrieHeader
+  auto path = test_temp_dir / "recv_badtrie.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // Build TRIE_DATA with payload too small for TransferTrieHeader (45 bytes)
+  uint8_t tiny_payload[10] = {0};
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
+                           tiny_payload, sizeof(tiny_payload));
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_magic, ReplicationFixture) {
+  // Receiver gets TRIE_DATA with valid size but wrong TransferTrieHeader magic
+  auto path = test_temp_dir / "recv_badtriemagic.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // Build a fake TransferTrieHeader with wrong magic
+  std::vector<uint8_t> fake_tth(sizeof(TransferTrieHeader), 0);
+  auto* tth = reinterpret_cast<TransferTrieHeader*>(fake_tth.data());
+  tth->magic = 0xBAADF00D;
+  tth->version = 1;
+
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
+                           fake_tth.data(), fake_tth.size());
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_subtrie_path_overflow,
+                        ReplicationFixture) {
+  // TransferTrieHeader claims subtrie_path_len larger than remaining buffer
+  auto path = test_temp_dir / "recv_pathoverflow.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // Valid TransferTrieHeader magic/version but subtrie_path_len = 9999
+  std::vector<uint8_t> payload(sizeof(TransferTrieHeader), 0);
+  auto* tth = reinterpret_cast<TransferTrieHeader*>(payload.data());
+  tth->magic = 0x4C565354;  // TRANSFER_MAGIC "LVST"
+  tth->version = 1;
+  tth->subtrie_path_len = 9999;  // way beyond buffer
+
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
+                           payload.data(), payload.size());
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Receiver: BIG_VALUE_START validation
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_truncated,
+                        ReplicationFixture) {
+  // BIG_VALUE_START with payload smaller than BigValueStartHeader
+  auto path = test_temp_dir / "recv_bvs_trunc.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // Send BIG_VALUE_START with only 4 bytes (need 12)
+  uint8_t tiny[] = {0x01, 0x00, 0x00, 0x00};
+  auto msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1,
+                           tiny, sizeof(tiny));
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_too_large,
+                        ReplicationFixture) {
+  // BIG_VALUE_START claims total_aligned_size > _max_big_value_size
+  auto path = test_temp_dir / "recv_bvs_huge.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  // Set max_big_value_size to 1KB
+  ReceiverFSM receiver(impl, impl->txn(), {}, 64 * 1024, 256 * 1024 * 1024,
+                       ReceiverFSM::DEFAULT_MAX_PAYLOAD_SIZE, 1024);
+
+  receiver.begin(&transport, &events);
+
+  // Claim 1MB of big value data (exceeds 1KB limit)
+  BigValueStartHeader bvh{};
+  bvh.count = 1;
+  bvh.total_aligned_size = 1024 * 1024;
+
+  auto msg = build_raw_msg(
+      ReplicationMsgType::BIG_VALUE_START, 1,
+      reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::RESOURCE_LIMIT);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_integer_overflow,
+                        ReplicationFixture) {
+  // BIG_VALUE_START with total_aligned_size near SIZE_MAX to trigger overflow
+  auto path = test_temp_dir / "recv_bvs_overflow.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  // total_aligned_size near uint64_t max -> alignment arithmetic would overflow
+  BigValueStartHeader bvh{};
+  bvh.count = 1;
+  bvh.total_aligned_size = UINT64_MAX - 100;
+
+  auto msg = build_raw_msg(
+      ReplicationMsgType::BIG_VALUE_START, 1,
+      reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
+  feed_receiver(receiver, msg.data(), msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  // Either RESOURCE_LIMIT (size exceeds limit) or RESOURCE_LIMIT (overflow)
+  BOOST_CHECK(receiver.error() == ReplicationError::RESOURCE_LIMIT);
+}
+
+// ---------------------------------------------------------------------------
+// 9. Receiver: error propagation to sender
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
+  // When receiver errors, it sends an ERROR message back via transport
+  auto src_path = test_temp_dir / "errprop_src.lvs";
+  auto dst_path = test_temp_dir / "errprop_dst.lvs";
+
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src_db = (*src_storage)["testdb"];
+  auto dst_db = (*dst_storage)["testdb"];
+
+  {
+    auto cursor = src_db.cursor();
+    cursor.find(Slice("key"));
+    cursor.value(Slice("value"));
+    cursor.commit();
+  }
+
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents sender_events, receiver_events;
+
+  // Use a small max_payload (200) so first real msg fits but second won't
+  ReceiverFSM receiver(dst_impl, dst_impl->txn(), {}, 64 * 1024,
+                       256 * 1024 * 1024, 200);
+
+  SenderFSM sender(src_impl, src_impl->txn());
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  // Process sender's first message at receiver — this sets session_id
+  BOOST_REQUIRE(receiver_transport.has_message());
+  {
+    auto msg = receiver_transport.receive();
+    feed_receiver(receiver, msg.data(), msg.size());
+  }
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+
+  // Drain any ACK/COMPLETE sent back to sender (side-effect of first message)
+  size_t msgs_before = 0;
+  while (sender_transport.has_message()) {
+    sender_transport.receive();
+    msgs_before++;
+  }
+
+  // Now inject a second TRIE_DATA with payload > 200 bytes -> PAYLOAD_TOO_LARGE
+  std::vector<uint8_t> big_payload(300, 0x42);
+  auto bad = build_raw_msg(ReplicationMsgType::TRIE_DATA,
+                           receiver.session_id(),
+                           big_payload.data(), big_payload.size());
+  feed_receiver(receiver, bad.data(), bad.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::PAYLOAD_TOO_LARGE);
+  BOOST_CHECK(receiver_events.errored);
+
+  // Verify that the receiver sent an ERROR message on the wire
+  BOOST_REQUIRE(sender_transport.has_message());
+  auto error_msg = sender_transport.receive();
+  Slice error_payload;
+  const auto* hdr =
+      parse_replication_msg(error_msg.data(), error_msg.size(), &error_payload);
+  BOOST_REQUIRE(hdr != nullptr);
+  BOOST_CHECK(static_cast<ReplicationMsgType>(hdr->msg_type) ==
+              ReplicationMsgType::ERROR);
+  BOOST_REQUIRE(error_payload.size() >= 1);
+  BOOST_CHECK(static_cast<ReplicationError>(error_payload.data()[0]) ==
+              ReplicationError::PAYLOAD_TOO_LARGE);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Receiver: data after complete doesn't crash
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_ignores_late_messages,
+                        ReplicationFixture) {
+  // After successful replication, late messages are silently ignored
+  auto src_path = test_temp_dir / "late_src.lvs";
+  auto dst_path = test_temp_dir / "late_dst.lvs";
+
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src_db = (*src_storage)["testdb"];
+  auto dst_db = (*dst_storage)["testdb"];
+
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents sender_events, receiver_events;
+
+  SenderFSM sender(src_impl, src_impl->txn());
+  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  run_protocol(sender, receiver, sender_transport, receiver_transport);
+
+  BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::IDLE);
+
+  // Send a TRIE_DATA after IDLE -> should stay IDLE, not crash
+  auto late = build_raw_msg(ReplicationMsgType::TRIE_DATA,
+                            receiver.session_id(), nullptr, 0);
+  feed_receiver(receiver, late.data(), late.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::IDLE);
+}
+
+// ---------------------------------------------------------------------------
+// 11. Sender: session mismatch on SUBTRIE_ACK with valid RequestChildren
+// ---------------------------------------------------------------------------
+
+BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
+                        ReplicationFixture) {
+  // SUBTRIE_ACK with wrong session_id in the outer message -> SESSION_MISMATCH
+  auto path = test_temp_dir / "sender_acksess.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  {
+    auto cursor = db.cursor();
+    cursor.find(Slice("key"));
+    cursor.value(Slice("value"));
+    cursor.commit();
+  }
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+  TestEvents events;
+
+  SenderFSM sender(impl, impl->txn());
+  sender.begin(&sender_transport, &events);
+  BOOST_REQUIRE(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
+
+  // Build valid RequestChildrenHeader but wrap it in wrong session
+  RequestChildrenBuilder rcb;
+  rcb.begin(sender.session_id(), DbType::DB_MAIN);
+
+  uint64_t wrong = sender.session_id() + 1;
+  auto bad = build_raw_msg(ReplicationMsgType::SUBTRIE_ACK, wrong,
+                           reinterpret_cast<const uint8_t*>(rcb.finalize().data()),
+                           rcb.size());
+  sender.on_message_received(bad.data(), bad.size());
+
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.error() == ReplicationError::SESSION_MISMATCH);
+}
+
+// ---------------------------------------------------------------------------
+// 12. Transfer header parsing
+// ---------------------------------------------------------------------------
+
+BOOST_AUTO_TEST_CASE(test_transfer_header_parse_truncated) {
+  // parse_header with data smaller than TransferTrieHeader -> nullptr
+  using Transfer = TransferTrie<_ReplicatingMemoryMapTraits>;
+  uint8_t tiny[10] = {0};
+  const auto* hdr = Transfer::parse_header(Slice(tiny, sizeof(tiny)));
+  BOOST_CHECK(hdr == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_transfer_header_parse_bad_magic) {
+  // parse_header with wrong magic -> nullptr
+  using Transfer = TransferTrie<_ReplicatingMemoryMapTraits>;
+  std::vector<uint8_t> buf(sizeof(TransferTrieHeader), 0);
+  auto* tth = reinterpret_cast<TransferTrieHeader*>(buf.data());
+  tth->magic = 0x00000000;
+  tth->version = 1;
+  const auto* hdr = Transfer::parse_header(Slice(buf.data(), buf.size()));
+  BOOST_CHECK(hdr == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_request_children_parse_truncated) {
+  // parse_request_children with truncated data -> false
+  uint8_t tiny[5] = {0};
+  RequestChildrenHeader out;
+  BOOST_CHECK(!parse_request_children(Slice(tiny, sizeof(tiny)), &out));
+}
+
+BOOST_AUTO_TEST_CASE(test_request_children_parse_bad_magic) {
+  // parse_request_children with wrong magic -> false
+  RequestChildrenHeader raw{};
+  raw.magic = 0xDEADBEEF;
+  raw.session_id = 1;
+  raw.path_count = 0;
+  RequestChildrenHeader out;
+  BOOST_CHECK(!parse_request_children(
+      Slice(reinterpret_cast<const char*>(&raw), sizeof(raw)), &out));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

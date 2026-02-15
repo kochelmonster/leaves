@@ -2,11 +2,13 @@
 #define _LEAVES_THREADPOOL_HPP
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace leaves {
@@ -15,26 +17,48 @@ namespace leaves {
  * @brief Thread pool mixin for storage classes
  *
  * Provides a shared thread pool that databases can use for background tasks
- * like LSM merges, compaction, etc.
+ * like LSM merges, compaction, etc.  Also includes a job scheduler for
+ * delayed/periodic tasks via schedule_after() / cancel_job().
+ *
+ * Scheduled jobs are handled by the worker threads themselves — no
+ * dedicated scheduler thread.  Workers sleep until the next scheduled
+ * job is due (or until an immediate task arrives).
  *
  * Usage:
  *   struct MyStorage : _ThreadPoolMixin<MyStorage> {
  *     MyStorage() : _ThreadPoolMixin(4) {}  // 4 worker threads
  *   };
  *
- *   // Submit a task:
+ *   // Submit a task immediately:
  *   storage.submit_task([&]() { do_background_work(); });
+ *
+ *   // Schedule a task to run after a delay:
+ *   auto id = storage.schedule_after(std::chrono::seconds(60), [&]() { ... });
+ *   storage.cancel_job(id);  // cancel before it fires
  */
 template <typename Derived>
 struct _ThreadPoolMixin {
   using Task = std::function<void()>;
 
+  // --- Scheduled job (min-heap by time) ---
+  struct _ScheduledJob {
+    uint64_t id;
+    std::chrono::steady_clock::time_point when;
+    Task task;
+    bool operator>(const _ScheduledJob& o) const { return when > o.when; }
+  };
+
+  // Everything protected by _queue_mutex
   std::vector<std::thread> _workers;
   std::queue<Task> _task_queue;
+  std::priority_queue<_ScheduledJob, std::vector<_ScheduledJob>,
+                      std::greater<_ScheduledJob>> _sched_queue;
+  std::unordered_set<uint64_t> _cancelled_jobs;
   std::mutex _queue_mutex;
   std::condition_variable _queue_cv;
   std::atomic<bool> _pool_shutdown{false};
   std::atomic<uint32_t> _active_tasks{0};
+  std::atomic<uint64_t> _next_job_id{1};
 
   explicit _ThreadPoolMixin(size_t num_threads = 0) {
     if (num_threads == 0) {
@@ -67,27 +91,50 @@ struct _ThreadPoolMixin {
     _queue_cv.notify_all();
 
     for (auto& worker : _workers) {
-      if (worker.joinable()) {
-        worker.join();
-      }
+      if (worker.joinable()) worker.join();
     }
     _workers.clear();
   }
 
   /**
-   * @brief Submit a task to the thread pool
-   *
-   * @param task The task to execute
+   * @brief Submit a task to the thread pool for immediate execution
    */
   void submit_task(Task task) {
     {
       std::lock_guard<std::mutex> lock(_queue_mutex);
-      if (_pool_shutdown.load()) {
-        return;  // Don't accept new tasks during shutdown
-      }
+      if (_pool_shutdown.load()) return;
       _task_queue.push(std::move(task));
     }
     _queue_cv.notify_one();
+  }
+
+  /**
+   * @brief Schedule a task to execute after a delay
+   *
+   * The task is picked up by a worker thread once the delay elapses.
+   * Returns a job ID that can be passed to cancel_job().
+   */
+  template <typename Rep, typename Period>
+  uint64_t schedule_after(std::chrono::duration<Rep, Period> delay, Task task) {
+    uint64_t id = _next_job_id.fetch_add(1, std::memory_order_relaxed);
+    auto when = std::chrono::steady_clock::now() + delay;
+    {
+      std::lock_guard<std::mutex> lock(_queue_mutex);
+      if (_pool_shutdown.load()) return id;
+      _sched_queue.push({id, when, std::move(task)});
+    }
+    _queue_cv.notify_one();  // wake a worker to recalculate its deadline
+    return id;
+  }
+
+  /**
+   * @brief Cancel a scheduled job that has not yet fired
+   *
+   * If the job has already been picked up by a worker, this has no effect.
+   */
+  void cancel_job(uint64_t id) {
+    std::lock_guard<std::mutex> lock(_queue_mutex);
+    _cancelled_jobs.insert(id);
   }
 
   /**
@@ -119,22 +166,53 @@ struct _ThreadPoolMixin {
     });
   }
 
+  // Move due scheduled jobs into the immediate task queue.
+  // Must be called with _queue_mutex held.
+  void _promote_scheduled_jobs() {
+    auto now = std::chrono::steady_clock::now();
+    while (!_sched_queue.empty() && _sched_queue.top().when <= now) {
+      auto& top = const_cast<_ScheduledJob&>(_sched_queue.top());
+      auto it = _cancelled_jobs.find(top.id);
+      if (it != _cancelled_jobs.end()) {
+        _cancelled_jobs.erase(it);
+      } else {
+        _task_queue.push(std::move(top.task));
+      }
+      _sched_queue.pop();
+    }
+  }
+
   void _worker_loop() {
     while (true) {
       Task task;
       {
         std::unique_lock<std::mutex> lock(_queue_mutex);
-        _queue_cv.wait(lock, [this]() {
-          return _pool_shutdown.load() || !_task_queue.empty();
-        });
 
-        if (_pool_shutdown.load() && _task_queue.empty()) {
-          return;
+        while (true) {
+          _promote_scheduled_jobs();
+
+          if (!_task_queue.empty()) {
+            task = std::move(_task_queue.front());
+            _task_queue.pop();
+            _active_tasks.fetch_add(1);
+            break;
+          }
+
+          if (_pool_shutdown.load()) return;
+
+          if (!_sched_queue.empty()) {
+            // Sleep until the next scheduled job or a new event
+            _queue_cv.wait_until(lock, _sched_queue.top().when);
+          } else {
+            // Nothing scheduled — sleep until a task arrives
+            _queue_cv.wait(lock, [this]() {
+              return _pool_shutdown.load() || !_task_queue.empty() ||
+                     !_sched_queue.empty();
+            });
+          }
+
+          if (_pool_shutdown.load() && _task_queue.empty()) return;
         }
-
-        task = std::move(_task_queue.front());
-        _task_queue.pop();
-        _active_tasks.fetch_add(1);
       }
 
       // Execute task outside the lock

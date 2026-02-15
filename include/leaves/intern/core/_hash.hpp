@@ -155,13 +155,31 @@ void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t current_txn_i
 
 }  // namespace detail
 
+// Helper to detect if Transaction has deletion_root
+template <typename T, typename = void>
+struct has_deletion_root : std::false_type {};
+
+template <typename T>
+struct has_deletion_root<T, std::void_t<decltype(std::declval<T>().deletion_root)>>
+    : std::true_type {};
+
 // compute_hashes for Blake3Hasher - computes merkle hashes for all modified nodes
 template <typename DB>
 void compute_hashes(Blake3Hasher, DB* db, typename DB::txn_ptr txn) {
-  if (!txn->root) return;
   std::string key_path;
   key_path.reserve(255);  // reasonable value
-  detail::compute_node_hash(db, txn->root, txn->txn_id, key_path);
+
+  if (txn->root) {
+    detail::compute_node_hash(db, txn->root, txn->txn_id, key_path);
+  }
+
+  // Also hash the deletion trie if present
+  if constexpr (has_deletion_root<std::remove_reference_t<decltype(*txn)>>::value) {
+    if (txn->deletion_root) {
+      key_path.clear();
+      detail::compute_node_hash(db, txn->deletion_root, txn->txn_id, key_path);
+    }
+  }
 }
 
 #endif  // BLAKE3_API

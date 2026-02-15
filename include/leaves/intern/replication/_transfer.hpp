@@ -151,9 +151,10 @@ struct TransferTrie {
   // Generate a random session ID
   static uint64_t generate_session_id() {
     std::random_device rd;
-    uint64_t high = rd();
-    uint64_t low = rd();
-    return (high << 32) | low;
+    // std::random_device returns unsigned int (>=32 bits).
+    // Combine four calls for 128 bits of entropy mixed into 64.
+    uint64_t a = rd(), b = rd(), c = rd(), d = rd();
+    return (a ^ (b << 16)) ^ ((c << 32) | (d << 48));
   }
 
   // Initialize buffer with header for sending
@@ -693,8 +694,16 @@ struct TransferTrieSender {
       // max_depth
       _path_buffer.clear();
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
-      if (_txn->root)
-        _write_subtree(_path_buffer, &_txn->root, 0, nullptr, true);
+
+      // Select root based on db_type: deletion_root for DB_DELETION
+      offset_e* root_ptr = &_txn->root;
+      if constexpr (requires { _txn->deletion_root; }) {
+        if (_db_type == DbType::DB_DELETION)
+          root_ptr = &_txn->deletion_root;
+      }
+
+      if (*root_ptr)
+        _write_subtree(_path_buffer, root_ptr, 0, nullptr, true);
       return;
     }
 

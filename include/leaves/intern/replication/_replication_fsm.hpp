@@ -1,6 +1,7 @@
 #ifndef _LEAVES__REPLICATION_FSM_HPP
 #define _LEAVES__REPLICATION_FSM_HPP
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -36,16 +37,22 @@ enum class ReplicationMsgType : uint8_t {
 constexpr uint32_t REPLICATION_MSG_MAGIC = 0x4C565250;  // "LVRP"
 
 // Message envelope wrapping all replication messages
+constexpr uint8_t REPLICATION_PROTOCOL_VERSION = 1;
+
 #pragma pack(push, 1)
 struct ReplicationMsgHeader {
   boost::endian::little_uint32_t magic;
   uint8_t msg_type;  // ReplicationMsgType
   boost::endian::little_uint64_t session_id;
   boost::endian::little_uint32_t payload_size;
-  uint8_t reserved[7];  // Padding to 24 bytes for 8-byte payload alignment
+  uint8_t version;     // Protocol version (REPLICATION_PROTOCOL_VERSION)
+  uint8_t reserved[6]; // Padding to 24 bytes for 8-byte payload alignment
   // Followed by: payload bytes
 
-  bool is_valid() const { return magic == REPLICATION_MSG_MAGIC; }
+  bool is_valid() const {
+    return magic == REPLICATION_MSG_MAGIC &&
+           version == REPLICATION_PROTOCOL_VERSION;
+  }
 };
 #pragma pack(pop)
 
@@ -85,7 +92,9 @@ enum class ReplicationError : uint8_t {
   SESSION_MISMATCH = 0x01,
   INVALID_MESSAGE = 0x02,
   INVALID_STATE = 0x03,
-  INTERNAL_ERROR = 0x04
+  INTERNAL_ERROR = 0x04,
+  PAYLOAD_TOO_LARGE = 0x05,
+  RESOURCE_LIMIT = 0x06
 };
 
 // =============================================================================
@@ -216,6 +225,8 @@ struct ReplicationMsgBuilder {
     hdr->msg_type = static_cast<uint8_t>(type);
     hdr->session_id = session_id;
     hdr->payload_size = 0;
+    hdr->version = REPLICATION_PROTOCOL_VERSION;
+    std::memset(hdr->reserved, 0, sizeof(hdr->reserved));
   }
 
   void append_payload(const uint8_t* data, size_t size) {
@@ -306,6 +317,9 @@ struct ReplicationSenderFSM {
   size_t _bv_current_offset;  // Offset within current big value's data
   bool _bv_header_sent;       // Whether header for current value was sent
 
+  // Activity tracking for application-level timeouts
+  std::chrono::steady_clock::time_point _last_activity;
+
   ReplicationSenderFSM(DB* db, typename DB::txn_ptr txn,
                        size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
       : _db(db),
@@ -321,7 +335,8 @@ struct ReplicationSenderFSM {
         _db_type(DbType::DB_MAIN),
         _bv_current_idx(0),
         _bv_current_offset(0),
-        _bv_header_sent(false) {}
+        _bv_header_sent(false),
+        _last_activity(std::chrono::steady_clock::now()) {}
 
   // Start replication
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
@@ -333,6 +348,7 @@ struct ReplicationSenderFSM {
     _total_bytes = 0;
     _error = ReplicationError::NONE;
     _db_type = db_type;
+    _last_activity = std::chrono::steady_clock::now();
 
     _sender.begin(db_type);
     _session_id = _sender.session_id();
@@ -356,6 +372,8 @@ struct ReplicationSenderFSM {
                            "Session ID mismatch");
       return;
     }
+
+    _last_activity = std::chrono::steady_clock::now();
 
     auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
 
@@ -388,6 +406,11 @@ struct ReplicationSenderFSM {
   State state() const { return _state; }
   uint64_t session_id() const { return _session_id; }
   ReplicationError error() const { return _error; }
+
+  // Time of last received message (for application-level timeout detection)
+  std::chrono::steady_clock::time_point last_activity() const {
+    return _last_activity;
+  }
 
   void _handle_response(ReplicationMsgType msg_type, const Slice& payload) {
     switch (msg_type) {
@@ -634,6 +657,11 @@ struct ReplicationSenderFSM {
   }
 
   void _send_complete() {
+    // If we just finished the main trie, check for deletion trie
+    if (_db_type == DbType::DB_MAIN) {
+      if (_start_deletion_phase()) return;
+    }
+
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
 
@@ -641,6 +669,21 @@ struct ReplicationSenderFSM {
       _events->on_complete(_session_id, _total_nodes);
     }
     _state = State::IDLE;
+  }
+
+  // Check if deletion trie needs to be sent; if so, start sending it.
+  // Returns true if deletion phase was started.
+  bool _start_deletion_phase() {
+    if constexpr (requires { _txn->deletion_root; }) {
+      if (_txn->deletion_root) {
+        _db_type = DbType::DB_DELETION;
+        _sender.begin(_db_type);
+        _state = State::SENDING;
+        _send_next_buffer();
+        return true;
+      }
+    }
+    return false;
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
@@ -671,15 +714,79 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   // Dummy struct for raw pointer resolution
   struct Chunk {};
 
+  using InternalCursor = _Cursor<typename DstDB::CursorTraits>;
+  using CursorTraits_ = typename DstDB::CursorTraits;
+  using BigMemory = _BigMemory<InternalCursor>;
+  using BigValue = typename BigMemory::BigValue;
+  using OverwritePolicy = typename DstDB::OverwritePolicy;
+
   // Big value mapping: wire_offset -> offset_t in persistent storage
   const std::unordered_map<uint64_t, offset_t>* big_value_offsets = nullptr;
   DstDB* db = nullptr;
+
+  // Internal cursor pointing at main trie root — set during deletion phase
+  // merge so that may_add_leaf can delete keys from main when merging new
+  // deletion records.  Uses _Cursor (non-transactional) to avoid conflicting
+  // with the already-active write transaction.
+  InternalCursor* main_cursor = nullptr;
+
+  // BigMemory for freeing big values when deleting keys from main trie
+  BigMemory* bigmemory = nullptr;
+
+  // User-facing overwrite policy (owned by _ReplicationDB)
+  OverwritePolicy* overwrite_policy = nullptr;
 
   // Set the big value mapping (called before merge)
   void set_big_value_storage(
       const std::unordered_map<uint64_t, offset_t>* offsets, DstDB* dst_db) {
     big_value_offsets = offsets;
     db = dst_db;
+  }
+
+  // Main trie merge: check overwrite policy before overwriting existing leaf
+  bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
+                     bool dst_is_big, bool src_is_big) {
+    if (!main_cursor) {
+      // main_cursor == nullptr means we are merging the main trie
+      return overwrite_policy->may_overwrite(Slice(key), dst, dst_is_big,
+                                             src, src_is_big);
+    }
+    return true;
+  }
+
+  // When merging the deletion trie, new deletion keys trigger removal
+  // from the main trie within the same transaction.
+  // When merging the main trie, delegates to the overwrite policy.
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    if (main_cursor) {
+      // Deletion trie merge — consult may_delete policy
+      // The deletion entry value is [uint64_le timestamp][meta...]
+      Slice meta;
+      if (src.size() > sizeof(uint64_t)) {
+        meta = Slice(src.data() + sizeof(uint64_t),
+                     src.size() - sizeof(uint64_t));
+      }
+      if (!overwrite_policy->may_delete(Slice(key), meta)) {
+        return false;  // policy rejected this deletion
+      }
+
+      main_cursor->find(Slice(key));
+      if (main_cursor->is_valid()) {
+        // Free big value storage before deleting, otherwise it leaks
+        auto& back = main_cursor->stack.back();
+        if (back.leaf()->is_big() && bigmemory) {
+          BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+          bigmemory->free(bvalue);
+        }
+        main_cursor->remove();
+      }
+    } else {
+      // Main trie merge — consult may_add_leaf policy
+      if (!overwrite_policy->may_add_leaf(Slice(key), src, is_big)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // Migrate big value from source to destination
@@ -755,6 +862,7 @@ struct ReplicationReceiverFSM {
   size_t _total_nodes;
   size_t _total_bytes;
   ReplicationError _error;
+  DbType _current_db_type;    // Tracks which trie we're currently receiving
   std::vector<std::string>
       _prune_paths;          // Paths where hashes match (tell sender to prune)
   std::string _path_buffer;  // Reusable buffer for path construction
@@ -764,6 +872,11 @@ struct ReplicationReceiverFSM {
                              // round (must be > 0 before FRACTION_COMPLETE).
   size_t _memory_budget;     // Max temp DB bytes before forcing a fraction
                              // merge. SIZE_MAX = unlimited (single round).
+  size_t _max_payload_size;  // Max single-message payload size (reject larger)
+  size_t _max_big_value_size;// Max total big value allocation size
+
+  // Activity tracking for application-level timeouts
+  std::chrono::steady_clock::time_point _last_activity;
 
   // Receive buffer management (Temp DB)
   // ====================================
@@ -821,15 +934,33 @@ struct ReplicationReceiverFSM {
   size_t _bv_current_received;       // Bytes received for current value
   bool _bv_parsing_header;  // true = parsing header, false = parsing data
 
+  // Deferred merge state (single-transaction mode)
+  // ====================================
+  // When the DB supports a deletion trie, the main trie data is deferred
+  // (kept in memory without merging) until COMPLETE arrives.  Then both
+  // tries are merged in one short atomic transaction.
+  char* _deferred_wire_root;          // Saved main trie wire root pointer
+  uint8_t _deferred_wire_root_type;   // Type of deferred root (TRIE or LEAF)
+  std::vector<std::vector<uint8_t>> _deferred_temp_buffers;  // Keeps deferred wire data alive
+
   // Constants for big value alignment (must match BigMemory)
   static constexpr size_t MAX_PAGE_SIZE =
       Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
   static constexpr size_t FREE_KEY_SIZE = sizeof(_FreeKey);
 
+  static constexpr size_t DEFAULT_MAX_PAYLOAD_SIZE =
+      64 * 1024 * 1024;  // 64MB
+  static constexpr size_t DEFAULT_MEMORY_BUDGET =
+      256 * 1024 * 1024;  // 256MB
+  static constexpr size_t DEFAULT_MAX_BIG_VALUE_SIZE =
+      256 * 1024 * 1024;  // 256MB
+
   ReplicationReceiverFSM(
       DB* db, typename DB::txn_ptr txn, MergePolicy handler = MergePolicy(),
       size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE,
-      size_t memory_budget = SIZE_MAX)
+      size_t memory_budget = DEFAULT_MEMORY_BUDGET,
+      size_t max_payload_size = DEFAULT_MAX_PAYLOAD_SIZE,
+      size_t max_big_value_size = DEFAULT_MAX_BIG_VALUE_SIZE)
       : _db(db),
         _txn(txn),
         _cursor(db->create_cursor()),
@@ -840,7 +971,10 @@ struct ReplicationReceiverFSM {
         _total_nodes(0),
         _total_bytes(0),
         _error(ReplicationError::NONE),
+        _current_db_type(DbType::DB_MAIN),
         _memory_budget(memory_budget),
+        _max_payload_size(max_payload_size),
+        _max_big_value_size(max_big_value_size),
         _initial_buffer_size(receive_buffer_size),
         _temp_root(0),
         _wire_cursor(&_wire_db, &_temp_root),
@@ -857,9 +991,15 @@ struct ReplicationReceiverFSM {
         _bv_current_wire_offset(0),
         _bv_current_size(0),
         _bv_current_received(0),
-        _bv_parsing_header(true) {
+        _bv_parsing_header(true),
+        _deferred_wire_root(nullptr),
+        _deferred_wire_root_type(0),
+        _last_activity(std::chrono::steady_clock::now()) {
     // Allocate first receive buffer
     _alloc_receive_buffer();
+
+    // Wire up the user-facing overwrite policy from the DB
+    _merge_policy.overwrite_policy = &_db->overwrite_policy();
   }
 
   // Allocate a new receive buffer (previous one becomes part of temp DB)
@@ -905,6 +1045,7 @@ struct ReplicationReceiverFSM {
     _pending_children = 0;
     _new_leaves = 0;
     _big_value_trie_count = 0;
+    _last_activity = std::chrono::steady_clock::now();
 
     // Reset temp buffers from any previous session
     _temp_buffers.clear();
@@ -918,6 +1059,11 @@ struct ReplicationReceiverFSM {
     _big_value_area_offset = 0;
     _big_value_area_size = 0;
     _big_value_write_pos = 0;
+
+    // Reset deferred merge state
+    _deferred_wire_root = nullptr;
+    _deferred_wire_root_type = 0;
+    _deferred_temp_buffers.clear();
   }
 
   // ==========================================================================
@@ -947,6 +1093,15 @@ struct ReplicationReceiverFSM {
         _transition_to_error(ReplicationError::INVALID_MESSAGE,
                              "Invalid message header");
         return true;  // Error is a "complete" state
+      }
+
+      // Reject messages that exceed the configured payload limit
+      size_t payload_size =
+          _receive_buffer._expected - sizeof(ReplicationMsgHeader);
+      if (payload_size > _max_payload_size) {
+        _transition_to_error(ReplicationError::PAYLOAD_TOO_LARGE,
+                             "Message payload exceeds size limit");
+        return true;
       }
 
       // Check if message fits in current buffer
@@ -992,6 +1147,8 @@ struct ReplicationReceiverFSM {
       return;
     }
 
+    _last_activity = std::chrono::steady_clock::now();
+
     auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
     Slice payload = _receive_buffer.payload();
 
@@ -1018,6 +1175,11 @@ struct ReplicationReceiverFSM {
   uint64_t session_id() const { return _session_id; }
   ReplicationError error() const { return _error; }
 
+  // Time of last received message (for application-level timeout detection)
+  std::chrono::steady_clock::time_point last_activity() const {
+    return _last_activity;
+  }
+
   void _handle_incoming(ReplicationMsgType msg_type, const Slice& payload) {
     switch (msg_type) {
       case ReplicationMsgType::TRIE_DATA:
@@ -1033,10 +1195,9 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::COMPLETE:
-        // Sender indicates sync is complete - merge temp DB and finish
-        if (_temp_root) {
-          _merge_temp_to_local();
-        }
+        // Sender indicates sync is complete — merge all deferred and
+        // current temp data in one short atomic transaction.
+        _merge_all_phases();
         _free_temp_buffers();
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
@@ -1072,6 +1233,12 @@ struct ReplicationReceiverFSM {
       return;
     }
 
+    // Detect transition from main trie to deletion trie
+    auto msg_db_type = static_cast<DbType>(hdr->db_type);
+    if (msg_db_type != _current_db_type) {
+      _transition_db_type(msg_db_type);
+    }
+
     _total_bytes += payload.size();
     _total_nodes += hdr->node_count;
 
@@ -1097,11 +1264,27 @@ struct ReplicationReceiverFSM {
     _big_value_received_count = 0;
     uint64_t total_aligned_size = hdr->total_aligned_size;
 
+    // Reject big value allocations that exceed the configured limit
+    if (total_aligned_size > _max_big_value_size) {
+      _transition_to_error(ReplicationError::RESOURCE_LIMIT,
+                           "Big value total size exceeds limit");
+      return;
+    }
+
     // Allocate persistent storage directly from storage layer (bypasses
     // transaction) The area is allocated now but only linked to transaction
     // during merge
     static constexpr size_t AREA_SIZE = Traits::AREA_SIZE;
-    size_t alloc_size = padding(total_aligned_size, AREA_SIZE);
+
+    // Use uint64_t arithmetic to detect overflow before casting to size_t
+    uint64_t alloc_size_64 =
+        ((total_aligned_size + AREA_SIZE - 1) / AREA_SIZE) * AREA_SIZE;
+    if (alloc_size_64 > SIZE_MAX) {
+      _transition_to_error(ReplicationError::RESOURCE_LIMIT,
+                           "Big value allocation overflow");
+      return;
+    }
+    size_t alloc_size = static_cast<size_t>(alloc_size_64);
     _big_value_multi_area = _db->_storage.alloc_multi_area(alloc_size);
 
     _big_value_area_offset = _big_value_multi_area->content_offset();
@@ -1225,17 +1408,15 @@ struct ReplicationReceiverFSM {
 
     // Check if all big values have been received
     if (_big_value_received_count >= _big_value_expected_count) {
-      // All big values received - merge and complete
-      if (_temp_root) {
-        _merge_temp_to_local();
+      // All big values received — defer main trie data so that
+      // _merge_all_phases() at COMPLETE merges everything atomically.
+      // Deletion trie data stays in _temp_root for _merge_all_phases().
+      if (_current_db_type == DbType::DB_MAIN) {
+        _defer_current_temp();
       }
-      _free_temp_buffers();
-      // Send ACK so sender can proceed to COMPLETE
+      _state = State::RECEIVING;
+      // Send ACK so sender can proceed
       _send_big_value_ack();
-      if (_events) {
-        _events->on_complete(_session_id, _total_nodes);
-      }
-      _state = State::IDLE;
       return;
     }
 
@@ -1269,6 +1450,7 @@ struct ReplicationReceiverFSM {
     // state so hash comparisons see previously merged data.
     if (path.empty()) {
       _cursor->update();
+      _ensure_cursor_root();
     }
 
     // Compare wire nodes with local nodes *before* connecting to
@@ -1285,9 +1467,10 @@ struct ReplicationReceiverFSM {
       ++_pending_children;
     }
 
-    const char* payload_end = payload.data() + payload.size();
-    _compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_end,
-                             _path_buffer);
+    const char* payload_start = payload.data();
+    const char* payload_end = payload_start + payload.size();
+    _compare_wire_with_local((TempOffset*)&transfer_hdr->root,
+                             payload_start, payload_end, _path_buffer);
 
     // Now connect to temp DB — but only if the root wasn't pruned.
     if (transfer_hdr->root) {
@@ -1304,10 +1487,18 @@ struct ReplicationReceiverFSM {
 
     // Check if all pending children are now connected
     if (_pending_children == 0) {
-      // If no big values in trie, we can complete immediately
-      if (_big_value_trie_count == 0) {
-        _send_complete();  // Handles merge and cleanup
-        return;
+      // All children for this trie phase are resolved.
+      // Don't send COMPLETE — let the sender decide completion
+      // (the sender may still need to send a deletion trie phase).
+      if (_big_value_trie_count == 0 && _temp_root) {
+        // Defer main trie data: keep in memory without merging.
+        // _merge_all_phases() at COMPLETE will merge everything
+        // (main + deletion) in one short atomic transaction.
+        // Deletion trie data stays in _temp_root — _merge_all_phases()
+        // picks it up as the "current" phase.
+        if (_current_db_type == DbType::DB_MAIN) {
+          _defer_current_temp();
+        }
       }
       // Big values expected - just ACK and wait for BIG_VALUE_START
       _send_prune_ack();
@@ -1421,20 +1612,60 @@ struct ReplicationReceiverFSM {
   // - If hashes differ and wire is leaf: will be merged to local via _Merger
   // - If hashes differ and wire is trie: recurse into children
   // - If child offset == 0 in wire: sender hasn't sent it yet, stays pending
-  bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_end,
+  bool _compare_wire_with_local(TempOffset* wire_node,
+                                const char* buffer_start,
+                                const char* buffer_end,
                                 std::string& path) {
-    if ((char*)wire_node >= buffer_end) return false;
+    if ((char*)wire_node < buffer_start ||
+        (char*)(wire_node + 1) > buffer_end) {
+      // wire_node itself is out of bounds — prune
+      *wire_node = 0;
+      --_pending_children;
+      return true;
+    }
 
     --_pending_children;
+
+    // Bounds-check the resolved pointer
+    if (*wire_node != 0) {
+      char* resolved = wire_node->template resolve<char>();
+      if (resolved < buffer_start || resolved >= buffer_end) {
+        // Relative offset points outside the buffer — prune
+        *wire_node = 0;
+        return true;
+      }
+    }
 
     // Get wire node's hash
     const uint8_t* wire_hash;
     int branch_key;
     if (wire_node->type() == LEAF) {
-      wire_hash = wire_node->template resolve<TempLeafNode>()->hash;
+      auto* leaf = wire_node->template resolve<TempLeafNode>();
+      // Bounds-check the fixed leaf header first
+      if ((char*)(leaf + 1) > buffer_end) {
+        *wire_node = 0;
+        return true;
+      }
+      // Bounds-check the full leaf node including key and value data
+      if ((char*)leaf + leaf->size() > buffer_end) {
+        *wire_node = 0;
+        return true;
+      }
+      wire_hash = leaf->hash;
       branch_key = get_branch_key(wire_node);
     } else {
-      wire_hash = wire_node->template resolve<TempTrieNode>()->hash;
+      auto* trie = wire_node->template resolve<TempTrieNode>();
+      // Bounds-check the fixed trie header first
+      if ((char*)(trie + 1) > buffer_end) {
+        *wire_node = 0;
+        return true;
+      }
+      // Bounds-check the full trie node including compressed path and child array
+      if ((char*)trie + trie->size() > buffer_end) {
+        *wire_node = 0;
+        return true;
+      }
+      wire_hash = trie->hash;
       // path.empty() => wire_node is root => no branch_key
       branch_key =
           path.empty() ? TempTrieNode::NONE : get_branch_key(wire_node);
@@ -1464,6 +1695,17 @@ struct ReplicationReceiverFSM {
       ++_new_leaves;
       auto* leaf = wire_node->template resolve<TempLeafNode>();
       if (leaf->is_big()) {
+        // Bounds-check the BigValueDataHeader within the leaf's value data
+        if (leaf->vsize() < sizeof(BigValueDataHeader)) {
+          *wire_node = 0;
+          return true;
+        }
+        const auto* bv_hdr =
+            reinterpret_cast<const BigValueDataHeader*>(leaf->vdata());
+        if (bv_hdr->value_size > _max_big_value_size) {
+          *wire_node = 0;
+          return true;
+        }
         ++_big_value_trie_count;
       }
 #ifdef LEAVES_DEBUG
@@ -1479,6 +1721,13 @@ struct ReplicationReceiverFSM {
     auto* wire_trie = wire_node->template resolve<TempTrieNode>();
     TempOffset* wire_array = wire_trie->array();
     int count = wire_trie->count();
+
+    // Bounds-check the trie's child array against the buffer
+    if ((char*)(wire_array + count) > buffer_end) {
+      // Array extends past buffer — prune the whole trie node
+      *wire_node = 0;
+      return true;
+    }
 
 #ifdef LEAVES_DEBUG
     if (!path.empty()) path.push_back((char)wire_trie->compressed()[0]);
@@ -1500,22 +1749,15 @@ struct ReplicationReceiverFSM {
       assert(child_offset->is_relative() &&
              "Child offsets in wire format must be relative");
 
-      if (!_compare_wire_with_local(child_offset, buffer_end, path)) {
+      if (!_compare_wire_with_local(child_offset, buffer_start, buffer_end, path)) {
         path.resize(path_len);
         return false;
       }
     }
-#if 0
-    // If every child was pruned (zeroed), this trie node is an empty
-    // skeleton — zero it out so the merger doesn't try to merge it.
-    {
-      bool all_zero = true;
-      for (int i = 0; i < count; ++i) {
-        if (wire_array[i]) { all_zero = false; break; }
-      }
-      if (all_zero) *wire_node = 0;
-    }
-#endif
+    // Note: partially-pruned skeleton tries (some children zeroed) are
+    // safe — _Merger::merge_into_trie() skips zero-offset src branches
+    // for both shared and src-only cases.
+
     // Restore path to original length (remove compressed portion we added)
     path.resize(path_len);
     return true;
@@ -1528,7 +1770,185 @@ struct ReplicationReceiverFSM {
     return _db->template resolve<TrieNode>(offset)->hash;
   }
 
-  // Merge temp DB (received wire nodes) into local DB using _Merger
+  // Handle transition from one db_type to another (e.g., DB_MAIN → DB_DELETION)
+  // Defers any pending temp data from the previous phase (no merge, no transaction).
+  void _transition_db_type(DbType new_db_type) {
+    // Defer any pending temp data from the previous phase.
+    // No transaction is started — data stays in memory until COMPLETE.
+    _defer_current_temp();
+
+    // Reset state for the new phase
+    _pending_children = 0;
+    _new_leaves = 0;
+    _prune_paths.clear();
+
+    _current_db_type = new_db_type;
+  }
+
+  // After any cursor operation that calls _set_txn() (update(), start_transaction()),
+  // re-set the cursor root if we're in the deletion phase.
+  void _ensure_cursor_root() {
+    if (_current_db_type == DbType::DB_DELETION) {
+      if constexpr (requires { _txn->deletion_root; }) {
+        using Transaction = typename DB::Transaction;
+        auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
+        _cursor->set_root(&txn->deletion_root);
+      }
+    }
+  }
+
+  // Save current temp data to deferred storage without merging.
+  // The data stays in memory until _merge_all_phases() is called.
+  // Safe to call multiple times — second call is a no-op if _temp_root
+  // was already cleared.
+  void _defer_current_temp() {
+    if (!_temp_root) return;
+
+    // Only one deferred root is supported (one main-to-deletion transition).
+    // If this fires, the protocol was changed to allow multiple deferrals.
+    assert(_deferred_wire_root == nullptr &&
+           "double defer: only one deferred root is supported");
+
+    // Save the resolved root pointer and type before clearing _temp_root.
+    // The pointer is into the temp buffer memory which we keep alive.
+    _deferred_wire_root = _temp_root.template resolve<char>();
+    _deferred_wire_root_type = _temp_root.type();
+
+    // Move temp buffers to deferred storage (memory stays at same address)
+    for (auto& buf : _temp_buffers) {
+      _deferred_temp_buffers.push_back(std::move(buf));
+    }
+    _temp_buffers.clear();
+    _temp_root = 0;
+    _new_leaves = 0;
+    _alloc_receive_buffer();
+  }
+
+  // Merge all phases (deletion trie + deferred main trie) in one
+  // short atomic transaction.  Called at COMPLETE or fraction-complete.
+  //
+  // Deletion trie is merged FIRST so that any re-inserted keys are
+  // restored by the subsequent main trie merge (Phase 2).
+  void _merge_all_phases() {
+    bool has_deferred = (_deferred_wire_root != nullptr);
+    bool has_current = (_temp_root != 0);
+
+    if (!has_deferred && !has_current) return;
+
+    // Save current temp root before we overwrite _temp_root for deferred
+    char* current_wire_root = nullptr;
+    uint8_t current_wire_root_type = 0;
+    if (has_current) {
+      current_wire_root = _temp_root.template resolve<char>();
+      current_wire_root_type = _temp_root.type();
+    }
+
+    _cursor->start_transaction();
+
+    // Link pre-allocated big value multi-area to this transaction
+    // (must happen before any merge phase that references big values)
+    _link_big_value_area();
+
+    // Phase 1: Merge current (deletion trie) data and apply deletions
+    if (current_wire_root) {
+      // Switch cursor root to deletion trie within the same transaction
+      _ensure_cursor_root();
+
+      _temp_root.set_relative(current_wire_root);
+      _temp_root.type((NodeTypes)current_wire_root_type);
+      _wire_cursor.clear();
+
+      // Only set main_cursor when actually merging deletion trie data.
+      // During main-phase fraction merge, current data is main trie —
+      // setting main_cursor would incorrectly delete-then-reinsert each key.
+      if (_current_db_type == DbType::DB_DELETION) {
+        using Transaction = typename DB::Transaction;
+        auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
+        using CursorTraits_ = typename DB::CursorTraits;
+        _Cursor<CursorTraits_> main_cursor(_db, &txn->root);
+        using BigMemoryType = _BigMemory<_Cursor<CursorTraits_>>;
+        BigMemoryType bigmem(_db, &txn->free_bigmem_root);
+        _merge_policy.main_cursor = &main_cursor;
+        _merge_policy.bigmemory = &bigmem;
+
+        // Deletion trie has no big values; no need for big value storage
+        _Merger<LocalCursor, WireCursor, MergePolicy> merger(
+            *_cursor, _wire_cursor, _merge_policy);
+        merger.exec();
+
+        _merge_policy.main_cursor = nullptr;
+        _merge_policy.bigmemory = nullptr;
+      } else {
+        _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
+        _Merger<LocalCursor, WireCursor, MergePolicy> merger(
+            *_cursor, _wire_cursor, _merge_policy);
+        merger.exec();
+      }
+    }
+
+    // Phase 2: Merge deferred (main trie) data
+    if (has_deferred) {
+      // If Phase 1 switched cursor to deletion trie, switch back to main
+      if (current_wire_root) {
+        using Transaction = typename DB::Transaction;
+        auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
+        _cursor->set_root(&txn->root);
+      }
+
+      _temp_root.set_relative(_deferred_wire_root);
+      _temp_root.type((NodeTypes)_deferred_wire_root_type);
+      _wire_cursor.clear();
+
+      _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
+      _Merger<LocalCursor, WireCursor, MergePolicy> merger(
+          *_cursor, _wire_cursor, _merge_policy);
+      merger.exec();
+
+      _deferred_wire_root = nullptr;
+      _deferred_wire_root_type = 0;
+    }
+
+    _cursor->commit();
+
+    // Clean up all state
+    _temp_root = 0;
+    _deferred_temp_buffers.clear();
+    _clear_big_value_state();
+  }
+
+  // Link pre-allocated big value multi-area to the active transaction
+  void _link_big_value_area() {
+    if (!_big_value_multi_area) return;
+
+    _big_value_multi_area->next = 0;
+    if (_db->_active_txn->area_list_tail_multi) {
+      auto tail = _db->template resolve<Area>(
+          &_db->_active_txn->area_list_tail_multi);
+      tail->next = _db->resolve(_big_value_multi_area);
+      _db->make_dirty(tail);
+    } else {
+      _db->_header->area_list_head_multi =
+          _db->resolve(_big_value_multi_area);
+      _db->make_dirty(_db->_header);
+    }
+    _db->_active_txn->area_list_tail_multi =
+        _db->resolve(_big_value_multi_area);
+    _db->make_dirty(_big_value_multi_area);
+  }
+
+  // Clear big value state after merge
+  void _clear_big_value_state() {
+    _big_value_offsets.clear();
+    _big_value_multi_area = nullptr;
+    _big_value_area = nullptr;
+    _big_value_area_offset = 0;
+    _big_value_area_size = 0;
+    _big_value_write_pos = 0;
+  }
+
+  // Merge temp DB (received wire nodes) into local DB using _Merger.
+  // Starts and commits its own transaction.  Used for non-ReplicationDB
+  // merges and for fraction-complete when no deferred data exists.
   void _merge_temp_to_local() {
     if (!_temp_root) return;
 
@@ -1563,26 +1983,10 @@ struct ReplicationReceiverFSM {
     // set position to root
     _wire_cursor.clear();
     _cursor->start_transaction();
+    _ensure_cursor_root();
 
     // Link pre-allocated big value multi-area to this transaction
-    if (_big_value_multi_area) {
-      _big_value_multi_area->next = 0;
-      // Append to transaction's area list tail
-      if (_db->_active_txn->area_list_tail_multi) {
-        auto tail = _db->template resolve<Area>(
-            &_db->_active_txn->area_list_tail_multi);
-        tail->next = _db->resolve(_big_value_multi_area);
-        _db->make_dirty(tail);
-      } else {
-        // First area in this transaction - update head
-        _db->_header->area_list_head_multi =
-            _db->resolve(_big_value_multi_area);
-        _db->make_dirty(_db->_header);
-      }
-      _db->_active_txn->area_list_tail_multi =
-          _db->resolve(_big_value_multi_area);
-      _db->make_dirty(_big_value_multi_area);
-    }
+    _link_big_value_area();
 
     // Set big value storage on merge policy before merging
     _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
@@ -1594,18 +1998,13 @@ struct ReplicationReceiverFSM {
     _cursor->commit();
 
     // Clear big value storage after merge (data is in persistent storage)
-    _big_value_offsets.clear();
-    _big_value_multi_area = nullptr;
-    _big_value_area = nullptr;
-    _big_value_area_offset = 0;
-    _big_value_area_size = 0;
-    _big_value_write_pos = 0;
+    _clear_big_value_state();
   }
 
   // Send ACK with prune paths (where hashes matched)
   // Sender will respond with next subtrie or COMPLETE
   void _send_prune_ack() {
-    _request_builder.begin(_session_id, DbType::DB_MAIN);
+    _request_builder.begin(_session_id, _current_db_type);
 
     // Add all paths where hashes matched (sender should prune these)
     for (const auto& path : _prune_paths) {
@@ -1620,16 +2019,17 @@ struct ReplicationReceiverFSM {
 
   // Merge current fraction, commit so next round sees updated hashes,
   // reset temp state, and tell sender to restart from root.
+  // Always commits — the next round needs to see the merged state.
   void _send_fraction_complete() {
-    if (_temp_root) {
-      _merge_temp_to_local();
-    }
+    // Merge all accumulated data (deferred + current) in one transaction
+    _merge_all_phases();
 
     // Reset temp DB for the next fraction
     _free_temp_buffers();
     _temp_root = 0;
     _pending_children = 0;
     _new_leaves = 0;
+    _big_value_trie_count = 0;
     _prune_paths.clear();
 
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
@@ -1637,10 +2037,8 @@ struct ReplicationReceiverFSM {
   }
 
   void _send_complete() {
-    // Merge temp DB into local DB using _Merger
-    if (_temp_root) {  // _temp_root != 0 means it was set
-      _merge_temp_to_local();
-    }
+    // Merge all accumulated data in one short atomic transaction
+    _merge_all_phases();
 
     // Free temp buffers - data has been integrated into persistent storage
     _free_temp_buffers();
@@ -1657,6 +2055,11 @@ struct ReplicationReceiverFSM {
   void _transition_to_error(ReplicationError error, const char* reason) {
     _state = State::ERROR;
     _error = error;
+
+    // Discard deferred data
+    _deferred_wire_root = nullptr;
+    _deferred_wire_root_type = 0;
+    _deferred_temp_buffers.clear();
 
     // Free temp buffers on error
     _free_temp_buffers();

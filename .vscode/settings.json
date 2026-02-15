@@ -88,6 +88,7 @@
     "C_Cpp.default.compilerPath": "/usr/bin/g++",
     "chat.tools.terminal.autoApprove": {
         "./build/test_lsm": true,
-        "./build/test_db": true
+        "./build/test_db": true,
+        "./build/test_replication_fsm": true
     }
 }

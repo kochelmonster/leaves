@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "db.hpp"
+#include "intern/replication/_replication_db.hpp"
 #include "intern/storage/_fstore.hpp"
 
 namespace leaves {
@@ -23,18 +24,35 @@ struct _ReplicationTraits : public BaseTraits {
 // Replication-enabled file storage traits
 typedef _ReplicationTraits<_StoreTraits> _ReplicatingStoreTraits;
 
-// Forward declaration for template specialization
-template <typename Traits, typename FileOps>
-struct _CacheStore;
+// Forward-declare so Self_ can refer to it
+struct _ReplicationCacheStore;
 
-// Replication-enabled FileStore using _ReplicatingStoreTraits
-typedef _CacheStore<_ReplicatingStoreTraits, _FileOperations>
-    _ReplicatingFileStore;
+// Replication-enabled CacheStore: passes itself as Self_ so that
+// DB::_storage is typed as _ReplicationCacheStore& — giving direct
+// access to schedule_after() / cancel_job() / wait_all().
+struct _ReplicationCacheStore
+    : public _CacheStore<_ReplicatingStoreTraits, _FileOperations,
+                         _ReplicationDB, _ReplicationCacheStore> {
+  using Base = _CacheStore<_ReplicatingStoreTraits, _FileOperations,
+                           _ReplicationDB, _ReplicationCacheStore>;
+  using DB = typename Base::DB;
+  using Base::Base;  // inherit constructors
+
+  // Override make() to start purge on newly-created DBs
+  DB* make(const char* name) {
+    DB* db = Base::make(name);
+    if (!db->_purge_job_id && !db->_purge_cancelled.load())
+      db->start_purge();
+    return db;
+  }
+
+  DB* operator[](const char* name) { return make(name); }
+};
 
 class ReplicatingFileStorage
     : public std::enable_shared_from_this<ReplicatingFileStorage> {
  public:
-  typedef _ReplicatingFileStore StorageImpl;
+  typedef _ReplicationCacheStore StorageImpl;
   typedef TDB<ReplicatingFileStorage> DB;
   typedef std::shared_ptr<ReplicatingFileStorage> storage_ptr;
 

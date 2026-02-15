@@ -29,17 +29,24 @@ struct _CacheBase {
   };
 };
 
-template <typename Traits_, typename Opers_>
+template <typename Traits_, typename Opers_,
+          template <typename> class DB_ = _DB,
+          typename Self_ = void>
 struct _CacheStore : public Opers_,
-                     public _ThreadPoolMixin<_CacheStore<Traits_, Opers_>> {
+                     public _ThreadPoolMixin<_CacheStore<Traits_, Opers_, DB_, Self_>> {
   typedef Traits_ Traits;
-  typedef _CacheStore<Traits_, Opers_> Self;
+  // CRTP: if Self_ is provided, use it as the storage type seen by DB;
+  // otherwise default to this class itself (non-derived usage).
+  using CacheStore = std::conditional_t<
+      std::is_void_v<Self_>, _CacheStore<Traits_, Opers_, DB_, Self_>, Self_>;
   using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   typedef Opers_ Operations;
-  typedef _DB<_CacheStore> DB;
+  typedef DB_<CacheStore> DB;
   typedef std::unique_ptr<DB> _db_ptr;
+
+  CacheStore& _self() { return static_cast<CacheStore&>(*this); }
   typedef std::vector<char> area_chunk_t;
   using Opers_::_header;
   using Opers_::calc_header_size;
@@ -90,7 +97,7 @@ struct _CacheStore : public Opers_,
 
   _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M,
               size_t pool_threads = 1)
-      : _ThreadPoolMixin<Self>(pool_threads),
+      : _ThreadPoolMixin<_CacheStore>(pool_threads),
         _cache(capacity),
         _capacity(capacity) {
     _dbs.resize(db_count);
@@ -282,7 +289,7 @@ struct _CacheStore : public Opers_,
       if (_header->dbs[i].offset) {
         if (!strcmp(_header->dbs[i].name, name)) {
           if (!_dbs[i]) {
-            _dbs[i] = std::make_unique<DB>(*this, _header->dbs[i].offset, i);
+            _dbs[i] = std::make_unique<DB>(_self(), _header->dbs[i].offset, i);
             make_header_dirty();
             return _dbs[i].get();
           }
@@ -296,7 +303,7 @@ struct _CacheStore : public Opers_,
     std::strncpy(_header->dbs[free].name, name,
                  sizeof(_header->dbs[free].name) - 1);
     _header->dbs[free].name[sizeof(_header->dbs[free].name) - 1] = '\0';
-    _dbs[free] = std::make_unique<DB>(*this, &_header->dbs[free].offset, free);
+    _dbs[free] = std::make_unique<DB>(_self(), &_header->dbs[free].offset, free);
     make_header_dirty();
     return _dbs[free].get();
   }
@@ -307,7 +314,7 @@ struct _CacheStore : public Opers_,
     for (uint16_t i = 0; i < _header->db_count; i++) {
       if (_header->dbs[i].offset && !strcmp(_header->dbs[i].name, name)) {
         if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
-        DB tmp(*this, _header->dbs[i].offset, i);
+        DB tmp(_self(), _header->dbs[i].offset, i);
         tmp.return_areas();
         _header->dbs[i].offset = 0;
         flush(true, true);
