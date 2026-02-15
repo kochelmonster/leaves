@@ -338,6 +338,7 @@ struct _DB {
     _active_txn->area_list_tail_single = resolve(area_ptr);
 
     make_dirty(area_ptr);
+    flush();
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -361,6 +362,7 @@ struct _DB {
     _active_txn->area_list_tail_multi = resolve(area_ptr);
 
     make_dirty(area_ptr);
+    flush();
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
