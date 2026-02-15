@@ -11,17 +11,6 @@
 
 namespace leaves {
 
-// Replication-enabled traits mixin for memory-mapped storage
-// Inherits from base traits and enables 32-byte hash storage
-template <typename BaseTraits>
-struct _ReplicationTraits : public BaseTraits {
-  // Enable 32-byte hash storage in nodes
-  typedef uint8_t hash_t[HASH_SIZE];
-
-  // Use Blake3Hasher for replication
-  typedef Blake3Hasher ReplicationHasher;
-};
-
 // Replication-enabled memory-mapped storage traits
 typedef _ReplicationTraits<_MemoryMapTraits> _ReplicatingMemoryMapTraits;
 

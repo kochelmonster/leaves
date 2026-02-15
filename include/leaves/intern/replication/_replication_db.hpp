@@ -8,6 +8,14 @@
 
 namespace leaves {
 
+// Replication-enabled traits mixin — inherits from base traits and enables
+// 32-byte hash storage plus Blake3 hashing for replication.
+template <typename BaseTraits>
+struct _ReplicationTraits : public BaseTraits {
+  typedef uint8_t hash_t[HASH_SIZE];
+  typedef Blake3Hasher ReplicationHasher;
+};
+
 // Replication-specific DB header — extends _DBHeader with a fixed-size
 // slot array for crash-safe tracking of pre-merge big-value multi-areas.
 // Each active ReplicationReceiverFSM claims one slot.  The slot holds the
@@ -120,7 +128,7 @@ struct _ReplicationDB
   std::atomic<bool> _purge_interrupt{false};
   std::atomic<bool> _purge_cancelled{false};
   uint64_t _purge_job_id = 0;
-  inline static thread_local bool _in_purge = false;
+  bool _in_purge = false;  // per-instance; only accessed from pool thread
 
   ~_ReplicationDB() {
     cancel_purge();
@@ -179,7 +187,13 @@ struct _ReplicationDB
         // Sentinel: slot was claimed but no area allocated yet — just clear.
         slot = 0;
       } else if (slot) {
-        this->_storage.return_multi_areas(slot, slot);
+        // Zero the area's next pointer so the pool's linked list stays
+        // consistent (the crash may have left a stale forward link).
+        auto area = this->template resolve<Area>(&slot, WRITE);
+        area->next = 0;
+        this->make_dirty(area);
+        offset_t head = this->resolve(area);
+        this->_storage.return_multi_areas(head, head);
         slot = 0;
       }
     }
@@ -240,9 +254,13 @@ struct _ReplicationDB
 
     size_t purged = 0;
     uint64_t oldest_ts = 0;
+    bool interrupted = false;
     del_cursor.first();
     while (del_cursor.is_valid()) {
-      if (_purge_interrupt.load(std::memory_order_relaxed)) break;
+      if (_purge_interrupt.load(std::memory_order_relaxed)) {
+        interrupted = true;
+        break;
+      }
 
       Slice val = del_cursor.value();
       if (val.size() >= sizeof(uint64_t)) {
@@ -265,6 +283,10 @@ struct _ReplicationDB
       del_cursor.next();
     }
     cursor->commit();
+    // If interrupted before visiting all entries, force a near-immediate
+    // reschedule so remaining expired entries are purged promptly.
+    if (interrupted && oldest_ts == 0 && purged > 0)
+      oldest_ts = older_than > 0 ? older_than : 1;
     return {purged, oldest_ts};
   }
 };
@@ -310,19 +332,21 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
     [[maybe_unused]] bool r = this->start_transaction();
     if (!this->is_valid()) throw NoValidPosition();
 
-    // Aspect gate — may throw or return false to reject
+    // Aspect gate first, while key() is still valid.
     Slice cur_value = this->_raw_value();
     if (!this->_aspect().may_delete(this->key(), cur_value,
                                     this->_aspect_context)) {
-      throw NoValidPosition();  // Aspect rejected the delete
+      throw NoValidPosition();
     }
 
-    // Record the key in the deletion trie before removing from main trie
-    Slice deleted_key = this->key();
+    // Position the deletion cursor BEFORE Base::remove(), because the
+    // deleter modifies current_key.
     auto& del_cursor = get_deletion_cursor();
-    del_cursor.find(deleted_key);
-    // Store current timestamp (seconds since epoch) followed by optional
-    // metadata (e.g. a version vector) as the deletion entry value.
+    del_cursor.find(this->key());
+
+    // Delegate to base — skip aspect (already checked above).
+    Base::template remove<false>();
+
     // Layout: [uint64_le timestamp][meta bytes...]
     uint64_t now = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -339,14 +363,6 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
       std::memcpy(buf.data() + sizeof(ts_le), meta.data(), meta.size());
       del_cursor.value(Slice(buf.data(), buf.size()));
     }
-
-    // Now remove from main trie (same as _TransactionalCursor::remove)
-    const Transition& back = this->stack.back();
-    if (back.leaf()->is_big()) {
-      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-      this->get_bigmemory().free(bvalue);
-    }
-    _Deleter(*this).exec();
   }
 
   // Override _set_txn to also update the deletion cursor's root

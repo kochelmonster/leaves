@@ -14,6 +14,7 @@
 #define TESTING
 #endif
 
+#include "leaves/replicating_fstore.hpp"
 #include "leaves/replicating_mmap.hpp"
 #include "leaves/intern/db/_check.hpp"
 #include "leaves/intern/replication/_replication_fsm.hpp"
@@ -25,6 +26,11 @@ using Storage = ReplicatingMapStorage;
 using DBImpl = Storage::StorageImpl::DB;
 using SenderFSM = ReplicationSenderFSM<DBImpl>;
 using ReceiverFSM = ReplicationReceiverFSM<DBImpl>;
+
+// File-backed replicating storage types
+using FileDBImpl = ReplicatingFileStorage::StorageImpl::DB;
+using FileSenderFSM = ReplicationSenderFSM<FileDBImpl>;
+using FileReceiverFSM = ReplicationReceiverFSM<FileDBImpl>;
 
 // =============================================================================
 // Test Transport - connects sender and receiver directly
@@ -112,7 +118,9 @@ struct ReplicationFixture {
   ~ReplicationFixture() { std::filesystem::remove_all(test_temp_dir); }
 
   // Run the FSM protocol until both sides complete or error
-  static void run_protocol(SenderFSM& sender, ReceiverFSM& receiver,
+  // Templated version for cross-storage replication testing
+  template <typename Sender, typename Receiver>
+  static void run_protocol(Sender& sender, Receiver& receiver,
                            TestTransport& sender_transport,
                            TestTransport& receiver_transport,
                            int max_rounds = 100) {
@@ -142,10 +150,10 @@ struct ReplicationFixture {
       }
 
       // Check if both are done
-      if ((sender.state() == SenderFSM::State::IDLE ||
-           sender.state() == SenderFSM::State::ERROR) &&
-          (receiver.state() == ReceiverFSM::State::IDLE ||
-           receiver.state() == ReceiverFSM::State::ERROR)) {
+      if ((sender.state() == Sender::State::IDLE ||
+           sender.state() == Sender::State::ERROR) &&
+          (receiver.state() == Receiver::State::IDLE ||
+           receiver.state() == Receiver::State::ERROR)) {
         break;
       }
 
@@ -2533,6 +2541,169 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
 
   for (uint16_t i = 0; i < N; ++i) {
     BOOST_CHECK_EQUAL(receiver_impl->_header->replication_slots[i]._offset, 0u);
+  }
+}
+
+// =============================================================================
+// Cross-Storage Replication Tests
+// =============================================================================
+
+// Replicate between MemoryMapStorage (sender) and FileStorage (receiver),
+// then replicate back from FileStorage (sender) to a fresh MemoryMapStorage.
+// Verifies that the replication protocol is storage-agnostic.
+BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
+                        ReplicationFixture) {
+  auto mmap_path = test_temp_dir / "sender_mmap.lvs";
+  auto file_path = (test_temp_dir / "receiver_file.lvs").string();
+
+  auto mmap_storage = ReplicatingMapStorage::create(mmap_path.c_str());
+  auto file_storage = ReplicatingFileStorage::create(file_path.c_str());
+
+  auto mmap_db = (*mmap_storage)["test"];
+  auto file_db = (*file_storage)["test"];
+
+  // Insert a mix of small and big values on the mmap sender
+  const size_t BIG_VALUE_SIZE = 8 * 1024;
+  const int NUM_SMALL = 10;
+  const int NUM_BIG = 3;
+
+  {
+    auto cursor = mmap_db.cursor();
+    cursor.start_transaction();
+
+    for (int i = 0; i < NUM_SMALL; ++i) {
+      std::string key = "small_" + std::to_string(i);
+      std::string val = "value_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val));
+    }
+
+    for (int i = 0; i < NUM_BIG; ++i) {
+      std::string key = "big_" + std::to_string(i);
+      std::vector<char> val(BIG_VALUE_SIZE, 'M' + i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val.data(), val.size()));
+    }
+
+    cursor.commit();
+  }
+
+  auto* mmap_impl = mmap_db._internal();
+  auto* file_impl = file_db._internal();
+
+  // Phase 1: Replicate mmap → file
+  {
+    TestTransport sender_transport, receiver_transport;
+    sender_transport.set_peer(&receiver_transport);
+    receiver_transport.set_peer(&sender_transport);
+
+    TestEvents sender_events, receiver_events;
+
+    ReplicationSenderFSM<DBImpl> sender(mmap_impl, mmap_impl->txn());
+    ReplicationReceiverFSM<FileDBImpl> receiver(
+        file_impl, file_impl->txn(),
+        ReplicationMergePolicy<FileDBImpl>{});
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    run_protocol(sender, receiver, sender_transport, receiver_transport, 200);
+
+    BOOST_REQUIRE_MESSAGE(
+        sender.state() == decltype(sender)::State::IDLE,
+        "Sender not IDLE: " + std::to_string(static_cast<int>(sender.state())));
+    BOOST_REQUIRE_MESSAGE(
+        receiver.state() == decltype(receiver)::State::IDLE,
+        "Receiver not IDLE: " +
+            std::to_string(static_cast<int>(receiver.state())));
+    BOOST_CHECK(sender_events.completed);
+    BOOST_CHECK(receiver_events.completed);
+  }
+
+  // Verify all data arrived on the file-storage receiver
+  {
+    auto cursor = file_db.cursor();
+
+    for (int i = 0; i < NUM_SMALL; ++i) {
+      std::string key = "small_" + std::to_string(i);
+      std::string expected = "value_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "File receiver missing small key: " + key);
+      BOOST_CHECK_EQUAL(
+          std::string(cursor.value().data(), cursor.value().size()), expected);
+    }
+
+    for (int i = 0; i < NUM_BIG; ++i) {
+      std::string key = "big_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "File receiver missing big key: " + key);
+      BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+      BOOST_CHECK_EQUAL(cursor.value().data()[0], 'M' + i);
+    }
+  }
+
+  // Phase 2: Replicate back from file → fresh mmap
+  auto mmap2_path = test_temp_dir / "receiver_mmap2.lvs";
+  auto mmap2_storage = ReplicatingMapStorage::create(mmap2_path.c_str());
+  auto mmap2_db = (*mmap2_storage)["test"];
+  auto* mmap2_impl = mmap2_db._internal();
+
+  {
+    TestTransport sender_transport, receiver_transport;
+    sender_transport.set_peer(&receiver_transport);
+    receiver_transport.set_peer(&sender_transport);
+
+    TestEvents sender_events, receiver_events;
+
+    ReplicationSenderFSM<FileDBImpl> sender(file_impl, file_impl->txn());
+    ReplicationReceiverFSM<DBImpl> receiver(
+        mmap2_impl, mmap2_impl->txn(),
+        ReplicationMergePolicy<DBImpl>{});
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    run_protocol(sender, receiver, sender_transport, receiver_transport, 200);
+
+    BOOST_REQUIRE_MESSAGE(
+        sender.state() == decltype(sender)::State::IDLE,
+        "File sender not IDLE");
+    BOOST_REQUIRE_MESSAGE(
+        receiver.state() == decltype(receiver)::State::IDLE,
+        "Mmap receiver not IDLE");
+    BOOST_CHECK(sender_events.completed);
+    BOOST_CHECK(receiver_events.completed);
+  }
+
+  // Verify round-trip: all data matches the original mmap source
+  {
+    auto cursor = mmap2_db.cursor();
+
+    for (int i = 0; i < NUM_SMALL; ++i) {
+      std::string key = "small_" + std::to_string(i);
+      std::string expected = "value_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Round-trip missing small key: " + key);
+      BOOST_CHECK_EQUAL(
+          std::string(cursor.value().data(), cursor.value().size()), expected);
+    }
+
+    for (int i = 0; i < NUM_BIG; ++i) {
+      std::string key = "big_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Round-trip missing big key: " + key);
+      BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+      BOOST_CHECK_EQUAL(cursor.value().data()[0], 'M' + i);
+      std::vector<char> expected_data(BIG_VALUE_SIZE, 'M' + i);
+      BOOST_CHECK_MESSAGE(
+          std::memcmp(cursor.value().data(), expected_data.data(),
+                      BIG_VALUE_SIZE) == 0,
+          "Round-trip big value content mismatch for: " + key);
+    }
   }
 }
 

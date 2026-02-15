@@ -711,13 +711,16 @@ struct _TransactionalCursor
     this->_db->flush();
   }
 
+  template <bool callaspect = true>
   void remove() {
     [[maybe_unused]] bool r = start_transaction();
     if (!this->is_valid()) throw NoValidPosition();
-    // Aspect gate — may throw or return false to reject
-    Slice cur_value = _raw_value();
-    if (!_aspect().may_delete(this->key(), cur_value, _aspect_context)) {
-      throw NoValidPosition();  // Aspect rejected the delete
+    if constexpr (callaspect) {
+      // Aspect gate — may throw or return false to reject
+      Slice cur_value = _raw_value();
+      if (!_aspect().may_delete(this->key(), cur_value, _aspect_context)) {
+        throw NoValidPosition();  // Aspect rejected the delete
+      }
     }
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {

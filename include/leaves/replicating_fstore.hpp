@@ -10,17 +10,6 @@
 
 namespace leaves {
 
-// Replication-enabled traits mixin for file storage
-// Inherits from base traits and enables 32-byte hash storage
-template <typename BaseTraits>
-struct _ReplicationTraits : public BaseTraits {
-  // Enable 32-byte hash storage in nodes
-  typedef uint8_t hash_t[HASH_SIZE];
-  
-  // Use Blake3Hasher for replication
-  typedef Blake3Hasher ReplicationHasher;
-};
-
 // Replication-enabled file storage traits
 typedef _ReplicationTraits<_StoreTraits> _ReplicatingStoreTraits;
 
@@ -36,7 +25,54 @@ struct _ReplicationCacheStore
   using Base = _CacheStore<_ReplicatingStoreTraits, _FileOperations,
                            _ReplicationDB, _ReplicationCacheStore>;
   using DB = typename Base::DB;
-  using Base::Base;  // inherit constructors
+  using DBEntry = typename Base::DBEntry;
+  using FileHeader = typename _FileOperations::FileHeader;
+
+  _ReplicationCacheStore(const char* path, uint16_t db_count = 48,
+                         size_t capacity = 500 * M, size_t pool_threads = 1)
+      : Base(db_count, capacity, pool_threads) {
+    init_dbfile(path, db_count);
+  }
+
+  ~_ReplicationCacheStore() {
+    this->destroy();
+    delete[] (char*)this->_header;
+  }
+
+  void init_dbfile(const char* path, uint16_t db_count) {
+    size_t header_size =
+        leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+    char* buffer = new char[header_size];
+    if (!std::filesystem::is_regular_file(path)) {
+      this->open(path);
+      this->_header = new (buffer) FileHeader(db_count);
+      this->_header->file_size = header_size;
+      this->resize(this->_header->file_size);
+      this->write(0, buffer, header_size);
+    } else {
+      this->open(path);
+      this->read(0, buffer, header_size);
+      this->_header = (FileHeader*)buffer;
+      if (strcmp(this->_header->signature, FSTORE_SIGNATURE))
+        throw std::runtime_error("wrong filetype");
+      if (this->_header->db_count != db_count)
+        throw WrongValue("db_count may not be changed.");
+    }
+    assert(((uint64_t)this->_header & 7) == 0);
+    sanitize();
+  }
+
+  void sanitize() {
+    for (uint16_t i = 0; i < this->_header->db_count; i++) {
+      if (this->_header->dbs[i].offset) {
+        assert(!this->_dbs[i]);
+        DB(*this, this->_header->dbs[i].offset, i).sanitize();
+      }
+    }
+    if (std::filesystem::file_size(this->filename()) !=
+        this->_header->file_size)
+      std::filesystem::resize_file(this->filename(), this->_header->file_size);
+  }
 
   // Override make() to start purge on newly-created DBs
   DB* make(const char* name) {
