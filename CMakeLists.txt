@@ -165,6 +165,9 @@ target_link_libraries(test_file_storage PUBLIC core test)
 add_executable(test_multithread tests/test_multithread.cpp)
 target_link_libraries(test_multithread PUBLIC core test pthread)
 
+add_executable(test_aspect tests/test_aspect.cpp)
+target_link_libraries(test_aspect PUBLIC core test blake3)
+
 add_executable(profile tests/profile.cpp)
 
 # Dumper tool

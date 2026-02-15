@@ -89,6 +89,8 @@
     "chat.tools.terminal.autoApprove": {
         "./build/test_lsm": true,
         "./build/test_db": true,
-        "./build/test_replication_fsm": true
+        "./build/test_replication_fsm": true,
+        "./$t": true,
+        "./test_aspect": true
     }
 }

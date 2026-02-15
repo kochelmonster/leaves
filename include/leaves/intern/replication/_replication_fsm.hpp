@@ -718,7 +718,8 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   using CursorTraits_ = typename DstDB::CursorTraits;
   using BigMemory = _BigMemory<InternalCursor>;
   using BigValue = typename BigMemory::BigValue;
-  using OverwritePolicy = typename DstDB::OverwritePolicy;
+  using Aspect = typename DstDB::Aspect;
+  using CursorContext = typename Aspect::CursorContext;
 
   // Big value mapping: wire_offset -> offset_t in persistent storage
   const std::unordered_map<uint64_t, offset_t>* big_value_offsets = nullptr;
@@ -733,8 +734,9 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   // BigMemory for freeing big values when deleting keys from main trie
   BigMemory* bigmemory = nullptr;
 
-  // User-facing overwrite policy (owned by _ReplicationDB)
-  OverwritePolicy* overwrite_policy = nullptr;
+  // Aspect-based merge policy (owned by _DB, accessed via pointer)
+  Aspect* aspect = nullptr;
+  [[no_unique_address]] CursorContext _merge_context;
 
   // Set the big value mapping (called before merge)
   void set_big_value_storage(
@@ -743,31 +745,31 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
     db = dst_db;
   }
 
-  // Main trie merge: check overwrite policy before overwriting existing leaf
+  // Main trie merge: check aspect before overwriting existing leaf
   bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
                      bool dst_is_big, bool src_is_big) {
     if (!main_cursor) {
       // main_cursor == nullptr means we are merging the main trie
-      return overwrite_policy->may_overwrite(Slice(key), dst, dst_is_big,
-                                             src, src_is_big);
+      return aspect->may_merge_overwrite(Slice(key), dst, dst_is_big,
+                                         src, src_is_big, _merge_context);
     }
     return true;
   }
 
   // When merging the deletion trie, new deletion keys trigger removal
   // from the main trie within the same transaction.
-  // When merging the main trie, delegates to the overwrite policy.
+  // When merging the main trie, delegates to the aspect.
   bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
     if (main_cursor) {
-      // Deletion trie merge — consult may_delete policy
+      // Deletion trie merge — consult may_merge_delete
       // The deletion entry value is [uint64_le timestamp][meta...]
       Slice meta;
       if (src.size() > sizeof(uint64_t)) {
         meta = Slice(src.data() + sizeof(uint64_t),
                      src.size() - sizeof(uint64_t));
       }
-      if (!overwrite_policy->may_delete(Slice(key), meta)) {
-        return false;  // policy rejected this deletion
+      if (!aspect->may_merge_delete(Slice(key), meta, _merge_context)) {
+        return false;  // aspect rejected this deletion
       }
 
       main_cursor->find(Slice(key));
@@ -781,8 +783,8 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
         main_cursor->remove();
       }
     } else {
-      // Main trie merge — consult may_add_leaf policy
-      if (!overwrite_policy->may_add_leaf(Slice(key), src, is_big)) {
+      // Main trie merge — consult may_merge_add
+      if (!aspect->may_merge_add(Slice(key), src, is_big, _merge_context)) {
         return false;
       }
     }
@@ -998,8 +1000,9 @@ struct ReplicationReceiverFSM {
     // Allocate first receive buffer
     _alloc_receive_buffer();
 
-    // Wire up the user-facing overwrite policy from the DB
-    _merge_policy.overwrite_policy = &_db->overwrite_policy();
+    // Wire up the aspect from the DB for merge decisions
+    _merge_policy.aspect = &_db->aspect();
+    _db->aspect().init_cursor_context(_merge_policy._merge_context);
   }
 
   // Allocate a new receive buffer (previous one becomes part of temp DB)

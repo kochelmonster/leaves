@@ -71,6 +71,9 @@ class TCursor {
 
   void rollback() { _cursor->rollback(); }
 
+  auto& aspect_context() { return _cursor->_aspect_context; }
+  const auto& aspect_context() const { return _cursor->_aspect_context; }
+
  private:
   storage_ptr _storage;
   cursor_ptr _cursor;

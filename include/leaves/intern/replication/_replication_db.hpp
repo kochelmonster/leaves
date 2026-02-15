@@ -49,38 +49,6 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
 };
 
 // =============================================================================
-// OverwritePolicy: user-facing policy for controlling replication merge
-// =============================================================================
-// Passed as a template argument to _ReplicationDB.  The default policy
-// accepts everything.  Users can supply a custom policy to filter
-// individual operations during merge.
-
-struct DefaultOverwritePolicy {
-  // Called before deleting an item when merging the deletion trie.
-  // |key|  — the key being deleted
-  // |meta| — metadata stored alongside the deletion timestamp (e.g.
-  //          a version vector), or empty if none was provided.
-  bool may_delete(const Slice& key, const Slice& meta) { return true; }
-
-  // Called before overwriting an existing item during main trie merge.
-  // |dst_is_big| / |src_is_big| — true when the value is stored externally.
-  // When is_big is true, the Slice contains a _BigValue reference
-  // (chunk_offset + value_size) rather than inline data.  Use
-  // _BigValue::data(db) to resolve the actual bytes if needed.
-  bool may_overwrite(const Slice& key, const Slice& dst_value,
-                     bool dst_is_big, const Slice& src_value,
-                     bool src_is_big) {
-    return true;
-  }
-
-  // Called before adding a new item during main trie merge.
-  // |src_is_big| — true when the value is stored externally (see above).
-  bool may_add_leaf(const Slice& key, const Slice& value, bool is_big) {
-    return true;
-  }
-};
-
-// =============================================================================
 // _ReplicationDB: Extends _DB with deletion trie support and background purge
 // =============================================================================
 // Uses _ReplicationTransaction which includes deletion_root.
@@ -91,8 +59,7 @@ struct DefaultOverwritePolicy {
 template <typename Traits_>
 struct _ReplicationCursor;  // forward declaration
 
-template <typename Storage_,
-          typename OverwritePolicy_ = DefaultOverwritePolicy>
+template <typename Storage_>
 struct _ReplicationDB
     : public _DB<Storage_,
                  _ReplicationTransaction<typename Storage_::Traits>> {
@@ -100,6 +67,7 @@ struct _ReplicationDB
       _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>>;
   using CursorTraits = typename Base::CursorTraits;
   using Transaction = typename Base::Transaction;
+  using Aspect = typename Base::Aspect;
 
   // Override cursor types to use _ReplicationCursor
   typedef _ReplicationCursor<CursorTraits> Cursor;
@@ -109,13 +77,6 @@ struct _ReplicationDB
   using Base::Base;
   using txn_ptr = typename Base::txn_ptr;
   using offset_e = typename CursorTraits::offset_e;
-  using OverwritePolicy = OverwritePolicy_;
-
-  // --- Overwrite policy ---
-  OverwritePolicy_ _overwrite_policy{};
-
-  OverwritePolicy_& overwrite_policy() { return _overwrite_policy; }
-  const OverwritePolicy_& overwrite_policy() const { return _overwrite_policy; }
 
   // --- Purge configuration ---
   uint64_t _retention_seconds = 86400;  // how long deleted keys stay (default 24h)
@@ -133,7 +94,9 @@ struct _ReplicationDB
   void set_retention(uint64_t seconds) { _retention_seconds = seconds; }
 
   cursor_ptr create_cursor() {
-    return std::make_shared<Cursor>(this, &this->txn()->root);
+    auto cursor = std::make_shared<Cursor>(this, &this->txn()->root);
+    this->_aspect.init_cursor_context(cursor->_aspect_context);
+    return cursor;
   }
 
   // Start the self-rescheduling purge.  Requires that _storage has
@@ -288,6 +251,13 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
   void remove(Slice meta = Slice()) {
     [[maybe_unused]] bool r = this->start_transaction();
     if (!this->is_valid()) throw NoValidPosition();
+
+    // Aspect gate — may throw or return false to reject
+    Slice cur_value = this->_raw_value();
+    if (!this->_aspect().may_delete(this->key(), cur_value,
+                                    this->_aspect_context)) {
+      throw NoValidPosition();  // Aspect rejected the delete
+    }
 
     // Record the key in the deletion trie before removing from main trie
     Slice deleted_key = this->key();

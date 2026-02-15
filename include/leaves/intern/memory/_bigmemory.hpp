@@ -68,10 +68,11 @@ struct _BigMemory {
       : _db(db), _free_cursor(db, free_bigmem_root) {}
 
   template <typename LeafNode>
-  static uint16_t modify_size(uint16_t key, uint64_t size) {
+  static uint16_t modify_size(uint16_t key, uint64_t size,
+                              size_t big_inline_size = sizeof(BigValue)) {
     key &= 0xff;
     if (sizeof(LeafNode) + size + key > MAX_PAGE_SIZE)
-      return sizeof(BigValue);
+      return big_inline_size;
     return size;
   }
 

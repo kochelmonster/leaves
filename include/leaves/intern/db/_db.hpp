@@ -8,6 +8,7 @@
 #include "../core/_hash.hpp"
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
+#include "_aspect.hpp"
 #include "_cursor.hpp"
 
 namespace leaves {
@@ -131,6 +132,17 @@ struct _DB {
   
   using ReplicationHasher = typename get_replication_hasher<Traits>::type;
 
+  // Detect Aspect from Traits, fallback to DefaultAspect
+  template <typename T, typename = void>
+  struct get_aspect { using type = DefaultAspect; };
+  
+  template <typename T>
+  struct get_aspect<T, std::void_t<typename T::Aspect>> {
+    using type = typename T::Aspect;
+  };
+  
+  using Aspect = typename get_aspect<Traits>::type;
+
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
   static constexpr uint16_t PAGE_SIZES_COUNT = Traits::PAGE_SIZES_COUNT;
@@ -157,6 +169,8 @@ struct _DB {
   txn_ptr _wtxn;
   header_ptr _header;
   uint16_t _index;
+
+  [[no_unique_address]] Aspect _aspect{};
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
@@ -231,8 +245,13 @@ struct _DB {
     init(header);
   }
 
+  Aspect& aspect() { return _aspect; }
+  const Aspect& aspect() const { return _aspect; }
+
   cursor_ptr create_cursor() {
-    return std::make_unique<Cursor>(this, &txn()->root);
+    auto cursor = std::make_shared<Cursor>(this, &txn()->root);
+    _aspect.init_cursor_context(cursor->_aspect_context);
+    return cursor;
   }
 
   const db_type* _internal() const { return this; }  // for _Dumper
