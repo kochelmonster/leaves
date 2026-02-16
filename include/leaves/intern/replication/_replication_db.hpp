@@ -339,13 +339,11 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
       throw NoValidPosition();
     }
 
-    // Position the deletion cursor BEFORE Base::remove(), because the
-    // deleter modifies current_key.
+    // Write to the deletion trie BEFORE Base::remove(), because the
+    // deleter modifies current_key and COW may invalidate cursor stacks.
+    // The aspect gate above ensures no spurious entries on rejection.
     auto& del_cursor = get_deletion_cursor();
     del_cursor.find(this->key());
-
-    // Delegate to base — skip aspect (already checked above).
-    Base::template remove<false>();
 
     // Layout: [uint64_le timestamp][meta bytes...]
     uint64_t now = static_cast<uint64_t>(
@@ -363,6 +361,9 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
       std::memcpy(buf.data() + sizeof(ts_le), meta.data(), meta.size());
       del_cursor.value(Slice(buf.data(), buf.size()));
     }
+
+    // Delegate to base — skip aspect (already checked above).
+    Base::template remove<false>();
   }
 
   // Override _set_txn to also update the deletion cursor's root
