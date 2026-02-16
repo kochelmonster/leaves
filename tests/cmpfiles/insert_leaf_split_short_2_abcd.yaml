@@ -29,8 +29,8 @@ children:
 type: leaf
 id: 15609
 page: 15601
-freespace: 111
-size: 9
+freespace: 112
+size: 8
 txn: 4
 keysize: 0
 key: ""
@@ -40,8 +40,8 @@ value: "abcd*"
 type: leaf
 id: 15249
 page: 15241
-freespace: 103
-size: 17
+freespace: 104
+size: 16
 txn: 4
 keysize: 4
 key: "[f][g][h][i]"
@@ -51,8 +51,8 @@ value: "abcd*fghi"
 type: leaf
 id: 10241
 page: 10233
-freespace: 102
-size: 18
+freespace: 103
+size: 17
 txn: 3
 keysize: 5
 key: "[e][f][g][h][i]"

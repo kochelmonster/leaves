@@ -177,6 +177,11 @@ struct _Transition {
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void find() {
+    if (!node) {
+      cmp = NOT_FOUND;
+      return;
+    }
+
     // find the next node
     if (is_leaf()) {
       LeafNode& leaf_ = *leaf();
@@ -439,8 +444,6 @@ struct _ICursor
   using offset_e = typename Traits::offset_e;
   using Transition = typename CursorBase::Transition;
   using Stack = typename CursorBase::Stack;
-  using Hasher = typename Traits::Hasher;
-  using hash_t = typename Hasher::hash_t;
 
   static constexpr size_t MAX_KEY_SIZE = Traits::MAX_KEY_SIZE;
 
@@ -596,16 +599,21 @@ struct _TransactionalCursor
   using Transition = typename Cursor::Transition;
   using LeafNode = typename Transition::LeafNode;
   typedef typename BigMemory::BigValue BigValue;
+  using Aspect = typename DB::Aspect;
+  using CursorContext = typename Aspect::CursorContext;
 
   std::unique_ptr<BigMemory> _bigmemory;
   txn_ptr _txn;
   uint64_t _id{0};
   std::string _refind_buffer;
+  [[no_unique_address]] CursorContext _aspect_context;
 
   _TransactionalCursor(DB* db, offset_e* root) : Cursor(db, root) {
     _id = this->_db->new_cursor_id();
     update();
   }
+
+  Aspect& _aspect() { return this->_db->aspect(); }
 
   ~_TransactionalCursor() {
     if (this->_txn) this->_txn->refs.fetch_sub(1);
@@ -638,13 +646,24 @@ struct _TransactionalCursor
       get_bigmemory().free(bvalue);
     }
 
+    // Account for inline aspect metadata alongside _BigValue
+    static constexpr size_t BIG_INLINE_SIZE =
+        sizeof(BigValue) + Aspect::big_meta_size;
+
     uint16_t size_modified =
-        BigMemory::template modify_size<LeafNode>(this->rest_key.size(), size);
+        BigMemory::template modify_size<LeafNode>(this->rest_key.size(), size,
+                                                  BIG_INLINE_SIZE);
     void* result = Cursor::reserve(size_modified);
     if (size_modified != size) {
       BigValue* bvalue = (BigValue*)result;
       get_bigmemory().alloc(size, bvalue);
       this->stack.back().leaf()->set_big();
+      // Let aspect write inline metadata after BigValue
+      if constexpr (Aspect::big_meta_size > 0) {
+        _aspect().init_big_meta(this->key(),
+                                (char*)result + sizeof(BigValue),
+                                _aspect_context);
+      }
       auto data_ptr = bvalue->data(this->_db);
       this->_db->make_dirty(data_ptr);
       return (char*)data_ptr;
@@ -652,7 +671,7 @@ struct _TransactionalCursor
     return result;
   }
 
-  Slice value() const {
+  Slice _raw_value() const {
     const Transition& back = this->stack.back();
     if (back.cmp == 0 && back.is_leaf()) {
       if (back.leaf()->is_big()) {
@@ -666,15 +685,43 @@ struct _TransactionalCursor
     return Slice();
   }
 
+  Slice _big_meta() const {
+    if constexpr (Aspect::big_meta_size > 0) {
+      const Transition& back = this->stack.back();
+      if (back.cmp == 0 && back.is_leaf() && back.leaf()->is_big()) {
+        char* meta = (char*)back.leaf()->vdata() + sizeof(BigValue);
+        return Slice(meta, Aspect::big_meta_size);
+      }
+    }
+    return Slice();
+  }
+
+  Slice value() const {
+    Slice raw = _raw_value();
+    if (!raw.data()) return raw;
+    return const_cast<_TransactionalCursor*>(this)->_aspect().on_read(
+        this->key(), raw, _big_meta(),
+        const_cast<CursorContext&>(_aspect_context));
+  }
+
   void value(const Slice& value) {
-    void* space = reserve(value.size());
-    optimized_memcpy(space, value.data(), value.size());
+    Slice transformed = _aspect().on_write(this->key(), value, _aspect_context);
+    void* space = reserve(transformed.size());
+    optimized_memcpy(space, transformed.data(), transformed.size());
     this->_db->flush();
   }
 
+  template <bool callaspect = true>
   void remove() {
     [[maybe_unused]] bool r = start_transaction();
     if (!this->is_valid()) throw NoValidPosition();
+    if constexpr (callaspect) {
+      // Aspect gate — may throw or return false to reject
+      Slice cur_value = _raw_value();
+      if (!_aspect().may_delete(this->key(), cur_value, _aspect_context)) {
+        throw NoValidPosition();  // Aspect rejected the delete
+      }
+    }
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();

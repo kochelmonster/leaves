@@ -26,6 +26,9 @@ class TDB {
 
   db_type* _internal() const { return _db; }
 
+  auto& aspect() { return _db->aspect(); }
+  const auto& aspect() const { return _db->aspect(); }
+
   // Transaction management methods for crash recovery
   tid_t transaction_active() const { return _db->transaction_active(); }
   bool commit(bool sync = true) { return _db->commit(0, sync); }

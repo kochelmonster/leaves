@@ -109,6 +109,7 @@ struct _GarbageSlot {
   typedef _PageContainer<Traits> PageContainer;
   using cont_ptr = typename PageContainer::ptr;
 
+  // Pop from the garbage slot queue
   template <typename Resolver>
   ptr pop(Resolver& resolver) {
     if (count == 0) return nullptr;

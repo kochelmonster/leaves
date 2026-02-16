@@ -14,8 +14,8 @@ children:
 type: leaf
 id: 11225
 page: 11217
-freespace: 283
-size: 269
+freespace: 284
+size: 268
 txn: 2
 keysize: 5
 key: "[2][2][2][2][2]"

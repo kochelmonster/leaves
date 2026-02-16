@@ -8,6 +8,7 @@
 #include "../core/_hash.hpp"
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
+#include "_aspect.hpp"
 #include "_cursor.hpp"
 
 namespace leaves {
@@ -52,6 +53,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   typedef _MemManager<Traits> MemManager;
   using ptr = typename Traits::Pointer<_Transaction>;
   using page_ptr = typename Traits::ptr;
+  using offset_e = typename Traits::offset_e;
   using TransactionBase::area_list_tail_multi;
   using TransactionBase::area_list_tail_single;
   using TransactionBase::mem_manager;
@@ -116,9 +118,30 @@ struct _DB {
 
   struct CursorTraits : public Storage::Traits {
     typedef _DB<Storage_, Transaction_, Header_> DB;
-    typedef ::Hasher Hasher;
     using tid_t = leaves::tid_t;
   };
+
+  // Detect ReplicationHasher from Traits, fallback to NullHasher
+  template <typename T, typename = void>
+  struct get_replication_hasher { using type = NullHasher; };
+  
+  template <typename T>
+  struct get_replication_hasher<T, std::void_t<typename T::ReplicationHasher>> {
+    using type = typename T::ReplicationHasher;
+  };
+  
+  using ReplicationHasher = typename get_replication_hasher<Traits>::type;
+
+  // Detect Aspect from Traits, fallback to DefaultAspect
+  template <typename T, typename = void>
+  struct get_aspect { using type = DefaultAspect; };
+  
+  template <typename T>
+  struct get_aspect<T, std::void_t<typename T::Aspect>> {
+    using type = typename T::Aspect;
+  };
+  
+  using Aspect = typename get_aspect<Traits>::type;
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
@@ -146,6 +169,8 @@ struct _DB {
   txn_ptr _wtxn;
   header_ptr _header;
   uint16_t _index;
+
+  [[no_unique_address]] Aspect _aspect{};
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id;
@@ -220,8 +245,13 @@ struct _DB {
     init(header);
   }
 
+  Aspect& aspect() { return _aspect; }
+  const Aspect& aspect() const { return _aspect; }
+
   cursor_ptr create_cursor() {
-    return std::make_unique<Cursor>(this, &txn()->root);
+    auto cursor = std::make_shared<Cursor>(this, &txn()->root);
+    _aspect.init_cursor_context(cursor->_aspect_context);
+    return cursor;
   }
 
   const db_type* _internal() const { return this; }  // for _Dumper
@@ -308,6 +338,7 @@ struct _DB {
     _active_txn->area_list_tail_single = resolve(area_ptr);
 
     make_dirty(area_ptr);
+    flush();
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -331,6 +362,7 @@ struct _DB {
     _active_txn->area_list_tail_multi = resolve(area_ptr);
 
     make_dirty(area_ptr);
+    flush();
     return area_ptr;  // Convert Area* to AreaSlice for return
   }
 
@@ -438,6 +470,9 @@ struct _DB {
 
     // already prepared
     if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
+
+    // Compute merkle hashes for all new nodes in this transaction
+    compute_hashes(ReplicationHasher{}, this, _wtxn);
 
     _header->prepared_txn = resolve(_wtxn);
 

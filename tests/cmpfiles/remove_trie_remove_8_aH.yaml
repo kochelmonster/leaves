@@ -20,8 +20,8 @@ children:
 type: leaf
 id: 12617
 page: 12609
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[C]"
@@ -31,8 +31,8 @@ value: "aC"
 type: leaf
 id: 11849
 page: 11841
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[I]"
@@ -42,8 +42,8 @@ value: "aI"
 type: leaf
 id: 12089
 page: 12081
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[J]"
@@ -53,8 +53,8 @@ value: "aJ"
 type: leaf
 id: 12329
 page: 12321
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[K]"
@@ -64,8 +64,8 @@ value: "aK"
 type: leaf
 id: 17577
 page: 17569
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[O]"
@@ -75,8 +75,8 @@ value: "aO"
 type: leaf
 id: 17001
 page: 16993
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[l]"
@@ -86,8 +86,8 @@ value: "al"
 type: leaf
 id: 17289
 page: 17281
-freespace: 113
-size: 7
+freespace: 114
+size: 6
 txn: 2
 keysize: 1
 key: "[n]"

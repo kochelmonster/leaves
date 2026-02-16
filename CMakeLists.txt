@@ -103,6 +103,12 @@ target_sources(test_mmap INTERFACE
     include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC test)
 
+add_executable(test_transfer tests/test_transfer.cpp)
+target_link_libraries(test_transfer PUBLIC core test blake3)
+
+add_executable(test_replication_fsm tests/test_replication_fsm.cpp)
+target_link_libraries(test_replication_fsm PUBLIC core test blake3)
+
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
     include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
@@ -158,6 +164,9 @@ target_link_libraries(test_file_storage PUBLIC core test)
 
 add_executable(test_multithread tests/test_multithread.cpp)
 target_link_libraries(test_multithread PUBLIC core test pthread)
+
+add_executable(test_aspect tests/test_aspect.cpp)
+target_link_libraries(test_aspect PUBLIC core test blake3)
 
 add_executable(profile tests/profile.cpp)
 

@@ -316,6 +316,12 @@ struct _Offset {
     int64_t signed_val = (int64_t)(raw << shift) >> shift;
     return signed_val;
   }
+
+  template <typename T>
+  T* resolve() const {
+    return reinterpret_cast<T*>((char*)this + as_signed());
+  }
+
 };
 
 typedef _Offset<uint64_t> offset_t;

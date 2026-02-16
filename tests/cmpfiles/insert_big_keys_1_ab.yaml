@@ -41,8 +41,8 @@ children:
 type: leaf
 id: 6577
 page: 6569
-freespace: 500
-size: 556
+freespace: 501
+size: 555
 txn: 2
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
@@ -78,8 +78,8 @@ children:
 type: leaf
 id: 14057
 page: 14049
-freespace: 499
-size: 557
+freespace: 500
+size: 556
 txn: 3
 keysize: 21
 key: "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"

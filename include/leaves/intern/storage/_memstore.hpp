@@ -65,8 +65,6 @@ struct _MemoryDB {
   // Value traits for non-transactional operations
   struct CursorTraits : public Storage::Traits {
     typedef db_type DB;
-    typedef ::NullHasher Hasher;  // No hashing needed for memory-only
-    typedef uint8_t hash_t[0];
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;

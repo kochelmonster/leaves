@@ -40,7 +40,7 @@ namespace leaves {
 static const char MMAP_SIGNATURE[] = "larch-leaves-mmap";
 static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 
-// definition og all headers and data types
+// definition of all headers and data types
 struct _MemoryMapTraits {
   typedef uint8_t hash_t[0];
   typedef uint32_t uint32_e;
@@ -80,16 +80,24 @@ struct _MemoryMapTraits {
   using Pointer = SimplePointer<T, type>;
 };
 
-template <typename Traits_, template <typename> class DB_ = _DB>
+template <typename Traits_, template <typename> class DB_ = _DB,
+          typename Self_ = void>
 struct _MemoryMapFile {
   typedef Traits_ Traits;
-  typedef _MemoryMapFile<Traits_, DB_> MemoryMapFile;
+  // CRTP: if Self_ is provided, use it as the storage type seen by DB;
+  // otherwise default to this class itself (non-derived usage).
+  using MemoryMapFile = std::conditional_t<
+      std::is_void_v<Self_>, _MemoryMapFile<Traits_, DB_, Self_>, Self_>;
   using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  typedef _DB<MemoryMapFile> DB;
+  typedef DB_<MemoryMapFile> DB;
   typedef std::unique_ptr<DB> _db_ptr;
+
+  // When Self_ is provided, DB's Storage_ is the derived type.
+  // _self() downcasts *this so references match DB's constructor.
+  MemoryMapFile& _self() { return static_cast<MemoryMapFile&>(*this); }
 
   using Mutex = boost::interprocess::interprocess_mutex;
 
@@ -238,7 +246,7 @@ struct _MemoryMapFile {
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset) {
         assert(!_dbs[i]);
-        _DB(*this, _memory->dbs[i].offset, i).sanitize();
+        DB(_self(), _memory->dbs[i].offset, i).sanitize();
       }
     }
   }
@@ -266,7 +274,7 @@ struct _MemoryMapFile {
 
     if (offset_ptr->is_relative()) {
       // Relative: calculate address relative to where offset_t is stored
-      p = (char*)offset_ptr + offset_ptr->as_signed();
+      p = offset_ptr->resolve<char>();
     } else {
       // Absolute: offset from _memory base
       p = (char*)_memory + (uint64_t)*offset_ptr;
@@ -377,7 +385,7 @@ struct _MemoryMapFile {
       if (_memory->dbs[i].offset) {
         if (!strcmp(_memory->dbs[i].name, name)) {
           if (!_dbs[i]) {
-            _dbs[i] = std::make_unique<DB>(*this, _memory->dbs[i].offset, i);
+            _dbs[i] = std::make_unique<DB>(_self(), _memory->dbs[i].offset, i);
             return _dbs[i].get();
           }
           return _dbs[i].get();
@@ -388,7 +396,7 @@ struct _MemoryMapFile {
 
     if (free < 0) throw LeavesException();
     strcpy(_memory->dbs[free].name, name);
-    _dbs[free] = std::make_unique<DB>(*this, &_memory->dbs[free].offset, free);
+    _dbs[free] = std::make_unique<DB>(_self(), &_memory->dbs[free].offset, free);
     return _dbs[free].get();
   }
 
@@ -400,7 +408,7 @@ struct _MemoryMapFile {
     for (uint16_t i = 0; i < _memory->db_count; i++) {
       if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
         if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
-        DB tmp(*this, _memory->dbs[i].offset, i);
+        DB tmp(_self(), _memory->dbs[i].offset, i);
         tmp.return_areas();
         _memory->dbs[i].offset = 0;
         flush();

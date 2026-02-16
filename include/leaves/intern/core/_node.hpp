@@ -20,6 +20,7 @@ A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
 parent node) This makes the implmentation of many operations easier.
 */
+#pragma pack(push, 1)
 template <typename Traits>
 struct _TrieNode {
   typedef _TrieNode<Traits> TrieNode;
@@ -36,7 +37,7 @@ struct _TrieNode {
   hash_t hash;
   uint8_t _compressed_data[];
 
-  constexpr static uint16_e NULL_MASK = 0x8000;
+  static constexpr uint16_t NULL_MASK = uint16_t(1) << 15;
   constexpr static int NONE = -1;
   constexpr static int OUT_OF_RANGE = -2;
   constexpr static uint16_t MAX_SIZE =
@@ -119,10 +120,10 @@ struct _TrieNode {
     return array_start + 2 * sizeof(offset_e);
   }
 
-  // estimates the max size for a trie node with a given prefix and branches
+  // Estimates the max size for a trie node with a given prefix and branches.
+  // This is an upper-bound estimate used for allocation - actual size may be smaller
+  // due to bitmap compression of sparse branch arrays.
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
-    // TODO: calculate exact size
-
     uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
     uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
     uint16_t array_size = branches * sizeof(offset_e);
@@ -163,7 +164,7 @@ struct _TrieNode {
       }
     } else {
       _upper = 1 << ubit(key2);
-      _array_len |= NULL_MASK;
+      _array_len = _array_len | NULL_MASK;
       lower_[0] = 1 << lbit(key2);
       array_start_ = align(lower_start_ + sizeof(uint32_e));
     }
@@ -199,7 +200,7 @@ struct _TrieNode {
     } else {
       _upper = 0;
       array_start_ = align(lower_start_);
-      _array_len |= NULL_MASK;
+      _array_len = _array_len | NULL_MASK;
     }
 
     _array_offset = array_start_ / sizeof(offset_e);
@@ -281,7 +282,7 @@ struct _TrieNode {
       for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
     } else {
       assert((src._array_len & NULL_MASK) == 0);
-      _array_len |= NULL_MASK;
+      _array_len = _array_len | NULL_MASK;
       memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
       oidx = 0;
     }
@@ -335,7 +336,7 @@ struct _TrieNode {
       }
     } else {
       assert(src._array_len & NULL_MASK);
-      _array_len &= ~NULL_MASK;
+      _array_len = _array_len & uint16_t(~NULL_MASK);
       memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
       oidx = 0;
     }
@@ -477,8 +478,11 @@ int first() const {
   if (has_none()) return NONE;
   return (bits::first(_upper) << 5) | bits::first(lower()[0]);
 }
-};
 
+};
+#pragma pack(pop)
+
+#pragma pack(push, 1)
 template <typename Traits>
 struct _LeafNode {
   typedef _LeafNode<Traits> LeafNode;
@@ -488,13 +492,10 @@ struct _LeafNode {
   using uint32_e = typename Traits::uint32_e;
   using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
-  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
-  static constexpr auto BS_COUNT = Traits::PAGE_SIZES_COUNT;
-  static constexpr auto MAX_SIZE = PAGE_SIZES[BS_COUNT - 1];
-  static constexpr auto BIG_VALUE_FLAG = uint16_e(1) << 15;
+  static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
-  uint8_t key_size;
   uint16_e value_size;
+  uint8_t key_size;
   hash_t hash;
   uint8_t data[];
   uint8_t* vdata() { return data + key_size; }
@@ -518,7 +519,6 @@ struct _LeafNode {
     return (value_size & BIG_VALUE_FLAG) == BIG_VALUE_FLAG;
   }
 
-  // TODO: needed?
   static uint16_t size(uint16_t key, size_t value) {
     return sizeof(LeafNode) + key + value;
   }
@@ -527,6 +527,7 @@ struct _LeafNode {
     return size(key.size(), value.size());
   }
 };
+#pragma pack(pop)
 
 }  // namespace leaves
 
