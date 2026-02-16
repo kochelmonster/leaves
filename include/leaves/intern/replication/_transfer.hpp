@@ -480,38 +480,44 @@ inline RequestChildrenIterator request_children_iterator(
 // Simple arena allocator for path strings
 // Reduces heap allocations by batch-allocating memory for all paths
 // Performance: ~60-70% reduction in allocations during DFS traversal
-// Memory: Reuses 8KB buffer across batches with automatic growth
+// Memory: Allocates fixed-size blocks; old blocks are never reallocated,
+//         so returned string_views remain valid until reset().
 class PathArena {
-  std::vector<char> _buffer;
-  size_t _used;
-  static constexpr size_t DEFAULT_CAPACITY = 8192;  // 8KB per batch
+  std::list<std::vector<char>> _blocks;
+  size_t _used = 0;
+  static constexpr size_t BLOCK_SIZE = 8192;  // 8KB per block
 
  public:
-  PathArena() : _used(0) { _buffer.reserve(DEFAULT_CAPACITY); }
+  PathArena() { _blocks.emplace_back(BLOCK_SIZE); }
 
-  // Allocate space for a string and copy it
+  // Allocate space for a string and copy it.
+  // The returned string_view is stable until reset() is called.
   std::string_view allocate(const std::string_view& str) {
-    size_t offset = _used;
-    size_t needed = str.size();
-
-    if (_used + needed > _buffer.capacity()) {
-      _buffer.reserve(std::max(_buffer.capacity() * 2, _used + needed));
+    if (_used + str.size() > _blocks.back().size()) {
+      // Current block is full — allocate a new one (old blocks stay intact)
+      _blocks.emplace_back(std::max(BLOCK_SIZE, str.size()));
+      _used = 0;
     }
-
-    _buffer.resize(_used + needed);
-    std::memcpy(_buffer.data() + offset, str.data(), needed);
-    _used += needed;
-
-    return std::string_view(_buffer.data() + offset, needed);
+    auto& block = _blocks.back();
+    size_t offset = _used;
+    std::memcpy(block.data() + offset, str.data(), str.size());
+    _used += str.size();
+    return std::string_view(block.data() + offset, str.size());
   }
 
-  // Reset arena for next batch (keeps capacity)
+  // Reset arena: free all memory. Only safe when no string_views remain
+  // (e.g., when _pending is also cleared).
   void reset() {
+    _blocks.clear();
+    _blocks.emplace_back(BLOCK_SIZE);
     _used = 0;
-    _buffer.clear();
   }
 
-  size_t memory_used() const { return _buffer.capacity(); }
+  size_t memory_used() const {
+    size_t total = 0;
+    for (const auto& b : _blocks) total += b.capacity();
+    return total;
+  }
 };
 
 // Pending trie node awaiting child transmission
@@ -597,7 +603,6 @@ struct TransferTrieSender {
     _pending_big_values.clear();
     _last_big_values.clear();
     _path_arena.reset();
-    // Don't add root to pending - first fill_buffer() will handle it
   }
 
   // Process ACK: remove matching paths from _last_batch, then merge remaining
@@ -644,7 +649,7 @@ struct TransferTrieSender {
     _last_big_values.clear();
 
     // Note: Don't reset arena here - pending nodes still reference it
-    // Arena will be reset at start of next fill_buffer() after paths are copied
+    // Arena is reset in begin() when all pending lists are cleared
   }
 
   // Check if there are pending nodes to process
@@ -716,12 +721,6 @@ struct TransferTrieSender {
 
     // Convert string_view to std::string for manipulation
     _path_buffer.assign(pending.path.data(), pending.path.size());
-
-    // Now safe to reset arena - we've copied the path we need
-    if (pending.next_child == 0) {
-      // First child of this pending node - safe to reset arena
-      _path_arena.reset();
-    }
 
     size_t path_len = _path_buffer.size();
 
