@@ -2412,27 +2412,20 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
             std::to_string(slot_val));
 
     // --- "Crash" ---
-    // The FSMs and their cursors are destroyed here without completing
-    // the protocol.  The receiver's _release_slot() will be called in the
-    // destructor or not — but even if it isn't, sanitize() must handle
-    // cleanup.  To truly simulate a crash (no destructors), we detach:
-    // We deliberately do NOT let _release_slot run. Write a non-zero
-    // value directly to the slot to persist the orphaned area.
-    // (The FSM destructor doesn't call _release_slot; only COMPLETE and
-    // _transition_to_error do.)
+    // The FSMs are destroyed here without completing the protocol.
+    // The destructor calls _release_slot(), which returns the orphaned
+    // area to the pool.  To simulate a true crash (no destructors),
+    // we re-write a non-zero value to the slot after the scope exits.
+    // sanitize() must handle that case.
   }
 
-  // At this point the FSMs are destroyed.  The slot should still be
-  // non-zero (orphaned area).
-  // Note: _release_slot is only called from COMPLETE and error paths,
-  // not from the destructor — so the slot remains populated after a crash.
-  uint64_t orphaned_val =
-      receiver_impl->_header->replication_slots[claimed_slot]._offset;
-
-  // It's possible _release_slot was called if the receiver errored during
-  // partial protocol.  If not, the slot is non-zero and sanitize cleans it.
-  // If yes, the slot is already zero and sanitize is a no-op.
-  // Either way, after sanitize() ALL slots must be zero.
+  // The destructor now calls _release_slot(), so the slot is already
+  // cleared.  To simulate a true crash (no destructors run), we write
+  // a non-zero sentinel back into the slot.
+  constexpr uint64_t SENTINEL = DBImpl::Header::REPLICATION_SLOT_SENTINEL;
+  std::atomic_ref<uint64_t>(
+      receiver_impl->_header->replication_slots[claimed_slot]._offset)
+      .store(SENTINEL, std::memory_order_release);
 
   // Call sanitize() — this is what happens on crash recovery
   receiver_impl->sanitize();
@@ -2530,17 +2523,150 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
 
   BOOST_CHECK_EQUAL(extra_receiver._replication_slot, -1);
 
-  // Clean up: destroy all receivers (slots released via _release_slot
-  // in _transition_to_error or COMPLETE — but since we're just destroying,
-  // slots remain occupied.  Clear them manually for the extra receiver test.)
+  // Clean up: destroy all receivers.  The destructor calls _release_slot(),
+  // which clears each receiver's slot.
   receivers.clear();
 
-  // After destroying receivers (which don't call _release_slot in dtor),
-  // sanitize() should clean up all orphaned sentinel slots
+  // After destroying receivers, all slots should already be zero.
+  // Run sanitize() anyway to verify it's a harmless no-op.
   receiver_impl->sanitize();
 
   for (uint16_t i = 0; i < N; ++i) {
     BOOST_CHECK_EQUAL(receiver_impl->_header->replication_slots[i]._offset, 0u);
+  }
+}
+
+// Test: error during big-value reception returns the pre-allocated
+// multi-area to the pool via _release_slot() in _transition_to_error().
+BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_err_area.lvs";
+  auto receiver_path = test_temp_dir / "receiver_err_area.lvs";
+
+  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
+  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  const size_t BIG_VALUE_SIZE = 8 * 1024;
+
+  // Insert a big value on sender so replication triggers BIG_VALUE_START
+  {
+    auto cursor = sender_db.cursor();
+    cursor.start_transaction();
+    std::vector<char> value(BIG_VALUE_SIZE, 'Q');
+    cursor.find("err_bigkey");
+    cursor.value(Slice(value.data(), value.size()));
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
+  int16_t claimed_slot = -1;
+
+  {
+    TestTransport sender_transport, receiver_transport;
+    sender_transport.set_peer(&receiver_transport);
+    receiver_transport.set_peer(&sender_transport);
+
+    TestEvents sender_events, receiver_events;
+
+    SenderFSM sender(sender_impl, sender_impl->txn());
+    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+                         ReplicationMergePolicy<DBImpl>{});
+
+    receiver.begin(&receiver_transport, &receiver_events);
+    sender.begin(&sender_transport, &sender_events);
+
+    // Run protocol until the receiver has allocated the big-value area
+    // (slot holds a real offset, not zero and not sentinel)
+    for (int round = 0; round < 100; ++round) {
+      while (receiver_transport.has_message()) {
+        auto msg = receiver_transport.receive();
+        auto& buf = receiver.receive_buffer();
+        size_t to_copy = std::min(msg.size(), buf.available());
+        std::memcpy(buf.write_ptr(), msg.data(), to_copy);
+        buf.advance(to_copy);
+        receiver.on_data_received();
+      }
+
+      while (sender_transport.has_message()) {
+        auto msg = sender_transport.receive();
+        sender.on_message_received(msg.data(), msg.size());
+      }
+
+      claimed_slot = receiver._replication_slot;
+      if (claimed_slot >= 0) {
+        uint64_t slot_val =
+            receiver_impl->_header->replication_slots[claimed_slot]._offset;
+        constexpr uint64_t SENTINEL =
+            DBImpl::Header::REPLICATION_SLOT_SENTINEL;
+        if (slot_val != 0 && slot_val != SENTINEL) break;
+      }
+
+      if (sender.state() == SenderFSM::State::IDLE ||
+          sender.state() == SenderFSM::State::ERROR ||
+          receiver.state() == ReceiverFSM::State::IDLE ||
+          receiver.state() == ReceiverFSM::State::ERROR)
+        break;
+    }
+
+    BOOST_REQUIRE_GE(claimed_slot, 0);
+    uint64_t slot_before =
+        receiver_impl->_header->replication_slots[claimed_slot]._offset;
+    BOOST_REQUIRE_MESSAGE(
+        slot_before != 0 &&
+            slot_before != DBImpl::Header::REPLICATION_SLOT_SENTINEL,
+        "Expected real area offset in slot, got: " +
+            std::to_string(slot_before));
+
+    // Inject a corrupt message to trigger _transition_to_error()
+    // A message with bad magic will cause INVALID_MESSAGE error
+    std::vector<uint8_t> bad_msg(sizeof(ReplicationMsgHeader), 0);
+    auto& buf = receiver.receive_buffer();
+    std::memcpy(buf.write_ptr(), bad_msg.data(), bad_msg.size());
+    buf.advance(bad_msg.size());
+    // Force the buffer to look complete
+    receiver.on_data_received();
+
+    // Receiver should now be in ERROR state
+    BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::ERROR);
+    BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+
+    // _transition_to_error should have called _release_slot(), which
+    // returned the area to the pool and cleared the slot
+    BOOST_CHECK_EQUAL(
+        receiver_impl->_header->replication_slots[claimed_slot]._offset, 0u);
+    BOOST_CHECK_EQUAL(receiver._replication_slot, -1);
+  }
+
+  // After the scope, the destructor runs _release_slot() again — but it's
+  // idempotent (_replication_slot == -1), so this is a no-op.
+
+  // All slots must be zero
+  for (uint16_t i = 0; i < N; ++i) {
+    BOOST_CHECK_EQUAL(
+        receiver_impl->_header->replication_slots[i]._offset, 0u);
+  }
+
+  // Verify the DB is still usable after the error
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.start_transaction();
+    cursor.find("post_error_key");
+    const char* val = "post_error_value";
+    cursor.value(Slice(val, strlen(val)));
+    cursor.commit();
+  }
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find("post_error_key");
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(
+        std::string(cursor.value().data(), cursor.value().size()),
+        "post_error_value");
   }
 }
 

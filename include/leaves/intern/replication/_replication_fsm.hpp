@@ -1015,6 +1015,14 @@ struct ReplicationReceiverFSM {
     _db->aspect().init_cursor_context(_merge_policy._merge_context);
   }
 
+  ~ReplicationReceiverFSM() { _release_slot(); }
+
+  // Non-copyable, non-movable (owns replication slot)
+  ReplicationReceiverFSM(const ReplicationReceiverFSM&) = delete;
+  ReplicationReceiverFSM& operator=(const ReplicationReceiverFSM&) = delete;
+  ReplicationReceiverFSM(ReplicationReceiverFSM&&) = delete;
+  ReplicationReceiverFSM& operator=(ReplicationReceiverFSM&&) = delete;
+
   // Allocate a new receive buffer (previous one becomes part of temp DB)
   void _alloc_receive_buffer() {
     _temp_buffers.emplace_back(_initial_buffer_size);
