@@ -503,22 +503,18 @@ inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
     uint8x16_t a = vld1q_u8(reinterpret_cast<const uint8_t*>(str1 + i));
     uint8x16_t b = vld1q_u8(reinterpret_cast<const uint8_t*>(str2 + i));
     uint8x16_t eq = vceqq_u8(a, b);
-    // Check if all bytes are equal using min across vector
-    uint8x16_t min_val = vpminq_u8(eq, eq);
-    min_val = vpminq_u8(min_val, min_val);
-    min_val = vpminq_u8(min_val, min_val);
-    min_val = vpminq_u8(min_val, min_val);
-    if (vgetq_lane_u8(min_val, 0) != 0xFF) {
-      // Find first differing byte by scanning
-      const uint8_t* p1 = reinterpret_cast<const uint8_t*>(str1 + i);
-      const uint8_t* p2 = reinterpret_cast<const uint8_t*>(str2 + i);
-      for (unsigned j = 0; j < 16; j++) {
-        if (p1[j] != p2[j]) {
-          i += j;
-          cmp = p1[j] > p2[j] ? 1 : -1;
-          return i;
-        }
-      }
+    // Invert: 0xFF at mismatch positions, 0x00 at matches
+    uint8x16_t neq = vmvnq_u8(eq);
+    // Narrow 16 bytes to 8 nibbles: take the high nibble of each pair,
+    // producing a non-zero nibble for each differing byte
+    uint8x8_t narrow = vshrn_n_u16(vreinterpretq_u16_u8(neq), 4);
+    uint64_t mask64 = vget_lane_u64(vreinterpret_u64_u8(narrow), 0);
+    if (mask64 != 0) {
+      // Each byte maps to a 4-bit nibble; ctz/4 gives the byte index
+      unsigned j = detail::count_trailing_zeros_64(mask64) / 4;
+      i += j;
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
     }
     i += 16;
   }
