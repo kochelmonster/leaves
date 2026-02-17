@@ -265,20 +265,26 @@ struct _Offset {
     return *this;
   }
 
+  // Arithmetic on _Offset operates on the raw value including metadata bits.
+  // This is safe because offsets are 8-byte aligned, so the low 3 metadata
+  // bits (TYPE_MASK | RELATIVE_FLAG) are not affected by aligned operands.
   template <typename T>
   const _Offset& operator+=(T add) {
+    static_assert(std::is_convertible<T, uint64_t>::value, "T must be convertible to uint64_t");
     _offset += add;
     return *this;
   }
 
   template <typename T>
   _Offset operator+(T src) {
-    return _Offset(_offset + src);
+    static_assert(std::is_convertible<T, uint64_t>::value, "T must be convertible to uint64_t");
+    return _offset + src;
   }
 
   template <typename T>
   _Offset operator-(T src) {
-    return _Offset(_offset - src);
+    static_assert(std::is_convertible<T, uint64_t>::value, "T must be convertible to uint64_t");
+    return _offset - src;
   }
 
   // Get absolute offset value (mask out TYPE_MASK and RELATIVE_FLAG)
