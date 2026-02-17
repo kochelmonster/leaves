@@ -619,6 +619,8 @@ struct _TransactionalCursor
     if (this->_txn) this->_txn->refs.fetch_sub(1);
   }
 
+  tid_t txn_id() const { return _txn ? _txn->txn_id : tid_t(0); }
+
   bool is_transaction_active() const {
     return this->_db->txn_cursor_id() == _id;
   }
