@@ -420,10 +420,6 @@ struct _DB {
     _active_txn = &*_wtxn;
     _active_txn->refs.store(0);
 
-    // Initialize area list tails from the last transaction
-    _active_txn->area_list_tail_single = last_txn->area_list_tail_single;
-    _active_txn->area_list_tail_multi = last_txn->area_list_tail_multi;
-
     // ensure last_txn is not freed
     last_txn->refs.fetch_add(1);
 

@@ -508,6 +508,7 @@ struct _LeafNode {
   void set_big() { value_size |= BIG_VALUE_FLAG; }
 
   void set(const Slice& key, size_t value_size_) {
+    assert(key.size() < 256);
     key_size = key.size();
     memcpy(data, key.data(), key.size());
     value_size = value_size_;
