@@ -764,3 +764,31 @@ BOOST_AUTO_TEST_CASE(move_backward) {
     BOOST_REQUIRE(false);
   }
 }
+
+BOOST_AUTO_TEST_CASE(test_statistics) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // Insert enough keys to create multiple trie and leaf nodes
+  for (int i = 0; i < 100; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "key_%04d", i);
+    cursor.find(key);
+    cursor.value("value");
+    cursor.commit();
+  }
+
+  Storage::StorageImpl::DB::Statistics stat;
+  db._internal()->statistics(stat);
+
+  // Both branch and leaf stats should be populated
+  size_t branch_count = 0, leaf_count = 0;
+  for (auto& slot : stat.branch.slots) branch_count += slot.count;
+  for (auto& slot : stat.leaf.slots) leaf_count += slot.count;
+
+  BOOST_CHECK_GT(branch_count, 0);
+  BOOST_CHECK_GT(leaf_count, 0);
+  BOOST_CHECK_EQUAL(leaf_count, 100);  // one leaf per key
+}

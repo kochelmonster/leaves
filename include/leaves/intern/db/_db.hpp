@@ -514,6 +514,7 @@ struct _DB {
   };
 
   void _garbage_statistics(MemStatistics& tofill) {
+    using PageContainer = typename MemManager::PageContainer;
     txn_ptr txn_ = txn();
     const int garbage =
         MemManager::assign_slot(MemManager::PageContainer::SIZE);
@@ -523,7 +524,7 @@ struct _DB {
       offset_t o = slot.ostart;
       size_t count = 0;
       while (true) {
-        typename MemManager::Slot::cont_ptr gc = resolve(o);
+        typename MemManager::Slot::cont_ptr gc = resolve<PageContainer>(&o);
         count++;
         if (o == slot.oend) break;
         o = gc->next;
@@ -535,17 +536,28 @@ struct _DB {
 
   void _node_statistics(Statistics& stat, offset_t offset) {
     typedef _TrieNode<Traits> TrieNode;
+    typedef _LeafNode<Traits> LeafNode;
+    using PageHeader = typename Traits::PageHeader;
     using trie_ptr = typename Traits::Pointer<TrieNode>;
+    using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
 
     if (offset.type() == TRIE) {
-      trie_ptr branch = resolve(offset);
-      stat.branch.add(branch->slot_id, 1,
-                      PAGE_SIZES[branch->slot_id] - branch->size());
+      trie_ptr branch = resolve<TrieNode>(&offset);
+      auto* hdr = reinterpret_cast<PageHeader*>((char*)branch - sizeof(PageHeader));
+      stat.branch.add(hdr->slot_id, 1,
+                      PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - branch->size());
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {
         _node_statistics(stat, array[i]);
       }
+      return;
+    }
+    if (offset.type() == LEAF) {
+      leaf_ptr leaf = resolve<LeafNode>(&offset);
+      auto* hdr = reinterpret_cast<PageHeader*>((char*)leaf - sizeof(PageHeader));
+      stat.leaf.add(hdr->slot_id, 1,
+                    PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - leaf->size());
       return;
     }
   }
