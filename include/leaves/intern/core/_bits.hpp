@@ -77,10 +77,12 @@ int last(bits_t bits) {
 template <typename bits_t = uint64_t>
 int next(bits_t bits, int index) {
   using native_t = typename native_unsigned<decltype(to_native(bits))>::type;
+  constexpr int WIDTH = sizeof(native_t) * 8;
+  if (index >= WIDTH - 1) return -1;
   native_t native = static_cast<native_t>(to_native(bits));
   native_t mask = ~(((native_t)1 << (index + 1)) - 1);
   native_t v = native & mask;
-  return (v && index < static_cast<int>(sizeof(native_t) * 8 - 1)) ? countr_zero(v) : -1;
+  return v ? countr_zero(v) : -1;
 }
 
 template <typename bits_t = uint64_t>

@@ -65,6 +65,38 @@ BOOST_AUTO_TEST_CASE(test_next_bit) {
   BOOST_CHECK_EQUAL(next(test2, 0), -1);
 }
 
+// Test bits::next at the maximum bit index for each type width.
+// When index == width-1, the mask computation (1 << (index+1)) shifts by the
+// full type width — undefined behavior per the C++ standard.
+BOOST_AUTO_TEST_CASE(test_next_bit_at_max_index) {
+  // 64-bit: index=63 means (uint64_t)1 << 64 — UB
+  {
+    uint64_t all_set = 0xFFFFFFFFFFFFFFFF;
+    BOOST_CHECK_EQUAL(next(all_set, 63), -1);  // No next after last bit
+
+    uint64_t high_bit = (uint64_t)1 << 63;
+    BOOST_CHECK_EQUAL(next(high_bit, 62), 63); // Should find bit 63
+    BOOST_CHECK_EQUAL(next(high_bit, 63), -1); // No next after 63
+  }
+
+  // 32-bit: index=31 means (uint32_t)1 << 32 — UB
+  // This is the case reachable via _TrieNode::next() for byte values
+  // where lbit() returns 31 (bytes: 31, 63, 95, 127, 159, 191, 223, 255)
+  {
+    uint32_t all_set = 0xFFFFFFFF;
+    BOOST_CHECK_EQUAL(next(all_set, 31), -1);  // No next after last bit
+
+    uint32_t high_bit = (uint32_t)1 << 31;
+    BOOST_CHECK_EQUAL(next(high_bit, 30), 31); // Should find bit 31
+    BOOST_CHECK_EQUAL(next(high_bit, 31), -1); // No next after 31
+
+    // Two highest bits set — next after 30 should be 31
+    uint32_t two_high = ((uint32_t)1 << 31) | ((uint32_t)1 << 30);
+    BOOST_CHECK_EQUAL(next(two_high, 30), 31);
+    BOOST_CHECK_EQUAL(next(two_high, 31), -1);
+  }
+}
+
 BOOST_AUTO_TEST_CASE(test_prev_bit) {
   uint64_t test1 = 0b1011;  // Bits at positions 0, 1, and 3
 
