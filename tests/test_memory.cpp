@@ -700,6 +700,54 @@ BOOST_AUTO_TEST_CASE(test_area_list_remove_only_element) {
   BOOST_CHECK_EQUAL(areas.get_tail(), 0);
 }
 
+BOOST_AUTO_TEST_CASE(test_area_list_find_and_remove_sole_element_with_split) {
+  // Tests the specific defect where find_and_remove on the sole element
+  // that is larger than requested would set new_tail=0 but then split the
+  // remainder into new_head — leaving head=rest_offset, tail=0.
+  // A subsequent add() would resolve tail=0 and corrupt the file header.
+  TestStorage storage;
+  AreaList areas;
+  areas.init();
+
+  // Add a single large area — it is both head and tail
+  Area sole_area;
+  sole_area.init(1000, 3 * AREA_SIZE, 0);
+  areas.push(sole_area, storage);
+
+  BOOST_CHECK_EQUAL(areas.get_head(), sole_area.offset());
+  BOOST_CHECK_EQUAL(areas.get_tail(), sole_area.offset());
+
+  // Remove with a smaller size — triggers split of the sole element
+  auto found = areas.find_and_remove(AREA_SIZE, storage);
+  BOOST_REQUIRE(found);
+  BOOST_CHECK_EQUAL(found->offset(), sole_area.offset());
+  BOOST_CHECK_EQUAL(found->size(), AREA_SIZE);
+
+  // The remainder should now be both head and tail
+  offset_t rest_offset = sole_area.offset() + AREA_SIZE;
+  BOOST_CHECK_EQUAL(areas.get_head(), rest_offset);
+  // CRITICAL: tail must NOT be 0 — it must equal head (sole remainder node)
+  BOOST_CHECK_NE(areas.get_tail(), 0);
+  BOOST_CHECK_EQUAL(areas.get_tail(), rest_offset);
+
+  // Verify the remainder area is correct
+  auto remaining = areas.pop(storage);
+  BOOST_REQUIRE(remaining);
+  BOOST_CHECK_EQUAL(remaining->size(), 2 * AREA_SIZE);
+  BOOST_CHECK_EQUAL(remaining->offset(), rest_offset);
+
+  // List should now be empty
+  BOOST_CHECK_EQUAL(areas.get_head(), 0);
+  BOOST_CHECK_EQUAL(areas.get_tail(), 0);
+
+  // Verify add() works after the split (would crash with tail=0)
+  Area new_area;
+  new_area.init(5000, AREA_SIZE, 0);
+  areas.push(new_area, storage);
+  BOOST_CHECK_EQUAL(areas.get_head(), new_area.offset());
+  BOOST_CHECK_EQUAL(areas.get_tail(), new_area.offset());
+}
+
 BOOST_AUTO_TEST_CASE(test_binary_search_edge_cases) {
   // Test binary search function used in assign_slot
   uint16_t sizes[] = {100, 200, 300, 400, 500};

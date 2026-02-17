@@ -520,6 +520,7 @@ struct _LeafNode {
   }
 
   static uint16_t size(uint16_t key, size_t value) {
+    assert(sizeof(LeafNode) + key + value <= Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1]);
     return sizeof(LeafNode) + key + value;
   }
 

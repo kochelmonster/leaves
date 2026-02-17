@@ -474,6 +474,10 @@ struct AreaList {
           resolver.make_dirty(curr);
         }
 
+        // If we removed the sole element and split it, the rest
+        // becomes the only node — it must be both head and tail.
+        if (!new_tail && new_head) new_tail = new_head;
+
         atomic_switch(new_head, new_tail);
         return curr;
       }
