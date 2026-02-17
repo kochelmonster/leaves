@@ -127,7 +127,7 @@ struct _ReplicationDB
   // --- Purge state ---
   std::atomic<bool> _purge_interrupt{false};
   std::atomic<bool> _purge_cancelled{false};
-  uint64_t _purge_job_id = 0;
+  std::atomic<uint64_t> _purge_job_id{0};
   bool _in_purge = false;  // per-instance; only accessed from pool thread
 
   ~_ReplicationDB() {
@@ -145,19 +145,23 @@ struct _ReplicationDB
   // Start the self-rescheduling purge.  Requires that _storage has
   // schedule_after() / cancel_job() / wait_all() (i.e. _ThreadPoolMixin).
   void start_purge() {
+    uint64_t expected = 0;
+    if (!_purge_job_id.compare_exchange_strong(expected, UINT64_MAX,
+            std::memory_order_acq_rel))
+      return;  // Another purge is already scheduled
     _purge_cancelled.store(false, std::memory_order_relaxed);
-    _purge_job_id = this->_storage.schedule_after(
-        std::chrono::seconds(0), [this] { _run_purge(); });
+    _purge_job_id.store(this->_storage.schedule_after(
+        std::chrono::seconds(0), [this] { _run_purge(); }),
+        std::memory_order_release);
   }
 
   // Cancel any scheduled or running purge and wait for completion.
   void cancel_purge() {
     _purge_cancelled.store(true, std::memory_order_release);
     _purge_interrupt.store(true, std::memory_order_release);
-    if (_purge_job_id) {
-      this->_storage.cancel_job(_purge_job_id);
-      _purge_job_id = 0;
-    }
+    uint64_t job_id = _purge_job_id.exchange(0, std::memory_order_acq_rel);
+    if (job_id && job_id != UINT64_MAX)
+      this->_storage.cancel_job(job_id);
     if (!this->_storage._pool_shutdown.load(std::memory_order_acquire))
       this->_storage.wait_all();
   }
@@ -237,8 +241,11 @@ struct _ReplicationDB
         // Deletion trie is empty — check again after one retention period
         next_seconds = _retention_seconds;
       }
-      _purge_job_id = this->_storage.schedule_after(
-          std::chrono::seconds(next_seconds), [this] { _run_purge(); });
+      _purge_job_id.store(this->_storage.schedule_after(
+          std::chrono::seconds(next_seconds), [this] { _run_purge(); }),
+          std::memory_order_release);
+    } else {
+      _purge_job_id.store(0, std::memory_order_release);
     }
 
     _in_purge = false;

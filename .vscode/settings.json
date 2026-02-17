@@ -93,6 +93,7 @@
         "./$t": true,
         "./test_aspect": true,
         "./test_replication_fsm": true,
-        "git stash": true
+        "git stash": true,
+        "$t": true
     }
 }

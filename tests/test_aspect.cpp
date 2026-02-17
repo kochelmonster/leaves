@@ -192,8 +192,7 @@ struct _AspectReplicationMMapFile
 
   DB* make(const char* name) {
     DB* db = Base::make(name);
-    if (!db->_purge_job_id && !db->_purge_cancelled.load())
-      db->start_purge();
+    db->start_purge();
     return db;
   }
 
