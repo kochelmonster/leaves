@@ -94,6 +94,7 @@
         "./test_aspect": true,
         "./test_replication_fsm": true,
         "git stash": true,
-        "$t": true
+        "$t": true,
+        "build/test_aspect": true
     }
 }

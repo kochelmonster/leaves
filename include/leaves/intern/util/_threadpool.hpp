@@ -158,10 +158,15 @@ struct _ThreadPoolMixin {
 
   /**
    * @brief Wait for all pending and active tasks to complete
+   *
+   * Waits until the immediate task queue is drained and no tasks are
+   * executing.  Scheduled (delayed) jobs are NOT waited on — use
+   * cancel_job() to cancel them first if needed.
    */
   void wait_all() {
     std::unique_lock<std::mutex> lock(_queue_mutex);
     _queue_cv.wait(lock, [this]() {
+      _promote_scheduled_jobs();
       return _task_queue.empty() && _active_tasks.load() == 0;
     });
   }
@@ -179,6 +184,19 @@ struct _ThreadPoolMixin {
         _task_queue.push(std::move(top.task));
       }
       _sched_queue.pop();
+    }
+    // Prune stale entries from _cancelled_jobs: any ID below the
+    // smallest pending scheduled job can never match, so remove it.
+    if (!_cancelled_jobs.empty()) {
+      uint64_t min_id = _sched_queue.empty()
+          ? _next_job_id.load(std::memory_order_relaxed)
+          : _sched_queue.top().id;
+      for (auto it = _cancelled_jobs.begin(); it != _cancelled_jobs.end(); ) {
+        if (*it < min_id)
+          it = _cancelled_jobs.erase(it);
+        else
+          ++it;
+      }
     }
   }
 

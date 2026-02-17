@@ -151,10 +151,7 @@ struct TransferTrie {
   // Generate a random session ID
   static uint64_t generate_session_id() {
     std::random_device rd;
-    // std::random_device returns unsigned int (>=32 bits).
-    // Combine four calls for 128 bits of entropy mixed into 64.
-    uint64_t a = rd(), b = rd(), c = rd(), d = rd();
-    return (a ^ (b << 16)) ^ ((c << 32) | (d << 48));
+    return uint64_t(rd()) | (uint64_t(rd()) << 32);
   }
 
   // Initialize buffer with header for sending
