@@ -518,6 +518,10 @@ struct _DB {
       auto slot = txn_->mem_manager.slots[i];
       // collect blocks
       offset_t o = slot.ostart;
+      if (!o) {
+        assert(slot.count == 0 && "empty garbage slot with non-zero count");
+        continue;
+      }
       size_t count = 0;
       while (true) {
         typename MemManager::Slot::cont_ptr gc = resolve<PageContainer>(&o);
