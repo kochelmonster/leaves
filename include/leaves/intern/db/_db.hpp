@@ -374,8 +374,8 @@ struct _DB {
     offset_t* link = &txn->start_txn;
     do {
       txn = resolve<Transaction>(link);
+      link = &txn->next_txn;  // read before callback (callback may free txn)
       if (caller(txn)) break;
-      link = &txn->next_txn;
     } while (txn->txn_id < end);
   }
 
