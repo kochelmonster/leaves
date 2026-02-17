@@ -792,3 +792,35 @@ BOOST_AUTO_TEST_CASE(test_statistics) {
   BOOST_CHECK_GT(leaf_count, 0);
   BOOST_CHECK_EQUAL(leaf_count, 100);  // one leaf per key
 }
+
+BOOST_AUTO_TEST_CASE(test_memory_checker) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // Insert keys, committing periodically to create multiple transactions
+  for (int i = 0; i < 200; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "key_%04d", i);
+    cursor.find(key);
+    cursor.value("some_value");
+    if (i % 10 == 0) cursor.commit();
+  }
+  cursor.commit();
+
+  // Delete some keys to populate garbage slots
+  for (int i = 0; i < 50; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "key_%04d", i);
+    cursor.find(key);
+    cursor.remove();
+  }
+  cursor.commit();
+
+  // Run the memory checker — should not throw
+  using db_type = Storage::StorageImpl::DB;
+  _MemoryChecker<db_type> checker(*db._internal());
+  BOOST_CHECK_NO_THROW(checker.check());
+  BOOST_CHECK_GT(checker.total_pages, 0);
+}

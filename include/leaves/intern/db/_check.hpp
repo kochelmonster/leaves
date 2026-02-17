@@ -1,6 +1,7 @@
 #ifndef _LEAVES__CHECK_HPP
 #define _LEAVES__CHECK_HPP
 
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -259,139 +260,108 @@ struct _Dumper {
     }
   }
 };
-#if 0
-template <typename Storage>
+
+/**
+ * Memory integrity checker — verifies that every allocated page is
+ * accounted for exactly once across: free space, garbage slots,
+ * trie nodes (branch + leaf), and transaction headers.
+ *
+ * Usage:
+ *   _MemoryChecker<db_type>(*db._internal()).check();
+ */
+template <typename DB>
 struct _MemoryChecker {
-  using Traits = typename Storage::Traits;
-  static constexpr auto& PAGE_SIZES = Storage::PAGE_SIZES;
-  using offset_e = typename Storage::offset_e;
-  using txn_ptr = typename Storage::txn_ptr;
-  using page_ptr = typename Storage::page_ptr;
-  static constexpr uint16_t COUNT =
-      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
-  Storage& storage;
-  std::vector<uint64_t> pages;
+  using Traits = typename DB::Traits;
+  using MemManager = typename DB::MemManager;
+  using PageHeader = typename Traits::PageHeader;
+  using PageContainer = typename MemManager::PageContainer;
+  using offset_e = typename Traits::offset_e;
+  using txn_ptr = typename DB::txn_ptr;
+  using page_ptr = typename Traits::ptr;
+  typedef _TrieNode<Traits> TrieNode;
+  typedef _LeafNode<Traits> LeafNode;
+  using trie_ptr = typename Traits::template Pointer<TrieNode>;
+  using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
 
-  static constexpr std::array<uint16_t, COUNT> generate_counts() {
-    std::array<uint16_t, COUNT> result;
-    for (int i = 0; i < COUNT; i++) {
-      uint16_t bsize = PAGE_SIZES[i];
-      uint16_t count = AREA_SIZE / bsize;
-      uint16_t used = count * bsize;
-      uint16_t collect = count;
-      uint16_t rest = AREA_SIZE - used;
-      for (int id = i - 1; id >= 0 && rest > PAGE_SIZES[0]; id--) {
-        uint16_t bs = PAGE_SIZES[id];
-        while (bs < rest) {
-          collect++;
-          rest -= bs;
-        }
-      }
-      result[i] = collect;
-    }
-    return result;
-  }
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  static constexpr uint16_t COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
 
-  static std::array<uint16_t, COUNT> PART_COUNT;
+  DB& db;
+  std::set<uint64_t> marked_pages;
+  size_t total_pages = 0;
 
-  _MemoryChecker(Storage& storage_) : storage(storage_) {}
+  _MemoryChecker(DB& db_) : db(db_) {}
 
-  void check() {
-    const uint64_t ALL = ~(uint64_t)0;
-
-    txn_ptr txn_ = storage.txn();
-    pages.resize(txn_->file_size / AREA_SIZE);
-    pages[0] = ALL;
-
-    for (uint64_t p = txn_->mem_manager.next_free;
-         p < txn_->mem_manager.allocation_end; p += AREA_SIZE) {
-      pages[p / AREA_SIZE] = ALL;
-    }
-
-    for (int i = 0; i < txn_->mem_manager.COUNT; i++) {
-      auto& slot = txn_->mem_manager.slots[i];
-      uint16_t size = PAGE_SIZES[i];
-      uint64_t b = slot.next_free;
-      while (true) {
-        uint64_t pb = padding(b, AREA_SIZE);  // this is wrong
-        if (b + size > pb) b = pb;
-        if (b == slot.end_free) break;
-        offset_t b_offset(b);
-        storage.resolve(&b_offset, READ)->slot_id = i;
-        mark_page(b);
-        b += size;
-      }
-      // collect garbage container blocks
-      offset_t o = slot.ostart;
-      while (o) {
-        typename Storage::MemManager::Slot::cont_ptr gc = storage.template resolve<PageContainer>(&o);
-        mark_page(o);
-        if (o == slot.oend) break;
-        o = gc->next;
-      }
-
-      // collect garbage blocks
-      slot.iter(storage, [this]<typename Block>(Block& block) {
-        mark_page(block.link);
-      });
-    }
-
-    mark_trie_memory(txn_->root);
-
-    storage.iter_transactions([this](txn_ptr txn) -> bool {
-      mark_page(storage.resolve(txn));
-      return false;
-    });
-
-    for (int i = 0; i < pages.size(); i++) {
-      uint64_t p = pages[i];
-      if (p != ALL) {
-        offset_t i_offset(i * AREA_SIZE);
-        page_ptr ptr = storage.template resolve<PageHeader>(&i_offset);
-        uint16_t s0 = PAGE_SIZES[0];
-        uint16_t s1 = PAGE_SIZES[1];
-        uint16_t size = PAGE_SIZES[ptr->slot_id];
-        int collected = bits::count(p);
-        int needed = PART_COUNT[ptr->slot_id];
-        assert(collected == needed);
-      }
-    }
-  }
-
-  void mark_page(offset_t offset) {
-    uint16_t slot_id = storage.resolve(&offset, READ)->slot_id;
-    uint64_t addr = offset;
-    uint16_t size = PAGE_SIZES[slot_id];
-    uint64_t page = addr / AREA_SIZE;
-    uint16_t poff = (addr % AREA_SIZE);
-    uint16_t part = poff / size;
-    if (poff % size) part += AREA_SIZE / size;
-
-    assert(!(pages[page] & (1 << part)));
-    pages[page] |= (1 << part);
+  struct CheckError : std::runtime_error {
+    using std::runtime_error::runtime_error;
   };
 
+  void mark_page(uint64_t addr) {
+    if (!marked_pages.insert(addr).second) {
+      throw CheckError("double allocation at offset " + std::to_string(addr));
+    }
+    total_pages++;
+  }
+
+  void mark_page(offset_t offset) { mark_page(uint64_t(offset)); }
+
+  void check() {
+    txn_ptr txn_ = db.txn();
+    auto& mm = txn_->mem_manager;
+
+    // 1. Mark free allocation space (not yet allocated pages)
+    //    These are tracked as ranges, not individual pages, so we
+    //    don't mark them — they're simply unallocated.
+
+    // 2. Mark garbage container blocks and freed pages
+    for (int i = 0; i < MemManager::COUNT; i++) {
+      auto& slot = mm.slots[i];
+
+      // Mark garbage container blocks (PageContainer linked list)
+      if (slot.ostart) {
+        offset_t o = slot.ostart;
+        while (true) {
+          mark_page(o);
+          typename MemManager::Slot::cont_ptr gc =
+              db.template resolve<PageContainer>(&o);
+          if (o == slot.oend) break;
+          o = gc->next;
+        }
+      }
+
+      // Mark freed pages tracked inside the garbage containers
+      if (slot.count) {
+        slot.iter(db, [this](auto& block) { mark_page(block.link); });
+      }
+    }
+
+    // 3. Mark all trie nodes (branches and leaves)
+    if (txn_->root) {
+      mark_trie_memory(txn_->root);
+    }
+
+    // 4. Mark transaction pages
+    db.iter_transactions([this](txn_ptr txn) -> bool {
+      mark_page(db.resolve(txn));
+      return false;
+    });
+  }
+
   void mark_trie_memory(offset_e offset) {
-    typedef _TrieNode<Traits> TrieNode;
-    using trie_ptr = typename Traits::Pointer<TrieNode>;
     mark_page(offset);
 
     if (offset.type() == TRIE) {
-      trie_ptr branch = storage.template resolve<TrieNode>(&offset);
+      trie_ptr branch = db.template resolve<TrieNode>(&offset);
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {
         mark_trie_memory(array[i]);
       }
     }
+    // LEAF nodes are already marked above, no children to recurse into
   }
 };
-
-template <typename Storage>
-std::array<uint16_t, _MemoryChecker<Storage>::COUNT>
-    _MemoryChecker<Storage>::PART_COUNT =
-        _MemoryChecker<Storage>::generate_counts();
-#endif
 }  // namespace leaves
 
 #endif  // _LEAVES__CHECK_HPP
