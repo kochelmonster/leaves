@@ -128,7 +128,7 @@ struct _ReplicationDB
   std::atomic<bool> _purge_interrupt{false};
   std::atomic<bool> _purge_cancelled{false};
   std::atomic<uint64_t> _purge_job_id{0};
-  bool _in_purge = false;  // per-instance; only accessed from pool thread
+  std::atomic<bool> _in_purge{false};
 
   ~_ReplicationDB() {
     cancel_purge();
@@ -176,7 +176,7 @@ struct _ReplicationDB
   // Override: signal background purge to stop before acquiring txn_lock
   // so the purge commits quickly and releases the lock.
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
-    if (!_in_purge) {
+    if (!_in_purge.load(std::memory_order_relaxed)) {
       _purge_interrupt.store(true, std::memory_order_release);
     }
     return Base::start_transaction(cursor_id, nonblocking);
@@ -221,7 +221,7 @@ struct _ReplicationDB
   // After purging, schedules the next run based on the oldest remaining
   // entry and the retention period.
   void _run_purge() {
-    _in_purge = true;
+    _in_purge.store(true, std::memory_order_relaxed);
     _purge_interrupt.store(false, std::memory_order_relaxed);
 
     uint64_t now = _current_time();
@@ -248,7 +248,7 @@ struct _ReplicationDB
       _purge_job_id.store(0, std::memory_order_release);
     }
 
-    _in_purge = false;
+    _in_purge.store(false, std::memory_order_relaxed);
   }
 
   // Iterate the deletion trie and remove entries older than the threshold.
