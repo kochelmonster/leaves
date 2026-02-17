@@ -175,6 +175,7 @@ struct _ThreadPoolMixin {
   // Must be called with _queue_mutex held.
   void _promote_scheduled_jobs() {
     auto now = std::chrono::steady_clock::now();
+    bool promoted = false;
     while (!_sched_queue.empty() && _sched_queue.top().when <= now) {
       auto& top = const_cast<_ScheduledJob&>(_sched_queue.top());
       auto it = _cancelled_jobs.find(top.id);
@@ -182,8 +183,12 @@ struct _ThreadPoolMixin {
         _cancelled_jobs.erase(it);
       } else {
         _task_queue.push(std::move(top.task));
+        promoted = true;
       }
       _sched_queue.pop();
+    }
+    if (promoted) {
+      _queue_cv.notify_all();
     }
     // Prune stale entries from _cancelled_jobs: any ID below the
     // smallest pending scheduled job can never match, so remove it.
