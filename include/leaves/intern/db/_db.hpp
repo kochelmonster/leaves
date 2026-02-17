@@ -564,10 +564,12 @@ struct _DB {
 
   // Defragment big memory - merge adjacent free chunks
   void defrag() {
-    auto txn = start_transaction(1);
+    uint64_t defrag_cursor_id = new_cursor_id();
+    auto txn = start_transaction(defrag_cursor_id);
     assert(txn);
 
     if (!txn->free_bigmem_root) {
+      rollback(defrag_cursor_id);
       return;  // No big memory allocated yet
     }
 
@@ -579,7 +581,7 @@ struct _DB {
     BigMemory big_mem(this, &txn->free_bigmem_root);
     big_mem.defrag(txn);
     flush();
-    commit(1);
+    commit(defrag_cursor_id);
   }
 
   void return_areas_range(offset_t start_single, offset_t end_single,
