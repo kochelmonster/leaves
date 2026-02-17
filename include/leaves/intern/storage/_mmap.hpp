@@ -321,10 +321,12 @@ struct _MemoryMapFile {
     uint64_t total_growth = std::max({size, MIN_GROWTH, geometric_growth});
     total_growth = padding(total_growth, AREA_SIZE);
 
+    if (_memory->file_size + total_growth > _region.get_size())
+      throw StorageFull();
+
     offset_t new_offset = _memory->file_size;
     _memory->file_size = _memory->file_size + total_growth;
     std::filesystem::resize_file(filename(), _memory->file_size);
-    assert(_memory->file_size <= _region.get_size());
 
     // Create Area for the requested size
     auto area = area_ptr(resolve(&new_offset, WRITE));

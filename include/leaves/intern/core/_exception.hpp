@@ -28,6 +28,11 @@ class NotImplemented : public LeavesException {};
 
 class KeyTooBig : public LeavesException {};
 
+class StorageFull : public LeavesException {
+ public:
+  const char* what() const NOEXCEPT { return "storage full: file size would exceed mapped region"; }
+};
+
 class WrongValue : public LeavesException {
  private:
   const char* _msg;
