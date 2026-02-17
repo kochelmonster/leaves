@@ -1922,6 +1922,82 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_subtrie_path_overflow,
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 }
 
+BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
+                        ReplicationFixture) {
+  // Defensive test: _connect_subtrie_to_parent gracefully handles a null
+  // parent_offset (returned by _find_temp_parent_offset when _temp_root is
+  // a leaf, not a trie) by transitioning to error instead of aborting via
+  // assert.  In normal protocol flow the sender never sends subtrie data
+  // when the root is a leaf, but a malicious or buggy sender could.
+  auto path = test_temp_dir / "parentnf.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl, impl->txn());
+  receiver.begin(&transport, &events);
+
+  using Transfer = TransferTrie<DBImpl::Traits>;
+  using LeafNode = _LeafNode<DBImpl::Traits>;
+  uint64_t session_id = 42;
+
+  // Step 1: Send a single-leaf root TRIE_DATA so _temp_root becomes a leaf.
+  // Pre-set _pending_children to prevent the receiver from deferring
+  // _temp_root (simulates a malicious sender that promises more children).
+  receiver._pending_children = 1;
+
+  {
+    const size_t leaf_size = LeafNode::size(3, 3);
+    std::vector<uint8_t> leaf_buf(leaf_size, 0);
+    auto* leaf = reinterpret_cast<LeafNode*>(leaf_buf.data());
+    leaf->set(Slice("abc"), 3);
+    std::memcpy(leaf->data + 3, "val", 3);
+    std::memset(leaf->hash, 0xFF, HASH_SIZE);
+
+    Transfer transfer;
+    transfer.begin(session_id, 0, DbType::DB_MAIN, Slice());
+    transfer.add_leaf_node(leaf);
+    Slice payload = transfer.finalize();
+
+    auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, session_id,
+                             (const uint8_t*)payload.data(), payload.size());
+    feed_receiver(receiver, msg.data(), msg.size());
+  }
+
+  BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::RECEIVING);
+  while (peer.has_message()) peer.receive();  // drain ACK
+
+  // Step 2: Send a second TRIE_DATA with a non-empty subtrie_path.
+  // _temp_root is a leaf → _find_temp_parent_offset returns nullptr →
+  // _transition_to_error is called instead of the old assert crash.
+  {
+    const size_t leaf_size = LeafNode::size(1, 1);
+    std::vector<uint8_t> leaf_buf(leaf_size, 0);
+    auto* leaf = reinterpret_cast<LeafNode*>(leaf_buf.data());
+    leaf->set(Slice("q"), 1);
+    leaf->data[1] = 'v';
+    std::memset(leaf->hash, 0xAA, HASH_SIZE);
+
+    Transfer transfer;
+    transfer.begin(session_id, 0, DbType::DB_MAIN, Slice("xyz"));
+    transfer.add_leaf_node(leaf);
+    Slice payload = transfer.finalize();
+
+    auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, session_id,
+                             (const uint8_t*)payload.data(), payload.size());
+    feed_receiver(receiver, msg.data(), msg.size());
+  }
+
+  // Must transition to ERROR with INVALID_MESSAGE, not crash
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
+  BOOST_CHECK(events.errored);
+}
+
 // ---------------------------------------------------------------------------
 // 8. Receiver: BIG_VALUE_START validation
 // ---------------------------------------------------------------------------

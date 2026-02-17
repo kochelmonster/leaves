@@ -1607,12 +1607,14 @@ struct ReplicationReceiverFSM {
     } else {
       _path_buffer.assign(path.data(), path.size());
       _path_buffer.push_back((char)key);
-
-      WireTrieNode* temp_trie = _temp_root.template resolve<WireTrieNode>();
       parent_offset = _find_temp_parent_offset(Slice(_path_buffer));
     }
 
-    assert(parent_offset && "Parent not found in temp DB");
+    if (!parent_offset) {
+      _transition_to_error(ReplicationError::INVALID_MESSAGE,
+                           "Parent not found in temp DB for subtrie");
+      return;
+    }
 
     parent_offset->set_relative(subtrie_root->template resolve<char>());
     parent_offset->type(subtrie_root->type());
