@@ -2,6 +2,7 @@
 #define _LEAVES__FSTORE_HPP
 
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <boost/multi_index/hashed_index.hpp>
@@ -181,11 +182,9 @@ struct _FileOperations : _CacheBase {
     if (!_file.is_open()) {
       throw std::runtime_error("File not open");
     }
-    _file.close();
-    std::filesystem::resize_file(_filepath, new_size);
-    _file.open(_filepath, std::ios::in | std::ios::out | std::ios::binary);
-    if (!_file.is_open()) {
-      throw std::runtime_error("Failed to reopen file after resize");
+    if (::truncate(_filepath.c_str(), static_cast<off_t>(new_size)) != 0) {
+      throw std::runtime_error("Failed to resize file: " +
+                               std::string(std::strerror(errno)));
     }
   }
 

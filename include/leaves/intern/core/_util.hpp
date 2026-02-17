@@ -180,7 +180,8 @@ class Slice {
 
   template <typename ot>
   int compare(const ot& other) const {
-    int cmp = 0, size_ = size() < other.size() ? size() : other.size();
+    int cmp = 0;
+    size_t size_ = size() < other.size() ? size() : other.size();
     (cmp = memcmp(data(), other.data(), size_)) ||
         (cmp = (size() > other.size()) - (size() < other.size()));
     return (0 < cmp) - (cmp < 0);
