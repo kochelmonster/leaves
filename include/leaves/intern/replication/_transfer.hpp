@@ -807,6 +807,13 @@ struct TransferTrieSender {
     path.append((char*)trie->compressed(), trie->len());
 
     if (depth >= _max_depth) {
+      // Undo the full compressed append — fill_buffer() expects only
+      // the branch key (compressed[0]) and will itself append the rest.
+      path.resize(path_len);
+      if (!root) {
+        assert(trie->len() > 0);
+        path.push_back((char)trie->compressed()[0]);
+      }
       // Store path in arena for efficient memory usage
       auto arena_path = _path_arena.allocate(path);
       _last_batch.emplace_back(arena_path, offset, 0);
