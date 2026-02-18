@@ -474,6 +474,13 @@ struct ReplicationSenderFSM {
     auto iter = request_children_iterator(payload, req_hdr);
     _sender.process_ack(iter);
 
+    // Check for malformed message (bounds violation during iteration)
+    if (iter.error()) {
+      _transition_to_error(ReplicationError::INVALID_MESSAGE,
+                           "Malformed SUBTRIE_ACK: path length exceeds buffer");
+      return;
+    }
+
     // Continue sending remaining nodes
     if (_sender.has_pending()) {
       _state = State::SENDING;

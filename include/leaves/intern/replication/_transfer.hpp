@@ -418,10 +418,12 @@ struct RequestChildrenIterator {
   const uint8_t* _data;
   const uint8_t* _end;
   const uint8_t* _current;
+  bool _error = false;
   RequestChildrenIterator(const uint8_t* data, size_t size)
       : _data(data), _end(data + size), _current(data) {}
 
-  bool valid() const { return _current + 2 <= _end; }
+  bool valid() const { return !_error && _current + 2 <= _end; }
+  bool error() const { return _error; }
 
   uint16_t path_len() const {
     // _current is guaranteed to be 2-byte aligned
@@ -430,22 +432,20 @@ struct RequestChildrenIterator {
 
   Slice path() const {
     uint16_t len = path_len();
+    if (_current + 2 + len > _end) return Slice();
     return Slice(_current + 2, len);
   }
 
   bool next() {
     if (!valid()) return false;
     uint16_t len = path_len();
-    _current += 2 + len;
-    // Align to next 2-byte boundary for next path_len
-    // Check if len is odd (then we need to skip padding byte)
-    if (len & 1) {
-      _current++;
-    }
+    size_t advance = 2 + len + (len & 1 ? 1 : 0);
+    if (_current + advance > _end) { _error = true; return false; }
+    _current += advance;
     return valid();
   }
 
-  void reset() { _current = _data; }
+  void reset() { _current = _data; _error = false; }
 };
 
 // Parse REQUEST_CHILDREN message

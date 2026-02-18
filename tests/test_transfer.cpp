@@ -224,6 +224,55 @@ void test_request_children_builder() {
   std::cout << "OK\n";
 }
 
+void test_request_children_bounds_check() {
+  std::cout << "test_request_children_bounds_check... ";
+  
+  // Build a valid message first
+  RequestChildrenBuilder builder;
+  builder.begin(0x123456789ABCDEF0ULL, DbType::DB_MAIN);
+  builder.add_path("\x01\x02\x03");
+  Slice valid_msg = builder.finalize();
+  
+  // Now create a truncated buffer - keep header but truncate path data
+  // Header is sizeof(RequestChildrenHeader), after that comes path data
+  // We'll truncate in the middle of the path
+  size_t header_size = sizeof(RequestChildrenHeader);
+  if (header_size & 1) header_size++;  // padding
+  
+  // Create buffer with header + length field but truncated path
+  std::vector<uint8_t> truncated(header_size + 2 + 1);  // header + 2-byte len + 1 byte (not 3)
+  std::memcpy(truncated.data(), valid_msg.data(), truncated.size());
+  
+  // Parse header - should succeed
+  RequestChildrenHeader hdr;
+  bool ok = parse_request_children(Slice(truncated.data(), truncated.size()), &hdr);
+  assert(ok);
+  
+  // Create iterator
+  RequestChildrenIterator iter((uint8_t*)truncated.data() + header_size,
+                                truncated.size() - header_size);
+  
+  // First valid() should be true (we have 2 bytes for length)
+  assert(iter.valid());
+  
+  // But path() should return empty slice (path_len says 3 but only 1 byte available)
+  Slice path = iter.path();
+  assert(path.empty());
+  
+  // next() should fail and set error
+  bool advanced = iter.next();
+  assert(!advanced);
+  assert(iter.error());
+  assert(!iter.valid());
+  
+  // reset() should clear error
+  iter.reset();
+  assert(!iter.error());
+  assert(iter.valid());
+  
+  std::cout << "OK\n";
+}
+
 void test_invalid_header() {
   std::cout << "test_invalid_header... ";
   
@@ -537,6 +586,7 @@ int main() {
   test_add_raw_nodes();
   test_capacity_limit();
   test_request_children_builder();
+  test_request_children_bounds_check();
   test_invalid_header();
   
   std::cout << "\n=== Sender Tests ===\n";
