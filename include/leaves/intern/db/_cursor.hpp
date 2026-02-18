@@ -750,8 +750,18 @@ struct _TransactionalCursor
 
   bool rollback() {
     if (this->_db->rollback(_id)) {
+      // Switch back to the committed read transaction (the write txn is
+      // now orphaned).  Must update _txn/_root before re-finding so
+      // find() navigates the committed trie.
+      auto read_txn = this->_db->txn();
+      if (this->_txn) this->_txn->refs.fetch_sub(1);
+      this->_txn = read_txn;
+      this->_txn->refs.fetch_add(1);
+      this->_root = &this->_txn->root;
+      if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
       this->stack.clear();
-      this->find(this->current_key);
+      _refind_buffer = this->current_key;
+      this->find(_refind_buffer);
       return true;
     }
     return false;
