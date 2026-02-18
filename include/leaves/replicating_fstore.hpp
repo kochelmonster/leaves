@@ -35,8 +35,10 @@ struct _ReplicationCacheStore
   }
 
   ~_ReplicationCacheStore() {
-    this->destroy();
-    delete[] (char*)this->_header;
+    this->_dbs.clear();             // Cancel all purge jobs
+    this->stop_pool();              // Join worker threads
+    this->destroy();                // Flush and close
+    delete[] (char*)this->_header;  // Free header last
   }
 
   void init_dbfile(const char* path, uint16_t db_count) {
