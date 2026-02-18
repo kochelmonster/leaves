@@ -318,6 +318,7 @@ struct ReplicationSenderFSM {
   size_t _bv_current_idx;     // Current big value index being sent
   size_t _bv_current_offset;  // Offset within current big value's data
   bool _bv_header_sent;       // Whether header for current value was sent
+  size_t _bv_header_bytes_sent;  // Bytes of header already sent (for partial)
 
   // Activity tracking for application-level timeouts
   std::chrono::steady_clock::time_point _last_activity;
@@ -338,6 +339,7 @@ struct ReplicationSenderFSM {
         _bv_current_idx(0),
         _bv_current_offset(0),
         _bv_header_sent(false),
+        _bv_header_bytes_sent(0),
         _last_activity(std::chrono::steady_clock::now()) {}
 
   // Start replication
@@ -553,6 +555,7 @@ struct ReplicationSenderFSM {
     _bv_current_idx = 0;
     _bv_current_offset = 0;
     _bv_header_sent = false;
+    _bv_header_bytes_sent = 0;
     _state = State::AWAITING_BIG_VALUE_START_ACK;
   }
 
@@ -606,21 +609,23 @@ struct ReplicationSenderFSM {
         hdr.value_size = size;
 
         // How much of the header can we send?
-        size_t header_remaining = sizeof(hdr);
+        size_t header_remaining = sizeof(hdr) - _bv_header_bytes_sent;
         size_t header_space = BIG_VALUE_CHUNK_SIZE - chunk_bytes;
         size_t header_to_send = std::min(header_remaining, header_space);
 
-        _msg_builder.append_payload((const uint8_t*)&hdr, header_to_send);
+        _msg_builder.append_payload(
+            (const uint8_t*)&hdr + _bv_header_bytes_sent, header_to_send);
         chunk_bytes += header_to_send;
 
-        if (header_to_send < sizeof(hdr)) {
-          // Header spans chunk boundary - this shouldn't happen with 1MB chunks
-          // but we handle it for correctness. Send what we can.
-          // Note: We always send the full header since it's only 12 bytes
-          // and our minimum chunk is much larger
+        if (header_to_send < header_remaining) {
+          // Header spans chunk boundary — finish this chunk and
+          // resume sending the rest of the header on the next call.
+          _bv_header_bytes_sent += header_to_send;
+          break;
         }
 
         _bv_header_sent = true;
+        _bv_header_bytes_sent = 0;
         _bv_current_offset = 0;
       }
 
@@ -643,6 +648,7 @@ struct ReplicationSenderFSM {
         ++_bv_current_idx;
         _bv_current_offset = 0;
         _bv_header_sent = false;
+        _bv_header_bytes_sent = 0;
       } else {
         // Value spans to next chunk
         break;
