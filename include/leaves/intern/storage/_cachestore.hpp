@@ -143,10 +143,24 @@ struct _CacheStore : public Opers_,
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
     
     // Check cache first - use pointer-returning get to avoid copy
-    if (auto* cached = _cache.get(area_offset)) {
-      assert(cached->area()->offset() == area_offset);
-      page_ptr result = *cached;  // Single copy here
-      result._offset = static_cast<uint32_t>(raw_offset - area_offset);
+    // For multi-area allocations the offset may fall past the first
+    // AREA_SIZE chunk.  Walk backwards by AREA_SIZE until we hit the
+    // cached entry for the area's true start.
+    auto* cached = _cache.get(area_offset);
+    uint64_t probe = area_offset;
+    while (!cached && probe >= AREA_SIZE) {
+      probe -= AREA_SIZE;
+      cached = _cache.get(probe);
+      // Make sure the found entry actually spans our offset
+      if (cached && cached->area()->offset() + cached->area()->size() <= area_offset) {
+        cached = nullptr;  // belongs to a different, earlier area
+        break;
+      }
+    }
+    if (cached) {
+      uint64_t true_start = cached->area()->offset();
+      page_ptr result = *cached;
+      result._offset = static_cast<uint32_t>(raw_offset - true_start);
       return result;
     }
 

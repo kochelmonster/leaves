@@ -278,3 +278,63 @@ BOOST_AUTO_TEST_CASE(test_file_storage_key_patterns) {
   test_key_pattern(prep.get_file_path() + "_long", long_keys, "Long keys");
   test_key_pattern(prep.get_file_path() + "_numeric", numeric_keys, "Numeric keys");
 }
+
+BOOST_AUTO_TEST_CASE(test_multi_area_big_values) {
+  // Regression test for CODE_REVIEW_4 Finding #3:
+  // CacheStore::resolve() must handle offsets that fall in the 2nd (or later)
+  // AREA_SIZE chunk of a multi-area allocation.
+  // FileStorage AREA_SIZE = 128 KB, so values >= ~128 KB trigger multi-area.
+  DirPreparation prep;
+  auto path = prep.get_file_path();
+
+  // Use values large enough to span multiple AREA_SIZE chunks.
+  // 300 KB > 2 × 128 KB → 3× AREA_SIZE allocation.
+  const size_t BIG_SIZE = 300 * 1024;
+
+  {
+    auto storage = FileStorage::create(path.c_str());
+    auto db = (*storage)["big"];
+    auto cursor = db.cursor();
+
+    // Insert several big values so BigMemory allocates multi-areas
+    for (int i = 0; i < 5; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "key_%d", i);
+      // Fill each value with a distinct byte so we can verify contents
+      std::string value(BIG_SIZE, 'A' + i);
+      cursor.find(key);
+      BOOST_REQUIRE(!cursor.is_valid());
+      cursor.value(value);
+    }
+    cursor.commit();
+
+    // Read them back in the same session — cache is warm
+    for (int i = 0; i < 5; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "key_%d", i);
+      std::string expected(BIG_SIZE, 'A' + i);
+      cursor.find(key);
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_REQUIRE_EQUAL(cursor.value().size(), BIG_SIZE);
+      BOOST_REQUIRE_EQUAL(cursor.value(), Slice(expected));
+    }
+  }
+
+  // Re-open from disk — cache is cold, resolve() must read multi-areas
+  // from disk and handle offsets past the first AREA_SIZE chunk.
+  {
+    auto storage = FileStorage::create(path.c_str());
+    auto db = (*storage)["big"];
+    auto cursor = db.cursor();
+
+    for (int i = 0; i < 5; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "key_%d", i);
+      std::string expected(BIG_SIZE, 'A' + i);
+      cursor.find(key);
+      BOOST_REQUIRE(cursor.is_valid());
+      BOOST_REQUIRE_EQUAL(cursor.value().size(), BIG_SIZE);
+      BOOST_REQUIRE_EQUAL(cursor.value(), Slice(expected));
+    }
+  }
+}
