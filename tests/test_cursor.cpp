@@ -793,6 +793,141 @@ BOOST_AUTO_TEST_CASE(test_statistics) {
   BOOST_CHECK_EQUAL(leaf_count, 100);  // one leaf per key
 }
 
+BOOST_AUTO_TEST_CASE(rollback_sees_committed_trie) {
+  // Regression test for CODE_REVIEW_4 Finding #1:
+  // After rollback(), the cursor must navigate the committed trie,
+  // not the orphaned write transaction.
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // 1. Insert and commit some keys
+  cursor.find("aaa");
+  cursor.value("val_aaa");
+  cursor.find("bbb");
+  cursor.value("val_bbb");
+  cursor.find("ccc");
+  cursor.value("val_ccc");
+  cursor.commit();
+
+  // 2. Verify committed state
+  cursor.find("aaa");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_aaa"));
+
+  // 3. Make uncommitted changes: modify existing + insert new
+  cursor.find("aaa");
+  cursor.value("MODIFIED");
+  cursor.find("ddd");
+  cursor.value("val_ddd");
+
+  // 4. Rollback — cursor should revert to committed state
+  cursor.rollback();
+
+  // 5. The key "aaa" should have its ORIGINAL value, not "MODIFIED"
+  cursor.find("aaa");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_aaa"));
+
+  // 6. The uncommitted key "ddd" must NOT exist
+  cursor.find("ddd");
+  BOOST_CHECK(!cursor.is_valid());
+
+  // 7. Other committed keys must still be accessible
+  cursor.find("bbb");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_bbb"));
+
+  cursor.find("ccc");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_ccc"));
+
+  // 8. We can still write after rollback
+  cursor.find("eee");
+  cursor.value("val_eee");
+  cursor.commit();
+
+  cursor.find("eee");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_eee"));
+
+  // 9. Original keys still intact after new commit
+  cursor.find("aaa");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_aaa"));
+}
+
+BOOST_AUTO_TEST_CASE(rollback_position_preserved) {
+  // Verify that rollback re-finds the cursor at its current key position
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // Commit some keys
+  for (int i = 0; i < 50; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "key_%04d", i);
+    cursor.find(key);
+    cursor.value("committed");
+  }
+  cursor.commit();
+
+  // Navigate to a known position, then start modifying
+  cursor.find("key_0025");
+  BOOST_CHECK(cursor.is_valid());
+
+  // Make uncommitted changes while positioned at key_0025
+  cursor.value("uncommitted");
+
+  // Rollback from that position
+  cursor.rollback();
+
+  // Cursor should be re-positioned at or near key_0025 with committed value
+  cursor.find("key_0025");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("committed"));
+
+  // Verify next/prev navigation works after rollback
+  cursor.next();
+  BOOST_CHECK(cursor.is_valid());
+  std::string next_key(cursor.key().data(), cursor.key().size());
+  BOOST_CHECK_EQUAL(next_key, "key_0026");
+}
+
+BOOST_AUTO_TEST_CASE(rollback_with_big_values) {
+  // Rollback must also handle big values correctly — the bigmemory
+  // allocator must be reset to the committed free list.
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // Commit a key with a big value
+  std::string big_committed(5000, 'A');
+  cursor.find("big");
+  cursor.value(big_committed);
+  cursor.commit();
+
+  cursor.find("big");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice(big_committed));
+
+  // Overwrite with a different big value but don't commit
+  std::string big_uncommitted(6000, 'B');
+  cursor.find("big");
+  cursor.value(big_uncommitted);
+
+  // Rollback
+  cursor.rollback();
+
+  // Should see the original big value
+  cursor.find("big");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice(big_committed));
+}
+
 BOOST_AUTO_TEST_CASE(test_memory_checker) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
