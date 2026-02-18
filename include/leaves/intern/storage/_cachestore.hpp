@@ -234,14 +234,16 @@ struct _CacheStore : public Opers_,
 
   area_ptr alloc_single_area() {
     auto result = _header->area_pool.alloc_single_area(*this);
-    return result ? result : emplace_new_area(AREA_SIZE);
+    if (result) { make_header_dirty(); return result; }
+    return emplace_new_area(AREA_SIZE);
   }
 
   area_ptr alloc_multi_area(uint64_t size) {
     // Ensure size is multiple of AREA_SIZE
     const uint64_t aligned = padding(size, AREA_SIZE);
     auto result = _header->area_pool.alloc_multi_area(aligned, *this);
-    return result ? result : emplace_new_area(aligned);
+    if (result) { make_header_dirty(); return result; }
+    return emplace_new_area(aligned);
   }
 
   void return_single_areas(offset_t head, offset_t tail) {
