@@ -1520,8 +1520,12 @@ struct ReplicationReceiverFSM {
 
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
-    _compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
-                             payload_end, _path_buffer);
+    if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
+                                  payload_end, _path_buffer)) {
+      _transition_to_error(ReplicationError::INVALID_MESSAGE,
+                           "Wire node offset out of bounds");
+      return;
+    }
 
     // Now connect to temp DB — but only if the root wasn't pruned.
     if (transfer_hdr->root) {
@@ -1669,10 +1673,8 @@ struct ReplicationReceiverFSM {
                                 const char* buffer_end, std::string& path) {
     if ((char*)wire_node < buffer_start ||
         (char*)(wire_node + 1) > buffer_end) {
-      // wire_node itself is out of bounds — prune
-      *wire_node = 0;
-      --_pending_children;
-      return true;
+      // wire_node itself is out of bounds — malformed message from sender
+      return false;
     }
 
     --_pending_children;
