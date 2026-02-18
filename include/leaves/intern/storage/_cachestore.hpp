@@ -96,9 +96,9 @@ struct _CacheStore : public Opers_,
   std::vector<_db_ptr> _dbs;
 
   _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M,
-              size_t pool_threads = 1)
+              size_t pool_threads = 1, size_t avg_item_size = 512 * K)
       : _ThreadPoolMixin<_CacheStore>(pool_threads),
-        _cache(capacity),
+        _cache(capacity, 0.25f, 0.5f, avg_item_size),
         _capacity(capacity) {
     _dbs.resize(db_count);
   }

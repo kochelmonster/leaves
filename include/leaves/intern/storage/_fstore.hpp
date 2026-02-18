@@ -254,7 +254,7 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
 
   _FileStore(const char* path, uint16_t db_count = 48,
              size_t capacity = 500 * M, size_t pool_threads = 1)
-      : base_t(db_count, capacity, pool_threads) {
+      : base_t(db_count, capacity, pool_threads, _StoreTraits::AREA_SIZE) {
     init_dbfile(path, db_count);
     // Thread pool already started by base constructor
   }

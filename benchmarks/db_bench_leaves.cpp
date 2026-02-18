@@ -536,7 +536,7 @@ class Benchmark {
     if (using_file_storage_) {
       file_storage_ = leaves::FileStorage::create(test_fname.c_str());
     } else {
-      map_storage_ = leaves::MapStorage::create(test_fname.c_str());
+      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), 64 * leaves::G);
     }
   }
 

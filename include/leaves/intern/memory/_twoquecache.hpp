@@ -1,6 +1,7 @@
 #ifndef _LEAVES__TWOQUECACHE_HPP
 #define _LEAVES__TWOQUECACHE_HPP
 
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include "../third_party/unordered_dense.h"
@@ -91,15 +92,18 @@ struct TwoQCache {
     using List = IntrusiveList<Key, Value>;
     using GhostList = IntrusiveList<Key, char>;
     
-    // Constructor with configurable size ratios
-    TwoQCache(size_t capacity = 0, float kin_ratio = 0.25, float kout_ratio = 0.5)
+    // Constructor with configurable size ratios and item size estimate
+    TwoQCache(size_t capacity = 0, float kin_ratio = 0.25, float kout_ratio = 0.5,
+              size_t avg_item_size = 512 * 1024)  // Default to AREA_SIZE
         : _capacity(capacity),
           _size(0),
           _a1in_size_limit(capacity * kin_ratio),
-          _a1out_size_limit(capacity * kout_ratio) {
+          _a1out_size_limit(0) {
         // Pre-allocate hash maps to avoid rehashing during warmup
-        // Estimate ~64KB average area size
-        constexpr size_t avg_item_size = 64 * 1024;
+        // _a1out_size_limit is an item count (ghost entries carry no value),
+        // so convert the byte-based capacity to an estimated item count.
+        size_t estimated_total_items = capacity / avg_item_size;
+        _a1out_size_limit = std::max<size_t>(estimated_total_items * kout_ratio, 1);
         size_t estimated_items = capacity / avg_item_size;
         if (estimated_items > 0) {
             _a1in_map.reserve(estimated_items / 4);   // 25% in A1in
