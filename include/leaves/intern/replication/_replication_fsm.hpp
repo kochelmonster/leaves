@@ -1326,7 +1326,7 @@ struct ReplicationReceiverFSM {
     _track_area_in_slot(_big_value_multi_area);
 
     _big_value_area_offset = _big_value_multi_area->content_offset();
-    _big_value_area_size = total_aligned_size;
+    _big_value_area_size = _big_value_multi_area->end() - _big_value_area_offset;
     _big_value_area =
         _db->template resolve<Chunk>(&_big_value_area_offset, WRITE);
     _big_value_write_pos = 0;
