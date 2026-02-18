@@ -74,7 +74,7 @@ struct _TrieNode {
     uint16_t prefix_size =
         padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
     uint16_t lower_size_ = lower_size();
-    if (key != NONE && !(_upper & (1 << ubit(key)))) {
+    if (key != NONE && !(_upper & (1u << ubit(key)))) {
       lower_size_ += sizeof(uint32_e);
     }
     uint16_t array_size_ = (count() + 1) * sizeof(offset_e);
@@ -85,7 +85,7 @@ struct _TrieNode {
     uint16_t prefix_size =
         padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
     uint16_t lower_size_ = lower_size();
-    if (key != NONE && (_upper & (1 << ubit(key)))) {
+    if (key != NONE && (_upper & (1u << ubit(key)))) {
       // Only decrement lower_size if this key is the only one in its lower
       // bucket
       int lidx = bits::index(_upper, ubit(key));
@@ -153,19 +153,19 @@ struct _TrieNode {
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     if (key1 != NONE) {
-      _upper = (1 << ubit(key1)) | (1 << ubit(key2));
+      _upper = (1u << ubit(key1)) | (1u << ubit(key2));
       if (bits::count(_upper) == 1) {
-        lower_[0] = (1 << lbit(key1)) | (1 << lbit(key2));
+        lower_[0] = (1u << lbit(key1)) | (1u << lbit(key2));
         array_start_ = align(lower_start_ + sizeof(uint32_e));
       } else {
-        lower_[0] = 1 << lbit(key1);
-        lower_[1] = 1 << lbit(key2);
+        lower_[0] = 1u << lbit(key1);
+        lower_[1] = 1u << lbit(key2);
         array_start_ = align(lower_start_ + 2 * sizeof(uint32_e));
       }
     } else {
-      _upper = 1 << ubit(key2);
+      _upper = 1u << ubit(key2);
       _array_len = _array_len | NULL_MASK;
-      lower_[0] = 1 << lbit(key2);
+      lower_[0] = 1u << lbit(key2);
       array_start_ = align(lower_start_ + sizeof(uint32_e));
     }
 
@@ -194,8 +194,8 @@ struct _TrieNode {
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     if (key != NONE) {
-      _upper = 1 << ubit(key);
-      lower_[0] = 1 << lbit(key);
+      _upper = 1u << ubit(key);
+      lower_[0] = 1u << lbit(key);
       array_start_ = align(lower_start_ + sizeof(uint32_e));
     } else {
       _upper = 0;
@@ -263,21 +263,21 @@ struct _TrieNode {
     int oidx;
     if (key != NONE) {
       uint8_t bit = ubit(key);
-      _upper |= (1 << bit);
+      _upper |= (1u << bit);
       int lidx = bits::index(_upper, bit);
-      if (src._upper & (1 << bit)) {
+      if (src._upper & (1u << bit)) {
         // _upper == src._upper
         memcpy(lower_, src.lower(), bits::count(_upper) * sizeof(uint32_e));
-        lower_[lidx] |= 1 << lbit(key);
+        lower_[lidx] |= 1u << lbit(key);
       } else {
         // bits::count(_upper) == bits::count(src._upper) + 1
         memcpy(lower_, src.lower(), lidx * sizeof(uint32_e));
         memcpy(lower_ + lidx + 1, src.lower() + lidx,
                (bits::count(src._upper) - lidx) * sizeof(uint32_e));
-        lower_[lidx] = 1 << lbit(key);
+        lower_[lidx] = 1u << lbit(key);
       }
 
-      oidx = bits::count(lower_[lidx] & ((1 << lbit(key)) - 1)) +
+      oidx = bits::count(lower_[lidx] & ((1u << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
       for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
     } else {
@@ -317,15 +317,15 @@ struct _TrieNode {
       uint32_e src_lower_val = src.lower()[lidx];
 
       // Calculate oidx using source value
-      oidx = bits::count(src_lower_val & ((1 << lbit(key)) - 1)) +
+      oidx = bits::count(src_lower_val & ((1u << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
       for (int i = 0; i < lidx; i++) oidx += bits::count(src.lower()[i]);
 
       // Check if removing this bit will empty the lower bucket
-      uint32_e new_lower_val = src_lower_val & ~(1 << lbit(key));
+      uint32_e new_lower_val = src_lower_val & ~(1u << lbit(key));
       if (!new_lower_val) {
         // Remove the upper bit and copy lower array around the removed bucket
-        _upper &= ~(1 << bit);
+        _upper &= ~(1u << bit);
         memcpy(lower_, src.lower(), lidx * sizeof(uint32_e));
         memcpy(lower_ + lidx, src.lower() + lidx + 1,
                (bits::count(src._upper) - lidx - 1) * sizeof(uint32_e));
@@ -377,7 +377,7 @@ void create(const Slice& prefix, offset_e* offsets) {
   _upper = 0;
   for (int i = 0; i < 256; i++) {
     if (offsets[i]) {
-      _upper |= (1 << ubit(i));
+      _upper |= (1u << ubit(i));
     }
   }
 
@@ -400,7 +400,7 @@ void create(const Slice& prefix, offset_e* offsets) {
     if (offsets[i]) {
       _array_len++;
       *array_++ = offsets[i];
-      lower_[bits::index(_upper, ubit(i))] |= 1 << lbit(i);
+      lower_[bits::index(_upper, ubit(i))] |= 1u << lbit(i);
     }
   }
 }
@@ -408,8 +408,8 @@ void create(const Slice& prefix, offset_e* offsets) {
 // check if the index exists
 bool isset(int nchar) const {
   if (nchar == NONE) return has_none();
-  return (_upper & (1 << ubit(nchar))) &&
-         (lower()[bits::index(_upper, ubit(nchar))] & (1 << lbit(nchar)));
+  return (_upper & (1u << ubit(nchar))) &&
+         (lower()[bits::index(_upper, ubit(nchar))] & (1u << lbit(nchar)));
 }
 
 int array_index(int nchar) const {
@@ -418,8 +418,8 @@ int array_index(int nchar) const {
 
   uint32_e* lower_ = lower();
   int lidx = bits::index(_upper, ubit(nchar));
-  if (_upper & (1 << ubit(nchar))) {
-    int oidx = bits::count(lower_[lidx] & ((1 << lbit(nchar)) - 1)) +
+  if (_upper & (1u << ubit(nchar))) {
+    int oidx = bits::count(lower_[lidx] & ((1u << lbit(nchar)) - 1)) +
                bool(_array_len & NULL_MASK);
     for (int i = 0; i < lidx; i++) {
       oidx += bits::count(lower_[i]);
@@ -446,7 +446,7 @@ int _prev_lower(int nchar) const {
 
 int prev(int nchar) const {
   if (nchar == NONE) return OUT_OF_RANGE;
-  if (!(_upper & (1 << ubit(nchar)))) return _prev_lower(nchar);
+  if (!(_upper & (1u << ubit(nchar)))) return _prev_lower(nchar);
 
   int lidx = bits::index(_upper, ubit(nchar)),
       lbit_idx = bits::prev(lower()[lidx], lbit(nchar));
@@ -467,7 +467,7 @@ int next(int nchar) const {
     if (lidx < 0) return OUT_OF_RANGE;
     return (lidx << 5) | bits::first(lower()[0]);
   }
-  if (!(_upper & (1 << ubit(nchar)))) return _next_lower(nchar);
+  if (!(_upper & (1u << ubit(nchar)))) return _next_lower(nchar);
   int lidx = bits::index(_upper, ubit(nchar)),
       lbit_idx = bits::next(lower()[lidx], lbit(nchar));
   if (lbit_idx < 0) return _next_lower(nchar);
