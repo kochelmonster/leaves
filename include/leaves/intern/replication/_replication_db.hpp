@@ -176,7 +176,7 @@ struct _ReplicationDB
   // Override: signal background purge to stop before acquiring txn_lock
   // so the purge commits quickly and releases the lock.
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
-    if (!_in_purge.load(std::memory_order_relaxed)) {
+    if (_in_purge.load(std::memory_order_relaxed)) {
       _purge_interrupt.store(true, std::memory_order_release);
     }
     return Base::start_transaction(cursor_id, nonblocking);
@@ -257,6 +257,9 @@ struct _ReplicationDB
   PurgeResult _do_purge(uint64_t older_than) {
     auto cursor = create_cursor();
     [[maybe_unused]] bool r = cursor->start_transaction();
+    // Clear the interrupt that our own start_transaction() just set
+    // (we are still _in_purge, so it would self-interrupt immediately).
+    _purge_interrupt.store(false, std::memory_order_relaxed);
     auto& del_cursor = cursor->get_deletion_cursor();
 
     size_t purged = 0;
