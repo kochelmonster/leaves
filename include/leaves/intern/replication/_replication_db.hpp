@@ -145,11 +145,11 @@ struct _ReplicationDB
   // Start the self-rescheduling purge.  Requires that _storage has
   // schedule_after() / cancel_job() / wait_all() (i.e. _ThreadPoolMixin).
   void start_purge() {
+    _purge_cancelled.store(false, std::memory_order_release);
     uint64_t expected = 0;
     if (!_purge_job_id.compare_exchange_strong(expected, UINT64_MAX,
             std::memory_order_acq_rel))
       return;  // Another purge is already scheduled
-    _purge_cancelled.store(false, std::memory_order_relaxed);
     _purge_job_id.store(this->_storage.schedule_after(
         std::chrono::seconds(0), [this] { _run_purge(); }),
         std::memory_order_release);
