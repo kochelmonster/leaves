@@ -492,6 +492,7 @@ struct _LeafNode {
   using uint32_e = typename Traits::uint32_e;
   using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
+  static constexpr uint16_t MAX_SIZE = Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
   static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
   uint16_e value_size;
@@ -521,7 +522,7 @@ struct _LeafNode {
   }
 
   static uint16_t size(uint16_t key, size_t value) {
-    assert(sizeof(LeafNode) + key + value <= Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1]);
+    assert(sizeof(LeafNode) + key + value <= MAX_SIZE);
     return sizeof(LeafNode) + key + value;
   }
 

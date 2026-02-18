@@ -1990,9 +1990,13 @@ struct ReplicationReceiverFSM {
     _db->_active_txn->area_list_tail_multi = area_off;
     _db->make_dirty(_big_value_multi_area);
 
-    // Clear the slot — the area is now owned by the transaction
+    // Reset slot to sentinel — area is now transaction-owned but keep the
+    // slot claimed so another receiver cannot steal it between rounds.
+    // On crash: _sanitize_replication_anchors treats SENTINEL as no-op;
+    // the area is reclaimed by Base::sanitize() via return_areas_range.
     if (_replication_slot >= 0) {
-      _db->_header->replication_slots[_replication_slot] = 0;
+      constexpr uint64_t SENTINEL = DB::Header::REPLICATION_SLOT_SENTINEL;
+      _db->_header->replication_slots[_replication_slot] = SENTINEL;
       _db->make_dirty(_db->_header);
       _db->flush();
     }

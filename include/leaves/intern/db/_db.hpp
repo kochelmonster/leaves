@@ -457,6 +457,7 @@ struct _DB {
         read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
 
     _header->prepared_txn = _header->read_txn;
+    make_dirty(_header);
     flush();
     end_transaction();
     return true;
@@ -608,10 +609,18 @@ struct _DB {
       _storage.return_single_areas(range_head, end_single);
     }
 
-    if (start_multi && end_multi && start_multi != end_multi) {
-      area_ptr start_area = resolve<Area>(&start_multi, READ);
-      offset_t range_head = start_area->next;
-      _storage.return_multi_areas(range_head, end_multi);
+    if (end_multi && start_multi != end_multi) {
+      if (start_multi == 0) {
+        // First-ever multi-area allocation: no committed tail to walk from,
+        // return the whole chain from head.
+        _storage.return_multi_areas(
+            _header->area_list_head_multi, end_multi);
+        _header->area_list_head_multi = 0;
+      } else {
+        area_ptr start_area = resolve<Area>(&start_multi, READ);
+        offset_t range_head = start_area->next;
+        _storage.return_multi_areas(range_head, end_multi);
+      }
     }
   }
 
