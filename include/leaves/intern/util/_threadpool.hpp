@@ -190,19 +190,6 @@ struct _ThreadPoolMixin {
     if (promoted) {
       _queue_cv.notify_all();
     }
-    // Prune stale entries from _cancelled_jobs: any ID below the
-    // smallest pending scheduled job can never match, so remove it.
-    if (!_cancelled_jobs.empty()) {
-      uint64_t min_id = _sched_queue.empty()
-          ? _next_job_id.load(std::memory_order_relaxed)
-          : _sched_queue.top().id;
-      for (auto it = _cancelled_jobs.begin(); it != _cancelled_jobs.end(); ) {
-        if (*it < min_id)
-          it = _cancelled_jobs.erase(it);
-        else
-          ++it;
-      }
-    }
   }
 
   void _worker_loop() {
