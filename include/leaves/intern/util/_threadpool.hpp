@@ -8,7 +8,6 @@
 #include <mutex>
 #include <queue>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 
 namespace leaves {
@@ -53,7 +52,6 @@ struct _ThreadPoolMixin {
   std::queue<Task> _task_queue;
   std::priority_queue<_ScheduledJob, std::vector<_ScheduledJob>,
                       std::greater<_ScheduledJob>> _sched_queue;
-  std::unordered_set<uint64_t> _cancelled_jobs;
   std::mutex _queue_mutex;
   std::condition_variable _queue_cv;
   std::atomic<bool> _pool_shutdown{false};
@@ -131,10 +129,21 @@ struct _ThreadPoolMixin {
    * @brief Cancel a scheduled job that has not yet fired
    *
    * If the job has already been picked up by a worker, this has no effect.
+   * Rebuilds the queue without the cancelled job (O(n) but n < 10 typically).
    */
   void cancel_job(uint64_t id) {
     std::lock_guard<std::mutex> lock(_queue_mutex);
-    _cancelled_jobs.insert(id);
+    std::vector<_ScheduledJob> remaining;
+    while (!_sched_queue.empty()) {
+      auto job = std::move(const_cast<_ScheduledJob&>(_sched_queue.top()));
+      _sched_queue.pop();
+      if (job.id != id) {
+        remaining.push_back(std::move(job));
+      }
+    }
+    for (auto& job : remaining) {
+      _sched_queue.push(std::move(job));
+    }
   }
 
   /**
@@ -178,14 +187,9 @@ struct _ThreadPoolMixin {
     bool promoted = false;
     while (!_sched_queue.empty() && _sched_queue.top().when <= now) {
       auto& top = const_cast<_ScheduledJob&>(_sched_queue.top());
-      auto it = _cancelled_jobs.find(top.id);
-      if (it != _cancelled_jobs.end()) {
-        _cancelled_jobs.erase(it);
-      } else {
-        _task_queue.push(std::move(top.task));
-        promoted = true;
-      }
+      _task_queue.push(std::move(top.task));
       _sched_queue.pop();
+      promoted = true;
     }
     if (promoted) {
       _queue_cv.notify_all();
