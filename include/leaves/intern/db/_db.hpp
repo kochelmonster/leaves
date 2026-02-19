@@ -627,8 +627,9 @@ struct _DB {
   void sanitize() {
     new (&_header->txn_lock) Mutex();
     _header->txn_cursor_id.store(0);
-    iter_transactions([](txn_ptr txn) -> bool {
+    iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
+      make_dirty(txn);
       return false;
     });
 
@@ -649,6 +650,7 @@ struct _DB {
     }
     // otherwise we have to wait for rollback or commit
 
+    make_dirty(_header);
     flush();
   }
 };
