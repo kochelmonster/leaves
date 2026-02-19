@@ -99,6 +99,9 @@
         "./db_bench": true,
         "./build/test_file_storage": true,
         "./test_transfer": true,
-        "./build/test_cursor": true
+        "./build/test_cursor": true,
+        "ninja": true,
+        "diff": true,
+        "printf": true
     }
 }
