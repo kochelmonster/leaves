@@ -29,12 +29,12 @@ struct _TrieNode {
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
   static constexpr uint16_t MAX_BRANCH_COUNT = 257;  // 256 (chars) + 1 (NULL)
+  hash_t hash;
+  uint16_e _array_len;  // < MAX_BRANCH_COUNT
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;
   uint8_t _array_offset;
-  uint16_e _array_len;  // < MAX_BRANCH_COUNT
-  hash_t hash;
   uint8_t _compressed_data[];
 
   static constexpr uint16_t NULL_MASK = uint16_t(1) << 15;
@@ -279,7 +279,14 @@ struct _TrieNode {
 
       oidx = bits::count(lower_[lidx] & ((1u << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
-      for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
+      // Unrolled loop - lidx is at most 7
+      if (lidx > 0) oidx += bits::count(lower_[0]);
+      if (lidx > 1) oidx += bits::count(lower_[1]);
+      if (lidx > 2) oidx += bits::count(lower_[2]);
+      if (lidx > 3) oidx += bits::count(lower_[3]);
+      if (lidx > 4) oidx += bits::count(lower_[4]);
+      if (lidx > 5) oidx += bits::count(lower_[5]);
+      if (lidx > 6) oidx += bits::count(lower_[6]);
     } else {
       assert((src._array_len & NULL_MASK) == 0);
       _array_len = _array_len | NULL_MASK;
@@ -319,7 +326,15 @@ struct _TrieNode {
       // Calculate oidx using source value
       oidx = bits::count(src_lower_val & ((1u << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
-      for (int i = 0; i < lidx; i++) oidx += bits::count(src.lower()[i]);
+      // Unrolled loop - lidx is at most 7
+      uint32_e* src_lower = src.lower();
+      if (lidx > 0) oidx += bits::count(src_lower[0]);
+      if (lidx > 1) oidx += bits::count(src_lower[1]);
+      if (lidx > 2) oidx += bits::count(src_lower[2]);
+      if (lidx > 3) oidx += bits::count(src_lower[3]);
+      if (lidx > 4) oidx += bits::count(src_lower[4]);
+      if (lidx > 5) oidx += bits::count(src_lower[5]);
+      if (lidx > 6) oidx += bits::count(src_lower[6]);
 
       // Check if removing this bit will empty the lower bucket
       uint32_e new_lower_val = src_lower_val & ~(1u << lbit(key));
@@ -421,9 +436,14 @@ int array_index(int nchar) const {
   if (_upper & (1u << ubit(nchar))) {
     int oidx = bits::count(lower_[lidx] & ((1u << lbit(nchar)) - 1)) +
                bool(_array_len & NULL_MASK);
-    for (int i = 0; i < lidx; i++) {
-      oidx += bits::count(lower_[i]);
-    }
+    // Unrolled loop - lidx is at most 7, compiles to branchless CMOVs
+    if (lidx > 0) oidx += bits::count(lower_[0]);
+    if (lidx > 1) oidx += bits::count(lower_[1]);
+    if (lidx > 2) oidx += bits::count(lower_[2]);
+    if (lidx > 3) oidx += bits::count(lower_[3]);
+    if (lidx > 4) oidx += bits::count(lower_[4]);
+    if (lidx > 5) oidx += bits::count(lower_[5]);
+    if (lidx > 6) oidx += bits::count(lower_[6]);
     assert(oidx < count());
     return oidx;
   }
