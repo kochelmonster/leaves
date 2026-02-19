@@ -228,7 +228,7 @@ struct _Dumper {
     offset_e* end = start + trie->count();
 
     assert(trie->count() > 0);
-    assert(trie->count() <= 256);
+    assert(trie->count() <= TrieNode::MAX_BRANCH_COUNT);
     out << "branches: \"";
     for (int iter = trie->first(); iter != TrieNode::OUT_OF_RANGE;
          iter = trie->next(iter)) {
