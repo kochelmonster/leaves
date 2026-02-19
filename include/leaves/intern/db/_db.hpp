@@ -604,9 +604,11 @@ struct _DB {
     // transaction
 
     if (start_single && end_single && start_single != end_single) {
-      area_ptr start_area = resolve<Area>(&start_single, READ);
+      area_ptr start_area = resolve<Area>(&start_single, WRITE);
       offset_t range_head = start_area->next;
       _storage.return_single_areas(range_head, end_single);
+      start_area->next = 0;
+      make_dirty(start_area);
     }
 
     if (end_multi && start_multi != end_multi) {
@@ -617,9 +619,11 @@ struct _DB {
             _header->area_list_head_multi, end_multi);
         _header->area_list_head_multi = 0;
       } else {
-        area_ptr start_area = resolve<Area>(&start_multi, READ);
+        area_ptr start_area = resolve<Area>(&start_multi, WRITE);
         offset_t range_head = start_area->next;
         _storage.return_multi_areas(range_head, end_multi);
+        start_area->next = 0;
+        make_dirty(start_area);
       }
     }
   }
