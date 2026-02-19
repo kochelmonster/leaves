@@ -522,7 +522,7 @@ struct _LeafNode {
   uint8_t* vdata() { return data + key_size; }
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
-  Slice value() const { return Slice(data + key_size, value_size); }
+  Slice value() const { return Slice(data + key_size, vsize()); }
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
