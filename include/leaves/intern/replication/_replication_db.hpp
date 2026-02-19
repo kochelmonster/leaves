@@ -122,7 +122,7 @@ struct _ReplicationDB
   using offset_e = typename CursorTraits::offset_e;
 
   // --- Purge configuration ---
-  uint64_t _retention_seconds = 86400;  // how long deleted keys stay (default 24h)
+  std::atomic<uint64_t> _retention_seconds{86400};  // how long deleted keys stay (default 24h)
 
   // --- Purge state ---
   std::atomic<bool> _purge_interrupt{false};
@@ -134,7 +134,7 @@ struct _ReplicationDB
     cancel_purge();
   }
 
-  void set_retention(uint64_t seconds) { _retention_seconds = seconds; }
+  void set_retention(uint64_t seconds) { _retention_seconds.store(seconds, std::memory_order_relaxed); }
 
   cursor_ptr create_cursor() {
     auto cursor = std::make_shared<Cursor>(this, &this->txn()->root);
@@ -225,8 +225,9 @@ struct _ReplicationDB
     _purge_interrupt.store(false, std::memory_order_relaxed);
 
     uint64_t now = _current_time();
+    uint64_t retention = _retention_seconds.load(std::memory_order_relaxed);
     uint64_t older_than =
-        (now > _retention_seconds) ? now - _retention_seconds : 0;
+        (now > retention) ? now - retention : 0;
 
     auto result = _do_purge(older_than);
 
@@ -235,11 +236,11 @@ struct _ReplicationDB
       uint64_t next_seconds;
       if (result.oldest_remaining_ts > 0) {
         // Items remain — wake when the oldest one expires
-        uint64_t expire_at = result.oldest_remaining_ts + _retention_seconds;
+        uint64_t expire_at = result.oldest_remaining_ts + retention;
         next_seconds = (expire_at > now) ? expire_at - now : 0;
       } else {
         // Deletion trie is empty — check again after one retention period
-        next_seconds = _retention_seconds;
+        next_seconds = retention;
       }
       _purge_job_id.store(this->_storage.schedule_after(
           std::chrono::seconds(next_seconds), [this] { _run_purge(); }),
