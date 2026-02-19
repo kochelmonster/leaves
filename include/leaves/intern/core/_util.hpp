@@ -203,6 +203,7 @@ class Slice {
   size_t size() const { return _size; }
 
   Slice advance(size_t size) const {
+    assert(size <= _size);
     return Slice(data() + size, _size - size);
   }
 
