@@ -429,7 +429,6 @@ bool isset(int nchar) const {
 
 int array_index(int nchar) const {
   assert(nchar >= NONE);
-  assert(isset(nchar));
   if (nchar == NONE) return has_none() ? 0 : -1;
 
   uint32_e* lower_ = lower();
