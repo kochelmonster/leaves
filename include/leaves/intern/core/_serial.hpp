@@ -162,6 +162,14 @@ struct serial_number {
     return *this > serial_number(rhs);
   }
   
+  constexpr bool operator<=(T rhs) const {
+    return *this <= serial_number(rhs);
+  }
+  
+  constexpr bool operator>=(T rhs) const {
+    return *this >= serial_number(rhs);
+  }
+  
   constexpr bool operator==(T rhs) const {
     return _value == rhs;
   }
