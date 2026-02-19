@@ -385,7 +385,8 @@ struct AreaList {
     uint8_t inactive = 1 - active;
     head[inactive] = new_head;
     tail[inactive] = new_tail;
-    active = inactive;  // Atomic: single byte write
+    std::atomic_thread_fence(std::memory_order_release);
+    active = inactive;
   }
 
   template <typename Resolver>
