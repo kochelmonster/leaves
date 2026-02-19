@@ -2,6 +2,7 @@
 #define _LEAVES__BIT_HPP
 
 #include <boost/core/bit.hpp>
+#include <cassert>
 #include <cstdint>
 #include <type_traits>
 
@@ -43,18 +44,21 @@ int count(bits_t bits) {
 
 template <typename bits_t = uint64_t>
 bool isset(bits_t bits, int val) {
+  assert(val >= 0);
   auto native = to_native(bits);
   return native & (((decltype(native))1) << val);
 }
 
 template <typename bits_t = uint64_t>
 void set(bits_t& bits, int val) {
+  assert(val >= 0);
   bits |= (((bits_t)1) << val);
 }
 
 template <typename bits_t = uint64_t>
 int index(bits_t bits, int val) {
   using native_t = typename native_unsigned<decltype(to_native(bits))>::type;
+  assert(val >= 0);
   native_t native = static_cast<native_t>(to_native(bits));
   native_t v = native & (((native_t)1 << val) - 1);
   return popcount(v);
@@ -78,6 +82,7 @@ template <typename bits_t = uint64_t>
 int next(bits_t bits, int index) {
   using native_t = typename native_unsigned<decltype(to_native(bits))>::type;
   constexpr int WIDTH = sizeof(native_t) * 8;
+  assert(index >= 0);
   if (index >= WIDTH - 1) return -1;
   native_t native = static_cast<native_t>(to_native(bits));
   native_t mask = ~(((native_t)1 << (index + 1)) - 1);
@@ -88,6 +93,7 @@ int next(bits_t bits, int index) {
 template <typename bits_t = uint64_t>
 int prev(bits_t bits, int index) {
   using native_t = typename native_unsigned<decltype(to_native(bits))>::type;
+  assert(index >= 0);
   native_t native = static_cast<native_t>(to_native(bits));
   native_t mask = ((native_t)1 << index) - 1;
   native_t v = native & mask;
