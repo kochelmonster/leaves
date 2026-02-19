@@ -201,6 +201,7 @@ struct _Transition {
     if (key().empty()) {
       if (trie_.has_none()) {
         link_idx = 0;
+        cursor->_db->prefetch(&trie_.array()[link_idx]);
         push().find();
       } else
         cmp = -1;
@@ -214,6 +215,7 @@ struct _Transition {
     }
     cmp = 0;
     link_idx = trie_.array_index(branch_key);
+    cursor->_db->prefetch(&trie_.array()[link_idx]);
     push().find();
   }
 
