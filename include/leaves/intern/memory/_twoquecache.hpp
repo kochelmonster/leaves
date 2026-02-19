@@ -193,6 +193,7 @@ struct TwoQCache {
               size_t avg_item_size = 512 * 1024)  // Default to AREA_SIZE
         : _capacity(capacity),
           _size(0),
+          _a1in_current_size(0),
           _a1in_size_limit(capacity * kin_ratio),
           _a1out_size_limit(0) {
         // Pre-allocate hash maps to avoid rehashing during warmup
@@ -223,6 +224,7 @@ struct TwoQCache {
     TwoQCache(TwoQCache&& other) noexcept
         : _capacity(other._capacity),
           _size(other._size),
+          _a1in_current_size(other._a1in_current_size),
           _a1in_size_limit(other._a1in_size_limit),
           _a1out_size_limit(other._a1out_size_limit),
           _a1in_list(other._a1in_list),
@@ -237,6 +239,7 @@ struct TwoQCache {
         other._a1out_list = {};
         other._am_list = {};
         other._size = 0;
+        other._a1in_current_size = 0;
     }
     
     // Move assignment
@@ -248,6 +251,7 @@ struct TwoQCache {
             
             _capacity = other._capacity;
             _size = other._size;
+            _a1in_current_size = other._a1in_current_size;
             _a1in_size_limit = other._a1in_size_limit;
             _a1out_size_limit = other._a1out_size_limit;
             _a1in_list = other._a1in_list;
@@ -263,6 +267,7 @@ struct TwoQCache {
             other._a1out_list = {};
             other._am_list = {};
             other._size = 0;
+            other._a1in_current_size = 0;
         }
         return *this;
     }
@@ -276,6 +281,7 @@ struct TwoQCache {
             Entry* entry = a1in_it->second;
             
             // Move from A1in to Am
+            _a1in_current_size -= get_item_size(entry->value);
             _am_list.splice_back(_a1in_list, entry);
             _am_map[key] = entry;
             _a1in_map.erase(a1in_it);
@@ -335,6 +341,7 @@ struct TwoQCache {
             Entry* entry = _entry_pool.alloc(key, value);
             _a1in_list.push_back(entry);
             _a1in_map[key] = entry;
+            _a1in_current_size += get_item_size(value);
         }
 
         // Maintain size limits
@@ -390,22 +397,19 @@ struct TwoQCache {
 
     // Make A1in queue respect size limit
     void maintain_a1in_size() {
-        size_t a1in_current_size = 0;
-        for (Entry* e = _a1in_list.front(); e != nullptr; e = e->next) {
-            a1in_current_size += get_item_size(e->value);
-        }
-        
-        if (a1in_current_size <= _a1in_size_limit) return;
+        if (_a1in_current_size <= _a1in_size_limit) return;
         
         // Collect all evictable entries in one pass
         std::vector<Entry*> to_evict;
         to_evict.reserve(16);  // Pre-allocate for common case
         
-        for (Entry* e = _a1in_list.front(); e != nullptr && a1in_current_size > _a1in_size_limit; e = e->next) {
+        size_t target_size = _a1in_current_size;
+        for (Entry* e = _a1in_list.front(); e != nullptr && target_size > _a1in_size_limit; e = e->next) {
             if (can_evict(e->value)) {
                 size_t item_size = get_item_size(e->value);
-                a1in_current_size -= item_size;
+                target_size -= item_size;
                 _size -= item_size;
+                _a1in_current_size -= item_size;
                 to_evict.push_back(e);
             }
         }
@@ -476,6 +480,9 @@ struct TwoQCache {
     
     // Current size in bytes
     size_t _size;
+    
+    // Current A1in size in bytes (tracked incrementally to avoid O(n) scans)
+    size_t _a1in_current_size;
     
     // Size limits for the different queues
     size_t _a1in_size_limit;  // A1in should use about 25% of cache
