@@ -1,0 +1,394 @@
+#ifndef _LEAVES__BROWSERSTORE_HPP
+#define _LEAVES__BROWSERSTORE_HPP
+
+/**
+ * _BrowserStorage: WebAssembly-compatible storage using IndexedDB
+ *
+ * This provides a browser-based alternative to _FileStore, using IndexedDB
+ * as the persistence layer. It maintains API compatibility with _CacheStore
+ * while adapting to the async, key-value nature of IndexedDB.
+ *
+ * Architecture:
+ * - IndexedDB database stores areas as key-value pairs
+ * - Object store "header" stores file header and metadata
+ * - Object store "areas" stores data blocks keyed by offset
+ * - Uses Emscripten Asyncify for synchronous-looking async operations
+ *
+ * Build requirements:
+ * - Compile with Emscripten: emcc -sASYNCIFY
+ * - Link flags: -sASYNCIFY_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete']
+ */
+
+#ifdef __EMSCRIPTEN__
+
+#include <emscripten.h>
+#include <emscripten/val.h>
+#include <emscripten/bind.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "_cachestore.hpp"
+#include "../db/_db.hpp"
+#include "../core/_exception.hpp"
+#include "../memory/_memory.hpp"
+#include "../core/_node.hpp"
+#include "../core/_traits.hpp"
+
+namespace leaves {
+
+static const char BROWSERSTORE_SIGNATURE[] = "leaves-browserstore";
+static const size_t BROWSERSTORE_SIGNATURE_SIZE =
+    padding(sizeof(BROWSERSTORE_SIGNATURE), 8);
+
+// Store traits - same as _StoreTraits but tuned for browser environment
+struct _BrowserStoreTraits {
+  typedef uint8_t hash_t[0];
+  typedef uint32_t uint32_e;
+  typedef uint16_t uint16_e;
+  typedef uint64_t uint64_e;
+  typedef offset_t offset_e;
+
+  struct PageHeader {
+    typedef PageHeader Base;
+    tid_t txn_id;
+    uint16_e used;
+    uint8_t slot_id;
+
+    template <typename DB>
+    bool needs_cow(const DB* db) const {
+      return txn_id != db->transaction_active();
+    }
+  };
+
+  // Slightly smaller sizes for browser memory constraints
+  static constexpr size_t MAX_KEY_SIZE = 512 * K;
+  static constexpr size_t AREA_SIZE = 64 * K;  // Smaller blocks for IDB
+  static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t PAGE_SIZES[] = {
+      _TrieNode<_BrowserStoreTraits>::size(1, 10),
+      _TrieNode<_BrowserStoreTraits>::size(1, 16),
+      _TrieNode<_BrowserStoreTraits>::size(1, 64),
+      _TrieNode<_BrowserStoreTraits>::size(1, 127),
+      _TrieNode<_BrowserStoreTraits>::size(1, 256),
+      4 * K};
+  static constexpr uint16_t PAGE_SIZES_COUNT =
+      sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
+  using ptr = SmartPointer<PageHeader, TRIE>;
+  template <typename T, NodeTypes type = TRIE>
+  using Pointer = SmartPointer<T, type>;
+};
+
+/**
+ * IndexedDB operations wrapper for Emscripten
+ *
+ * Uses emscripten_idb_* APIs which require Asyncify for synchronous behavior.
+ * Each IDB operation is wrapped to provide a file-like interface.
+ */
+struct _BrowserOperations : _CacheBase {
+  // No mutex needed for single-threaded browser environment
+  struct Mutex {
+    template <typename Time = std::chrono::seconds>
+    void lock(Time /*t*/ = Time(10)) {}
+    bool try_lock() { return true; }
+    void unlock() {}
+  };
+
+  struct FileHeader {
+    char signature[BROWSERSTORE_SIGNATURE_SIZE];
+    uint16_t db_version;
+    size_t logical_size;  // Logical file size for compatibility
+    Mutex file_lock;
+    AreaPool area_pool;
+    uint16_t db_count;
+    DBEntry dbs[0];
+
+    FileHeader(uint16_t db_count_)
+        : signature{},
+          db_version(0),
+          logical_size(0),
+          file_lock{},
+          area_pool{},
+          db_count(db_count_) {
+      std::memset(signature, 0, sizeof(signature));
+      std::strcpy(signature, BROWSERSTORE_SIGNATURE);
+      area_pool.init();
+      std::memset((void*)dbs, 0, sizeof(DBEntry) * db_count);
+    }
+  };
+
+  std::string _db_name;       // IndexedDB database name
+  std::string _store_name;    // Object store name
+  FileHeader* _header;
+  mutable std::mutex _io_mutex;  // For thread-safety even in browser
+
+  // Internal buffer for IndexedDB operations
+  mutable std::vector<char> _idb_buffer;
+
+  size_t file_size() const { return _header->logical_size; }
+
+  size_t calc_header_size() const {
+    return leaves::padding(
+        sizeof(FileHeader) + sizeof(DBEntry) * _header->db_count, 4 * K);
+  }
+
+  // Initialize IndexedDB connection
+  void open(const char* db_name) {
+    _db_name = db_name;
+    _store_name = "leaves_data";
+    // IndexedDB initialization happens on first access
+  }
+
+  void close() {
+    // IndexedDB connections auto-close; flush any pending data
+    flush_to_idb();
+  }
+
+  // Write data to IndexedDB
+  // We batch operations by storing entire areas as single records
+  void write(offset_t offset, const void* ptr, size_t size) const {
+    std::lock_guard<std::mutex> lock(_io_mutex);
+    idb_store_data(offset, ptr, size);
+  }
+
+  // Read data from IndexedDB
+  void read(offset_t offset, void* ptr, size_t size) const {
+    std::lock_guard<std::mutex> lock(_io_mutex);
+    idb_load_data(offset, ptr, size);
+  }
+
+  // Resize is a no-op for IndexedDB (no fixed file size)
+  void resize(size_t new_size) const {
+    // IndexedDB grows automatically; just track logical size
+    // Header update happens separately
+  }
+
+  template <typename BlockVector>
+  void write_batch(BlockVector& blocks_to_write, size_t header_size) {
+    // Sort by offset for locality (helps with browser cache)
+    std::sort(blocks_to_write.begin(), blocks_to_write.end(),
+              [](const auto& a, const auto& b) {
+                return a.area()->offset() < b.area()->offset();
+              });
+
+    // Write each block as a separate IndexedDB record
+    // IDB handles its own batching internally
+    for (const auto& block : blocks_to_write) {
+      const auto& area = block.area();
+      write(header_size + area->offset(), area, area->size());
+    }
+  }
+
+  const char* filename() const { return _db_name.c_str(); }
+
+  Mutex& file_lock() { return _header->file_lock; }
+
+private:
+  // IndexedDB store operation using Emscripten Asyncify
+  void idb_store_data(uint64_t key, const void* data, size_t size) const {
+    // Key format: "area_<offset>" for data blocks, "header" for metadata
+    std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
+
+    // emscripten_idb_store is synchronous with Asyncify enabled
+    int error = 0;
+    emscripten_idb_store(
+        _db_name.c_str(),
+        key_str.c_str(),
+        const_cast<void*>(data),
+        size,
+        &error
+    );
+
+    if (error) {
+      throw std::runtime_error("IndexedDB store failed for key: " + key_str);
+    }
+  }
+
+  // IndexedDB load operation using Emscripten Asyncify
+  void idb_load_data(uint64_t key, void* data, size_t size) const {
+    std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
+
+    void* loaded_data = nullptr;
+    int loaded_size = 0;
+    int error = 0;
+
+    emscripten_idb_load(
+        _db_name.c_str(),
+        key_str.c_str(),
+        &loaded_data,
+        &loaded_size,
+        &error
+    );
+
+    if (error || !loaded_data) {
+      // Key not found - return zeros (new area)
+      std::memset(data, 0, size);
+      return;
+    }
+
+    // Copy loaded data
+    size_t copy_size = std::min(size, static_cast<size_t>(loaded_size));
+    std::memcpy(data, loaded_data, copy_size);
+
+    // Zero remaining bytes if loaded size was smaller
+    if (copy_size < size) {
+      std::memset(static_cast<char*>(data) + copy_size, 0, size - copy_size);
+    }
+
+    // Free the allocated buffer from emscripten
+    free(loaded_data);
+  }
+
+  // Flush any pending data
+  void flush_to_idb() const {
+    // IndexedDB operations are already synchronous with Asyncify
+  }
+};
+
+/**
+ * _BrowserStore: Main storage class for WebAssembly/browser environment
+ *
+ * Usage:
+ *   _BrowserStore store("my_database", 16, 100 * M);
+ *   auto* db = store["my_collection"];
+ *   db->put(key, value);
+ */
+struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
+  typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations> base_t;
+  using DB = base_t::DB;
+
+  _BrowserStore(const char* db_name, uint16_t db_count = 48,
+                size_t capacity = 100 * M, size_t pool_threads = 0)
+      : base_t(db_count, capacity, pool_threads, _BrowserStoreTraits::AREA_SIZE) {
+    // Note: pool_threads=0 for browser (single-threaded)
+    init_browser_db(db_name, db_count);
+  }
+
+  ~_BrowserStore() {
+    destroy();
+    delete[] reinterpret_cast<char*>(_header);
+  }
+
+  void init_browser_db(const char* db_name, uint16_t db_count) {
+    size_t header_size =
+        leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+    char* buffer = new char[header_size];
+
+    open(db_name);
+
+    // Try to load existing header from IndexedDB
+    bool exists = try_load_header(buffer, header_size);
+
+    if (!exists) {
+      // Create new database
+      _header = new (buffer) FileHeader(db_count);
+      _header->logical_size = header_size;
+      // Write initial header
+      write(0, buffer, header_size);
+    } else {
+      _header = reinterpret_cast<FileHeader*>(buffer);
+
+      if (strcmp(_header->signature, BROWSERSTORE_SIGNATURE)) {
+        throw std::runtime_error("Invalid browser store signature");
+      }
+      if (_header->db_count != db_count) {
+        throw WrongValue("db_count may not be changed.");
+      }
+    }
+
+    assert(((uint64_t)_header & 7) == 0);
+    sanitize();
+  }
+
+  bool try_load_header(char* buffer, size_t header_size) {
+    try {
+      read(0, buffer, header_size);
+      auto* h = reinterpret_cast<FileHeader*>(buffer);
+      return strcmp(h->signature, BROWSERSTORE_SIGNATURE) == 0;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  void sanitize() {
+    sanitize_dbs();
+  }
+
+  void sanitize_dbs() {
+    for (uint16_t i = 0; i < _header->db_count; i++) {
+      if (_header->dbs[i].offset) {
+        assert(!_dbs[i]);
+        _DB(*this, _header->dbs[i].offset, i).sanitize();
+      }
+    }
+  }
+
+  // Compatibility method
+  AreaSlice get_area(size_t size) {
+    auto area_ptr = alloc_multi_area(size);
+    return *area_ptr;
+  }
+
+  // Browser-specific: Export database to transferable format
+  std::vector<char> export_to_buffer() const {
+    std::vector<char> result;
+    size_t total_size = _header->logical_size;
+    result.resize(total_size);
+
+    // Export header
+    size_t header_size = calc_header_size();
+    std::memcpy(result.data(), _header, header_size);
+
+    // Export all areas (would need iteration over stored keys)
+    // This is a simplified version - full implementation would
+    // enumerate all IndexedDB keys
+    return result;
+  }
+
+  // Browser-specific: Import database from buffer
+  void import_from_buffer(const std::vector<char>& data) {
+    if (data.size() < sizeof(FileHeader)) {
+      throw std::runtime_error("Invalid import data");
+    }
+
+    size_t header_size = calc_header_size();
+    std::memcpy(_header, data.data(), header_size);
+
+    // Write header
+    write(0, _header, header_size);
+
+    // Import areas (simplified - full version would parse all areas)
+  }
+
+  // Browser-specific: Clear all data
+  void clear_database() {
+    // Delete the IndexedDB database
+    emscripten_idb_delete_database(_db_name.c_str(), nullptr, nullptr);
+    // Reinitialize
+    init_browser_db(_db_name.c_str(), _header->db_count);
+  }
+};
+
+}  // namespace leaves
+
+#else  // !__EMSCRIPTEN__
+
+// Stub for non-Emscripten builds - provides compile-time error
+namespace leaves {
+
+struct _BrowserStore {
+  _BrowserStore(...) {
+    static_assert(false, "_BrowserStore requires Emscripten compilation");
+  }
+};
+
+}  // namespace leaves
+
+#endif  // __EMSCRIPTEN__
+
+#endif  // _LEAVES__BROWSERSTORE_HPP
