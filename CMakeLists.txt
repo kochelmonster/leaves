@@ -43,6 +43,18 @@ if (COMPILER_SUPPORTS_LZCNT)
     add_compile_options(-mlzcnt)
 endif()
 
+# Check for AVX2 support (32-byte SIMD operations)
+check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2)
+if (COMPILER_SUPPORTS_AVX2)
+    add_compile_options(-mavx2)
+endif()
+
+# Check for AVX-512 support (64-byte SIMD operations) 
+check_cxx_compiler_flag("-mavx512bw" COMPILER_SUPPORTS_AVX512BW)
+if (COMPILER_SUPPORTS_AVX512BW)
+    add_compile_options(-mavx512bw)
+endif()
+
 
 add_subdirectory("BLAKE3/c")
 

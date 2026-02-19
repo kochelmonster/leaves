@@ -21,7 +21,16 @@
 // Platform detection for SIMD optimizations
 #if defined(__x86_64__) || defined(_M_X64)
   #define LEAVES_X86_64 1
-  #if defined(__SSE2__) || (defined(_MSC_VER) && _M_X64)
+  #if defined(__AVX512BW__)
+    #include <immintrin.h>
+    #define LEAVES_HAS_AVX512 1
+    #define LEAVES_HAS_AVX2 1
+    #define LEAVES_HAS_SSE2 1
+  #elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define LEAVES_HAS_AVX2 1
+    #define LEAVES_HAS_SSE2 1
+  #elif defined(__SSE2__) || (defined(_MSC_VER) && _M_X64)
     #include <emmintrin.h>  // SSE2 for non-temporal stores
     #define LEAVES_HAS_SSE2 1
   #endif
@@ -483,6 +492,37 @@ inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {
   size_t i = 0;
   const size_t min_size = std::min(size1, size2);
+
+#if defined(LEAVES_HAS_AVX512) && !defined(__EMSCRIPTEN__)
+  // AVX-512: Compare 64 bytes at a time
+  while (i + 64 <= min_size) {
+    __m512i a = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(str1 + i));
+    __m512i b = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(str2 + i));
+    __mmask64 mask = _mm512_cmpneq_epi8_mask(a, b);
+    if (mask != 0) {
+      i += detail::count_trailing_zeros_64(mask);
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i += 64;
+  }
+#endif
+
+#if defined(LEAVES_HAS_AVX2) && !defined(__EMSCRIPTEN__)
+  // AVX2: Compare 32 bytes at a time
+  while (i + 32 <= min_size) {
+    __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(str1 + i));
+    __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(str2 + i));
+    __m256i eq = _mm256_cmpeq_epi8(a, b);
+    int mask = _mm256_movemask_epi8(eq);
+    if (mask != -1) {  // -1 = 0xFFFFFFFF = all 32 bytes equal
+      i += detail::count_trailing_zeros_32(static_cast<uint32_t>(~mask));
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i += 32;
+  }
+#endif
 
 #if defined(LEAVES_HAS_SSE2) && !defined(__EMSCRIPTEN__)
   // SSE2: Compare 16 bytes at a time (x86-64 only, not Emscripten)
