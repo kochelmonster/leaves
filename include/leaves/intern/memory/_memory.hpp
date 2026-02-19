@@ -462,6 +462,7 @@ struct AreaList {
           // Create rest area from the remaining space
           offset_t rest_offset = curr->offset() + size;
           size_t rest_size = curr->size() - size;
+          assert(rest_size >= sizeof(Area));
 
           // Insert rest area at head
           area_ptr rest = resolver.resolve(&rest_offset, WRITE);
