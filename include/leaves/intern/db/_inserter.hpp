@@ -35,14 +35,9 @@ struct _Inserter {
     return back->cursor->_db->resolve(offset_ptr);
   }
 
-  page_ptr alloc(uint16_t size) { return back->cursor->alloc(size); }
-
-  // Allocate node with PageHeader prefix, return pointer to node
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
-    using PageHeader = typename Traits::PageHeader;
-    page_ptr page = alloc(node_size);
-    return page + sizeof(PageHeader);
+    return back->cursor->_db->template alloc_node<NodePtr>(node_size);
   }
 
   // Free node by computing PageHeader pointer

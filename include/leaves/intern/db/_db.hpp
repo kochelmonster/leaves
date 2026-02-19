@@ -293,14 +293,23 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  // space without PageHeader
-  page_ptr alloc(uint16_t space) {
-    assert(space + sizeof(typename Traits::PageHeader) <=
-           PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+  // Allocate a page for content of 'space' bytes (PageHeader added internally).
+  // Returns page_ptr pointing at the PageHeader.
+  page_ptr alloc_page(uint16_t space) {
+    using PageHeader = typename Traits::PageHeader;
+    assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     page_ptr result = alloc_slot(
-        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
+        MemManager::assign_slot(space + sizeof(PageHeader)));
     result->used = space;
     return result;
+  }
+
+  // Allocate a node of 'node_size' bytes, returning a pointer past PageHeader.
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc_page(node_size);
+    return page + sizeof(PageHeader);
   }
 
   page_ptr alloc_slot(uint16_t slot) {

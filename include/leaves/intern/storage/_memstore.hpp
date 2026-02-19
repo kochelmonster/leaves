@@ -94,9 +94,28 @@ struct _MemoryDB {
   area_ptr alloc_single_area() { return _storage.alloc_single_area(); }
 
   // Block allocation - using memory manager properly
+  // Raw slot allocation (allocate slot for 'space' total bytes)
   page_ptr alloc(uint16_t space) {
     uint8_t slot = _mem_manager.assign_slot(space);
     return alloc_slot(slot);
+  }
+
+  // Allocate a page for content of 'space' bytes (PageHeader added internally).
+  // Returns page_ptr pointing at the PageHeader.
+  page_ptr alloc_page(uint16_t space) {
+    using PageHeader = typename Traits::PageHeader;
+    uint8_t slot = _mem_manager.assign_slot(space + sizeof(PageHeader));
+    page_ptr result = alloc_slot(slot);
+    result->used = space;
+    return result;
+  }
+
+  // Allocate a node of 'node_size' bytes, returning a pointer past PageHeader.
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc_page(node_size);
+    return page + sizeof(PageHeader);
   }
 
   void free(page_ptr p) { _mem_manager.free(p, *this); }

@@ -129,12 +129,9 @@ struct _Merger {
   _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
-  // Allocate node with PageHeader prefix, return pointer to node
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
-    using PageHeader = typename Traits::PageHeader;
-    page_ptr page = dst_cursor.alloc(sizeof(PageHeader) + node_size);
-    return page + sizeof(PageHeader);
+    return dst_cursor._db->template alloc_node<NodePtr>(node_size);
   }
 
   // Free node by computing PageHeader pointer

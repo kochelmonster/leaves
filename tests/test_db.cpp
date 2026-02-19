@@ -54,13 +54,13 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   {
     Transaction trans(db);
-    block1 = db->alloc(311);
+    block1 = db->alloc_page(311);
   }
 
   {
     Transaction trans(db);
     db->free(block1);
-    block2 = db->alloc(311);
+    block2 = db->alloc_page(311);
     BOOST_CHECK(block1 != block2);
     BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
   }
@@ -68,7 +68,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   {
     Transaction trans(db);
     db->free(block2);
-    block3 = db->alloc(311);
+    block3 = db->alloc_page(311);
     BOOST_CHECK(block1 != block3);
     BOOST_CHECK(block2 != block3);
     BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
@@ -80,7 +80,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   {
     Transaction trans(db);
-    block4 = db->alloc(311);
+    block4 = db->alloc_page(311);
     BOOST_CHECK(block4 != block3);
     BOOST_CHECK_GT(db->_start_txn_id, txn->txn_id);
   }
@@ -106,7 +106,7 @@ BOOST_AUTO_TEST_CASE(test_extend) {
     // Allocate enough blocks to exceed initial capacity
     int count = (11 * AREA_SIZE) / MAX_PAYLOAD;  // Force growth beyond initial allocation
     for (int i = 0; i < count; i++) {
-      db->alloc(MAX_PAYLOAD);
+      db->alloc_page(MAX_PAYLOAD);
     }
   }
 
@@ -121,17 +121,17 @@ BOOST_AUTO_TEST_CASE(test_rollback) {
   auto db = storage.make("test");
 
   db->start_transaction(0, true);
-  auto block1 = db->alloc(1123);
+  auto block1 = db->alloc_page(1123);
   db->prepare_commit(0);
   db->rollback(0);
 
   db->start_transaction(0);
-  auto block2 = db->alloc(1123);
+  auto block2 = db->alloc_page(1123);
   db->prepare_commit(0);
   db->commit(0);
 
   db->start_transaction(0);
-  auto block3 = db->alloc(1123);
+  auto block3 = db->alloc_page(1123);
   db->prepare_commit(0);
   db->commit(0);
 
@@ -163,7 +163,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for (size_t i = 0; i < MAX_REF_COUNT - 1; i++) {
-        page_ptr block = db->alloc(4 * K - sizeof(PageHeader));
+        page_ptr block = db->alloc_page(4 * K - sizeof(PageHeader));
         block_offsets.push_back(db->resolve(block));
       }
       file_size = storage._memory->file_size;
@@ -214,7 +214,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     {
       Transaction trans(db);
       for (offset_t bo : block_offsets) {
-        page_ptr block = db->alloc(4 * K - sizeof(PageHeader));
+        page_ptr block = db->alloc_page(4 * K - sizeof(PageHeader));
         [[maybe_unused]] offset_t offset = db->resolve(block);
         BOOST_REQUIRE(db->resolve(block) == bo);
       }
@@ -235,7 +235,7 @@ BOOST_AUTO_TEST_CASE(test_recycle_db) {
 
   {
     Transaction t(db1);
-    db1->alloc(3 * K);
+    db1->alloc_page(3 * K);
   }
 
   size_t initial_file_size = storage._memory->file_size;
@@ -267,7 +267,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
                               db1->_wtxn->mem_manager.allocation_start;
   uint64_t size = 0;
   while (size < ALLOC_SIZE) {
-    offsets.push_back(storage.resolve(db1->alloc(MAX_PAYLOAD)));
+    offsets.push_back(storage.resolve(db1->alloc_page(MAX_PAYLOAD)));
     size += MAX_PAYLOAD + sizeof(DBMMap::Traits::PageHeader);
   }
 
@@ -286,7 +286,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   // alloc again - with recycling, we should get similar allocation patterns
   std::vector<offset_t> new_offsets;
   for (size_t i = 0; i < offsets.size(); i++) {
-    new_offsets.push_back(storage.resolve(db1->alloc(MAX_PAYLOAD)));
+    new_offsets.push_back(storage.resolve(db1->alloc_page(MAX_PAYLOAD)));
   }
 
   // Check that we allocated the same number of blocks (recycling working)
@@ -485,7 +485,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     BOOST_REQUIRE(db->start_transaction(0));
     BOOST_CHECK_EQUAL(db->transaction_active(), 2);  // First user txn is 2
     
-    auto block1 = db->alloc(512);
+    auto block1 = db->alloc_page(512);
     memcpy((char*)block1, "test_data", 10);
     
     // Prepare the commit (makes it durable)
@@ -554,7 +554,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
     
     // Normal two-phase commit: prepare then commit
     BOOST_REQUIRE(db->start_transaction(0));
-    auto block1 = db->alloc(512);
+    auto block1 = db->alloc_page(512);
     
     // Prepare should return transaction ID
     tid_t tid = db->prepare_commit(0);
@@ -585,7 +585,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
     
     // Start transaction
     BOOST_REQUIRE(db->start_transaction(0));
-    auto block1 = db->alloc(512);
+    auto block1 = db->alloc_page(512);
     offset_t block1_offset = db->resolve(block1);
     
     // Prepare the commit
@@ -603,7 +603,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
     // Pending areas should have been returned
     // Start new transaction and verify block can be reused
     BOOST_REQUIRE(db->start_transaction(0));
-    auto block2 = db->alloc(512);
+    auto block2 = db->alloc_page(512);
     offset_t block2_offset = db->resolve(block2);
     
     // Should get the same block back since previous was rolled back
@@ -622,7 +622,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_idempotency) {
     auto db = storage.make("test");
     
     BOOST_REQUIRE(db->start_transaction(0));
-    auto block1 = db->alloc(512);
+    auto block1 = db->alloc_page(512);
     
     // First prepare
     tid_t tid1 = db->prepare_commit(0);
@@ -659,7 +659,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     const size_t num_blocks = (AREA_SIZE * 2) / page_size;  // Enough to need multiple areas
     
     for (size_t i = 0; i < num_blocks; i++) {
-      blocks.push_back(db->alloc(page_size));
+      blocks.push_back(db->alloc_page(page_size));
     }
     
     // Before prepare, pending areas should have content (may not always be true if blocks fit in initial area)
@@ -707,7 +707,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     const size_t num_blocks = (AREA_SIZE * 3) / page_size;  // Force 3+ areas
     
     for (size_t i = 0; i < num_blocks; i++) {
-      blocks.push_back(db->alloc(page_size));
+      blocks.push_back(db->alloc_page(page_size));
     }
     
     // Get the transaction state after allocations
@@ -780,7 +780,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     // Database should be in a consistent state
     // Try to start a new transaction and allocate - should work
     BOOST_CHECK(db->start_transaction(0));
-    auto test_block = db->alloc(1000);
+    auto test_block = db->alloc_page(1000);
     BOOST_CHECK(test_block);
     BOOST_CHECK(db->commit(0));
   }
@@ -804,7 +804,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     // Allocate much more to definitely create multiple linked areas
     // We need to exceed the initial area and force allocation of new areas
     for (size_t i = 0; i < 50; i++) {
-      blocks.push_back(db->alloc(page_size));
+      blocks.push_back(db->alloc_page(page_size));
     }
     
     offset_t tail_before_prepare = db->_wtxn->area_list_tail_single;
@@ -874,7 +874,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     
     // Database should be usable after sanitize
     BOOST_CHECK(db->start_transaction(0));
-    auto test_block = db->alloc(1000);
+    auto test_block = db->alloc_page(1000);
     BOOST_CHECK(test_block);
     BOOST_CHECK(db->commit(0));
   }
