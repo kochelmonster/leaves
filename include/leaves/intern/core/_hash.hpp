@@ -72,8 +72,11 @@ void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher, std::false_t
   hasher.update(leaf->vdata(), leaf->vsize());
 }
 
+// Compute hash for a node and its descendants.
+// Hashes all nodes where txn_id > last_hashed_txn_id (i.e., not yet hashed).
+// COW guarantees: if parent txn_id <= last_hashed, children are also <= last_hashed.
 template <typename DB>
-void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t current_txn_id,
+void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t last_hashed_txn_id,
                        std::string& key_path) {
   using Traits = typename DB::Traits;
   using CursorTraits = typename DB::CursorTraits;
@@ -89,7 +92,7 @@ void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t current_txn_i
     leaf_ptr leaf = db->template resolve<LeafNode>(&offset);
     // Access PageHeader before the node
     page_ptr page_header = leaf - sizeof(PageHeader);
-    if (page_header->txn_id == current_txn_id) {
+    if (page_header->txn_id > last_hashed_txn_id) {
       // Hash full key (path + leaf's key suffix) and value
       // Note: Blake3Hasher uses stack-only memory (~2KB), safe to create per-call
       Blake3Hasher hasher;
@@ -111,8 +114,8 @@ void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t current_txn_i
   // Access PageHeader before the node
   page_ptr page_header = trie - sizeof(PageHeader);
   
-  // If this node wasn't modified in current transaction, skip entire subtree
-  if (page_header->txn_id != current_txn_id) {
+  // If this node was already hashed, skip entire subtree (COW guarantee)
+  if (page_header->txn_id <= last_hashed_txn_id) {
     return;
   }
   
@@ -126,7 +129,7 @@ void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t current_txn_i
   offset_e* children = trie->array();
   uint16_t child_count = trie->count();
   for (uint16_t i = 0; i < child_count; ++i) {
-    compute_node_hash(db, children[i], current_txn_id, key_path);
+    compute_node_hash(db, children[i], last_hashed_txn_id, key_path);
   }
   
   // Restore original path length
@@ -164,21 +167,44 @@ struct has_deletion_root<T, std::void_t<decltype(std::declval<T>().deletion_root
     : std::true_type {};
 
 // compute_hashes for Blake3Hasher - computes merkle hashes for all modified nodes
+// Hashes all nodes with txn_id > (txn->txn_id - 1), i.e., nodes from current txn only
 template <typename DB>
 void compute_hashes(Blake3Hasher, DB* db, typename DB::txn_ptr txn) {
   std::string key_path;
   key_path.reserve(255);  // reasonable value
 
+  // Hash nodes newer than the previous transaction
+  tid_t prev_txn_id = txn->txn_id - tid_t(1);
+
   if (txn->root) {
-    detail::compute_node_hash(db, txn->root, txn->txn_id, key_path);
+    detail::compute_node_hash(db, txn->root, prev_txn_id, key_path);
   }
 
   // Also hash the deletion trie if present
   if constexpr (has_deletion_root<std::remove_reference_t<decltype(*txn)>>::value) {
     if (txn->deletion_root) {
       key_path.clear();
-      detail::compute_node_hash(db, txn->deletion_root, txn->txn_id, key_path);
+      detail::compute_node_hash(db, txn->deletion_root, prev_txn_id, key_path);
     }
+  }
+}
+
+// Catchup version: hash all nodes with txn_id > last_hashed_txn_id.
+// Used by background hasher to catch up after multiple commits.
+template <typename DB>
+void compute_hashes_catchup(DB* db, typename DB::offset_e root,
+                            typename DB::offset_e deletion_root,
+                            tid_t last_hashed_txn_id) {
+  std::string key_path;
+  key_path.reserve(255);
+
+  if (root) {
+    detail::compute_node_hash(db, root, last_hashed_txn_id, key_path);
+  }
+
+  if (deletion_root) {
+    key_path.clear();
+    detail::compute_node_hash(db, deletion_root, last_hashed_txn_id, key_path);
   }
 }
 

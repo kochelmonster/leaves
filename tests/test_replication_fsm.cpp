@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <queue>
+#include <thread>
 #include <vector>
 
 #define LEAVES_DEBUG
@@ -117,6 +118,21 @@ struct ReplicationFixture {
 
   ~ReplicationFixture() { std::filesystem::remove_all(test_temp_dir); }
 
+  // Wait for background hashing to catch up to the current transaction.
+  // Call after commit() and before begin() to ensure hashes are available.
+  template <typename DB>
+  static void wait_for_hashing(DB* db, int timeout_ms = 5000) {
+    auto target = db->txn()->txn_id;
+    auto start = std::chrono::steady_clock::now();
+    while (!db->hashes_ready_through(target)) {
+      auto elapsed = std::chrono::steady_clock::now() - start;
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
+        throw std::runtime_error("Timeout waiting for hashing to complete");
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+
   // Run the FSM protocol until both sides complete or error
   // Templated version for cross-storage replication testing
   template <typename Sender, typename Receiver>
@@ -226,8 +242,8 @@ BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, ReplicationFixture) {
 
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(sender_impl, sender_impl->txn());
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -269,8 +285,8 @@ BOOST_FIXTURE_TEST_CASE(test_single_key_replication, ReplicationFixture) {
 
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(sender_impl, sender_impl->txn());
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -327,8 +343,8 @@ BOOST_FIXTURE_TEST_CASE(test_multiple_keys_replication, ReplicationFixture) {
 
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(sender_impl, sender_impl->txn());
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -383,8 +399,8 @@ BOOST_FIXTURE_TEST_CASE(test_session_id_mismatch, ReplicationFixture) {
 
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(sender_impl, sender_impl->txn());
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -442,8 +458,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
   // Use a small buffer size to force multiple round trips
   constexpr size_t SMALL_BUFFER = 512;
 
-  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl, SMALL_BUFFER);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -564,8 +580,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
 
   // Use a small buffer size to force multiple round trips and test pruning
   constexpr size_t SMALL_BUFFER = 8192;  // 8KB buffer forces multiple transmissions
-  SenderFSM sender(sender_impl, sender_impl->txn(), SMALL_BUFFER);
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl, SMALL_BUFFER);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -672,8 +688,8 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
   auto* receiver_impl = receiver_db._internal();
 
   {
-    SenderFSM sender(sender_impl, sender_impl->txn());
-    ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl);
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -720,8 +736,8 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
 
   // Create fresh FSM instances for second replication round
   {
-    SenderFSM sender(sender_impl, sender_impl->txn());
-    ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl);
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -795,6 +811,9 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -808,8 +827,8 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   constexpr size_t RECV_BUFFER = SEND_BUFFER;
   constexpr size_t MEMORY_BUDGET = RECV_BUFFER * 3;  // ~48 KB — a few subtrees before fraction
 
-  SenderFSM sender(sender_impl, sender_impl->txn(), SEND_BUFFER);
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+  SenderFSM sender(sender_impl, SEND_BUFFER);
+  ReceiverFSM receiver(receiver_impl,
                        ReplicationMergePolicy<DBImpl>{},
                        RECV_BUFFER,
                        MEMORY_BUDGET);
@@ -913,8 +932,8 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
   constexpr size_t RECV_BUFFER = SEND_BUFFER;
   constexpr size_t MEMORY_BUDGET = RECV_BUFFER * 3;  // ~48 KB
 
-  SenderFSM sender(sender_impl, sender_impl->txn(), SEND_BUFFER);
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+  SenderFSM sender(sender_impl, SEND_BUFFER);
+  ReceiverFSM receiver(receiver_impl,
                        ReplicationMergePolicy<DBImpl>{},
                        RECV_BUFFER,
                        MEMORY_BUDGET);
@@ -1027,8 +1046,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
 
     TestEvents sender_events, receiver_events;
 
-    SenderFSM sender(sender_impl, sender_impl->txn());
-    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl,
                          ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
@@ -1283,8 +1302,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_replication, ReplicationFixture) {
   receiver_transport.set_peer(&sender_transport);
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(src_impl, src_impl->txn());
-  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+  SenderFSM sender(src_impl);
+  ReceiverFSM receiver(dst_impl);
 
   sender.begin(&sender_transport, &sender_events);
   receiver.begin(&receiver_transport, &receiver_events);
@@ -1427,8 +1446,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
   receiver_transport.set_peer(&sender_transport);
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(src_impl, src_impl->txn());
-  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+  SenderFSM sender(src_impl);
+  ReceiverFSM receiver(dst_impl);
 
   sender.begin(&sender_transport, &sender_events);
   receiver.begin(&receiver_transport, &receiver_events);
@@ -1575,7 +1594,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_garbage, ReplicationFixture) {
   receiver_transport.set_peer(&sender_transport);
   TestEvents events;
 
-  SenderFSM sender(impl, impl->txn());
+  SenderFSM sender(impl);
   sender.begin(&sender_transport, &events);
 
   // Feed garbage
@@ -1607,7 +1626,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_wrong_state_message, ReplicationFixture) {
   receiver_transport.set_peer(&sender_transport);
   TestEvents events;
 
-  SenderFSM sender(impl, impl->txn());
+  SenderFSM sender(impl);
   sender.begin(&sender_transport, &events);
 
   // Sender is now in AWAITING_RESPONSE after sending first buffer.
@@ -1644,7 +1663,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload, ReplicationFixture)
   receiver_transport.set_peer(&sender_transport);
   TestEvents events;
 
-  SenderFSM sender(impl, impl->txn());
+  SenderFSM sender(impl);
   sender.begin(&sender_transport, &events);
   BOOST_CHECK(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
 
@@ -1675,7 +1694,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_magic, ReplicationFixture) {
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // Build a header-sized message with bad magic
@@ -1718,8 +1737,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
   receiver_transport.set_peer(&sender_transport);
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(src_impl, src_impl->txn());
-  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+  SenderFSM sender(src_impl);
+  ReceiverFSM receiver(dst_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -1761,7 +1780,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_payload_too_large, ReplicationFixture) {
   TestEvents events;
 
   // Create receiver with very small max_payload_size (256 bytes)
-  ReceiverFSM receiver(impl, impl->txn(), {}, 64 * 1024, 256 * 1024 * 1024,
+  ReceiverFSM receiver(impl, {}, 64 * 1024, 256 * 1024 * 1024,
                        256);
 
   receiver.begin(&transport, &events);
@@ -1797,7 +1816,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_in_idle_state, ReplicationFixture) {
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   // Don't call begin() — receiver stays IDLE
 
   auto msg = build_raw_msg(ReplicationMsgType::COMPLETE, 42, nullptr, 0);
@@ -1822,7 +1841,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_unexpected_msg_type, ReplicationFixture) {
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // Send SUBTRIE_ACK to receiver — this is a receiver->sender message type,
@@ -1851,7 +1870,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header, ReplicationFixture) 
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // Build TRIE_DATA with payload too small for TransferTrieHeader (45 bytes)
@@ -1875,7 +1894,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_magic, ReplicationFixture) {
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // Build a fake TransferTrieHeader with wrong magic
@@ -1904,7 +1923,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_subtrie_path_overflow,
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // Valid TransferTrieHeader magic/version but subtrie_path_len = 9999
@@ -1938,7 +1957,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   using Transfer = TransferTrie<DBImpl::Traits>;
@@ -2014,7 +2033,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_truncated,
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // Send BIG_VALUE_START with only 4 bytes (need 12)
@@ -2040,7 +2059,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_too_large,
   TestEvents events;
 
   // Set max_big_value_size to 1KB
-  ReceiverFSM receiver(impl, impl->txn(), {}, 64 * 1024, 256 * 1024 * 1024,
+  ReceiverFSM receiver(impl, {}, 64 * 1024, 256 * 1024 * 1024,
                        ReceiverFSM::DEFAULT_MAX_PAYLOAD_SIZE, 1024);
 
   receiver.begin(&transport, &events);
@@ -2071,7 +2090,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_integer_overflow,
   transport.set_peer(&peer);
   TestEvents events;
 
-  ReceiverFSM receiver(impl, impl->txn());
+  ReceiverFSM receiver(impl);
   receiver.begin(&transport, &events);
 
   // total_aligned_size near uint64_t max -> alignment arithmetic would overflow
@@ -2119,10 +2138,10 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
   TestEvents sender_events, receiver_events;
 
   // Use a small max_payload (200) so first real msg fits but second won't
-  ReceiverFSM receiver(dst_impl, dst_impl->txn(), {}, 64 * 1024,
+  ReceiverFSM receiver(dst_impl, {}, 64 * 1024,
                        256 * 1024 * 1024, 200);
 
-  SenderFSM sender(src_impl, src_impl->txn());
+  SenderFSM sender(src_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -2190,8 +2209,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_ignores_late_messages,
   receiver_transport.set_peer(&sender_transport);
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(src_impl, src_impl->txn());
-  ReceiverFSM receiver(dst_impl, dst_impl->txn());
+  SenderFSM sender(src_impl);
+  ReceiverFSM receiver(dst_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -2232,7 +2251,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
   receiver_transport.set_peer(&sender_transport);
   TestEvents events;
 
-  SenderFSM sender(impl, impl->txn());
+  SenderFSM sender(impl);
   sender.begin(&sender_transport, &events);
   BOOST_REQUIRE(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
 
@@ -2343,8 +2362,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
 
     TestEvents sender_events, receiver_events;
 
-    SenderFSM sender(sender_impl, sender_impl->txn());
-    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl,
                          ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
@@ -2432,8 +2451,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
 
     TestEvents sender_events, receiver_events;
 
-    SenderFSM sender(sender_impl, sender_impl->txn());
-    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl,
                          ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
@@ -2575,7 +2594,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
   std::vector<ReceiverContext> receivers(N);
   for (uint16_t i = 0; i < N; ++i) {
     receivers[i].fsm = std::make_unique<ReceiverFSM>(
-        receiver_impl, receiver_impl->txn(),
+        receiver_impl,
         ReplicationMergePolicy<DBImpl>{});
     receivers[i].fsm->begin(&receivers[i].transport, &receivers[i].events);
 
@@ -2593,7 +2612,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
   // Create one more receiver — should fail to claim a slot
   TestTransport extra_transport;
   TestEvents extra_events;
-  ReceiverFSM extra_receiver(receiver_impl, receiver_impl->txn(),
+  ReceiverFSM extra_receiver(receiver_impl,
                              ReplicationMergePolicy<DBImpl>{});
   extra_receiver.begin(&extra_transport, &extra_events);
 
@@ -2649,8 +2668,8 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
 
     TestEvents sender_events, receiver_events;
 
-    SenderFSM sender(sender_impl, sender_impl->txn());
-    ReceiverFSM receiver(receiver_impl, receiver_impl->txn(),
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl,
                          ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
@@ -2801,9 +2820,9 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
 
     TestEvents sender_events, receiver_events;
 
-    ReplicationSenderFSM<DBImpl> sender(mmap_impl, mmap_impl->txn());
+    ReplicationSenderFSM<DBImpl> sender(mmap_impl);
     ReplicationReceiverFSM<FileDBImpl> receiver(
-        file_impl, file_impl->txn(),
+        file_impl,
         ReplicationMergePolicy<FileDBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
@@ -2859,9 +2878,9 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
 
     TestEvents sender_events, receiver_events;
 
-    ReplicationSenderFSM<FileDBImpl> sender(file_impl, file_impl->txn());
+    ReplicationSenderFSM<FileDBImpl> sender(file_impl);
     ReplicationReceiverFSM<DBImpl> receiver(
-        mmap2_impl, mmap2_impl->txn(),
+        mmap2_impl,
         ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
@@ -2953,8 +2972,8 @@ BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixtu
 
   TestEvents sender_events, receiver_events;
 
-  SenderFSM sender(sender_impl, sender_impl->txn());
-  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);

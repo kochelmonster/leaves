@@ -2,6 +2,7 @@
 #define _LEAVES_REPLICATING_FSTORE_HPP
 
 #include <blake3.h>
+
 #include <memory>
 
 #include "db.hpp"
@@ -29,7 +30,7 @@ struct _ReplicationCacheStore
   using FileHeader = typename _FileOperations::FileHeader;
 
   _ReplicationCacheStore(const char* path, uint16_t db_count = 48,
-                         size_t capacity = 500 * M, size_t pool_threads = 1)
+                         size_t capacity = 500 * M, size_t pool_threads = 0)
       : Base(db_count, capacity, pool_threads) {
     init_dbfile(path, db_count);
   }
@@ -94,9 +95,10 @@ class ReplicatingFileStorage
   typedef std::shared_ptr<ReplicatingFileStorage> storage_ptr;
 
   ReplicatingFileStorage(const char* path, uint16_t db_count = 48,
-                         size_t cache_capacity = 500 * M)
-      : _storage(
-            std::make_unique<StorageImpl>(path, db_count, cache_capacity)) {}
+                         size_t cache_capacity = 500 * M,
+                         size_t pool_threads = 0)
+      : _storage(std::make_unique<StorageImpl>(path, db_count, cache_capacity,
+                                               pool_threads)) {}
 
   DB operator[](const char* name) { return DB(shared_from_this(), name); }
 
@@ -111,9 +113,9 @@ class ReplicatingFileStorage
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t cache_capacity = 500 * M,
-                            uint16_t db_count = 48) {
-    return std::make_shared<ReplicatingFileStorage>(path, db_count,
-                                                    cache_capacity);
+                            uint16_t db_count = 48, size_t pool_threads = 0) {
+    return std::make_shared<ReplicatingFileStorage>(
+        path, db_count, cache_capacity, pool_threads);
   }
 
   void debug_reset() { _storage->debug_reset(); }

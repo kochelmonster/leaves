@@ -96,7 +96,8 @@ enum class ReplicationError : uint8_t {
   INTERNAL_ERROR = 0x04,
   PAYLOAD_TOO_LARGE = 0x05,
   RESOURCE_LIMIT = 0x06,
-  STORAGE_FULL = 0x07
+  STORAGE_FULL = 0x07,
+  HASHES_NOT_READY = 0x08  // No fully-hashed transaction available yet
 };
 
 // =============================================================================
@@ -323,13 +324,13 @@ struct ReplicationSenderFSM {
   // Activity tracking for application-level timeouts
   std::chrono::steady_clock::time_point _last_activity;
 
-  ReplicationSenderFSM(DB* db, typename DB::txn_ptr txn,
+  ReplicationSenderFSM(DB* db,
                        size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
       : _db(db),
-        _txn(txn),
+        _txn(nullptr),
         _transport(nullptr),
         _events(nullptr),
-        _sender(db, txn, buffer_size),
+        _sender(db, typename DB::txn_ptr(nullptr), buffer_size),
         _state(State::IDLE),
         _session_id(0),
         _total_nodes(0),
@@ -347,6 +348,24 @@ struct ReplicationSenderFSM {
              DbType db_type = DbType::DB_MAIN) {
     _transport = transport;
     _events = events;
+
+    // Get the latest fully-hashed transaction (non-blocking).
+    // Caller should ensure hashes are ready by responding to on_hashes_ready.
+    _txn = _db->hashed_txn();
+    if (!_txn) {
+      // No hashed transaction - check if DB is empty (nothing to send anyway)
+      auto current = _db->txn();
+      if (current->root) {
+        // Non-empty DB without hashes - cannot proceed with replication.
+        // Caller should wait for on_hashes_ready callback before calling begin().
+        _transition_to_error(ReplicationError::HASHES_NOT_READY,
+                             "No hashed transaction available");
+        return;
+      }
+      // Empty DB - proceed with unhashed (nothing to send)
+      _txn = current;
+    }
+    _sender._txn = _txn;
     _state = State::SENDING;
     _total_nodes = 0;
     _total_bytes = 0;
@@ -980,13 +999,13 @@ struct ReplicationReceiverFSM {
       256 * 1024 * 1024;  // 256MB
 
   ReplicationReceiverFSM(
-      DB* db, typename DB::txn_ptr txn, MergePolicy handler = MergePolicy(),
+      DB* db, MergePolicy handler = MergePolicy(),
       size_t receive_buffer_size = DEFAULT_RECEIVE_BUFFER_SIZE,
       size_t memory_budget = DEFAULT_MEMORY_BUDGET,
       size_t max_payload_size = DEFAULT_MAX_PAYLOAD_SIZE,
       size_t max_big_value_size = DEFAULT_MAX_BIG_VALUE_SIZE)
       : _db(db),
-        _txn(txn),
+        _txn(nullptr),
         _cursor(db->create_cursor()),
         _transport(nullptr),
         _events(nullptr),
@@ -1070,6 +1089,23 @@ struct ReplicationReceiverFSM {
   void begin(ReplicationTransport* transport, ReplicationEvents* events) {
     _transport = transport;
     _events = events;
+
+    // Get the latest fully-hashed transaction (non-blocking).
+    // Caller should ensure hashes are ready by responding to on_hashes_ready.
+    _txn = _db->hashed_txn();
+    if (!_txn) {
+      // No hashed transaction - check if DB is empty (full copy is OK)
+      auto current = _db->txn();
+      if (current->root) {
+        // Non-empty DB without hashes - cannot compare correctly.
+        // Caller should wait for on_hashes_ready callback before calling begin().
+        _transition_to_error(ReplicationError::HASHES_NOT_READY,
+                             "No hashed transaction available");
+        return;
+      }
+      // Empty DB - proceed with unhashed (full copy, no local hashes to compare)
+      _txn = current;
+    }
     _state = State::RECEIVING;
     _session_id = 0;  // Will be set from first message
     _total_nodes = 0;

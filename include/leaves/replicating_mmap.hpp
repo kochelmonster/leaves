@@ -2,6 +2,7 @@
 #define _LEAVES_REPLICATING_MMAP_HPP
 
 #include <blake3.h>
+
 #include <memory>
 
 #include "db.hpp"
@@ -27,15 +28,14 @@ struct _ReplicationMemoryMapFile
     : public _MemoryMapFile<Traits_, _ReplicationDB,
                             _ReplicationMemoryMapFile<Traits_>>,
       public _ThreadPoolMixin<_ReplicationMemoryMapFile<Traits_>> {
-  using Base =
-      _MemoryMapFile<Traits_, _ReplicationDB,
-                     _ReplicationMemoryMapFile<Traits_>>;
+  using Base = _MemoryMapFile<Traits_, _ReplicationDB,
+                              _ReplicationMemoryMapFile<Traits_>>;
   using PoolMixin = _ThreadPoolMixin<_ReplicationMemoryMapFile<Traits_>>;
   using DB = typename Base::DB;
 
   _ReplicationMemoryMapFile(const char* path, size_t map_size = 2 * G,
-                            uint16_t db_count = 48)
-      : Base(path, map_size, db_count), PoolMixin(1) {}
+                            uint16_t db_count = 48, size_t pool_threads = 0)
+      : Base(path, map_size, db_count), PoolMixin(pool_threads) {}
 
   ~_ReplicationMemoryMapFile() {
     this->_dbs.clear();  // Destroy DBs first (cancels purge jobs)
@@ -61,10 +61,14 @@ class ReplicatingMapStorage
   typedef std::shared_ptr<ReplicatingMapStorage> storage_ptr;
 
   ReplicatingMapStorage(const char* path, size_t map_size = 4 * G,
-                        uint16_t db_count = 48)
-      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count)) {}
+                        uint16_t db_count = 48, size_t pool_threads = 0)
+      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count,
+                                               pool_threads)) {}
 
-  DB operator[](const char* name) { return DB(shared_from_this(), name); }
+  DB operator[](const char* name) {
+    _storage->make(name);
+    return DB(shared_from_this(), name);
+  }
 
   void remove_db(const char* name) { _storage->remove_db(name); }
 
@@ -77,8 +81,9 @@ class ReplicatingMapStorage
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t map_size = 4 * G,
-                            uint16_t db_count = 48) {
-    return std::make_shared<ReplicatingMapStorage>(path, map_size, db_count);
+                            uint16_t db_count = 48, size_t pool_threads = 0) {
+    return std::make_shared<ReplicatingMapStorage>(path, map_size, db_count,
+                                                   pool_threads);
   }
 
  private:

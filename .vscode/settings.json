@@ -102,6 +102,16 @@
         "./build/test_cursor": true,
         "ninja": true,
         "diff": true,
-        "printf": true
+        "printf": true,
+        "nproc": true,
+        "touch": true,
+        "/tmp/test_rep": true,
+        "g++": true,
+        "./build/test_transfer": true,
+        "time": true,
+        "/^perl -i -p0e 's/ReceiverFSM receiver\\\\\\(\\(\\[\\^,\\]\\+\\), \\[\\^,\\]\\+->txn\\\\\\(\\\\\\),/ReceiverFSM receiver\\(\\\\1,/gs' tests/test_replication_fsm\\.cpp$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

@@ -585,7 +585,7 @@ struct TransferTrieSender {
         _txn(txn),
         _transfer(buffer_size),
         _session_id(Transfer::generate_session_id()),
-        _snapshot_id(txn->txn_id),
+        _snapshot_id(txn ? txn->txn_id : tid_t(0)),
         _db_type(DbType::DB_MAIN),
         _max_depth(max_depth) {
     // Pre-reserve capacity to avoid reallocations during DFS
@@ -595,6 +595,7 @@ struct TransferTrieSender {
   // Start from root
   void begin(DbType db_type = DbType::DB_MAIN) {
     _db_type = db_type;
+    _snapshot_id = _txn->txn_id;  // Update snapshot for potentially new txn
     _pending.clear();
     _last_batch.clear();
     _pending_big_values.clear();

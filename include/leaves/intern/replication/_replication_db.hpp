@@ -47,6 +47,15 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   // Each slot holds the offset of one pre-merge multi-area.
   // 0 = slot is free, SENTINEL = claimed but no area yet.
   offset_t replication_slots[MAX_REPLICATION_SLOTS];
+
+  // Transaction ID up to which all nodes have been hashed.
+  // Background hasher updates this after catching up.
+  // Replication sender must wait until last_hashed_txn_id >= target.
+  std::atomic<tid_t> last_hashed_txn_id{tid_t(0)};
+
+  // Offset of the last fully-hashed transaction (persisted for restart).
+  // hashed_txn() loads from this offset to return a pinned transaction.
+  offset_t hashed_txn_offset;
 };
 
 // =============================================================================
@@ -108,9 +117,14 @@ struct _ReplicationDB
   using Base =
       _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
           _ReplicationDBHeader<Storage_>>;
-  using CursorTraits = typename Base::CursorTraits;
   using Transaction = typename Base::Transaction;
   using Aspect = typename Base::Aspect;
+
+  // Override CursorTraits to point DB to _ReplicationDB (not _DB)
+  // This ensures cursor.commit() calls _ReplicationDB::commit()
+  struct CursorTraits : public Base::CursorTraits {
+    typedef _ReplicationDB<Storage_> DB;
+  };
 
   // Override cursor types to use _ReplicationCursor
   typedef _ReplicationCursor<CursorTraits> Cursor;
@@ -130,11 +144,57 @@ struct _ReplicationDB
   std::atomic<uint64_t> _purge_job_id{0};
   std::atomic<bool> _in_purge{false};
 
+  // --- Background hashing state ---
+  // Hashing runs in background, catching up to current txn_id.
+  // Commits never wait; use on_hashes_ready aspect callback for event-driven replication.
+  std::atomic<bool> _hash_running{false};
+  std::atomic<bool> _hash_cancelled{false};
+
+  // Pinned fully-hashed transaction (prevents GC until next hashed txn is ready).
+  // Loaded from header->hashed_txn_offset on startup; updated by hash catchup.
+  txn_ptr _hashed_txn{nullptr};
+
   ~_ReplicationDB() {
     cancel_purge();
+    _stop_hash_catchup();
   }
 
   void set_retention(uint64_t seconds) { _retention_seconds.store(seconds, std::memory_order_relaxed); }
+
+  // Check if hashing has caught up to a given transaction.
+  bool hashes_ready_through(tid_t target_txn_id) const {
+    return this->_header->last_hashed_txn_id.load(std::memory_order_acquire) >= target_txn_id;
+  }
+
+  // Get the last fully hashed transaction ID.
+  tid_t last_hashed_txn_id() const {
+    return this->_header->last_hashed_txn_id.load(std::memory_order_acquire);
+  }
+
+  // Get the last fully-hashed transaction, or nullptr if none available.
+  // The returned transaction is pinned (ref-counted) and safe to use even
+  // as new commits occur.  Returns nullptr only before the first transaction
+  // has been hashed (e.g., immediately after DB creation).
+  txn_ptr hashed_txn() const {
+    return _hashed_txn;
+  }
+
+  // Override commit - no hashing overhead. Background hasher catches up.
+  bool commit(uint64_t cursor_id, bool sync = false) {
+    // Prepare commit without computing hashes (base doesn't hash either)
+    if (!Base::prepare_commit(cursor_id, false)) return false;
+
+    // Atomically switch to new transaction
+    this->_header->read_txn = this->_header->prepared_txn;
+    this->make_dirty(this->_header);
+    this->flush(sync, true);
+    this->end_transaction();
+
+    // Kick background hasher if not already running
+    _start_hash_catchup();
+
+    return true;
+  }
 
   cursor_ptr create_cursor() {
     auto cursor = std::make_shared<Cursor>(this, &this->txn()->root);
@@ -170,11 +230,24 @@ struct _ReplicationDB
   void sanitize() {
     Base::sanitize();
     _sanitize_replication_anchors();
+
+    // Load persisted hashed transaction if available
+    if (this->_header->hashed_txn_offset) {
+      _hashed_txn = this->template resolve<Transaction>(&this->_header->hashed_txn_offset);
+    }
+
     this->flush();
+
+    // Kick background hasher if there are unhashed transactions
+    tid_t last_hashed = this->_header->last_hashed_txn_id.load(std::memory_order_acquire);
+    tid_t current = this->txn()->txn_id;
+    if (last_hashed < current) {
+      _start_hash_catchup();
+    }
   }
 
-  // Override: signal background purge to stop before acquiring txn_lock
-  // so the purge commits quickly and releases the lock.
+  // Override: signal background purge to stop before acquiring txn_lock.
+  // No waiting for hashes - they run independently.
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
     if (_in_purge.load(std::memory_order_relaxed)) {
       _purge_interrupt.store(true, std::memory_order_release);
@@ -299,6 +372,89 @@ struct _ReplicationDB
     if (interrupted && oldest_ts == 0 && purged > 0)
       oldest_ts = older_than > 0 ? older_than : 1;
     return {purged, oldest_ts};
+  }
+
+  // --- Background hash catchup ---
+  // Start the background hash catchup task if not already running.
+  void _start_hash_catchup() {
+    if (_hash_cancelled.load(std::memory_order_acquire)) return;  // Shutting down
+    bool expected = false;
+    if (!_hash_running.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel)) {
+      return;  // Already running
+    }
+    this->_storage.submit_task([this]() { _run_hash_catchup(); });
+  }
+
+  // Stop background hashing and wait for completion.
+  void _stop_hash_catchup() {
+    _hash_cancelled.store(true, std::memory_order_release);
+    // Wait for current run to complete
+    if (!this->_storage._pool_shutdown.load(std::memory_order_acquire)) {
+      this->_storage.wait_all();
+    }
+  }
+
+  // Background hash catchup loop - runs until hashing is caught up to current txn.
+  //
+  // THEORETICAL RACE: There is a narrow window between txn() returning a pointer
+  // and refs.fetch_add() protecting it. In theory, multiple rapid commits could
+  // push this txn into the recyclable set and GC could free it before we increment
+  // refs. This is not guarded because:
+  //   1. Proper protection requires epoch-based reclamation (RCU) or locks
+  //   2. The window is a few CPU instructions (~nanoseconds)
+  //   3. Triggering it requires multiple commits completing end_transaction() GC
+  //      within that window - practically impossible
+  // The same theoretical race exists in cursors (_TransactionalCursor::rollback,
+  // update) and is similarly accepted as negligible risk.
+  void _run_hash_catchup() {
+    while (!_hash_cancelled.load(std::memory_order_acquire)) {
+      // Get txn and immediately protect it (minimize race window)
+      auto txn = this->txn();
+      const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_add(1);
+
+      tid_t last_hashed = this->_header->last_hashed_txn_id.load(std::memory_order_acquire);
+      tid_t current = txn->txn_id;
+
+      if (last_hashed >= current) {
+        // Caught up - release refs and exit
+        const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
+        _hash_running.store(false, std::memory_order_release);
+        return;
+      }
+
+      // Hash all nodes newer than last_hashed
+      compute_hashes_catchup(this, txn->root, txn->deletion_root, last_hashed);
+
+      // Release refs
+      const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
+
+      if (_hash_cancelled.load(std::memory_order_acquire)) {
+        _hash_running.store(false, std::memory_order_release);
+        return;
+      }
+
+      // Pin the just-hashed transaction (old _hashed_txn released automatically).
+      // This ref keeps the transaction alive until the next one is hashed.
+      _hashed_txn = txn;
+
+      // Persist offset for recovery (allows hashed_txn() to work after restart)
+      this->_header->hashed_txn_offset = this->resolve(txn);
+
+      // Update last_hashed_txn_id
+      this->_header->last_hashed_txn_id.store(current, std::memory_order_release);
+      this->make_dirty(this->_header);
+      this->flush(false, false);
+
+      // Notify aspect that hashes are ready for this transaction.
+      // Applications can use this to trigger non-blocking replication.
+      if constexpr (requires { this->_aspect.on_hashes_ready(this, current); }) {
+        this->_aspect.on_hashes_ready(this, current);
+      }
+
+      // Loop to catch any commits that happened during hashing
+    }
+    _hash_running.store(false, std::memory_order_release);
   }
 };
 

@@ -237,7 +237,7 @@ target_sources(lbench INTERFACE
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
-    benchmark leveldb pthread core)
+    benchmark leveldb pthread core blake3)
 
 if (DEBUG_BENCHMARKS)
     target_compile_options(db_bench_leaves PRIVATE -g -O0)

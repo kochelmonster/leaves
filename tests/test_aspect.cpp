@@ -5,6 +5,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef TESTING
@@ -19,6 +20,21 @@
 #include "leaves/intern/replication/_replication_fsm.hpp"
 
 using namespace leaves;
+
+// Wait for background hashing to catch up to the current transaction.
+// Call after commit() and before begin() to ensure hashes are available.
+template <typename DB>
+void wait_for_hashing(DB* db, int timeout_ms = 5000) {
+  auto target = db->txn()->txn_id;
+  auto start = std::chrono::steady_clock::now();
+  while (!db->hashes_ready_through(target)) {
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
+      throw std::runtime_error("Timeout waiting for hashing to complete");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
 
 // =============================================================================
 // Test Aspect — exercises all join points
@@ -654,17 +670,18 @@ BOOST_AUTO_TEST_CASE(test_may_merge_overwrite_rejects_locked) {
     c->commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_db);
+  wait_for_hashing(receiver_db);
+
   // Replicate sender → receiver
   TestTransport st, rt;
   st.set_peer(&rt);
   rt.set_peer(&st);
   TestEvents se, re;
 
-  auto sender_txn = sender_db->txn();
-  auto receiver_txn = receiver_db->txn();
-
-  Sender sender(sender_db, sender_txn);
-  Receiver receiver(receiver_db, receiver_txn);
+  Sender sender(sender_db);
+  Receiver receiver(receiver_db);
 
   receiver.begin(&rt, &re);
   sender.begin(&st, &se);
@@ -720,13 +737,16 @@ BOOST_AUTO_TEST_CASE(test_may_merge_add_rejects_blocked) {
     c->commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_db);
+
   TestTransport st, rt;
   st.set_peer(&rt);
   rt.set_peer(&st);
   TestEvents se, re;
 
-  Sender sender(sender_db, sender_db->txn());
-  Receiver receiver(receiver_db, receiver_db->txn());
+  Sender sender(sender_db);
+  Receiver receiver(receiver_db);
 
   receiver.begin(&rt, &re);
   sender.begin(&st, &se);
@@ -785,14 +805,18 @@ BOOST_AUTO_TEST_CASE(test_may_merge_delete_rejects_pinned) {
     c->commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_db);
+  wait_for_hashing(receiver_db);
+
   // Replicate sender → receiver (deletions propagate via deletion trie)
   TestTransport st, rt;
   st.set_peer(&rt);
   rt.set_peer(&st);
   TestEvents se, re;
 
-  Sender sender(sender_db, sender_db->txn());
-  Receiver receiver(receiver_db, receiver_db->txn());
+  Sender sender(sender_db);
+  Receiver receiver(receiver_db);
 
   receiver.begin(&rt, &re);
   sender.begin(&st, &se);

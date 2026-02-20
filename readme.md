@@ -114,12 +114,15 @@ Does a standard proceeding exits to reach this goal?
     Ich brauche einen Assistenten zur Job Suche. Die Funktion sollte in etwa folgende sein: - Ich lade meinen Resume hoch - Ich gebe Parameter ein (Gehaltsvorstellung, Location, Branche, Wünche usw.) Der Assistent durchkämmt regelmäßig das Internet, um passende Job Angebote zu finden (abgeglichen mit dem Resume, und den Parametern). Dabei konzentriert er sich direkt auf Firmen seiten und nicht auf Jobportale. Jeden Abend wird mir eine Email mit passenden Jobs gesendet mit einer kurzen Zusammenfassung. Ich kann dann auf einen Link in der Email klicken die direkt zu dem Angebot führt. Über den Link kann ich dann den Assistenten anweisen einen Cover letter zu schreiben, und wenn ein Fragebogen existiert diesen vorausfüllen. 1. Gibt es eine Webseite die diese Funktion anbietet?
 
     
+- Browser version
+- Convertsion tools value->binary sortable
+- TransferTries (Result und Joins)
+- Joiner
+- Subtrie Replication
+- Subtrie remove 
+- multi thread merger
 
-    The localization shall be a localizer type that can be set in traits. A NullLocalizer shall be the same like now. A ThreadLocalizer as now described shall work for MemoryMapped and FileStore.
-Only implement the thread structure by using storages thread pool (you have to readd threadpool mixin to _MemoryMapped File)
 
 
-
-Replace std::unordered_map with a flat hash map (better branch prediction, better cache locality)
-Prefetch data before it's needed in the trie traversal
-Consider bulk operations to reduce memcpy overhead
+- Multi thread Partitioner
+Loclalization idea

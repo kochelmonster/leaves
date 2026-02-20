@@ -441,7 +441,7 @@ struct _DB {
       _storage.prefetch(&_active_txn->mem_manager.slots[i]);
     }
 
-    // find the oldest used transaction
+    // find the oldest used transaction and free unused old transactions
     iter_transactions([this](txn_ptr txn) -> bool {
       if (txn->refs.load() > 0) {
         _active_txn->start_txn = resolve(txn);
@@ -478,9 +478,6 @@ struct _DB {
 
     // already prepared
     if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
-
-    // Compute merkle hashes for all new nodes in this transaction
-    compute_hashes(ReplicationHasher{}, this, _wtxn);
 
     _header->prepared_txn = resolve(_wtxn);
 
