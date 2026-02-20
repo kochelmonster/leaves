@@ -2909,4 +2909,80 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
   }
 }
 
+// Test that replicating a populated trie to a completely empty receiver works.
+// This exercises the fix for Finding 4: _get_original_node must return nullptr
+// when the DB root is zero (empty DB), not a non-null pointer to offset 0.
+// Before the fix, the receiver would resolve offset 0 and read garbage hash
+// bytes from the DB header, potentially causing incorrect hash comparisons.
+BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_empty_root.lvs";
+  auto receiver_path = test_temp_dir / "receiver_empty_root.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  // Populate sender with enough keys to create a multi-level trie
+  // (branch nodes with compressed paths) — this ensures the root is a
+  // trie node whose hash is compared against the receiver's empty root.
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 20; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string val = "val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(val));
+    }
+    cursor.commit();
+  }
+
+  // Receiver DB is completely empty — root offset is 0
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  // Verify receiver root is actually zero (empty)
+  BOOST_REQUIRE_EQUAL((uint64_t)receiver_impl->txn()->root, 0);
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
+  TestEvents sender_events, receiver_events;
+
+  SenderFSM sender(sender_impl, sender_impl->txn());
+  ReceiverFSM receiver(receiver_impl, receiver_impl->txn());
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  run_protocol(sender, receiver, sender_transport, receiver_transport);
+
+  BOOST_CHECK_MESSAGE(sender.state() == SenderFSM::State::IDLE,
+                      "Sender did not complete");
+  BOOST_CHECK_MESSAGE(receiver.state() == ReceiverFSM::State::IDLE,
+                      "Receiver did not complete");
+  BOOST_CHECK(sender_events.completed);
+  BOOST_CHECK(receiver_events.completed);
+  BOOST_CHECK(!receiver_events.errored);
+
+  // Verify all keys replicated correctly
+  {
+    auto cursor = receiver_db.cursor();
+    for (int i = 0; i < 20; ++i) {
+      std::string key = "key_" + std::to_string(i);
+      std::string expected_val = "val_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Key not found in receiver: " + key);
+      BOOST_CHECK_EQUAL(
+          std::string(cursor.value().data(), cursor.value().size()),
+          expected_val);
+    }
+  }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

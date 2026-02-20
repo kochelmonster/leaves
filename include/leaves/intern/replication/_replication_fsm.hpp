@@ -1580,7 +1580,7 @@ struct ReplicationReceiverFSM {
   // NONE-branch leaves from their parent trie node which share the same path.
   const offset_t* _get_original_node(const Slice& path, uint8_t expected_type) {
     if (path.empty()) {
-      return _cursor->_root;
+      return *_cursor->_root ? _cursor->_root : nullptr;
     }
 
     // Navigate to path in local trie using cursor
