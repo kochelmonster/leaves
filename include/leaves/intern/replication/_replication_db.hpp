@@ -54,8 +54,9 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   std::atomic<tid_t> last_hashed_txn_id{tid_t(0)};
 
   // Offset of the last fully-hashed transaction (persisted for restart).
-  // hashed_txn() loads from this offset to return a pinned transaction.
-  offset_t hashed_txn_offset;
+  // Atomic for lock-free thread-safe access from hashed_txn().
+  // NOTE: std::atomic<uint64_t> is trivially copyable and works with mmap.
+  std::atomic<uint64_t> hashed_txn_offset{0};
 };
 
 // =============================================================================
@@ -150,10 +151,6 @@ struct _ReplicationDB
   std::atomic<bool> _hash_running{false};
   std::atomic<bool> _hash_cancelled{false};
 
-  // Pinned fully-hashed transaction (prevents GC until next hashed txn is ready).
-  // Loaded from header->hashed_txn_offset on startup; updated by hash catchup.
-  txn_ptr _hashed_txn{nullptr};
-
   ~_ReplicationDB() {
     cancel_purge();
     _stop_hash_catchup();
@@ -167,16 +164,16 @@ struct _ReplicationDB
   }
 
   // Get the last fully hashed transaction ID.
-  tid_t last_hashed_txn_id() const {
-    return this->_header->last_hashed_txn_id.load(std::memory_order_acquire);
-  }
-
   // Get the last fully-hashed transaction, or nullptr if none available.
   // The returned transaction is pinned (ref-counted) and safe to use even
   // as new commits occur.  Returns nullptr only before the first transaction
   // has been hashed (e.g., immediately after DB creation).
+  // Lock-free: uses atomic offset from header, resolved on demand.
   txn_ptr hashed_txn() const {
-    return _hashed_txn;
+    uint64_t off = this->_header->hashed_txn_offset.load(std::memory_order_acquire);
+    if (!off) return nullptr;
+    offset_t offset(off);
+    return this->template resolve<Transaction>(&offset);
   }
 
   // Override commit - no hashing overhead. Background hasher catches up.
@@ -231,10 +228,7 @@ struct _ReplicationDB
     Base::sanitize();
     _sanitize_replication_anchors();
 
-    // Load persisted hashed transaction if available
-    if (this->_header->hashed_txn_offset) {
-      _hashed_txn = this->template resolve<Transaction>(&this->_header->hashed_txn_offset);
-    }
+    // hashed_txn_offset is already atomic in header - no load needed
 
     this->flush();
 
@@ -426,20 +420,17 @@ struct _ReplicationDB
       // Hash all nodes newer than last_hashed
       compute_hashes_catchup(this, txn->root, txn->deletion_root, last_hashed);
 
-      // Release refs
-      const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
-
       if (_hash_cancelled.load(std::memory_order_acquire)) {
+        const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
         _hash_running.store(false, std::memory_order_release);
         return;
       }
 
-      // Pin the just-hashed transaction (old _hashed_txn released automatically).
-      // This ref keeps the transaction alive until the next one is hashed.
-      _hashed_txn = txn;
-
-      // Persist offset for recovery (allows hashed_txn() to work after restart)
-      this->_header->hashed_txn_offset = this->resolve(txn);
+      // Store offset atomically in header for lock-free hashed_txn() access.
+      // The header keeps the transaction alive (prevents GC) and persists it.
+      offset_t txn_offset = this->resolve(txn);
+      this->_header->hashed_txn_offset.store(txn_offset, std::memory_order_release);
+      const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
 
       // Update last_hashed_txn_id
       this->_header->last_hashed_txn_id.store(current, std::memory_order_release);
