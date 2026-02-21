@@ -135,19 +135,36 @@ void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t last_hashed_t
   // Restore original path length
   key_path.resize(path_len);
 
-  // Now compute this node's hash
+  hash_trie_node(db, trie);
+}
+
+}  // namespace detail
+
+// Compute hash for a trie node from its compressed path and children's hashes.
+// Hash = Blake3(compressed_path || child_hash[0] || child_hash[1] || ...)
+// Children must already be hashed.
+template <typename DB, typename TriePtr>
+void hash_trie_node(DB* db, TriePtr& trie) {
+  using Traits = typename DB::Traits;
+  using CursorTraits = typename DB::CursorTraits;
+  using TrieNode = _TrieNode<CursorTraits>;
+  using LeafNode = _LeafNode<CursorTraits>;
+  using offset_e = typename Traits::offset_e;
+
   Blake3Hasher hasher;
 
   // Hash the compressed path
   hasher.update(trie->compressed(), trie->len());
 
   // Hash all child hashes in array order
+  offset_e* children = trie->array();
+  uint16_t child_count = trie->count();
   for (uint16_t i = 0; i < child_count; ++i) {
     if (children[i].type() == LEAF) {
-      leaf_ptr child = db->template resolve<LeafNode>(&children[i]);
+      auto child = db->template resolve<LeafNode>(&children[i]);
       hasher.update(child->hash, sizeof(child->hash));
     } else {
-      trie_ptr child = db->template resolve<TrieNode>(&children[i]);
+      auto child = db->template resolve<TrieNode>(&children[i]);
       hasher.update(child->hash, sizeof(child->hash));
     }
   }
@@ -155,8 +172,6 @@ void compute_node_hash(DB* db, typename DB::offset_e offset, tid_t last_hashed_t
   hasher.finalize(trie->hash);
   db->make_dirty(trie);
 }
-
-}  // namespace detail
 
 // Helper to detect if Transaction has deletion_root
 template <typename T, typename = void>

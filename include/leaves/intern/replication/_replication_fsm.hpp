@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../db/_cursor.hpp"
+#include "../core/_hash.hpp"
 #include "../util/_merger.hpp"
 #include "_transfer.hpp"
 
@@ -349,20 +350,19 @@ struct ReplicationSenderFSM {
     _transport = transport;
     _events = events;
 
-    // Get the latest fully-hashed transaction (non-blocking).
-    // Caller should ensure hashes are ready by responding to on_hashes_ready.
+    // "Take what you have" — use hashed_txn() if available.
+    // If no hashed transaction exists and DB is non-empty, error.
+    // Never block waiting for hashes.
     _txn = _db->hashed_txn();
     if (!_txn) {
-      // No hashed transaction - check if DB is empty (nothing to send anyway)
       auto current = _db->txn();
       if (current->root) {
-        // Non-empty DB without hashes - cannot proceed with replication.
-        // Caller should wait for on_hashes_ready callback before calling begin().
+        // Non-empty DB with no hashed transaction — cannot replicate yet
         _transition_to_error(ReplicationError::HASHES_NOT_READY,
                              "No hashed transaction available");
         return;
       }
-      // Empty DB - proceed with unhashed (nothing to send)
+      // Empty DB — send nothing (or just sync empty state)
       _txn = current;
     }
     _sender._txn = _txn;
@@ -825,6 +825,17 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
     return true;
   }
 
+  // Called during merge after a trie node is created/merged.
+  // Computes the trie's hash based on its children's hashes.
+  // Only called if sizeof(trie->hash) > 0 (checked by merger).
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {
+    constexpr size_t HASH_SIZE = sizeof(trie->hash);
+    if constexpr (HASH_SIZE > 0) {
+      hash_trie_node(db, trie);
+    }
+  }
+
   // Migrate big value from source to destination
   // Returns a MigratedValue with the pre-allocated destination offset
   // Overrides StandardMergePolicy::migrate_big_value for wire format big values
@@ -1090,20 +1101,19 @@ struct ReplicationReceiverFSM {
     _transport = transport;
     _events = events;
 
-    // Get the latest fully-hashed transaction (non-blocking).
-    // Caller should ensure hashes are ready by responding to on_hashes_ready.
+    // "Take what you have" — use hashed_txn() if available.
+    // If no hashed transaction exists and DB is non-empty, error.
+    // Never block waiting for hashes.
     _txn = _db->hashed_txn();
     if (!_txn) {
-      // No hashed transaction - check if DB is empty (full copy is OK)
       auto current = _db->txn();
       if (current->root) {
-        // Non-empty DB without hashes - cannot compare correctly.
-        // Caller should wait for on_hashes_ready callback before calling begin().
+        // Non-empty DB with no hashed transaction — cannot replicate yet
         _transition_to_error(ReplicationError::HASHES_NOT_READY,
                              "No hashed transaction available");
         return;
       }
-      // Empty DB - proceed with unhashed (full copy, no local hashes to compare)
+      // Empty DB — accept all sender data
       _txn = current;
     }
     _state = State::RECEIVING;
@@ -2004,6 +2014,10 @@ struct ReplicationReceiverFSM {
       }
 
       _cursor->commit();
+
+      // Update hashed_txn_offset so the merged state becomes "last hashed".
+      // Hashes were computed inline during merge via after_trie_merged.
+      _update_hashed_txn();
     } catch (const StorageFull&) {
       _cursor->rollback();
       _transition_to_error(ReplicationError::STORAGE_FULL,
@@ -2098,6 +2112,25 @@ struct ReplicationReceiverFSM {
     _db->flush();
   }
 
+  // Update hashed_txn_offset after merge commits.
+  // The merged state becomes the "last hashed" txn. Hashes were computed
+  // inline during merge via after_trie_merged.
+  void _update_hashed_txn() {
+    if constexpr (requires { _db->_header->hashed_txn_offset; }) {
+      auto txn = _db->txn();
+
+      offset_t txn_offset = _db->resolve(txn);
+      _db->_header->hashed_txn_offset.store(txn_offset, std::memory_order_release);
+      _db->_header->last_hashed_txn_id.store(txn->txn_id, std::memory_order_release);
+      _db->make_dirty(_db->_header);
+      _db->flush(false, false);
+
+      if constexpr (requires { _db->_aspect.on_hashes_ready(_db, txn->txn_id); }) {
+        _db->_aspect.on_hashes_ready(_db, txn->txn_id);
+      }
+    }
+  }
+
   // Release the replication slot.  If it still holds a non-zero offset
   // (error path — area was never merged), return it to the pool first.
   // Sole-owner operation — no lock needed; atomic store for visibility.
@@ -2122,72 +2155,6 @@ struct ReplicationReceiverFSM {
     _replication_slot = -1;
   }
 
-  // Merge temp DB (received wire nodes) into local DB using _Merger.
-  // Starts and commits its own transaction.  Used for non-ReplicationDB
-  // merges and for fraction-complete when no deferred data exists.
-  void _merge_temp_to_local() {
-    if (!_temp_root) return;
-
-#ifdef LEAVES_DEBUG
-    // Dump to /tmp/rb-<N>.yaml for debugging
-    {
-      static int _rb_round = 0;
-      std::ofstream out("/tmp/rb-" + std::to_string(_rb_round++) + ".yaml");
-      WireTempDB db;
-      struct DumpContainer {
-        using db_type = WireTempDB;
-        struct Cursor {};  // Dummy cursor type
-        const WireTempDB& _db;
-        const WireTempDB* _internal() const { return &_db; }
-      } container{db};
-      _Dumper<DumpContainer, false> dumper(container, _wire_cursor._root,
-                                           false);
-      dumper.dump(out);
-
-      // Dump local (destination) DB state
-      std::ofstream dst_out("/tmp/rb-dst-" + std::to_string(_rb_round - 1) +
-                            ".yaml");
-      _Dumper<DB, true> dst_dumper(*_db, _cursor->_root, false);
-      dst_dumper.dump(dst_out);
-
-      std::cerr << "DEBUG: dumped replication buffers to /tmp/rb-"
-                << (_rb_round - 1) << ".yaml and rb-dst-" << (_rb_round - 1)
-                << ".yaml\n";
-    }
-#endif
-
-    // set position to root
-    _wire_cursor.clear();
-    _cursor->start_transaction();
-    try {
-      _ensure_cursor_root();
-
-      // Link pre-allocated big value multi-area to this transaction
-      _link_big_value_area();
-
-      // Set big value storage on merge policy before merging
-      _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
-
-      // Use _Merger to merge wire trie into local DB
-      _Merger<LocalCursor, WireCursor, MergePolicy> merger(
-          *_cursor, _wire_cursor, _merge_policy);
-      merger.exec();
-      _cursor->commit();
-    } catch (const StorageFull&) {
-      _cursor->rollback();
-      _transition_to_error(ReplicationError::STORAGE_FULL,
-                           "Storage full during replication merge");
-      return;
-    } catch (const std::exception& e) {
-      _cursor->rollback();
-      _transition_to_error(ReplicationError::INTERNAL_ERROR, e.what());
-      return;
-    }
-
-    // Clear big value storage after merge (data is in persistent storage)
-    _clear_big_value_state();
-  }
-
   // Send ACK with prune paths (where hashes matched)
   // Sender will respond with next subtrie or COMPLETE
   void _send_prune_ack() {
@@ -2208,7 +2175,8 @@ struct ReplicationReceiverFSM {
   // reset temp state, and tell sender to restart from root.
   // Always commits — the next round needs to see the merged state.
   void _send_fraction_complete() {
-    // Merge all accumulated data (deferred + current) in one transaction
+    // Merge all accumulated data (deferred + current) in one transaction.
+    // _update_hashed_txn() is called inside _merge_all_phases().
     if (!_merge_all_phases()) return;  // error already reported
 
     // Reset temp DB for the next fraction
@@ -2221,22 +2189,6 @@ struct ReplicationReceiverFSM {
 
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
-  }
-
-  void _send_complete() {
-    // Merge all accumulated data in one short atomic transaction
-    if (!_merge_all_phases()) return;  // error already reported
-
-    // Free temp buffers - data has been integrated into persistent storage
-    _free_temp_buffers();
-
-    _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
-    _transport->send(_msg_builder.data(), _msg_builder.size());
-
-    if (_events) {
-      _events->on_complete(_session_id, _total_nodes);
-    }
-    _state = State::IDLE;
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {

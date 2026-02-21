@@ -42,6 +42,13 @@ struct StandardMergePolicy {
   // Always recurse into source tries
   bool may_add_trie(const std::string& key) { return true; }
 
+  // Called after a trie node is created/merged during the merge process.
+  // Override to compute the trie's hash based on its children's hashes.
+  // |trie| is the newly created trie node, |db| is the destination database.
+  // Children's hashes are already computed (either copied or computed earlier).
+  template <typename TriePtr, typename DB>
+  void after_trie_merged(TriePtr& trie, DB* db) {}
+
   // Free big value from destination BigMemory
   template <typename LeafNode, typename DstCursor>
   void free_big(LeafNode& leaf, DstCursor& dst_cursor) {
@@ -171,6 +178,11 @@ struct _Merger {
       leaf->set_big();
     }
     memcpy(leaf->vdata(), src_value.data(), vsize);
+
+    // Copy hash from source leaf - content hashes are identical
+    if constexpr (sizeof(leaf->hash) > 0) {
+      memcpy(leaf->hash, src_leaf.hash, sizeof(leaf->hash));
+    }
 
     return leaf;
   }
@@ -326,6 +338,9 @@ struct _Merger {
       leaf_ptr new_leaf = fill_leaf(
           Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
       *dst.link() = resolve_offset(new_leaf);
+
+      // Compute hash for the new trie - both children have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -380,6 +395,9 @@ struct _Merger {
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
       suffix_trie->create(suffix_prefix, offsets_buf);
 
+      // Compute hash for suffix_trie - children have valid hashes from deep copy
+      handler.after_trie_merged(suffix_trie, dst_cursor._db);
+
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
       auto idxs = new_trie->create(
@@ -389,6 +407,9 @@ struct _Merger {
       dst.link_idx = idxs.second;
       dst.update_trie_offset();
       *dst.link() = resolve_offset(suffix_trie);
+
+      // Compute hash for new_trie - child1 and suffix_trie have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -433,6 +454,9 @@ struct _Merger {
         dst_cursor.stack.clear();
         merge_node();
       }
+
+      // Compute hash for new_trie - all children now have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -461,6 +485,9 @@ struct _Merger {
 
       dst.trie() = new_trie;
       dst.update_trie_offset();
+
+      // Compute hash for new_trie - all children have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
     }
   }
 
@@ -503,6 +530,9 @@ struct _Merger {
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
       suffix_trie->create(suffix_prefix, offsets_buf);
 
+      // Compute hash for suffix_trie - children have valid hashes from deep copy
+      handler.after_trie_merged(suffix_trie, dst_cursor._db);
+
       uint16_t loffset;
       trie_ptr new_trie =
           expand_trie_with_branch(dst_trie, suffix_len, &loffset);
@@ -511,6 +541,9 @@ struct _Merger {
       dst.link_idx = loffset;
       *dst.link() = resolve_offset(suffix_trie);
       dst.update_trie_offset();
+
+      // Compute hash for new_trie - all children have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -577,6 +610,9 @@ struct _Merger {
       merge_node();
     }
 
+    // Compute hash for new_trie - all children now have valid hashes
+    handler.after_trie_merged(new_trie, dst_cursor._db);
+
     free_node(dst_trie);
   }
 
@@ -603,6 +639,9 @@ struct _Merger {
     dst.link_idx = loffset;
     *dst.link() = resolve_offset(new_leaf);
     dst.update_trie_offset();
+
+    // Compute hash for new_trie - all children have valid hashes
+    handler.after_trie_merged(new_trie, dst_cursor._db);
   }
 
   typename CursorDst::Transition::trie_ptr expand_trie_with_branch(
@@ -727,6 +766,16 @@ struct _Merger {
     uint16_t new_size = TrieNode::size(prefix.size(), surviving);
     trie_ptr dst_trie = alloc_node<trie_ptr>(new_size);
     dst_trie->create(prefix, offsets_buf);
+
+    // Copy hash from source trie if all children survived unchanged.
+    // If any child was filtered, compute the hash.
+    if constexpr (sizeof(dst_trie->hash) > 0) {
+      if (surviving == src_trie->count()) {
+        memcpy(dst_trie->hash, src_trie->hash, sizeof(dst_trie->hash));
+      } else {
+        handler.after_trie_merged(dst_trie, dst_cursor._db);
+      }
+    }
 
     *parent_link = resolve_offset(dst_trie);
     return true;

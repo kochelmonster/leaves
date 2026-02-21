@@ -148,8 +148,12 @@ struct _ReplicationDB
   // --- Background hashing state ---
   // Hashing runs in background, catching up to current txn_id.
   // Commits never wait; use on_hashes_ready aspect callback for event-driven replication.
+  // Hashing is delayed until idle (no commits for _hash_idle_ms) to avoid
+  // interfering with write-heavy workloads.
   std::atomic<bool> _hash_running{false};
   std::atomic<bool> _hash_cancelled{false};
+  std::atomic<uint64_t> _hash_job_id{0};  // Scheduled delayed hash job
+  std::atomic<uint64_t> _hash_idle_ms{100};  // Delay before hashing starts (default 100ms)
 
   ~_ReplicationDB() {
     cancel_purge();
@@ -157,6 +161,26 @@ struct _ReplicationDB
   }
 
   void set_retention(uint64_t seconds) { _retention_seconds.store(seconds, std::memory_order_relaxed); }
+
+  // Set the idle delay before background hashing starts (default 100ms).
+  // Higher values reduce interference with write-heavy workloads.
+  void set_hash_idle_ms(uint64_t ms) { _hash_idle_ms.store(ms, std::memory_order_relaxed); }
+
+  // Force immediate hashing, bypassing the idle delay.
+  // Blocks until all pending transactions are hashed.
+  // Use when you need hashes immediately (e.g., before replication).
+  void flush_hashes() {
+    // Cancel any pending delayed job and start immediately
+    uint64_t old_job = _hash_job_id.exchange(0, std::memory_order_acq_rel);
+    if (old_job && old_job != UINT64_MAX) {
+      this->_storage.cancel_job(old_job);
+    }
+    _start_hash_catchup();
+    // Wait for hashing to complete
+    if (!this->_storage._pool_shutdown.load(std::memory_order_acquire)) {
+      this->_storage.wait_all();
+    }
+  }
 
   // Check if hashing has caught up to a given transaction.
   bool hashes_ready_through(tid_t target_txn_id) const {
@@ -187,8 +211,10 @@ struct _ReplicationDB
     this->flush(sync, true);
     this->end_transaction();
 
-    // Kick background hasher if not already running
-    _start_hash_catchup();
+    // Schedule background hasher after idle delay (cancels any pending schedule).
+    // This ensures hashing only starts after writes have been idle for a while,
+    // avoiding interference with write-heavy workloads.
+    _schedule_hash_catchup();
 
     return true;
   }
@@ -369,8 +395,30 @@ struct _ReplicationDB
   }
 
   // --- Background hash catchup ---
+  // Schedule hash catchup after idle delay. Cancels any pending schedule.
+  // Called on every commit - rapid commits keep pushing hashing back.
+  void _schedule_hash_catchup() {
+    if (_hash_cancelled.load(std::memory_order_acquire)) return;  // Shutting down
+    if (_hash_running.load(std::memory_order_acquire)) return;  // Already running
+
+    // Cancel any pending scheduled job
+    uint64_t old_job = _hash_job_id.exchange(0, std::memory_order_acq_rel);
+    if (old_job && old_job != UINT64_MAX) {
+      this->_storage.cancel_job(old_job);
+    }
+
+    // Schedule new job after idle delay
+    uint64_t delay_ms = _hash_idle_ms.load(std::memory_order_relaxed);
+    uint64_t new_job = this->_storage.schedule_after(
+        std::chrono::milliseconds(delay_ms),
+        [this]() { _start_hash_catchup(); });
+    _hash_job_id.store(new_job, std::memory_order_release);
+  }
+
   // Start the background hash catchup task if not already running.
+  // Called from scheduled job after idle delay.
   void _start_hash_catchup() {
+    _hash_job_id.store(0, std::memory_order_relaxed);  // Job has fired
     if (_hash_cancelled.load(std::memory_order_acquire)) return;  // Shutting down
     bool expected = false;
     if (!_hash_running.compare_exchange_strong(expected, true,
@@ -383,6 +431,11 @@ struct _ReplicationDB
   // Stop background hashing and wait for completion.
   void _stop_hash_catchup() {
     _hash_cancelled.store(true, std::memory_order_release);
+    // Cancel any pending scheduled job
+    uint64_t job_id = _hash_job_id.exchange(0, std::memory_order_acq_rel);
+    if (job_id && job_id != UINT64_MAX) {
+      this->_storage.cancel_job(job_id);
+    }
     // Wait for current run to complete
     if (!this->_storage._pool_shutdown.load(std::memory_order_acquire)) {
       this->_storage.wait_all();
