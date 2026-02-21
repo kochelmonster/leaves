@@ -102,6 +102,9 @@ struct OverwritePolicy {
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
 };
 
 // Handler that keeps destination values
@@ -143,6 +146,9 @@ struct KeepDestPolicy {
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
 };
 
 // Test actual _Merger functionality
@@ -1337,6 +1343,9 @@ struct PrefixFilterPolicy {
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
 };
 
 BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_into_empty) {
@@ -1582,6 +1591,9 @@ struct TrackingFilterPolicy {
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
 };
 
 BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_prunes_subtree) {
@@ -1704,6 +1716,9 @@ struct RejectBigPolicy {
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
 };
 
 BOOST_AUTO_TEST_CASE(test_merger_may_add_leaf_is_big_param) {

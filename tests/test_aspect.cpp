@@ -23,15 +23,33 @@ using namespace leaves;
 
 // Wait for background hashing to catch up to the current transaction.
 // Call after commit() and before begin() to ensure hashes are available.
+// Uses polling since tests don't have a custom aspect with on_hashes_ready.
 template <typename DB>
 void wait_for_hashing(DB* db, int timeout_ms = 5000) {
-  auto target = db->txn()->txn_id;
   auto start = std::chrono::steady_clock::now();
-  while (!db->hashes_ready_through(target)) {
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
-      throw std::runtime_error("Timeout waiting for hashing to complete");
+  auto timeout = std::chrono::milliseconds(timeout_ms);
+  
+  while (true) {
+    auto hashed = db->hashed_txn();
+    auto current = db->txn();
+    
+    // Check if hashed transaction matches current
+    if (hashed && hashed == current) {
+      return;
     }
+    
+    // Empty DB is fine
+    if (!current->root) {
+      return;
+    }
+    
+    // Check timeout
+    if (std::chrono::steady_clock::now() - start > timeout) {
+      BOOST_FAIL("Timeout waiting for hashing");
+      return;
+    }
+    
+    // Small sleep to avoid busy loop
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }

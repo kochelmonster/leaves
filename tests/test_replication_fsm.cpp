@@ -120,15 +120,33 @@ struct ReplicationFixture {
 
   // Wait for background hashing to catch up to the current transaction.
   // Call after commit() and before begin() to ensure hashes are available.
+  // Uses polling since tests don't have a custom aspect with on_hashes_ready.
   template <typename DB>
   static void wait_for_hashing(DB* db, int timeout_ms = 5000) {
-    auto target = db->txn()->txn_id;
     auto start = std::chrono::steady_clock::now();
-    while (!db->hashes_ready_through(target)) {
-      auto elapsed = std::chrono::steady_clock::now() - start;
-      if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
-        throw std::runtime_error("Timeout waiting for hashing to complete");
+    auto timeout = std::chrono::milliseconds(timeout_ms);
+    
+    while (true) {
+      auto hashed = db->hashed_txn();
+      auto current = db->txn();
+      
+      // Check if hashed transaction matches current
+      if (hashed && hashed == current) {
+        return;
       }
+      
+      // Empty DB is fine
+      if (!current->root) {
+        return;
+      }
+      
+      // Check timeout
+      if (std::chrono::steady_clock::now() - start > timeout) {
+        BOOST_FAIL("Timeout waiting for hashing");
+        return;
+      }
+      
+      // Small sleep to avoid busy loop
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
@@ -279,6 +297,9 @@ BOOST_FIXTURE_TEST_CASE(test_single_key_replication, ReplicationFixture) {
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -336,6 +357,9 @@ BOOST_FIXTURE_TEST_CASE(test_multiple_keys_replication, ReplicationFixture) {
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
 
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
@@ -449,6 +473,10 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -572,6 +600,9 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -687,6 +718,9 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   {
     SenderFSM sender(sender_impl);
     ReceiverFSM receiver(receiver_impl);
@@ -733,6 +767,9 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
     cursor.value(Slice("value_e"));
     cursor.commit();
   }
+
+  // Wait for background hashing to complete before second replication round
+  wait_for_hashing(sender_impl);
 
   // Create fresh FSM instances for second replication round
   {
@@ -922,6 +959,9 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -1037,6 +1077,9 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
 
   // Run replication (in separate scope so FSMs release their cursors)
   {
@@ -1297,6 +1340,9 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_replication, ReplicationFixture) {
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(src_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -1440,6 +1486,9 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
   // Replicate
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(src_impl);
 
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
@@ -1621,6 +1670,9 @@ BOOST_FIXTURE_TEST_CASE(test_sender_wrong_state_message, ReplicationFixture) {
     cursor.commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -1657,6 +1709,9 @@ BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload, ReplicationFixture)
     cursor.value(Slice("value"));
     cursor.commit();
   }
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(impl);
 
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
@@ -1731,6 +1786,9 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
 
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(src_impl);
 
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
@@ -2132,6 +2190,9 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(src_impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -2246,6 +2307,9 @@ BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
     cursor.commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(impl);
+
   TestTransport sender_transport, receiver_transport;
   sender_transport.set_peer(&receiver_transport);
   receiver_transport.set_peer(&sender_transport);
@@ -2347,6 +2411,9 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
 
   // Verify all slots start at zero
@@ -2438,6 +2505,9 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
 
   constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
 
@@ -2658,6 +2728,9 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
+
   constexpr auto N = DBImpl::Header::MAX_REPLICATION_SLOTS;
   int16_t claimed_slot = -1;
 
@@ -2812,6 +2885,9 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
   auto* mmap_impl = mmap_db._internal();
   auto* file_impl = file_db._internal();
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(mmap_impl);
+
   // Phase 1: Replicate mmap → file
   {
     TestTransport sender_transport, receiver_transport;
@@ -2870,6 +2946,9 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
   auto mmap2_storage = ReplicatingMapStorage::create(mmap2_path.c_str());
   auto mmap2_db = (*mmap2_storage)["test"];
   auto* mmap2_impl = mmap2_db._internal();
+
+  // Wait for file storage hashing to complete before second replication
+  wait_for_hashing(file_impl);
 
   {
     TestTransport sender_transport, receiver_transport;
@@ -2962,6 +3041,9 @@ BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixtu
   // Receiver DB is completely empty — root offset is 0
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
+
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_impl);
 
   // Verify receiver root is actually zero (empty)
   BOOST_REQUIRE_EQUAL((uint64_t)receiver_impl->txn()->root, 0);
