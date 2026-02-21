@@ -123,6 +123,9 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "jobs": true
+        "jobs": true,
+        "./test_hash_updater": true,
+        "./build/test_hash_updater": true,
+        "/tmp/test_hash_debug": true
     }
 }
