@@ -402,6 +402,21 @@ struct _DB {
     return t;
   }
 
+  // Atomically pin a txn by raw storage offset and increment its refcount.
+  // Returns null if offset is 0 — txn was cleaned between the caller's read
+  // of the offset and acquiring txn_ref_lock. Caller must treat null as stale.
+  txn_ptr txn_ref_at(offset_t offset) {
+    std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+    if (!offset) return txn_ptr();
+    txn_ptr t = resolve<Transaction>(&offset);
+    t->refs.fetch_add(1);
+    return t;
+  }
+
+  // Called (under txn_ref_lock) just before a stale transaction is freed.
+  // Override in derived classes to invalidate any cached references to the txn.
+  virtual void _on_txn_freed(txn_ptr) {}
+
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
   }
@@ -464,6 +479,7 @@ struct _DB {
           _start_txn_id = txn->txn_id;
           return true;
         }
+        _on_txn_freed(txn);
         free(txn);
         return false;
       });

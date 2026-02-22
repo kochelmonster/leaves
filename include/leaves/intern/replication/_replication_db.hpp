@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "../db/_db.hpp"
+#include "../util/_hash_updater.hpp"
 
 namespace leaves {
 
@@ -50,68 +51,29 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   // real area offset is known.  sanitize() must skip these.
   static constexpr uint64_t REPLICATION_SLOT_SENTINEL = 1;
 
-  // Hash trie memory management (separate from data trie)
-  MemManager hash_mem_manager;
-  offset_e hash_root;
-  offset_e deletion_hash_root;
-
-  // Hash trie synchronization — atomic-only, works in both mmap and CacheStore.
-  // update_lock: 0 = free, 1 = update in progress (CAS spin lock)
-  // ref_count: number of active replication sessions using this hash trie
-  // hashed_txn_offset: offset of the txn whose data matches the current hash trie
+  // Hash trie control: synchronization, storage, and root offsets.
   //
-  // Invariant: hash trie and hashed_txn_offset are consistent whenever
-  // update_lock == 0.  Readers must wait for update_lock == 0 before reading.
+  // Protocol: acquire update_lock FIRST, then ref_count++.
+  // This ensures exactly one FSM runs the hash update; all others
+  // wait on the lock and find the trie already current when they enter.
+  // The lock is held only for check+update, not during replication.
   //
-  // These are lock-free on x86/ARM for uint32_t/uint64_t, so they work
-  // correctly in shared memory (mmap multi-process) and in-process (CacheStore).
+  // SpinLock uses TTAS with CPU yield — safe in shared memory (mmap)
+  // and single-process (CacheStore). No kernel state involved.
   struct HashTrieControl {
-    std::atomic<uint32_t> update_lock;       // CAS spin lock for hash update
+    SpinLock update_lock;                    // TTAS spinlock — safe in shared memory
     std::atomic<uint32_t> ref_count;         // Active replication session count
-    std::atomic<uint64_t> hashed_txn_offset; // Txn offset matching hash trie
+    std::atomic<uint64_t> hashed_txn_offset; // Raw offset of txn matching hash trie (0=stale)
+    MemManager hash_mem_manager;             // Separate allocator for hash trie nodes
+    offset_e hash_root;                      // Root of main hash trie
+    offset_e deletion_hash_root;             // Root of deletion hash trie
 
+    // Reset synchronization state after file reopen or sanitize.
+    // hashed_txn_offset is intentionally preserved: the hash trie on disk
+    // is still valid and should not be recomputed unnecessarily.
     void reset() noexcept {
-      update_lock.store(0, std::memory_order_relaxed);
+      new (&update_lock) SpinLock();
       ref_count.store(0, std::memory_order_relaxed);
-      // hashed_txn_offset intentionally preserved: still valid after reopen
-    }
-
-    // Acquire update lock (spin). Returns when no other updater is active.
-    // Precondition: caller already ensured ref_count == 0 or is the only user.
-    void acquire_update() noexcept {
-      uint32_t expected = 0;
-      while (!update_lock.compare_exchange_weak(expected, 1,
-                                                std::memory_order_acquire,
-                                                std::memory_order_relaxed))
-        expected = 0;
-    }
-
-    // Release update lock.
-    void release_update() noexcept {
-      update_lock.store(0, std::memory_order_release);
-    }
-
-    // Wait until no update is in progress (spin). Call before starting
-    // replication to ensure hash trie and hashed_txn_offset are consistent.
-    void wait_for_update() const noexcept {
-      while (update_lock.load(std::memory_order_acquire))
-        std::this_thread::yield();
-    }
-
-    // Increment ref count and wait for any in-progress update to finish.
-    void start_replication() noexcept {
-      ref_count.fetch_add(1, std::memory_order_acq_rel);
-      wait_for_update();
-    }
-
-    // Decrement ref count when replication session ends.
-    void finish_replication() noexcept {
-      ref_count.fetch_sub(1, std::memory_order_acq_rel);
-    }
-
-    // True if someone else is actively replicating (hash trie in use).
-    bool is_in_use() const noexcept {
-      return ref_count.load(std::memory_order_acquire) > 0;
     }
   } hash_control;
 
@@ -227,19 +189,19 @@ struct _ReplicationDB
       return _parent->resolve(ptr);
     }
 
-    // Allocate a node of given size using hash_mem_manager
+    // Allocate a node of given size using hash_control.hash_mem_manager
     template <typename NodePtr>
     NodePtr alloc_node(uint16_t size) {
       uint8_t slot_id = MemManager::assign_slot(size);
-      auto& hash_mem = _parent->_header->hash_mem_manager;
+      auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
       page_ptr page = hash_mem.alloc(slot_id, *_parent);
       _parent->make_dirty(page);
       return NodePtr((char*)&*page + sizeof(PageHeader));
     }
 
-    // Free a page using hash_mem_manager
+    // Free a page using hash_control.hash_mem_manager
     void free(page_ptr page) {
-      auto& hash_mem = _parent->_header->hash_mem_manager;
+      auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
       hash_mem.free(page, *_parent);
     }
 
@@ -251,10 +213,10 @@ struct _ReplicationDB
   HashDB hash_db() { return HashDB(this); }
 
   // Get hash root pointer for main trie
-  offset_e* hash_root_ptr() { return &this->_header->hash_root; }
+  offset_e* hash_root_ptr() { return &this->_header->hash_control.hash_root; }
 
   // Get hash root pointer for deletion trie
-  offset_e* deletion_hash_root_ptr() { return &this->_header->deletion_hash_root; }
+  offset_e* deletion_hash_root_ptr() { return &this->_header->hash_control.deletion_hash_root; }
 
   // Inherit constructors
   using Base::Base;
@@ -279,12 +241,10 @@ struct _ReplicationDB
 
     // Allocate a separate area for hash trie memory management
     auto hash_area = this->_storage.alloc_single_area();
-    this->_header->hash_mem_manager.init(hash_area->content_offset(),
-                                         hash_area->end());
-    this->_header->hash_root = 0;
-    this->_header->deletion_hash_root = 0;
-
-    // Initialize hash trie synchronization primitives
+    this->_header->hash_control.hash_mem_manager.init(hash_area->content_offset(),
+                                                      hash_area->end());
+    this->_header->hash_control.hash_root = 0;
+    this->_header->hash_control.deletion_hash_root = 0;
     this->_header->hash_control.reset();
     this->_header->hash_control.hashed_txn_offset.store(0, std::memory_order_relaxed);
 
@@ -356,6 +316,73 @@ struct _ReplicationDB
       _purge_interrupt.store(true, std::memory_order_release);
     }
     return Base::start_transaction(cursor_id, nonblocking);
+  }
+
+  // Called under txn_ref_lock just before a stale txn is freed.
+  // Zeros hashed_txn_offset if it pointed at the freed txn so that
+  // the next acquire_hash_trie() knows it must recompute the hash trie.
+  void _on_txn_freed(txn_ptr t) override {
+    uint64_t freed_off = (uint64_t)this->resolve(t);
+    auto& atom = this->_header->hash_control.hashed_txn_offset;
+    if (atom.load(std::memory_order_relaxed) == freed_off)
+      atom.store(0, std::memory_order_relaxed);
+  }
+
+  // Acquire the hash trie for a replication session.
+  //
+  // Locking order: update_lock FIRST, then ref_count++.
+  // The FSM that wins update_lock is "first" and updates the hash trie
+  // if stale. All subsequent FSMs wait on the lock, then find the trie
+  // current and skip the update. The lock is released before replication
+  // begins, so it is held only for the check+update phase.
+  //
+  // Returns a pinned txn_ptr whose snapshot matches hash_root /
+  // deletion_hash_root. Caller MUST call release_hash_trie() when done.
+  txn_ptr acquire_hash_trie() {
+    auto& hc = this->_header->hash_control;
+    {
+      std::lock_guard<SpinLock> lock(hc.update_lock);
+      uint32_t prev = hc.ref_count.fetch_add(1, std::memory_order_acq_rel);
+      if (prev == 0) {
+        // First FSM: update hash trie if stale
+        txn_ptr current = this->txn_ref();
+        uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_relaxed);
+        bool needs_update = (htxn_off == 0);
+        if (!needs_update) {
+          offset_t off(htxn_off);
+          auto hashed = this->template resolve<Transaction>(&off);
+          needs_update = (hashed->txn_id < current->txn_id);
+        }
+        if (needs_update) {
+          auto hdb = this->hash_db();
+          auto* rtxn = static_cast<Transaction*>(&*current);
+          update_hash_trie(this, &hdb, current->root,       &hc.hash_root);
+          update_hash_trie(this, &hdb, rtxn->deletion_root, &hc.deletion_hash_root);
+          hc.hashed_txn_offset.store((uint64_t)this->resolve(current),
+                                     std::memory_order_release);
+        }
+        current->refs.fetch_sub(1, std::memory_order_acq_rel);
+      }
+    }  // update_lock released — subsequent FSMs will not recompute
+
+    // Pin the txn whose snapshot matches the hash trie
+    uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_acquire);
+    txn_ptr pinned = this->txn_ref_at(offset_t(htxn_off));
+    if (!pinned) {
+      // Cleaned between update and pin — fall back to current, force recompute next time
+      hc.hashed_txn_offset.store(0, std::memory_order_relaxed);
+      pinned = this->txn_ref();
+    }
+    return pinned;
+  }
+
+  // Release a replication session acquired via acquire_hash_trie().
+  void release_hash_trie(txn_ptr& pinned) {
+    if (pinned) {
+      pinned->refs.fetch_sub(1, std::memory_order_acq_rel);
+      pinned.reset();
+    }
+    this->_header->hash_control.ref_count.fetch_sub(1, std::memory_order_acq_rel);
   }
 
   void _sanitize_replication_anchors() {
