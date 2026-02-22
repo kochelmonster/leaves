@@ -747,15 +747,14 @@ struct _TransactionalCursor
 
   bool commit(bool sync = false) { return this->_db->commit(_id, sync); }
 
-  // NOTE: Theoretical race between txn() and refs.fetch_add() - see comment
-  // in _ReplicationDB::_run_hash_catchup() for detailed explanation.
   bool rollback() {
     if (this->_db->rollback(_id)) {
       // Switch back to the committed read transaction (the write txn is
       // now orphaned).  Must update _txn/_root before re-finding so
       // find() navigates the committed trie.
-      auto read_txn = this->_db->txn();
-      read_txn->refs.fetch_add(1);  // minimize race window
+      // txn_ref() atomically resolves and increments refs under SpinLock,
+      // preventing a concurrent start_transaction() from freeing the txn.
+      auto read_txn = this->_db->txn_ref();
 
       if (this->_txn) this->_txn->refs.fetch_sub(1);
       this->_txn = read_txn;
@@ -769,12 +768,11 @@ struct _TransactionalCursor
     return false;
   }
 
-  // NOTE: Same theoretical race as rollback() - see _run_hash_catchup()
-  // comment.
   void update() {
-    auto new_txn = this->_db->txn();
+    // txn_ref() atomically resolves and increments refs under SpinLock,
+    // preventing a concurrent start_transaction() from freeing the txn.
+    auto new_txn = this->_db->txn_ref();
     assert(new_txn);
-    new_txn->refs.fetch_add(1);  // minimize race window
     if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
       _set_txn(new_txn);
     }
