@@ -22,9 +22,11 @@ struct HashTrieTraits : BaseTraits {
   // Enable hash storage in nodes
   using hash_t = uint8_t[HASH_SIZE];
 
-  // Hash leaf size: just the LeafNode header with hash, no key/value
+  // Minimum hash leaf size (NONE-branch: key_size=0, value_size=0).
+  // Non-NONE branch leaves have key_size=1 (data[0] = branch char) and are
+  // allocated as sizeof(HashLeafNode) + 1 bytes.
   static constexpr uint16_t HASH_LEAF_SIZE =
-      sizeof(_LeafNode<HashTrieTraits>) + 0 + 0;  // key=0, value=0
+      sizeof(_LeafNode<HashTrieTraits>);  // NONE-branch minimum
 };
 
 /**
@@ -128,7 +130,8 @@ struct _HashUpdater {
    * child.
    */
   void sync_nodes(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
-                  uint8_t hash_prefix_skip = 0, uint8_t data_prefix_skip = 0) {
+                  uint8_t hash_prefix_skip = 0, uint8_t data_prefix_skip = 0,
+                  int branch_key = HashTrieNode::NONE) {
     // Case: data is empty
     if (!data_offset) {
       if (*hash_offset_ptr) {
@@ -140,7 +143,7 @@ struct _HashUpdater {
 
     // Case: hash is empty - deep copy entire data subtree
     if (!*hash_offset_ptr) {
-      deep_copy_data_to_hash(data_offset, hash_offset_ptr);
+      deep_copy_data_to_hash(data_offset, hash_offset_ptr, branch_key);
       return;
     }
 
@@ -158,7 +161,7 @@ struct _HashUpdater {
 
     // txn_id differs - need to sync structure
     if (data_offset.type() == LEAF) {
-      sync_data_leaf(data_offset, hash_offset_ptr);
+      sync_data_leaf(data_offset, hash_offset_ptr, branch_key);
     } else {
       sync_data_trie(data_offset, hash_offset_ptr, hash_prefix_skip,
                      data_prefix_skip);
@@ -168,8 +171,8 @@ struct _HashUpdater {
   /**
    * @brief Sync when data is a leaf.
    */
-  void sync_data_leaf(data_offset_e data_offset,
-                      hash_offset_e* hash_offset_ptr) {
+  void sync_data_leaf(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
+                      int branch_key = HashTrieNode::NONE) {
     auto data_leaf = _data_db->template resolve<DataLeafNode>(&data_offset);
 
     // Save key path state
@@ -181,8 +184,8 @@ struct _HashUpdater {
       free_hash_subtree(*hash_offset_ptr);
     }
 
-    // Create hash leaf with computed hash
-    hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf);
+    // Create hash leaf with computed hash; store branch_key in data[0]
+    hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf, branch_key);
     *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
     _key_path.resize(saved_len);
@@ -276,10 +279,10 @@ struct _HashUpdater {
           uint8_t new_hash_skip = hash_prefix_skip + common + 1;
           uint8_t new_data_skip =
               1;  // Skip the branch byte embedded in child's prefix
-          sync_nodes(data_child, &hash_child, new_hash_skip, new_data_skip);
+          sync_nodes(data_child, &hash_child, new_hash_skip, new_data_skip, k);
           hash_consumed = true;
         } else {
-          deep_copy_data_to_hash(data_child, &hash_child);
+          deep_copy_data_to_hash(data_child, &hash_child, k);
         }
 
         offsets_buf[k] = hash_child;
@@ -396,12 +399,12 @@ struct _HashUpdater {
       if (hash_has[k + 1]) {
         // Common branch - recurse
         hash_offset_e hash_child = *hash_trie->offset(k);
-        sync_nodes(data_child, &hash_child);
+        sync_nodes(data_child, &hash_child, 0, 0, k);
         offsets_buf[k] = hash_child;
       } else {
         // Data-only branch - deep copy
         hash_offset_e hash_child{};
-        deep_copy_data_to_hash(data_child, &hash_child);
+        deep_copy_data_to_hash(data_child, &hash_child, k);
         offsets_buf[k] = hash_child;
       }
 
@@ -445,7 +448,8 @@ struct _HashUpdater {
    * @brief Deep copy data subtree to hash trie, computing hashes.
    */
   void deep_copy_data_to_hash(data_offset_e data_offset,
-                              hash_offset_e* hash_offset_ptr) {
+                              hash_offset_e* hash_offset_ptr,
+                              int branch_key = HashTrieNode::NONE) {
     if (!data_offset) {
       *hash_offset_ptr = hash_offset_e();
       return;
@@ -456,7 +460,7 @@ struct _HashUpdater {
       size_t saved_len = _key_path.size();
       _key_path.append((const char*)data_leaf->data, data_leaf->key_size);
 
-      hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf);
+      hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf, branch_key);
       *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
       _key_path.resize(saved_len);
@@ -477,7 +481,7 @@ struct _HashUpdater {
         }
 
         hash_offset_e child{};
-        deep_copy_data_to_hash(*data_trie->offset(k), &child);
+        deep_copy_data_to_hash(*data_trie->offset(k), &child, k);
         offsets_buf[k] = child;
         branch_count++;
 
@@ -506,7 +510,8 @@ struct _HashUpdater {
   /**
    * @brief Create hash leaf from data leaf.
    */
-  hash_leaf_ptr create_leaf_hash(data_leaf_ptr data_leaf) {
+  hash_leaf_ptr create_leaf_hash(data_leaf_ptr data_leaf,
+                                  int branch_key = HashTrieNode::NONE) {
     // Get data leaf's txn_id from its page header
     data_page_ptr data_page((char*)&*data_leaf - sizeof(DataPageHeader));
     tid_t txn_id = data_page->txn_id;
@@ -523,7 +528,7 @@ struct _HashUpdater {
       hasher.update(data_leaf->vdata(), data_leaf->vsize());
     }
 
-    hash_leaf_ptr hash_leaf = alloc_hash_leaf(txn_id);
+    hash_leaf_ptr hash_leaf = alloc_hash_leaf(txn_id, branch_key);
     hasher.finalize(hash_leaf->hash);
     return hash_leaf;
   }
@@ -551,10 +556,17 @@ struct _HashUpdater {
 
   // ── Allocation helpers ─────────────────────────────────────────────────
 
-  hash_leaf_ptr alloc_hash_leaf(tid_t txn_id) {
-    constexpr uint16_t size = sizeof(HashLeafNode);
+  hash_leaf_ptr alloc_hash_leaf(tid_t txn_id, int branch_key = HashTrieNode::NONE) {
+    // NONE-branch leaf: key_size=0.  Non-NONE branch: data[0]=branch_char.
+    uint16_t size = static_cast<uint16_t>(sizeof(HashLeafNode) +
+                                          (branch_key == HashTrieNode::NONE ? 0 : 1));
     hash_leaf_ptr leaf = _hash_db->template alloc_node<hash_leaf_ptr>(size);
-    leaf->key_size = 0;
+    if (branch_key == HashTrieNode::NONE) {
+      leaf->key_size = 0;
+    } else {
+      leaf->key_size = 1;
+      leaf->data[0] = static_cast<uint8_t>(branch_key);
+    }
     leaf->value_size = 0;
     // Copy txn_id to hash page header
     hash_page_ptr page((char*)&*leaf - sizeof(HashPageHeader));

@@ -650,9 +650,9 @@ struct TransferTrieSender {
 
     _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
     // Note: root=false because we're writing a CHILD of the pending node, not
-    // the root
-    _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0, nullptr,
-                   false);
+    // the root. The leaf case in _write_subtree handles branch-char push/pop.
+    _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0,
+                   nullptr, false);
     _path_buffer.resize(path_len);  // Restore path for retry
 
     // the child as the TransferTrie root is guaranteed to be written.
@@ -678,24 +678,36 @@ struct TransferTrieSender {
       auto hash_leaf = _db->template resolve<HashLeafNode>(hash_offset);
       assert(hash_leaf);
 
-      // Look up data leaf via cursor (reuse stored cursor)
+      // Hash leaves store their branch char in data[0] (key_size == 1).
+      // NONE-branch leaves have key_size == 0 and path is already the full key.
+      if (hash_leaf->key_size > 0) path.push_back((char)hash_leaf->data[0]);
+
+      // Navigate cursor to the data leaf at this trie position.
+      // Hash leaves do not store the full key — path is only a prefix of the
+      // actual data key. find() lands on the correct leaf (is_leaf()==true)
+      // without an exact match (is_valid()==false).
       _cursor->find(Slice(path.data(), path.size()));
-      assert(_cursor->is_valid() && "hash trie entry missing from data trie - corruption");
+      assert(_cursor->stack.size && _cursor->stack.back().is_leaf() &&
+             "hash trie entry missing from data trie - corruption");
+      assert(_cursor->key().size() >= path.size() &&
+             memcmp(_cursor->key().data(), path.data(), path.size()) == 0 &&
+             "cursor landed on wrong leaf - hash/data trie mismatch");
 
       // Get the data leaf from cursor's stack
       auto& data_trans = _cursor->stack.back();
       auto& data_leaf = *data_trans.leaf();
 
 #ifdef LEAVES_DEBUG
-      path.append(data_leaf.key().data(), data_leaf.key().size());
       std::cerr << "DEBUG: send node: " << path << " (type=leaf) "
                 << data_leaf.key().size() << "\n";
-      path.resize(path_len);
 #endif
 
       // Add data leaf to wire buffer (copies key/value, zeroes hash)
       auto* dest = _transfer.add_leaf_node(&data_leaf);
-      if (!dest) return false;
+      if (!dest) {
+        path.resize(path_len);
+        return false;
+      }
 
       // Copy hash from hash trie leaf into wire leaf
       std::memcpy(dest->hash, hash_leaf->hash, HASH_SIZE);
@@ -713,6 +725,7 @@ struct TransferTrieSender {
         wire_link->type(LEAF);
       }
       // Leaves don't need tracking in _last_batch (no children to process)
+      path.resize(path_len);
       return true;
     }
 
@@ -758,6 +771,8 @@ struct TransferTrieSender {
 
     int count = hash_trie->count(), i;
     hash_offset_e* children = hash_trie->array();
+    // Hash leaves carry their branch char in data[0] (key_size > 0);
+    // _write_subtree pushes it before find() and restores path on return.
     for (i = 0; i < count && !_transfer.full;) {
       if (!_write_subtree(path, children + i, depth + 1, wire_array + i)) break;
       ++i;

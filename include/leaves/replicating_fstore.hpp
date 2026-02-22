@@ -12,7 +12,7 @@
 namespace leaves {
 
 // Replication-enabled file storage traits
-typedef _ReplicationTraits<_StoreTraits> _ReplicatingStoreTraits;
+typedef _StoreTraits _ReplicatingStoreTraits;
 
 // Forward-declare so Self_ can refer to it
 struct _ReplicationCacheStore;

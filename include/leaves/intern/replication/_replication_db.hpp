@@ -10,14 +10,6 @@
 
 namespace leaves {
 
-// Replication-enabled traits mixin — inherits from base traits and enables
-// 32-byte hash storage plus Blake3 hashing for replication.
-template <typename BaseTraits>
-struct _ReplicationTraits : public BaseTraits {
-  typedef uint8_t hash_t[HASH_SIZE];
-  typedef Blake3Hasher ReplicationHasher;
-};
-
 // Replication-specific DB header — extends _DBHeader with:
 // - hash_mem_manager: Separate memory manager for hash trie (independent of
 // data transactions)
@@ -61,12 +53,13 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   // SpinLock uses TTAS with CPU yield — safe in shared memory (mmap)
   // and single-process (CacheStore). No kernel state involved.
   struct HashTrieControl {
-    SpinLock update_lock;                    // TTAS spinlock — safe in shared memory
-    std::atomic<uint32_t> ref_count;         // Active replication session count
-    std::atomic<uint64_t> hashed_txn_offset; // Raw offset of txn matching hash trie (0=stale)
-    MemManager hash_mem_manager;             // Separate allocator for hash trie nodes
-    offset_e hash_root;                      // Root of main hash trie
-    offset_e deletion_hash_root;             // Root of deletion hash trie
+    SpinLock update_lock;             // TTAS spinlock — safe in shared memory
+    std::atomic<uint32_t> ref_count;  // Active replication session count
+    std::atomic<uint64_t>
+        hashed_txn_offset;  // Raw offset of txn matching hash trie (0=stale)
+    MemManager hash_mem_manager;  // Separate allocator for hash trie nodes
+    offset_e hash_root;           // Root of main hash trie
+    offset_e deletion_hash_root;  // Root of deletion hash trie
 
     // Reset synchronization state after file reopen or sanitize.
     // hashed_txn_offset is intentionally preserved: the hash trie on disk
@@ -183,27 +176,62 @@ struct _ReplicationDB
       return _parent->template resolve<T>(offset, access);
     }
 
-    // Convert pointer to offset
-    template <typename T>
-    offset_e resolve(typename Traits::template Pointer<T> ptr) {
+    // Convert any typed pointer (TRIE or LEAF) to an offset in persistent
+    // storage.  Works for both SimplePointer<T,TRIE> and SimplePointer<T,LEAF>.
+    template <typename Ptr>
+    offset_e resolve(Ptr ptr) {
       return _parent->resolve(ptr);
     }
 
-    // Allocate a node of given size using hash_control.hash_mem_manager
+    // Allocate a node of given size using hash_control.hash_mem_manager.
+    // Passes *this as the resolver so that _MemManager calls our
+    // alloc_single_area() below instead of _DB::alloc_single_area() (which
+    // requires an active write transaction).
     template <typename NodePtr>
     NodePtr alloc_node(uint16_t size) {
       uint8_t slot_id = MemManager::assign_slot(size);
       auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
-      page_ptr page = hash_mem.alloc(slot_id, *_parent);
+      page_ptr page = hash_mem.alloc(slot_id, *this);
       _parent->make_dirty(page);
       return NodePtr((char*)&*page + sizeof(PageHeader));
+    }
+
+    // Non-transactional area allocation for the hash mem-manager.
+    // Called by _MemManager when its current area is exhausted.
+    // Inserts the new area at the head of area_list_head_single so it is
+    // tracked for reclamation on close/reset without requiring _active_txn.
+    typename _ReplicationDB::area_ptr alloc_single_area() {
+      std::scoped_lock lock(_parent->_storage.file_lock());
+      auto area = _parent->_storage.alloc_single_area();
+      area->next = _parent->_header->area_list_head_single;
+      _parent->_header->area_list_head_single = _parent->_storage.resolve(area);
+      _parent->make_dirty(area);
+      _parent->make_dirty(_parent->_header);
+      _parent->flush();
+      return area;
     }
 
     // Free a page using hash_control.hash_mem_manager
     void free(page_ptr page) {
       auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
-      hash_mem.free(page, *_parent);
+      hash_mem.free(page, *this);
     }
+
+    // Allocate a slot page from hash_mem_manager.
+    // Called by _GarbageSlot::push when it needs a new PageContainer.
+    page_ptr alloc_slot(uint16_t slot) {
+      auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
+      return hash_mem.alloc(slot, *this);
+    }
+
+    // Hash trie nodes are freed explicitly by _HashUpdater when stale —
+    // they are always safe to recycle immediately.
+    template <typename T>
+    bool may_recycle(T&) const { return true; }
+
+    // No transaction tracking needed for hash nodes.
+    template <typename T>
+    void mark_for_recycle(T&) const {}
 
     // Make page dirty (for persistence)
     void make_dirty(page_ptr page) { _parent->make_dirty(page); }
@@ -213,10 +241,12 @@ struct _ReplicationDB
   HashDB hash_db() { return HashDB(this); }
 
   // Get hash root pointer for main trie
-  offset_e* hash_root_ptr() { return &this->_header->hash_control.hash_root; }
+  auto* hash_root_ptr() { return &this->_header->hash_control.hash_root; }
 
   // Get hash root pointer for deletion trie
-  offset_e* deletion_hash_root_ptr() { return &this->_header->hash_control.deletion_hash_root; }
+  auto* deletion_hash_root_ptr() {
+    return &this->_header->hash_control.deletion_hash_root;
+  }
 
   // Inherit constructors
   using Base::Base;
@@ -241,12 +271,13 @@ struct _ReplicationDB
 
     // Allocate a separate area for hash trie memory management
     auto hash_area = this->_storage.alloc_single_area();
-    this->_header->hash_control.hash_mem_manager.init(hash_area->content_offset(),
-                                                      hash_area->end());
+    this->_header->hash_control.hash_mem_manager.init(
+        hash_area->content_offset(), hash_area->end());
     this->_header->hash_control.hash_root = 0;
     this->_header->hash_control.deletion_hash_root = 0;
     this->_header->hash_control.reset();
-    this->_header->hash_control.hashed_txn_offset.store(0, std::memory_order_relaxed);
+    this->_header->hash_control.hashed_txn_offset.store(
+        0, std::memory_order_relaxed);
 
     this->make_dirty(this->_header);
   }
@@ -346,7 +377,8 @@ struct _ReplicationDB
       if (prev == 0) {
         // First FSM: update hash trie if stale
         txn_ptr current = this->txn_ref();
-        uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_relaxed);
+        uint64_t htxn_off =
+            hc.hashed_txn_offset.load(std::memory_order_relaxed);
         bool needs_update = (htxn_off == 0);
         if (!needs_update) {
           offset_t off(htxn_off);
@@ -356,8 +388,9 @@ struct _ReplicationDB
         if (needs_update) {
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*current);
-          update_hash_trie(this, &hdb, current->root,       &hc.hash_root);
-          update_hash_trie(this, &hdb, rtxn->deletion_root, &hc.deletion_hash_root);
+          update_hash_trie(this, &hdb, current->root, &hc.hash_root);
+          update_hash_trie(this, &hdb, rtxn->deletion_root,
+                           &hc.deletion_hash_root);
           hc.hashed_txn_offset.store((uint64_t)this->resolve(current),
                                      std::memory_order_release);
         }
@@ -369,7 +402,8 @@ struct _ReplicationDB
     uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_acquire);
     txn_ptr pinned = this->txn_ref_at(offset_t(htxn_off));
     if (!pinned) {
-      // Cleaned between update and pin — fall back to current, force recompute next time
+      // Cleaned between update and pin — fall back to current, force recompute
+      // next time
       hc.hashed_txn_offset.store(0, std::memory_order_relaxed);
       pinned = this->txn_ref();
     }
@@ -377,12 +411,13 @@ struct _ReplicationDB
   }
 
   // Release a replication session acquired via acquire_hash_trie().
+  // Idempotent: safe to call even if pinned is null (no-op).
   void release_hash_trie(txn_ptr& pinned) {
-    if (pinned) {
-      pinned->refs.fetch_sub(1, std::memory_order_acq_rel);
-      pinned.reset();
-    }
-    this->_header->hash_control.ref_count.fetch_sub(1, std::memory_order_acq_rel);
+    if (!pinned) return;
+    pinned->refs.fetch_sub(1, std::memory_order_acq_rel);
+    pinned.reset();
+    this->_header->hash_control.ref_count.fetch_sub(1,
+                                                    std::memory_order_acq_rel);
   }
 
   void _sanitize_replication_anchors() {

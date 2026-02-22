@@ -126,6 +126,10 @@
         "jobs": true,
         "./test_hash_updater": true,
         "./build/test_hash_updater": true,
-        "/tmp/test_hash_debug": true
+        "/tmp/test_hash_debug": true,
+        "/^python3 -c \"\nwith open\\('/home/michael/src/leaves/tests/test_replication_fsm\\.cpp', 'a'\\) as f:\n    f\\.write\\('\\\\n#endif  // closes SKIP_REPLICATION_TESTS\\\\n'\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

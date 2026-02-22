@@ -30,6 +30,10 @@ struct _TransferTrie {
     typedef boost::endian::little_uint16_t uint16_e;
     typedef boost::endian::little_uint64_t uint64_e;
     typedef _Offset<boost::endian::little_uint64_t> offset_e;
+    // Wire nodes live in a flat buffer - use a large sentinel PAGE_SIZES
+    // so _LeafNode<Traits>::MAX_SIZE can hold any wire leaf.
+    static constexpr uint16_t PAGE_SIZES[] = {65534};
+    static constexpr uint16_t PAGE_SIZES_COUNT = 1;
   };
 
   // Wire format node types
@@ -43,45 +47,54 @@ struct _TransferTrie {
     using Pointer = SimplePointer<T, type>;
 
     static constexpr size_t MAX_KEY_SIZE = WIRE_MAX_KEY_SIZE;
-    struct DB;  // Forward declaration
-  };
+    // Stub page management types — wire format is read-only;
+    // write paths in _Cursor / _Transition will never be called.
+    struct PageHeader {};
+    using ptr = SimplePointer<PageHeader, TRIE>;
 
-  // DB: Read-only DB adapter for wire format nodes
-  // Allows using _Cursor to navigate with relative offsets
-  struct DB {
-    using Traits = DBTraits;
-    using offset_e = typename Traits::offset_e;
+    // DB: Read-only DB adapter for wire format nodes.
+    // Allows using _Cursor to navigate with relative offsets.
+    // Defined inside DBTraits so that DBTraits::DB is a complete type for _Cursor.
+    struct DB {
+      using Traits = DBTraits;
+      using offset_e = typename Traits::offset_e;
 
-    // Resolve offset to node pointer using relative addressing
-    template <typename T>
-    typename Traits::template Pointer<T> resolve(const offset_e* offset) const {
-      if (*offset == 0) {
-        return nullptr;  // Null pointer for zero offset
+      // Resolve offset to node pointer using relative addressing
+      template <typename T>
+      typename Traits::template Pointer<T> resolve(const offset_e* offset) const {
+        if (*offset == 0) {
+          return nullptr;  // Null pointer for zero offset
+        }
+        return typename Traits::template Pointer<T>(offset->template resolve<char>());
       }
-      return typename Traits::template Pointer<T>(offset->template resolve<char>());
-    }
 
-    // Overload with Access parameter (ignored for temp DB)
-    template <typename T>
-    typename Traits::template Pointer<T> resolve(const offset_e* offset, Access) const {
-      return resolve<T>(offset);
-    }
+      // Overload with Access parameter (ignored for temp DB)
+      template <typename T>
+      typename Traits::template Pointer<T> resolve(const offset_e* offset, Access) const {
+        return resolve<T>(offset);
+      }
 
-    // Resolve pointer to offset (for _Dumper compatibility)
-    template <typename T>
-    offset_e resolve(typename Traits::template Pointer<T> ptr) const {
-      return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
-    }
+      // Resolve pointer to offset (for _Dumper compatibility)
+      template <typename T>
+      offset_e resolve(typename Traits::template Pointer<T> ptr) const {
+        return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
+      }
 
-    // Overload for leaf_ptr (SimplePointer with LEAF type)
-    template <typename T>
-    offset_e resolve(typename Traits::template Pointer<T, LEAF> ptr) const {
-      return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
-    }
+      // Overload for leaf_ptr (SimplePointer with LEAF type)
+      template <typename T>
+      offset_e resolve(typename Traits::template Pointer<T, LEAF> ptr) const {
+        return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
+      }
 
-    // Prefetch is a no-op for temp DB
-    void prefetch(const offset_e*, int = 0) const {}
+      // Prefetch is a no-op for temp DB
+      void prefetch(const offset_e*, int = 0) const {}
+    };
   };
+
+  // DB: convenience alias so external code can still spell _TransferTrie<>::DB
+  using DB = typename DBTraits::DB;
+
+  // (old outer struct DB removed — definition is now DBTraits::DB above)
 
   std::vector<uint8_t>& _buffer;  // External buffer, not owned
   size_t _grow_delta;

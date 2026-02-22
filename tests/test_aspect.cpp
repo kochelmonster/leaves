@@ -23,35 +23,12 @@ using namespace leaves;
 
 // Wait for background hashing to catch up to the current transaction.
 // Call after commit() and before begin() to ensure hashes are available.
-// Uses polling since tests don't have a custom aspect with on_hashes_ready.
+// Hashing is now synchronous: acquire_hash_trie() always updates the hash
+// trie before returning, so there is nothing to poll for.
 template <typename DB>
-void wait_for_hashing(DB* db, int timeout_ms = 5000) {
-  auto start = std::chrono::steady_clock::now();
-  auto timeout = std::chrono::milliseconds(timeout_ms);
-  
-  while (true) {
-    auto hashed = db->hashed_txn();
-    auto current = db->txn();
-    
-    // Check if hashed transaction matches current
-    if (hashed && hashed == current) {
-      return;
-    }
-    
-    // Empty DB is fine
-    if (!current->root) {
-      return;
-    }
-    
-    // Check timeout
-    if (std::chrono::steady_clock::now() - start > timeout) {
-      BOOST_FAIL("Timeout waiting for hashing");
-      return;
-    }
-    
-    // Small sleep to avoid busy loop
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
+  auto hashed = db->acquire_hash_trie();
+  db->release_hash_trie(hashed);
 }
 
 // =============================================================================
@@ -188,9 +165,9 @@ struct _BigMetaTraits : public _MemoryMapTraits {
   typedef BigMetaAspect Aspect;
 };
 
-// For replication tests — inherits from _ReplicationTraits to get hashes
+// For replication tests — uses plain _MemoryMapTraits (no hash on data nodes)
 struct _ReplicationAspectTraits
-    : public _ReplicationTraits<_MemoryMapTraits> {
+    : public _MemoryMapTraits {
   typedef TestAspect Aspect;
 };
 

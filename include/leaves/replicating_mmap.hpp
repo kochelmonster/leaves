@@ -13,7 +13,7 @@
 namespace leaves {
 
 // Replication-enabled memory-mapped storage traits
-typedef _ReplicationTraits<_MemoryMapTraits> _ReplicatingMemoryMapTraits;
+typedef _MemoryMapTraits _ReplicatingMemoryMapTraits;
 
 // Forward-declare so Self_ can refer to it
 template <typename Traits_>

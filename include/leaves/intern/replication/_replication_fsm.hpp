@@ -13,6 +13,7 @@
 #include "../core/_hash.hpp"
 #include "../util/_merger.hpp"
 #include "_transfer.hpp"
+#include "../util/_hash_updater.hpp"
 
 namespace leaves {
 
@@ -97,8 +98,7 @@ enum class ReplicationError : uint8_t {
   INTERNAL_ERROR = 0x04,
   PAYLOAD_TOO_LARGE = 0x05,
   RESOURCE_LIMIT = 0x06,
-  STORAGE_FULL = 0x07,
-  HASHES_NOT_READY = 0x08  // No fully-hashed transaction available yet
+  STORAGE_FULL = 0x07
 };
 
 // =============================================================================
@@ -350,21 +350,9 @@ struct ReplicationSenderFSM {
     _transport = transport;
     _events = events;
 
-    // "Take what you have" — use hashed_txn() if available.
-    // If no hashed transaction exists and DB is non-empty, error.
-    // Never block waiting for hashes.
-    _txn = _db->hashed_txn();
-    if (!_txn) {
-      auto current = _db->txn();
-      if (current->root) {
-        // Non-empty DB with no hashed transaction — cannot replicate yet
-        _transition_to_error(ReplicationError::HASHES_NOT_READY,
-                             "No hashed transaction available");
-        return;
-      }
-      // Empty DB — send nothing (or just sync empty state)
-      _txn = current;
-    }
+    // Acquire the hash trie — updates it synchronously if stale, then pins
+    // the matching txn for the duration of this replication session.
+    _txn = _db->acquire_hash_trie();
     _sender._txn = _txn;
     _state = State::SENDING;
     _total_nodes = 0;
@@ -438,6 +426,7 @@ struct ReplicationSenderFSM {
   void _handle_response(ReplicationMsgType msg_type, const Slice& payload) {
     switch (msg_type) {
       case ReplicationMsgType::COMPLETE:
+        _db->release_hash_trie(_txn);
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
         }
@@ -454,9 +443,9 @@ struct ReplicationSenderFSM {
 
       case ReplicationMsgType::FRACTION_COMPLETE:
         // Receiver merged what it had and wants a fresh round.
-        // Refresh _txn to latest read txn so the sender reads the
-        // current snapshot when restarting from root.
-        _txn = _db->txn();
+        // Re-acquire hash trie so the sender reads an updated snapshot.
+        _db->release_hash_trie(_txn);
+        _txn = _db->acquire_hash_trie();
         _sender._txn = _txn;
         _sender.begin(_db_type);
         _state = State::SENDING;
@@ -699,6 +688,7 @@ struct ReplicationSenderFSM {
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
 
+    _db->release_hash_trie(_txn);
     if (_events) {
       _events->on_complete(_session_id, _total_nodes);
     }
@@ -721,6 +711,7 @@ struct ReplicationSenderFSM {
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
+    _db->release_hash_trie(_txn);
     _state = State::ERROR;
     _error = error;
 
@@ -825,17 +816,6 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
     return true;
   }
 
-  // Called during merge after a trie node is created/merged.
-  // Computes the trie's hash based on its children's hashes.
-  // Only called if sizeof(trie->hash) > 0 (checked by merger).
-  template <typename TriePtr, typename DBType>
-  void after_trie_merged(TriePtr& trie, DBType* db) {
-    constexpr size_t HASH_SIZE = sizeof(trie->hash);
-    if constexpr (HASH_SIZE > 0) {
-      hash_trie_node(db, trie);
-    }
-  }
-
   // Migrate big value from source to destination
   // Returns a MigratedValue with the pre-allocated destination offset
   // Overrides StandardMergePolicy::migrate_big_value for wire format big values
@@ -871,6 +851,8 @@ template <typename DB, typename MergePolicy = ReplicationMergePolicy<DB>>
 struct ReplicationReceiverFSM {
   using Traits = typename DB::Traits;
   using Transfer = ReplicationTransferTrie<>;
+  using WireTempTraits = typename Transfer::DBTraits;
+  using WireTempDB = typename Transfer::DB;
   using TrieNode = _TrieNode<Traits>;
   using LeafNode = _LeafNode<Traits>;
   using offset_e = typename Traits::offset_e;
@@ -883,6 +865,10 @@ struct ReplicationReceiverFSM {
   using TempLeafNode =
       _LeafNode<WireTempTraits>;  // Temp DB leaf node (native layout)
   using LocalCursor = typename DB::Cursor;
+  // Hash trie node types (hash stored outside data trie)
+  using HashTraits_ = HashTrieTraits<Traits>;
+  using HashTrieNode_ = _TrieNode<HashTraits_>;
+  using HashLeafNode_ = _LeafNode<HashTraits_>;
 
   // Dummy struct for raw data pointers (similar to BigMemory::Chunk)
   struct Chunk {};
@@ -1101,21 +1087,9 @@ struct ReplicationReceiverFSM {
     _transport = transport;
     _events = events;
 
-    // "Take what you have" — use hashed_txn() if available.
-    // If no hashed transaction exists and DB is non-empty, error.
-    // Never block waiting for hashes.
-    _txn = _db->hashed_txn();
-    if (!_txn) {
-      auto current = _db->txn();
-      if (current->root) {
-        // Non-empty DB with no hashed transaction — cannot replicate yet
-        _transition_to_error(ReplicationError::HASHES_NOT_READY,
-                             "No hashed transaction available");
-        return;
-      }
-      // Empty DB — accept all sender data
-      _txn = current;
-    }
+    // Acquire the hash trie — updates it synchronously if stale, then pins
+    // the matching txn for the duration of this replication session.
+    _txn = _db->acquire_hash_trie();
     _state = State::RECEIVING;
     _session_id = 0;  // Will be set from first message
     _total_nodes = 0;
@@ -1283,6 +1257,7 @@ struct ReplicationReceiverFSM {
         if (!_merge_all_phases()) break;  // error already reported
         _release_slot();
         _free_temp_buffers();
+        _db->release_hash_trie(_txn);
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
         }
@@ -1290,6 +1265,7 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::ERROR:
+        _db->release_hash_trie(_txn);
         _state = State::ERROR;
         _error = payload.size() > 0
                      ? static_cast<ReplicationError>(payload.data()[0])
@@ -1620,39 +1596,6 @@ struct ReplicationReceiverFSM {
     _send_prune_ack();
   }
 
-  // Get pointer to the original offset at a path (what we had before receiving)
-  // Returns pointer to offset for future relative offset handling compatibility
-  // expected_type: the wire node's type (LEAF or TRIE) — used to disambiguate
-  // NONE-branch leaves from their parent trie node which share the same path.
-  const offset_t* _get_original_node(const Slice& path, uint8_t expected_type) {
-    if (path.empty()) {
-      return *_cursor->_root ? _cursor->_root : nullptr;
-    }
-
-    // Navigate to path in local trie using cursor
-    _cursor->find(path);
-
-    if (_cursor->stack.size == 0) {
-      return nullptr;  // Path doesn't exist locally
-    }
-
-    auto& trans = _cursor->stack.back();
-    if (!trans.offset || !*trans.offset) {
-      return nullptr;  // No node at this path
-    }
-
-    // Wire node is a NONE-branch leaf but cursor landed on the parent trie
-    // (they share the same path).  Resolve the trie's NONE child instead.
-    if (expected_type == LEAF && trans.offset->type() == TRIE) {
-      auto trie = _db->template resolve<TrieNode>(trans.offset);
-      auto* none_child = trie->offset(TrieNode::NONE);
-      return none_child ? reinterpret_cast<const offset_t*>(none_child)
-                        : nullptr;
-    }
-
-    return trans.offset;
-  }
-
   int get_branch_key(const TempOffset* subtrie_root) {
     if (subtrie_root->type() == TRIE) {
       auto* temp_trie = subtrie_root->template resolve<TempTrieNode>();
@@ -1774,18 +1717,15 @@ struct ReplicationReceiverFSM {
     size_t path_len = path.size();
     if (branch_key != TempTrieNode::NONE) path.push_back((char)branch_key);
 
-    auto* local_offset = _get_original_node(Slice(path), wire_node->type());
-    // Compare with local
-    if (local_offset) {
-      const uint8_t* local_hash = _get_local_hash(local_offset);
-      if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
-        // Hashes match - tell sender to prune, set the offset 0 to avoid
-        // merging
-        *wire_node = 0;
-        _prune_paths.push_back(path);
-        path.resize(path_len);
-        return true;
-      }
+    // Compare hash from hash trie at this path
+    const uint8_t* local_hash = _get_local_hash(path, wire_node->type());
+    if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
+      // Hashes match - tell sender to prune, set the offset 0 to avoid
+      // merging
+      *wire_node = 0;
+      _prune_paths.push_back(path);
+      path.resize(path_len);
+      return true;
     }
 
     path.resize(path_len);
@@ -1864,11 +1804,62 @@ struct ReplicationReceiverFSM {
     return true;
   }
 
-  const uint8_t* _get_local_hash(const offset_t* offset) {
-    if (offset->type() == LEAF)
-      return _db->template resolve<LeafNode>(offset)->hash;
+  // Walk the hash trie to find the hash for the node at `path`.
+  // expected_type: LEAF or TRIE — if LEAF and the path ends on a trie node,
+  //   resolve the NONE-branch child (value stored at key == path prefix).
+  const uint8_t* _get_local_hash(const std::string& path,
+                                  uint8_t expected_type) {
+    auto& hc = _db->_header->hash_control;
+    auto* cur = (_current_db_type == DbType::DB_DELETION)
+                    ? &hc.deletion_hash_root
+                    : &hc.hash_root;
+    if (!*cur) return nullptr;
 
-    return _db->template resolve<TrieNode>(offset)->hash;
+    size_t pos = 0;
+    while (*cur) {
+      if (cur->type() == LEAF) {
+        auto leaf = _db->template resolve<HashLeafNode_>(cur);
+        size_t remaining = path.size() - pos;
+        size_t ksize = leaf->key().size();
+        if (remaining == ksize &&
+            (ksize == 0 ||
+             std::memcmp(leaf->key().data(), path.data() + pos, ksize) == 0))
+          return leaf->hash;
+        return nullptr;
+      }
+      // TRIE node
+      auto node = _db->template resolve<HashTrieNode_>(cur);
+      uint8_t clen = node->len();
+      size_t remaining = path.size() - pos;
+      if (clen > remaining) {
+        // Path ends partway through this trie's compressed portion.
+        // The hash belongs to this TRIE subtree.
+        if (expected_type == TRIE &&
+            std::memcmp(node->compressed(), path.data() + pos, remaining) == 0)
+          return node->hash;
+        return nullptr;
+      }
+      if (clen > 0) {
+        if (std::memcmp(node->compressed(), path.data() + pos, clen) != 0)
+          return nullptr;
+        pos += clen;
+      }
+      if (pos == path.size()) {
+        if (expected_type == TRIE) return node->hash;
+        // expected LEAF — look for NONE-branch child (key stored at this prefix)
+        auto* none_child = node->offset(HashTrieNode_::NONE);
+        if (!none_child || !*none_child) return nullptr;
+        if (none_child->type() == LEAF) {
+          auto leaf2 = _db->template resolve<HashLeafNode_>(none_child);
+          if (leaf2->key().size() == 0) return leaf2->hash;
+        }
+        return nullptr;
+      }
+      uint8_t branch = static_cast<uint8_t>(path[pos++]);
+      cur = node->offset(branch);
+      if (!cur) return nullptr;
+    }
+    return nullptr;
   }
 
   // Handle transition from one db_type to another (e.g., DB_MAIN → DB_DELETION)
@@ -2014,10 +2005,6 @@ struct ReplicationReceiverFSM {
       }
 
       _cursor->commit();
-
-      // Update hashed_txn_offset so the merged state becomes "last hashed".
-      // Hashes were computed inline during merge via after_trie_merged.
-      _update_hashed_txn();
     } catch (const StorageFull&) {
       _cursor->rollback();
       _transition_to_error(ReplicationError::STORAGE_FULL,
@@ -2112,25 +2099,6 @@ struct ReplicationReceiverFSM {
     _db->flush();
   }
 
-  // Update hashed_txn_offset after merge commits.
-  // The merged state becomes the "last hashed" txn. Hashes were computed
-  // inline during merge via after_trie_merged.
-  void _update_hashed_txn() {
-    if constexpr (requires { _db->_header->hashed_txn_offset; }) {
-      auto txn = _db->txn();
-
-      offset_t txn_offset = _db->resolve(txn);
-      _db->_header->hashed_txn_offset.store(txn_offset, std::memory_order_release);
-      _db->_header->last_hashed_txn_id.store(txn->txn_id, std::memory_order_release);
-      _db->make_dirty(_db->_header);
-      _db->flush(false, false);
-
-      if constexpr (requires { _db->_aspect.on_hashes_ready(_db, txn->txn_id); }) {
-        _db->_aspect.on_hashes_ready(_db, txn->txn_id);
-      }
-    }
-  }
-
   // Release the replication slot.  If it still holds a non-zero offset
   // (error path — area was never merged), return it to the pool first.
   // Sole-owner operation — no lock needed; atomic store for visibility.
@@ -2176,8 +2144,11 @@ struct ReplicationReceiverFSM {
   // Always commits — the next round needs to see the merged state.
   void _send_fraction_complete() {
     // Merge all accumulated data (deferred + current) in one transaction.
-    // _update_hashed_txn() is called inside _merge_all_phases().
     if (!_merge_all_phases()) return;  // error already reported
+
+    // Re-acquire hash trie so next round sees the freshly merged state.
+    _db->release_hash_trie(_txn);
+    _txn = _db->acquire_hash_trie();
 
     // Reset temp DB for the next fraction
     _free_temp_buffers();
@@ -2192,6 +2163,7 @@ struct ReplicationReceiverFSM {
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
+    _db->release_hash_trie(_txn);
     _state = State::ERROR;
     _error = error;
 
