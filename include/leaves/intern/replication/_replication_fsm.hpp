@@ -287,7 +287,7 @@ template <typename DB>
 struct ReplicationSenderFSM {
   using Traits = typename DB::Traits;
   using Sender = TransferTrieSender<DB>;
-  using Transfer = TransferTrie<Traits>;
+  using Transfer = ReplicationTransferTrie<>;
 
   enum class State {
     IDLE,                          // Not started
@@ -870,7 +870,7 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
 template <typename DB, typename MergePolicy = ReplicationMergePolicy<DB>>
 struct ReplicationReceiverFSM {
   using Traits = typename DB::Traits;
-  using Transfer = TransferTrie<Traits>;
+  using Transfer = ReplicationTransferTrie<>;
   using TrieNode = _TrieNode<Traits>;
   using LeafNode = _LeafNode<Traits>;
   using offset_e = typename Traits::offset_e;

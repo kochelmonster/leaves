@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <thread>
 
 #include "../db/_db.hpp"
 
@@ -53,6 +54,66 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   MemManager hash_mem_manager;
   offset_e hash_root;
   offset_e deletion_hash_root;
+
+  // Hash trie synchronization — atomic-only, works in both mmap and CacheStore.
+  // update_lock: 0 = free, 1 = update in progress (CAS spin lock)
+  // ref_count: number of active replication sessions using this hash trie
+  // hashed_txn_offset: offset of the txn whose data matches the current hash trie
+  //
+  // Invariant: hash trie and hashed_txn_offset are consistent whenever
+  // update_lock == 0.  Readers must wait for update_lock == 0 before reading.
+  //
+  // These are lock-free on x86/ARM for uint32_t/uint64_t, so they work
+  // correctly in shared memory (mmap multi-process) and in-process (CacheStore).
+  struct HashTrieControl {
+    std::atomic<uint32_t> update_lock;       // CAS spin lock for hash update
+    std::atomic<uint32_t> ref_count;         // Active replication session count
+    std::atomic<uint64_t> hashed_txn_offset; // Txn offset matching hash trie
+
+    void reset() noexcept {
+      update_lock.store(0, std::memory_order_relaxed);
+      ref_count.store(0, std::memory_order_relaxed);
+      // hashed_txn_offset intentionally preserved: still valid after reopen
+    }
+
+    // Acquire update lock (spin). Returns when no other updater is active.
+    // Precondition: caller already ensured ref_count == 0 or is the only user.
+    void acquire_update() noexcept {
+      uint32_t expected = 0;
+      while (!update_lock.compare_exchange_weak(expected, 1,
+                                                std::memory_order_acquire,
+                                                std::memory_order_relaxed))
+        expected = 0;
+    }
+
+    // Release update lock.
+    void release_update() noexcept {
+      update_lock.store(0, std::memory_order_release);
+    }
+
+    // Wait until no update is in progress (spin). Call before starting
+    // replication to ensure hash trie and hashed_txn_offset are consistent.
+    void wait_for_update() const noexcept {
+      while (update_lock.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    }
+
+    // Increment ref count and wait for any in-progress update to finish.
+    void start_replication() noexcept {
+      ref_count.fetch_add(1, std::memory_order_acq_rel);
+      wait_for_update();
+    }
+
+    // Decrement ref count when replication session ends.
+    void finish_replication() noexcept {
+      ref_count.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    // True if someone else is actively replicating (hash trie in use).
+    bool is_in_use() const noexcept {
+      return ref_count.load(std::memory_order_acquire) > 0;
+    }
+  } hash_control;
 
   // Each slot holds the offset of one pre-merge multi-area.
   // 0 = slot is free, SENTINEL = claimed but no area yet.
@@ -222,6 +283,11 @@ struct _ReplicationDB
                                          hash_area->end());
     this->_header->hash_root = 0;
     this->_header->deletion_hash_root = 0;
+
+    // Initialize hash trie synchronization primitives
+    this->_header->hash_control.reset();
+    this->_header->hash_control.hashed_txn_offset.store(0, std::memory_order_relaxed);
+
     this->make_dirty(this->_header);
   }
 
@@ -275,6 +341,10 @@ struct _ReplicationDB
   // Override sanitize() to also recover orphaned replication anchors.
   void sanitize() {
     Base::sanitize();
+
+    // Reset hash trie synchronization primitives (stale lock/ref after reopen)
+    this->_header->hash_control.reset();
+
     _sanitize_replication_anchors();
     this->flush();
   }
