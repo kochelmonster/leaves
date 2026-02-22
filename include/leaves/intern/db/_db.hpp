@@ -92,6 +92,7 @@ struct _DBHeader {
   Mutex txn_lock;
   std::atomic<uint64_t>
       txn_cursor_id;  // the id of the cursor holding the transaction
+  SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
 
   // Atomic area management - no AreaList objects, just head pointers
   // Areas are linked lists in storage, operations use atomic head/tail pattern
@@ -199,6 +200,7 @@ struct _DB {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex();
+    new (&_header->txn_ref_lock) SpinLock();
 
     // Initialize area lists with the first allocated area (area_ptr)
     offset_t first_area_offset = _storage.resolve(area_ptr);
@@ -390,6 +392,16 @@ struct _DB {
 
   txn_ptr txn() const { return resolve<Transaction>(&_header->read_txn); }
 
+  // Atomically resolve current read txn and increment its refcount.
+  // Uses SpinLock to prevent a concurrent start_transaction() from
+  // freeing the txn between resolve and refs.fetch_add().
+  txn_ptr txn_ref() {
+    std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+    txn_ptr t = txn();
+    t->refs.fetch_add(1);
+    return t;
+  }
+
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
   }
@@ -441,16 +453,21 @@ struct _DB {
       _storage.prefetch(&_active_txn->mem_manager.slots[i]);
     }
 
-    // find the oldest used transaction and free unused old transactions
-    iter_transactions([this](txn_ptr txn) -> bool {
-      if (txn->refs.load() > 0) {
-        _active_txn->start_txn = resolve(txn);
-        _start_txn_id = txn->txn_id;
-        return true;
-      }
-      free(txn);
-      return false;
-    });
+    // Find the oldest used transaction and free unused old transactions.
+    // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
+    // a txn between the refs==0 check and free().
+    {
+      std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+      iter_transactions([this](txn_ptr txn) -> bool {
+        if (txn->refs.load() > 0) {
+          _active_txn->start_txn = resolve(txn);
+          _start_txn_id = txn->txn_id;
+          return true;
+        }
+        free(txn);
+        return false;
+      });
+    }
 
     last_txn->refs.fetch_sub(1);
     return _wtxn;
@@ -636,6 +653,7 @@ struct _DB {
 
   void sanitize() {
     new (&_header->txn_lock) Mutex();
+    new (&_header->txn_ref_lock) SpinLock();
     _header->txn_cursor_id.store(0);
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);

@@ -155,6 +155,29 @@ typedef tid_serial tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
 typedef enum { READ = 0, WRITE = 1 } Access;
 
+// CAS spinlock using TTAS (test-and-test-and-set) pattern.
+// Safe in shared memory (mmap) — uses only hardware atomics, no kernel state.
+struct SpinLock {
+  std::atomic<uint32_t> _flag{0};
+
+  void lock() {
+    while (_flag.exchange(1, std::memory_order_acquire)) {
+      // Spin on load (shared cache line) to reduce bus traffic
+      while (_flag.load(std::memory_order_relaxed)) {
+#if defined(LEAVES_X86_64)
+        _mm_pause();
+#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
+        __yield();
+#elif defined(LEAVES_ARM64)
+        __asm__ __volatile__("yield");
+#endif
+      }
+    }
+  }
+
+  void unlock() { _flag.store(0, std::memory_order_release); }
+};
+
 class Slice {
  private:
   size_t _size;
