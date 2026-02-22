@@ -680,10 +680,7 @@ struct TransferTrieSender {
 
       // Look up data leaf via cursor (reuse stored cursor)
       _cursor->find(Slice(path.data(), path.size()));
-      if (!_cursor->is_valid()) {
-        // Data not found - shouldn't happen if tries are in sync
-        return false;
-      }
+      assert(_cursor->is_valid() && "hash trie entry missing from data trie - corruption");
 
       // Get the data leaf from cursor's stack
       auto& data_trans = _cursor->stack.back();
