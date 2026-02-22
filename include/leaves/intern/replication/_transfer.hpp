@@ -1,114 +1,40 @@
 #ifndef _LEAVES__TRANSFER_HPP
 #define _LEAVES__TRANSFER_HPP
 
-#include <boost/endian/arithmetic.hpp>
-#include <cstdint>
-#include <cstring>
 #include <fstream>
 #include <list>
 #include <random>
 #include <unordered_set>
-#include <vector>
 
-#include "../core/_node.hpp"
-#include "../core/_traits.hpp"
-#include "../core/_util.hpp"
+#include "../core/_hash.hpp"
 #include "../db/_check.hpp"
 #include "../memory/_bigmemory.hpp"
+#include "../util/_hash_updater.hpp"
+#include "../util/_transfer_trie.hpp"
 
 namespace leaves {
 
-// Wire format traits for TransferTrie nodes
-// Uses explicit little-endian types for cross-platform compatibility
-struct WireFormatTraits {
-  typedef uint8_t hash_t[HASH_SIZE];
-  typedef boost::endian::little_uint32_t uint32_e;
-  typedef boost::endian::little_uint16_t uint16_e;
-  typedef boost::endian::little_uint64_t uint64_e;
-  typedef _Offset<boost::endian::little_uint64_t> offset_e;
-};
-
-// Wire format node types for external access (reading node contents)
-using WireTrieNode = _TrieNode<WireFormatTraits>;
-using WireLeafNode = _LeafNode<WireFormatTraits>;
-using WireOffset = WireFormatTraits::offset_e;
-
-// Wire format constants
-constexpr uint32_t TRANSFER_MAGIC = 0x4C565354;  // "LVST" little-endian
-constexpr uint16_t TRANSFER_VERSION = 0x0001;
-
-// WireTempTraits: Traits for navigating temp DB nodes with _Cursor
-// Inherits little-endian types from WireFormatTraits for cross-platform
-// compatibility. TransferTrie nodes are stored in wire format with explicit
-// endian conversion.
-struct WireTempTraits : public WireFormatTraits {
-  struct PageHeader {
-    uint16_e used;
-    uint8_t slot_id;
-  };
-
-  template <typename T, NodeTypes type = TRIE>
-  using Pointer = SimplePointer<T, type>;
-  using ptr = SimplePointer<PageHeader, TRIE>;
-
-  static constexpr size_t MAX_KEY_SIZE = 8192;
-  struct DB;  // Forward declaration
-};
-
-// WireTempDB: Read-only DB adapter for wire format nodes
-// Allows using _Cursor to navigate temp DB with relative offsets
-struct WireTempTraits::DB {
-  using Traits = WireTempTraits;
-  using offset_e = typename Traits::offset_e;
-
-  // Resolve offset to node pointer using relative addressing
-  template <typename T>
-  Traits::Pointer<T> resolve(const offset_e* offset) const {
-    if (*offset == 0) {
-      return nullptr;  // Null pointer for zero offset
-    }
-    return Traits::Pointer<T>(offset->resolve<char>());
-  }
-
-  // Overload with Access parameter (ignored for temp DB)
-  template <typename T>
-  Traits::Pointer<T> resolve(const offset_e* offset, Access) const {
-    return resolve<T>(offset);
-  }
-
-  // Resolve pointer to offset (for _Dumper compatibility)
-  template <typename T>
-  offset_e resolve(Traits::Pointer<T> ptr) const {
-    // Return absolute address as offset
-    return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
-  }
-
-  // Overload for leaf_ptr (SimplePointer with LEAF type)
-  template <typename T>
-  offset_e resolve(Traits::Pointer<T, LEAF> ptr) const {
-    // Return absolute address as offset
-    return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
-  }
-
-  // Prefetch is a no-op for temp DB
-  void prefetch(const offset_e*, int = 0) const {}
-};
-
-using WireTempDB = WireTempTraits::DB;
-
-// Database type identifiers
+// Database type identifiers for replication
 enum class DbType : uint8_t { DB_MAIN = 0x00, DB_DELETION = 0x01 };
 
-// Wire format header for TransferTrie messages
+// Wire format constants for replication protocol
+constexpr uint32_t REPLICATION_TRANSFER_MAGIC = 0x4C565354;  // "LVST" little-endian
+constexpr uint16_t REPLICATION_TRANSFER_VERSION = 0x0001;
+
+// Backward compatibility aliases
+constexpr uint32_t TRANSFER_MAGIC = REPLICATION_TRANSFER_MAGIC;
+constexpr uint16_t TRANSFER_VERSION = REPLICATION_TRANSFER_VERSION;
+
+// Wire format header for replication transfer messages
 // All multi-byte fields are little-endian
 // Nodes are stored in pre-order DFS (parent before children)
 // The root is the FIRST node in the buffer
 #pragma pack(push, 1)
-struct TransferTrieHeader {
+struct ReplicationTransferHeader {
   boost::endian::little_uint32_t magic;
   boost::endian::little_uint16_t version;
   boost::endian::little_uint16_t subtrie_path_len;
-  WireFormatTraits::offset_e root;  // aligned 8
+  _Offset<boost::endian::little_uint64_t> root;  // aligned 8
   boost::endian::little_uint32_t node_count;
   boost::endian::little_uint64_t total_size;
   boost::endian::little_uint64_t session_id;
@@ -117,34 +43,44 @@ struct TransferTrieHeader {
   // Followed by: subtrie_path bytes (variable), then nodes in post-order
 
   bool is_valid() const {
-    return magic == TRANSFER_MAGIC && version == TRANSFER_VERSION;
+    return magic == REPLICATION_TRANSFER_MAGIC && version == REPLICATION_TRANSFER_VERSION;
   }
 };
 #pragma pack(pop)
 
-static_assert(sizeof(TransferTrieHeader) == 45,
-              "TransferTrieHeader must be 45 bytes");
+static_assert(sizeof(ReplicationTransferHeader) == 45,
+              "ReplicationTransferHeader must be 45 bytes");
 
-// TransferTrie buffer for serializing/deserializing trie nodes
-// Used by sender to build transfer messages and receiver to parse them
-// SrcTraits: The source database traits (platform-native format)
-// Nodes are stored in wire format (WireFormatTraits) for cross-platform
-// transfer
-template <typename SrcTraits>
-struct TransferTrie {
-  using SrcTrieNode = _TrieNode<SrcTraits>;
-  using SrcLeafNode = _LeafNode<SrcTraits>;
-  using TrieNode = WireTrieNode;
+// Backward compatibility alias
+using TransferTrieHeader = ReplicationTransferHeader;
+
+// Private base to hold buffer before TransferTrie base initialization
+struct ReplicationTransferTrieBufferHolder {
+  std::vector<uint8_t> _buffer;
+};
+
+// ReplicationTransferTrie: Serializes trie nodes for replication transfer.
+// Manages header and protocol framing, inherits node storage from _TransferTrie.
+//
+// WIRE_MAX_KEY_SIZE: Maximum key size for cursor navigation (default 8192)
+template <size_t WIRE_MAX_KEY_SIZE = 8192>
+struct ReplicationTransferTrie
+    : private ReplicationTransferTrieBufferHolder,
+      public _TransferTrie<HASH_SIZE, WIRE_MAX_KEY_SIZE> {
+  using Base = _TransferTrie<HASH_SIZE, WIRE_MAX_KEY_SIZE>;
+  using TrieNode = typename Base::TrieNode;
+  using LeafNode = typename Base::LeafNode;
 
   static constexpr size_t DEFAULT_MAX_SIZE = 1024 * 1024;  // 1MB
 
-  std::vector<uint8_t> _buffer;
-  size_t _max_size;
-  size_t _node_count;
+  size_t _header_size;
   bool _finalized;
   bool full;
-  explicit TransferTrie(size_t max_size = DEFAULT_MAX_SIZE)
-      : _max_size(max_size), _node_count(0), _finalized(false), full(false) {
+
+  explicit ReplicationTransferTrie(size_t max_size = DEFAULT_MAX_SIZE)
+      : ReplicationTransferTrieBufferHolder(),
+        Base(_buffer, 0),  // grow_delta=0: don't grow, bail out
+        _header_size(0), _finalized(false), full(false) {
     _buffer.reserve(max_size);
   }
 
@@ -157,20 +93,19 @@ struct TransferTrie {
   // Initialize buffer with header for sending
   void begin(uint64_t session_id, uint64_t snapshot_id, DbType db_type,
              const Slice& subtrie_path) {
-    _buffer.clear();
-    _node_count = 0;
+    Base::clear();
     _finalized = false;
     full = false;
 
     // Reserve space for header + subtrie_path, aligned to 8 bytes for nodes
-    size_t raw_header_size = sizeof(TransferTrieHeader) + subtrie_path.size();
-    size_t header_size = (raw_header_size + 7) & ~size_t(7);  // Align to 8
-    _buffer.resize(header_size, 0);  // Zero-pad alignment bytes
+    size_t raw_header_size = sizeof(ReplicationTransferHeader) + subtrie_path.size();
+    _header_size = (raw_header_size + 7) & ~size_t(7);  // Align to 8
+    _buffer.resize(_header_size, 0);  // Zero-pad alignment bytes
 
     // Write header (node_count and total_size will be updated in finalize)
-    auto* hdr = reinterpret_cast<TransferTrieHeader*>(_buffer.data());
-    hdr->magic = TRANSFER_MAGIC;
-    hdr->version = TRANSFER_VERSION;
+    auto* hdr = reinterpret_cast<ReplicationTransferHeader*>(_buffer.data());
+    hdr->magic = REPLICATION_TRANSFER_MAGIC;
+    hdr->version = REPLICATION_TRANSFER_VERSION;
     hdr->db_type = static_cast<uint8_t>(db_type);
     hdr->node_count = 0;
     hdr->total_size = 0;
@@ -180,108 +115,70 @@ struct TransferTrie {
 
     // Write subtrie path
     if (!subtrie_path.empty()) {
-      std::memcpy(_buffer.data() + sizeof(TransferTrieHeader),
+      std::memcpy(_buffer.data() + sizeof(ReplicationTransferHeader),
                   subtrie_path.data(), subtrie_path.size());
     }
   }
 
   // Add a source trie node to the buffer (converts to wire format)
   // Returns pointer to copied wire-format node, or nullptr if doesn't fit
+  template <typename SrcTrieNode>
   TrieNode* add_trie_node(const SrcTrieNode* src) {
-    uint8_t* dest_ptr = add_node(TRIE, (const uint8_t*)src, src->size());
-    if (!dest_ptr) return nullptr;
-
-    auto* dest = (TrieNode*)dest_ptr;
-    // Overwrite endian-aware fields with explicit conversion
-    dest->_array_len = static_cast<uint16_t>(src->_array_len);
-
-    // Overwrite lower bitmap with endian conversion
-    auto* src_lower = src->lower();
-    auto* dest_lower = dest->lower();
-    int lower_count = bits::count(src->_upper);
-    for (int i = 0; i < lower_count; ++i) {
-      dest_lower[i] = src_lower[i];
-    }
-
-    // Zero out offset array (will be filled by _write_subtree)
-    std::memset(dest->array(), 0, dest->array_size());
-    return dest;
-  }
-
-  // Add a source leaf node to the buffer (converts to wire format)
-  // Returns pointer to copied data, or nullptr if doesn't fit
-  uint8_t* add_leaf_node(const SrcLeafNode* src) {
-    uint8_t* dest_ptr = add_node(LEAF, (const uint8_t*)src, src->size());
-    if (!dest_ptr) return nullptr;
-
-    auto* dest = (WireLeafNode*)dest_ptr;
-
-    // Overwrite endian-aware field with explicit conversion
-    dest->value_size = src->value_size;
-    return dest_ptr;
-  }
-
-  // Add raw node data with specified type (base method)
-  // Performs memcpy without endian conversion - used by
-  // add_trie_node/add_leaf_node Returns pointer to copied node data, or nullptr
-  // if doesn't fit Nodes are aligned to 8 bytes for relative offset
-  // compatibility
-  uint8_t* add_node(NodeTypes type, const uint8_t* data, uint16_t size) {
-    if (_finalized) return nullptr;
-
-    // Align current position to 8 bytes
-    size_t current_pos = _buffer.size();
-    size_t aligned_pos = (current_pos + 7) & ~size_t(7);
-    size_t padding = aligned_pos - current_pos;
-
-    if (aligned_pos + size > _max_size) {
+    auto* result = Base::add_trie_node(src);
+    if (!result) {
       full = true;
       return nullptr;
     }
 
-    // Add padding bytes if needed
-    if (padding > 0) {
-      _buffer.resize(aligned_pos, 0);
+    // Track first node (root is first in pre-order DFS)
+    if (Base::node_count() == 1) {
+      auto* hdr = reinterpret_cast<ReplicationTransferHeader*>(_buffer.data());
+      hdr->root.set_relative(reinterpret_cast<uint8_t*>(result));
+      hdr->root.type(TRIE);
     }
+    return result;
+  }
 
-    size_t offset = _buffer.size();
-    _buffer.resize(offset + size);
-
-    uint8_t* node_dest = _buffer.data() + offset;
-    std::memcpy(node_dest, data, size);
-    ++_node_count;
+  // Add a source leaf node to the buffer (converts to wire format)
+  // Returns pointer to copied node, or nullptr if doesn't fit
+  template <typename SrcLeafNode>
+  LeafNode* add_leaf_node(const SrcLeafNode* src) {
+    auto* result = Base::add_leaf_node(src);
+    if (!result) {
+      full = true;
+      return nullptr;
+    }
 
     // Track first node (root is first in pre-order DFS)
-    if (_node_count == 1) {
-      auto* hdr = reinterpret_cast<TransferTrieHeader*>(_buffer.data());
-      hdr->root.set_relative(node_dest);
-      hdr->root.type(type);
+    if (Base::node_count() == 1) {
+      auto* hdr = reinterpret_cast<ReplicationTransferHeader*>(_buffer.data());
+      hdr->root.set_relative(reinterpret_cast<uint8_t*>(result));
+      hdr->root.type(LEAF);
     }
-
-    return node_dest;
+    return result;
   }
 
   // Remaining capacity in bytes
   size_t remaining_capacity() const {
-    return _max_size > _buffer.size() ? _max_size - _buffer.size() : 0;
+    return _buffer.capacity() > _buffer.size() ? _buffer.capacity() - _buffer.size() : 0;
   }
 
   // Current buffer size
   size_t size() const { return _buffer.size(); }
 
   // Number of nodes added
-  size_t node_count() const { return _node_count; }
+  size_t node_count() const { return Base::node_count(); }
 
   // Check if buffer is empty (no nodes added)
-  bool empty() const { return _node_count == 0; }
+  bool empty() const { return Base::node_count() == 0; }
 
   // Finalize the buffer, updating header fields
   // Returns the complete buffer as a Slice
   Slice finalize() {
     if (_buffer.empty()) return Slice();
 
-    auto* hdr = reinterpret_cast<TransferTrieHeader*>(_buffer.data());
-    hdr->node_count = static_cast<uint32_t>(_node_count);
+    auto* hdr = reinterpret_cast<ReplicationTransferHeader*>(_buffer.data());
+    hdr->node_count = static_cast<uint32_t>(Base::node_count());
     hdr->total_size = _buffer.size();
     _finalized = true;
 
@@ -290,12 +187,12 @@ struct TransferTrie {
     {
       static int _sb_round = 0;
       std::ofstream out("/tmp/sb-" + std::to_string(_sb_round++) + ".yaml");
-      WireTempDB db;
+      typename Base::DB db;
       struct DumpContainer {
-        using db_type = WireTempDB;
+        using db_type = typename Base::DB;
         struct Cursor {};  // Dummy cursor type
-        const WireTempDB& _db;
-        const WireTempDB* _internal() const { return &_db; }
+        const typename Base::DB& _db;
+        const typename Base::DB* _internal() const { return &_db; }
       } container{db};
       _Dumper<DumpContainer, false> dumper(container, &hdr->root, true);
       dumper.dump(out);
@@ -313,26 +210,26 @@ struct TransferTrie {
   // Parse header from received data
   // Returns pointer to header in buffer, sets out_subtrie_path slice
   // Returns nullptr if invalid
-  static const TransferTrieHeader* parse_header(
+  static const ReplicationTransferHeader* parse_header(
       const Slice& data, Slice* out_subtrie_path = nullptr) {
-    if (data.size() < sizeof(TransferTrieHeader)) {
+    if (data.size() < sizeof(ReplicationTransferHeader)) {
       return nullptr;
     }
 
-    const auto* hdr = reinterpret_cast<const TransferTrieHeader*>(data.data());
+    const auto* hdr = reinterpret_cast<const ReplicationTransferHeader*>(data.data());
 
     if (!hdr->is_valid()) {
       return nullptr;
     }
 
     size_t path_len = hdr->subtrie_path_len;
-    if (data.size() < sizeof(TransferTrieHeader) + path_len) {
+    if (data.size() < sizeof(ReplicationTransferHeader) + path_len) {
       return nullptr;
     }
 
     if (out_subtrie_path) {
       *out_subtrie_path =
-          Slice(data.data() + sizeof(TransferTrieHeader), path_len);
+          Slice(data.data() + sizeof(ReplicationTransferHeader), path_len);
     }
 
     return hdr;
@@ -341,8 +238,8 @@ struct TransferTrie {
   // Get pointer to start of node data in received buffer
   // Nodes are aligned to 8 bytes after header + subtrie_path
   static const uint8_t* nodes_data(const Slice& data,
-                                   const TransferTrieHeader& header) {
-    size_t raw_offset = sizeof(TransferTrieHeader) + header.subtrie_path_len;
+                                   const ReplicationTransferHeader& header) {
+    size_t raw_offset = sizeof(ReplicationTransferHeader) + header.subtrie_path_len;
     size_t nodes_offset = (raw_offset + 7) & ~size_t(7);  // Align to 8
     return reinterpret_cast<const uint8_t*>(data.data()) + nodes_offset;
   }
@@ -542,15 +439,27 @@ struct PendingBigValue {
 // Sender for transferring trie nodes with relative offsets
 // Uses pre-order DFS where children set their relative offsets in parent's
 // array
+// Walks the hash trie structure, but for leaf nodes looks up actual data
+// from the data trie via cursor (combining hash + key/value).
 template <typename DB>
 struct TransferTrieSender {
   using Traits = typename DB::Traits;
+  using DataCursorTraits = typename DB::CursorTraits;
+  using HashTraits = HashTrieTraits<Traits>;
+
   using offset_e = typename Traits::offset_e;
-  using SrcOffset = offset_e;
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
-  using Transfer = TransferTrie<Traits>;
-  using WireOffset = typename WireFormatTraits::offset_e;
+  using hash_offset_e = typename HashTraits::offset_e;
+
+  // Data trie node types (for cursor lookup)
+  using DataTrieNode = _TrieNode<DataCursorTraits>;
+  using DataLeafNode = _LeafNode<DataCursorTraits>;
+
+  // Hash trie node types (for walking)
+  using HashTrieNode = _TrieNode<HashTraits>;
+  using HashLeafNode = _LeafNode<HashTraits>;
+
+  using Transfer = ReplicationTransferTrie<Traits::MAX_KEY_SIZE>;
+  using WireOffset = typename Transfer::Offset;
 
   // Chunk placeholder for big value data
   struct Chunk {
@@ -563,6 +472,7 @@ struct TransferTrieSender {
 
   DB* _db;
   typename DB::txn_ptr _txn;
+  typename DB::cursor_ptr _cursor;  // Reusable cursor for data trie lookup
   Transfer _transfer;
   std::list<PendingTrieNode> _pending;  // Nodes awaiting transmission
   std::list<PendingTrieNode>
@@ -601,6 +511,15 @@ struct TransferTrieSender {
     _pending_big_values.clear();
     _last_big_values.clear();
     _path_arena.reset();
+
+    // Create cursor on the appropriate data trie root
+    _cursor = _db->create_cursor();
+    if (_db_type == DbType::DB_DELETION) {
+      // Set cursor root to deletion trie for deletion database
+      _cursor->set_root(&_txn->deletion_root);
+    } else {
+      _cursor->set_root(&_txn->root);
+    }
   }
 
   // Process ACK: remove matching paths from _last_batch, then merge remaining
@@ -677,7 +596,7 @@ struct TransferTrieSender {
   std::pair<const uint8_t*, uint32_t> resolve_big_value(
       const PendingBigValue& bv) {
     offset_t off = bv.leaf_offset;
-    auto leaf = _db->template resolve<LeafNode>(&off);
+    auto leaf = _db->template resolve<DataLeafNode>(&off);
     BigValue* big_val = (BigValue*)leaf->vdata();
 
     // Resolve the chunk pointer
@@ -691,6 +610,7 @@ struct TransferTrieSender {
   // If _pending is empty, writes the root trie
   // If _pending has nodes, picks the first and writes a subtrie of its next
   // child as root All written nodes go to _last_batch
+  // Walks the hash trie structure, looking up data via cursor for leaves.
   void fill_buffer() {
     if (_pending.empty()) {
       // First transmission - write root node and its descendants up to
@@ -698,24 +618,23 @@ struct TransferTrieSender {
       _path_buffer.clear();
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
 
-      // Select root based on db_type: deletion_root for DB_DELETION
-      offset_e* root_ptr = &_txn->root;
-      if constexpr (requires { _txn->deletion_root; }) {
-        if (_db_type == DbType::DB_DELETION)
-          root_ptr = &_txn->deletion_root;
+      // Select hash root based on db_type
+      hash_offset_e* hash_root = _db->hash_root_ptr();
+      if (_db_type == DbType::DB_DELETION) {
+        hash_root = _db->deletion_hash_root_ptr();
       }
 
-      if (*root_ptr)
-        _write_subtree(_path_buffer, root_ptr, 0, nullptr, true);
+      if (*hash_root)
+        _write_subtree(_path_buffer, hash_root, 0, nullptr, true);
       return;
     }
 
     // Pick first pending node - it's already been transmitted, now send its
     // next child
     auto& pending = _pending.front();
-    auto trie = _db->template resolve<TrieNode>(pending.offset);
-    assert(trie);  // Should always resolve since it was transmitted before
-    assert(pending.next_child < trie->count());
+    auto hash_trie = _db->template resolve<HashTrieNode>(pending.offset);
+    assert(hash_trie);  // Should always resolve since it was transmitted before
+    assert(pending.next_child < hash_trie->count());
 
     // Convert string_view to std::string for manipulation
     _path_buffer.assign(pending.path.data(), pending.path.size());
@@ -724,53 +643,70 @@ struct TransferTrieSender {
 
     // branch_key is already in path
     if (path_len)
-      _path_buffer.append((char*)trie->compressed() + 1, trie->len() - 1);
+      _path_buffer.append((char*)hash_trie->compressed() + 1, hash_trie->len() - 1);
     else
       // root
-      _path_buffer.append((char*)trie->compressed(), trie->len());
+      _path_buffer.append((char*)hash_trie->compressed(), hash_trie->len());
 
     _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
     // Note: root=false because we're writing a CHILD of the pending node, not
     // the root
-    _write_subtree(_path_buffer, trie->array() + pending.next_child, 0, nullptr,
+    _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0, nullptr,
                    false);
     _path_buffer.resize(path_len);  // Restore path for retry
 
     // the child as the TransferTrie root is guaranteed to be written.
-    if (++pending.next_child >= trie->count()) {
+    if (++pending.next_child >= hash_trie->count()) {
       _pending.pop_front();
     }
   }
 
   // Write a subtrie with DFS up to max_depth
+  // Walks the hash trie structure, looking up data via cursor for leaves.
   // All written nodes are added to _last_batch for ACK tracking
   // Nodes at max_depth have their children NOT written (will be handled later
   // if not pruned)
   // wire_link: If provided, the root node stores its relative offset here (for
   // linking to parent)
   // returns false if the node is not written
-  bool _write_subtree(std::string& path, offset_t* offset, size_t depth,
+  bool _write_subtree(std::string& path, hash_offset_e* hash_offset, size_t depth,
                       WireOffset* wire_link, bool root = false) {
     size_t path_len = path.size();
 
-    if (offset->type() == LEAF) {
-      auto leaf = _db->template resolve<LeafNode>(offset);
+    if (hash_offset->type() == LEAF) {
+      // Hash leaf: need to combine hash + data from data trie
+      auto hash_leaf = _db->template resolve<HashLeafNode>(hash_offset);
+      assert(hash_leaf);
+
+      // Look up data leaf via cursor (reuse stored cursor)
+      _cursor->find(Slice(path.data(), path.size()));
+      if (!_cursor->is_valid()) {
+        // Data not found - shouldn't happen if tries are in sync
+        return false;
+      }
+
+      // Get the data leaf from cursor's stack
+      auto& data_trans = _cursor->stack.back();
+      auto& data_leaf = *data_trans.leaf();
 
 #ifdef LEAVES_DEBUG
-      path.append(leaf->key().data(), leaf->key().size());
+      path.append(data_leaf.key().data(), data_leaf.key().size());
       std::cerr << "DEBUG: send node: " << path << " (type=leaf) "
-                << leaf->key().size() << "\n";
+                << data_leaf.key().size() << "\n";
       path.resize(path_len);
 #endif
 
-      assert(leaf);
-      auto* dest = _transfer.add_leaf_node(&*leaf);
+      // Add data leaf to wire buffer (copies key/value, zeroes hash)
+      auto* dest = _transfer.add_leaf_node(&data_leaf);
       if (!dest) return false;
 
+      // Copy hash from hash trie leaf into wire leaf
+      std::memcpy(dest->hash, hash_leaf->hash, HASH_SIZE);
+
       // Track big values for later transmission
-      if (leaf->is_big()) {
-        BigValue* bv = (BigValue*)leaf->vdata();
-        _last_big_values.emplace_back(*offset, bv->chunk_offset,
+      if (data_leaf.is_big()) {
+        BigValue* bv = (BigValue*)data_leaf.vdata();
+        _last_big_values.emplace_back(*data_trans.offset, bv->chunk_offset,
                                       bv->value_size);
       }
 
@@ -783,10 +719,11 @@ struct TransferTrieSender {
       return true;
     }
 
-    auto trie = _db->template resolve<TrieNode>(offset);
-    assert(trie);
+    // Hash trie node: add directly (hash is in the node)
+    auto hash_trie = _db->template resolve<HashTrieNode>(hash_offset);
+    assert(hash_trie);
 
-    auto* dest = _transfer.add_trie_node(&*trie);
+    auto* dest = _transfer.add_trie_node(&*hash_trie);
     if (!dest) return false;
 
     if (wire_link) {
@@ -795,35 +732,35 @@ struct TransferTrieSender {
     }
 
 #ifdef LEAVES_DEBUG
-    if (!root) path.push_back((char)trie->compressed()[0]);
+    if (!root) path.push_back((char)hash_trie->compressed()[0]);
     std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
     path.resize(path_len);
 #endif
 
     // Get wire array for setting child offsets
-    auto* wire_trie = const_cast<WireTrieNode*>(dest);
+    auto* wire_trie = const_cast<typename Transfer::TrieNode*>(dest);
     WireOffset* wire_array = wire_trie->array();
 
     // Process children
-    path.append((char*)trie->compressed(), trie->len());
+    path.append((char*)hash_trie->compressed(), hash_trie->len());
 
     if (depth >= _max_depth) {
       // Undo the full compressed append — fill_buffer() expects only
       // the branch key (compressed[0]) and will itself append the rest.
       path.resize(path_len);
       if (!root) {
-        assert(trie->len() > 0);
-        path.push_back((char)trie->compressed()[0]);
+        assert(hash_trie->len() > 0);
+        path.push_back((char)hash_trie->compressed()[0]);
       }
       // Store path in arena for efficient memory usage
       auto arena_path = _path_arena.allocate(path);
-      _last_batch.emplace_back(arena_path, offset, 0);
+      _last_batch.emplace_back(arena_path, hash_offset, 0);
       path.resize(path_len);
       return true;
     }
 
-    int count = trie->count(), i;
-    offset_t* children = trie->array();
+    int count = hash_trie->count(), i;
+    hash_offset_e* children = hash_trie->array();
     for (i = 0; i < count && !_transfer.full;) {
       if (!_write_subtree(path, children + i, depth + 1, wire_array + i)) break;
       ++i;
@@ -832,12 +769,12 @@ struct TransferTrieSender {
     path.resize(path_len);
     if (i < count) {
       if (!root) {
-        assert(trie->len() > 0);
-        path.push_back((char)trie->compressed()[0]);
+        assert(hash_trie->len() > 0);
+        path.push_back((char)hash_trie->compressed()[0]);
       }
       // Store path in arena for efficient memory usage
       auto arena_path = _path_arena.allocate(path);
-      _last_batch.emplace_back(arena_path, offset, i);
+      _last_batch.emplace_back(arena_path, hash_offset, i);
       path.resize(path_len);
     }
 

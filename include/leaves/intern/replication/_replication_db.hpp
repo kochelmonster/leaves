@@ -1,10 +1,10 @@
 #ifndef _LEAVES__REPLICATION_DB_HPP
 #define _LEAVES__REPLICATION_DB_HPP
 
-#include "../db/_db.hpp"
-
 #include <atomic>
 #include <chrono>
+
+#include "../db/_db.hpp"
 
 namespace leaves {
 
@@ -16,25 +16,30 @@ struct _ReplicationTraits : public BaseTraits {
   typedef Blake3Hasher ReplicationHasher;
 };
 
-// Replication-specific DB header — extends _DBHeader with a fixed-size
-// slot array for crash-safe tracking of pre-merge big-value multi-areas.
-// Each active ReplicationReceiverFSM claims one slot.  The slot holds the
-// offset of the multi-area currently being filled.  On crash recovery,
-// sanitize() returns all non-zero slots to the pool.
+// Replication-specific DB header — extends _DBHeader with:
+// - hash_mem_manager: Separate memory manager for hash trie (independent of
+// data transactions)
+// - hash_root: Root offset of the hash trie
+// - replication_slots: Fixed-size slot array for crash-safe big-value anchoring
+//
+// The hash trie uses its own memory manager so hash updates don't interfere
+// with data trie transactions. This allows background hash computation.
 //
 // MAX_REPLICATION_SLOTS is read from Storage_::Traits if available,
 // defaulting to 8 (= 64 bytes of offset_t).
 template <typename Storage_>
 struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
+  using offset_e = typename Traits::offset_e;
+  using MemManager = _MemManager<Traits>;
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
   template <typename T, typename = void>
-  struct get_max_replication_slots
-      : std::integral_constant<uint16_t, 8> {};
+  struct get_max_replication_slots : std::integral_constant<uint16_t, 8> {};
 
   template <typename T>
-  struct get_max_replication_slots<T, std::void_t<decltype(T::MAX_REPLICATION_SLOTS)>>
+  struct get_max_replication_slots<
+      T, std::void_t<decltype(T::MAX_REPLICATION_SLOTS)>>
       : std::integral_constant<uint16_t, T::MAX_REPLICATION_SLOTS> {};
 
   static constexpr uint16_t MAX_REPLICATION_SLOTS =
@@ -44,19 +49,14 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   // real area offset is known.  sanitize() must skip these.
   static constexpr uint64_t REPLICATION_SLOT_SENTINEL = 1;
 
+  // Hash trie memory management (separate from data trie)
+  MemManager hash_mem_manager;
+  offset_e hash_root;
+  offset_e deletion_hash_root;
+
   // Each slot holds the offset of one pre-merge multi-area.
   // 0 = slot is free, SENTINEL = claimed but no area yet.
   offset_t replication_slots[MAX_REPLICATION_SLOTS];
-
-  // Transaction ID up to which all nodes have been hashed.
-  // Background hasher updates this after catching up.
-  // Replication sender must wait until last_hashed_txn_id >= target.
-  std::atomic<tid_t> last_hashed_txn_id{tid_t(0)};
-
-  // Offset of the last fully-hashed transaction (persisted for restart).
-  // Atomic for lock-free thread-safe access from hashed_txn().
-  // NOTE: std::atomic<uint64_t> is trivially copyable and works with mmap.
-  std::atomic<uint64_t> hashed_txn_offset{0};
 };
 
 // =============================================================================
@@ -72,7 +72,8 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
   using offset_e = typename Traits_::offset_e;
 
   // Override ptr to point to _ReplicationTransaction so that _DB::txn_ptr
-  // resolves to Pointer<_ReplicationTransaction> rather than Pointer<_Transaction>
+  // resolves to Pointer<_ReplicationTransaction> rather than
+  // Pointer<_Transaction>
   using ptr = typename Traits_::template Pointer<_ReplicationTransaction>;
 
   // Root of the deletion trie — records keys deleted from the main trie
@@ -112,12 +113,10 @@ struct _ReplicationCursor;  // forward declaration
 
 template <typename Storage_>
 struct _ReplicationDB
-    : public _DB<Storage_,
-                 _ReplicationTransaction<typename Storage_::Traits>,
+    : public _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
                  _ReplicationDBHeader<Storage_>> {
-  using Base =
-      _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
-          _ReplicationDBHeader<Storage_>>;
+  using Base = _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
+                   _ReplicationDBHeader<Storage_>>;
   using Transaction = typename Base::Transaction;
   using Aspect = typename Base::Aspect;
 
@@ -131,13 +130,79 @@ struct _ReplicationDB
   typedef _ReplicationCursor<CursorTraits> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
+  // =========================================================================
+  // HashDB: Minimal DB adapter for _HashUpdater
+  // =========================================================================
+  // Provides the interface needed by _HashUpdater to manage the hash trie.
+  // Uses hash_mem_manager for allocation (independent of data transactions).
+  // Uses the parent _ReplicationDB's storage for offset resolution.
+  struct HashDB {
+    using Traits = typename Storage_::Traits;
+    using offset_e = typename Traits::offset_e;
+    using MemManager = _MemManager<Traits>;
+    using PageHeader = typename Traits::PageHeader;
+    using page_ptr = typename Traits::ptr;
+
+    _ReplicationDB* _parent;
+
+    explicit HashDB(_ReplicationDB* parent) : _parent(parent) {}
+
+    // Resolve offset to node pointer
+    template <typename T>
+    typename Traits::template Pointer<T> resolve(offset_e* offset,
+                                                 Access access = READ) {
+      return _parent->template resolve<T>(offset, access);
+    }
+
+    template <typename T>
+    typename Traits::template Pointer<T> resolve(const offset_e* offset,
+                                                 Access access = READ) {
+      return _parent->template resolve<T>(offset, access);
+    }
+
+    // Convert pointer to offset
+    template <typename T>
+    offset_e resolve(typename Traits::template Pointer<T> ptr) {
+      return _parent->resolve(ptr);
+    }
+
+    // Allocate a node of given size using hash_mem_manager
+    template <typename NodePtr>
+    NodePtr alloc_node(uint16_t size) {
+      uint8_t slot_id = MemManager::assign_slot(size);
+      auto& hash_mem = _parent->_header->hash_mem_manager;
+      page_ptr page = hash_mem.alloc(slot_id, *_parent);
+      _parent->make_dirty(page);
+      return NodePtr((char*)&*page + sizeof(PageHeader));
+    }
+
+    // Free a page using hash_mem_manager
+    void free(page_ptr page) {
+      auto& hash_mem = _parent->_header->hash_mem_manager;
+      hash_mem.free(page, *_parent);
+    }
+
+    // Make page dirty (for persistence)
+    void make_dirty(page_ptr page) { _parent->make_dirty(page); }
+  };
+
+  // Get HashDB adapter for use with _HashUpdater
+  HashDB hash_db() { return HashDB(this); }
+
+  // Get hash root pointer for main trie
+  offset_e* hash_root_ptr() { return &this->_header->hash_root; }
+
+  // Get hash root pointer for deletion trie
+  offset_e* deletion_hash_root_ptr() { return &this->_header->deletion_hash_root; }
+
   // Inherit constructors
   using Base::Base;
   using txn_ptr = typename Base::txn_ptr;
   using offset_e = typename CursorTraits::offset_e;
 
   // --- Purge configuration ---
-  std::atomic<uint64_t> _retention_seconds{86400};  // how long deleted keys stay (default 24h)
+  std::atomic<uint64_t> _retention_seconds{
+      86400};  // how long deleted keys stay (default 24h)
 
   // --- Purge state ---
   std::atomic<bool> _purge_interrupt{false};
@@ -145,62 +210,26 @@ struct _ReplicationDB
   std::atomic<uint64_t> _purge_job_id{0};
   std::atomic<bool> _in_purge{false};
 
-  // --- Background hashing state ---
-  // Hashing runs in background, catching up to current txn_id.
-  // Commits never wait; use on_hashes_ready aspect callback for event-driven replication.
-  // Hashing is delayed until idle (no commits for _hash_idle_ms) to avoid
-  // interfering with write-heavy workloads.
-  std::atomic<bool> _hash_running{false};
-  std::atomic<bool> _hash_cancelled{false};
-  std::atomic<uint64_t> _hash_job_id{0};  // Scheduled delayed hash job
-  std::atomic<uint64_t> _hash_idle_ms{100};  // Delay before hashing starts (default 100ms)
+  ~_ReplicationDB() { cancel_purge(); }
 
-  ~_ReplicationDB() {
-    cancel_purge();
-    _stop_hash_catchup();
+  // Override init to also initialize hash_mem_manager with its own area
+  void init(offset_t* header) {
+    Base::init(header);
+
+    // Allocate a separate area for hash trie memory management
+    auto hash_area = this->_storage.alloc_single_area();
+    this->_header->hash_mem_manager.init(hash_area->content_offset(),
+                                         hash_area->end());
+    this->_header->hash_root = 0;
+    this->_header->deletion_hash_root = 0;
+    this->make_dirty(this->_header);
   }
 
-  void set_retention(uint64_t seconds) { _retention_seconds.store(seconds, std::memory_order_relaxed); }
-
-  // Set the idle delay before background hashing starts (default 100ms).
-  // Higher values reduce interference with write-heavy workloads.
-  void set_hash_idle_ms(uint64_t ms) { _hash_idle_ms.store(ms, std::memory_order_relaxed); }
-
-  // Force immediate hashing, bypassing the idle delay.
-  // Blocks until all pending transactions are hashed.
-  // Use when you need hashes immediately (e.g., before replication).
-  void flush_hashes() {
-    // Cancel any pending delayed job and start immediately
-    uint64_t old_job = _hash_job_id.exchange(0, std::memory_order_acq_rel);
-    if (old_job && old_job != UINT64_MAX) {
-      this->_storage.cancel_job(old_job);
-    }
-    _start_hash_catchup();
-    // Wait for hashing to complete
-    if (!this->_storage._pool_shutdown.load(std::memory_order_acquire)) {
-      this->_storage.wait_all();
-    }
+  void set_retention(uint64_t seconds) {
+    _retention_seconds.store(seconds, std::memory_order_relaxed);
   }
 
-  // Check if hashing has caught up to a given transaction.
-  bool hashes_ready_through(tid_t target_txn_id) const {
-    return this->_header->last_hashed_txn_id.load(std::memory_order_acquire) >= target_txn_id;
-  }
-
-  // Get the last fully hashed transaction ID.
-  // Get the last fully-hashed transaction, or nullptr if none available.
-  // The returned transaction is pinned (ref-counted) and safe to use even
-  // as new commits occur.  Returns nullptr only before the first transaction
-  // has been hashed (e.g., immediately after DB creation).
-  // Lock-free: uses atomic offset from header, resolved on demand.
-  txn_ptr hashed_txn() const {
-    uint64_t off = this->_header->hashed_txn_offset.load(std::memory_order_acquire);
-    if (!off) return nullptr;
-    offset_t offset(off);
-    return this->template resolve<Transaction>(&offset);
-  }
-
-  // Override commit - no hashing overhead. Background hasher catches up.
+  // Override commit.
   bool commit(uint64_t cursor_id, bool sync = false) {
     // Prepare commit without computing hashes (base doesn't hash either)
     if (!Base::prepare_commit(cursor_id, false)) return false;
@@ -210,11 +239,6 @@ struct _ReplicationDB
     this->make_dirty(this->_header);
     this->flush(sync, true);
     this->end_transaction();
-
-    // Schedule background hasher after idle delay (cancels any pending schedule).
-    // This ensures hashing only starts after writes have been idle for a while,
-    // avoiding interference with write-heavy workloads.
-    _schedule_hash_catchup();
 
     return true;
   }
@@ -231,11 +255,11 @@ struct _ReplicationDB
     _purge_cancelled.store(false, std::memory_order_release);
     uint64_t expected = 0;
     if (!_purge_job_id.compare_exchange_strong(expected, UINT64_MAX,
-            std::memory_order_acq_rel))
+                                               std::memory_order_acq_rel))
       return;  // Another purge is already scheduled
-    _purge_job_id.store(this->_storage.schedule_after(
-        std::chrono::seconds(0), [this] { _run_purge(); }),
-        std::memory_order_release);
+    _purge_job_id.store(this->_storage.schedule_after(std::chrono::seconds(0),
+                                                      [this] { _run_purge(); }),
+                        std::memory_order_release);
   }
 
   // Cancel any scheduled or running purge and wait for completion.
@@ -243,8 +267,7 @@ struct _ReplicationDB
     _purge_cancelled.store(true, std::memory_order_release);
     _purge_interrupt.store(true, std::memory_order_release);
     uint64_t job_id = _purge_job_id.exchange(0, std::memory_order_acq_rel);
-    if (job_id && job_id != UINT64_MAX)
-      this->_storage.cancel_job(job_id);
+    if (job_id && job_id != UINT64_MAX) this->_storage.cancel_job(job_id);
     if (!this->_storage._pool_shutdown.load(std::memory_order_acquire))
       this->_storage.wait_all();
   }
@@ -253,17 +276,7 @@ struct _ReplicationDB
   void sanitize() {
     Base::sanitize();
     _sanitize_replication_anchors();
-
-    // hashed_txn_offset is already atomic in header - no load needed
-
     this->flush();
-
-    // Kick background hasher if there are unhashed transactions
-    tid_t last_hashed = this->_header->last_hashed_txn_id.load(std::memory_order_acquire);
-    tid_t current = this->txn()->txn_id;
-    if (last_hashed < current) {
-      _start_hash_catchup();
-    }
   }
 
   // Override: signal background purge to stop before acquiring txn_lock.
@@ -319,8 +332,7 @@ struct _ReplicationDB
 
     uint64_t now = _current_time();
     uint64_t retention = _retention_seconds.load(std::memory_order_relaxed);
-    uint64_t older_than =
-        (now > retention) ? now - retention : 0;
+    uint64_t older_than = (now > retention) ? now - retention : 0;
 
     auto result = _do_purge(older_than);
 
@@ -335,8 +347,9 @@ struct _ReplicationDB
         // Deletion trie is empty — check again after one retention period
         next_seconds = retention;
       }
-      _purge_job_id.store(this->_storage.schedule_after(
-          std::chrono::seconds(next_seconds), [this] { _run_purge(); }),
+      _purge_job_id.store(
+          this->_storage.schedule_after(std::chrono::seconds(next_seconds),
+                                        [this] { _run_purge(); }),
           std::memory_order_release);
     } else {
       _purge_job_id.store(0, std::memory_order_release);
@@ -392,113 +405,6 @@ struct _ReplicationDB
     if (interrupted && oldest_ts == 0 && purged > 0)
       oldest_ts = older_than > 0 ? older_than : 1;
     return {purged, oldest_ts};
-  }
-
-  // --- Background hash catchup ---
-  // Schedule hash catchup after idle delay. Cancels any pending schedule.
-  // Called on every commit - rapid commits keep pushing hashing back.
-  void _schedule_hash_catchup() {
-    if (_hash_cancelled.load(std::memory_order_acquire)) return;  // Shutting down
-    if (_hash_running.load(std::memory_order_acquire)) return;  // Already running
-
-    // Cancel any pending scheduled job
-    uint64_t old_job = _hash_job_id.exchange(0, std::memory_order_acq_rel);
-    if (old_job && old_job != UINT64_MAX) {
-      this->_storage.cancel_job(old_job);
-    }
-
-    // Schedule new job after idle delay
-    uint64_t delay_ms = _hash_idle_ms.load(std::memory_order_relaxed);
-    uint64_t new_job = this->_storage.schedule_after(
-        std::chrono::milliseconds(delay_ms),
-        [this]() { _start_hash_catchup(); });
-    _hash_job_id.store(new_job, std::memory_order_release);
-  }
-
-  // Start the background hash catchup task if not already running.
-  // Called from scheduled job after idle delay.
-  void _start_hash_catchup() {
-    _hash_job_id.store(0, std::memory_order_relaxed);  // Job has fired
-    if (_hash_cancelled.load(std::memory_order_acquire)) return;  // Shutting down
-    bool expected = false;
-    if (!_hash_running.compare_exchange_strong(expected, true,
-            std::memory_order_acq_rel)) {
-      return;  // Already running
-    }
-    this->_storage.submit_task([this]() { _run_hash_catchup(); });
-  }
-
-  // Stop background hashing and wait for completion.
-  void _stop_hash_catchup() {
-    _hash_cancelled.store(true, std::memory_order_release);
-    // Cancel any pending scheduled job
-    uint64_t job_id = _hash_job_id.exchange(0, std::memory_order_acq_rel);
-    if (job_id && job_id != UINT64_MAX) {
-      this->_storage.cancel_job(job_id);
-    }
-    // Wait for current run to complete
-    if (!this->_storage._pool_shutdown.load(std::memory_order_acquire)) {
-      this->_storage.wait_all();
-    }
-  }
-
-  // Background hash catchup loop - runs until hashing is caught up to current txn.
-  //
-  // THEORETICAL RACE: There is a narrow window between txn() returning a pointer
-  // and refs.fetch_add() protecting it. In theory, multiple rapid commits could
-  // push this txn into the recyclable set and GC could free it before we increment
-  // refs. This is not guarded because:
-  //   1. Proper protection requires epoch-based reclamation (RCU) or locks
-  //   2. The window is a few CPU instructions (~nanoseconds)
-  //   3. Triggering it requires multiple commits completing end_transaction() GC
-  //      within that window - practically impossible
-  // The same theoretical race exists in cursors (_TransactionalCursor::rollback,
-  // update) and is similarly accepted as negligible risk.
-  void _run_hash_catchup() {
-    while (!_hash_cancelled.load(std::memory_order_acquire)) {
-      // Get txn and immediately protect it (minimize race window)
-      auto txn = this->txn();
-      const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_add(1);
-
-      tid_t last_hashed = this->_header->last_hashed_txn_id.load(std::memory_order_acquire);
-      tid_t current = txn->txn_id;
-
-      if (last_hashed >= current) {
-        // Caught up - release refs and exit
-        const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
-        _hash_running.store(false, std::memory_order_release);
-        return;
-      }
-
-      // Hash all nodes newer than last_hashed
-      compute_hashes_catchup(this, txn->root, txn->deletion_root, last_hashed);
-
-      if (_hash_cancelled.load(std::memory_order_acquire)) {
-        const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
-        _hash_running.store(false, std::memory_order_release);
-        return;
-      }
-
-      // Store offset atomically in header for lock-free hashed_txn() access.
-      // The header keeps the transaction alive (prevents GC) and persists it.
-      offset_t txn_offset = this->resolve(txn);
-      this->_header->hashed_txn_offset.store(txn_offset, std::memory_order_release);
-      const_cast<std::atomic<uint32_t>&>(txn->refs).fetch_sub(1);
-
-      // Update last_hashed_txn_id
-      this->_header->last_hashed_txn_id.store(current, std::memory_order_release);
-      this->make_dirty(this->_header);
-      this->flush(false, false);
-
-      // Notify aspect that hashes are ready for this transaction.
-      // Applications can use this to trigger non-blocking replication.
-      if constexpr (requires { this->_aspect.on_hashes_ready(this, current); }) {
-        this->_aspect.on_hashes_ready(this, current);
-      }
-
-      // Loop to catch any commits that happened during hashing
-    }
-    _hash_running.store(false, std::memory_order_release);
   }
 };
 
