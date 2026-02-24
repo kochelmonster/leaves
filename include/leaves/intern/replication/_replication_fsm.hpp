@@ -508,10 +508,6 @@ struct ReplicationSenderFSM {
     // the parent
     _sender.fill_buffer();
     Slice buffer = _sender.finalize();
-#ifdef LEAVES_DEBUG
-    std::cerr << "DEBUG: Sending buffer with " << buffer.size() << " bytes\n";
-#endif
-
     // Parse to get node count
     const TransferTrieHeader* hdr = Transfer::parse_header(buffer);
     if (!hdr) {
@@ -896,8 +892,11 @@ struct ReplicationReceiverFSM {
   size_t _total_bytes;
   ReplicationError _error;
   DbType _current_db_type;  // Tracks which trie we're currently receiving
-  std::vector<std::string>
+  std::vector<std::pair<std::string, bool>>
       _prune_paths;          // Paths where hashes match (tell sender to prune)
+                             // pair: (path, is_leaf) — leaf flag prevents the
+                             // sender from discarding pending trie continuations
+                             // stored at an identical path.
   std::string _path_buffer;  // Reusable buffer for path construction
   size_t _pending_children;  // Count of 0 offsets not yet connected (receiver
                              // completion tracking)
@@ -907,7 +906,6 @@ struct ReplicationReceiverFSM {
                              // merge. SIZE_MAX = unlimited (single round).
   size_t _max_payload_size;  // Max single-message payload size (reject larger)
   size_t _max_big_value_size;  // Max total big value allocation size
-
   // Activity tracking for application-level timeouts
   std::chrono::steady_clock::time_point _last_activity;
 
@@ -1540,10 +1538,13 @@ struct ReplicationReceiverFSM {
       ++_pending_children;
     }
 
+    fprintf(stderr, "[PRN] path='%.*s' pending_before=%zu new_leaves=%zu\n",
+            (int)path.size(), path.data(), _pending_children, _new_leaves);
+
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
     if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
-                                  payload_end, _path_buffer)) {
+                                  payload_end, _path_buffer, true)) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
                            "Wire node offset out of bounds");
       return;
@@ -1588,6 +1589,9 @@ struct ReplicationReceiverFSM {
     // Guard: at least one new leaf must have been received, otherwise
     // a fraction merge would make no progress and loop forever.
     if (_temp_buffer_memory() > _memory_budget && _new_leaves > 0) {
+      fprintf(stderr, "[FRAC] pending=%zu new_leaves=%zu mem=%zu budget=%zu path='%.*s'\n",
+              _pending_children, _new_leaves, _temp_buffer_memory(), _memory_budget,
+              (int)path.size(), path.data());
       _send_fraction_complete();
       return;
     }
@@ -1596,7 +1600,11 @@ struct ReplicationReceiverFSM {
     _send_prune_ack();
   }
 
-  int get_branch_key(const TempOffset* subtrie_root) {
+  // Returns the branch char of a wire node: for TRIE it's compressed()[0];
+  // for LEAF it's the char at position parent_path_len in the full data key.
+  // parent_path_len is the depth of the parent, i.e. how many prefix bytes
+  // of the key are covered by the path already.
+  int get_branch_key(const TempOffset* subtrie_root, size_t parent_path_len = 0) {
     if (subtrie_root->type() == TRIE) {
       auto* temp_trie = subtrie_root->template resolve<TempTrieNode>();
       assert(temp_trie->len() > 0 && "Received empty trie node");
@@ -1604,8 +1612,14 @@ struct ReplicationReceiverFSM {
     }
     assert(subtrie_root->type() == LEAF);
     auto* temp_leaf = subtrie_root->template resolve<TempLeafNode>();
-    return temp_leaf->key().size() > 0 ? temp_leaf->key()[0]
-                                       : TempTrieNode::NONE;
+    const auto key = temp_leaf->key();
+    // Wire leaf keys are RELATIVE (suffix after the parent trie's compressed
+    // prefix). The branch char is key[0] (first char of the suffix).
+    // A zero-length key means this leaf IS the exact-match (NONE branch).
+    // parent_path_len is not used because keys are already relative.
+    (void)parent_path_len;
+    if (key.size() > 0) return (uint8_t)key[0];
+    return TempTrieNode::NONE;  // NONE-branch (exact match)
   }
 
   // Connect a received subtrie to its parent in the temp DB
@@ -1616,7 +1630,7 @@ struct ReplicationReceiverFSM {
     if (path.empty() || !_temp_root) return;  // _temp_root == 0 means not set
 
     TempOffset* parent_offset;
-    int key = get_branch_key(subtrie_root);
+    int key = get_branch_key(subtrie_root, path.size());
     if (key == TempTrieNode::NONE) {
       parent_offset = _find_temp_parent_offset(path);
     } else {
@@ -1658,8 +1672,14 @@ struct ReplicationReceiverFSM {
   // - If hashes differ and wire is leaf: will be merged to local via _Merger
   // - If hashes differ and wire is trie: recurse into children
   // - If child offset == 0 in wire: sender hasn't sent it yet, stays pending
+  // is_message_root: true for the first call of each received message (both root
+  //   and subtrie messages). When true, `path` is the subtrie_path from the wire
+  //   header — it already encodes the position of this node in the global trie,
+  //   so we must NOT append branch_key (which would double-count it).  The hash
+  //   lookup uses `path` directly to find the matching local hash-trie node.
   bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_start,
-                                const char* buffer_end, std::string& path) {
+                                const char* buffer_end, std::string& path,
+                                bool is_message_root = false) {
     if ((char*)wire_node < buffer_start ||
         (char*)(wire_node + 1) > buffer_end) {
       // wire_node itself is out of bounds — malformed message from sender
@@ -1694,7 +1714,7 @@ struct ReplicationReceiverFSM {
         return true;
       }
       wire_hash = leaf->hash;
-      branch_key = get_branch_key(wire_node);
+      branch_key = get_branch_key(wire_node, path.size());
     } else {
       auto* trie = wire_node->template resolve<TempTrieNode>();
       // Bounds-check the fixed trie header first
@@ -1709,9 +1729,17 @@ struct ReplicationReceiverFSM {
         return true;
       }
       wire_hash = trie->hash;
-      // path.empty() => wire_node is root => no branch_key
-      branch_key =
-          path.empty() ? TempTrieNode::NONE : get_branch_key(wire_node);
+      // is_message_root => path is the subtrie_path from the wire header;
+      //   we must NOT add branch_key because path already represents this
+      //   node's position.  Using path as-is lets _get_local_hash find the
+      //   correct hash-trie entry (e.g. "n_key_" correctly resolves to the
+      //   'n' subtrie hash, while "n_key_" + compressed[0]='n' = "n_key_n"
+      //   would fail to find anything).
+      // NOTE: path.empty() is intentionally NOT used here — root trie
+      //   children also start with path="" but still need a branch_key.
+      branch_key = is_message_root
+                       ? TempTrieNode::NONE
+                       : get_branch_key(wire_node);
     }
 
     size_t path_len = path.size();
@@ -1721,9 +1749,12 @@ struct ReplicationReceiverFSM {
     const uint8_t* local_hash = _get_local_hash(path, wire_node->type());
     if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
       // Hashes match - tell sender to prune, set the offset 0 to avoid
-      // merging
+      // merging.
+      // Read type BEFORE zeroing: a zeroed offset always has type TRIE (0)
+      // regardless of the actual node type.
+      bool is_leaf_node = (wire_node->type() == LEAF);
       *wire_node = 0;
-      _prune_paths.push_back(path);
+      _prune_paths.emplace_back(path, is_leaf_node);
       path.resize(path_len);
       return true;
     }
@@ -1733,6 +1764,15 @@ struct ReplicationReceiverFSM {
     // Hashes differ or local doesn't exist
     if (wire_node->type() == LEAF) {
       ++_new_leaves;
+      if (_new_leaves <= 5) {
+        auto* dbg_leaf = wire_node->template resolve<TempLeafNode>();
+        fprintf(stderr, "[NEW_LEAF] path='%.*s' bk=%d key_size=%d local_hash=%s wire[0]=%02x loc[0]=%02x\n",
+                (int)path.size(), path.data(),
+                branch_key, (int)dbg_leaf->key_size,
+                local_hash ? "exists_but_differs" : "null",
+                wire_hash[0],
+                local_hash ? local_hash[0] : 0xff);
+      }
       auto* leaf = wire_node->template resolve<TempLeafNode>();
       if (leaf->is_big()) {
         // Bounds-check the BigValueDataHeader within the leaf's value data
@@ -1748,12 +1788,6 @@ struct ReplicationReceiverFSM {
         }
         ++_big_value_trie_count;
       }
-#ifdef LEAVES_DEBUG
-      path.append(leaf->key().data(), leaf->key().size());
-      std::cerr << "DEBUG: receive node: " << path << " (type=leaf) "
-                << leaf->key().size() << "\n";
-      path.resize(path_len);
-#endif
       return true;
     }
 
@@ -1769,16 +1803,38 @@ struct ReplicationReceiverFSM {
       return true;
     }
 
-#ifdef LEAVES_DEBUG
-    if (!path.empty()) path.push_back((char)wire_trie->compressed()[0]);
-    std::cerr << "DEBUG: receive node: " << path << " (type=trie)\n";
-    path.resize(path_len);
-#endif
-
     // All children start as pending; decrement as each is handled
     _pending_children += count;
 
-    path.append((char*)wire_trie->compressed(), wire_trie->len());
+    // Restore the path so children can extend it.
+    //
+    // For regular (non-message-root) trie nodes: `path` was reset to
+    // path_len by the resize above, which removed the branch_key push.
+    // We must restore it to parent_path + full_compressed so that each
+    // child can push its own branch_key and get the correct full path.
+    // Example: for "a_key_" trie, after resize path="", append compressed
+    // "a_key_" → path="a_key_". Child leaf '0' pushes '0' → "a_key_0". ✓
+    //
+    // For subtrie message roots (is_message_root=true, path non-empty):
+    //   `path` is already the subtrie_path from the wire header (e.g. "n_key_"),
+    //   and the wire root's compressed encodes the SAME position (it includes
+    //   the branch char that was already consumed to reach this node).
+    //   Appending compressed again would DOUBLE-COUNT that prefix.
+    //   Example: subtrie_path="sender_7", wire root compressed="7"; appending
+    //   would give "sender_77" instead of "sender_7". Skip the append.
+    //
+    // Special case: global root message (is_message_root=true, path EMPTY):
+    //   The root wire trie may have a non-empty compressed prefix (e.g., "s"
+    //   when all keys start with 's'). This prefix has NOT been added to path
+    //   (path=""  since there is no parent). We MUST append it so children
+    //   get the correct base path.
+    //   Example: root compressed="s", children are 'e' (→"ender_") and 'h'
+    //   (→"hared_"). Without appending "s", children would get paths "e..."
+    //   and "h..." instead of "se..."="sender_..." and "sh..."="shared_...".
+    if (!is_message_root || path_len == 0) {
+      path.append((char*)wire_trie->compressed(), wire_trie->len());
+    }
+
     for (int i = 0; i < count; ++i) {
       TempOffset* child_offset = wire_array + i;
 
@@ -1815,38 +1871,38 @@ struct ReplicationReceiverFSM {
                     : &hc.hash_root;
     if (!*cur) return nullptr;
 
+    bool via_branch = false;
     size_t pos = 0;
     while (*cur) {
       if (cur->type() == LEAF) {
         auto leaf = _db->template resolve<HashLeafNode_>(cur);
         size_t remaining = path.size() - pos;
-        size_t ksize = leaf->key().size();
-        if (remaining == ksize &&
-            (ksize == 0 ||
-             std::memcmp(leaf->key().data(), path.data() + pos, ksize) == 0))
-          return leaf->hash;
+        if (remaining == 0) return leaf->hash;
         return nullptr;
       }
       // TRIE node
       auto node = _db->template resolve<HashTrieNode_>(cur);
       uint8_t clen = node->len();
+      // Skip compressed()[0] for non-root nodes: it is the branch char
+      // already consumed by pos++ in the previous iteration.
+      uint8_t skip = via_branch ? 1 : 0;
+      uint8_t eff_clen = (clen > skip) ? clen - skip : 0;
+      const uint8_t* eff_compressed = node->compressed() + skip;
       size_t remaining = path.size() - pos;
-      if (clen > remaining) {
-        // Path ends partway through this trie's compressed portion.
-        // The hash belongs to this TRIE subtree.
+      if (eff_clen > remaining) {
         if (expected_type == TRIE &&
-            std::memcmp(node->compressed(), path.data() + pos, remaining) == 0)
+            std::memcmp(eff_compressed, path.data() + pos, remaining) == 0)
           return node->hash;
         return nullptr;
       }
-      if (clen > 0) {
-        if (std::memcmp(node->compressed(), path.data() + pos, clen) != 0)
+      if (eff_clen > 0) {
+        if (std::memcmp(eff_compressed, path.data() + pos, eff_clen) != 0) {
           return nullptr;
-        pos += clen;
+        }
+        pos += eff_clen;
       }
       if (pos == path.size()) {
         if (expected_type == TRIE) return node->hash;
-        // expected LEAF — look for NONE-branch child (key stored at this prefix)
         auto* none_child = node->offset(HashTrieNode_::NONE);
         if (!none_child || !*none_child) return nullptr;
         if (none_child->type() == LEAF) {
@@ -1858,6 +1914,7 @@ struct ReplicationReceiverFSM {
       uint8_t branch = static_cast<uint8_t>(path[pos++]);
       cur = node->offset(branch);
       if (!cur) return nullptr;
+      via_branch = true;
     }
     return nullptr;
   }
@@ -2129,8 +2186,8 @@ struct ReplicationReceiverFSM {
     _request_builder.begin(_session_id, _current_db_type);
 
     // Add all paths where hashes matched (sender should prune these)
-    for (const auto& path : _prune_paths) {
-      _request_builder.add_path(path);
+    for (const auto& [path, is_leaf] : _prune_paths) {
+      _request_builder.add_path(path, is_leaf);
     }
     _prune_paths.clear();
 

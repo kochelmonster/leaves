@@ -51,9 +51,6 @@ struct ReplicationTransferHeader {
 static_assert(sizeof(ReplicationTransferHeader) == 45,
               "ReplicationTransferHeader must be 45 bytes");
 
-// Backward compatibility alias
-using TransferTrieHeader = ReplicationTransferHeader;
-
 // Private base to hold buffer before TransferTrie base initialization
 struct ReplicationTransferTrieBufferHolder {
   std::vector<uint8_t> _buffer;
@@ -245,6 +242,11 @@ struct ReplicationTransferTrie
   }
 };
 
+// Backward compatibility aliases
+using TransferTrieHeader = ReplicationTransferHeader;
+template <typename Traits>
+using TransferTrie = ReplicationTransferTrie<Traits::MAX_KEY_SIZE>;
+
 // Request for children at specific paths
 // Wire format: magic(4), session_id(8), db_type(1), path_count(4),
 //              [path_len(2), path(var)]...
@@ -282,12 +284,20 @@ struct RequestChildrenBuilder {
     }
   }
 
-  void add_path(const std::string& path) {
+  void add_path(const std::string& path, bool is_leaf = false) {
     // path_len (2 bytes, aligned) + path data
+    // Bit 15 of path_len is the leaf flag: set when the pruned node is a
+    // NONE-branch leaf (a value stored at the exact path of an interior trie
+    // node). A trie node can have both a NONE-branch leaf (value at "sender_7")
+    // and non-NONE branches ('8', '9', ...) as children. An ACK for the
+    // NONE-branch leaf must NOT cause the sender to discard its deferred
+    // continuation for the trie's remaining children.
     size_t offset = _buffer.size();
     _buffer.resize(offset + 2 + path.size());
 
-    boost::endian::little_uint16_t path_len = (uint16_t)path.size();
+    uint16_t raw_len = (uint16_t)path.size();
+    if (is_leaf) raw_len |= 0x8000u;  // set leaf flag in MSB
+    boost::endian::little_uint16_t path_len = raw_len;
     std::memcpy(_buffer.data() + offset, &path_len, 2);
     std::memcpy(_buffer.data() + offset + 2, path.data(), path.size());
 
@@ -322,10 +332,17 @@ struct RequestChildrenIterator {
   bool valid() const { return !_error && _current + 2 <= _end; }
   bool error() const { return _error; }
 
-  uint16_t path_len() const {
+  // Raw 16-bit field: bit 15 = leaf flag, bits 0-14 = path length
+  uint16_t raw_path_len() const {
     // _current is guaranteed to be 2-byte aligned
     return *(boost::endian::little_uint16_t*)_current;
   }
+
+  uint16_t path_len() const { return raw_path_len() & 0x7FFFu; }
+
+  // True when the pruned node was a NONE-branch leaf (value at a trie node's
+  // exact path), not a full trie subtrie match.
+  bool is_leaf() const { return (raw_path_len() & 0x8000u) != 0; }
 
   Slice path() const {
     uint16_t len = path_len();
@@ -536,8 +553,20 @@ struct TransferTrieSender {
       iter.reset();
       while (iter.valid()) {
         Slice acked_path = iter.path();
-        // Check if it->path begins with acked_path
-        if (it->path.size() >= acked_path.size() &&
+        bool ack_is_leaf = iter.is_leaf();
+        // Descendants of acked_path are always prunable.
+        if (it->path.size() > acked_path.size() &&
+            it->path.compare(0, acked_path.size(), acked_path.data(),
+                             acked_path.size()) == 0) {
+          should_remove = true;
+          break;
+        }
+        // Exact path match: only prune if it's a trie ACK.
+        // A NONE-branch leaf ACK (is_leaf=true) means the receiver already has
+        // the value stored at this trie node's exact path, but the trie may
+        // still have unset non-NONE branches whose deferred continuation must
+        // be kept.
+        if (!ack_is_leaf && it->path.size() == acked_path.size() &&
             it->path.compare(0, acked_path.size(), acked_path.data(),
                              acked_path.size()) == 0) {
           should_remove = true;
@@ -629,9 +658,11 @@ struct TransferTrieSender {
       return;
     }
 
-    // Pick first pending node - it's already been transmitted, now send its
-    // next child
-    auto& pending = _pending.front();
+    // Pick last pending node (LIFO) so that later-inserted nodes (higher
+    // branch-key subtries, e.g. 'h' before 'e') are sent first. This ensures
+    // that subtries which share a common prefix with the receiver's local trie
+    // (and are thus prunable) are sent before lower-priority subtries.
+    auto& pending = _pending.back();
     auto hash_trie = _db->template resolve<HashTrieNode>(pending.offset);
     assert(hash_trie);  // Should always resolve since it was transmitted before
     assert(pending.next_child < hash_trie->count());
@@ -648,7 +679,38 @@ struct TransferTrieSender {
       // root
       _path_buffer.append((char*)hash_trie->compressed(), hash_trie->len());
 
-    _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
+    // When pending is a root-level deferred node (path_len == 0), the
+    // _path_buffer contains only the root's own compressed prefix (e.g., "s"
+    // when all keys share that prefix, or "" for a true empty root).
+    // But the wire root being sent is actually a CHILD of the root node, so
+    // its true global position is root_compressed + child_compressed.
+    // Using just _path_buffer ("s") as the subtrie_path would mislead the
+    // receiver into hashing against the 's' root entry instead of the child's
+    // actual entry (e.g., "sender_"), causing all child leaves to appear as
+    // new (local_hash=null) every round.
+    //
+    // Fix: when path_len == 0, peek at the child being sent and append its
+    // compressed bytes to subtrie_header_path, giving the receiver the correct
+    // full path to the wire root.
+    //
+    // The internal _path_buffer passed to _write_subtree must remain at
+    // root_compressed (path_len==0 path) so the child's compressed is appended
+    // only once inside _write_subtree (it would double-count otherwise).
+    std::string subtrie_header_path = _path_buffer;
+    if (path_len == 0) {
+      auto* child_offset = hash_trie->array() + pending.next_child;
+      if (child_offset->type() == TRIE) {
+        auto child_trie = _db->template resolve<HashTrieNode>(child_offset);
+        if (child_trie && child_trie->len() > 0)
+          subtrie_header_path.append((char*)child_trie->compressed(), child_trie->len());
+      } else {
+        auto child_leaf = _db->template resolve<HashLeafNode>(child_offset);
+        if (child_leaf && child_leaf->key_size > 0)
+          subtrie_header_path.push_back((char)child_leaf->data[0]);
+      }
+    }
+
+    _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(subtrie_header_path));
     // Note: root=false because we're writing a CHILD of the pending node, not
     // the root. The leaf case in _write_subtree handles branch-char push/pop.
     _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0,
@@ -657,7 +719,7 @@ struct TransferTrieSender {
 
     // the child as the TransferTrie root is guaranteed to be written.
     if (++pending.next_child >= hash_trie->count()) {
-      _pending.pop_front();
+      _pending.pop_back();
     }
   }
 
@@ -697,11 +759,6 @@ struct TransferTrieSender {
       auto& data_trans = _cursor->stack.back();
       auto& data_leaf = *data_trans.leaf();
 
-#ifdef LEAVES_DEBUG
-      std::cerr << "DEBUG: send node: " << path << " (type=leaf) "
-                << data_leaf.key().size() << "\n";
-#endif
-
       // Add data leaf to wire buffer (copies key/value, zeroes hash)
       auto* dest = _transfer.add_leaf_node(&data_leaf);
       if (!dest) {
@@ -740,12 +797,6 @@ struct TransferTrieSender {
       wire_link->set_relative(dest);
       wire_link->type(TRIE);
     }
-
-#ifdef LEAVES_DEBUG
-    if (!root) path.push_back((char)hash_trie->compressed()[0]);
-    std::cerr << "DEBUG: send node: " << path << " (type=trie)\n";
-    path.resize(path_len);
-#endif
 
     // Get wire array for setting child offsets
     auto* wire_trie = const_cast<typename Transfer::TrieNode*>(dest);

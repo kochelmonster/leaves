@@ -130,6 +130,10 @@
         "/^python3 -c \"\nwith open\\('/home/michael/src/leaves/tests/test_replication_fsm\\.cpp', 'a'\\) as f:\n    f\\.write\\('\\\\n#endif  // closes SKIP_REPLICATION_TESTS\\\\n'\\)\n\"$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "./$f": true,
+        "wait": true,
+        "pgrep": true,
+        "read": true
     }
 }
