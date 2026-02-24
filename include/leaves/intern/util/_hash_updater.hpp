@@ -130,8 +130,7 @@ struct _HashUpdater {
    * child.
    */
   void sync_nodes(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
-                  uint8_t hash_prefix_skip = 0, uint8_t data_prefix_skip = 0,
-                  int branch_key = HashTrieNode::NONE) {
+                  uint8_t hash_prefix_skip = 0, uint8_t data_prefix_skip = 0) {
     // Case: data is empty
     if (!data_offset) {
       if (*hash_offset_ptr) {
@@ -143,7 +142,7 @@ struct _HashUpdater {
 
     // Case: hash is empty - deep copy entire data subtree
     if (!*hash_offset_ptr) {
-      deep_copy_data_to_hash(data_offset, hash_offset_ptr, branch_key);
+      deep_copy_data_to_hash(data_offset, hash_offset_ptr);
       return;
     }
 
@@ -161,7 +160,7 @@ struct _HashUpdater {
 
     // txn_id differs - need to sync structure
     if (data_offset.type() == LEAF) {
-      sync_data_leaf(data_offset, hash_offset_ptr, branch_key);
+      sync_data_leaf(data_offset, hash_offset_ptr, data_prefix_skip);
     } else {
       sync_data_trie(data_offset, hash_offset_ptr, hash_prefix_skip,
                      data_prefix_skip);
@@ -172,20 +171,21 @@ struct _HashUpdater {
    * @brief Sync when data is a leaf.
    */
   void sync_data_leaf(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
-                      int branch_key = HashTrieNode::NONE) {
+                      uint8_t data_prefix_skip = 0) {
     auto data_leaf = _data_db->template resolve<DataLeafNode>(&data_offset);
 
     // Save key path state
     size_t saved_len = _key_path.size();
-    _key_path.append((const char*)data_leaf->data, data_leaf->key_size);
+    _key_path.append((const char*)data_leaf->data + data_prefix_skip,
+                     data_leaf->key_size - data_prefix_skip);
 
     // Replace whatever is in hash with a new hash leaf
     if (*hash_offset_ptr) {
       free_hash_subtree(*hash_offset_ptr);
     }
 
-    // Create hash leaf with computed hash; store branch_key in data[0]
-    hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf, branch_key);
+    // Create hash leaf with computed hash
+    hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf);
     *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
     _key_path.resize(saved_len);
@@ -265,30 +265,27 @@ struct _HashUpdater {
            k = data_trie->next(k)) {
         data_offset_e data_child = *data_trie->offset(k);
 
-        if (k != DataTrieNode::NONE) {
-          _key_path.push_back((char)k);
-        }
-
         hash_offset_e hash_child{};
         if (k == (int)diverge_byte && !hash_consumed) {
-          // This data branch aligns with hash's embedded prefix
-          // Recurse with increased skip: skip original + common + 1 (for
-          // diverge_byte) Data child's first byte is the branch key, so skip 1
-          // byte in data too
+          // This data branch aligns with hash's embedded prefix.
+          // The child's compressed[0] is the branch char, which will be
+          // skipped via data_prefix_skip=1.  We must include it in
+          // _key_path so the hash covers the full key.
           hash_child = *hash_offset_ptr;
+          if (k != DataTrieNode::NONE) _key_path.push_back((char)k);
           uint8_t new_hash_skip = hash_prefix_skip + common + 1;
           uint8_t new_data_skip =
               1;  // Skip the branch byte embedded in child's prefix
-          sync_nodes(data_child, &hash_child, new_hash_skip, new_data_skip, k);
+          sync_nodes(data_child, &hash_child, new_hash_skip, new_data_skip);
+          if (k != DataTrieNode::NONE) _key_path.pop_back();
           hash_consumed = true;
         } else {
-          deep_copy_data_to_hash(data_child, &hash_child, k);
+          // Non-matching branch: child appends full compressed (no skip),
+          // so branch char is included naturally — no push needed.
+          deep_copy_data_to_hash(data_child, &hash_child);
         }
 
         offsets_buf[k] = hash_child;
-        if (k != DataTrieNode::NONE) {
-          _key_path.pop_back();
-        }
         branch_count++;
       }
 
@@ -296,8 +293,11 @@ struct _HashUpdater {
         free_hash_subtree(*hash_offset_ptr);
       }
 
-      // Create new hash trie with data's structure (use effective prefix)
-      Slice prefix((const char*)data_prefix, effective_data_len);
+      // Create new hash trie mirroring data's full compressed prefix.
+      // Must use the FULL compressed (not effective/skipped), because
+      // compute_trie_hash hashes trie->compressed() and it must match
+      // what compute_node_hash would produce for this data trie node.
+      Slice prefix((const char*)data_trie->compressed(), data_trie->len());
       data_page_ptr data_page((char*)&*data_trie - sizeof(DataPageHeader));
       hash_trie_ptr new_hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
@@ -392,24 +392,16 @@ struct _HashUpdater {
          k = data_trie->next(k)) {
       data_offset_e data_child = *data_trie->offset(k);
 
-      if (k != DataTrieNode::NONE) {
-        _key_path.push_back((char)k);
-      }
-
       if (hash_has[k + 1]) {
         // Common branch - recurse
         hash_offset_e hash_child = *hash_trie->offset(k);
-        sync_nodes(data_child, &hash_child, 0, 0, k);
+        sync_nodes(data_child, &hash_child);
         offsets_buf[k] = hash_child;
       } else {
         // Data-only branch - deep copy
         hash_offset_e hash_child{};
-        deep_copy_data_to_hash(data_child, &hash_child, k);
+        deep_copy_data_to_hash(data_child, &hash_child);
         offsets_buf[k] = hash_child;
-      }
-
-      if (k != DataTrieNode::NONE) {
-        _key_path.pop_back();
       }
 
       branch_count++;
@@ -424,11 +416,11 @@ struct _HashUpdater {
       }
     }
 
-    // Create new hash trie with correct branches (use effective prefix)
-    const uint8_t* effective_prefix =
-        data_trie->compressed() + data_prefix_skip;
-    uint8_t effective_len = data_trie->len() - data_prefix_skip;
-    Slice prefix((const char*)effective_prefix, effective_len);
+    // Create new hash trie mirroring data's full compressed prefix.
+    // Must use the FULL compressed (not effective/skipped), because
+    // compute_trie_hash hashes trie->compressed() and it must match
+    // what compute_node_hash would produce for this data trie node.
+    Slice prefix((const char*)data_trie->compressed(), data_trie->len());
     data_page_ptr data_page((char*)&*data_trie - sizeof(DataPageHeader));
     hash_trie_ptr new_hash_trie =
         alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
@@ -448,8 +440,7 @@ struct _HashUpdater {
    * @brief Deep copy data subtree to hash trie, computing hashes.
    */
   void deep_copy_data_to_hash(data_offset_e data_offset,
-                              hash_offset_e* hash_offset_ptr,
-                              int branch_key = HashTrieNode::NONE) {
+                              hash_offset_e* hash_offset_ptr) {
     if (!data_offset) {
       *hash_offset_ptr = hash_offset_e();
       return;
@@ -460,7 +451,7 @@ struct _HashUpdater {
       size_t saved_len = _key_path.size();
       _key_path.append((const char*)data_leaf->data, data_leaf->key_size);
 
-      hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf, branch_key);
+      hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf);
       *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
       _key_path.resize(saved_len);
@@ -476,18 +467,10 @@ struct _HashUpdater {
 
       for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
            k = data_trie->next(k)) {
-        if (k != DataTrieNode::NONE) {
-          _key_path.push_back((char)k);
-        }
-
         hash_offset_e child{};
-        deep_copy_data_to_hash(*data_trie->offset(k), &child, k);
+        deep_copy_data_to_hash(*data_trie->offset(k), &child);
         offsets_buf[k] = child;
         branch_count++;
-
-        if (k != DataTrieNode::NONE) {
-          _key_path.pop_back();
-        }
       }
 
       // Create hash trie
@@ -510,8 +493,13 @@ struct _HashUpdater {
   /**
    * @brief Create hash leaf from data leaf.
    */
-  hash_leaf_ptr create_leaf_hash(data_leaf_ptr data_leaf,
-                                  int branch_key = HashTrieNode::NONE) {
+  hash_leaf_ptr create_leaf_hash(data_leaf_ptr data_leaf) {
+    // Derive branch key from data leaf's key: data[0] is the branch char,
+    // or NONE if key_size == 0 (exact-match / NONE-branch leaf).
+    int branch_key = (data_leaf->key_size > 0)
+        ? static_cast<int>(static_cast<uint8_t>(data_leaf->data[0]))
+        : HashTrieNode::NONE;
+
     // Get data leaf's txn_id from its page header
     data_page_ptr data_page((char*)&*data_leaf - sizeof(DataPageHeader));
     tid_t txn_id = data_page->txn_id;
