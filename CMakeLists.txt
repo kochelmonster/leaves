@@ -200,6 +200,9 @@ target_link_libraries(test_merger PUBLIC core test)
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
 target_link_libraries(test_hash_updater PUBLIC core test blake3)
 
+add_executable(test_hash_lookup tests/test_hash_lookup.cpp)
+target_link_libraries(test_hash_lookup PUBLIC core test blake3)
+
 add_executable(test_serial tests/test_serial.cpp)
 target_link_libraries(test_serial PUBLIC test)
 

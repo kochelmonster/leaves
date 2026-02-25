@@ -5,7 +5,7 @@
 #include <blake3.h>
 #include <set>
 
-#include "../include/leaves/intern/util/_hash_updater.hpp"
+#include "../include/leaves/intern/replication/_hash.hpp"
 #include "../include/leaves/mmap.hpp"
 
 using namespace leaves;
