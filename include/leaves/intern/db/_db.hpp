@@ -5,7 +5,6 @@
 #include <memory>
 #include <mutex>
 
-#include "../core/_hash.hpp"
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
 #include "_aspect.hpp"
@@ -122,17 +121,6 @@ struct _DB {
     typedef _DB<Storage_, Transaction_, Header_> DB;
     using tid_t = leaves::tid_t;
   };
-
-  // Detect ReplicationHasher from Traits, fallback to NullHasher
-  template <typename T, typename = void>
-  struct get_replication_hasher { using type = NullHasher; };
-  
-  template <typename T>
-  struct get_replication_hasher<T, std::void_t<typename T::ReplicationHasher>> {
-    using type = typename T::ReplicationHasher;
-  };
-  
-  using ReplicationHasher = typename get_replication_hasher<Traits>::type;
 
   // Detect Aspect from Traits, fallback to DefaultAspect
   template <typename T, typename = void>
