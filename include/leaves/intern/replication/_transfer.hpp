@@ -6,10 +6,9 @@
 #include <random>
 #include <unordered_set>
 
-#include "../core/_hash.hpp"
+#include "_hash.hpp"
 #include "../db/_check.hpp"
 #include "../memory/_bigmemory.hpp"
-#include "../util/_hash_updater.hpp"
 #include "../util/_transfer_trie.hpp"
 
 namespace leaves {
@@ -554,8 +553,11 @@ struct TransferTrieSender {
       while (iter.valid()) {
         Slice acked_path = iter.path();
         bool ack_is_leaf = iter.is_leaf();
-        // Descendants of acked_path are always prunable.
-        if (it->path.size() > acked_path.size() &&
+        // Descendants of acked_path are prunable only for trie ACKs.
+        // A NONE-branch leaf ACK (is_leaf=true) means only the value at
+        // this path matches — the trie node's other branches may still
+        // differ, so their deferred continuations must be kept.
+        if (!ack_is_leaf && it->path.size() > acked_path.size() &&
             it->path.compare(0, acked_path.size(), acked_path.data(),
                              acked_path.size()) == 0) {
           should_remove = true;
@@ -640,7 +642,7 @@ struct TransferTrieSender {
   // If _pending has nodes, picks the first and writes a subtrie of its next
   // child as root All written nodes go to _last_batch
   // Walks the hash trie structure, looking up data via cursor for leaves.
-  void fill_buffer() {
+  size_t fill_buffer() {
     if (_pending.empty()) {
       // First transmission - write root node and its descendants up to
       // max_depth
@@ -652,10 +654,10 @@ struct TransferTrieSender {
       if (_db_type == DbType::DB_DELETION) {
         hash_root = _db->deletion_hash_root_ptr();
       }
-
+      
       if (*hash_root)
         _write_subtree(_path_buffer, hash_root, 0, nullptr, true);
-      return;
+      return _transfer.node_count();
     }
 
     // Pick last pending node (LIFO) so that later-inserted nodes (higher
@@ -679,25 +681,16 @@ struct TransferTrieSender {
       // root
       _path_buffer.append((char*)hash_trie->compressed(), hash_trie->len());
 
-    // When pending is a root-level deferred node (path_len == 0), the
-    // _path_buffer contains only the root's own compressed prefix (e.g., "s"
-    // when all keys share that prefix, or "" for a true empty root).
-    // But the wire root being sent is actually a CHILD of the root node, so
-    // its true global position is root_compressed + child_compressed.
-    // Using just _path_buffer ("s") as the subtrie_path would mislead the
-    // receiver into hashing against the 's' root entry instead of the child's
-    // actual entry (e.g., "sender_"), causing all child leaves to appear as
-    // new (local_hash=null) every round.
+    // _path_buffer holds the parent's full compressed path.  The wire root
+    // is a CHILD of that parent, so its global position is
+    // parent_path + child's own key bytes.  Peek at the child to build the
+    // full subtrie_header_path so the receiver can hash-compare at the
+    // correct position.
     //
-    // Fix: when path_len == 0, peek at the child being sent and append its
-    // compressed bytes to subtrie_header_path, giving the receiver the correct
-    // full path to the wire root.
-    //
-    // The internal _path_buffer passed to _write_subtree must remain at
-    // root_compressed (path_len==0 path) so the child's compressed is appended
-    // only once inside _write_subtree (it would double-count otherwise).
+    // The internal _path_buffer passed to _write_subtree must stay at the
+    // parent level so _write_subtree appends child compressed only once.
     std::string subtrie_header_path = _path_buffer;
-    if (path_len == 0) {
+    {
       auto* child_offset = hash_trie->array() + pending.next_child;
       if (child_offset->type() == TRIE) {
         auto child_trie = _db->template resolve<HashTrieNode>(child_offset);
@@ -721,6 +714,7 @@ struct TransferTrieSender {
     if (++pending.next_child >= hash_trie->count()) {
       _pending.pop_back();
     }
+    return _transfer.node_count();
   }
 
   // Write a subtrie with DFS up to max_depth

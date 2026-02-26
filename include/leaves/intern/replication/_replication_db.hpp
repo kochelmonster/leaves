@@ -6,7 +6,7 @@
 #include <thread>
 
 #include "../db/_db.hpp"
-#include "../util/_hash_updater.hpp"
+#include "_hash.hpp"
 
 namespace leaves {
 

@@ -741,28 +741,19 @@ struct _HashLookup {
       return nullptr;
     }
 
-    // expected_type == TRIE: looking for a trie node whose subtree covers
-    // exactly the position described by `path`.
-    //
-    // Case 1: path is exhausted at a trie node (no NONE child to follow).
-    //   back is a trie with cmp == -1, rest_key empty, prefix == len().
-    if (back.is_trie() && back.cmp == -1 &&
-        _cursor.rest_key.empty() && back.prefix == back.trie()->len()) {
-      return back.trie()->hash;
-    }
+    // expected_type == TRIE: return the deepest trie node hash the cursor
+    // landed on.  If the path overshoots or undershoots, the hash simply
+    // won't match the wire hash, so the caller treats it as "hashes differ"
+    // — no incorrect pruning can occur (would require a BLAKE3 collision).
+    if (back.is_trie()) return back.trie()->hash;
 
-    // Case 2: cursor followed the NONE-branch into a leaf (key_size=0).
-    //   The trie we want is the parent frame.
-    if (back.success() && _cursor.stack.size >= 2) {
+    // Cursor followed the NONE-branch into a leaf — the trie we want is
+    // the parent frame.
+    if (_cursor.stack.size >= 2) {
       auto& parent = _cursor.stack.data[_cursor.stack.size - 2];
-      if (parent.is_trie() && parent.prefix == parent.trie()->len()) {
-        return parent.trie()->hash;
-      }
+      if (parent.is_trie()) return parent.trie()->hash;
     }
 
-    // Case 3: path lands mid-compressed or branch not found — no exact
-    //   node boundary at this path.  Return nullptr so the caller treats
-    //   it as "no local hash available" (hashes differ → send data).
     return nullptr;
   }
 };

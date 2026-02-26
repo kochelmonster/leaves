@@ -180,22 +180,6 @@ struct ReplicationFixture {
 // Tests
 // =============================================================================
 
-// TODO: Re-enable once hash trie integration is complete
-// All replication tests are currently skipped because TransferTrieSender
-// now requires a separate hash trie (set via set_hash_root).
-#define SKIP_REPLICATION_TESTS 1
-
-#if SKIP_REPLICATION_TESTS
-BOOST_AUTO_TEST_SUITE(ReplicationFSMTests)
-
-BOOST_AUTO_TEST_CASE(tests_skipped) {
-  BOOST_TEST_MESSAGE("Replication tests SKIPPED: requires hash trie adaptation");
-  BOOST_CHECK(true);  // Pass trivially
-}
-
-BOOST_AUTO_TEST_SUITE_END()
-
-#else  // !SKIP_REPLICATION_TESTS
 
 BOOST_AUTO_TEST_SUITE(ReplicationFSMTests)
 
@@ -2429,8 +2413,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
     sender.begin(&sender_transport, &sender_events);
 
     // After begin(), receiver should have claimed a slot (sentinel)
-    BOOST_CHECK_GE(receiver._replication_slot, 0);
-    int16_t claimed_slot = receiver._replication_slot;
+    BOOST_CHECK_GE(receiver._replication_slot.slot_index(), 0);
+    int16_t claimed_slot = receiver._replication_slot.slot_index();
     BOOST_CHECK_EQUAL(
         receiver_impl->_header->replication_slots[claimed_slot]._offset,
         DBImpl::Header::REPLICATION_SLOT_SENTINEL);
@@ -2540,7 +2524,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
 
       // Check if the receiver's slot now has a real offset
       // (not sentinel and not zero)
-      claimed_slot = receiver._replication_slot;
+      claimed_slot = receiver._replication_slot.slot_index();
       if (claimed_slot >= 0) {
         uint64_t slot_val =
             receiver_impl->_header->replication_slots[claimed_slot]._offset;
@@ -2661,7 +2645,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
     receivers[i].fsm->begin(&receivers[i].transport, &receivers[i].events);
 
     // Each should have claimed a unique slot
-    BOOST_CHECK_GE(receivers[i].fsm->_replication_slot, 0);
+    BOOST_CHECK_GE(receivers[i].fsm->_replication_slot.slot_index(), 0);
   }
 
   // Verify all N slots are occupied (sentinel value since no BIG_VALUE_START)
@@ -2678,7 +2662,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
                              ReplicationMergePolicy<DBImpl>{});
   extra_receiver.begin(&extra_transport, &extra_events);
 
-  BOOST_CHECK_EQUAL(extra_receiver._replication_slot, -1);
+  BOOST_CHECK_EQUAL(extra_receiver._replication_slot.slot_index(), -1);
 
   // Clean up: destroy all receivers.  The destructor calls _release_slot(),
   // which clears each receiver's slot.
@@ -2757,7 +2741,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
         sender.on_message_received(msg.data(), msg.size());
       }
 
-      claimed_slot = receiver._replication_slot;
+      claimed_slot = receiver._replication_slot.slot_index();
       if (claimed_slot >= 0) {
         uint64_t slot_val =
             receiver_impl->_header->replication_slots[claimed_slot]._offset;
@@ -2799,7 +2783,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
     // returned the area to the pool and cleared the slot
     BOOST_CHECK_EQUAL(
         receiver_impl->_header->replication_slots[claimed_slot]._offset, 0u);
-    BOOST_CHECK_EQUAL(receiver._replication_slot, -1);
+    BOOST_CHECK_EQUAL(receiver._replication_slot.slot_index(), -1);
   }
 
   // After the scope, the destructor runs _release_slot() again — but it's
@@ -3080,4 +3064,4 @@ BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixtu
 
 BOOST_AUTO_TEST_SUITE_END()
 
-#endif  // closes SKIP_REPLICATION_TESTS
+

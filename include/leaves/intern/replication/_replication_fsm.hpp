@@ -10,96 +10,14 @@
 #include <vector>
 
 #include "../db/_cursor.hpp"
-#include "../core/_hash.hpp"
+#include "_hash.hpp"
 #include "../util/_merger.hpp"
+#include "_big_value_receiver.hpp"
+#include "_replication_protocol.hpp"
+#include "_replication_slot.hpp"
 #include "_transfer.hpp"
-#include "../util/_hash_updater.hpp"
 
 namespace leaves {
-
-// =============================================================================
-// Message Envelope
-// =============================================================================
-
-// Message types for replication protocol
-enum class ReplicationMsgType : uint8_t {
-  TRIE_DATA = 0x01,  // TransferTrie buffer (sender → receiver)
-  SUBTRIE_ACK =
-      0x02,  // ACK subtries at paths - sender can skip (receiver → sender)
-  COMPLETE = 0x03,           // Replication complete (either side)
-  ERROR = 0x04,              // Error occurred (either side)
-  FRACTION_COMPLETE = 0x05,  // Fraction merged, restart from root
-                             // (receiver → sender)
-  BIG_VALUE_DATA = 0x06,     // Big value data transfer (sender → receiver)
-  BIG_VALUE_ACK =
-      0x07,  // Big value received acknowledgement (receiver → sender)
-  BIG_VALUE_START = 0x08,  // Big value transfer start with total size
-                           // (sender → receiver)
-};
-
-constexpr uint32_t REPLICATION_MSG_MAGIC = 0x4C565250;  // "LVRP"
-
-// Message envelope wrapping all replication messages
-constexpr uint8_t REPLICATION_PROTOCOL_VERSION = 1;
-
-#pragma pack(push, 1)
-struct ReplicationMsgHeader {
-  boost::endian::little_uint32_t magic;
-  uint8_t msg_type;  // ReplicationMsgType
-  boost::endian::little_uint64_t session_id;
-  boost::endian::little_uint32_t payload_size;
-  uint8_t version;      // Protocol version (REPLICATION_PROTOCOL_VERSION)
-  uint8_t reserved[6];  // Padding to 24 bytes for 8-byte payload alignment
-  // Followed by: payload bytes
-
-  bool is_valid() const {
-    return magic == REPLICATION_MSG_MAGIC &&
-           version == REPLICATION_PROTOCOL_VERSION;
-  }
-};
-#pragma pack(pop)
-
-static_assert(sizeof(ReplicationMsgHeader) == 24,
-              "ReplicationMsgHeader must be 24 bytes");
-
-// Big value data header - sent in BIG_VALUE_DATA messages
-// Multiple big values can be batched in one message
-#pragma pack(push, 1)
-struct BigValueDataHeader {
-  boost::endian::little_uint64_t
-      wire_chunk_offset;                      // Original offset (lookup key)
-  boost::endian::little_uint32_t value_size;  // Size of value data
-  // Followed by: value_size bytes of data
-};
-#pragma pack(pop)
-
-static_assert(sizeof(BigValueDataHeader) == 12,
-              "BigValueDataHeader must be 12 bytes");
-
-// Big value start header - sent in BIG_VALUE_START messages
-// Announces total count and aligned size so receiver can pre-allocate
-#pragma pack(push, 1)
-struct BigValueStartHeader {
-  boost::endian::little_uint32_t count;  // Number of big values to follow
-  boost::endian::little_uint64_t
-      total_aligned_size;  // Total size with MAX_PAGE_SIZE alignment
-};
-#pragma pack(pop)
-
-static_assert(sizeof(BigValueStartHeader) == 12,
-              "BigValueStartHeader must be 12 bytes");
-
-// Error codes for ERROR messages
-enum class ReplicationError : uint8_t {
-  NONE = 0x00,
-  SESSION_MISMATCH = 0x01,
-  INVALID_MESSAGE = 0x02,
-  INVALID_STATE = 0x03,
-  INTERNAL_ERROR = 0x04,
-  PAYLOAD_TOO_LARGE = 0x05,
-  RESOURCE_LIMIT = 0x06,
-  STORAGE_FULL = 0x07
-};
 
 // =============================================================================
 // Receive Buffer for Zero-Copy Message Reception
@@ -506,17 +424,10 @@ struct ReplicationSenderFSM {
     // With the new strategy, each fill_buffer() produces exactly one complete
     // subtrie The subtrie_path in the header identifies where it connects to
     // the parent
-    _sender.fill_buffer();
+    size_t node_count = _sender.fill_buffer();
     Slice buffer = _sender.finalize();
-    // Parse to get node count
-    const TransferTrieHeader* hdr = Transfer::parse_header(buffer);
-    if (!hdr) {
-      _transition_to_error(ReplicationError::INTERNAL_ERROR,
-                           "Failed to parse transfer header");
-      return;
-    }
 
-    _total_nodes += hdr->node_count;
+    _total_nodes += node_count;
     _total_bytes += buffer.size();
 
     // Wrap in message envelope and send
@@ -865,10 +776,7 @@ struct ReplicationReceiverFSM {
   using HashTraits_ = HashTrieTraits<Traits>;
   using HashTrieNode_ = _TrieNode<HashTraits_>;
   using HashLeafNode_ = _LeafNode<HashTraits_>;
-
-  // Dummy struct for raw data pointers (similar to BigMemory::Chunk)
-  struct Chunk {};
-  using chunk_ptr = typename Traits::template Pointer<Chunk>;
+  using BigValueRx = _BigValueReceiver<DB>;
 
   enum class State {
     IDLE,                  // Not started
@@ -905,7 +813,6 @@ struct ReplicationReceiverFSM {
   size_t _memory_budget;     // Max temp DB bytes before forcing a fraction
                              // merge. SIZE_MAX = unlimited (single round).
   size_t _max_payload_size;  // Max single-message payload size (reject larger)
-  size_t _max_big_value_size;  // Max total big value allocation size
   // Activity tracking for application-level timeouts
   std::chrono::steady_clock::time_point _last_activity;
 
@@ -935,35 +842,11 @@ struct ReplicationReceiverFSM {
   // Overwrite handler for merge conflicts
   MergePolicy _merge_policy;
 
-  // Big value storage
-  // ====================================
-  // Maps wire_chunk_offset (sender's offset) -> offset_t in persistent storage
-  // Big values are allocated directly from storage (bypassing transaction) and
-  // written as they arrive. The multi-area is linked to the transaction only
-  // during merge, keeping transaction lifetime short. Receiver detects
-  // completion when all expected big values are received, then merges
-  // immediately.
-  std::unordered_map<uint64_t, offset_t> _big_value_offsets;
-  typename DB::Storage::area_ptr
-      _big_value_multi_area;        // Multi-area from storage
-  chunk_ptr _big_value_area;        // Pointer to allocated multi_area storage
-  offset_t _big_value_area_offset;  // Base offset in persistent storage
-  size_t _big_value_area_size;      // Total allocated size
-  size_t _big_value_write_pos;      // Current write position in area
-  uint32_t _big_value_expected_count;  // Expected count from BIG_VALUE_START
-  uint32_t _big_value_received_count;  // Count of big values received so far
-  uint32_t _big_value_trie_count;  // Count of big values found in received trie
+  // Hash trie lookup (owns cursor + root pointer)
+  _HashLookup<DB> _hash_lookup;
 
-  // Big value stream parsing state
-  // ====================================
-  // The sender sends a virtual stream of [header1][data1][header2][data2]...
-  // in fixed-size chunks. Headers/values may span chunk boundaries.
-  uint8_t _bv_header_buf[sizeof(BigValueDataHeader)];  // Partial header buffer
-  size_t _bv_header_pos;             // Bytes of header received so far
-  uint64_t _bv_current_wire_offset;  // Current value's wire_chunk_offset
-  uint32_t _bv_current_size;         // Current value's total size
-  size_t _bv_current_received;       // Bytes received for current value
-  bool _bv_parsing_header;  // true = parsing header, false = parsing data
+  // Big value receiver — manages big value streaming and storage
+  BigValueRx _big_value;
 
   // Deferred merge state (single-transaction mode)
   // ====================================
@@ -976,17 +859,7 @@ struct ReplicationReceiverFSM {
       _deferred_temp_buffers;  // Keeps deferred wire data alive
 
   // Replication slot — crash-safe tracking of pre-merge multi-areas
-  // ====================================
-  // The FSM claims one slot in _header->replication_slots[].  The slot
-  // holds the offset of the multi-area currently being filled for a big
-  // value.  On merge, the area is handed to the transaction and the slot
-  // is cleared.  On crash, sanitize() returns all non-zero slots to the pool.
-  int16_t _replication_slot;  // -1 = no slot claimed
-
-  // Constants for big value alignment (must match BigMemory)
-  static constexpr size_t MAX_PAGE_SIZE =
-      Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
-  static constexpr size_t FREE_KEY_SIZE = sizeof(_FreeKey);
+  _ReplicationSlot<DB> _replication_slot;
 
   static constexpr size_t DEFAULT_MAX_PAYLOAD_SIZE = 64 * 1024 * 1024;  // 64MB
   static constexpr size_t DEFAULT_MEMORY_BUDGET = 256 * 1024 * 1024;    // 256MB
@@ -1012,27 +885,15 @@ struct ReplicationReceiverFSM {
         _current_db_type(DbType::DB_MAIN),
         _memory_budget(memory_budget),
         _max_payload_size(max_payload_size),
-        _max_big_value_size(max_big_value_size),
         _initial_buffer_size(receive_buffer_size),
         _temp_root(0),
         _wire_cursor(&_wire_db, &_temp_root),
         _merge_policy(std::move(handler)),
-        _big_value_multi_area(nullptr),
-        _big_value_area(nullptr),
-        _big_value_area_offset(0),
-        _big_value_area_size(0),
-        _big_value_write_pos(0),
-        _big_value_expected_count(0),
-        _big_value_received_count(0),
-        _big_value_trie_count(0),
-        _bv_header_pos(0),
-        _bv_current_wire_offset(0),
-        _bv_current_size(0),
-        _bv_current_received(0),
-        _bv_parsing_header(true),
+        _hash_lookup(db, &db->_header->hash_control.hash_root),
+        _big_value(max_big_value_size),
         _deferred_wire_root(nullptr),
         _deferred_wire_root_type(0),
-        _replication_slot(-1),
+        _replication_slot(db),
         _last_activity(std::chrono::steady_clock::now()) {
     // Allocate first receive buffer
     _alloc_receive_buffer();
@@ -1042,7 +903,7 @@ struct ReplicationReceiverFSM {
     _db->aspect().init_cursor_context(_merge_policy._merge_context);
   }
 
-  ~ReplicationReceiverFSM() { _release_slot(); }
+  ~ReplicationReceiverFSM() = default;
 
   // Non-copyable, non-movable (owns replication slot)
   ReplicationReceiverFSM(const ReplicationReceiverFSM&) = delete;
@@ -1096,7 +957,6 @@ struct ReplicationReceiverFSM {
     _prune_paths.clear();
     _pending_children = 0;
     _new_leaves = 0;
-    _big_value_trie_count = 0;
     _last_activity = std::chrono::steady_clock::now();
 
     // Reset temp buffers from any previous session
@@ -1104,13 +964,11 @@ struct ReplicationReceiverFSM {
     _alloc_receive_buffer();
     _temp_root = 0;
 
-    // Reset big value storage
-    _big_value_offsets.clear();
-    _big_value_multi_area = nullptr;
-    _big_value_area = nullptr;
-    _big_value_area_offset = 0;
-    _big_value_area_size = 0;
-    _big_value_write_pos = 0;
+    // Reset hash lookup for fresh session (root may have changed)
+    _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
+
+    // Reset big value state
+    _big_value.reset();
 
     // Reset deferred merge state
     _deferred_wire_root = nullptr;
@@ -1118,7 +976,7 @@ struct ReplicationReceiverFSM {
     _deferred_temp_buffers.clear();
 
     // Claim a replication slot for crash-safe area tracking
-    _claim_slot();
+    _replication_slot.claim();
   }
 
   // ==========================================================================
@@ -1253,7 +1111,7 @@ struct ReplicationReceiverFSM {
         // Sender indicates sync is complete — merge all deferred and
         // current temp data in one short atomic transaction.
         if (!_merge_all_phases()) break;  // error already reported
-        _release_slot();
+        _replication_slot.release();
         _free_temp_buffers();
         _db->release_hash_trie(_txn);
         if (_events) {
@@ -1309,189 +1167,36 @@ struct ReplicationReceiverFSM {
   }
 
   void _handle_big_value_start(const Slice& payload) {
-    // Parse BIG_VALUE_START header
-    if (payload.size() < sizeof(BigValueStartHeader)) {
-      _transition_to_error(ReplicationError::INVALID_MESSAGE,
-                           "BIG_VALUE_START payload too small");
+    auto err = _big_value.handle_start(_db, payload, _replication_slot);
+    if (err) {
+      _transition_to_error(err.code, err.message);
       return;
     }
-
-    const auto* hdr = (const BigValueStartHeader*)payload.data();
-
-    _big_value_expected_count = hdr->count;
-    _big_value_received_count = 0;
-    uint64_t total_aligned_size = hdr->total_aligned_size;
-
-    // Reject big value allocations that exceed the configured limit
-    if (total_aligned_size > _max_big_value_size) {
-      _transition_to_error(ReplicationError::RESOURCE_LIMIT,
-                           "Big value total size exceeds limit");
-      return;
-    }
-
-    // Allocate persistent storage directly from storage layer (bypasses
-    // transaction) The area is allocated now but only linked to transaction
-    // during merge
-    static constexpr size_t AREA_SIZE = Traits::AREA_SIZE;
-
-    // Use uint64_t arithmetic to detect overflow before casting to size_t
-    uint64_t alloc_size_64 =
-        ((total_aligned_size + AREA_SIZE - 1) / AREA_SIZE) * AREA_SIZE;
-    if (alloc_size_64 > SIZE_MAX) {
-      _transition_to_error(ReplicationError::RESOURCE_LIMIT,
-                           "Big value allocation overflow");
-      return;
-    }
-    size_t alloc_size = static_cast<size_t>(alloc_size_64);
-    try {
-      _big_value_multi_area = _db->_storage.alloc_multi_area(alloc_size);
-    } catch (const StorageFull&) {
-      _transition_to_error(ReplicationError::STORAGE_FULL,
-                           "Storage full during big value allocation");
-      return;
-    } catch (const std::exception& e) {
-      _transition_to_error(ReplicationError::INTERNAL_ERROR, e.what());
-      return;
-    }
-
-    // Track the newly allocated multi-area in the replication slot
-    // so it can be reclaimed on crash before merge completes
-    _track_area_in_slot(_big_value_multi_area);
-
-    _big_value_area_offset = _big_value_multi_area->content_offset();
-    _big_value_area_size = _big_value_multi_area->end() - _big_value_area_offset;
-    _big_value_area =
-        _db->template resolve<Chunk>(&_big_value_area_offset, WRITE);
-    _big_value_write_pos = 0;
-    _big_value_offsets.clear();
-
-    // Reset stream parsing state
-    _bv_header_pos = 0;
-    _bv_current_wire_offset = 0;
-    _bv_current_size = 0;
-    _bv_current_received = 0;
-    _bv_parsing_header = true;
-
     _state = State::AWAITING_BIG_VALUES;
-
-    // Send ACK to indicate we're ready to receive data
     _send_big_value_ack();
   }
 
   void _handle_big_value_data(const Slice& payload) {
-    // Parse streaming big value data - format is a continuous stream of
-    // [header][data][header][data]... that may span chunk boundaries
-    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(payload.data());
-    const uint8_t* end = ptr + payload.size();
-
-    _state = State::RECEIVING_BIG_VALUES;
-
-    while (ptr < end) {
-      if (_bv_parsing_header) {
-        // Parse header (may be partial from previous chunk)
-        size_t header_needed = sizeof(BigValueDataHeader) - _bv_header_pos;
-        size_t header_available = end - ptr;
-        size_t header_to_read = std::min(header_needed, header_available);
-
-        std::memcpy(_bv_header_buf + _bv_header_pos, ptr, header_to_read);
-        _bv_header_pos += header_to_read;
-        ptr += header_to_read;
-
-        if (_bv_header_pos < sizeof(BigValueDataHeader)) {
-          // Header incomplete, wait for next chunk
-          break;
-        }
-
-        // Header complete, parse it
-        const auto* hdr = (const BigValueDataHeader*)_bv_header_buf;
-        _bv_current_wire_offset = hdr->wire_chunk_offset;
-        _bv_current_size = hdr->value_size;
-        _bv_current_received = 0;
-        _bv_parsing_header = false;
-
-        // Calculate space for this value with MAX_PAGE_SIZE alignment
-        size_t chunk_size = FREE_KEY_SIZE + _bv_current_size;
-        size_t aligned_size = padding(chunk_size, MAX_PAGE_SIZE);
-
-        // Check that pre-allocated area has enough space
-        size_t needed = _big_value_write_pos + aligned_size;
-        if (needed > _big_value_area_size) {
-          _transition_to_error(ReplicationError::INTERNAL_ERROR,
-                               "Big value area overflow");
-          return;
-        }
-
-        // Write _FreeKey header at the current position in persistent storage
-        // _FreeKey layout: { big_uint64_t size, uint64_t offset }
-        // The size is the aligned chunk size (header + data + padding)
-        // The offset is the chunk's own offset with has_successor flag in bit 0
-        char* chunk_ptr = (char*)_big_value_area + _big_value_write_pos;
-
-        // Calculate offset_t for this chunk header
-        offset_t header_offset = _big_value_area_offset + _big_value_write_pos;
-
-        // Write the _FreeKey header directly
-        _FreeKey* header = (_FreeKey*)chunk_ptr;
-        header->size = aligned_size;
-        // Set has_successor flag (bit 0) for all chunks except the last one
-        // This allows BigMemory to merge adjacent freed chunks
-        bool has_successor =
-            (_big_value_received_count + 1) < _big_value_expected_count;
-        header->offset = header_offset._offset | (has_successor ? 1 : 0);
-
-        // Record mapping: wire_offset -> offset_t in persistent storage
-        // The offset points to the data (past _FreeKey header)
-        offset_t data_offset = header_offset + FREE_KEY_SIZE;
-        _big_value_offsets[_bv_current_wire_offset] = data_offset;
-      }
-
-      // Parse data (may be partial)
-      size_t data_needed = _bv_current_size - _bv_current_received;
-      size_t data_available = end - ptr;
-      size_t data_to_read = std::min(data_needed, data_available);
-
-      if (data_to_read > 0) {
-        // Copy data after _FreeKey header into persistent storage
-        char* chunk_ptr = (char*)_big_value_area + _big_value_write_pos;
-        std::memcpy(chunk_ptr + FREE_KEY_SIZE + _bv_current_received, ptr,
-                    data_to_read);
-        _bv_current_received += data_to_read;
-        ptr += data_to_read;
-        _total_bytes += data_to_read;
-      }
-
-      if (_bv_current_received >= _bv_current_size) {
-        // Value complete - advance write position by aligned size
-        size_t chunk_size = FREE_KEY_SIZE + _bv_current_size;
-        _big_value_write_pos += padding(chunk_size, MAX_PAGE_SIZE);
-
-        ++_big_value_received_count;
-
-        // Reset for next value
-        _bv_header_pos = 0;
-        _bv_parsing_header = true;
-      }
+    size_t bytes_delta = 0;
+    bool all_received = false;
+    auto err = _big_value.handle_data(payload, bytes_delta, all_received);
+    if (err) {
+      _transition_to_error(err.code, err.message);
+      return;
     }
+    _total_bytes += bytes_delta;
+    _state = State::RECEIVING_BIG_VALUES;
 
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
     }
 
-    // Check if all big values have been received
-    if (_big_value_received_count >= _big_value_expected_count) {
-      // All big values received — defer main trie data so that
-      // _merge_all_phases() at COMPLETE merges everything atomically.
-      // Deletion trie data stays in _temp_root for _merge_all_phases().
+    if (all_received) {
       if (_current_db_type == DbType::DB_MAIN) {
         _defer_current_temp();
       }
       _state = State::RECEIVING;
-      // Send ACK so sender can proceed
-      _send_big_value_ack();
-      return;
     }
-
-    // Send ACK to sender
     _send_big_value_ack();
   }
 
@@ -1563,12 +1268,33 @@ struct ReplicationReceiverFSM {
       }
     }
 
+#ifdef LEAVES_DEBUG
+    // Dump the accumulated temp trie after connecting this round's subtrie
+    if (_temp_root) {
+      static int _recv_round = 0;
+      std::ofstream out("/tmp/recv-" + std::to_string(_recv_round++) + ".yaml");
+      out << "# round " << _recv_round - 1
+          << " path='" << std::string(path.data(), path.size()) << "'"
+          << " pending=" << _pending_children
+          << " new_leaves=" << _new_leaves << std::endl;
+      WireTempDB db;
+      struct DumpContainer {
+        using db_type = WireTempDB;
+        struct Cursor {};
+        const WireTempDB& _db;
+        const WireTempDB* _internal() const { return &_db; }
+      } container{db};
+      _Dumper<DumpContainer, false> dumper(container, &_temp_root, true);
+      dumper.dump(out);
+    }
+#endif
+
     // Check if all pending children are now connected
     if (_pending_children == 0) {
       // All children for this trie phase are resolved.
       // Don't send COMPLETE — let the sender decide completion
       // (the sender may still need to send a deletion trie phase).
-      if (_big_value_trie_count == 0 && _temp_root) {
+      if (_big_value.trie_count() == 0 && _temp_root) {
         // Defer main trie data: keep in memory without merging.
         // _merge_all_phases() at COMPLETE will merge everything
         // (main + deletion) in one short atomic transaction.
@@ -1600,44 +1326,16 @@ struct ReplicationReceiverFSM {
     _send_prune_ack();
   }
 
-  // Returns the branch char of a wire node: for TRIE it's compressed()[0];
-  // for LEAF it's the char at position parent_path_len in the full data key.
-  // parent_path_len is the depth of the parent, i.e. how many prefix bytes
-  // of the key are covered by the path already.
-  int get_branch_key(const TempOffset* subtrie_root, size_t parent_path_len = 0) {
-    if (subtrie_root->type() == TRIE) {
-      auto* temp_trie = subtrie_root->template resolve<TempTrieNode>();
-      assert(temp_trie->len() > 0 && "Received empty trie node");
-      return temp_trie->compressed()[0];
-    }
-    assert(subtrie_root->type() == LEAF);
-    auto* temp_leaf = subtrie_root->template resolve<TempLeafNode>();
-    const auto key = temp_leaf->key();
-    // Wire leaf keys are RELATIVE (suffix after the parent trie's compressed
-    // prefix). The branch char is key[0] (first char of the suffix).
-    // A zero-length key means this leaf IS the exact-match (NONE branch).
-    // parent_path_len is not used because keys are already relative.
-    (void)parent_path_len;
-    if (key.size() > 0) return (uint8_t)key[0];
-    return TempTrieNode::NONE;  // NONE-branch (exact match)
-  }
-
   // Connect a received subtrie to its parent in the temp DB
-  // path: the full path to this subtrie (e.g., "abc")
+  // path: the full path to this subtrie's position in the global trie.
+  //   For a trie child, path already includes the child's compressed bytes
+  //   (e.g., "shared_8").  For a NONE-branch leaf, path is the parent trie's
+  //   path (e.g., "shared_8") — cursor.find() follows the NONE branch.
   // subtrie_root: pointer to the received subtrie's root node
-  // subtrie_type: type of the subtrie root (TRIE_NODE or LEAF_NODE)
   void _connect_subtrie_to_parent(const Slice& path, TempOffset* subtrie_root) {
     if (path.empty() || !_temp_root) return;  // _temp_root == 0 means not set
 
-    TempOffset* parent_offset;
-    int key = get_branch_key(subtrie_root, path.size());
-    if (key == TempTrieNode::NONE) {
-      parent_offset = _find_temp_parent_offset(path);
-    } else {
-      _path_buffer.assign(path.data(), path.size());
-      _path_buffer.push_back((char)key);
-      parent_offset = _find_temp_parent_offset(Slice(_path_buffer));
-    }
+    TempOffset* parent_offset = _find_temp_parent_offset(path);
 
     if (!parent_offset) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
@@ -1698,9 +1396,12 @@ struct ReplicationReceiverFSM {
       }
     }
 
-    // Get wire node's hash
+    // Get wire node's hash and extend path with the node's own key/compressed.
+    // _HashLookup::find() navigates to the correct hash-trie node regardless
+    // of whether the path covers the full compressed prefix or just the
+    // branch char — a wrong landing simply means the hash won't match.
     const uint8_t* wire_hash;
-    int branch_key;
+    size_t path_len = path.size();
     if (wire_node->type() == LEAF) {
       auto* leaf = wire_node->template resolve<TempLeafNode>();
       // Bounds-check the fixed leaf header first
@@ -1714,7 +1415,10 @@ struct ReplicationReceiverFSM {
         return true;
       }
       wire_hash = leaf->hash;
-      branch_key = get_branch_key(wire_node, path.size());
+      if (!is_message_root) {
+        auto key = leaf->key();
+        path.append(key.data(), key.size());
+      }
     } else {
       auto* trie = wire_node->template resolve<TempTrieNode>();
       // Bounds-check the fixed trie header first
@@ -1729,24 +1433,16 @@ struct ReplicationReceiverFSM {
         return true;
       }
       wire_hash = trie->hash;
-      // is_message_root => path is the subtrie_path from the wire header;
-      //   we must NOT add branch_key because path already represents this
-      //   node's position.  Using path as-is lets _get_local_hash find the
-      //   correct hash-trie entry (e.g. "n_key_" correctly resolves to the
-      //   'n' subtrie hash, while "n_key_" + compressed[0]='n' = "n_key_n"
-      //   would fail to find anything).
-      // NOTE: path.empty() is intentionally NOT used here — root trie
-      //   children also start with path="" but still need a branch_key.
-      branch_key = is_message_root
-                       ? TempTrieNode::NONE
-                       : get_branch_key(wire_node);
+      // For subtrie message roots the path already encodes this node's
+      // position; appending compressed would double-count.  Exception:
+      // global root (path empty) must append since there is no parent.
+      if (!is_message_root || path_len == 0) {
+        path.append((char*)trie->compressed(), trie->len());
+      }
     }
 
-    size_t path_len = path.size();
-    if (branch_key != TempTrieNode::NONE) path.push_back((char)branch_key);
-
     // Compare hash from hash trie at this path
-    const uint8_t* local_hash = _get_local_hash(path, wire_node->type());
+    const uint8_t* local_hash = _hash_lookup.find(path, wire_node->type());
     if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
       // Hashes match - tell sender to prune, set the offset 0 to avoid
       // merging.
@@ -1759,16 +1455,15 @@ struct ReplicationReceiverFSM {
       return true;
     }
 
-    path.resize(path_len);
-
     // Hashes differ or local doesn't exist
     if (wire_node->type() == LEAF) {
+      path.resize(path_len);
       ++_new_leaves;
       if (_new_leaves <= 5) {
         auto* dbg_leaf = wire_node->template resolve<TempLeafNode>();
-        fprintf(stderr, "[NEW_LEAF] path='%.*s' bk=%d key_size=%d local_hash=%s wire[0]=%02x loc[0]=%02x\n",
+        fprintf(stderr, "[NEW_LEAF] path='%.*s' key_size=%d local_hash=%s wire[0]=%02x loc[0]=%02x\n",
                 (int)path.size(), path.data(),
-                branch_key, (int)dbg_leaf->key_size,
+                (int)dbg_leaf->key_size,
                 local_hash ? "exists_but_differs" : "null",
                 wire_hash[0],
                 local_hash ? local_hash[0] : 0xff);
@@ -1782,11 +1477,11 @@ struct ReplicationReceiverFSM {
         }
         const auto* bv_hdr =
             reinterpret_cast<const BigValueDataHeader*>(leaf->vdata());
-        if (bv_hdr->value_size > _max_big_value_size) {
+        if (bv_hdr->value_size > _big_value._max_size) {
           *wire_node = 0;
           return true;
         }
-        ++_big_value_trie_count;
+        _big_value.increment_trie_count();
       }
       return true;
     }
@@ -1806,34 +1501,8 @@ struct ReplicationReceiverFSM {
     // All children start as pending; decrement as each is handled
     _pending_children += count;
 
-    // Restore the path so children can extend it.
-    //
-    // For regular (non-message-root) trie nodes: `path` was reset to
-    // path_len by the resize above, which removed the branch_key push.
-    // We must restore it to parent_path + full_compressed so that each
-    // child can push its own branch_key and get the correct full path.
-    // Example: for "a_key_" trie, after resize path="", append compressed
-    // "a_key_" → path="a_key_". Child leaf '0' pushes '0' → "a_key_0". ✓
-    //
-    // For subtrie message roots (is_message_root=true, path non-empty):
-    //   `path` is already the subtrie_path from the wire header (e.g. "n_key_"),
-    //   and the wire root's compressed encodes the SAME position (it includes
-    //   the branch char that was already consumed to reach this node).
-    //   Appending compressed again would DOUBLE-COUNT that prefix.
-    //   Example: subtrie_path="sender_7", wire root compressed="7"; appending
-    //   would give "sender_77" instead of "sender_7". Skip the append.
-    //
-    // Special case: global root message (is_message_root=true, path EMPTY):
-    //   The root wire trie may have a non-empty compressed prefix (e.g., "s"
-    //   when all keys start with 's'). This prefix has NOT been added to path
-    //   (path=""  since there is no parent). We MUST append it so children
-    //   get the correct base path.
-    //   Example: root compressed="s", children are 'e' (→"ender_") and 'h'
-    //   (→"hared_"). Without appending "s", children would get paths "e..."
-    //   and "h..." instead of "se..."="sender_..." and "sh..."="shared_...".
-    if (!is_message_root || path_len == 0) {
-      path.append((char*)wire_trie->compressed(), wire_trie->len());
-    }
+    // path already includes the full compressed prefix (appended above
+    // during hash lookup).  Children will append their own key/compressed.
 
     for (int i = 0; i < count; ++i) {
       TempOffset* child_offset = wire_array + i;
@@ -1860,65 +1529,6 @@ struct ReplicationReceiverFSM {
     return true;
   }
 
-  // Walk the hash trie to find the hash for the node at `path`.
-  // expected_type: LEAF or TRIE — if LEAF and the path ends on a trie node,
-  //   resolve the NONE-branch child (value stored at key == path prefix).
-  const uint8_t* _get_local_hash(const std::string& path,
-                                  uint8_t expected_type) {
-    auto& hc = _db->_header->hash_control;
-    auto* cur = (_current_db_type == DbType::DB_DELETION)
-                    ? &hc.deletion_hash_root
-                    : &hc.hash_root;
-    if (!*cur) return nullptr;
-
-    bool via_branch = false;
-    size_t pos = 0;
-    while (*cur) {
-      if (cur->type() == LEAF) {
-        auto leaf = _db->template resolve<HashLeafNode_>(cur);
-        size_t remaining = path.size() - pos;
-        if (remaining == 0) return leaf->hash;
-        return nullptr;
-      }
-      // TRIE node
-      auto node = _db->template resolve<HashTrieNode_>(cur);
-      uint8_t clen = node->len();
-      // Skip compressed()[0] for non-root nodes: it is the branch char
-      // already consumed by pos++ in the previous iteration.
-      uint8_t skip = via_branch ? 1 : 0;
-      uint8_t eff_clen = (clen > skip) ? clen - skip : 0;
-      const uint8_t* eff_compressed = node->compressed() + skip;
-      size_t remaining = path.size() - pos;
-      if (eff_clen > remaining) {
-        if (expected_type == TRIE &&
-            std::memcmp(eff_compressed, path.data() + pos, remaining) == 0)
-          return node->hash;
-        return nullptr;
-      }
-      if (eff_clen > 0) {
-        if (std::memcmp(eff_compressed, path.data() + pos, eff_clen) != 0) {
-          return nullptr;
-        }
-        pos += eff_clen;
-      }
-      if (pos == path.size()) {
-        if (expected_type == TRIE) return node->hash;
-        auto* none_child = node->offset(HashTrieNode_::NONE);
-        if (!none_child || !*none_child) return nullptr;
-        if (none_child->type() == LEAF) {
-          auto leaf2 = _db->template resolve<HashLeafNode_>(none_child);
-          if (leaf2->key().size() == 0) return leaf2->hash;
-        }
-        return nullptr;
-      }
-      uint8_t branch = static_cast<uint8_t>(path[pos++]);
-      cur = node->offset(branch);
-      if (!cur) return nullptr;
-      via_branch = true;
-    }
-    return nullptr;
-  }
-
   // Handle transition from one db_type to another (e.g., DB_MAIN → DB_DELETION)
   // Defers any pending temp data from the previous phase (no merge, no
   // transaction).
@@ -1933,6 +1543,13 @@ struct ReplicationReceiverFSM {
     _prune_paths.clear();
 
     _current_db_type = new_db_type;
+
+    // Point hash lookup at the correct hash trie root for the new db type
+    auto& hc = _db->_header->hash_control;
+    auto* root = (new_db_type == DbType::DB_DELETION)
+                     ? &hc.deletion_hash_root
+                     : &hc.hash_root;
+    _hash_lookup.set_root(root);
   }
 
   // After any cursor operation that calls _set_txn() (update(),
@@ -2000,7 +1617,7 @@ struct ReplicationReceiverFSM {
     try {
       // Link pre-allocated big value multi-area to this transaction
       // (must happen before any merge phase that references big values)
-      _link_big_value_area();
+      _big_value.link_area(_db, _replication_slot);
 
       // Phase 1: Merge current (deletion trie) data and apply deletions
       if (current_wire_root) {
@@ -2032,7 +1649,7 @@ struct ReplicationReceiverFSM {
           _merge_policy.main_cursor = nullptr;
           _merge_policy.bigmemory = nullptr;
         } else {
-          _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
+          _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
           _Merger<LocalCursor, WireCursor, MergePolicy> merger(
               *_cursor, _wire_cursor, _merge_policy);
           merger.exec();
@@ -2052,7 +1669,7 @@ struct ReplicationReceiverFSM {
         _temp_root.type((NodeTypes)_deferred_wire_root_type);
         _wire_cursor.clear();
 
-        _merge_policy.set_big_value_storage(&_big_value_offsets, _db);
+        _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
         _Merger<LocalCursor, WireCursor, MergePolicy> merger(
             *_cursor, _wire_cursor, _merge_policy);
         merger.exec();
@@ -2076,108 +1693,8 @@ struct ReplicationReceiverFSM {
     // Clean up all state
     _temp_root = 0;
     _deferred_temp_buffers.clear();
-    _clear_big_value_state();
+    _big_value.clear();
     return true;
-  }
-
-  // Link pre-allocated big value multi-area to the active transaction.
-  // Uses _big_value_multi_area directly, then clears the replication slot.
-  void _link_big_value_area() {
-    if (!_big_value_multi_area) return;
-
-    _big_value_multi_area->next = 0;
-    offset_t area_off = _db->resolve(_big_value_multi_area);
-    if (_db->_active_txn->area_list_tail_multi) {
-      auto tail =
-          _db->template resolve<Area>(&_db->_active_txn->area_list_tail_multi);
-      tail->next = area_off;
-      _db->make_dirty(tail);
-    } else {
-      _db->_header->area_list_head_multi = area_off;
-      _db->make_dirty(_db->_header);
-    }
-    _db->_active_txn->area_list_tail_multi = area_off;
-    _db->make_dirty(_big_value_multi_area);
-
-    // Reset slot to sentinel — area is now transaction-owned but keep the
-    // slot claimed so another receiver cannot steal it between rounds.
-    // On crash: _sanitize_replication_anchors treats SENTINEL as no-op;
-    // the area is reclaimed by Base::sanitize() via return_areas_range.
-    if (_replication_slot >= 0) {
-      constexpr uint64_t SENTINEL = DB::Header::REPLICATION_SLOT_SENTINEL;
-      _db->_header->replication_slots[_replication_slot] = SENTINEL;
-      _db->make_dirty(_db->_header);
-      _db->flush();
-    }
-  }
-
-  // Clear big value state after merge
-  void _clear_big_value_state() {
-    _big_value_offsets.clear();
-    _big_value_multi_area = nullptr;
-    _big_value_area = nullptr;
-    _big_value_area_offset = 0;
-    _big_value_area_size = 0;
-    _big_value_write_pos = 0;
-  }
-
-  // Claim a replication slot in _header->replication_slots[].
-  // Uses atomic CAS (0 → sentinel) to claim without file_lock().
-  void _claim_slot() {
-    constexpr auto N = DB::Header::MAX_REPLICATION_SLOTS;
-    constexpr uint64_t SENTINEL = DB::Header::REPLICATION_SLOT_SENTINEL;
-    for (uint16_t i = 0; i < N; ++i) {
-      auto& slot = _db->_header->replication_slots[i];
-      uint64_t expected = 0;
-      if (std::atomic_ref<uint64_t>(slot._offset)
-              .compare_exchange_strong(expected, SENTINEL,
-                                       std::memory_order_acq_rel,
-                                       std::memory_order_relaxed)) {
-        _replication_slot = static_cast<int16_t>(i);
-        return;
-      }
-    }
-    // All slots occupied — proceed without crash-safety tracking.
-    // This is a soft failure: the session will work but a crash could
-    // leak one multi-area.
-    _replication_slot = -1;
-  }
-
-  // Store the multi-area offset in the claimed slot and flush.
-  // Sole-owner operation — no lock needed; atomic store for visibility.
-  void _track_area_in_slot(typename DB::Storage::area_ptr area) {
-    if (_replication_slot < 0) return;
-
-    auto& slot = _db->_header->replication_slots[_replication_slot];
-    offset_t off = _db->resolve(area);
-    std::atomic_ref<uint64_t>(slot._offset)
-        .store(off._offset, std::memory_order_release);
-    _db->make_dirty(_db->_header);
-    _db->flush();
-  }
-
-  // Release the replication slot.  If it still holds a non-zero offset
-  // (error path — area was never merged), return it to the pool first.
-  // Sole-owner operation — no lock needed; atomic store for visibility.
-  void _release_slot() {
-    if (_replication_slot < 0) return;
-
-    constexpr uint64_t SENTINEL = DB::Header::REPLICATION_SLOT_SENTINEL;
-    auto& slot = _db->_header->replication_slots[_replication_slot];
-    uint64_t raw =
-        std::atomic_ref<uint64_t>(slot._offset).load(std::memory_order_acquire);
-    if (raw && raw != SENTINEL) {
-      offset_t off;
-      off._offset = raw;
-      _db->_storage.return_multi_areas(off, off);
-    }
-    if (raw) {
-      std::atomic_ref<uint64_t>(slot._offset)
-          .store(0, std::memory_order_release);
-      _db->make_dirty(_db->_header);
-      _db->flush();
-    }
-    _replication_slot = -1;
   }
 
   // Send ACK with prune paths (where hashes matched)
@@ -2212,7 +1729,7 @@ struct ReplicationReceiverFSM {
     _temp_root = 0;
     _pending_children = 0;
     _new_leaves = 0;
-    _big_value_trie_count = 0;
+    _big_value.reset_trie_count();
     _prune_paths.clear();
 
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
@@ -2230,7 +1747,7 @@ struct ReplicationReceiverFSM {
     _deferred_temp_buffers.clear();
 
     // Release slot — returns any un-merged big value areas to the pool
-    _release_slot();
+    _replication_slot.release();
 
     // Free temp buffers on error
     _free_temp_buffers();
