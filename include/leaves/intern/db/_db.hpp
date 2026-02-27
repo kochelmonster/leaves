@@ -101,9 +101,12 @@ struct _DBHeader {
 };
 
 // Make _DB accept Transaction and Header as template parameters
+// Self_ enables CRTP: derived classes pass themselves so _DB can
+// statically dispatch to overrides (e.g. _on_txn_freed) without virtual.
 template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
-          typename Header_ = _DBHeader<Storage_>>
+          typename Header_ = _DBHeader<Storage_>,
+          typename Self_ = void>
 struct _DB {
   typedef Storage_ Storage;
   typedef Transaction_ Transaction;
@@ -115,10 +118,14 @@ struct _DB {
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
 
-  typedef _DB<Storage_, Transaction_, Header_> DB;
+  // CRTP self-type: derived class if provided, otherwise this class.
+  using Self = std::conditional_t<std::is_void_v<Self_>,
+      _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
+
+  typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
 
   struct CursorTraits : public Storage::Traits {
-    typedef _DB<Storage_, Transaction_, Header_> DB;
+    typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
     using tid_t = leaves::tid_t;
   };
 
@@ -402,8 +409,9 @@ struct _DB {
   }
 
   // Called (under txn_ref_lock) just before a stale transaction is freed.
-  // Override in derived classes to invalidate any cached references to the txn.
-  virtual void _on_txn_freed(txn_ptr) {}
+  // Derived classes override via CRTP (Self_ parameter) to invalidate
+  // any cached references to the txn.  No virtual dispatch needed.
+  void _on_txn_freed(txn_ptr) {}
 
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
@@ -467,7 +475,7 @@ struct _DB {
           _start_txn_id = txn->txn_id;
           return true;
         }
-        _on_txn_freed(txn);
+        static_cast<Self*>(this)->_on_txn_freed(txn);
         free(txn);
         return false;
       });
