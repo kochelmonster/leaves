@@ -130,9 +130,11 @@ struct _ReplicationCursor;  // forward declaration
 template <typename Storage_>
 struct _ReplicationDB
     : public _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
-                 _ReplicationDBHeader<Storage_>> {
+                 _ReplicationDBHeader<Storage_>,
+                 _ReplicationDB<Storage_>> {
   using Base = _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
-                   _ReplicationDBHeader<Storage_>>;
+                   _ReplicationDBHeader<Storage_>,
+                   _ReplicationDB<Storage_>>;
   using Transaction = typename Base::Transaction;
   using Aspect = typename Base::Aspect;
 
@@ -352,7 +354,7 @@ struct _ReplicationDB
   // Called under txn_ref_lock just before a stale txn is freed.
   // Zeros hashed_txn_offset if it pointed at the freed txn so that
   // the next acquire_hash_trie() knows it must recompute the hash trie.
-  void _on_txn_freed(txn_ptr t) override {
+  void _on_txn_freed(txn_ptr t) {
     uint64_t freed_off = (uint64_t)this->resolve(t);
     auto& atom = this->_header->hash_control.hashed_txn_offset;
     if (atom.load(std::memory_order_relaxed) == freed_off)

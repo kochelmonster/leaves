@@ -674,17 +674,9 @@ struct TransferTrieSender {
     assert(hash_trie);  // Should always resolve since it was transmitted before
     assert(pending.next_child < hash_trie->count());
 
-    // Convert string_view to std::string for manipulation
+    // pending.path already includes the trie node's full compressed,
+    // so _path_buffer is the complete parent path for the subtrie.
     _path_buffer.assign(pending.path.data(), pending.path.size());
-
-    size_t path_len = _path_buffer.size();
-
-    // branch_key is already in path
-    if (path_len)
-      _path_buffer.append((char*)hash_trie->compressed() + 1, hash_trie->len() - 1);
-    else
-      // root
-      _path_buffer.append((char*)hash_trie->compressed(), hash_trie->len());
 
     // _path_buffer holds the parent trie's full path.  Use it as the
     // subtrie_path so the receiver knows where this subtrie attaches.
@@ -695,7 +687,6 @@ struct TransferTrieSender {
     // the root. The leaf case in _write_subtree handles branch-char push/pop.
     _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0,
                    nullptr, false);
-    _path_buffer.resize(path_len);  // Restore path for retry
 
     // the child as the TransferTrie root is guaranteed to be written.
     if (++pending.next_child >= hash_trie->count()) {
@@ -811,14 +802,9 @@ struct TransferTrieSender {
     path.append((char*)hash_trie->compressed(), hash_trie->len());
 
     if (depth >= _max_depth) {
-      // Undo the full compressed append — fill_buffer() expects only
-      // the branch key (compressed[0]) and will itself append the rest.
-      path.resize(path_len);
-      if (!root) {
-        assert(hash_trie->len() > 0);
-        path.push_back((char)hash_trie->compressed()[0]);
-      }
-      // Store path in arena for efficient memory usage
+      // path already includes the full compressed (appended above).
+      // Store the complete path so _is_pruned_by_ack sees the same
+      // path the receiver uses during hash comparison.
       auto arena_path = _path_arena.allocate(path);
       _last_batch.emplace_back(arena_path, hash_offset, 0);
       path.resize(path_len);
@@ -836,11 +822,9 @@ struct TransferTrieSender {
 
     path.resize(path_len);
     if (i < count) {
-      if (!root) {
-        assert(hash_trie->len() > 0);
-        path.push_back((char)hash_trie->compressed()[0]);
-      }
-      // Store path in arena for efficient memory usage
+      // Re-append full compressed so _last_batch stores the complete
+      // path that matches the receiver's hash-comparison path.
+      path.append((char*)hash_trie->compressed(), hash_trie->len());
       auto arena_path = _path_arena.allocate(path);
       _last_batch.emplace_back(arena_path, hash_offset, i);
       path.resize(path_len);
