@@ -686,29 +686,11 @@ struct TransferTrieSender {
       // root
       _path_buffer.append((char*)hash_trie->compressed(), hash_trie->len());
 
-    // _path_buffer holds the parent's full compressed path.  The wire root
-    // is a CHILD of that parent, so its global position is
-    // parent_path + child's own key bytes.  Peek at the child to build the
-    // full subtrie_header_path so the receiver can hash-compare at the
-    // correct position.
-    //
-    // The internal _path_buffer passed to _write_subtree must stay at the
-    // parent level so _write_subtree appends child compressed only once.
-    std::string subtrie_header_path = _path_buffer;
-    {
-      auto* child_offset = hash_trie->array() + pending.next_child;
-      if (child_offset->type() == TRIE) {
-        auto child_trie = _db->template resolve<HashTrieNode>(child_offset);
-        if (child_trie && child_trie->len() > 0)
-          subtrie_header_path.append((char*)child_trie->compressed(), child_trie->len());
-      } else {
-        auto child_leaf = _db->template resolve<HashLeafNode>(child_offset);
-        if (child_leaf && child_leaf->key_size > 0)
-          subtrie_header_path.push_back((char)child_leaf->data[0]);
-      }
-    }
-
-    _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(subtrie_header_path));
+    // _path_buffer holds the parent trie's full path.  Use it as the
+    // subtrie_path so the receiver knows where this subtrie attaches.
+    // The child's own compressed/key is NOT included — the receiver
+    // unconditionally appends it from the wire node during hash comparison.
+    _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
     // Note: root=false because we're writing a CHILD of the pending node, not
     // the root. The leaf case in _write_subtree handles branch-char push/pop.
     _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0,

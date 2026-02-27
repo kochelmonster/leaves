@@ -1260,7 +1260,7 @@ struct ReplicationReceiverFSM {
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
     if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
-                                  payload_end, _path_buffer, true)) {
+                                  payload_end, _path_buffer)) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
                            "Wire node offset out of bounds");
       return;
@@ -1274,8 +1274,20 @@ struct ReplicationReceiverFSM {
         _temp_root.set_relative(wire_root);
         _temp_root.type(transfer_hdr->root.type());
       } else {
-        // Subsequent subtrie - connect to parent in temp DB
-        _connect_subtrie_to_parent(path, (TempOffset*)&transfer_hdr->root);
+        // Subsequent subtrie - connect to parent in temp DB.
+        // subtrie_path is the parent path; append child's compressed/key
+        // for cursor navigation, then restore.
+        size_t parent_len = _path_buffer.size();
+        if (transfer_hdr->root.type() == TRIE) {
+          auto* trie = transfer_hdr->root.template resolve<TempTrieNode>();
+          _path_buffer.append((char*)trie->compressed(), trie->len());
+        } else {
+          auto* leaf = transfer_hdr->root.template resolve<TempLeafNode>();
+          auto key = leaf->key();
+          _path_buffer.append(key.data(), key.size());
+        }
+        _connect_subtrie_to_parent(Slice(_path_buffer), (TempOffset*)&transfer_hdr->root);
+        _path_buffer.resize(parent_len);
       }
     }
 
@@ -1384,8 +1396,7 @@ struct ReplicationReceiverFSM {
   // resolved-pointer bounds.
   bool _compare_leaf_wire_with_local(TempOffset* wire_node,
                                      const char* buffer_end,
-                                     std::string& path,
-                                     bool is_message_root) {
+                                     std::string& path) {
     auto* leaf = wire_node->template resolve<TempLeafNode>();
     // Bounds-check the fixed leaf header first
     if ((char*)(leaf + 1) > buffer_end) {
@@ -1400,7 +1411,7 @@ struct ReplicationReceiverFSM {
 
     size_t path_len = path.size();
     const uint8_t* wire_hash = leaf->hash;
-    if (!is_message_root) {
+    {
       auto key = leaf->key();
       path.append(key.data(), key.size());
     }
@@ -1457,8 +1468,7 @@ struct ReplicationReceiverFSM {
   bool _compare_trie_wire_with_local(TempOffset* wire_node,
                                      const char* buffer_start,
                                      const char* buffer_end,
-                                     std::string& path,
-                                     bool is_message_root) {
+                                     std::string& path) {
     auto* trie = wire_node->template resolve<TempTrieNode>();
     // Bounds-check the fixed trie header first
     if ((char*)(trie + 1) > buffer_end) {
@@ -1473,12 +1483,7 @@ struct ReplicationReceiverFSM {
 
     size_t path_len = path.size();
     const uint8_t* wire_hash = trie->hash;
-    // For subtrie message roots the path already encodes this node's
-    // position; appending compressed would double-count.  Exception:
-    // global root (path empty) must append since there is no parent.
-    if (!is_message_root || path_len == 0) {
-      path.append((char*)trie->compressed(), trie->len());
-    }
+    path.append((char*)trie->compressed(), trie->len());
 
     // Compare hash from hash trie at this path
     const uint8_t* local_hash = _hash_lookup.find(path, TRIE);
@@ -1537,8 +1542,7 @@ struct ReplicationReceiverFSM {
   // Common preamble: bounds-check wire_node, decrement _pending_children,
   // validate resolved pointer.  Dispatches to leaf/trie-specific methods.
   bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_start,
-                                const char* buffer_end, std::string& path,
-                                bool is_message_root = false) {
+                                const char* buffer_end, std::string& path) {
     if ((char*)wire_node < buffer_start ||
         (char*)(wire_node + 1) > buffer_end) {
       // wire_node itself is out of bounds — malformed message from sender
@@ -1558,11 +1562,10 @@ struct ReplicationReceiverFSM {
     }
 
     if (wire_node->type() == LEAF) {
-      return _compare_leaf_wire_with_local(wire_node, buffer_end, path,
-                                           is_message_root);
+      return _compare_leaf_wire_with_local(wire_node, buffer_end, path);
     }
     return _compare_trie_wire_with_local(wire_node, buffer_start, buffer_end,
-                                         path, is_message_root);
+                                         path);
   }
 
   // Handle transition from one db_type to another (e.g., DB_MAIN → DB_DELETION)
@@ -1759,6 +1762,10 @@ struct ReplicationReceiverFSM {
     // Re-acquire hash trie so next round sees the freshly merged state.
     _db->release_hash_trie(_txn);
     _txn = _db->acquire_hash_trie();
+
+    // Reset hash lookup cursor — the old hash trie pages may have been
+    // freed/reused, so the cursor's keep_stack() cache is stale.
+    _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
 
     // Reset temp DB for the next fraction
     _free_temp_buffers();
