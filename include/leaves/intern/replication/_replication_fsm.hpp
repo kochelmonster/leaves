@@ -845,6 +845,11 @@ struct ReplicationReceiverFSM {
   // Hash trie lookup (owns cursor + root pointer)
   _HashLookup<DB> _hash_lookup;
 
+#ifdef LEAVES_DEBUG
+  int _debug_fraction = 0;
+  int _debug_round = 0;
+#endif
+
   // Big value receiver — manages big value streaming and storage
   BigValueRx _big_value;
 
@@ -1246,6 +1251,12 @@ struct ReplicationReceiverFSM {
     fprintf(stderr, "[PRN] path='%.*s' pending_before=%zu new_leaves=%zu\n",
             (int)path.size(), path.data(), _pending_children, _new_leaves);
 
+#ifdef LEAVES_DEBUG
+    if (_debug_fraction == 3 && _debug_round == 0) {
+      volatile int _bp = 0; (void)_bp;  // breakpoint: beginning of fraction 3
+    }
+#endif
+
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
     if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
@@ -1271,9 +1282,10 @@ struct ReplicationReceiverFSM {
 #ifdef LEAVES_DEBUG
     // Dump the accumulated temp trie after connecting this round's subtrie
     if (_temp_root) {
-      static int _recv_round = 0;
-      std::ofstream out("/tmp/recv-" + std::to_string(_recv_round++) + ".yaml");
-      out << "# round " << _recv_round - 1
+      std::ofstream out("/tmp/recv-" + std::to_string(_debug_fraction) + "-" +
+                        std::to_string(_debug_round++) + ".yaml");
+      out << "# fraction " << _debug_fraction
+          << " round " << (_debug_round - 1)
           << " path='" << std::string(path.data(), path.size()) << "'"
           << " pending=" << _pending_children
           << " new_leaves=" << _new_leaves << std::endl;
@@ -1365,136 +1377,128 @@ struct ReplicationReceiverFSM {
     return _wire_cursor.stack.back().offset;
   }
 
-  // Compare wire node with local node, collect paths where we need more data
-  // - If hashes match: tell sender to prune, _Merger handles identical subtrees
-  // - If hashes differ and wire is leaf: will be merged to local via _Merger
-  // - If hashes differ and wire is trie: recurse into children
-  // - If child offset == 0 in wire: sender hasn't sent it yet, stays pending
-  // is_message_root: true for the first call of each received message (both root
-  //   and subtrie messages). When true, `path` is the subtrie_path from the wire
-  //   header — it already encodes the position of this node in the global trie,
-  //   so we must NOT append branch_key (which would double-count it).  The hash
-  //   lookup uses `path` directly to find the matching local hash-trie node.
-  bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_start,
-                                const char* buffer_end, std::string& path,
-                                bool is_message_root = false) {
-    if ((char*)wire_node < buffer_start ||
-        (char*)(wire_node + 1) > buffer_end) {
-      // wire_node itself is out of bounds — malformed message from sender
-      return false;
+  // Handle a wire leaf node: bounds-check, hash compare, prune/mismatch.
+  // Only adds to _prune_paths for big-value leaves — small leaves are fully
+  // contained in wire data so there is nothing for the sender to skip.
+  // Called after _compare_wire_with_local has validated wire_node pointer and
+  // resolved-pointer bounds.
+  bool _compare_leaf_wire_with_local(TempOffset* wire_node,
+                                     const char* buffer_end,
+                                     std::string& path,
+                                     bool is_message_root) {
+    auto* leaf = wire_node->template resolve<TempLeafNode>();
+    // Bounds-check the fixed leaf header first
+    if ((char*)(leaf + 1) > buffer_end) {
+      *wire_node = 0;
+      return true;
+    }
+    // Bounds-check the full leaf node including key and value data
+    if ((char*)leaf + leaf->size() > buffer_end) {
+      *wire_node = 0;
+      return true;
     }
 
-    --_pending_children;
-
-    // Bounds-check the resolved pointer
-    if (*wire_node != 0) {
-      char* resolved = wire_node->template resolve<char>();
-      if (resolved < buffer_start || resolved >= buffer_end) {
-        // Relative offset points outside the buffer — prune
-        *wire_node = 0;
-        return true;
-      }
-    }
-
-    // Get wire node's hash and extend path with the node's own key/compressed.
-    // _HashLookup::find() navigates to the correct hash-trie node regardless
-    // of whether the path covers the full compressed prefix or just the
-    // branch char — a wrong landing simply means the hash won't match.
-    const uint8_t* wire_hash;
     size_t path_len = path.size();
-    if (wire_node->type() == LEAF) {
-      auto* leaf = wire_node->template resolve<TempLeafNode>();
-      // Bounds-check the fixed leaf header first
-      if ((char*)(leaf + 1) > buffer_end) {
-        *wire_node = 0;
-        return true;
-      }
-      // Bounds-check the full leaf node including key and value data
-      if ((char*)leaf + leaf->size() > buffer_end) {
-        *wire_node = 0;
-        return true;
-      }
-      wire_hash = leaf->hash;
-      if (!is_message_root) {
-        auto key = leaf->key();
-        path.append(key.data(), key.size());
-      }
-    } else {
-      auto* trie = wire_node->template resolve<TempTrieNode>();
-      // Bounds-check the fixed trie header first
-      if ((char*)(trie + 1) > buffer_end) {
-        *wire_node = 0;
-        return true;
-      }
-      // Bounds-check the full trie node including compressed path and child
-      // array
-      if ((char*)trie + trie->size() > buffer_end) {
-        *wire_node = 0;
-        return true;
-      }
-      wire_hash = trie->hash;
-      // For subtrie message roots the path already encodes this node's
-      // position; appending compressed would double-count.  Exception:
-      // global root (path empty) must append since there is no parent.
-      if (!is_message_root || path_len == 0) {
-        path.append((char*)trie->compressed(), trie->len());
-      }
+    const uint8_t* wire_hash = leaf->hash;
+    if (!is_message_root) {
+      auto key = leaf->key();
+      path.append(key.data(), key.size());
     }
 
     // Compare hash from hash trie at this path
-    const uint8_t* local_hash = _hash_lookup.find(path, wire_node->type());
+    const uint8_t* local_hash = _hash_lookup.find(path, LEAF);
     if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
-      // Hashes match - tell sender to prune, set the offset 0 to avoid
-      // merging.
-      // Read type BEFORE zeroing: a zeroed offset always has type TRIE (0)
-      // regardless of the actual node type.
-      bool is_leaf_node = (wire_node->type() == LEAF);
+      // Hashes match — zero wire node to avoid merging.
+      // Only ACK big-value leaves so the sender prunes the pending big
+      // value data.  Small leaves are fully contained in the wire message
+      // so pruning them has no effect on the sender.
+      bool is_big = leaf->is_big();
       *wire_node = 0;
-      _prune_paths.emplace_back(path, is_leaf_node);
+      if (is_big) {
+        _prune_paths.emplace_back(path, true);
+      }
       path.resize(path_len);
       return true;
     }
 
-    // Hashes differ or local doesn't exist
-    if (wire_node->type() == LEAF) {
-      path.resize(path_len);
-      ++_new_leaves;
-      if (_new_leaves <= 5) {
-        auto* dbg_leaf = wire_node->template resolve<TempLeafNode>();
-        fprintf(stderr, "[NEW_LEAF] path='%.*s' key_size=%d local_hash=%s wire[0]=%02x loc[0]=%02x\n",
-                (int)path.size(), path.data(),
-                (int)dbg_leaf->key_size,
-                local_hash ? "exists_but_differs" : "null",
-                wire_hash[0],
-                local_hash ? local_hash[0] : 0xff);
+    // Hashes differ or local doesn't exist — leaf will be merged
+    path.resize(path_len);
+    ++_new_leaves;
+    if (_new_leaves <= 5) {
+      fprintf(stderr, "[NEW_LEAF] path='%.*s' key_size=%d local_hash=%s wire[0]=%02x loc[0]=%02x\n",
+              (int)path.size(), path.data(),
+              (int)leaf->key_size,
+              local_hash ? "exists_but_differs" : "null",
+              wire_hash[0],
+              local_hash ? local_hash[0] : 0xff);
+    }
+    if (leaf->is_big()) {
+      // Bounds-check the BigValueDataHeader within the leaf's value data
+      if (leaf->vsize() < sizeof(BigValueDataHeader)) {
+        *wire_node = 0;
+        return true;
       }
-      auto* leaf = wire_node->template resolve<TempLeafNode>();
-      if (leaf->is_big()) {
-        // Bounds-check the BigValueDataHeader within the leaf's value data
-        if (leaf->vsize() < sizeof(BigValueDataHeader)) {
-          *wire_node = 0;
-          return true;
-        }
-        const auto* bv_hdr =
-            reinterpret_cast<const BigValueDataHeader*>(leaf->vdata());
-        if (bv_hdr->value_size > _big_value._max_size) {
-          *wire_node = 0;
-          return true;
-        }
-        _big_value.increment_trie_count();
+      const auto* bv_hdr =
+          reinterpret_cast<const BigValueDataHeader*>(leaf->vdata());
+      if (bv_hdr->value_size > _big_value._max_size) {
+        *wire_node = 0;
+        return true;
       }
+      _big_value.increment_trie_count();
+    }
+    return true;
+  }
+
+  // Handle a wire trie node: bounds-check, hash compare, prune or recurse.
+  // Always adds to _prune_paths on hash match (trie ACK tells sender to
+  // prune entire subtree).
+  // Called after _compare_wire_with_local has validated wire_node pointer and
+  // resolved-pointer bounds.
+  bool _compare_trie_wire_with_local(TempOffset* wire_node,
+                                     const char* buffer_start,
+                                     const char* buffer_end,
+                                     std::string& path,
+                                     bool is_message_root) {
+    auto* trie = wire_node->template resolve<TempTrieNode>();
+    // Bounds-check the fixed trie header first
+    if ((char*)(trie + 1) > buffer_end) {
+      *wire_node = 0;
+      return true;
+    }
+    // Bounds-check the full trie node including compressed path and child array
+    if ((char*)trie + trie->size() > buffer_end) {
+      *wire_node = 0;
       return true;
     }
 
-    // Wire is trie node - iterate through children
-    auto* wire_trie = wire_node->template resolve<TempTrieNode>();
-    TempOffset* wire_array = wire_trie->array();
-    int count = wire_trie->count();
+    size_t path_len = path.size();
+    const uint8_t* wire_hash = trie->hash;
+    // For subtrie message roots the path already encodes this node's
+    // position; appending compressed would double-count.  Exception:
+    // global root (path empty) must append since there is no parent.
+    if (!is_message_root || path_len == 0) {
+      path.append((char*)trie->compressed(), trie->len());
+    }
+
+    // Compare hash from hash trie at this path
+    const uint8_t* local_hash = _hash_lookup.find(path, TRIE);
+    if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
+      // Hashes match — zero wire node and tell sender to prune subtree
+      *wire_node = 0;
+      _prune_paths.emplace_back(path, false);
+      path.resize(path_len);
+      return true;
+    }
+
+    // Hashes differ — iterate through children
+    TempOffset* wire_array = trie->array();
+    int count = trie->count();
 
     // Bounds-check the trie's child array against the buffer
     if ((char*)(wire_array + count) > buffer_end) {
       // Array extends past buffer — prune the whole trie node
       *wire_node = 0;
+      path.resize(path_len);
       return true;
     }
 
@@ -1527,6 +1531,38 @@ struct ReplicationReceiverFSM {
     // Restore path to original length (remove compressed portion we added)
     path.resize(path_len);
     return true;
+  }
+
+  // Compare wire node with local node, collect paths where we need more data.
+  // Common preamble: bounds-check wire_node, decrement _pending_children,
+  // validate resolved pointer.  Dispatches to leaf/trie-specific methods.
+  bool _compare_wire_with_local(TempOffset* wire_node, const char* buffer_start,
+                                const char* buffer_end, std::string& path,
+                                bool is_message_root = false) {
+    if ((char*)wire_node < buffer_start ||
+        (char*)(wire_node + 1) > buffer_end) {
+      // wire_node itself is out of bounds — malformed message from sender
+      return false;
+    }
+
+    --_pending_children;
+
+    // Bounds-check the resolved pointer
+    if (*wire_node == 0) {
+      return true;  // No node — nothing to compare
+    }
+    char* resolved = wire_node->template resolve<char>();
+    if (resolved < buffer_start || resolved >= buffer_end) {
+      // Relative offset points outside the buffer — malformed message
+      return false;
+    }
+
+    if (wire_node->type() == LEAF) {
+      return _compare_leaf_wire_with_local(wire_node, buffer_end, path,
+                                           is_message_root);
+    }
+    return _compare_trie_wire_with_local(wire_node, buffer_start, buffer_end,
+                                         path, is_message_root);
   }
 
   // Handle transition from one db_type to another (e.g., DB_MAIN → DB_DELETION)
@@ -1731,6 +1767,10 @@ struct ReplicationReceiverFSM {
     _new_leaves = 0;
     _big_value.reset_trie_count();
     _prune_paths.clear();
+#ifdef LEAVES_DEBUG
+    ++_debug_fraction;
+    _debug_round = 0;
+#endif
 
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());

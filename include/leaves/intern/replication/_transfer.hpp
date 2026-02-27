@@ -178,23 +178,6 @@ struct ReplicationTransferTrie
     hdr->total_size = _buffer.size();
     _finalized = true;
 
-#ifdef LEAVES_DEBUG
-    // Dump to /tmp/sb-<N>.yaml for debugging
-    {
-      static int _sb_round = 0;
-      std::ofstream out("/tmp/sb-" + std::to_string(_sb_round++) + ".yaml");
-      typename Base::DB db;
-      struct DumpContainer {
-        using db_type = typename Base::DB;
-        struct Cursor {};  // Dummy cursor type
-        const typename Base::DB& _db;
-        const typename Base::DB* _internal() const { return &_db; }
-      } container{db};
-      _Dumper<DumpContainer, false> dumper(container, &hdr->root, true);
-      dumper.dump(out);
-    }
-#endif
-
     return Slice(_buffer.data(), _buffer.size());
   }
 
@@ -447,9 +430,12 @@ struct PendingBigValue {
   uint64_t
       wire_chunk_offset;  // The chunk_offset sent in wire format (for lookup)
   uint32_t value_size;    // Size of the actual value
+  std::string_view path;  // Path to the containing leaf (points into PathArena)
 
-  PendingBigValue(offset_t off, uint64_t wire_off, uint32_t size)
-      : leaf_offset(off), wire_chunk_offset(wire_off), value_size(size) {}
+  PendingBigValue(offset_t off, uint64_t wire_off, uint32_t size,
+                  std::string_view p = {})
+      : leaf_offset(off), wire_chunk_offset(wire_off), value_size(size),
+        path(p) {}
 };
 
 // Sender for transferring trie nodes with relative offsets
@@ -503,6 +489,10 @@ struct TransferTrieSender {
   uint64_t _snapshot_id;
   DbType _db_type;
   size_t _max_depth;  // Maximum recursion depth for DFS
+#ifdef LEAVES_DEBUG
+  int _debug_fraction = -1;
+  int _debug_round = 0;
+#endif
 
   TransferTrieSender(DB* db, typename DB::txn_ptr txn,
                      size_t buffer_size = Transfer::DEFAULT_MAX_SIZE,
@@ -522,6 +512,10 @@ struct TransferTrieSender {
   void begin(DbType db_type = DbType::DB_MAIN) {
     _db_type = db_type;
     _snapshot_id = _txn->txn_id;  // Update snapshot for potentially new txn
+#ifdef LEAVES_DEBUG
+    ++_debug_fraction;
+    _debug_round = 0;
+#endif
     _pending.clear();
     _last_batch.clear();
     _pending_big_values.clear();
@@ -538,46 +532,47 @@ struct TransferTrieSender {
     }
   }
 
+  // Check if `path` should be pruned based on ACKed paths.
+  // Trie ACKs (!is_leaf): prune if path equals or is a descendant of ACK path.
+  // Leaf ACKs (is_leaf): only prune on exact match when prune_leaf_exact is
+  // set (used for big values whose data hasn't been sent yet).
+  // _last_batch entries are never pruned by leaf ACKs because the trie node
+  // at that path may still have un-ACKed child branches.
+  template <typename Iter>
+  static bool _is_pruned_by_ack(Iter& iter, std::string_view path,
+                                bool prune_leaf_exact) {
+    iter.reset();
+    while (iter.valid()) {
+      Slice acked_path = iter.path();
+      bool ack_is_leaf = iter.is_leaf();
+      // Trie ACK: prune descendants and exact matches
+      if (!ack_is_leaf && path.size() >= acked_path.size() &&
+          path.compare(0, acked_path.size(), acked_path.data(),
+                       acked_path.size()) == 0) {
+        return true;
+      }
+      // Leaf ACK: optionally prune exact match (for big values)
+      if (prune_leaf_exact && ack_is_leaf &&
+          path.size() == acked_path.size() &&
+          path.compare(0, acked_path.size(), acked_path.data(),
+                       acked_path.size()) == 0) {
+        return true;
+      }
+      iter.next();
+    }
+    return false;
+  }
+
   // Process ACK: remove matching paths from _last_batch, then merge remaining
-  // to _pending Note: No need to prune descendants from _pending - they're only
-  // added when transmitted
+  // to _pending. No need to prune descendants from _pending — they're only
+  // added when transmitted.
   template <typename Iter>
   void process_ack(Iter iter) {
-    // Remove ACKed nodes and their descendants from _last_batch
-    // A node should be removed if its path equals or begins with any acked_path
+    // Remove ACKed trie nodes and their descendants from _last_batch.
+    // Leaf ACKs never prune _last_batch — the trie node may still have
+    // un-ACKed child branches whose deferred continuations must be kept.
     for (auto it = _last_batch.begin(); it != _last_batch.end();) {
-      bool should_remove = false;
-
-      // Check against each acked path
-      iter.reset();
-      while (iter.valid()) {
-        Slice acked_path = iter.path();
-        bool ack_is_leaf = iter.is_leaf();
-        // Descendants of acked_path are prunable only for trie ACKs.
-        // A NONE-branch leaf ACK (is_leaf=true) means only the value at
-        // this path matches — the trie node's other branches may still
-        // differ, so their deferred continuations must be kept.
-        if (!ack_is_leaf && it->path.size() > acked_path.size() &&
-            it->path.compare(0, acked_path.size(), acked_path.data(),
-                             acked_path.size()) == 0) {
-          should_remove = true;
-          break;
-        }
-        // Exact path match: only prune if it's a trie ACK.
-        // A NONE-branch leaf ACK (is_leaf=true) means the receiver already has
-        // the value stored at this trie node's exact path, but the trie may
-        // still have unset non-NONE branches whose deferred continuation must
-        // be kept.
-        if (!ack_is_leaf && it->path.size() == acked_path.size() &&
-            it->path.compare(0, acked_path.size(), acked_path.data(),
-                             acked_path.size()) == 0) {
-          should_remove = true;
-          break;
-        }
-        iter.next();
-      }
-
-      if (should_remove) {
+      if (_is_pruned_by_ack(iter, it->path, false)) {
         it = _last_batch.erase(it);
       } else {
         ++it;
@@ -588,9 +583,16 @@ struct TransferTrieSender {
     _pending.splice(_pending.end(), _last_batch);
     _last_batch.clear();
 
-    // Move non-pruned big values to pending
-    // Note: Big values are identified by wire_chunk_offset - pruning is done
-    // when the containing leaf's subtrie is pruned (hash matched)
+    // Remove big values whose containing leaf was pruned (hash matched).
+    // Trie ACKs prune all descendant big values; leaf ACKs prune exact matches.
+    for (auto bv_it = _last_big_values.begin();
+         bv_it != _last_big_values.end();) {
+      if (_is_pruned_by_ack(iter, bv_it->path, true)) {
+        bv_it = _last_big_values.erase(bv_it);
+      } else {
+        ++bv_it;
+      }
+    }
     _pending_big_values.insert(_pending_big_values.end(),
                                _last_big_values.begin(),
                                _last_big_values.end());
@@ -657,6 +659,9 @@ struct TransferTrieSender {
       
       if (*hash_root)
         _write_subtree(_path_buffer, hash_root, 0, nullptr, true);
+#ifdef LEAVES_DEBUG
+      _debug_dump_buffer();
+#endif
       return _transfer.node_count();
     }
 
@@ -714,8 +719,31 @@ struct TransferTrieSender {
     if (++pending.next_child >= hash_trie->count()) {
       _pending.pop_back();
     }
+#ifdef LEAVES_DEBUG
+    _debug_dump_buffer();
+#endif
     return _transfer.node_count();
   }
+
+#ifdef LEAVES_DEBUG
+  void _debug_dump_buffer() {
+    _transfer.finalize();
+    auto* hdr = reinterpret_cast<ReplicationTransferHeader*>(
+        const_cast<uint8_t*>(_transfer.data()));
+    if (!hdr || _transfer.node_count() == 0) return;
+    std::ofstream out("/tmp/sb-" + std::to_string(_debug_fraction) + "-" +
+                      std::to_string(_debug_round++) + ".yaml");
+    typename Transfer::DB db;
+    struct DumpContainer {
+      using db_type = typename Transfer::DB;
+      struct Cursor {};
+      const typename Transfer::DB& _db;
+      const typename Transfer::DB* _internal() const { return &_db; }
+    } container{db};
+    _Dumper<DumpContainer, false> dumper(container, &hdr->root, true);
+    dumper.dump(out);
+  }
+#endif
 
   // Write a subtrie with DFS up to max_depth
   // Walks the hash trie structure, looking up data via cursor for leaves.
@@ -766,8 +794,9 @@ struct TransferTrieSender {
       // Track big values for later transmission
       if (data_leaf.is_big()) {
         BigValue* bv = (BigValue*)data_leaf.vdata();
+        auto arena_path = _path_arena.allocate(path);
         _last_big_values.emplace_back(*data_trans.offset, bv->chunk_offset,
-                                      bv->value_size);
+                                      bv->value_size, arena_path);
       }
 
       // Set relative offset in parent if wire_link provided
