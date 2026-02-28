@@ -232,8 +232,15 @@ struct _ThreadPoolMixin {
       // Execute task outside the lock
       task();
 
-      _active_tasks.fetch_sub(1);
-      _queue_cv.notify_all();  // Notify wait_all()
+      {
+        std::lock_guard<std::mutex> lock(_queue_mutex);
+        _active_tasks.fetch_sub(1);
+        if (!_task_queue.empty()) {
+          _queue_cv.notify_one();  // Wake one worker for next queued task
+        } else if (_active_tasks.load() == 0) {
+          _queue_cv.notify_all();  // Pool idle — unblock wait_all()
+        }
+      }
     }
   }
 };

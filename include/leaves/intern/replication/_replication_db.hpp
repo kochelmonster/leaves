@@ -496,6 +496,16 @@ struct _ReplicationDB
   // Returns the number of entries purged and the timestamp of the oldest
   // remaining entry (0 if the trie is empty after purge).
   PurgeResult _do_purge(uint64_t older_than) {
+    // Fast path: skip the write transaction entirely when the deletion
+    // trie is empty.  txn_ref() is lock-free (atomic ref bump).
+    {
+      auto snap = this->txn_ref();
+      auto* rtxn = static_cast<Transaction*>(&*snap);
+      bool empty = (rtxn->deletion_root == 0);
+      snap->refs.fetch_sub(1, std::memory_order_acq_rel);
+      if (empty) return {0, 0};
+    }
+
     auto cursor = create_cursor();
     [[maybe_unused]] bool r = cursor->start_transaction();
     // Clear the interrupt that our own start_transaction() just set
