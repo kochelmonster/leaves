@@ -1251,12 +1251,6 @@ struct ReplicationReceiverFSM {
     fprintf(stderr, "[PRN] path='%.*s' pending_before=%zu new_leaves=%zu\n",
             (int)path.size(), path.data(), _pending_children, _new_leaves);
 
-#ifdef LEAVES_DEBUG
-    if (_debug_fraction == 3 && _debug_round == 0) {
-      volatile int _bp = 0; (void)_bp;  // breakpoint: beginning of fraction 3
-    }
-#endif
-
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
     if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
