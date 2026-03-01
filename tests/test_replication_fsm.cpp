@@ -2009,7 +2009,6 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
     auto* leaf = reinterpret_cast<LeafNode*>(leaf_buf.data());
     leaf->set(Slice("abc"), 3);
     std::memcpy(leaf->data + 3, "val", 3);
-    std::memset(leaf->hash, 0xFF, HASH_SIZE);
 
     Transfer transfer;
     transfer.begin(session_id, 0, DbType::DB_MAIN, Slice());
@@ -2033,7 +2032,6 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
     auto* leaf = reinterpret_cast<LeafNode*>(leaf_buf.data());
     leaf->set(Slice("q"), 1);
     leaf->data[1] = 'v';
-    std::memset(leaf->hash, 0xAA, HASH_SIZE);
 
     Transfer transfer;
     transfer.begin(session_id, 0, DbType::DB_MAIN, Slice("xyz"));

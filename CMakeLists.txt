@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(LEAVES_GCOV "Add gconv support for tests" ON)
+option(LEAVES_ASAN "Build tests with AddressSanitizer" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
@@ -138,6 +139,11 @@ else (LEAVES_GCOV)
 target_compile_options(test INTERFACE -g)
 target_compile_definitions(test INTERFACE DEBUG)
 endif (LEAVES_GCOV)
+
+if (LEAVES_ASAN)
+target_compile_options(test INTERFACE -fsanitize=address -fno-omit-frame-pointer)
+target_link_options(test INTERFACE -fsanitize=address)
+endif (LEAVES_ASAN)
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE

@@ -195,7 +195,10 @@ struct _ReplicationDB
       auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
       page_ptr page = hash_mem.alloc(slot_id, *this);
       _parent->make_dirty(page);
-      return NodePtr((char*)&*page + sizeof(PageHeader));
+      // Use page_ptr arithmetic to preserve area tracking (SmartPointer _iref).
+      // Constructing from raw char* would break _CacheStore's SmartPointer
+      // by treating the data pointer as an AreaSlice header.
+      return NodePtr(page + sizeof(PageHeader));
     }
 
     // Non-transactional area allocation for the hash mem-manager.

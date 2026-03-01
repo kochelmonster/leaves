@@ -362,7 +362,7 @@ struct _HashUpdater {
       // compute_trie_hash hashes trie->compressed() and it must match
       // what compute_node_hash would produce for this data trie node.
       Slice prefix((const char*)data_trie->compressed(), data_trie->len());
-      data_page_ptr data_page((char*)&*data_trie - sizeof(DataPageHeader));
+      data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr new_hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
       new_hash_trie->create(prefix, offsets_buf);
@@ -485,7 +485,7 @@ struct _HashUpdater {
     // compute_trie_hash hashes trie->compressed() and it must match
     // what compute_node_hash would produce for this data trie node.
     Slice prefix((const char*)data_trie->compressed(), data_trie->len());
-    data_page_ptr data_page((char*)&*data_trie - sizeof(DataPageHeader));
+    data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
     hash_trie_ptr new_hash_trie =
         alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
     new_hash_trie->create(prefix, offsets_buf);
@@ -539,7 +539,7 @@ struct _HashUpdater {
 
       // Create hash trie
       Slice prefix((const char*)data_trie->compressed(), data_trie->len());
-      data_page_ptr data_page((char*)&*data_trie - sizeof(DataPageHeader));
+      data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
       hash_trie->create(prefix, offsets_buf);
@@ -565,7 +565,7 @@ struct _HashUpdater {
         : HashTrieNode::NONE;
 
     // Get data leaf's txn_id from its page header
-    data_page_ptr data_page((char*)&*data_leaf - sizeof(DataPageHeader));
+    data_page_ptr data_page = data_leaf - sizeof(DataPageHeader);
     tid_t txn_id = data_page->txn_id;
 
     // Compute leaf hash: Blake3(full_key || value)
@@ -621,7 +621,7 @@ struct _HashUpdater {
     }
     leaf->value_size = 0;
     // Copy txn_id to hash page header
-    hash_page_ptr page((char*)&*leaf - sizeof(HashPageHeader));
+    hash_page_ptr page = leaf - sizeof(HashPageHeader);
     page->txn_id = txn_id;
     return leaf;
   }
@@ -631,7 +631,7 @@ struct _HashUpdater {
     uint16_t size = HashTrieNode::size(prefix_len, branch_count);
     hash_trie_ptr trie = _hash_db->template alloc_node<hash_trie_ptr>(size);
     // Copy txn_id to hash page header
-    hash_page_ptr page((char*)&*trie - sizeof(HashPageHeader));
+    hash_page_ptr page = trie - sizeof(HashPageHeader);
     page->txn_id = txn_id;
     return trie;
   }
@@ -640,7 +640,7 @@ struct _HashUpdater {
 
   template <typename NodePtr>
   void free_hash_node(NodePtr node) {
-    hash_page_ptr page((char*)node - sizeof(HashPageHeader));
+    hash_page_ptr page = node - sizeof(HashPageHeader);
     _hash_db->free(page);
   }
 

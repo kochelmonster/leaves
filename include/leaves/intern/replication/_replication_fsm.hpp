@@ -262,6 +262,10 @@ struct ReplicationSenderFSM {
         _bv_header_bytes_sent(0),
         _last_activity(std::chrono::steady_clock::now()) {}
 
+  ~ReplicationSenderFSM() {
+    if (_txn) _db->release_hash_trie(_txn);
+  }
+
   // Start replication
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
              DbType db_type = DbType::DB_MAIN) {
@@ -908,7 +912,12 @@ struct ReplicationReceiverFSM {
     _db->aspect().init_cursor_context(_merge_policy._merge_context);
   }
 
-  ~ReplicationReceiverFSM() = default;
+  ~ReplicationReceiverFSM() {
+    if (_txn) {
+      _db->release_hash_trie(_txn);
+    }
+    _replication_slot.release();
+  }
 
   // Non-copyable, non-movable (owns replication slot)
   ReplicationReceiverFSM(const ReplicationReceiverFSM&) = delete;
@@ -1282,6 +1291,7 @@ struct ReplicationReceiverFSM {
         }
         _connect_subtrie_to_parent(Slice(_path_buffer), (TempOffset*)&transfer_hdr->root);
         _path_buffer.resize(parent_len);
+        if (_state == State::ERROR) return;  // temp buffers freed; path is dangling
       }
     }
 

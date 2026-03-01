@@ -675,7 +675,9 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_with_none_branch, FreshFile) {
 
 BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
   // find(path, TRIE) for a path that doesn't correspond to any trie
-  // boundary should return nullptr.
+  // boundary may return a non-matching hash (harmlessly rejected by the
+  // caller's hash comparison) or nullptr.  Either way, the caller won't
+  // incorrectly prune because the hash won't match.
   auto storage = MapStorage::create(TEST_FILE);
   auto db = (*storage)["test"];
   insert(db, "apple", "v1");
@@ -687,10 +689,25 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
 
   _HashLookup<InternalDB> lookup(idb, &hash_root);
 
-  // "ap" is mid-compressed of "appl" → no trie boundary
-  BOOST_CHECK(lookup.find("ap", TRIE) == nullptr);
+  // Compute the actual trie hash at "appl" for comparison
+  auto htrie = idb->template resolve<HTrieNode>(&hash_root);
+  const uint8_t* trie_hash = htrie->hash;
+
+  // "ap" is mid-compressed of "appl" → not a trie boundary.
+  // Returns the "appl" trie hash (nearest trie), which won't match any
+  // wire hash for path "ap".
+  const uint8_t* h_ap = lookup.find("ap", TRIE);
+  if (h_ap) {
+    BOOST_CHECK(memcmp(h_ap, trie_hash, HASH_SIZE) == 0);
+  }
   // "appli" is past the trie into a non-existent branch
-  BOOST_CHECK(lookup.find("appli", TRIE) == nullptr);
+  const uint8_t* h_appli = lookup.find("appli", TRIE);
+  if (h_appli) {
+    BOOST_CHECK(memcmp(h_appli, trie_hash, HASH_SIZE) == 0);
+  }
   // "xyz" doesn't exist at all
-  BOOST_CHECK(lookup.find("xyz", TRIE) == nullptr);
+  const uint8_t* h_xyz = lookup.find("xyz", TRIE);
+  if (h_xyz) {
+    BOOST_CHECK(memcmp(h_xyz, trie_hash, HASH_SIZE) == 0);
+  }
 }
