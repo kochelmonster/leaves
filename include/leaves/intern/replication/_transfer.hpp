@@ -1,7 +1,6 @@
 #ifndef _LEAVES__TRANSFER_HPP
 #define _LEAVES__TRANSFER_HPP
 
-#include <fstream>
 #include <list>
 #include <random>
 #include <unordered_set>
@@ -489,10 +488,6 @@ struct TransferTrieSender {
   uint64_t _snapshot_id;
   DbType _db_type;
   size_t _max_depth;  // Maximum recursion depth for DFS
-#ifdef LEAVES_DEBUG
-  int _debug_fraction = -1;
-  int _debug_round = 0;
-#endif
 
   TransferTrieSender(DB* db, typename DB::txn_ptr txn,
                      size_t buffer_size = Transfer::DEFAULT_MAX_SIZE,
@@ -512,10 +507,6 @@ struct TransferTrieSender {
   void begin(DbType db_type = DbType::DB_MAIN) {
     _db_type = db_type;
     _snapshot_id = _txn->txn_id;  // Update snapshot for potentially new txn
-#ifdef LEAVES_DEBUG
-    ++_debug_fraction;
-    _debug_round = 0;
-#endif
     _pending.clear();
     _last_batch.clear();
     _pending_big_values.clear();
@@ -659,9 +650,6 @@ struct TransferTrieSender {
       
       if (*hash_root)
         _write_subtree(_path_buffer, hash_root, 0, nullptr, true);
-#ifdef LEAVES_DEBUG
-      _debug_dump_buffer();
-#endif
       return _transfer.node_count();
     }
 
@@ -692,31 +680,8 @@ struct TransferTrieSender {
     if (++pending.next_child >= hash_trie->count()) {
       _pending.pop_back();
     }
-#ifdef LEAVES_DEBUG
-    _debug_dump_buffer();
-#endif
     return _transfer.node_count();
   }
-
-#ifdef LEAVES_DEBUG
-  void _debug_dump_buffer() {
-    _transfer.finalize();
-    auto* hdr = reinterpret_cast<ReplicationTransferHeader*>(
-        const_cast<uint8_t*>(_transfer.data()));
-    if (!hdr || _transfer.node_count() == 0) return;
-    std::ofstream out("/tmp/sb-" + std::to_string(_debug_fraction) + "-" +
-                      std::to_string(_debug_round++) + ".yaml");
-    typename Transfer::DB db;
-    struct DumpContainer {
-      using db_type = typename Transfer::DB;
-      struct Cursor {};
-      const typename Transfer::DB& _db;
-      const typename Transfer::DB* _internal() const { return &_db; }
-    } container{db};
-    _Dumper<DumpContainer, false> dumper(container, &hdr->root, true);
-    dumper.dump(out);
-  }
-#endif
 
   // Write a subtrie with DFS up to max_depth
   // Walks the hash trie structure, looking up data via cursor for leaves.

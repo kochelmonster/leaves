@@ -414,7 +414,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/test_replication_fsm",
             "args": [
-                "--run_test=ReplicationFSMTests/test_fractional_replication_differential"
+                "--run_test=ReplicationFSMTests/test_receiver_big_value_start_truncated"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",

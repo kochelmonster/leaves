@@ -849,11 +849,6 @@ struct ReplicationReceiverFSM {
   // Hash trie lookup (owns cursor + root pointer)
   _HashLookup<DB> _hash_lookup;
 
-#ifdef LEAVES_DEBUG
-  int _debug_fraction = 0;
-  int _debug_round = 0;
-#endif
-
   // Big value receiver — manages big value streaming and storage
   BigValueRx _big_value;
 
@@ -1257,9 +1252,6 @@ struct ReplicationReceiverFSM {
       ++_pending_children;
     }
 
-    fprintf(stderr, "[PRN] path='%.*s' pending_before=%zu new_leaves=%zu\n",
-            (int)path.size(), path.data(), _pending_children, _new_leaves);
-
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
     if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
@@ -1295,28 +1287,6 @@ struct ReplicationReceiverFSM {
       }
     }
 
-#ifdef LEAVES_DEBUG
-    // Dump the accumulated temp trie after connecting this round's subtrie
-    if (_temp_root) {
-      std::ofstream out("/tmp/recv-" + std::to_string(_debug_fraction) + "-" +
-                        std::to_string(_debug_round++) + ".yaml");
-      out << "# fraction " << _debug_fraction
-          << " round " << (_debug_round - 1)
-          << " path='" << std::string(path.data(), path.size()) << "'"
-          << " pending=" << _pending_children
-          << " new_leaves=" << _new_leaves << std::endl;
-      WireTempDB db;
-      struct DumpContainer {
-        using db_type = WireTempDB;
-        struct Cursor {};
-        const WireTempDB& _db;
-        const WireTempDB* _internal() const { return &_db; }
-      } container{db};
-      _Dumper<DumpContainer, false> dumper(container, &_temp_root, true);
-      dumper.dump(out);
-    }
-#endif
-
     // Check if all pending children are now connected
     if (_pending_children == 0) {
       // All children for this trie phase are resolved.
@@ -1343,9 +1313,6 @@ struct ReplicationReceiverFSM {
     // Guard: at least one new leaf must have been received, otherwise
     // a fraction merge would make no progress and loop forever.
     if (_temp_buffer_memory() > _memory_budget && _new_leaves > 0) {
-      fprintf(stderr, "[FRAC] pending=%zu new_leaves=%zu mem=%zu budget=%zu path='%.*s'\n",
-              _pending_children, _new_leaves, _temp_buffer_memory(), _memory_budget,
-              (int)path.size(), path.data());
       _send_fraction_complete();
       return;
     }
@@ -1439,14 +1406,6 @@ struct ReplicationReceiverFSM {
     // Hashes differ or local doesn't exist — leaf will be merged
     path.resize(path_len);
     ++_new_leaves;
-    if (_new_leaves <= 5) {
-      fprintf(stderr, "[NEW_LEAF] path='%.*s' key_size=%d local_hash=%s wire[0]=%02x loc[0]=%02x\n",
-              (int)path.size(), path.data(),
-              (int)leaf->key_size,
-              local_hash ? "exists_but_differs" : "null",
-              wire_hash[0],
-              local_hash ? local_hash[0] : 0xff);
-    }
     if (leaf->is_big()) {
       // Bounds-check the BigValueDataHeader within the leaf's value data
       if (leaf->vsize() < sizeof(BigValueDataHeader)) {
@@ -1778,11 +1737,6 @@ struct ReplicationReceiverFSM {
     _new_leaves = 0;
     _big_value.reset_trie_count();
     _prune_paths.clear();
-#ifdef LEAVES_DEBUG
-    ++_debug_fraction;
-    _debug_round = 0;
-#endif
-
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
   }
