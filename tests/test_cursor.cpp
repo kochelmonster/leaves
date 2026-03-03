@@ -959,3 +959,65 @@ BOOST_AUTO_TEST_CASE(test_memory_checker) {
   BOOST_CHECK_NO_THROW(checker.check());
   BOOST_CHECK_GT(checker.total_pages, 0);
 }
+
+// ── Deleter coverage: combine() with go_next=false (L167) ──────────────
+// When a 2-child trie has its first child deleted, the remaining child
+// is at begin+1 and go_next is false, triggering parent.first() path.
+
+BOOST_AUTO_TEST_CASE(remove_combine_first_child) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // Insert two keys that create a trie with 2 branches where the first
+  // (alphabetically) is what we'll delete
+  cursor.find("xya");
+  cursor.value("val_a");
+  cursor.find("xyb");
+  cursor.value("val_b");
+  cursor.commit();
+
+  // Delete "xya" — branch 'a' is first in array (begin), so link == begin,
+  // go_next = false → triggers parent.first() in combine()
+  cursor.find("xya");
+  BOOST_CHECK(cursor.is_valid());
+  cursor.remove();
+  cursor.commit();
+
+  // Verify "xyb" remains and "xya" is gone
+  cursor.find("xya");
+  BOOST_CHECK(!cursor.is_valid());
+
+  cursor.find("xyb");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_b"));
+
+  // Cursor should be positioned correctly after remove
+  cursor.first();
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key().string(), "xyb");
+  cursor.next();
+  BOOST_CHECK(!cursor.is_valid());
+}
+
+// ── Cursor rollback without transaction (_cursor.hpp L768) ──────────────
+// rollback() returns false when the cursor doesn't own the current write
+// transaction (txn_cursor_id != _id).
+BOOST_AUTO_TEST_CASE(rollback_without_transaction) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
+
+  // Insert some data so the DB isn't empty
+  cursor.find("abc");
+  cursor.value("123");
+  cursor.commit();
+
+  // Now try to rollback without having started a new transaction.
+  // The cursor's _id won't match txn_cursor_id, so rollback returns false.
+  // TCursor::rollback() returns void, so just verify it doesn't crash.
+  BOOST_CHECK_NO_THROW(cursor.rollback());
+}
+

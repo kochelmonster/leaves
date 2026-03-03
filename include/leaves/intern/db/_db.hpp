@@ -332,16 +332,15 @@ struct _DB {
     auto area_ptr = _storage.alloc_single_area();
     area_ptr->next = 0;
 
+    // init() pre-seeds area_list_tail_single with the first allocated area,
+    // so every transaction inherits a non-null tail — this can never be zero.
+    assert(_active_txn->area_list_tail_single &&
+           "init() always sets area_list_tail_single; cannot be null");
+
     // Append to transaction's area list tail
-    if (_active_txn->area_list_tail_single) {
-      auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
-      tail->next = resolve(area_ptr);
-      make_dirty(tail);
-    } else {
-      // First area in this transaction - update head
-      _header->area_list_head_single = resolve(area_ptr);
-      make_dirty(_header);
-    }
+    auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
+    tail->next = resolve(area_ptr);
+    make_dirty(tail);
     _active_txn->area_list_tail_single = resolve(area_ptr);
 
     make_dirty(area_ptr);

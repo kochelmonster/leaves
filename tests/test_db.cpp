@@ -879,3 +879,42 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     BOOST_CHECK(db->commit(0));
   }
 }
+
+BOOST_AUTO_TEST_CASE(test_defrag_empty_db) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.make("test");
+
+  // defrag() on a fresh DB with no big memory should return early
+  db->defrag();
+
+  // DB should still be usable after no-op defrag
+  BOOST_CHECK(db->start_transaction(0));
+  auto block = db->alloc_page(100);
+  BOOST_CHECK(block);
+  BOOST_CHECK(db->commit(0));
+}
+
+BOOST_AUTO_TEST_CASE(test_nonblocking_transaction) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.make("test");
+
+  // Start a blocking transaction (holds the lock)
+  auto txn1 = db->start_transaction(1);
+  BOOST_CHECK(txn1);
+
+  // Try nonblocking start — should fail because lock is held
+  auto txn2 = db->start_transaction(2, true);
+  BOOST_CHECK(!txn2);
+
+  // Commit the first transaction
+  BOOST_CHECK(db->commit(1));
+
+  // Now nonblocking should succeed
+  auto txn3 = db->start_transaction(2, true);
+  BOOST_CHECK(txn3);
+  BOOST_CHECK(db->commit(2));
+}
