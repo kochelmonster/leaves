@@ -49,6 +49,11 @@ struct TestStorage {
   std::vector<char> memory;
   AreaList single_areas;
   AreaList multi_areas;
+  std::vector<Area*> _owned_areas;
+
+  ~TestStorage() {
+    for (auto* a : _owned_areas) delete a;
+  }
 
   TestStorage() {
     accept_tid = mark_tid = tid_t(0);
@@ -96,6 +101,7 @@ struct TestStorage {
 
       // Create a new Area and initialize it
       Area* area = new Area();
+      _owned_areas.push_back(area);
       area->offset(old_size);
       area->size(AREA_SIZE);
       area->_ref.store(0);
@@ -116,6 +122,7 @@ struct TestStorage {
 
       // Create a new Area and initialize it
       Area* area = new Area();
+      _owned_areas.push_back(area);
       area->offset(old_size);
       area->size(size);
       area->_ref.store(0);

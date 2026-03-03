@@ -268,20 +268,20 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
     // Compute header size based on requested db_count first
     size_t header_size =
         leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
-    char* buffer = new char[header_size];
+    std::unique_ptr<char[]> buffer(new char[header_size]);
     if (!std::filesystem::is_regular_file(path)) {
       open(path);
-      _header = new (buffer) FileHeader(db_count);
+      _header = new (buffer.get()) FileHeader(db_count);
       // Ensure enough space on disk for first area aligned to AREA_SIZE
       // boundary
       _header->file_size = header_size;
       resize(_header->file_size);
       // Write header
-      write(0, buffer, header_size);
+      write(0, buffer.get(), header_size);
     } else {
       open(path);
-      read(0, buffer, header_size);
-      _header = (FileHeader*)buffer;
+      read(0, buffer.get(), header_size);
+      _header = (FileHeader*)buffer.get();
 
       if (strcmp(_header->signature, FSTORE_SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
@@ -291,6 +291,7 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
     }
 
     assert(((uint64_t)_header & 7) == 0);
+    buffer.release();  // ownership transferred to _header (freed in ~_FileStore)
     sanitize();
   }
 

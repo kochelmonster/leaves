@@ -5,7 +5,6 @@
 #include <memory>
 #include <mutex>
 
-#include "../core/_hash.hpp"
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
 #include "_aspect.hpp"
@@ -102,9 +101,12 @@ struct _DBHeader {
 };
 
 // Make _DB accept Transaction and Header as template parameters
+// Self_ enables CRTP: derived classes pass themselves so _DB can
+// statically dispatch to overrides (e.g. _on_txn_freed) without virtual.
 template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
-          typename Header_ = _DBHeader<Storage_>>
+          typename Header_ = _DBHeader<Storage_>,
+          typename Self_ = void>
 struct _DB {
   typedef Storage_ Storage;
   typedef Transaction_ Transaction;
@@ -116,23 +118,16 @@ struct _DB {
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
 
-  typedef _DB<Storage_, Transaction_, Header_> DB;
+  // CRTP self-type: derived class if provided, otherwise this class.
+  using Self = std::conditional_t<std::is_void_v<Self_>,
+      _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
+
+  typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
 
   struct CursorTraits : public Storage::Traits {
-    typedef _DB<Storage_, Transaction_, Header_> DB;
+    typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
     using tid_t = leaves::tid_t;
   };
-
-  // Detect ReplicationHasher from Traits, fallback to NullHasher
-  template <typename T, typename = void>
-  struct get_replication_hasher { using type = NullHasher; };
-  
-  template <typename T>
-  struct get_replication_hasher<T, std::void_t<typename T::ReplicationHasher>> {
-    using type = typename T::ReplicationHasher;
-  };
-  
-  using ReplicationHasher = typename get_replication_hasher<Traits>::type;
 
   // Detect Aspect from Traits, fallback to DefaultAspect
   template <typename T, typename = void>
@@ -337,16 +332,15 @@ struct _DB {
     auto area_ptr = _storage.alloc_single_area();
     area_ptr->next = 0;
 
+    // init() pre-seeds area_list_tail_single with the first allocated area,
+    // so every transaction inherits a non-null tail — this can never be zero.
+    assert(_active_txn->area_list_tail_single &&
+           "init() always sets area_list_tail_single; cannot be null");
+
     // Append to transaction's area list tail
-    if (_active_txn->area_list_tail_single) {
-      auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
-      tail->next = resolve(area_ptr);
-      make_dirty(tail);
-    } else {
-      // First area in this transaction - update head
-      _header->area_list_head_single = resolve(area_ptr);
-      make_dirty(_header);
-    }
+    auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
+    tail->next = resolve(area_ptr);
+    make_dirty(tail);
     _active_txn->area_list_tail_single = resolve(area_ptr);
 
     make_dirty(area_ptr);
@@ -401,6 +395,22 @@ struct _DB {
     t->refs.fetch_add(1);
     return t;
   }
+
+  // Atomically pin a txn by raw storage offset and increment its refcount.
+  // Returns null if offset is 0 — txn was cleaned between the caller's read
+  // of the offset and acquiring txn_ref_lock. Caller must treat null as stale.
+  txn_ptr txn_ref_at(offset_t offset) {
+    std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+    if (!offset) return txn_ptr();
+    txn_ptr t = resolve<Transaction>(&offset);
+    t->refs.fetch_add(1);
+    return t;
+  }
+
+  // Called (under txn_ref_lock) just before a stale transaction is freed.
+  // Derived classes override via CRTP (Self_ parameter) to invalidate
+  // any cached references to the txn.  No virtual dispatch needed.
+  void _on_txn_freed(txn_ptr) {}
 
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
@@ -464,6 +474,7 @@ struct _DB {
           _start_txn_id = txn->txn_id;
           return true;
         }
+        static_cast<Self*>(this)->_on_txn_freed(txn);
         free(txn);
         return false;
       });
@@ -612,7 +623,7 @@ struct _DB {
     // Use the non-transactional cursor type for the free-bigmem trie.
     // _TransactionalCursor rewires its root to txn->root in update(), which
     // would ignore &txn->free_bigmem_root and prevent defrag from working.
-    using RawCursor = typename Cursor::Cursor;
+    using RawCursor = _Cursor<CursorTraits>;
     using BigMemory = _BigMemory<RawCursor>;
     BigMemory big_mem(this, &txn->free_bigmem_root);
     big_mem.defrag(txn);

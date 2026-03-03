@@ -593,7 +593,7 @@ struct _TransactionalCursor
     : public _ICursor<Traits_, _TransactionalCursor<Traits_>> {
   typedef Traits_ Traits;
   typedef _ICursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
-  typedef _BigMemory<Cursor> BigMemory;
+  typedef _BigMemory<_Cursor<Traits_>> BigMemory;
   using DB = typename Traits::DB;
   using txn_ptr = typename DB::txn_ptr;
   using offset_e = typename Traits::offset_e;

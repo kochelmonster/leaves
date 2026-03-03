@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(LEAVES_GCOV "Add gconv support for tests" ON)
+option(LEAVES_ASAN "Build tests with AddressSanitizer" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
 
@@ -130,14 +131,18 @@ target_sources(test INTERFACE
     tests/test.hpp)
 
 if (LEAVES_GCOV)
-target_compile_options(test INTERFACE -g -fprofile-arcs -ftest-coverage)
+target_compile_options(test INTERFACE -g --coverage)
 target_compile_definitions(test INTERFACE DEBUG GCOV_ENABLED)
 target_link_options(test INTERFACE --coverage)
-target_link_libraries(test INTERFACE gcov)
 else (LEAVES_GCOV)
 target_compile_options(test INTERFACE -g)
 target_compile_definitions(test INTERFACE DEBUG)
 endif (LEAVES_GCOV)
+
+if (LEAVES_ASAN AND NOT LEAVES_GCOV)
+target_compile_options(test INTERFACE -fsanitize=address -fno-omit-frame-pointer)
+target_link_options(test INTERFACE -fsanitize=address)
+endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
@@ -197,10 +202,18 @@ add_executable(test_string_insert tests/test_string_insert.cpp)
 add_executable(test_merger tests/test_merger.cpp)
 target_link_libraries(test_merger PUBLIC core test)
 
+add_executable(test_hash_updater tests/test_hash_updater.cpp)
+target_link_libraries(test_hash_updater PUBLIC core test blake3)
+
+add_executable(test_hash_lookup tests/test_hash_lookup.cpp)
+target_link_libraries(test_hash_lookup PUBLIC core test blake3)
+
 add_executable(test_serial tests/test_serial.cpp)
 target_link_libraries(test_serial PUBLIC test)
 
 add_executable(test_twoquecache tests/test_twoquecache.cpp)
+target_link_libraries(test_twoquecache PUBLIC test)
+
 target_link_libraries(test_file_storage PUBLIC core test)
 
 add_executable(test_multithread tests/test_multithread.cpp)
@@ -237,15 +250,17 @@ COMMAND ./test_merger
 COMMAND ./test_serial
 COMMAND ./test_transfer
 COMMAND ./test_replication_fsm
+COMMAND ./test_hash_lookup
+COMMAND ./test_hash_updater
 COMMAND ./test_fstore
 COMMAND ./test_memstore
 COMMAND ./test_map_storage
 COMMAND ./test_file_storage
 COMMAND ./test_aspect
-COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
+COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_serial test_twoquecache test_transfer test_replication_fsm test_fstore test_memstore test_map_storage test_file_storage test_aspect
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_serial test_twoquecache test_transfer test_replication_fsm test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
 )
 
 endif(LEAVES_BUILD_TESTS)

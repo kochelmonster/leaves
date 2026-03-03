@@ -12,6 +12,7 @@
 - Test framework: Boost.Test with `BOOST_TEST_DYN_LINK`
 - Storage backends must work with both in-process memory and mmap (shared memory)
 - Synchronization primitives in shared memory must use only hardware atomics (no kernel state)
+- the project is new you don't have to worry about backwards compatibility.
 
 ## Coding Conventions
 inside include/leaves/intern folder:

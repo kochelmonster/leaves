@@ -92,13 +92,6 @@ struct DefaultAspect {
     return true;
   }
 
-  // --- Replication join points --------------------------------------------
-
-  /// Called by background hash catchup when a transaction's hashes are ready.
-  /// Applications can use this to trigger non-blocking replication sessions.
-  /// |db| is the ReplicationDB, |txn_id| is the transaction that was hashed.
-  template <typename DB>
-  void on_hashes_ready(DB* db, tid_t txn_id) {}
 };
 
 }  // namespace leaves

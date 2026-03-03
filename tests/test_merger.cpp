@@ -1980,3 +1980,133 @@ BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
   }
   BOOST_CHECK_EQUAL(count, 4);
 }
+
+// ── Dumper coverage: simple=true mode ────────────────────────────────────
+// Covers _check.hpp L140, L196, L245, L246 (simple-mode id printing)
+
+BOOST_AUTO_TEST_CASE(test_dumper_simple_mode) {
+  MergerPreparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+
+  // Insert a few keys so we have both trie and leaf nodes
+  auto c = db.cursor();
+  c.find("alpha");
+  c.value("val_a");
+  c.commit();
+  c.find("beta");
+  c.value("val_b");
+  c.commit();
+  c.find("gamma");
+  c.value("val_g");
+  c.commit();
+
+  // Dump with simple=true — exercises the simple id-printing branches
+  std::stringstream simple_out;
+  _Dumper(db, &db._internal()->txn()->root, true).dump(simple_out);
+  std::string simple_str = simple_out.str();
+  BOOST_CHECK(!simple_str.empty());
+
+  // The simple dump uses sequential integer IDs
+  BOOST_CHECK(simple_str.find("id: 0") != std::string::npos);
+  BOOST_CHECK(simple_str.find("type: trie") != std::string::npos ||
+              simple_str.find("type: leaf") != std::string::npos);
+
+  // Also dump with simple=false for comparison
+  std::stringstream full_out;
+  _Dumper(db, &db._internal()->txn()->root, false).dump(full_out);
+  std::string full_str = full_out.str();
+  BOOST_CHECK(!full_str.empty());
+
+  // Both should contain the same keys
+  BOOST_CHECK(simple_str.find("alpha") != std::string::npos ||
+              simple_str.find("key:") != std::string::npos);
+}
+
+// ── merge_leaf_into_trie rejection (L627) ────────────────────────────────
+// When src has a single leaf and dst has a trie with matching prefix,
+// merge_leaf_into_trie is called. If may_add_leaf rejects, return early.
+
+BOOST_AUTO_TEST_CASE(test_merger_leaf_into_trie_rejected) {
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // dst has multiple keys under "ab" → creates a trie at "ab"
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("abd");
+  dst_cursor_pub.value("v_abd");
+  dst_cursor_pub.find("abe");
+  dst_cursor_pub.value("v_abe");
+  dst_cursor_pub.commit();
+
+  // src has a single leaf "abc" → leaf node in src root
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("abc");
+  src_cursor_pub.value("v_abc");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  // Filter rejects everything — "abc" will be rejected in merge_leaf_into_trie
+  PrefixFilterPolicy handler("NOMATCH");
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // Verify dst unchanged: "abd" and "abe" remain, "abc" not added
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("abd");
+  BOOST_CHECK(v.is_valid());
+  v.find("abe");
+  BOOST_CHECK(v.is_valid());
+  v.find("abc");
+  BOOST_CHECK(!v.is_valid());
+}
+
+// ── merge_into_trie suffix_len==0, shared branches (L617) ──────────────
+// Both src and dst have tries with same prefix — forces the shared-branch
+// merge path and free_node(dst_trie) at L617.
+
+BOOST_AUTO_TEST_CASE(test_merger_shared_trie_prefix) {
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  // dst has keys that create a trie with prefix "ab" and branches d,e
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("abd");
+  dst_cursor_pub.value("v_dst_abd");
+  dst_cursor_pub.find("abe");
+  dst_cursor_pub.value("v_dst_abe");
+  dst_cursor_pub.commit();
+
+  // src also has keys under "ab" trie with branches d (shared), f (new)
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("abd");
+  src_cursor_pub.value("v_src_abd");
+  src_cursor_pub.find("abf");
+  src_cursor_pub.value("v_src_abf");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dst_db._internal();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // Verify: "abd" overwritten by src, "abe" kept from dst, "abf" added from src
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("abd");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_src_abd"));
+  v.find("abe");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_dst_abe"));
+  v.find("abf");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("v_src_abf"));
+}

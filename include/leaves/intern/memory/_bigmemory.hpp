@@ -4,7 +4,6 @@
 #include <boost/endian/arithmetic.hpp>
 
 #include "../db/_check.hpp"
-#include "../core/_hash.hpp"
 #include "../core/_util.hpp"
 #include "_memory.hpp"
 

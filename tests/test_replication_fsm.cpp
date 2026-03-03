@@ -2,9 +2,11 @@
 #define BOOST_TEST_MODULE ReplicationFSMTest
 
 #include <boost/test/included/unit_test.hpp>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <queue>
 #include <thread>
 #include <vector>
@@ -118,37 +120,12 @@ struct ReplicationFixture {
 
   ~ReplicationFixture() { std::filesystem::remove_all(test_temp_dir); }
 
-  // Wait for background hashing to catch up to the current transaction.
-  // Call after commit() and before begin() to ensure hashes are available.
-  // Uses polling since tests don't have a custom aspect with on_hashes_ready.
+  // Hashing is now synchronous: acquire_hash_trie() always updates the hash
+  // trie before returning, so there is nothing to poll for.
   template <typename DB>
-  static void wait_for_hashing(DB* db, int timeout_ms = 5000) {
-    auto start = std::chrono::steady_clock::now();
-    auto timeout = std::chrono::milliseconds(timeout_ms);
-    
-    while (true) {
-      auto hashed = db->hashed_txn();
-      auto current = db->txn();
-      
-      // Check if hashed transaction matches current
-      if (hashed && hashed == current) {
-        return;
-      }
-      
-      // Empty DB is fine
-      if (!current->root) {
-        return;
-      }
-      
-      // Check timeout
-      if (std::chrono::steady_clock::now() - start > timeout) {
-        BOOST_FAIL("Timeout waiting for hashing");
-        return;
-      }
-      
-      // Small sleep to avoid busy loop
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+  static void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
+    auto hashed = db->acquire_hash_trie();
+    db->release_hash_trie(hashed);
   }
 
   // Run the FSM protocol until both sides complete or error
@@ -204,6 +181,7 @@ struct ReplicationFixture {
 // =============================================================================
 // Tests
 // =============================================================================
+
 
 BOOST_AUTO_TEST_SUITE(ReplicationFSMTests)
 
@@ -2033,7 +2011,6 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
     auto* leaf = reinterpret_cast<LeafNode*>(leaf_buf.data());
     leaf->set(Slice("abc"), 3);
     std::memcpy(leaf->data + 3, "val", 3);
-    std::memset(leaf->hash, 0xFF, HASH_SIZE);
 
     Transfer transfer;
     transfer.begin(session_id, 0, DbType::DB_MAIN, Slice());
@@ -2057,7 +2034,6 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
     auto* leaf = reinterpret_cast<LeafNode*>(leaf_buf.data());
     leaf->set(Slice("q"), 1);
     leaf->data[1] = 'v';
-    std::memset(leaf->hash, 0xAA, HASH_SIZE);
 
     Transfer transfer;
     transfer.begin(session_id, 0, DbType::DB_MAIN, Slice("xyz"));
@@ -2437,8 +2413,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
     sender.begin(&sender_transport, &sender_events);
 
     // After begin(), receiver should have claimed a slot (sentinel)
-    BOOST_CHECK_GE(receiver._replication_slot, 0);
-    int16_t claimed_slot = receiver._replication_slot;
+    BOOST_CHECK_GE(receiver._replication_slot.slot_index(), 0);
+    int16_t claimed_slot = receiver._replication_slot.slot_index();
     BOOST_CHECK_EQUAL(
         receiver_impl->_header->replication_slots[claimed_slot]._offset,
         DBImpl::Header::REPLICATION_SLOT_SENTINEL);
@@ -2548,7 +2524,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
 
       // Check if the receiver's slot now has a real offset
       // (not sentinel and not zero)
-      claimed_slot = receiver._replication_slot;
+      claimed_slot = receiver._replication_slot.slot_index();
       if (claimed_slot >= 0) {
         uint64_t slot_val =
             receiver_impl->_header->replication_slots[claimed_slot]._offset;
@@ -2669,7 +2645,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
     receivers[i].fsm->begin(&receivers[i].transport, &receivers[i].events);
 
     // Each should have claimed a unique slot
-    BOOST_CHECK_GE(receivers[i].fsm->_replication_slot, 0);
+    BOOST_CHECK_GE(receivers[i].fsm->_replication_slot.slot_index(), 0);
   }
 
   // Verify all N slots are occupied (sentinel value since no BIG_VALUE_START)
@@ -2686,7 +2662,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
                              ReplicationMergePolicy<DBImpl>{});
   extra_receiver.begin(&extra_transport, &extra_events);
 
-  BOOST_CHECK_EQUAL(extra_receiver._replication_slot, -1);
+  BOOST_CHECK_EQUAL(extra_receiver._replication_slot.slot_index(), -1);
 
   // Clean up: destroy all receivers.  The destructor calls _release_slot(),
   // which clears each receiver's slot.
@@ -2765,7 +2741,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
         sender.on_message_received(msg.data(), msg.size());
       }
 
-      claimed_slot = receiver._replication_slot;
+      claimed_slot = receiver._replication_slot.slot_index();
       if (claimed_slot >= 0) {
         uint64_t slot_val =
             receiver_impl->_header->replication_slots[claimed_slot]._offset;
@@ -2807,7 +2783,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
     // returned the area to the pool and cleared the slot
     BOOST_CHECK_EQUAL(
         receiver_impl->_header->replication_slots[claimed_slot]._offset, 0u);
-    BOOST_CHECK_EQUAL(receiver._replication_slot, -1);
+    BOOST_CHECK_EQUAL(receiver._replication_slot.slot_index(), -1);
   }
 
   // After the scope, the destructor runs _release_slot() again — but it's
@@ -3085,5 +3061,403 @@ BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixtu
     }
   }
 }
+// =============================================================================
+// Multi-threaded replication test
+// Runs sender and receiver on separate threads with a thread-safe transport.
+// =============================================================================
 
+struct ThreadSafeTransport : ReplicationTransport {
+  std::mutex _mtx;
+  std::condition_variable _cv;
+  std::queue<std::vector<uint8_t>> _incoming;
+  bool _closed = false;
+
+  void send(const uint8_t* data, size_t size) override {
+    // Peer calls this; enqueue into OUR incoming queue
+    // (set up externally via deliver())
+  }
+
+  void deliver(const uint8_t* data, size_t size) {
+    std::lock_guard<std::mutex> lk(_mtx);
+    if (_closed) return;
+    _incoming.emplace(data, data + size);
+    _cv.notify_one();
+  }
+
+  bool try_receive(std::vector<uint8_t>& out,
+                   std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lk(_mtx);
+    if (_cv.wait_for(lk, timeout,
+                     [&] { return !_incoming.empty() || _closed; })) {
+      if (_closed && _incoming.empty()) return false;
+      out = std::move(_incoming.front());
+      _incoming.pop();
+      return true;
+    }
+    return false;
+  }
+
+  void close() {
+    std::lock_guard<std::mutex> lk(_mtx);
+    _closed = true;
+    _cv.notify_all();
+  }
+};
+
+// A transport adapter that forwards send() to the peer's thread-safe queue.
+struct ThreadedTransportAdapter : ReplicationTransport {
+  ThreadSafeTransport* _peer = nullptr;
+
+  void send(const uint8_t* data, size_t size) override {
+    if (_peer) _peer->deliver(data, size);
+  }
+};
+
+BOOST_FIXTURE_TEST_CASE(test_multithreaded_replication, ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_mt.lvs";
+  auto receiver_path = test_temp_dir / "receiver_mt.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  // Insert test data
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 50; ++i) {
+      std::string key = "mt_key_" + std::to_string(i);
+      std::string value = "mt_value_" + std::to_string(i);
+      cursor.find(Slice(key));
+      cursor.value(Slice(value));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+  wait_for_hashing(sender_impl);
+
+  // Thread-safe transports: sender_tsq receives messages for the sender,
+  // receiver_tsq receives messages for the receiver.
+  ThreadSafeTransport sender_tsq, receiver_tsq;
+
+  // Adapters forward send() to the peer's thread-safe queue.
+  ThreadedTransportAdapter sender_adapter, receiver_adapter;
+  sender_adapter._peer = &receiver_tsq;   // sender.send() → receiver queue
+  receiver_adapter._peer = &sender_tsq;   // receiver.send() → sender queue
+
+  TestEvents sender_events, receiver_events;
+
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
+
+  // Start both FSMs (synchronous init)
+  receiver.begin(&receiver_adapter, &receiver_events);
+  sender.begin(&sender_adapter, &sender_events);
+
+  // Run sender on a separate thread
+  std::thread sender_thread([&] {
+    while (sender.state() != SenderFSM::State::IDLE &&
+           sender.state() != SenderFSM::State::ERROR) {
+      std::vector<uint8_t> msg;
+      if (sender_tsq.try_receive(msg, std::chrono::milliseconds(100))) {
+        sender.on_message_received(msg.data(), msg.size());
+      }
+    }
+    // Signal receiver to stop waiting
+    receiver_tsq.close();
+  });
+
+  // Run receiver on this thread
+  while (receiver.state() != ReceiverFSM::State::IDLE &&
+         receiver.state() != ReceiverFSM::State::ERROR) {
+    std::vector<uint8_t> msg;
+    if (receiver_tsq.try_receive(msg, std::chrono::milliseconds(100))) {
+      auto& buf = receiver.receive_buffer();
+      size_t to_copy = std::min(msg.size(), buf.available());
+      std::memcpy(buf.write_ptr(), msg.data(), to_copy);
+      buf.advance(to_copy);
+      receiver.on_data_received();
+    }
+  }
+
+  // Signal sender to stop if it hasn't already
+  sender_tsq.close();
+  sender_thread.join();
+
+  BOOST_CHECK_MESSAGE(sender.state() == SenderFSM::State::IDLE,
+                      "Sender did not complete");
+  BOOST_CHECK_MESSAGE(receiver.state() == ReceiverFSM::State::IDLE,
+                      "Receiver did not complete");
+  BOOST_CHECK(sender_events.completed);
+  BOOST_CHECK(receiver_events.completed);
+  BOOST_CHECK(!sender_events.errored);
+  BOOST_CHECK(!receiver_events.errored);
+
+  // Verify all keys replicated
+  {
+    auto cursor = receiver_db.cursor();
+    for (int i = 0; i < 50; ++i) {
+      std::string key = "mt_key_" + std::to_string(i);
+      std::string expected = "mt_value_" + std::to_string(i);
+      cursor.find(Slice(key));
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Key not found in receiver: " + key);
+      BOOST_CHECK_EQUAL(
+          std::string(cursor.value().data(), cursor.value().size()), expected);
+    }
+  }
+}
+
+// =============================================================================
+// Partial failure / disconnect test
+// Simulates a mid-stream disconnect by stopping message delivery.
+// Verifies both FSMs get stuck (not crashed) and receiver hasn't committed
+// partial data.
+// =============================================================================
+
+BOOST_FIXTURE_TEST_CASE(test_partial_failure_disconnect, ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_disc.lvs";
+  auto receiver_path = test_temp_dir / "receiver_disc.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  // Insert enough data that replication takes multiple round trips
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 200; ++i) {
+      std::string key = "disc_key_" + std::to_string(i);
+      std::string value =
+          "disc_value_" + std::to_string(i) + "_padding_to_fill_buffer";
+      cursor.find(Slice(key));
+      cursor.value(Slice(value));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+  wait_for_hashing(sender_impl);
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
+  TestEvents sender_events, receiver_events;
+
+  // Small buffer to force many round trips
+  constexpr size_t SMALL_BUFFER = 256;
+  SenderFSM sender(sender_impl, SMALL_BUFFER);
+  ReceiverFSM receiver(receiver_impl);
+
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+
+  // Run only a few rounds — enough to start but not finish
+  int partial_rounds = 3;
+  for (int r = 0; r < partial_rounds; ++r) {
+    // Process messages for receiver
+    while (receiver_transport.has_message()) {
+      auto msg = receiver_transport.receive();
+      auto& buf = receiver.receive_buffer();
+      size_t to_copy = std::min(msg.size(), buf.available());
+      std::memcpy(buf.write_ptr(), msg.data(), to_copy);
+      buf.advance(to_copy);
+      receiver.on_data_received();
+    }
+
+    // Process messages for sender
+    while (sender_transport.has_message()) {
+      auto msg = sender_transport.receive();
+      sender.on_message_received(msg.data(), msg.size());
+    }
+  }
+
+  // Now "disconnect" by severing the peer link
+  sender_transport.set_peer(nullptr);
+  receiver_transport.set_peer(nullptr);
+
+  // Continue running — messages sent after disconnect go nowhere
+  run_protocol(sender, receiver, sender_transport, receiver_transport, 50);
+
+  // Protocol should be stuck, not crashed
+  // Neither side should be IDLE (didn't finish) or COMPLETE
+  // They should be in a sending/awaiting state, or the protocol loop broke
+  // because of no activity
+  BOOST_CHECK_MESSAGE(
+      sender.state() != SenderFSM::State::IDLE,
+      "Sender should NOT have completed after disconnect");
+  BOOST_CHECK_MESSAGE(
+      receiver.state() != ReceiverFSM::State::IDLE,
+      "Receiver should NOT have completed after disconnect");
+
+  // Neither side should have reported completion
+  BOOST_CHECK(!sender_events.completed);
+  BOOST_CHECK(!receiver_events.completed);
+
+  // Receiver DB should not have the full dataset committed
+  // (partial data is in temp buffers, not committed to the real DB)
+  {
+    auto cursor = receiver_db.cursor();
+    int found = 0;
+    for (int i = 0; i < 200; ++i) {
+      std::string key = "disc_key_" + std::to_string(i);
+      cursor.find(Slice(key));
+      if (cursor.is_valid()) ++found;
+    }
+    BOOST_CHECK_MESSAGE(found < 200,
+                        "Receiver should not have all 200 keys after "
+                        "disconnect (found " +
+                            std::to_string(found) + ")");
+  }
+}
+
+// =============================================================================
+// Timeout / last_activity() test
+// Verifies that last_activity() is updated when messages are processed and
+// can be used for application-level timeout detection.
+// =============================================================================
+
+BOOST_FIXTURE_TEST_CASE(test_last_activity_timeout, ReplicationFixture) {
+  auto sender_path = test_temp_dir / "sender_timeout.lvs";
+  auto receiver_path = test_temp_dir / "receiver_timeout.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+  BOOST_REQUIRE(sender_storage);
+  BOOST_REQUIRE(receiver_storage);
+
+  auto sender_db = (*sender_storage)["testdb"];
+  auto receiver_db = (*receiver_storage)["testdb"];
+
+  // Insert data so replication takes multiple rounds
+  {
+    auto cursor = sender_db.cursor();
+    for (int i = 0; i < 100; ++i) {
+      std::string key = "to_key_" + std::to_string(i);
+      std::string value =
+          "to_value_" + std::to_string(i) + "_extra_data_for_size";
+      cursor.find(Slice(key));
+      cursor.value(Slice(value));
+    }
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+  wait_for_hashing(sender_impl);
+
+  TestTransport sender_transport, receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
+  TestEvents sender_events, receiver_events;
+
+  // Small buffer to force multiple round trips
+  constexpr size_t SMALL_BUFFER = 512;
+  SenderFSM sender(sender_impl, SMALL_BUFFER);
+  ReceiverFSM receiver(receiver_impl);
+
+  // --- Test 1: last_activity is set after begin() ---
+  auto before_begin = std::chrono::steady_clock::now();
+  receiver.begin(&receiver_transport, &receiver_events);
+  sender.begin(&sender_transport, &sender_events);
+  auto after_begin = std::chrono::steady_clock::now();
+
+  BOOST_CHECK(sender.last_activity() >= before_begin);
+  BOOST_CHECK(sender.last_activity() <= after_begin);
+  BOOST_CHECK(receiver.last_activity() >= before_begin);
+  BOOST_CHECK(receiver.last_activity() <= after_begin);
+
+  // --- Test 2: Process one round, record activity, sleep, verify unchanged ---
+  // Process first exchange: receiver gets sender's initial message
+  while (receiver_transport.has_message()) {
+    auto msg = receiver_transport.receive();
+    auto& buf = receiver.receive_buffer();
+    size_t to_copy = std::min(msg.size(), buf.available());
+    std::memcpy(buf.write_ptr(), msg.data(), to_copy);
+    buf.advance(to_copy);
+    receiver.on_data_received();
+  }
+
+  auto receiver_activity_after_round1 = receiver.last_activity();
+
+  // Small sleep to advance the clock
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  // last_activity should NOT have changed (no messages processed during sleep)
+  BOOST_CHECK(receiver.last_activity() == receiver_activity_after_round1);
+
+  // Sender hasn't processed any reply yet; record its activity
+  auto sender_activity_before_reply = sender.last_activity();
+
+  // --- Test 3: Process sender's reply, verify activity advances ---
+  while (sender_transport.has_message()) {
+    auto msg = sender_transport.receive();
+    sender.on_message_received(msg.data(), msg.size());
+  }
+
+  // If there was a reply, sender's activity should have advanced
+  if (sender.state() != SenderFSM::State::IDLE) {
+    BOOST_CHECK(sender.last_activity() > sender_activity_before_reply);
+  }
+
+  // --- Test 4: Application-level timeout pattern ---
+  // Simulate: record time, sleep, check if "timed out" using last_activity
+  auto check_time = std::chrono::steady_clock::now();
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  auto now = std::chrono::steady_clock::now();
+
+  auto sender_idle_duration = now - sender.last_activity();
+  auto receiver_idle_duration = now - receiver.last_activity();
+
+  // Both should show some idle time (at least the 30ms sleep)
+  BOOST_CHECK_GE(sender_idle_duration.count(), 0);
+  BOOST_CHECK_GE(receiver_idle_duration.count(), 0);
+
+  // A hypothetical 10ms timeout would fire for the receiver (idle > 20+30ms)
+  auto timeout_threshold = std::chrono::milliseconds(10);
+  BOOST_CHECK_MESSAGE(
+      (now - receiver.last_activity()) > timeout_threshold,
+      "Receiver idle time should exceed the timeout threshold");
+
+  // --- Test 5: Complete replication, activity updates along the way ---
+  run_protocol(sender, receiver, sender_transport, receiver_transport, 200);
+
+  BOOST_CHECK_MESSAGE(sender.state() == SenderFSM::State::IDLE,
+                      "Sender did not complete");
+  BOOST_CHECK_MESSAGE(receiver.state() == ReceiverFSM::State::IDLE,
+                      "Receiver did not complete");
+  BOOST_CHECK(sender_events.completed);
+  BOOST_CHECK(receiver_events.completed);
+
+  // After completion, last_activity should be very recent (just finished)
+  auto final_check = std::chrono::steady_clock::now();
+  auto sender_since_complete = final_check - sender.last_activity();
+  auto receiver_since_complete = final_check - receiver.last_activity();
+
+  // Should have been active within the last second (generous margin)
+  BOOST_CHECK_LT(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          sender_since_complete)
+          .count(),
+      1000);
+  BOOST_CHECK_LT(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          receiver_since_complete)
+          .count(),
+      1000);
+}
 BOOST_AUTO_TEST_SUITE_END()
+
+

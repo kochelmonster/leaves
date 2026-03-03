@@ -434,6 +434,7 @@ int array_index(int nchar) const {
   uint32_e* lower_ = lower();
   int lidx = bits::index(_upper, ubit(nchar));
   if (_upper & (1u << ubit(nchar))) {
+    if (!(lower_[lidx] & (1u << lbit(nchar)))) return -1;
     int oidx = bits::count(lower_[lidx] & ((1u << lbit(nchar)) - 1)) +
                bool(_array_len & NULL_MASK);
     // Unrolled loop - lidx is at most 7, compiles to branchless CMOVs
