@@ -1,0 +1,63 @@
+name: Close out-of-scope Copilot PRs
+
+on:
+  pull_request:
+    types: [opened]
+    branches:
+      - main
+      - master
+
+jobs:
+  check-scope:
+    if: github.actor == 'Copilot' || github.actor == 'copilot[bot]' || startsWith(github.head_ref, 'copilot/')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify PR touches repository files
+        id: verify
+        run: |
+          # Get list of changed files in this PR
+          git fetch origin ${{ github.base_ref }} --depth=1
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # Check if any changed file is outside the allowed paths
+          ALLOWED_PATHS="^(include/|tests/|python/|benchmarks/|CMakeLists.txt|readme\.md|\.github/|visualc/)"
+          OUT_OF_SCOPE=false
+
+          while IFS= read -r file; do
+            if ! echo "$file" | grep -qE "$ALLOWED_PATHS"; then
+              echo "Out-of-scope file detected: $file"
+              OUT_OF_SCOPE=true
+            fi
+          done <<< "$CHANGED"
+
+          if [ "$OUT_OF_SCOPE" = "true" ]; then
+            echo "out_of_scope=true" >> $GITHUB_OUTPUT
+          else
+            echo "out_of_scope=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Close out-of-scope PR
+        if: steps.verify.outputs.out_of_scope == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              state: 'closed'
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'This pull request has been automatically closed because it contains changes outside the scope of this repository (a C++ trie/key-value store library). Only changes to `include/`, `tests/`, `python/`, `benchmarks/`, `CMakeLists.txt`, and repository configuration files are accepted.'
+            });
