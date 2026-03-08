@@ -283,14 +283,6 @@ add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
     benchmark leveldb pthread core blake3)
 
-if (DEBUG_BENCHMARKS)
-    target_compile_options(db_bench_leaves PRIVATE -g -O0)
-    target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
-else()
-    target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
-    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
-endif()
-
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
 target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
     benchmark leveldb lmdb pthread)
@@ -300,9 +292,19 @@ target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread)
-target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
-target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
-#target_compile_options(db_bench_memory PUBLIC -g -march=native)
+
+if (DEBUG_BENCHMARKS)
+    target_compile_options(db_bench_leaves PRIVATE -g -O0)
+    target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
+    target_compile_options(db_bench_memory PUBLIC  -g -O0)
+    target_compile_definitions(db_bench_memory PRIVATE DEBUG)
+else()
+    target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
+    target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
+    target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
+endif()
+
 
 # Check for RocksDB and add benchmark if available
 find_path(ROCKSDB_INCLUDE_DIR rocksdb/db.h)

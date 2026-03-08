@@ -323,6 +323,9 @@ struct _Offset {
 
   // Get absolute offset value (mask out TYPE_MASK and RELATIVE_FLAG)
   operator uint64_t() const { return _offset & ~(TYPE_MASK | RELATIVE_FLAG); }
+
+  // Get the raw offset value including metadata bits (for memory-store pointer round-tripping)
+  uint64_t raw() const { return _offset; }
   
   NodeTypes type() const { return (NodeTypes)(_offset & TYPE_MASK); }
   const _Offset& type(NodeTypes type) {

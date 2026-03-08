@@ -25,6 +25,7 @@ struct _MemoryTraits {
 
   struct PageHeader {
     typedef PageHeader Base;
+    tid_t txn_id;
     uint16_e used;  // used bytes in page
     uint8_t slot_id;
     template <typename DB>
@@ -34,7 +35,7 @@ struct _MemoryTraits {
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
+  static constexpr size_t AREA_SIZE = 512 * K;  // Same as file store
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t PAGE_SIZES[] = {                      // Page sizes (header + node)
       sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 10),   // digits 0-9
@@ -72,6 +73,9 @@ struct _MemoryDB {
   static constexpr uint16_t PAGE_SIZES_COUNT = Traits::PAGE_SIZES_COUNT;
   static constexpr uint16_t MIN_PAGE_SIZE = PAGE_SIZES[0];
   static constexpr uint16_t MAX_PAGE_SIZE = PAGE_SIZES[PAGE_SIZES_COUNT - 1];
+
+  static_assert(sizeof(typename Traits::PageHeader) % 8 == 0,
+                "PageHeader size must be a multiple of 8 for offset alignment");
 
   typedef _Cursor<CursorTraits> Cursor;
   typedef _MemManager<Traits> MemManager;
@@ -135,21 +139,19 @@ struct _MemoryDB {
   }
 
   // Direct pointer/offset resolution - no storage delegation needed
+  // Uses raw() to preserve all bits — memstore offsets are raw pointers,
+  // not file offsets, so the low 3 metadata bits must not be stripped.
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
-    // memstore doesn't support relative offsets - all offsets are absolute
-    // pointers
-    return page_ptr(reinterpret_cast<void*>((uint64_t)offset));
+    return page_ptr(reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
   }
 
   template <typename T>
   typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
                                       Access access = READ) const {
     offset_t offset = *offset_ptr;
-    // memstore doesn't support relative offsets - all offsets are absolute
-    // pointers
-    return
-        typename Traits::Pointer<T>(reinterpret_cast<void*>((uint64_t)offset));
+    return typename Traits::Pointer<T>(
+        reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
   }
 
   // Non-template overload for page_ptr to avoid implicit conversion to
