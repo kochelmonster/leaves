@@ -71,7 +71,7 @@ struct _MemoryMapTraits {
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 127),  // utf-8
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
-      sizeof(PageHeader) + 4 * K};
+      4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 

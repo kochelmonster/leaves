@@ -1,7 +1,7 @@
 type: trie
-id: 11968
-page: 11960
-freespace: 88
+id: 12416
+page: 12408
+freespace: 96
 txn: 16
 size: 32
 compressed: 
@@ -9,13 +9,13 @@ compressed:
   key: "[a]"
 branches: "[C][K]"
 children: 
-  - 12617
-  - 12329
+  - 12801
+  - 12545
 ---
 type: leaf
-id: 12617
-page: 12609
-freespace: 114
+id: 12801
+page: 12793
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
@@ -24,9 +24,9 @@ valuesize: 2
 value: "aC"
 ---
 type: leaf
-id: 12329
-page: 12321
-freespace: 114
+id: 12545
+page: 12537
+freespace: 122
 size: 6
 txn: 2
 keysize: 1

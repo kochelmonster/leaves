@@ -1,7 +1,7 @@
 type: trie
-id: 15896
-page: 15888
-freespace: 56
+id: 16048
+page: 16040
+freespace: 64
 txn: 3
 size: 64
 compressed: 
@@ -9,17 +9,17 @@ compressed:
   key: "[a]"
 branches: "[@][A][B][D][E][F]"
 children: 
-  - 5593
-  - 10169
-  - 10409
-  - 10649
-  - 10889
-  - 11129
+  - 5633
+  - 10241
+  - 10497
+  - 10753
+  - 11009
+  - 11265
 ---
 type: leaf
-id: 5593
-page: 5585
-freespace: 114
+id: 5633
+page: 5625
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
@@ -28,9 +28,9 @@ valuesize: 2
 value: "a@"
 ---
 type: leaf
-id: 10169
-page: 10161
-freespace: 114
+id: 10241
+page: 10233
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
@@ -39,9 +39,9 @@ valuesize: 2
 value: "aA"
 ---
 type: leaf
-id: 10409
-page: 10401
-freespace: 114
+id: 10497
+page: 10489
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
@@ -50,9 +50,9 @@ valuesize: 2
 value: "aB"
 ---
 type: leaf
-id: 10649
-page: 10641
-freespace: 114
+id: 10753
+page: 10745
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
@@ -61,9 +61,9 @@ valuesize: 2
 value: "aD"
 ---
 type: leaf
-id: 10889
-page: 10881
-freespace: 114
+id: 11009
+page: 11001
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
@@ -72,9 +72,9 @@ valuesize: 2
 value: "aE"
 ---
 type: leaf
-id: 11129
-page: 11121
-freespace: 114
+id: 11265
+page: 11257
+freespace: 122
 size: 6
 txn: 2
 keysize: 1
