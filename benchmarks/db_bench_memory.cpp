@@ -365,7 +365,7 @@ class MemoryBenchmark {
       bytes_ += value_size + mkey.size();
       mval = gen_.Generate(value_size);
 
-      if (k == 129032) {
+      if (k == 11) {
         // Debugging
         std::cout << "Debugging" << std::endl;
       }

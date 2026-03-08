@@ -62,8 +62,6 @@ struct _Transition {
 
   bool success() const { return cmp == 0 && is_leaf(); }
 
-  bool is_page_root() const { return !offset->is_relative(); }
-
   bool init(Cursor* cursor_, offset_e* offset_, uint16_t keypos_ = 0) {
     cursor = cursor_;
     keypos = keypos_;
@@ -90,12 +88,6 @@ struct _Transition {
 
   offset_e* update() {
     using PageHeader = typename Traits::PageHeader;
-
-    if (!is_page_root()) {
-      // not a page root: cow has to be done in page root
-      offset = parent().update();
-      return link();
-    }
 
     // Compute PageHeader addresses from node pointers
     page_ptr page_header = node - sizeof(PageHeader);
@@ -431,8 +423,6 @@ struct _CursorBase {
 
   // Allocation methods delegated through cursor to DB
   page_ptr alloc_page(uint16_t size) { return this->_db->alloc_page(size); }
-
-  AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
 };
 
 // Full cursor with find, transactions, and modification operations

@@ -182,17 +182,6 @@ struct _MemoryDB {
     return src;
   }
 
-  // Big allocation methods - throw exceptions since memory storage doesn't
-  // support them
-  AreaSlice alloc_big(uint64_t /*size*/) {
-    throw std::runtime_error("Big allocation not supported in memory storage");
-  }
-
-  void free_big(offset_e /*offset*/, size_t /*size*/) {
-    throw std::runtime_error(
-        "Big deallocation not supported in memory storage");
-  }
-
   // Cursor factory methods
   cursor_ptr create_cursor() { return std::make_unique<Cursor>(this, &_root); }
 };
