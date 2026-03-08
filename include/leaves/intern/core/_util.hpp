@@ -517,6 +517,53 @@ inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
   size_t i = 0;
   const size_t min_size = std::min(size1, size2);
 
+  // Fast path for short prefixes (< 8 bytes): covers compressed trie nodes
+  if (min_size < 8) {
+    if (min_size >= 4) {
+      uint32_t w1, w2;
+      memcpy(&w1, str1, 4);
+      memcpy(&w2, str2, 4);
+      if (w1 != w2) {
+        i = detail::count_trailing_zeros_32(w1 ^ w2) / 8;
+        cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+        return i;
+      }
+      i = 4;
+    }
+    while (i < min_size && str1[i] == str2[i]) i++;
+    if (i < min_size)
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+    else if (size1 > size2) cmp = 1;
+    else if (size2 > size1) cmp = -1;
+    else cmp = 0;
+    return i;
+  }
+
+  // Fast path: compare first 16 bytes without loops (covers 99.9% of cases)
+  {
+    uint64_t w1, w2;
+    memcpy(&w1, str1, 8);
+    memcpy(&w2, str2, 8);
+    if (w1 != w2) {
+      uint64_t diff = w1 ^ w2;
+      i = detail::count_trailing_zeros_64(diff) / 8;
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i = 8;
+    if (min_size >= 16) {
+      memcpy(&w1, str1 + 8, 8);
+      memcpy(&w2, str2 + 8, 8);
+      if (w1 != w2) {
+        uint64_t diff = w1 ^ w2;
+        i = 8 + detail::count_trailing_zeros_64(diff) / 8;
+        cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+        return i;
+      }
+      i = 16;
+    }
+  }
+
 #if defined(LEAVES_HAS_AVX512) && !defined(__EMSCRIPTEN__)
   // AVX-512: Compare 64 bytes at a time
   while (i + 64 <= min_size) {

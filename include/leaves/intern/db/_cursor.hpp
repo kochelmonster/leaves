@@ -201,13 +201,13 @@ struct _Transition {
     }
 
     branch_key = key()[0];
-    if (!trie_.isset(branch_key)) {
+    int idx = trie_.array_index(branch_key);
+    if (idx < 0) {
       cmp = NOT_FOUND;
       return;
     }
     cmp = 0;
-    link_idx = trie_.array_index(branch_key);
-    cursor->_db->prefetch(&trie_.array()[link_idx]);
+    link_idx = idx;
     push().find();
   }
 
