@@ -1,6 +1,6 @@
 type: trie
-id: 17040
-page: 17032
+id: 19560
+page: 19552
 freespace: 96
 txn: 9
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 10289
-  - 16912
+  - 11801
+  - 19432
 ---
 type: leaf
-id: 10289
-page: 10281
+id: 11801
+page: 11793
 freespace: 124
 size: 4
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 16912
-page: 16904
+id: 19432
+page: 19424
 freespace: 96
 txn: 9
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 15329
-  - 10416
+  - 17345
+  - 11928
 ---
 type: leaf
-id: 15329
-page: 15321
+id: 17345
+page: 17337
 freespace: 123
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 10416
-page: 10408
+id: 11928
+page: 11920
 freespace: 96
 txn: 9
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 5505
-  - 17296
+  - 6513
+  - 19816
 ---
 type: leaf
-id: 5505
-page: 5497
+id: 6513
+page: 6505
 freespace: 122
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 17296
-page: 17288
+id: 19816
+page: 19808
 freespace: 88
 txn: 9
 size: 40
@@ -84,13 +84,13 @@ compressed:
   key: "[d]"
 branches: "[][*][e]"
 children: 
-  - 14641
-  - 17169
-  - 18192
+  - 16153
+  - 19689
+  - 20712
 ---
 type: leaf
-id: 14641
-page: 14633
+id: 16153
+page: 16145
 freespace: 121
 size: 7
 txn: 6
@@ -100,8 +100,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: leaf
-id: 17169
-page: 17161
+id: 19689
+page: 19681
 freespace: 119
 size: 9
 txn: 9
@@ -111,8 +111,8 @@ valuesize: 5
 value: "abcd*"
 ---
 type: trie
-id: 18192
-page: 18184
+id: 20712
+page: 20704
 freespace: 80
 txn: 9
 size: 48
@@ -121,14 +121,14 @@ compressed:
   key: "[e]"
 branches: "[][*][f][g]"
 children: 
-  - 15713
-  - 18321
-  - 17809
-  - 18065
+  - 17729
+  - 20841
+  - 20329
+  - 20585
 ---
 type: leaf
-id: 15713
-page: 15705
+id: 17729
+page: 17721
 freespace: 120
 size: 8
 txn: 7
@@ -138,8 +138,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 18321
-page: 18313
+id: 20841
+page: 20833
 freespace: 118
 size: 10
 txn: 9
@@ -149,8 +149,8 @@ valuesize: 6
 value: "abcde*"
 ---
 type: leaf
-id: 17809
-page: 17801
+id: 20329
+page: 20321
 freespace: 118
 size: 10
 txn: 7
@@ -160,8 +160,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 18065
-page: 18057
+id: 20585
+page: 20577
 freespace: 118
 size: 10
 txn: 8

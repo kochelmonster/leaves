@@ -301,6 +301,240 @@ struct _MemManager {
   }
 };
 
+// =========================================================================
+// _PooledResolver — thin resolver wrapper pinned to a specific _MemManager
+// =========================================================================
+//
+// When _MemManagerPool dispatches work to a locked manager, internal
+// operations in _GarbageSlot (push→alloc_slot, pop→free) must stay on that
+// same manager without re-acquiring the pool lock.  _PooledResolver achieves
+// this by overriding alloc_slot()/free() to route directly to the locked
+// manager, while forwarding everything else (resolve, make_dirty, etc.) to
+// the underlying DB.
+
+template <typename DB, typename Traits>
+struct _PooledResolver {
+  using page_ptr = typename Traits::ptr;
+  using offset_e = typename Traits::offset_e;
+
+  DB& _db;
+  _MemManager<Traits>& _mgr;
+
+  _PooledResolver(DB& db, _MemManager<Traits>& mgr) : _db(db), _mgr(mgr) {}
+
+  page_ptr alloc_slot(uint16_t slot) {
+    page_ptr result = _mgr.alloc(slot, *this);
+    result->txn_id = _db._active_txn->txn_id;
+    _db.make_dirty(result);
+    return result;
+  }
+
+  void free(page_ptr page) { _mgr.free(page, *this); }
+
+  template <typename T>
+  auto resolve(const offset_e* offset_ptr, Access access = READ) const {
+    return _db.template resolve<T>(offset_ptr, access);
+  }
+
+  template <typename Pointer>
+  auto resolve(const Pointer& p) const {
+    return _db.resolve(p);
+  }
+
+  template <typename PtrType>
+  void make_dirty(PtrType block) {
+    _db.make_dirty(block);
+  }
+
+  template <typename T>
+  bool may_recycle(T& garbage_block) const {
+    return _db.may_recycle(garbage_block);
+  }
+
+  template <typename T>
+  void mark_for_recycle(T& garbage_block) const {
+    _db.mark_for_recycle(garbage_block);
+  }
+
+  auto alloc_single_area() { return _db.alloc_single_area(); }
+};
+
+// =========================================================================
+// _MemManagerPool — drop-in replacement for _MemManager with N managers
+// =========================================================================
+//
+// Provides the same interface as _MemManager.  Internally holds POOL_SIZE
+// managers with per-manager try-lock spinlocks.  When _count == 1 (default),
+// all operations go directly to managers[0] with zero overhead.
+//
+// When activated for parallel use (_count > 1), alloc/free use round-robin
+// try-lock to pick an available manager, creating a _PooledResolver to
+// keep the entire _GarbageSlot call chain on the locked manager.
+//
+// Persists in mmap (all fields are hardware atomics or plain data).
+// After clone()/memcpy, call reinit_locks() to reset spinlocks.
+
+template <typename Traits>
+struct _MemManagerPool {
+  using uint32_e = typename Traits::uint32_e;
+  using offset_e = typename Traits::offset_e;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
+  static constexpr auto COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  typedef typename Traits::PageHeader PageHeader;
+  typedef _MemManagerPool<Traits> MemManager;
+  using ptr = typename Traits::Pointer<MemManager>;
+  using page_ptr = typename Traits::ptr;
+
+  typedef _GarbageSlot<Traits> Slot;
+  using PageContainer = typename Slot::PageContainer;
+
+  static constexpr uint16_t PAGE_ID = _MemManager<Traits>::PAGE_ID;
+  static constexpr uint16_t MIN_PAGE_SIZE = _MemManager<Traits>::MIN_PAGE_SIZE;
+  static constexpr uint16_t MAX_PAGE_SIZE = _MemManager<Traits>::MAX_PAGE_SIZE;
+
+  static constexpr int POOL_SIZE = 4;
+
+  _MemManager<Traits> _managers[POOL_SIZE];
+  std::atomic<uint32_t> _locks[POOL_SIZE];
+  std::atomic<uint32_t> _next{0};
+  uint32_t _count{1};
+
+  void init(offset_t allocation_start_, offset_t allocation_end_) {
+    _managers[0].init(allocation_start_, allocation_end_);
+    for (int i = 1; i < POOL_SIZE; i++) {
+      memset(&_managers[i], 0, sizeof(_MemManager<Traits>));
+    }
+    reinit_locks();
+    _count = 1;
+  }
+
+  void reinit_locks() {
+    for (int i = 0; i < POOL_SIZE; i++) {
+      _locks[i].store(0, std::memory_order_relaxed);
+    }
+    _next.store(0, std::memory_order_relaxed);
+  }
+
+  // Activate extra managers for parallel use.
+  // Seeds each extra manager with an area from the resolver.
+  template <typename Resolver>
+  void activate(uint32_t count, Resolver& resolver) {
+    _count = count < POOL_SIZE ? count : POOL_SIZE;
+    if (_count < 2) _count = 1;
+    for (uint32_t i = 1; i < _count; i++) {
+      if (_managers[i].allocation_start == 0) {
+        auto area = resolver.alloc_single_area();
+        if (area) {
+          _managers[i].init(area->content_offset(), area->end());
+        }
+      }
+    }
+  }
+
+  void deactivate() { _count = 1; }
+
+  static constexpr int assign_slot(uint16_t size) {
+    return _MemManager<Traits>::assign_slot(size);
+  }
+
+  // Forward primary manager's fields for compatibility with code
+  // that reads slots, allocation_start/end, etc.
+  auto& slots_at(int i) { return _managers[0].slots[i]; }
+  const auto& slots_at(int i) const { return _managers[0].slots[i]; }
+
+  auto& get_allocation_start() { return _managers[0].allocation_start; }
+  auto& get_allocation_end() { return _managers[0].allocation_end; }
+
+  // Single-thread fast path (no locking)
+  template <typename Resolver>
+  page_ptr alloc(uint8_t sidx, Resolver& resolver) {
+    if (_count <= 1) {
+      return _managers[0].alloc(sidx, resolver);
+    }
+    return _alloc_pooled(sidx, resolver);
+  }
+
+  template <typename Resolver>
+  void free(page_ptr block, Resolver& resolver) {
+    if (_count <= 1) {
+      _managers[0].free(block, resolver);
+      return;
+    }
+    _free_pooled(block, resolver);
+  }
+
+  template <typename Resolver>
+  page_ptr _alloc_pooled(uint8_t sidx, Resolver& resolver) {
+    uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % _count;
+    for (uint32_t j = 0; j < _count; j++) {
+      uint32_t idx = (start + j) % _count;
+      uint32_t expected = 0;
+      if (_locks[idx].compare_exchange_weak(expected, 1,
+                                            std::memory_order_acquire,
+                                            std::memory_order_relaxed)) {
+        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
+        page_ptr result = _managers[idx].alloc(sidx, pr);
+        _locks[idx].store(0, std::memory_order_release);
+        return result;
+      }
+    }
+    // All managers busy — spin-wait on the first choice
+    uint32_t idx = start;
+    while (true) {
+      uint32_t expected = 0;
+      if (_locks[idx].compare_exchange_weak(expected, 1,
+                                            std::memory_order_acquire,
+                                            std::memory_order_relaxed)) {
+        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
+        page_ptr result = _managers[idx].alloc(sidx, pr);
+        _locks[idx].store(0, std::memory_order_release);
+        return result;
+      }
+#if defined(LEAVES_X86_64)
+      _mm_pause();
+#elif defined(LEAVES_ARM64) && !defined(_MSC_VER)
+      __asm__ __volatile__("yield");
+#endif
+    }
+  }
+
+  template <typename Resolver>
+  void _free_pooled(page_ptr block, Resolver& resolver) {
+    uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % _count;
+    for (uint32_t j = 0; j < _count; j++) {
+      uint32_t idx = (start + j) % _count;
+      uint32_t expected = 0;
+      if (_locks[idx].compare_exchange_weak(expected, 1,
+                                            std::memory_order_acquire,
+                                            std::memory_order_relaxed)) {
+        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
+        _managers[idx].free(block, pr);
+        _locks[idx].store(0, std::memory_order_release);
+        return;
+      }
+    }
+    // All managers busy — spin-wait on the first choice
+    uint32_t idx = start;
+    while (true) {
+      uint32_t expected = 0;
+      if (_locks[idx].compare_exchange_weak(expected, 1,
+                                            std::memory_order_acquire,
+                                            std::memory_order_relaxed)) {
+        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
+        _managers[idx].free(block, pr);
+        _locks[idx].store(0, std::memory_order_release);
+        return;
+      }
+#if defined(LEAVES_X86_64)
+      _mm_pause();
+#elif defined(LEAVES_ARM64) && !defined(_MSC_VER)
+      __asm__ __volatile__("yield");
+#endif
+    }
+  }
+};
+
 template <typename Traits>
 struct _MemStatistics {
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;

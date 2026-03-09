@@ -16,7 +16,7 @@ template <typename Traits_>
 struct _TransactionBase : public Traits_::PageHeader {
   typedef _TransactionBase<Traits_> TransactionBase;
   typedef Traits_ Traits;
-  typedef _MemManager<Traits> MemManager;
+  typedef _MemManagerPool<Traits> MemManager;
   using Traits::PageHeader::txn_id;
   using offset_e = typename Traits::offset_e;
 
@@ -49,7 +49,7 @@ template <typename Traits_>
 struct _Transaction : public _TransactionBase<Traits_> {
   typedef Traits_ Traits;
   typedef _TransactionBase<Traits_> TransactionBase;
-  typedef _MemManager<Traits> MemManager;
+  typedef _MemManagerPool<Traits> MemManager;
   using ptr = typename Traits::Pointer<_Transaction>;
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
@@ -76,6 +76,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
     new_txn->used = sizeof(TransactionBase);
     memcpy((char*)new_txn, this, sizeof(TransactionBase));
     new (&new_txn->refs) std::atomic<uint32_t>(this->refs.load(std::memory_order_relaxed));
+    new_txn->mem_manager.reinit_locks();
     assert(new_txn->slot_id == SLOT_ID);
     return new_txn;
   }
@@ -321,6 +322,16 @@ struct _DB {
     _active_txn->mem_manager.free(page, *this);
   }
 
+  void activate_pool(uint32_t count) {
+    assert(_active_txn);
+    _active_txn->mem_manager.activate(count, *this);
+  }
+
+  void deactivate_pool() {
+    assert(_active_txn);
+    _active_txn->mem_manager.deactivate();
+  }
+
   void prefetch(const offset_e* offset, Access access = READ) const {
     _storage.prefetch(offset, access);
   }
@@ -460,7 +471,7 @@ struct _DB {
 
     _storage.prefetch(&_active_txn->mem_manager);
     for (int i = 0; i < MemManager::COUNT; i++) {
-      _storage.prefetch(&_active_txn->mem_manager.slots[i]);
+      _storage.prefetch(&_active_txn->mem_manager.slots_at(i));
     }
 
     // Find the oldest used transaction and free unused old transactions.
@@ -550,7 +561,7 @@ struct _DB {
     const int garbage =
         MemManager::assign_slot(MemManager::PageContainer::SIZE);
     for (int i = 0; i < MemManager::COUNT; i++) {
-      auto slot = txn_->mem_manager.slots[i];
+      auto slot = txn_->mem_manager.slots_at(i);
       // collect blocks
       offset_t o = slot.ostart;
       if (!o) {

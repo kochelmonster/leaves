@@ -134,6 +134,7 @@
         "./$f": true,
         "wait": true,
         "pgrep": true,
-        "read": true
+        "read": true,
+        "./build/test_executor": true
     }
 }
