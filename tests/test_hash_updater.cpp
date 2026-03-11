@@ -6,6 +6,7 @@
 #include <set>
 
 #include "../include/leaves/intern/replication/_hash.hpp"
+#include "../include/leaves/intern/util/_threadpool.hpp"
 #include "../include/leaves/mmap.hpp"
 
 using namespace leaves;
@@ -1131,3 +1132,241 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_structural_verification) {
   int data_nodes = count_data_nodes(internal_db, txn2->root);
   BOOST_CHECK_EQUAL(data_nodes, final_hash_nodes);
 }
+
+// =============================================================================
+// Parallel execution tests (Phase 4)
+// =============================================================================
+
+#if LEAVES_HAS_THREADS
+
+/**
+ * Collect all leaf hashes from a hash trie into a map keyed by branch path.
+ * Used to compare parallel vs inline hash results.
+ */
+template <typename DB>
+void collect_leaf_hashes(DB* db, typename DB::offset_e offset,
+                         std::string path,
+                         std::map<std::string, std::vector<uint8_t>>& result) {
+  using HashTraits = HashTrieTraits<CursorTraits>;
+  using TrieNode = _TrieNode<HashTraits>;
+  using LeafNode = _LeafNode<HashTraits>;
+
+  if (!offset) return;
+
+  if (offset.type() == LEAF) {
+    auto leaf = db->template resolve<LeafNode>(&offset);
+    result[path] = std::vector<uint8_t>(leaf->hash, leaf->hash + HASH_SIZE);
+    return;
+  }
+
+  auto trie = db->template resolve<TrieNode>(&offset);
+  path.append((const char*)trie->compressed(), trie->len());
+  for (int k = trie->first(); k != TrieNode::OUT_OF_RANGE;
+       k = trie->next(k)) {
+    std::string child_path = path;
+    if (k != TrieNode::NONE) child_path.push_back((char)k);
+    collect_leaf_hashes(db, *trie->offset(k), child_path, result);
+  }
+}
+
+struct TestPool : _ThreadPoolMixin<TestPool> {
+  TestPool(size_t n = 4) : _ThreadPoolMixin(n) {}
+};
+
+template <typename DB>
+void run_hash_update_parallel(DB* internal_db, _PoolExecutor& exec,
+                              typename DB::offset_e data_root,
+                              typename DB::offset_e* hash_root_ptr) {
+  InternalCursor cursor(internal_db, hash_root_ptr);
+  cursor.start_transaction();
+
+  update_hash_trie(exec, internal_db, internal_db, data_root, hash_root_ptr);
+
+  cursor.commit(internal_db->new_cursor_id());
+}
+
+BOOST_AUTO_TEST_CASE(parallel_matches_inline_wide_trie) {
+  // Create a wide trie (many branches at root) and verify parallel hashes
+  // match inline hashes
+  std::remove(TEST_FILE);
+  auto storage = MapStorage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto* internal_db = db._internal();
+
+  // Insert keys that create many branches at the root level
+  for (int i = 0; i < 26; i++) {
+    auto cursor = db.cursor();
+    std::string key(1, 'a' + i);
+    key += "_value_key";
+    cursor.find(key);
+    cursor.value("value_" + std::to_string(i));
+    cursor.commit();
+  }
+
+  auto txn = internal_db->txn();
+
+  // Run inline hash update
+  offset_t hash_root_inline{};
+  run_hash_update(internal_db, txn->root, &hash_root_inline, tid_t(0));
+
+  // Collect inline hashes
+  std::map<std::string, std::vector<uint8_t>> inline_hashes;
+  collect_leaf_hashes(internal_db, hash_root_inline, "", inline_hashes);
+
+  // Run parallel hash update
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  offset_t hash_root_parallel{};
+  run_hash_update_parallel(internal_db, exec, txn->root, &hash_root_parallel);
+  pool.wait_all();
+
+  // Collect parallel hashes
+  std::map<std::string, std::vector<uint8_t>> parallel_hashes;
+  collect_leaf_hashes(internal_db, hash_root_parallel, "", parallel_hashes);
+
+  // Verify same number of leaves
+  BOOST_CHECK_EQUAL(inline_hashes.size(), parallel_hashes.size());
+
+  // Verify all hashes match
+  for (auto& [path, hash] : inline_hashes) {
+    auto it = parallel_hashes.find(path);
+    BOOST_REQUIRE_MESSAGE(it != parallel_hashes.end(),
+                          "Missing parallel hash for path: " + path);
+    BOOST_CHECK_EQUAL_COLLECTIONS(hash.begin(), hash.end(),
+                                  it->second.begin(), it->second.end());
+  }
+
+  // Verify root hashes match
+  using HashTrieNode = _TrieNode<HashTrieTraits<Traits>>;
+  auto inline_root = internal_db->template resolve<HashTrieNode>(&hash_root_inline);
+  auto parallel_root = internal_db->template resolve<HashTrieNode>(&hash_root_parallel);
+  BOOST_CHECK_EQUAL_COLLECTIONS(
+      inline_root->hash, inline_root->hash + HASH_SIZE,
+      parallel_root->hash, parallel_root->hash + HASH_SIZE);
+
+  // Verify structure
+  BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root_parallel));
+}
+
+BOOST_AUTO_TEST_CASE(parallel_matches_inline_deep_trie) {
+  // Create a deep trie with moderate branching at multiple levels
+  std::remove(TEST_FILE);
+  auto storage = MapStorage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto* internal_db = db._internal();
+
+  std::vector<std::string> keys = {
+    "aaa_111_x", "aaa_111_y", "aaa_222_x", "aaa_222_y",
+    "aaa_333_x", "aaa_333_y", "bbb_111_x", "bbb_111_y",
+    "bbb_222_x", "bbb_222_y", "ccc_111_x", "ccc_111_y",
+    "ddd_111_x", "ddd_111_y", "eee_111_x", "eee_111_y"
+  };
+
+  for (const auto& key : keys) {
+    auto cursor = db.cursor();
+    cursor.find(key);
+    cursor.value("v_" + key);
+    cursor.commit();
+  }
+
+  auto txn = internal_db->txn();
+
+  // Inline hashes
+  offset_t hash_root_inline{};
+  run_hash_update(internal_db, txn->root, &hash_root_inline, tid_t(0));
+
+  std::map<std::string, std::vector<uint8_t>> inline_hashes;
+  collect_leaf_hashes(internal_db, hash_root_inline, "", inline_hashes);
+
+  // Parallel hashes
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  offset_t hash_root_parallel{};
+  run_hash_update_parallel(internal_db, exec, txn->root, &hash_root_parallel);
+  pool.wait_all();
+
+  std::map<std::string, std::vector<uint8_t>> parallel_hashes;
+  collect_leaf_hashes(internal_db, hash_root_parallel, "", parallel_hashes);
+
+  BOOST_CHECK_EQUAL(inline_hashes.size(), parallel_hashes.size());
+  for (auto& [path, hash] : inline_hashes) {
+    auto it = parallel_hashes.find(path);
+    BOOST_REQUIRE_MESSAGE(it != parallel_hashes.end(),
+                          "Missing parallel hash for path: " + path);
+    BOOST_CHECK_EQUAL_COLLECTIONS(hash.begin(), hash.end(),
+                                  it->second.begin(), it->second.end());
+  }
+}
+
+BOOST_AUTO_TEST_CASE(parallel_incremental_update) {
+  // Test parallel incremental update after modifications
+  std::remove(TEST_FILE);
+  auto storage = MapStorage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto* internal_db = db._internal();
+
+  // Create initial wide trie
+  for (int i = 0; i < 20; i++) {
+    auto cursor = db.cursor();
+    std::string key(1, 'a' + i);
+    key += "_data";
+    cursor.find(key);
+    cursor.value("initial_" + std::to_string(i));
+    cursor.commit();
+  }
+
+  auto txn1 = internal_db->txn();
+
+  // Initial inline hash
+  offset_t hash_root{};
+  run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
+
+  // Modify some keys
+  for (int i = 0; i < 5; i++) {
+    auto cursor = db.cursor();
+    std::string key(1, 'a' + i);
+    key += "_data";
+    cursor.find(key);
+    cursor.value("modified_" + std::to_string(i));
+    cursor.commit();
+  }
+  // Add new keys
+  for (int i = 20; i < 26; i++) {
+    auto cursor = db.cursor();
+    std::string key(1, 'a' + i);
+    key += "_data";
+    cursor.find(key);
+    cursor.value("new_" + std::to_string(i));
+    cursor.commit();
+  }
+
+  auto txn2 = internal_db->txn();
+
+  // Inline incremental update
+  offset_t hash_root_inline = hash_root;
+  run_hash_update(internal_db, txn2->root, &hash_root_inline, tid_t(0));
+
+  std::map<std::string, std::vector<uint8_t>> inline_hashes;
+  collect_leaf_hashes(internal_db, hash_root_inline, "", inline_hashes);
+
+  // Parallel incremental update (from same starting hash trie)
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  offset_t hash_root_parallel = hash_root;
+  run_hash_update_parallel(internal_db, exec, txn2->root, &hash_root_parallel);
+  pool.wait_all();
+
+  std::map<std::string, std::vector<uint8_t>> parallel_hashes;
+  collect_leaf_hashes(internal_db, hash_root_parallel, "", parallel_hashes);
+
+  BOOST_CHECK_EQUAL(inline_hashes.size(), parallel_hashes.size());
+  for (auto& [path, hash] : inline_hashes) {
+    auto it = parallel_hashes.find(path);
+    BOOST_REQUIRE_MESSAGE(it != parallel_hashes.end(),
+                          "Missing parallel hash for path: " + path);
+    BOOST_CHECK_EQUAL_COLLECTIONS(hash.begin(), hash.end(),
+                                  it->second.begin(), it->second.end());
+  }
+}
+
+#endif  // LEAVES_HAS_THREADS

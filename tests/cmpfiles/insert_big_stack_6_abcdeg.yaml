@@ -1,6 +1,6 @@
 type: trie
-id: 20456
-page: 20448
+id: 537152
+page: 537144
 freespace: 96
 txn: 8
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 11801
-  - 19176
+  - 529481
+  - 10736
 ---
 type: leaf
-id: 11801
-page: 11793
+id: 529481
+page: 529473
 freespace: 124
 size: 4
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 19176
-page: 19168
+id: 10736
+page: 10728
 freespace: 96
 txn: 8
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 17345
-  - 19048
+  - 530673
+  - 1053216
 ---
 type: leaf
-id: 17345
-page: 17337
+id: 530673
+page: 530665
 freespace: 123
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 19048
-page: 19040
+id: 1053216
+page: 1053208
 freespace: 96
 txn: 8
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 6513
-  - 18920
+  - 534897
+  - 6512
 ---
 type: leaf
-id: 6513
-page: 6505
+id: 534897
+page: 534889
 freespace: 122
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 18920
-page: 18912
+id: 6512
+page: 6504
 freespace: 96
 txn: 8
 size: 32
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 16153
-  - 19304
+  - 1052705
+  - 1053088
 ---
 type: leaf
-id: 16153
-page: 16145
+id: 1052705
+page: 1052697
 freespace: 121
 size: 7
 txn: 6
@@ -99,8 +99,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 19304
-page: 19296
+id: 1053088
+page: 1053080
 freespace: 88
 txn: 8
 size: 40
@@ -109,13 +109,13 @@ compressed:
   key: "[e]"
 branches: "[][f][g]"
 children: 
-  - 17729
-  - 20329
-  - 20585
+  - 1052833
+  - 11761
+  - 1052961
 ---
 type: leaf
-id: 17729
-page: 17721
+id: 1052833
+page: 1052825
 freespace: 120
 size: 8
 txn: 7
@@ -125,8 +125,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 20329
-page: 20321
+id: 11761
+page: 11753
 freespace: 118
 size: 10
 txn: 7
@@ -136,8 +136,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 20585
-page: 20577
+id: 1052961
+page: 1052953
 freespace: 118
 size: 10
 txn: 8

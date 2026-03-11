@@ -1,6 +1,6 @@
 type: trie
-id: 17472
-page: 17464
+id: 1052832
+page: 1052824
 freespace: 96
 txn: 4
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a][b]"
 branches: "[][c]"
 children: 
-  - 17601
-  - 17344
+  - 10865
+  - 530672
 ---
 type: leaf
-id: 17601
-page: 17593
+id: 10865
+page: 10857
 freespace: 123
 size: 5
 txn: 4
@@ -24,8 +24,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 17344
-page: 17336
+id: 530672
+page: 530664
 freespace: 96
 txn: 4
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[c]"
 branches: "[*][d]"
 children: 
-  - 16153
-  - 11801
+  - 10737
+  - 529481
 ---
 type: leaf
-id: 16153
-page: 16145
+id: 10737
+page: 10729
 freespace: 114
 size: 14
 txn: 3
@@ -49,8 +49,8 @@ valuesize: 7
 value: "abc*efg"
 ---
 type: leaf
-id: 11801
-page: 11793
+id: 529481
+page: 529473
 freespace: 114
 size: 14
 txn: 3

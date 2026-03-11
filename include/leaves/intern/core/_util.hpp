@@ -175,6 +175,13 @@ struct SpinLock {
     }
   }
 
+  bool try_lock() {
+    uint32_t expected = 0;
+    return _flag.compare_exchange_weak(expected, 1,
+                                       std::memory_order_acquire,
+                                       std::memory_order_relaxed);
+  }
+
   void unlock() { _flag.store(0, std::memory_order_release); }
 };
 

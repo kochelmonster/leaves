@@ -268,7 +268,7 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
   size_t payload_off = sizeof(AreaSlice) + 128;
   std::memcpy(buf.data() + payload_off, &pattern, sizeof(pattern));
 
-  db.write(base + db.calc_header_size(), buf.data(), buf.size());
+  db.write(base, buf.data(), buf.size());
 
   db._cache = typename decltype(db)::Cache(db._capacity);  // Clear cache to force read from file
 
@@ -301,7 +301,7 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
   // Write a valid area buffer so resolve can read it
   std::vector<char> buf(area.size());
   std::memcpy(buf.data(), &area, sizeof(AreaSlice));
-  db.write(base + db.calc_header_size(), buf.data(), buf.size());
+  db.write(base, buf.data(), buf.size());
 
   // Resolve a location to get a page_ptr
   offset_t base_offset(base);

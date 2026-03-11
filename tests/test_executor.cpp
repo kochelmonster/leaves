@@ -285,7 +285,7 @@ BOOST_AUTO_TEST_CASE(single_thread_fast_path) {
   _MemManagerPool<TestTraits> pool;
   pool.init(sizeof(void*), AREA_SIZE);
 
-  // _count == 1 by default — fast path, no locking
+  // POOL_SIZE == 4 by default — all managers always active
   auto p1 = pool.alloc(0, resolver);
   BOOST_CHECK(p1 != nullptr);
   BOOST_CHECK(p1->slot_id == 0);
@@ -298,15 +298,12 @@ BOOST_AUTO_TEST_CASE(single_thread_fast_path) {
   pool.free(p1, resolver);
 }
 
-BOOST_AUTO_TEST_CASE(activate_multiple_managers) {
+BOOST_AUTO_TEST_CASE(multiple_managers_alloc) {
   TestResolver resolver;
   _MemManagerPool<TestTraits> pool;
   pool.init(sizeof(void*), AREA_SIZE);
 
-  pool.activate(4, resolver);
-  BOOST_TEST(pool._count == 4u);
-
-  // Allocate from multiple managers
+  // All POOL_SIZE managers are always active; managers 1..N-1 get areas lazily
   std::vector<TestTraits::ptr> pages;
   for (int i = 0; i < 20; i++) {
     auto p = pool.alloc(0, resolver);
@@ -318,16 +315,12 @@ BOOST_AUTO_TEST_CASE(activate_multiple_managers) {
   for (auto& p : pages) {
     pool.free(p, resolver);
   }
-
-  pool.deactivate();
-  BOOST_TEST(pool._count == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(concurrent_alloc_free) {
   TestResolver resolver;
   _MemManagerPool<TestTraits> pool;
   pool.init(sizeof(void*), AREA_SIZE);
-  pool.activate(4, resolver);
 
   constexpr int N_THREADS = 8;
   constexpr int N_ALLOCS = 100;
@@ -355,7 +348,6 @@ BOOST_AUTO_TEST_CASE(reinit_locks_after_clone) {
   TestResolver resolver;
   _MemManagerPool<TestTraits> pool;
   pool.init(sizeof(void*), AREA_SIZE);
-  pool.activate(4, resolver);
 
   // Simulate memcpy + reinit (as clone() would do)
   _MemManagerPool<TestTraits> pool2;

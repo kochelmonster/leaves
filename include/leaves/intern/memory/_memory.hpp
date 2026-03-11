@@ -412,7 +412,7 @@ struct _MemManagerPool {
   static constexpr int POOL_SIZE = _get_pool_size<Traits>::value;
 
   _MemManager<Traits> _managers[POOL_SIZE];
-  std::atomic<uint32_t> _locks[POOL_SIZE];
+  SpinLock _locks[POOL_SIZE];
   std::atomic<uint32_t> _next{0};
 
   void init(offset_t allocation_start_, offset_t allocation_end_) {
@@ -425,7 +425,7 @@ struct _MemManagerPool {
 
   void reinit_locks() {
     for (int i = 0; i < POOL_SIZE; i++) {
-      _locks[i].store(0, std::memory_order_relaxed);
+      _locks[i]._flag.store(0, std::memory_order_relaxed);
     }
     _next.store(0, std::memory_order_relaxed);
   }
@@ -465,34 +465,19 @@ struct _MemManagerPool {
     uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
-      uint32_t expected = 0;
-      if (_locks[idx].compare_exchange_weak(expected, 1,
-                                            std::memory_order_acquire,
-                                            std::memory_order_relaxed)) {
+      if (_locks[idx].try_lock()) {
         _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
         page_ptr result = _managers[idx].alloc(sidx, pr);
-        _locks[idx].store(0, std::memory_order_release);
+        _locks[idx].unlock();
         return result;
       }
     }
-    // All managers busy — spin-wait on the first choice
-    uint32_t idx = start;
-    while (true) {
-      uint32_t expected = 0;
-      if (_locks[idx].compare_exchange_weak(expected, 1,
-                                            std::memory_order_acquire,
-                                            std::memory_order_relaxed)) {
-        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
-        page_ptr result = _managers[idx].alloc(sidx, pr);
-        _locks[idx].store(0, std::memory_order_release);
-        return result;
-      }
-#if defined(LEAVES_X86_64)
-      _mm_pause();
-#elif defined(LEAVES_ARM64) && !defined(_MSC_VER)
-      __asm__ __volatile__("yield");
-#endif
-    }
+    // All managers busy — TTAS spin-wait on the first choice
+    _locks[start].lock();
+    _PooledResolver<Resolver, Traits> pr(resolver, _managers[start]);
+    page_ptr result = _managers[start].alloc(sidx, pr);
+    _locks[start].unlock();
+    return result;
   }
 
   template <typename Resolver>
@@ -500,34 +485,18 @@ struct _MemManagerPool {
     uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
-      uint32_t expected = 0;
-      if (_locks[idx].compare_exchange_weak(expected, 1,
-                                            std::memory_order_acquire,
-                                            std::memory_order_relaxed)) {
+      if (_locks[idx].try_lock()) {
         _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
         _managers[idx].free(block, pr);
-        _locks[idx].store(0, std::memory_order_release);
+        _locks[idx].unlock();
         return;
       }
     }
-    // All managers busy — spin-wait on the first choice
-    uint32_t idx = start;
-    while (true) {
-      uint32_t expected = 0;
-      if (_locks[idx].compare_exchange_weak(expected, 1,
-                                            std::memory_order_acquire,
-                                            std::memory_order_relaxed)) {
-        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
-        _managers[idx].free(block, pr);
-        _locks[idx].store(0, std::memory_order_release);
-        return;
-      }
-#if defined(LEAVES_X86_64)
-      _mm_pause();
-#elif defined(LEAVES_ARM64) && !defined(_MSC_VER)
-      __asm__ __volatile__("yield");
-#endif
-    }
+    // All managers busy — TTAS spin-wait on the first choice
+    _locks[start].lock();
+    _PooledResolver<Resolver, Traits> pr(resolver, _managers[start]);
+    _managers[start].free(block, pr);
+    _locks[start].unlock();
   }
 };
 
