@@ -25,7 +25,7 @@ template <typename Storage_>
 struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
   using offset_e = typename Traits::offset_e;
-  using MemManager = _MemManager<Traits>;
+  using MemManager = _MemManagerPool<Traits>;
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
   template <typename T, typename = void>
@@ -67,6 +67,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
     void reset() noexcept {
       new (&update_lock) SpinLock();
       ref_count.store(0, std::memory_order_relaxed);
+      hash_mem_manager.reinit_locks();
     }
   } hash_control;
 
@@ -157,7 +158,7 @@ struct _ReplicationDB
   struct HashDB {
     using Traits = typename Storage_::Traits;
     using offset_e = typename Traits::offset_e;
-    using MemManager = _MemManager<Traits>;
+    using MemManager = _MemManagerPool<Traits>;
     using PageHeader = typename Traits::PageHeader;
     using page_ptr = typename Traits::ptr;
 

@@ -322,16 +322,6 @@ struct _DB {
     _active_txn->mem_manager.free(page, *this);
   }
 
-  void activate_pool(uint32_t count) {
-    assert(_active_txn);
-    _active_txn->mem_manager.activate(count, *this);
-  }
-
-  void deactivate_pool() {
-    assert(_active_txn);
-    _active_txn->mem_manager.deactivate();
-  }
-
   void prefetch(const offset_e* offset, Access access = READ) const {
     _storage.prefetch(offset, access);
   }
@@ -342,11 +332,6 @@ struct _DB {
 
     auto area_ptr = _storage.alloc_single_area();
     area_ptr->next = 0;
-
-    // init() pre-seeds area_list_tail_single with the first allocated area,
-    // so every transaction inherits a non-null tail — this can never be zero.
-    assert(_active_txn->area_list_tail_single &&
-           "init() always sets area_list_tail_single; cannot be null");
 
     // Append to transaction's area list tail
     auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);

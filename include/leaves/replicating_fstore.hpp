@@ -49,7 +49,8 @@ struct _ReplicationCacheStore
     if (!std::filesystem::is_regular_file(path)) {
       this->open(path);
       this->_header = new (buffer) FileHeader(db_count);
-      this->_header->file_size = header_size;
+      // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
+      this->_header->file_size = leaves::padding(header_size, Base::AREA_SIZE);
       this->resize(this->_header->file_size);
       this->write(0, buffer, header_size);
     } else {

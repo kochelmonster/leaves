@@ -189,7 +189,7 @@ struct _FileOperations : _CacheBase {
   }
 
   template <typename BlockVector>
-  void write_batch(BlockVector& blocks_to_write, size_t header_size) {
+  void write_batch(BlockVector& blocks_to_write) {
     std::sort(blocks_to_write.begin(), blocks_to_write.end(),
               [](const auto& a, const auto& b) {
                 return a.area()->offset() < b.area()->offset();
@@ -220,7 +220,7 @@ struct _FileOperations : _CacheBase {
 
       if (batch_end == i) {
         // No contiguous blocks found, write the single block
-        write(header_size + start_offset, start_area, start_area->size());
+        write(start_offset, start_area, start_area->size());
         i++;
       } else {
         // We have contiguous blocks, allocate a temporary buffer and copy data
@@ -235,7 +235,7 @@ struct _FileOperations : _CacheBase {
         }
 
         // Write the entire batch at once
-        write(header_size + start_offset, buffer.data(), current_size);
+        write(start_offset, buffer.data(), current_size);
 
         // Move to the next non-contiguous block
         i = batch_end + 1;
@@ -272,9 +272,8 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
     if (!std::filesystem::is_regular_file(path)) {
       open(path);
       _header = new (buffer.get()) FileHeader(db_count);
-      // Ensure enough space on disk for first area aligned to AREA_SIZE
-      // boundary
-      _header->file_size = header_size;
+      // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
+      _header->file_size = leaves::padding(header_size, AREA_SIZE);
       resize(_header->file_size);
       // Write header
       write(0, buffer.get(), header_size);

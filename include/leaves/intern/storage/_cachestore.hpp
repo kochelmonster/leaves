@@ -109,7 +109,7 @@ struct _CacheStore : public Opers_,
     this->wait_all();
 
     // Final flush of any remaining dirty blocks
-    write_dirty_blocks(calc_header_size());
+    write_dirty_blocks();
     close();
   }
 
@@ -127,11 +127,11 @@ struct _CacheStore : public Opers_,
     _pending_dirty_areas.clear();
 
     if (sync) {
-      write_dirty_blocks(calc_header_size());
+      write_dirty_blocks();
     } else if (has_pending && !_flush_pending.exchange(true)) {
       // Submit async flush task to thread pool (only if not already pending)
       this->submit_task([this]() {
-        write_dirty_blocks(calc_header_size());
+        write_dirty_blocks();
         _flush_pending.store(false);
       });
     }
@@ -139,6 +139,7 @@ struct _CacheStore : public Opers_,
 
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
+    if (!offset) return page_ptr();  // null offset → null pointer
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
     
@@ -164,15 +165,13 @@ struct _CacheStore : public Opers_,
       return result;
     }
 
-    uint64_t read_offset = area_offset + calc_header_size();
-
     // Read on-disk header (could be partial / uninitialized)
     AreaSlice disk_header;
-    read((uint64_t)read_offset, &disk_header, sizeof(disk_header));
+    read(area_offset, &disk_header, sizeof(disk_header));
 
     // Allocate full region (header + payload)
     AreaSlice* slice = (AreaSlice*)::operator new(disk_header.size());
-    read((uint64_t)read_offset, slice, disk_header.size());
+    read(area_offset, slice, disk_header.size());
     slice->_ref.store(0);
 
     page_ptr result(slice);
@@ -218,8 +217,6 @@ struct _CacheStore : public Opers_,
     resize(_header->file_size);
     make_header_dirty();
 
-    start -= calc_header_size();  // adjust for header
-
     // Allocate a contiguous buffer for [AreaSlice/Area header + payload]
     Area* area = reinterpret_cast<Area*>(::operator new(size));
     area->init(start, size, 0);
@@ -257,7 +254,7 @@ struct _CacheStore : public Opers_,
   }
 
   // Process all dirty blocks from the queue and write them to storage
-  void write_dirty_blocks(size_t header_size) {
+  void write_dirty_blocks() {
     // Process all dirty areas in the set
     // Use a batch approach for blocks with contiguous offsets
 
@@ -278,11 +275,11 @@ struct _CacheStore : public Opers_,
       _dirty_areas.clear();
     }
 
-    write_batch(blocks_to_write, header_size);
+    write_batch(blocks_to_write);
 
     if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {
       // Write the header
-      write(0, _header, header_size);
+      write(0, _header, calc_header_size());
     }
   }
 
