@@ -409,32 +409,6 @@
             ]
         },
         {
-            "name": "(gdb) test_replication_fsm",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/test_replication_fsm",
-            "args": [
-                "--run_test=ReplicationFSMTests/test_receiver_big_value_start_truncated"
-            ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set Disassembly Flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                }
-            ]
-        },
-        {
             "name": "test_fractional_replication",
             "type": "cppdbg",
             "request": "launch",
@@ -467,6 +441,32 @@
             "program": "${workspaceFolder}/build/test_replication_fsm",
             "args": [
                 "--run_test=ReplicationFSMTests/test_cross_buffer_subtrie"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) test_replication_fsm_mem_pool_bug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_replication_fsm",
+            "args": [
+                "--run_test=ReplicationFSMTests/test_fractional_replication_differential"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
