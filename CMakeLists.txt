@@ -296,16 +296,23 @@ add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread)
 
+add_executable(bench_hash_updater benchmarks/bench_hash_updater.cpp)
+target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
+
 if (DEBUG_BENCHMARKS)
     target_compile_options(db_bench_leaves PRIVATE -g -O0)
     target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
     target_compile_options(db_bench_memory PUBLIC  -g -O0)
     target_compile_definitions(db_bench_memory PRIVATE DEBUG)
+    target_compile_options(bench_hash_updater PRIVATE -g -O0)
+    target_compile_definitions(bench_hash_updater PRIVATE DEBUG)
 else()
     target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
     target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
     target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
+    target_compile_options(bench_hash_updater PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    target_compile_definitions(bench_hash_updater PRIVATE NDEBUG)
 endif()
 
 

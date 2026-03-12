@@ -453,55 +453,33 @@ struct _HashUpdater {
       hash_has[k + 1] = true;  // +1 because NONE is -1
     }
 
-    if constexpr (Executor::is_single_threaded()) {
-      // Sequential path: save/restore _key_path, zero copies
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        data_offset_e data_child = *data_trie->offset(k);
+    _TaskGroup<Executor> tg(*_executor);
+    for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
+         k = data_trie->next(k)) {
+      data_offset_e data_child = *data_trie->offset(k);
+      bool has_hash = hash_has[k + 1];
+      hash_offset_e hash_child_init =
+          has_hash ? *hash_trie->offset(k) : hash_offset_e{};
 
-        if (hash_has[k + 1]) {
-          hash_offset_e hash_child = *hash_trie->offset(k);
-          sync_nodes(data_child, &hash_child);
-          offsets_buf[k] = hash_child;
+      tg.spawn([this, k, data_child, hash_child_init, has_hash,
+                offsets_buf, key = _key_path]() mutable {
+        _InlineExecutor inline_exec;
+        _HashUpdater<DataDB, HashDB> child(_data_db, _hash_db, &inline_exec);
+        child._key_path = std::move(key);
+        hash_offset_e hash_child = hash_child_init;
+        if (has_hash) {
+          child.sync_nodes(data_child, &hash_child);
         } else {
-          hash_offset_e hash_child{};
-          deep_copy_data_to_hash(data_child, &hash_child);
-          offsets_buf[k] = hash_child;
+          child.deep_copy_data_to_hash(data_child, &hash_child);
         }
-
-        branch_count++;
-      }
-    } else {
-      // Parallel path: spawn each branch as a task with its own key_path copy.
-      // When branches >= concurrency(), all tasks are dispatched to threads.
-      // When fewer, they run inline during BFS expansion.
-      _TaskGroup<Executor> tg(*_executor);
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        data_offset_e data_child = *data_trie->offset(k);
-        bool has_hash = hash_has[k + 1];
-        hash_offset_e hash_child_init =
-            has_hash ? *hash_trie->offset(k) : hash_offset_e{};
-
-        tg.spawn([this, k, data_child, hash_child_init, has_hash,
-                  offsets_buf, key = _key_path]() mutable {
-          _HashUpdater<DataDB, HashDB> child(_data_db, _hash_db);
-          child._key_path = std::move(key);
-          hash_offset_e hash_child = hash_child_init;
-          if (has_hash) {
-            child.sync_nodes(data_child, &hash_child);
-          } else {
-            child.deep_copy_data_to_hash(data_child, &hash_child);
-          }
-          offsets_buf[k] = hash_child;
-        });
-        branch_count++;
-      }
-      auto dispatcher = [this](auto&& task) {
-        _executor->post(std::forward<decltype(task)>(task));
-      };
-      tg.wait(dispatcher);
+        offsets_buf[k] = hash_child;
+      });
+      branch_count++;
     }
+    auto dispatcher = [this](auto&& task) {
+      _executor->post(std::forward<decltype(task)>(task));
+    };
+    tg.wait(dispatcher);
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
     // Free them
@@ -561,34 +539,25 @@ struct _HashUpdater {
       hash_offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 0;
 
-      if constexpr (Executor::is_single_threaded()) {
-        for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-             k = data_trie->next(k)) {
-          hash_offset_e child{};
-          deep_copy_data_to_hash(*data_trie->offset(k), &child);
-          offsets_buf[k] = child;
-          branch_count++;
-        }
-      } else {
-        _TaskGroup<Executor> tg(*_executor);
-        for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-             k = data_trie->next(k)) {
-          data_offset_e data_child = *data_trie->offset(k);
-          tg.spawn([this, k, data_child, offsets_buf,
-                    key = _key_path]() mutable {
-            _HashUpdater<DataDB, HashDB> child(_data_db, _hash_db);
-            child._key_path = std::move(key);
-            hash_offset_e result{};
-            child.deep_copy_data_to_hash(data_child, &result);
-            offsets_buf[k] = result;
-          });
-          branch_count++;
-        }
-        auto dispatcher = [this](auto&& task) {
-          _executor->post(std::forward<decltype(task)>(task));
-        };
-        tg.wait(dispatcher);
+      _TaskGroup<Executor> tg(*_executor);
+      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
+           k = data_trie->next(k)) {
+        data_offset_e data_child = *data_trie->offset(k);
+        tg.spawn([this, k, data_child, offsets_buf,
+                  key = _key_path]() mutable {
+          _InlineExecutor inline_exec;
+          _HashUpdater<DataDB, HashDB> child(_data_db, _hash_db, &inline_exec);
+          child._key_path = std::move(key);
+          hash_offset_e result{};
+          child.deep_copy_data_to_hash(data_child, &result);
+          offsets_buf[k] = result;
+        });
+        branch_count++;
       }
+      auto dispatcher = [this](auto&& task) {
+        _executor->post(std::forward<decltype(task)>(task));
+      };
+      tg.wait(dispatcher);
 
       // Create hash trie
       Slice prefix((const char*)data_trie->compressed(), data_trie->len());
@@ -729,7 +698,8 @@ template <typename DataDB, typename HashDB>
 void update_hash_trie(DataDB* data_db, HashDB* hash_db,
                       typename DataDB::offset_e data_root,
                       typename HashDB::offset_e* hash_root_ptr) {
-  _HashUpdater<DataDB, HashDB> updater(data_db, hash_db);
+  _InlineExecutor exec;
+  _HashUpdater<DataDB, HashDB> updater(data_db, hash_db, &exec);
   updater.exec(data_root, hash_root_ptr);
 }
 
