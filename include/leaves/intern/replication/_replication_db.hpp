@@ -109,11 +109,14 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
   template <typename Resolver>
   typename Traits_::template Pointer<_ReplicationTransaction> clone(
       Resolver& resolver) {
-    auto new_txn = Base::alloc_slot(SLOT_ID, resolver);
-    new_txn->used = sizeof(_ReplicationTransaction);
-    memcpy((char*)new_txn, this, sizeof(_ReplicationTransaction));
-    assert(new_txn->slot_id == SLOT_ID);
-    return new_txn;
+    auto page = Base::alloc_slot(SLOT_ID, resolver);
+    page->used = sizeof(_ReplicationTransaction);
+    memcpy((char*)page, this, sizeof(_ReplicationTransaction));
+    auto new_txn = reinterpret_cast<_ReplicationTransaction*>((char*)page);
+    new (&new_txn->refs) std::atomic<uint32_t>(0);
+    new_txn->mem_manager.reinit_locks();
+    assert(page->slot_id == SLOT_ID);
+    return page;
   }
 };
 

@@ -75,7 +75,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
     new_txn->used = sizeof(TransactionBase);
     memcpy((char*)new_txn, this, sizeof(TransactionBase));
-    new (&new_txn->refs) std::atomic<uint32_t>(this->refs.load(std::memory_order_relaxed));
+    new (&new_txn->refs) std::atomic<uint32_t>(0);
     new_txn->mem_manager.reinit_locks();
     assert(new_txn->slot_id == SLOT_ID);
     return new_txn;
@@ -441,11 +441,10 @@ struct _DB {
 
     Transaction tmp;  // needed to alloc the next transaction itself
     memcpy((void*)&tmp, &*last_txn, sizeof(Transaction));
-    new (&tmp.refs) std::atomic<uint32_t>(last_txn->refs.load(std::memory_order_relaxed));
+    new (&tmp.refs) std::atomic<uint32_t>(0);
     _active_txn = &tmp;
     _wtxn = tmp.clone(*this);
     _active_txn = &*_wtxn;
-    _active_txn->refs.store(0);
 
     // ensure last_txn is not freed
     last_txn->refs.fetch_add(1);
