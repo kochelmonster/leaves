@@ -8,6 +8,7 @@
 
 #include "../core/_node.hpp"
 #include "../core/_util.hpp"
+#include "../util/_task_group.hpp"
 
 namespace leaves {
 
@@ -106,7 +107,7 @@ struct HashTrieTraits : BaseTraits {
  * @tparam DataDB The data database type (with data trie nodes)
  * @tparam HashDB The hash database type (with hash trie nodes)
  */
-template <typename DataDB, typename HashDB>
+template <typename DataDB, typename HashDB, typename Executor = _InlineExecutor>
 struct _HashUpdater {
   using DataTraits = typename DataDB::Traits;
   using DataCursorTraits = typename DataDB::CursorTraits;
@@ -134,10 +135,11 @@ struct _HashUpdater {
 
   DataDB* _data_db;
   HashDB* _hash_db;
+  Executor* _executor;
   std::string _key_path;
 
-  _HashUpdater(DataDB* data_db, HashDB* hash_db)
-      : _data_db(data_db), _hash_db(hash_db) {
+  _HashUpdater(DataDB* data_db, HashDB* hash_db, Executor* executor = nullptr)
+      : _data_db(data_db), _hash_db(hash_db), _executor(executor) {
     _key_path.reserve(255);
   }
 
@@ -451,24 +453,54 @@ struct _HashUpdater {
       hash_has[k + 1] = true;  // +1 because NONE is -1
     }
 
-    // Process all data branches
-    for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-         k = data_trie->next(k)) {
-      data_offset_e data_child = *data_trie->offset(k);
+    if constexpr (Executor::is_single_threaded()) {
+      // Sequential path: save/restore _key_path, zero copies
+      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
+           k = data_trie->next(k)) {
+        data_offset_e data_child = *data_trie->offset(k);
 
-      if (hash_has[k + 1]) {
-        // Common branch - recurse
-        hash_offset_e hash_child = *hash_trie->offset(k);
-        sync_nodes(data_child, &hash_child);
-        offsets_buf[k] = hash_child;
-      } else {
-        // Data-only branch - deep copy
-        hash_offset_e hash_child{};
-        deep_copy_data_to_hash(data_child, &hash_child);
-        offsets_buf[k] = hash_child;
+        if (hash_has[k + 1]) {
+          hash_offset_e hash_child = *hash_trie->offset(k);
+          sync_nodes(data_child, &hash_child);
+          offsets_buf[k] = hash_child;
+        } else {
+          hash_offset_e hash_child{};
+          deep_copy_data_to_hash(data_child, &hash_child);
+          offsets_buf[k] = hash_child;
+        }
+
+        branch_count++;
       }
+    } else {
+      // Parallel path: spawn each branch as a task with its own key_path copy.
+      // When branches >= concurrency(), all tasks are dispatched to threads.
+      // When fewer, they run inline during BFS expansion.
+      _TaskGroup<Executor> tg(*_executor);
+      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
+           k = data_trie->next(k)) {
+        data_offset_e data_child = *data_trie->offset(k);
+        bool has_hash = hash_has[k + 1];
+        hash_offset_e hash_child_init =
+            has_hash ? *hash_trie->offset(k) : hash_offset_e{};
 
-      branch_count++;
+        tg.spawn([this, k, data_child, hash_child_init, has_hash,
+                  offsets_buf, key = _key_path]() mutable {
+          _HashUpdater<DataDB, HashDB> child(_data_db, _hash_db);
+          child._key_path = std::move(key);
+          hash_offset_e hash_child = hash_child_init;
+          if (has_hash) {
+            child.sync_nodes(data_child, &hash_child);
+          } else {
+            child.deep_copy_data_to_hash(data_child, &hash_child);
+          }
+          offsets_buf[k] = hash_child;
+        });
+        branch_count++;
+      }
+      auto dispatcher = [this](auto&& task) {
+        _executor->post(std::forward<decltype(task)>(task));
+      };
+      tg.wait(dispatcher);
     }
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
@@ -529,12 +561,33 @@ struct _HashUpdater {
       hash_offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 0;
 
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        hash_offset_e child{};
-        deep_copy_data_to_hash(*data_trie->offset(k), &child);
-        offsets_buf[k] = child;
-        branch_count++;
+      if constexpr (Executor::is_single_threaded()) {
+        for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
+             k = data_trie->next(k)) {
+          hash_offset_e child{};
+          deep_copy_data_to_hash(*data_trie->offset(k), &child);
+          offsets_buf[k] = child;
+          branch_count++;
+        }
+      } else {
+        _TaskGroup<Executor> tg(*_executor);
+        for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
+             k = data_trie->next(k)) {
+          data_offset_e data_child = *data_trie->offset(k);
+          tg.spawn([this, k, data_child, offsets_buf,
+                    key = _key_path]() mutable {
+            _HashUpdater<DataDB, HashDB> child(_data_db, _hash_db);
+            child._key_path = std::move(key);
+            hash_offset_e result{};
+            child.deep_copy_data_to_hash(data_child, &result);
+            offsets_buf[k] = result;
+          });
+          branch_count++;
+        }
+        auto dispatcher = [this](auto&& task) {
+          _executor->post(std::forward<decltype(task)>(task));
+        };
+        tg.wait(dispatcher);
       }
 
       // Create hash trie
@@ -680,6 +733,14 @@ void update_hash_trie(DataDB* data_db, HashDB* hash_db,
   updater.exec(data_root, hash_root_ptr);
 }
 
+template <typename Executor, typename DataDB, typename HashDB>
+void update_hash_trie(Executor& executor, DataDB* data_db, HashDB* hash_db,
+                      typename DataDB::offset_e data_root,
+                      typename HashDB::offset_e* hash_root_ptr) {
+  _HashUpdater<DataDB, HashDB, Executor> updater(data_db, hash_db, &executor);
+  updater.exec(data_root, hash_root_ptr);
+}
+
 // =============================================================================
 // Hash Lookup — cursor-based hash trie navigation
 // =============================================================================
@@ -708,6 +769,9 @@ struct _HashLookup {
   void set_root(offset_e* root) {
     _root = root;
     _cursor.set_root(root);
+    // Hash trie is non-COW: interior nodes may be freed/replaced
+    // without the root offset changing. Always invalidate the stack.
+    _cursor.clear();
   }
 
   /**
