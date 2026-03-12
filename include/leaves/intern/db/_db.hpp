@@ -664,6 +664,7 @@ struct _DB {
     _header->txn_cursor_id.store(0);
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
+      txn->mem_manager.reinit_locks();
       make_dirty(txn);
       return false;
     });
