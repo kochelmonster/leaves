@@ -6,7 +6,7 @@
 
 ---
 
-## What Is Done (Phases 1–3: Framework + Memory Pool + Tests)
+## What Is Done (Phases 1–4: Framework + Memory Pool + Tests + HashUpdater)
 
 All code compiles cleanly, all tests pass (including regenerated reference files).
 
@@ -91,6 +91,52 @@ Two template specializations of `_TaskGroup<Executor>`:
 ### 7. Reference Files Regenerated
 **`tests/cmpfiles/*.yaml`:** All reference YAML files regenerated because `_MemManagerPool` is larger than `_MemManager`, shifting page allocation offsets in the serialized trie graphs.
 
+### 8. `_HashUpdater` Parallel Integration (Phase 4)
+**File:** `include/leaves/intern/replication/_hash.hpp`
+
+**Template change:** `_HashUpdater<DataDB, HashDB>` → `_HashUpdater<DataDB, HashDB, Executor = _InlineExecutor>`.
+- Added `Executor* _executor` member (nullptr for inline).
+- New overload: `update_hash_trie(Executor& executor, ...)` creates `_HashUpdater<DataDB, HashDB, Executor>`.
+- Original `update_hash_trie(...)` unchanged — uses default `_InlineExecutor`, zero overhead.
+
+**Parallelized methods:**
+- **`sync_matching_tries()`:** `if constexpr (Executor::is_single_threaded())` gates two paths:
+  - *Inline path:* unchanged sequential loop with save/restore `_key_path`.
+  - *Parallel path:* spawns each trie branch into `_TaskGroup<Executor>`. Each task captures `key = _key_path` (copy) and creates a child `_HashUpdater<DataDB, HashDB>` (inline executor) for thread-safe independent execution. `tg.wait(dispatcher)` dispatches when branches ≥ concurrency.
+- **`deep_copy_data_to_hash()`:** Same `if constexpr` pattern for the trie branch loop. Leaf processing remains inline in both paths.
+
+**Key design decisions:**
+- **Only trie branches spawn tasks.** Leaf-level work is always inline — leaves are fast and spawning would add overhead without benefit.
+- **`_key_path` copied only in the parallel path.** The `if constexpr` gate means the inline executor path never copies `_key_path` — it uses the existing save/restore pattern. Copies happen at `tg.spawn()` time in the parallel path only.
+- **Child `_HashUpdater` per task.** Each dispatched task creates its own `_HashUpdater<DataDB, HashDB>` with `_InlineExecutor` and its own `_key_path`. This ensures thread-safe independent execution without sharing mutable state across threads.
+- **No nested parallelism.** Child updaters use `_InlineExecutor`, so BFS expansion doesn't grow the frontier beyond the initial branches. If branches ≥ concurrency, all are dispatched. If fewer, all run inline. Acceptable trade-off for v1.
+
+### 9. `_ReplicationDB` Hash Memory Pool (Phase 4a)
+**File:** `include/leaves/intern/replication/_replication_db.hpp`
+
+- **`_ReplicationDBHeader::MemManager`** → `_MemManagerPool<Traits>` (was `_MemManager<Traits>`).
+- **`HashDB::MemManager`** → `_MemManagerPool<Traits>`.
+- **`activate_hash_pool(count)`** / **`deactivate_hash_pool()`** methods on `_ReplicationDB`: activate/deactivate the hash trie's memory manager pool for parallel allocation.
+- **`HashTrieControl::reset()`** calls `hash_mem_manager.reinit_locks()` after memset to reset atomic locks.
+
+### 10. `_PooledResolver` Fix (Phase 4a)
+**File:** `include/leaves/intern/memory/_memory.hpp`
+
+- **`_PooledResolver::alloc_slot()`:** Now uses `if constexpr (requires { _db._active_txn; })` to conditionally access `_db._active_txn->txn_id`. This avoids compilation errors when the DB type (e.g., `HashDB`) lacks an `_active_txn` field. HashDB hash trie nodes get their `txn_id` set explicitly by `_HashUpdater` after allocation.
+
+### 11. Parallel Hash Updater Tests (Phase 4d)
+**File:** `tests/test_hash_updater.cpp`
+
+3 new test cases under `#if LEAVES_HAS_THREADS`:
+- **`parallel_matches_inline_wide_trie`:** 26 keys with different first bytes → wide root trie. Compares parallel hashes against inline hashes.
+- **`parallel_matches_inline_deep_trie`:** 16 keys with shared prefixes → deep trie structure. Compares parallel vs inline.
+- **`parallel_incremental_update`:** Modifies + adds keys, runs parallel update, verifies hashes match inline update.
+
+Helper code added:
+- `collect_leaf_hashes()` — traverses hash trie, returns map of key→hash for leaf-level comparison.
+- `struct TestPool : _ThreadPoolMixin<TestPool>` — 4-thread pool for tests.
+- `run_hash_update_parallel()` — activates pool, runs `update_hash_trie` with `_PoolExecutor`, deactivates pool.
+
 ---
 
 ## Thread-Safety Analysis (mmap storage path)
@@ -108,23 +154,14 @@ Two template specializations of `_TaskGroup<Executor>`:
 
 ## What Is NOT Done (Next Steps)
 
-### Phase 4: Integrate `_HashUpdater` with the Framework
-**File:** `include/leaves/intern/db/_hash_updater.hpp`
-
-The hash updater walks the trie tree computing hashes. It already has a recursive structure where each branch node can be processed independently. The integration would:
-1. Accept an executor parameter (defaulting to `_InlineExecutor` for backward compat).
-2. Create a `_TaskGroup` and `spawn()` each child branch during tree traversal.
-3. Call `wait(dispatcher)` where dispatcher calls `executor.post()`.
-4. Call `activate_pool()` before parallel work, `deactivate_pool()` after.
-5. The `_PooledResolver` + `_MemManagerPool` handle thread-safe memory allocation automatically.
-
 ### Phase 5: Integrate `_Merger` with the Framework
 **File:** `include/leaves/intern/db/_merger.hpp`
 
 Similar pattern to `_HashUpdater` — the merge walks two tries and can parallelize across independent subtrees.
 
 ### Phase 6: Update Call Sites
-- `_replication_fsm.hpp` / `_replication_db.hpp` — pass executor when calling hash updater / merger.
+- `_replication_fsm.hpp` / `_replication_db.hpp` — pass executor when calling merger.
+- Hash updater call sites already have the `update_hash_trie(executor, ...)` overload available.
 
 ### Phase 7: CacheStore Thread-Safety (if needed)
 - `CacheStore::resolve()` and `make_dirty()` use a shared cache map → needs mutex-wrapping for parallel use.
@@ -169,10 +206,13 @@ for t in build/test_*; do "$t" --log_level=error; done
 |------|--------|-------------|
 | `include/leaves/intern/util/_executor.hpp` | REWRITTEN | `_InlineExecutor` + `_PoolExecutor` |
 | `include/leaves/intern/util/_task_group.hpp` | REWRITTEN | Collect-expand-dispatch `_TaskGroup` |
-| `include/leaves/intern/memory/_memory.hpp` | MODIFIED | Added `_PooledResolver` + `_MemManagerPool` |
+| `include/leaves/intern/memory/_memory.hpp` | MODIFIED | Added `_PooledResolver` + `_MemManagerPool`, fixed `alloc_slot` for HashDB |
+| `include/leaves/intern/replication/_hash.hpp` | MODIFIED | `_HashUpdater<DataDB, HashDB, Executor>`, parallel `sync_matching_tries` + `deep_copy_data_to_hash` |
+| `include/leaves/intern/replication/_replication_db.hpp` | MODIFIED | `_MemManagerPool` for hash mem, `activate/deactivate_hash_pool()` |
 | `include/leaves/intern/db/_db.hpp` | MODIFIED | `_MemManagerPool` typedef, `reinit_locks()`, `activate/deactivate_pool()`, `slots_at()` |
 | `include/leaves/intern/db/_check.hpp` | MODIFIED | `slots_at()` accessor |
 | `tests/test_executor.cpp` | NEW | 17 tests for the framework |
+| `tests/test_hash_updater.cpp` | MODIFIED | 3 parallel hash updater tests + helpers |
 | `tests/test_db.cpp` | MODIFIED | `get_allocation_start/end()` accessors |
 | `tests/cmpfiles/*.yaml` | REGENERATED | New page offsets due to larger `_MemManagerPool` |
 | `CMakeLists.txt` | MODIFIED | Added `test_executor` target |
