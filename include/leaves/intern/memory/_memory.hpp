@@ -250,6 +250,8 @@ struct _MemManager {
     left_over_end = left_over_start = 0;
   }
 
+  void reinit_locks() {}
+
   static constexpr int assign_slot(uint16_t size) {
     assert(size > 0);
     return binary_search(&PAGE_SIZES[0], &PAGE_SIZES[COUNT], size);
