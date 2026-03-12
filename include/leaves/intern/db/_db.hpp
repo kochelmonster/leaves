@@ -89,6 +89,7 @@ struct _DBHeader {
 
   offset_t read_txn;      // the current read transaction
   offset_t prepared_txn;  // the transaction being prepared for commit
+  offset_t next_txn_page; // Optimation: preprepared transaction
   Mutex txn_lock;
   std::atomic<uint64_t>
       txn_cursor_id;  // the id of the cursor holding the transaction
@@ -220,6 +221,14 @@ struct _DB {
     txn->area_list_tail_multi = 0;
     txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
                           area_ptr->end());
+
+    // Pre-allocate the next transaction page so start_transaction()
+    // can skip the double-copy on the very first call.
+    _active_txn = &*txn;
+    auto next = txn->clone(*this);
+    _header->next_txn_page = resolve(next);
+    _active_txn = nullptr;
+
     make_dirty(_header);
     flush();
   }
@@ -439,11 +448,10 @@ struct _DB {
 
     txn_ptr last_txn = txn();
 
-    Transaction tmp;  // needed to alloc the next transaction itself
-    memcpy((void*)&tmp, &*last_txn, sizeof(Transaction));
-    new (&tmp.refs) std::atomic<uint32_t>(0);
-    _active_txn = &tmp;
-    _wtxn = tmp.clone(*this);
+    // Pre-allocated page is always ready (from commit, rollback, or init)
+    assert(_header->next_txn_page);
+    _wtxn = resolve<Transaction>(&_header->next_txn_page);
+    _header->next_txn_page = 0;
     _active_txn = &*_wtxn;
 
     // ensure last_txn is not freed
@@ -489,6 +497,16 @@ struct _DB {
         read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
 
     _header->prepared_txn = _header->read_txn;
+
+    // Reuse _wtxn's page for next pre-allocated transaction.
+    // _wtxn was allocated from read_txn's committed space, so it
+    // remains valid after rollback. Just overwrite with read_txn state.
+    memcpy((char*)&*_wtxn, &*read_txn, sizeof(Transaction));
+    new (&_wtxn->refs) std::atomic<uint32_t>(1);  // cursor still holds 1 ref
+    _wtxn->mem_manager.reinit_locks();
+    _header->next_txn_page = resolve(_wtxn);
+
+    make_dirty(_wtxn);
     make_dirty(_header);
     flush();
     end_transaction();
@@ -501,6 +519,12 @@ struct _DB {
 
     // already prepared
     if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
+
+    // Pre-allocate next transaction page before committing.
+    // The allocation modifies _wtxn->mem_manager, which gets persisted
+    // as part of this commit — no storage leak.
+    auto next = _wtxn->clone(*this);
+    _header->next_txn_page = resolve(next);
 
     _header->prepared_txn = resolve(_wtxn);
 
@@ -667,6 +691,14 @@ struct _DB {
       make_dirty(txn);
       return false;
     });
+
+    // Reinit locks/refs on pre-allocated transaction page (stale after crash)
+    if (_header->next_txn_page) {
+      auto next = resolve<Transaction>(&_header->next_txn_page);
+      next->refs.store(0);
+      next->mem_manager.reinit_locks();
+      make_dirty(next);
+    }
 
     if (_header->prepared_txn == _header->read_txn) {
       // Return any uncommitted areas

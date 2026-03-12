@@ -354,7 +354,8 @@ struct TestTraits {
   struct PageHeader {
     typedef PageHeader Base;
     tid_t txn_id;
-    uint16_t slot_id;
+    uint16_e used;
+    uint8_t slot_id;
   };
 
   using ptr = SimplePointer<PageHeader, TRIE>;
