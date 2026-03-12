@@ -203,7 +203,7 @@ struct TestTraits {
 
 constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
 
-// TestResolver acts like a DB for _PooledResolver / _MemManagerPool tests
+// TestResolver acts like a DB for _MemManagerPool tests
 struct TestResolver {
   typedef TestTraits Traits;
   using PageHeader = typename TestTraits::PageHeader;
@@ -217,7 +217,7 @@ struct TestResolver {
   tid_t mark_tid{1};
   tid_t accept_tid{1};
 
-  // Simulated _active_txn for _PooledResolver
+  // Simulated _active_txn for container txn_id stamping
   struct FakeTxn { tid_t txn_id{1}; };
   FakeTxn _fake_txn;
   FakeTxn* _active_txn = &_fake_txn;
@@ -357,40 +357,6 @@ BOOST_AUTO_TEST_CASE(reinit_locks_after_clone) {
   // pool2 should be usable
   auto p = pool2.alloc(0, resolver);
   BOOST_CHECK(p != nullptr);
-}
-
-BOOST_AUTO_TEST_SUITE_END()
-
-// =========================================================================
-// Phase 2: PooledResolver tests
-// =========================================================================
-
-BOOST_AUTO_TEST_SUITE(pooled_resolver)
-
-BOOST_AUTO_TEST_CASE(routes_alloc_to_manager) {
-  TestResolver resolver;
-  _MemManager<TestTraits> mgr;
-  mgr.init(sizeof(void*), AREA_SIZE);
-
-  _PooledResolver<TestResolver, TestTraits> pr(resolver, mgr);
-
-  auto p = pr.alloc_slot(0);
-  BOOST_CHECK(p != nullptr);
-  BOOST_CHECK(p->slot_id == 0);
-  BOOST_CHECK(p->txn_id == resolver._active_txn->txn_id);
-}
-
-BOOST_AUTO_TEST_CASE(routes_free_to_manager) {
-  TestResolver resolver;
-  _MemManager<TestTraits> mgr;
-  mgr.init(sizeof(void*), AREA_SIZE);
-
-  _PooledResolver<TestResolver, TestTraits> pr(resolver, mgr);
-
-  auto p = pr.alloc_slot(0);
-  BOOST_CHECK(p != nullptr);
-  // Should not crash
-  pr.free(p);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

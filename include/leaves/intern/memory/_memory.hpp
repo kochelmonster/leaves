@@ -99,6 +99,9 @@ different ends and starts of the queue.
 */
 
 template <typename Traits>
+struct _MemManager;
+
+template <typename Traits>
 struct _GarbageSlot {
   using PageHeader = typename Traits::PageHeader;
   using offset_e = typename Traits::offset_e;
@@ -111,7 +114,7 @@ struct _GarbageSlot {
 
   // Pop from the garbage slot queue
   template <typename Resolver>
-  ptr pop(Resolver& resolver) {
+  ptr pop(Resolver& resolver, _MemManager<Traits>& mgr) {
     if (count == 0) return nullptr;
 
     assert(ostart);
@@ -145,19 +148,19 @@ struct _GarbageSlot {
         iend = 0;
       }
       istart = 0;
-      resolver.free(front);
+      mgr.free(front, resolver);
     }
     return result;
   }
 
   template <typename Resolver>
-  void push(ptr& block, Resolver& resolver) {
+  void push(ptr& block, Resolver& resolver, _MemManager<Traits>& mgr) {
     cont_ptr back;
 
     if (oend) {
       back = resolver.template resolve<PageContainer>(&oend, WRITE);
       if (iend >= PageContainer::COUNT) {
-        cont_ptr new_back = resolver.alloc_slot(PageContainer::SLOT_ID);
+        cont_ptr new_back = mgr.alloc(PageContainer::SLOT_ID, resolver);
         assert(new_back->slot_id == PageContainer::SLOT_ID);
         new_back->next = 0;
         oend = back->next = resolver.resolve(new_back);
@@ -170,7 +173,7 @@ struct _GarbageSlot {
       assert(istart == 0);
       assert(iend == 0);
       assert(count == 0);
-      back = resolver.alloc_slot(PageContainer::SLOT_ID);
+      back = cont_ptr(mgr.alloc(PageContainer::SLOT_ID, resolver));
       assert(back->slot_id == PageContainer::SLOT_ID);
       back->next = 0;
       oend = ostart = resolver.resolve(back);
@@ -263,7 +266,7 @@ struct _MemManager {
     uint16_t bsize = PAGE_SIZES[sidx];
 
     Slot& slot = slots[sidx];
-    page_ptr result = slot.pop(resolver);
+    page_ptr result = slot.pop(resolver, *this);
     if (result) {
       // Because of some rollback situations slot_id of result could be wrong
       // but the classification of the slot is right
@@ -299,68 +302,8 @@ struct _MemManager {
 
   template <typename Resolver>
   void free(page_ptr block, Resolver& resolver) {
-    slots[block->slot_id].push(block, resolver);
+    slots[block->slot_id].push(block, resolver, *this);
   }
-};
-
-// =========================================================================
-// _PooledResolver — thin resolver wrapper pinned to a specific _MemManager
-// =========================================================================
-//
-// When _MemManagerPool dispatches work to a locked manager, internal
-// operations in _GarbageSlot (push→alloc_slot, pop→free) must stay on that
-// same manager without re-acquiring the pool lock.  _PooledResolver achieves
-// this by overriding alloc_slot()/free() to route directly to the locked
-// manager, while forwarding everything else (resolve, make_dirty, etc.) to
-// the underlying DB.
-
-template <typename DB, typename Traits>
-struct _PooledResolver {
-  using page_ptr = typename Traits::ptr;
-  using offset_e = typename Traits::offset_e;
-
-  DB& _db;
-  _MemManager<Traits>& _mgr;
-
-  _PooledResolver(DB& db, _MemManager<Traits>& mgr) : _db(db), _mgr(mgr) {}
-
-  page_ptr alloc_slot(uint16_t slot) {
-    page_ptr result = _mgr.alloc(slot, *this);
-    if constexpr (requires { _db._active_txn; }) {
-      result->txn_id = _db._active_txn->txn_id;
-    }
-    _db.make_dirty(result);
-    return result;
-  }
-
-  void free(page_ptr page) { _mgr.free(page, *this); }
-
-  template <typename T>
-  auto resolve(const offset_e* offset_ptr, Access access = READ) const {
-    return _db.template resolve<T>(offset_ptr, access);
-  }
-
-  template <typename Pointer>
-  auto resolve(const Pointer& p) const {
-    return _db.resolve(p);
-  }
-
-  template <typename PtrType>
-  void make_dirty(PtrType block) {
-    _db.make_dirty(block);
-  }
-
-  template <typename T>
-  bool may_recycle(T& garbage_block) const {
-    return _db.may_recycle(garbage_block);
-  }
-
-  template <typename T>
-  void mark_for_recycle(T& garbage_block) const {
-    _db.mark_for_recycle(garbage_block);
-  }
-
-  auto alloc_single_area() { return _db.alloc_single_area(); }
 };
 
 // =========================================================================
@@ -375,8 +318,10 @@ struct _PooledResolver {
 // single manager is accessed directly with zero overhead.
 //
 // When POOL_SIZE > 1, alloc/free use round-robin try-lock to pick an
-// available manager, creating a _PooledResolver to keep the entire
-// _GarbageSlot call chain on the locked manager.
+// available manager.  Re-entrant calls from _GarbageSlot (push needing
+// a new PageContainer, pop freeing an exhausted one) stay on the same
+// _MemManager via the mgr reference passed to push/pop — no TLS or
+// wrapper types needed.
 //
 // Manager 0 is initialized with the primary area via init().  Managers
 // 1..N-1 start with empty ranges and lazily acquire areas through
@@ -468,16 +413,14 @@ struct _MemManagerPool {
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
       if (_locks[idx].try_lock()) {
-        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
-        page_ptr result = _managers[idx].alloc(sidx, pr);
+        page_ptr result = _managers[idx].alloc(sidx, resolver);
         _locks[idx].unlock();
         return result;
       }
     }
     // All managers busy — TTAS spin-wait on the first choice
     _locks[start].lock();
-    _PooledResolver<Resolver, Traits> pr(resolver, _managers[start]);
-    page_ptr result = _managers[start].alloc(sidx, pr);
+    page_ptr result = _managers[start].alloc(sidx, resolver);
     _locks[start].unlock();
     return result;
   }
@@ -488,16 +431,14 @@ struct _MemManagerPool {
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
       if (_locks[idx].try_lock()) {
-        _PooledResolver<Resolver, Traits> pr(resolver, _managers[idx]);
-        _managers[idx].free(block, pr);
+        _managers[idx].free(block, resolver);
         _locks[idx].unlock();
         return;
       }
     }
     // All managers busy — TTAS spin-wait on the first choice
     _locks[start].lock();
-    _PooledResolver<Resolver, Traits> pr(resolver, _managers[start]);
-    _managers[start].free(block, pr);
+    _managers[start].free(block, resolver);
     _locks[start].unlock();
   }
 };
