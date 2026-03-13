@@ -10,7 +10,7 @@ compressed:
 branches: "[a][b]"
 children: 
   - 529481
-  - 10737
+  - 529609
 ---
 type: leaf
 id: 529481
@@ -24,8 +24,8 @@ valuesize: 3
 value: "aba"
 ---
 type: leaf
-id: 10737
-page: 10729
+id: 529609
+page: 529601
 freespace: 121
 size: 7
 txn: 3

@@ -1,6 +1,6 @@
 type: trie
-id: 530672
-page: 530664
+id: 529736
+page: 529728
 freespace: 88
 txn: 4
 size: 40
@@ -10,8 +10,8 @@ compressed:
 branches: "[a][b][c]"
 children: 
   - 529481
-  - 10737
-  - 1581089
+  - 529609
+  - 14833
 ---
 type: leaf
 id: 529481
@@ -25,8 +25,8 @@ valuesize: 3
 value: "aba"
 ---
 type: leaf
-id: 10737
-page: 10729
+id: 529609
+page: 529601
 freespace: 121
 size: 7
 txn: 3
@@ -36,8 +36,8 @@ valuesize: 3
 value: "abb"
 ---
 type: leaf
-id: 1581089
-page: 1581081
+id: 14833
+page: 14825
 freespace: 121
 size: 7
 txn: 4

@@ -1,6 +1,6 @@
 type: trie
-id: 537152
-page: 537144
+id: 6512
+page: 6504
 freespace: 96
 txn: 8
 size: 32
@@ -10,7 +10,7 @@ compressed:
 branches: "[][b]"
 children: 
   - 529481
-  - 10736
+  - 537112
 ---
 type: leaf
 id: 529481
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 10736
-page: 10728
+id: 537112
+page: 537104
 freespace: 96
 txn: 8
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 530673
-  - 1053216
+  - 529737
+  - 1058120
 ---
 type: leaf
-id: 530673
-page: 530665
+id: 529737
+page: 529729
 freespace: 123
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 1053216
-page: 1053208
+id: 1058120
+page: 1058112
 freespace: 96
 txn: 8
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 534897
-  - 6512
+  - 531057
+  - 1058248
 ---
 type: leaf
-id: 534897
-page: 534889
+id: 531057
+page: 531049
 freespace: 122
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 6512
-page: 6504
+id: 1058248
+page: 1058240
 freespace: 96
 txn: 8
 size: 32
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 1052705
-  - 1053088
+  - 535409
+  - 531184
 ---
 type: leaf
-id: 1052705
-page: 1052697
+id: 535409
+page: 535401
 freespace: 121
 size: 7
 txn: 6
@@ -99,8 +99,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 1053088
-page: 1053080
+id: 531184
+page: 531176
 freespace: 88
 txn: 8
 size: 40
@@ -109,13 +109,13 @@ compressed:
   key: "[e]"
 branches: "[][f][g]"
 children: 
-  - 1052833
-  - 11761
-  - 1052961
+  - 529865
+  - 14961
+  - 1059697
 ---
 type: leaf
-id: 1052833
-page: 1052825
+id: 529865
+page: 529857
 freespace: 120
 size: 8
 txn: 7
@@ -125,8 +125,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 11761
-page: 11753
+id: 14961
+page: 14953
 freespace: 118
 size: 10
 txn: 7
@@ -136,8 +136,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 1052961
-page: 1052953
+id: 1059697
+page: 1059689
 freespace: 118
 size: 10
 txn: 8

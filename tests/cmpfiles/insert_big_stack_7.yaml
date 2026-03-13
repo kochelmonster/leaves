@@ -1,6 +1,6 @@
 type: trie
-id: 11120
-page: 11112
+id: 537240
+page: 537232
 freespace: 96
 txn: 9
 size: 32
@@ -10,7 +10,7 @@ compressed:
 branches: "[][b]"
 children: 
   - 529481
-  - 1053472
+  - 1052704
 ---
 type: leaf
 id: 529481
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 1053472
-page: 1053464
+id: 1052704
+page: 1052696
 freespace: 96
 txn: 9
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 530673
-  - 10864
+  - 529737
+  - 535664
 ---
 type: leaf
-id: 530673
-page: 530665
+id: 529737
+page: 529729
 freespace: 123
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 10864
-page: 10856
+id: 535664
+page: 535656
 freespace: 96
 txn: 9
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 534897
-  - 1053344
+  - 531057
+  - 535536
 ---
 type: leaf
-id: 534897
-page: 534889
+id: 531057
+page: 531049
 freespace: 122
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 1053344
-page: 1053336
+id: 535536
+page: 535528
 freespace: 88
 txn: 9
 size: 40
@@ -84,13 +84,13 @@ compressed:
   key: "[d]"
 branches: "[][*][e]"
 children: 
-  - 1052705
-  - 537281
-  - 1058208
+  - 535409
+  - 529609
+  - 537368
 ---
 type: leaf
-id: 1052705
-page: 1052697
+id: 535409
+page: 535401
 freespace: 121
 size: 7
 txn: 6
@@ -100,8 +100,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: leaf
-id: 537281
-page: 537273
+id: 529609
+page: 529601
 freespace: 119
 size: 9
 txn: 9
@@ -111,8 +111,8 @@ valuesize: 5
 value: "abcd*"
 ---
 type: trie
-id: 1058208
-page: 1058200
+id: 537368
+page: 537360
 freespace: 80
 txn: 9
 size: 48
@@ -121,14 +121,14 @@ compressed:
   key: "[e]"
 branches: "[][*][f][g]"
 children: 
-  - 1052833
-  - 15985
-  - 11761
-  - 1052961
+  - 529865
+  - 15089
+  - 14961
+  - 1059697
 ---
 type: leaf
-id: 1052833
-page: 1052825
+id: 529865
+page: 529857
 freespace: 120
 size: 8
 txn: 7
@@ -138,8 +138,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 15985
-page: 15977
+id: 15089
+page: 15081
 freespace: 118
 size: 10
 txn: 9
@@ -149,8 +149,8 @@ valuesize: 6
 value: "abcde*"
 ---
 type: leaf
-id: 11761
-page: 11753
+id: 14961
+page: 14953
 freespace: 118
 size: 10
 txn: 7
@@ -160,8 +160,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 1052961
-page: 1052953
+id: 1059697
+page: 1059689
 freespace: 118
 size: 10
 txn: 8
