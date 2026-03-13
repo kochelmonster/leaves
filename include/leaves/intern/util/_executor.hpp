@@ -44,9 +44,11 @@ struct _PoolExecutor {
   using Task = std::function<void()>;
 
   template <typename Pool>
-  explicit _PoolExecutor(Pool& pool)
+  explicit _PoolExecutor(Pool& pool, size_t max_concurrency = 0)
       : _submit([&pool](Task task) { pool.submit_task(std::move(task)); }),
-        _concurrency(pool.pool_size()) {}
+        _concurrency(max_concurrency > 0
+                         ? std::min(pool.pool_size(), max_concurrency)
+                         : pool.pool_size()) {}
 
   _PoolExecutor(const _PoolExecutor&) = default;
   _PoolExecutor& operator=(const _PoolExecutor&) = default;

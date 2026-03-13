@@ -33,9 +33,13 @@ struct _ReplicationMemoryMapFile
   using PoolMixin = _ThreadPoolMixin<_ReplicationMemoryMapFile<Traits_>>;
   using DB = typename Base::DB;
 
+  size_t _hash_threads = 4;
+
   _ReplicationMemoryMapFile(const char* path, size_t map_size = 2 * G,
-                            uint16_t db_count = 48, size_t pool_threads = 0)
-      : Base(path, map_size, db_count), PoolMixin(pool_threads) {}
+                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t hash_threads = 4)
+      : Base(path, map_size, db_count), PoolMixin(pool_threads),
+        _hash_threads(hash_threads) {}
 
   ~_ReplicationMemoryMapFile() {
     this->_dbs.clear();  // Destroy DBs first (cancels purge jobs)
@@ -45,6 +49,7 @@ struct _ReplicationMemoryMapFile
   // Override make() to start purge on newly-created DBs
   DB* make(const char* name) {
     DB* db = Base::make(name);
+    db->_hash_threads = _hash_threads;
     db->start_purge();
     return db;
   }
@@ -61,9 +66,10 @@ class ReplicatingMapStorage
   typedef std::shared_ptr<ReplicatingMapStorage> storage_ptr;
 
   ReplicatingMapStorage(const char* path, size_t map_size = 4 * G,
-                        uint16_t db_count = 48, size_t pool_threads = 0)
+                        uint16_t db_count = 48, size_t pool_threads = 0,
+                        size_t hash_threads = 4)
       : _storage(std::make_unique<StorageImpl>(path, map_size, db_count,
-                                               pool_threads)) {}
+                                               pool_threads, hash_threads)) {}
 
   DB operator[](const char* name) {
     _storage->make(name);
@@ -81,9 +87,10 @@ class ReplicatingMapStorage
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t map_size = 4 * G,
-                            uint16_t db_count = 48, size_t pool_threads = 0) {
+                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t hash_threads = 4) {
     return std::make_shared<ReplicatingMapStorage>(path, map_size, db_count,
-                                                   pool_threads);
+                                                   pool_threads, hash_threads);
   }
 
  private:

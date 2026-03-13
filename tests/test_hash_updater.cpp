@@ -8,6 +8,7 @@
 #include "../include/leaves/intern/replication/_hash.hpp"
 #include "../include/leaves/intern/util/_threadpool.hpp"
 #include "../include/leaves/mmap.hpp"
+#include "../include/leaves/replicating_mmap.hpp"
 
 using namespace leaves;
 
@@ -41,8 +42,10 @@ void run_hash_update(DB* internal_db, typename DB::offset_e data_root,
   InternalCursor cursor(internal_db, hash_root_ptr);
   cursor.start_transaction();
 
+  std::string key_path;
+  key_path.reserve(255);
   _HashUpdater<DB, DB> updater(internal_db, internal_db);
-  updater.exec(data_root, hash_root_ptr);
+  updater.sync_nodes(key_path, data_root, hash_root_ptr);
 
   cursor.commit(internal_db->new_cursor_id());
 }
@@ -1367,6 +1370,74 @@ BOOST_AUTO_TEST_CASE(parallel_incremental_update) {
     BOOST_CHECK_EQUAL_COLLECTIONS(hash.begin(), hash.end(),
                                   it->second.begin(), it->second.end());
   }
+}
+
+BOOST_AUTO_TEST_CASE(parallel_long_key_prefix) {
+  // Long common prefix (1000 chars) forces deep trie nesting and stresses
+  // _key_path copying inside spawned tasks.
+  // Uses ReplicatingMapStorage with separate HashDB (no transaction needed).
+  std::remove(TEST_FILE);
+  auto storage = ReplicatingMapStorage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto* rdb = db._internal();
+
+  // 1000-char common prefix
+  std::string prefix(1000, 'x');
+
+  // Insert keys that share the long prefix but differ in the last few bytes,
+  // creating branches at the divergence point.
+  for (int i = 0; i < 26; i++) {
+    std::string key = prefix + std::string(1, 'a' + i) + "_leaf";
+    auto cursor = db.cursor();
+    cursor.find(key);
+    cursor.value("val_" + std::to_string(i));
+    cursor.commit();
+  }
+
+  auto txn = rdb->txn();
+  auto hdb = rdb->hash_db();
+  using RDB = std::remove_pointer_t<decltype(rdb)>;
+  using HDB = RDB::HashDB;
+
+  // Inline hash update
+  offset_t hash_root_inline{};
+  update_hash_trie(rdb, &hdb, txn->root, &hash_root_inline);
+
+  std::map<std::string, std::vector<uint8_t>> inline_hashes;
+  collect_leaf_hashes(rdb, hash_root_inline, "", inline_hashes);
+
+  // Parallel hash update
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  offset_t hash_root_parallel{};
+  update_hash_trie(exec, rdb, &hdb, txn->root, &hash_root_parallel);
+  pool.wait_all();
+
+  std::map<std::string, std::vector<uint8_t>> parallel_hashes;
+  collect_leaf_hashes(rdb, hash_root_parallel, "", parallel_hashes);
+
+  // Verify all leaves present
+  BOOST_CHECK_EQUAL(inline_hashes.size(), parallel_hashes.size());
+  BOOST_CHECK_EQUAL(inline_hashes.size(), 26u);
+
+  // Verify all hashes match
+  for (auto& [path, hash] : inline_hashes) {
+    auto it = parallel_hashes.find(path);
+    BOOST_REQUIRE_MESSAGE(it != parallel_hashes.end(),
+                          "Missing parallel hash for path: " + path);
+    BOOST_CHECK_EQUAL_COLLECTIONS(hash.begin(), hash.end(),
+                                  it->second.begin(), it->second.end());
+  }
+
+  // Verify root hashes match
+  using HashTrieNode = _TrieNode<HashTrieTraits<Traits>>;
+  auto inline_root = rdb->template resolve<HashTrieNode>(&hash_root_inline);
+  auto parallel_root = rdb->template resolve<HashTrieNode>(&hash_root_parallel);
+  BOOST_CHECK_EQUAL_COLLECTIONS(
+      inline_root->hash, inline_root->hash + HASH_SIZE,
+      parallel_root->hash, parallel_root->hash + HASH_SIZE);
+
+  BOOST_CHECK(verify_structure(rdb, rdb, txn->root, hash_root_parallel));
 }
 
 #endif  // LEAVES_HAS_THREADS

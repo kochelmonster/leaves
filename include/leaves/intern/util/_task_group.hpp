@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "_executor.hpp"
+#include "_small_function.hpp"
 
 #if LEAVES_HAS_THREADS
   #include <atomic>
@@ -20,15 +21,25 @@ namespace leaves {
 // _TaskGroup — structured concurrency: spawn tasks + wait for all
 // =========================================================================
 //
-// Collect-expand-dispatch model:
+// Reentrant work-stealing BFS expansion:
 //
 // When Executor == _InlineExecutor, spawn() runs the callable inline and
 // wait() just re-throws any captured exception.
 //
-// When Executor == _PoolExecutor, spawn() collects callables into a pending
-// list. wait() expands the frontier BFS-style until >= concurrency items
-// exist, then dispatches them to threads via a user-supplied dispatcher
-// callback.
+// When Executor == _PoolExecutor, spawn() collects callables into _current.
+// wait() is reentrant and acts as a FSM:
+//   - Move _current → _batch, steal and run tasks from _batch inline.
+//   - Each task may spawn() children and call wait() reentrantly.
+//   - Reentrant wait() steals remaining siblings from the same _batch.
+//   - When _batch is exhausted, check _current (next generation):
+//     - Empty → return (leaf level)
+//     - >= concurrency → dispatch to pool, block until done, return
+//     - < concurrency → expand: move _current → _batch, loop again
+//   - When dispatch completes or batch is exhausted, wait() returns.
+//     The caller's stack frame (with offsets_buf etc.) is preserved.
+//
+// On worker threads (detected via thread_local _in_worker), spawn()
+// runs immediately — workers run single-threaded depth-first.
 //
 // Usage (inline — single threaded):
 //   _TaskGroup<_InlineExecutor> tg(executor);
@@ -36,13 +47,15 @@ namespace leaves {
 //   tg.spawn([&]{ do_work_b(); });
 //   tg.wait();  // no-op, work already done
 //
-// Usage (pool — multithreaded, collect-expand-dispatch):
+// Usage (pool — multithreaded, reentrant BFS):
 //   _TaskGroup<_PoolExecutor> tg(executor);
 //   tg.spawn([&]{ process_branch_a(); });  // collected, not run
 //   tg.spawn([&]{ process_branch_b(); });  // collected, not run
-//   tg.wait([&](auto&& task) {             // expand + dispatch
-//     executor.post(std::move(task));
-//   });
+//   tg.wait();                              // BFS expand + dispatch
+
+#if LEAVES_HAS_THREADS
+inline thread_local bool _in_worker = false;
+#endif
 
 template <typename Executor>
 struct _TaskGroup;
@@ -89,17 +102,18 @@ struct _TaskGroup<_InlineExecutor> {
   }
 };
 
-// ── Specialisation: pool executor (collect-expand-dispatch) ──────────────
+// ── Specialisation: pool executor (reentrant work-stealing BFS) ──────────
 
 #if LEAVES_HAS_THREADS
 
 template <>
 struct _TaskGroup<_PoolExecutor> {
-  using Task = std::function<void()>;
+  using Task = _SmallFunction<void()>;
 
   _PoolExecutor& _executor;
-  std::vector<Task> _pending;
-  int _depth{0};
+  std::vector<Task> _current;  // tasks collected by spawn()
+  std::vector<Task> _batch;    // current level being expanded
+  size_t _batch_idx{0};        // next unprocessed task in _batch
   std::atomic<int> _outstanding{0};
   std::mutex _mutex;
   std::condition_variable _cv;
@@ -114,87 +128,104 @@ struct _TaskGroup<_PoolExecutor> {
     try { wait(); } catch (...) {}
   }
 
-  // Collect a callable into the pending list (not executed yet).
+  // Collect a callable. On worker threads, runs immediately.
   template <typename Fn>
   void spawn(Fn&& fn) {
-    _pending.emplace_back(std::forward<Fn>(fn));
+    if (_in_worker) {
+      fn();
+    } else {
+      _current.emplace_back(std::forward<Fn>(fn));
+    }
   }
 
-  // Expand + run inline (no dispatcher — all work stays on calling thread).
   void wait() {
-    _wait_impl(static_cast<std::function<void(Task&&)>*>(nullptr));
+    if (_in_worker) return;  // all work already done inline by spawn()
+    _wait_impl();
   }
 
-  // Expand + dispatch to threads via the provided callback.
   template <typename Dispatcher>
-  void wait(Dispatcher&& dispatcher) {
-    std::function<void(Task&&)> d = std::forward<Dispatcher>(dispatcher);
-    _wait_impl(&d);
+  void wait(Dispatcher&&) {
+    if (_in_worker) return;
+    _wait_impl();
   }
 
   size_t concurrency() const noexcept { return _executor.concurrency(); }
 
-  void _wait_impl(std::function<void(Task&&)>* dispatcher) {
-    _depth++;
-    if (_depth > 1) {
-      // Nested wait during BFS expansion — noop, let outer wait handle it.
-      _depth--;
-      return;
+  void _wait_impl() {
+    // If _batch is active, we're reentrant — steal remaining siblings.
+    // Then fall through to BFS expansion for children spawned by stolen tasks.
+    if (!_batch.empty()) {
+      _steal_loop();
     }
 
-    // BFS expand: run pending tasks inline; they may call spawn() to add
-    // children, growing the frontier until >= concurrency.
-    while (_pending.size() < concurrency()) {
-      auto current = std::move(_pending);
-      _pending.clear();
-      if (current.empty()) break;
-      for (auto& task : current) {
-        task();
-      }
-      if (_pending.empty()) break;  // leaf work only, nothing spawned
-    }
+    // BFS expansion — works at any nesting level.
+    for (;;) {
+      if (_current.empty()) break;
 
-    if (dispatcher && _pending.size() > 1) {
-      // Dispatch to real threads
-      _outstanding.store(static_cast<int>(_pending.size()),
-                         std::memory_order_release);
-      for (auto& task : _pending) {
-        (*dispatcher)([this, t = std::move(task)]() mutable {
-          try {
-            t();
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(_mutex);
-            if (!_exception) _exception = std::current_exception();
-          }
-          if (_outstanding.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            _cv.notify_all();
-          }
-        });
+      if (_current.size() >= concurrency()) {
+        _dispatch();
+        break;
       }
-      // Block until all dispatched tasks complete
-      std::unique_lock<std::mutex> lock(_mutex);
-      _cv.wait(lock, [this]() {
-        return _outstanding.load(std::memory_order_acquire) == 0;
-      });
-    } else {
-      // Run inline (single task or no dispatcher)
-      for (auto& task : _pending) {
-        try {
-          task();
-        } catch (...) {
-          if (!_exception) _exception = std::current_exception();
-        }
-      }
-    }
 
-    _pending.clear();
-    _depth--;
+      // Expand: move _current → _batch, steal and run inline.
+      _batch = std::move(_current);
+      _current.clear();
+      _batch_idx = 0;
+      _steal_loop();
+      _batch.clear();
+
+      // After expansion, _current has the next generation (if any).
+      // Loop to check size again.
+    }
 
     if (_exception) {
       auto ex = _exception;
       _exception = nullptr;
       std::rethrow_exception(ex);
     }
+  }
+
+  // Run remaining tasks from _batch starting at _batch_idx.
+  // Each task may call spawn() (populating _current) and wait() (reentrant).
+  void _steal_loop() {
+    while (_batch_idx < _batch.size()) {
+      auto task = std::move(_batch[_batch_idx++]);
+      try {
+        task();
+      } catch (...) {
+        if (!_exception) _exception = std::current_exception();
+      }
+    }
+  }
+
+  // Dispatch _current to pool threads and block.
+  // Posts index-based lambdas (16 bytes) that fit std::function SBO —
+  // zero heap allocs. Workers call _current[i]() directly; _current
+  // stays alive until all workers finish.
+  void _dispatch() {
+    _outstanding.store(static_cast<int>(_current.size()),
+                       std::memory_order_release);
+    for (size_t i = 0; i < _current.size(); ++i) {
+      _executor.post([this, i]() {
+        _in_worker = true;
+        try {
+          _current[i]();
+        } catch (...) {
+          std::lock_guard<std::mutex> lock(_mutex);
+          if (!_exception) _exception = std::current_exception();
+        }
+        _in_worker = false;
+        if (_outstanding.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+          _cv.notify_all();
+        }
+      });
+    }
+
+    std::unique_lock<std::mutex> lock(_mutex);
+    _cv.wait(lock, [this]() {
+      return _outstanding.load(std::memory_order_acquire) == 0;
+    });
+    _current.clear();
   }
 };
 

@@ -135,6 +135,7 @@
         "wait": true,
         "pgrep": true,
         "read": true,
-        "./build/test_executor": true
+        "./build/test_executor": true,
+        "./build/test_multithread": true
     }
 }

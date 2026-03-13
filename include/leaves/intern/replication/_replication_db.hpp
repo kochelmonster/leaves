@@ -262,6 +262,9 @@ struct _ReplicationDB
   using txn_ptr = typename Base::txn_ptr;
   using offset_e = typename CursorTraits::offset_e;
 
+  // --- Hash trie configuration ---
+  size_t _hash_threads = 4;  // max threads for parallel hash trie updates
+
   // --- Purge configuration ---
   std::atomic<uint64_t> _retention_seconds{
       86400};  // how long deleted keys stay (default 24h)
@@ -397,9 +400,16 @@ struct _ReplicationDB
         if (needs_update) {
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*current);
+#if LEAVES_HAS_THREADS
+          _PoolExecutor exec(this->_storage, _hash_threads);
+          update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
+          update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
+                           &hc.deletion_hash_root);
+#else
           update_hash_trie(this, &hdb, current->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
+#endif
           hc.hashed_txn_offset.store((uint64_t)this->resolve(current),
                                      std::memory_order_release);
         }

@@ -45,8 +45,10 @@ void build_hash_trie(DB* idb, typename DB::offset_e data_root,
                      typename DB::offset_e* hash_root_ptr) {
   InternalCursor cursor(idb, hash_root_ptr);
   cursor.start_transaction();
+  std::string key_path;
+  key_path.reserve(255);
   _HashUpdater<DB, DB> updater(idb, idb);
-  updater.exec(data_root, hash_root_ptr);
+  updater.sync_nodes(key_path, data_root, hash_root_ptr);
   cursor.commit(idb->new_cursor_id());
 }
 
