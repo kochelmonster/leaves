@@ -334,16 +334,13 @@ struct _HashUpdater {
         hash_offset_e hash_child{};
         if (k == (int)diverge_byte && !hash_consumed) {
           // This data branch aligns with hash's embedded prefix.
-          // The child's compressed[0] is the branch char, which will be
-          // skipped via data_prefix_skip=1.  We must include it in
-          // _key_path so the hash covers the full key.
+          // The child's compressed[0] is the branch char; don't skip it
+          // so the recursive call naturally appends it to _key_path.
+          // Keep the matching byte in hash's prefix too (no +1).
           hash_child = *hash_offset_ptr;
-          if (k != DataTrieNode::NONE) _key_path.push_back((char)k);
-          uint8_t new_hash_skip = hash_prefix_skip + common + 1;
-          uint8_t new_data_skip =
-              1;  // Skip the branch byte embedded in child's prefix
+          uint8_t new_hash_skip = hash_prefix_skip + common;
+          uint8_t new_data_skip = 0;
           sync_nodes(data_child, &hash_child, new_hash_skip, new_data_skip);
-          if (k != DataTrieNode::NONE) _key_path.pop_back();
           hash_consumed = true;
         } else {
           // Non-matching branch: child appends full compressed (no skip),
@@ -390,17 +387,15 @@ struct _HashUpdater {
       }
 
       if (hash_trie->isset(next_byte)) {
-        // Sync data with hash's matching branch child
-        // Need to skip the consumed data prefix: data_prefix_skip + common + 1
-        // Hash child's first byte is the branch key, so skip 1 byte in hash too
+        // Sync data with hash's matching branch child.
+        // Don't skip the branch byte on either side — the recursive call
+        // will match it in the common prefix and append it to _key_path.
         hash_offset_e hash_child = *hash_trie->offset(next_byte);
         size_t saved_len = _key_path.size();
         _key_path.append((const char*)data_prefix, common);
-        _key_path.push_back((char)next_byte);
 
-        uint8_t new_data_skip = data_prefix_skip + common + 1;
-        uint8_t new_hash_skip =
-            1;  // Skip the branch byte embedded in hash child's prefix
+        uint8_t new_data_skip = data_prefix_skip + common;
+        uint8_t new_hash_skip = 0;
         sync_nodes(data_offset, &hash_child, new_hash_skip, new_data_skip);
 
         // Replace the hash trie with the synced result
