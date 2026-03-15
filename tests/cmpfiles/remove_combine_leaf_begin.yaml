@@ -11,7 +11,7 @@ branches: "[][c][d]"
 children: 
   - 528417
   - 528545
-  - 10736
+  - 12800
 ---
 type: leaf
 id: 528417
@@ -36,8 +36,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 10736
-page: 10728
+id: 12800
+page: 12792
 freespace: 96
 txn: 2
 size: 32

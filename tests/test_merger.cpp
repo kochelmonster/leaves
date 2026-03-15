@@ -5,6 +5,7 @@
 
 #include "../include/leaves/intern/db/_cursor.hpp"
 #include "../include/leaves/intern/util/_merger.hpp"
+#include "../include/leaves/intern/util/_threadpool.hpp"
 #include "test.hpp"
 
 using namespace leaves;
@@ -51,6 +52,38 @@ void exec_merger(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
   }
 }
 
+#if LEAVES_HAS_THREADS
+struct TestPool : _ThreadPoolMixin<TestPool> {
+  TestPool(size_t n = 4) : _ThreadPoolMixin(n) {}
+};
+
+template <typename DBDst, typename DBSrc, typename MergePolicy>
+void exec_merger_parallel(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
+                          _PoolExecutor& exec) {
+  using DstCursorTraits = typename DBDst::CursorTraits;
+  using SrcCursorTraits = typename DBSrc::CursorTraits;
+  using DstCursor = _TransactionalCursor<DstCursorTraits>;
+  using SrcCursor = _Cursor<SrcCursorTraits>;
+
+  auto src_root = &src_db.txn()->root;
+  auto dst_root = &dst_db.txn()->root;
+  uint64_t cursor_id = dst_db.new_cursor_id();
+
+  DstCursor dst_cursor(&dst_db, dst_root);
+  SrcCursor src_cursor(&src_db, src_root);
+
+  src_cursor.clear();
+  dst_cursor.start_transaction();
+
+  _Merger<DstCursor, SrcCursor, MergePolicy, _PoolExecutor> merger(
+      dst_cursor, src_cursor, handler);
+  _TaskGroup<_PoolExecutor> tg(exec);
+  merger._tg = &tg;
+  merger.exec();
+  dst_cursor.commit(cursor_id);
+}
+#endif  // LEAVES_HAS_THREADS
+
 // Extended preparation that also cleans up the second test file
 struct MergerPreparation {
   MergerPreparation() {
@@ -83,7 +116,6 @@ struct OverwritePolicy {
     // No-op for testing - in real usage would free big value memory
   }
 
-  // Storage for the _BigValue returned by migrate_big_value
   mutable _BigValue _big_value_storage;
 
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
@@ -94,9 +126,8 @@ struct OverwritePolicy {
     auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
     uint32_t value_size = src_bvalue->value_size;
 
-    _BigValue* dst_bvalue = &_big_value_storage;
-    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
-    offset_t dst_offset(dst_bvalue->chunk_offset);
+    dst_cursor.get_bigmemory().alloc(value_size, &_big_value_storage);
+    offset_t dst_offset(_big_value_storage.chunk_offset);
     auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
     memcpy((char*)dst_data, (char*)src_data, value_size);
 
@@ -127,7 +158,6 @@ struct KeepDestPolicy {
     // No-op for testing
   }
 
-  // Storage for the _BigValue returned by migrate_big_value
   mutable _BigValue _big_value_storage;
 
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
@@ -138,9 +168,8 @@ struct KeepDestPolicy {
     auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
     uint32_t value_size = src_bvalue->value_size;
 
-    _BigValue* dst_bvalue = &_big_value_storage;
-    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
-    offset_t dst_offset(dst_bvalue->chunk_offset);
+    dst_cursor.get_bigmemory().alloc(value_size, &_big_value_storage);
+    offset_t dst_offset(_big_value_storage.chunk_offset);
     auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
     memcpy((char*)dst_data, (char*)src_data, value_size);
 
@@ -1324,7 +1353,6 @@ struct PrefixFilterPolicy {
   template <typename LeafNode, typename DstCursor>
   void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
 
-  // Storage for the _BigValue returned by migrate_big_value
   mutable _BigValue _big_value_storage;
 
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
@@ -1335,9 +1363,8 @@ struct PrefixFilterPolicy {
     auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
     uint32_t value_size = src_bvalue->value_size;
 
-    _BigValue* dst_bvalue = &_big_value_storage;
-    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
-    offset_t dst_offset(dst_bvalue->chunk_offset);
+    dst_cursor.get_bigmemory().alloc(value_size, &_big_value_storage);
+    offset_t dst_offset(_big_value_storage.chunk_offset);
     auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
     memcpy((char*)dst_data, (char*)src_data, value_size);
 
@@ -1572,7 +1599,6 @@ struct TrackingFilterPolicy {
   template <typename LeafNode, typename DstCursor>
   void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
 
-  // Storage for the _BigValue returned by migrate_big_value
   mutable _BigValue _big_value_storage;
 
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
@@ -1583,9 +1609,8 @@ struct TrackingFilterPolicy {
     auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
     uint32_t value_size = src_bvalue->value_size;
 
-    _BigValue* dst_bvalue = &_big_value_storage;
-    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
-    offset_t dst_offset(dst_bvalue->chunk_offset);
+    dst_cursor.get_bigmemory().alloc(value_size, &_big_value_storage);
+    offset_t dst_offset(_big_value_storage.chunk_offset);
     auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
     memcpy((char*)dst_data, (char*)src_data, value_size);
 
@@ -1697,7 +1722,6 @@ struct RejectBigPolicy {
   template <typename LeafNode, typename DstCursor>
   void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
 
-  // Storage for the _BigValue returned by migrate_big_value
   mutable _BigValue _big_value_storage;
 
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
@@ -1708,9 +1732,8 @@ struct RejectBigPolicy {
     auto src_data = src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
     uint32_t value_size = src_bvalue->value_size;
 
-    _BigValue* dst_bvalue = &_big_value_storage;
-    dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
-    offset_t dst_offset(dst_bvalue->chunk_offset);
+    dst_cursor.get_bigmemory().alloc(value_size, &_big_value_storage);
+    offset_t dst_offset(_big_value_storage.chunk_offset);
     auto dst_data = dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
     memcpy((char*)dst_data, (char*)src_data, value_size);
 
@@ -2110,3 +2133,393 @@ BOOST_AUTO_TEST_CASE(test_merger_shared_trie_prefix) {
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v_src_abf"));
 }
+
+// ── Parallel execution tests ────────────────────────────────────────────
+#if LEAVES_HAS_THREADS
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_multiple_to_empty) {
+  // Parallelize deep-copy of a wide source trie into empty destination
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto c = src_db.cursor();
+  for (int i = 0; i < 26; i++) {
+    std::string key(1, 'a' + i);
+    key += "_value_key";
+    c.find(key);
+    c.value("val_" + std::to_string(i));
+  }
+  c.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = (*dest_storage)["test"]._internal();
+
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  OverwritePolicy handler;
+  exec_merger_parallel(*dst_internal, *src_internal, handler, exec);
+
+  auto v = (*dest_storage)["test"].cursor();
+  int count = 0;
+  v.first();
+  while (v.is_valid()) { count++; v.next(); }
+  BOOST_CHECK_EQUAL(count, 26);
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_disjoint_keys) {
+  // Merge disjoint wide tries in parallel
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto dst_db = (*dest_storage)["test"];
+  auto sc = src_db.cursor();
+  auto dc = dst_db.cursor();
+
+  for (int i = 0; i < 26; i++) {
+    std::string skey = "src_" + std::string(1, 'a' + i);
+    sc.find(skey); sc.value("sv_" + std::to_string(i));
+    std::string dkey = "dst_" + std::string(1, 'a' + i);
+    dc.find(dkey); dc.value("dv_" + std::to_string(i));
+  }
+  sc.commit();
+  dc.commit();
+
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  OverwritePolicy handler;
+  exec_merger_parallel(*dst_db._internal(), *src_db._internal(), handler, exec);
+
+  auto v = (*dest_storage)["test"].cursor();
+  int count = 0;
+  v.first();
+  while (v.is_valid()) { count++; v.next(); }
+  BOOST_CHECK_EQUAL(count, 52);
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_large_dataset) {
+  // Large merge to stress-test parallel deep copy with many branches
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto sc = src_db.cursor();
+  for (int i = 0; i < 300; i++) {
+    std::string key = "key_" + std::to_string(i);
+    sc.find(key);
+    sc.value("src_value_" + std::to_string(i));
+  }
+  sc.commit();
+
+  // Pre-populate destination with some overlapping keys
+  auto dst_db = (*dest_storage)["test"];
+  auto dc = dst_db.cursor();
+  for (int i = 0; i < 50; i++) {
+    std::string key = "key_" + std::to_string(i);
+    dc.find(key);
+    dc.value("dst_value_" + std::to_string(i));
+  }
+  dc.commit();
+
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  OverwritePolicy handler;
+  exec_merger_parallel(*dst_db._internal(), *src_db._internal(), handler, exec);
+
+  auto v = (*dest_storage)["test"].cursor();
+  int count = 0;
+  v.first();
+  while (v.is_valid()) { count++; v.next(); }
+  BOOST_CHECK_EQUAL(count, 300);
+
+  // Check a few values are from source (overwritten)
+  v.find("key_0");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("src_value_0"));
+  v.find("key_49");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("src_value_49"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_matches_inline) {
+  // Verify parallel merge produces identical results to inline merge
+  MergerPreparation p;
+
+  // Build source tree with varied structure
+  auto src_storage = Storage::create(TEST_FILE);
+  auto src_db = (*src_storage)["test"];
+  auto sc = src_db.cursor();
+  for (int i = 0; i < 100; i++) {
+    std::string key = "prefix_" + std::string(1, 'a' + (i % 26)) + "_" + std::to_string(i);
+    sc.find(key);
+    sc.value("value_" + std::to_string(i));
+  }
+  sc.commit();
+
+  // Merge inline, collect results
+  std::vector<std::pair<std::string, std::string>> inline_results;
+  {
+    auto dst1_storage = Storage::create(TEST_FILE "2");
+    OverwritePolicy handler;
+    exec_merger(*(*dst1_storage)["test"]._internal(),
+                *src_db._internal(), handler);
+    auto v = (*dst1_storage)["test"].cursor();
+    v.first();
+    while (v.is_valid()) {
+      inline_results.emplace_back(v.key().string(), v.value().string());
+      v.next();
+    }
+  }
+  std::remove(TEST_FILE "2");
+
+  // Merge parallel, collect results
+  std::vector<std::pair<std::string, std::string>> parallel_results;
+  {
+    auto dst2_storage = Storage::create(TEST_FILE "2");
+    TestPool pool(4);
+    _PoolExecutor exec(pool);
+    OverwritePolicy handler;
+    exec_merger_parallel(*(*dst2_storage)["test"]._internal(),
+                         *src_db._internal(), handler, exec);
+    auto v = (*dst2_storage)["test"].cursor();
+    v.first();
+    while (v.is_valid()) {
+      parallel_results.emplace_back(v.key().string(), v.value().string());
+      v.next();
+    }
+  }
+
+  // Compare results
+  BOOST_CHECK_EQUAL(inline_results.size(), parallel_results.size());
+  BOOST_CHECK_EQUAL(inline_results.size(), 100u);
+  for (size_t i = 0; i < inline_results.size() && i < parallel_results.size(); i++) {
+    BOOST_CHECK_EQUAL(inline_results[i].first, parallel_results[i].first);
+    BOOST_CHECK_EQUAL(inline_results[i].second, parallel_results[i].second);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_with_filter) {
+  // Parallel merge with may_add filtering — exercises handler SpinLock
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  // Insert keys with distinct first-char prefixes: 'a' for accept, 'r' for reject
+  {
+    auto sc = src_db.cursor();
+    for (int i = 0; i < 50; i++) {
+      std::string key = "a" + std::to_string(i);
+      sc.find(key);
+      sc.value("x");
+    }
+    for (int i = 0; i < 50; i++) {
+      std::string key = "r" + std::to_string(i);
+      sc.find(key);
+      sc.value("y");
+    }
+    sc.commit();
+  }
+
+  // Filter: only keys starting with "a"
+  TrackingFilterPolicy handler("a");
+
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  exec_merger_parallel(*(*dest_storage)["test"]._internal(),
+                       *src_db._internal(), handler, exec);
+
+  auto v = (*dest_storage)["test"].cursor();
+  int count = 0;
+  v.first();
+  while (v.is_valid()) {
+    BOOST_CHECK(v.key().string()[0] == 'a');
+    count++;
+    v.next();
+  }
+  BOOST_CHECK_EQUAL(count, 50);
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches) {
+  // Both src and dst have overlapping key ranges, forcing shared-branch merges
+  // in merge_into_trie (suffix_len==0 path). Sub-cursors handle each branch.
+  MergerPreparation p;
+
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto dst_db = (*dest_storage)["test"];
+
+  // Use single-char prefix + zero-padded numbers to avoid the key1==key2 bug.
+  // dst: A00..A09, C00..C09, E00..E09  (30 keys)
+  // src: A00..A09, C00..C09, G00..G09  (30 keys)
+  // Shared: A, C branches.  dst-only: E.  src-only: G.
+  auto pad = [](int i) -> std::string {
+    char buf[4]; snprintf(buf, sizeof(buf), "%02d", i); return buf;
+  };
+  // Use pure numeric keys with branch-letter prefix to avoid cursor insert bugs.
+  // Insert in globally sorted order to avoid keep_stack issues.
+  auto mk = [](char prefix, int i) -> std::string {
+    char buf[8]; snprintf(buf, sizeof(buf), "%c%03d", prefix, i); return buf;
+  };
+  {
+    auto dc = dst_db.cursor();
+    for (int i = 0; i < 10; i++) dc.find(mk('A', i)), dc.value(mk('a', i));
+    for (int i = 0; i < 10; i++) dc.find(mk('C', i)), dc.value(mk('c', i));
+    for (int i = 0; i < 10; i++) dc.find(mk('E', i)), dc.value(mk('e', i));
+    dc.commit();
+  }
+  {
+    auto sc = src_db.cursor();
+    for (int i = 0; i < 10; i++) sc.find(mk('A', i)), sc.value(mk('a', i + 100));
+    for (int i = 0; i < 10; i++) sc.find(mk('C', i)), sc.value(mk('c', i + 100));
+    for (int i = 0; i < 10; i++) sc.find(mk('G', i)), sc.value(mk('g', i));
+    sc.commit();
+  }
+
+  // Inline merge for reference
+  std::vector<std::pair<std::string, std::string>> inline_results;
+  {
+    auto dst1_storage = Storage::create(TEST_FILE "3");
+    {
+      auto dst1_db = (*dst1_storage)["test"];
+      auto dc1 = dst1_db.cursor();
+      for (int i = 0; i < 10; i++) dc1.find(mk('A', i)), dc1.value(mk('a', i));
+      for (int i = 0; i < 10; i++) dc1.find(mk('C', i)), dc1.value(mk('c', i));
+      for (int i = 0; i < 10; i++) dc1.find(mk('E', i)), dc1.value(mk('e', i));
+      dc1.commit();
+      OverwritePolicy handler;
+      exec_merger(*dst1_db._internal(), *src_db._internal(), handler);
+    }
+    auto v = (*dst1_storage)["test"].cursor();
+    v.first();
+    while (v.is_valid()) {
+      inline_results.emplace_back(v.key().string(), v.value().string());
+      v.next();
+    }
+  }
+  std::remove(TEST_FILE "3");
+
+  // Parallel merge
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  OverwritePolicy handler;
+  exec_merger_parallel(*dst_db._internal(), *src_db._internal(), handler, exec);
+
+  std::vector<std::pair<std::string, std::string>> parallel_results;
+  {
+    auto v = (*dest_storage)["test"].cursor();
+    v.first();
+    while (v.is_valid()) {
+      parallel_results.emplace_back(v.key().string(), v.value().string());
+      v.next();
+    }
+  }
+
+  // 40 keys total: A (10 overwritten), C (10 overwritten), E (10 kept), G (10 added)
+  BOOST_CHECK_EQUAL(inline_results.size(), parallel_results.size());
+  BOOST_CHECK_EQUAL(parallel_results.size(), 40u);
+  for (size_t i = 0; i < inline_results.size() && i < parallel_results.size(); i++) {
+    BOOST_CHECK_EQUAL(inline_results[i].first, parallel_results[i].first);
+    BOOST_CHECK_EQUAL(inline_results[i].second, parallel_results[i].second);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
+  // Deeper shared branches: both src and dst share multi-level trie structure
+  MergerPreparation p;
+
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto dst_db = (*dest_storage)["test"];
+
+  // Keys: "P<branch>D<nn>" in dst, "P<branch>S<nn>" in src
+  // branch = A..E (5 branches), nn = 00..09 (10 each)
+  // Also src overwrites some dst keys "P<branch>D<nn>" for nn=00..04
+  auto pad = [](int i) -> std::string {
+    char buf[4]; snprintf(buf, sizeof(buf), "%02d", i); return buf;
+  };
+  {
+    auto dc = dst_db.cursor();
+    for (int b = 0; b < 5; b++) {
+      for (int i = 0; i < 10; i++) {
+        std::string key = "P" + std::string(1, 'A' + b) + "D" + pad(i);
+        dc.find(key); dc.value("d" + key);
+      }
+    }
+    dc.commit();
+  }
+  {
+    auto sc = src_db.cursor();
+    for (int b = 0; b < 5; b++) {
+      for (int i = 0; i < 10; i++) {
+        std::string key = "P" + std::string(1, 'A' + b) + "S" + pad(i);
+        sc.find(key); sc.value("s" + key);
+      }
+      // Overwrite 5 dst keys per branch
+      for (int i = 0; i < 5; i++) {
+        std::string key = "P" + std::string(1, 'A' + b) + "D" + pad(i);
+        sc.find(key); sc.value("s_ow_" + key);
+      }
+    }
+    sc.commit();
+  }
+
+  // Inline reference
+  std::vector<std::pair<std::string, std::string>> inline_results;
+  {
+    auto dst1_storage = Storage::create(TEST_FILE "3");
+    {
+      auto dst1_db = (*dst1_storage)["test"];
+      auto dc1 = dst1_db.cursor();
+      for (int b = 0; b < 5; b++) {
+        for (int i = 0; i < 10; i++) {
+          std::string key = "P" + std::string(1, 'A' + b) + "D" + pad(i);
+          dc1.find(key); dc1.value("d" + key);
+        }
+      }
+      dc1.commit();
+      OverwritePolicy handler;
+      exec_merger(*dst1_db._internal(), *src_db._internal(), handler);
+    }
+    auto v = (*dst1_storage)["test"].cursor();
+    v.first();
+    while (v.is_valid()) {
+      inline_results.emplace_back(v.key().string(), v.value().string());
+      v.next();
+    }
+  }
+  std::remove(TEST_FILE "3");
+
+  // Parallel merge
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  OverwritePolicy handler;
+  exec_merger_parallel(*dst_db._internal(), *src_db._internal(), handler, exec);
+
+  std::vector<std::pair<std::string, std::string>> parallel_results;
+  {
+    auto v = (*dest_storage)["test"].cursor();
+    v.first();
+    while (v.is_valid()) {
+      parallel_results.emplace_back(v.key().string(), v.value().string());
+      v.next();
+    }
+  }
+
+  // 5 branches * (10 dst + 10 src) = 100, minus 25 overwritten = 75 unique + 25 overwritten = 100
+  BOOST_CHECK_EQUAL(inline_results.size(), parallel_results.size());
+  for (size_t i = 0; i < inline_results.size() && i < parallel_results.size(); i++) {
+    BOOST_CHECK_EQUAL(inline_results[i].first, parallel_results[i].first);
+    BOOST_CHECK_EQUAL(inline_results[i].second, parallel_results[i].second);
+  }
+}
+
+#endif  // LEAVES_HAS_THREADS

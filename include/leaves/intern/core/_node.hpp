@@ -383,18 +383,12 @@ struct _TrieNode {
  * @note The offsets array must have NONE at index -1, accessible as
  * offsets[NONE].
  */
-void create(const Slice& prefix, offset_e* offsets) {
+void create(const Slice& prefix, offset_e* offsets, uint8_t precomputed_upper) {
   assert(prefix.size() < 256);
   _compressed_len = prefix.size();
   memcpy(_compressed_data, prefix.data(), _compressed_len);
 
-  // First pass: determine _upper bitmap
-  _upper = 0;
-  for (int i = 0; i < 256; i++) {
-    if (offsets[i]) {
-      _upper |= (1u << ubit(i));
-    }
-  }
+  _upper = precomputed_upper;
 
   // Now we can correctly calculate offsets
   _lower_offset = calc_lower_start() / sizeof(uint32_e);
@@ -411,12 +405,21 @@ void create(const Slice& prefix, offset_e* offsets) {
     _array_len = 0;
   }
 
-  for (int i = 0; i < 256; i++) {
-    if (offsets[i]) {
-      _array_len++;
-      *array_++ = offsets[i];
-      lower_[bits::index(_upper, ubit(i))] |= 1u << lbit(i);
+  // Iterate only groups with bits set in _upper
+  uint8_t remaining = _upper;
+  while (remaining) {
+    int grp = bits::first(remaining);
+    remaining &= remaining - 1;  // clear lowest set bit
+    int base = grp << 5;
+    uint32_t lbits = 0;
+    for (int j = 0; j < 32; j++) {
+      if (offsets[base + j]) {
+        _array_len++;
+        *array_++ = offsets[base + j];
+        lbits |= 1u << j;
+      }
     }
+    lower_[bits::index(_upper, grp)] = lbits;
   }
 }
 

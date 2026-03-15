@@ -358,9 +358,14 @@ struct _MemManagerPool {
 
   static constexpr int POOL_SIZE = _get_pool_size<Traits>::value;
 
+  // Each lock on its own cache line to prevent false sharing.
+  struct alignas(64) _PaddedLock {
+    SpinLock _lk;
+  };
+
   _MemManager<Traits> _managers[POOL_SIZE];
-  SpinLock _locks[POOL_SIZE];
-  std::atomic<uint32_t> _next{0};
+  _PaddedLock _locks[POOL_SIZE];
+  alignas(64) std::atomic<uint32_t> _next{0};
 
   void init(offset_t allocation_start_, offset_t allocation_end_) {
     _managers[0].init(allocation_start_, allocation_end_);
@@ -372,7 +377,7 @@ struct _MemManagerPool {
 
   void reinit_locks() {
     for (int i = 0; i < POOL_SIZE; i++) {
-      _locks[i]._flag.store(0, std::memory_order_relaxed);
+      _locks[i]._lk._flag.store(0, std::memory_order_relaxed);
     }
     _next.store(0, std::memory_order_relaxed);
   }
@@ -412,16 +417,16 @@ struct _MemManagerPool {
     uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
-      if (_locks[idx].try_lock()) {
+      if (_locks[idx]._lk.try_lock()) {
         page_ptr result = _managers[idx].alloc(sidx, resolver);
-        _locks[idx].unlock();
+        _locks[idx]._lk.unlock();
         return result;
       }
     }
     // All managers busy — TTAS spin-wait on the first choice
-    _locks[start].lock();
+    _locks[start]._lk.lock();
     page_ptr result = _managers[start].alloc(sidx, resolver);
-    _locks[start].unlock();
+    _locks[start]._lk.unlock();
     return result;
   }
 
@@ -430,16 +435,16 @@ struct _MemManagerPool {
     uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
-      if (_locks[idx].try_lock()) {
+      if (_locks[idx]._lk.try_lock()) {
         _managers[idx].free(block, resolver);
-        _locks[idx].unlock();
+        _locks[idx]._lk.unlock();
         return;
       }
     }
     // All managers busy — TTAS spin-wait on the first choice
-    _locks[start].lock();
+    _locks[start]._lk.lock();
     _managers[start].free(block, resolver);
-    _locks[start].unlock();
+    _locks[start]._lk.unlock();
   }
 };
 
