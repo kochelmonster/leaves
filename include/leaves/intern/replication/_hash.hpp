@@ -321,11 +321,11 @@ struct _HashUpdater {
       hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
       hash_offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 0;
+      uint8_t upper = 0;
       bool hash_consumed = false;
 
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        data_offset_e data_child = *data_trie->offset(k);
+      data_trie->for_each_branch([&](int k, auto* data_off) {
+        data_offset_e data_child = *data_off;
 
         hash_offset_e hash_child{};
         if (k == (int)diverge_byte && !hash_consumed) {
@@ -347,7 +347,8 @@ struct _HashUpdater {
 
         offsets_buf[k] = hash_child;
         branch_count++;
-      }
+        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+      });
 
       if (!hash_consumed) {
         free_hash_subtree(*hash_offset_ptr);
@@ -361,7 +362,7 @@ struct _HashUpdater {
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr new_hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-      new_hash_trie->create(prefix, offsets_buf);
+      new_hash_trie->create(prefix, offsets_buf, upper);
       compute_trie_hash(new_hash_trie);
       *hash_offset_ptr = _hash_db->resolve(new_hash_trie);
 
@@ -376,12 +377,11 @@ struct _HashUpdater {
       uint8_t next_byte = data_prefix[common];
 
       // Free hash branches that don't match
-      for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-           k = hash_trie->next(k)) {
+      hash_trie->for_each_branch([&](int k, auto* off) {
         if (k != (int)next_byte) {
-          free_hash_subtree(*hash_trie->offset(k));
+          free_hash_subtree(*off);
         }
-      }
+      });
 
       if (hash_trie->isset(next_byte)) {
         // Sync data with hash's matching branch child.
@@ -438,17 +438,16 @@ struct _HashUpdater {
     hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
     hash_offset_e* offsets_buf = &offsets_raw[1];  // -1..255 indexing
     int branch_count = 0;
+    uint8_t upper = 0;
 
     // Track which hash branches exist
     bool hash_has[257] = {};
-    for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-         k = hash_trie->next(k)) {
+    hash_trie->for_each_branch([&](int k, auto*) {
       hash_has[k + 1] = true;  // +1 because NONE is -1
-    }
+    });
 
-    for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-         k = data_trie->next(k)) {
-      data_offset_e data_child = *data_trie->offset(k);
+    data_trie->for_each_branch([&](int k, auto* data_off) {
+      data_offset_e data_child = *data_off;
       bool has_hash = hash_has[k + 1];
       hash_offset_e hash_child_init =
           has_hash ? *hash_trie->offset(k) : hash_offset_e{};
@@ -475,7 +474,8 @@ struct _HashUpdater {
       }
 #endif
       branch_count++;
-    }
+      if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+    });
 
     if constexpr (!std::is_same_v<Executor, _InlineExecutor>) {
       _tg->wait();
@@ -483,21 +483,18 @@ struct _HashUpdater {
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
     // Free them
-    for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-         k = hash_trie->next(k)) {
+    hash_trie->for_each_branch([&](int k, auto* off) {
       if (!data_trie->isset(k)) {
-        free_hash_subtree(*hash_trie->offset(k));
+        free_hash_subtree(*off);
       }
-    }
+    });
 
     // Create new hash trie mirroring data's full compressed prefix.
     Slice prefix((const char*)data_trie->compressed(), data_trie->len());
     data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
     hash_trie_ptr new_hash_trie =
         alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-    new_hash_trie->create(prefix, offsets_buf);
-
-    // Compute trie hash
+    new_hash_trie->create(prefix, offsets_buf, upper);
     compute_trie_hash(new_hash_trie);
 
     // Free old hash trie node and update pointer
@@ -531,14 +528,13 @@ struct _HashUpdater {
       size_t saved_len = key_path.size();
       key_path.append((const char*)data_trie->compressed(), data_trie->len());
 
-      // Collect children
       hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
       hash_offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 0;
+      uint8_t upper = 0;
 
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        data_offset_e data_child = *data_trie->offset(k);
+      data_trie->for_each_branch([&](int k, auto* data_off) {
+        data_offset_e data_child = *data_off;
 
         auto do_branch = [this, k, data_child, offsets_buf](std::string& kp) {
           hash_offset_e result{};
@@ -557,7 +553,8 @@ struct _HashUpdater {
         }
 #endif
         branch_count++;
-      }
+        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+      });
 
       if constexpr (!std::is_same_v<Executor, _InlineExecutor>) {
         _tg->wait();
@@ -568,7 +565,7 @@ struct _HashUpdater {
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-      hash_trie->create(prefix, offsets_buf);
+      hash_trie->create(prefix, offsets_buf, upper);
 
       // Compute trie hash
       compute_trie_hash(hash_trie);
@@ -681,10 +678,9 @@ struct _HashUpdater {
       free_hash_node(leaf);
     } else {
       auto trie = _hash_db->template resolve<HashTrieNode>(&offset);
-      for (int k = trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-           k = trie->next(k)) {
-        free_hash_subtree(*trie->offset(k));
-      }
+      trie->for_each_branch([&](int k, auto* off) {
+        free_hash_subtree(*off);
+      });
       free_hash_node(trie);
     }
   }

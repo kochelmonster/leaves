@@ -65,9 +65,9 @@ int count_data_nodes(DB* db, typename DB::offset_e offset) {
 
   auto trie = db->template resolve<TrieNode>(&offset);
   int count = 1;  // This trie node
-  for (int k = trie->first(); k != TrieNode::OUT_OF_RANGE; k = trie->next(k)) {
-    count += count_data_nodes(db, *trie->offset(k));
-  }
+  trie->for_each_branch([&](int k, auto* off) {
+    count += count_data_nodes(db, *off);
+  });
   return count;
 }
 
@@ -87,9 +87,9 @@ int count_hash_nodes(DB* db, typename DB::offset_e offset) {
 
   auto trie = db->template resolve<TrieNode>(&offset);
   int count = 1;  // This trie node
-  for (int k = trie->first(); k != TrieNode::OUT_OF_RANGE; k = trie->next(k)) {
-    count += count_hash_nodes(db, *trie->offset(k));
-  }
+  trie->for_each_branch([&](int k, auto* off) {
+    count += count_hash_nodes(db, *off);
+  });
   return count;
 }
 
@@ -108,9 +108,9 @@ void collect_hash_offsets(DB* db, typename DB::offset_e offset,
 
   if (offset.type() == TRIE) {
     auto trie = db->template resolve<TrieNode>(&offset);
-    for (int k = trie->first(); k != TrieNode::OUT_OF_RANGE; k = trie->next(k)) {
-      collect_hash_offsets(db, *trie->offset(k), offsets);
-    }
+    trie->for_each_branch([&](int k, auto* off) {
+      collect_hash_offsets(db, *off, offsets);
+    });
   }
 }
 
@@ -169,14 +169,16 @@ bool verify_structure(DataDB* data_db, HashDB* hash_db,
   if (data_trie->count() != hash_trie->count()) return false;
 
   // Check each branch exists in both and recurse
-  for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-       k = data_trie->next(k)) {
-    if (!hash_trie->isset(k)) return false;
-    if (!verify_structure(data_db, hash_db, *data_trie->offset(k),
+  bool all_valid = true;
+  data_trie->for_each_branch([&](int k, auto* off) {
+    if (!all_valid) return;
+    if (!hash_trie->isset(k)) { all_valid = false; return; }
+    if (!verify_structure(data_db, hash_db, *off,
                           *hash_trie->offset(k))) {
-      return false;
+      all_valid = false;
     }
-  }
+  });
+  if (!all_valid) return false;
 
   // Check hash trie node has non-zero hash
   bool has_hash = false;
@@ -948,9 +950,9 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   
   // Debug: print what branches exist
   BOOST_TEST_MESSAGE("Initial hash trie branches:");
-  for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE; k = hash_trie->next(k)) {
+  hash_trie->for_each_branch([&](int k, auto*) {
     BOOST_TEST_MESSAGE("  Branch: " << k << " (char: '" << (char)(k >= 0 ? k : '?') << "')");
-  }
+  });
   
   // Get first two branches (whatever they are)
   int branch1 = hash_trie->first();
@@ -1008,9 +1010,9 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   
   // Debug: print new hash trie branches
   BOOST_TEST_MESSAGE("New hash trie branches after update:");
-  for (int k = new_hash_root->first(); k != HashTrieNode::OUT_OF_RANGE; k = new_hash_root->next(k)) {
+  new_hash_root->for_each_branch([&](int k, auto*) {
     BOOST_TEST_MESSAGE("  Branch: " << k << " (char: '" << (char)(k >= 0 ? k : '?') << "')");
-  }
+  });
   
   // Find the 'd' branch which should contain the preserved subtree
   BOOST_REQUIRE(new_hash_root->isset('d'));
@@ -1021,9 +1023,9 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   
   // Debug: print d subtrie branches
   BOOST_TEST_MESSAGE("Subtrie 'd' branches:");
-  for (int k = d_trie->first(); k != HashTrieNode::OUT_OF_RANGE; k = d_trie->next(k)) {
+  d_trie->for_each_branch([&](int k, auto*) {
     BOOST_TEST_MESSAGE("  Branch: " << k << " (char: '" << (char)(k >= 0 ? k : '?') << "')");
-  }
+  });
   
   // The subtrie should have two branches (our original leaf branches)
   int d_branch1 = d_trie->first();
@@ -1164,12 +1166,11 @@ void collect_leaf_hashes(DB* db, typename DB::offset_e offset,
 
   auto trie = db->template resolve<TrieNode>(&offset);
   path.append((const char*)trie->compressed(), trie->len());
-  for (int k = trie->first(); k != TrieNode::OUT_OF_RANGE;
-       k = trie->next(k)) {
+  trie->for_each_branch([&](int k, auto* off) {
     std::string child_path = path;
     if (k != TrieNode::NONE) child_path.push_back((char)k);
-    collect_leaf_hashes(db, *trie->offset(k), child_path, result);
-  }
+    collect_leaf_hashes(db, *off, child_path, result);
+  });
 }
 
 struct TestPool : _ThreadPoolMixin<TestPool> {

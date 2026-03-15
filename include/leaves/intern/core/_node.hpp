@@ -502,6 +502,44 @@ int first() const {
   return (bits::first(_upper) << 5) | bits::first(lower()[0]);
 }
 
+/**
+ * @brief Iterate all branches via direct bitmap scan — no per-step popcount.
+ *
+ * Calls fn(key, offset_ptr) for every branch in sorted order (NONE first,
+ * then 0-255).  array_idx is tracked with a simple increment instead of
+ * recomputing bits::index on every step.
+ */
+template <typename Fn>
+void for_each_branch(Fn fn) const {
+  offset_e* arr = array();
+  int arr_idx = 0;
+
+  // NONE branch (stored at array position 0 when present)
+  if (has_none()) {
+    fn(NONE, &arr[arr_idx]);
+    arr_idx++;
+  }
+
+  // Iterate upper bitmap groups
+  uint8_t remaining_upper = _upper;
+  const uint32_e* lower_ = lower();
+  int lower_idx = 0;
+  while (remaining_upper) {
+    int grp = bits::first(remaining_upper);
+    remaining_upper &= remaining_upper - 1;  // blsr: clear lowest set bit
+
+    uint32_t remaining_lower = static_cast<uint32_t>(lower_[lower_idx]);
+    int base = grp << 5;
+    while (remaining_lower) {
+      int bit = bits::first(remaining_lower);
+      remaining_lower &= remaining_lower - 1;  // blsr
+      fn(base | bit, &arr[arr_idx]);
+      arr_idx++;
+    }
+    lower_idx++;
+  }
+}
+
 };
 #pragma pack(pop)
 

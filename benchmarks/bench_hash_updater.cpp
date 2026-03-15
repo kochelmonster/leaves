@@ -25,7 +25,7 @@ using namespace leaves;
 
 static int FLAGS_num = 100000;
 static int FLAGS_vsize = 100;
-static int FLAGS_max_threads = 8;
+static int FLAGS_max_threads = 5;
 static int FLAGS_iterations = 3;
 static bool FLAGS_profile = false;
 
@@ -111,9 +111,9 @@ static void count_nodes(RDB* rdb, offset_e offset,
   } else {
     trie_count++;
     auto trie = rdb->template resolve<DataTrieNode>(&offset);
-    for (int k = trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-         k = trie->next(k))
-      count_nodes(rdb, *trie->offset(k), trie_count, leaf_count);
+    trie->for_each_branch([&](int k, auto* off) {
+      count_nodes(rdb, *off, trie_count, leaf_count);
+    });
   }
 }
 
@@ -197,9 +197,9 @@ static void profile_breakdown(RDB* rdb, offset_e data_root) {
         } else {
           auto trie = rdb->template resolve<DataTrieNode>(&off);
           sink += trie->len();
-          for (int k = trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-               k = trie->next(k))
-            stack.push_back(*trie->offset(k));
+          trie->for_each_branch([&](int k, auto* branch_off) {
+            stack.push_back(*branch_off);
+          });
         }
       }
     }
@@ -301,7 +301,7 @@ int main(int argc, char** argv) {
           "inline (1 thread)", inline_best * 1000, inline_avg * 1000, "1.00x");
 
   // --- Pooled with varying thread counts ---
-  for (int threads = 1; threads <= FLAGS_max_threads; threads *= 2) {
+  for (int threads = 1; threads <= FLAGS_max_threads; threads++) {
     double best = 1e9;
     double total = 0;
     for (int it = 0; it < FLAGS_iterations; it++) {

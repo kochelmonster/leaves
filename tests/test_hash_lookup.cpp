@@ -127,14 +127,13 @@ void verify_lookup_recursive(DB* db,
     }
   }
 
-  for (int k = data_trie->first(); k != DTrieNode::OUT_OF_RANGE;
-       k = data_trie->next(k)) {
-    auto data_child = *data_trie->offset(k);
+  data_trie->for_each_branch([&](int k, auto* off) {
+    auto data_child = *off;
     auto hash_child = *hash_trie->offset(k);
 
     // No branch byte push — child's compressed[0] or leaf key[0] IS it
     verify_lookup_recursive(db, data_child, hash_child, lookup, path, checked);
-  }
+  });
 
   path.resize(saved);
 }
@@ -361,9 +360,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_different_values_different_hashes, FreshFile) {
     std::string base((const char*)trie->compressed(), trie->len());
 
     std::vector<const uint8_t*> hashes;
-    for (int k = trie->first(); k != DTrieNode::OUT_OF_RANGE;
-         k = trie->next(k)) {
-      auto data_child = *trie->offset(k);
+    trie->for_each_branch([&](int k, auto* off) {
+      auto data_child = *off;
       auto hash_child = *htrie->offset(k);
       if (data_child.type() == LEAF) {
         // Build path: compressed + hash leaf key
@@ -373,7 +371,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_different_values_different_hashes, FreshFile) {
         auto* h = lookup.find(p, LEAF);
         if (h) hashes.push_back(h);
       }
-    }
+    });
     if (hashes.size() >= 2) {
       BOOST_CHECK(memcmp(hashes[0], hashes[1], HASH_SIZE) != 0);
     }

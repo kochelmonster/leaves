@@ -230,13 +230,12 @@ struct _Dumper {
     assert(trie->count() > 0);
     assert(trie->count() <= TrieNode::MAX_BRANCH_COUNT);
     out << "branches: \"";
-    for (int iter = trie->first(); iter != TrieNode::OUT_OF_RANGE;
-         iter = trie->next(iter)) {
+    trie->for_each_branch([&](int iter, auto*) {
       if (iter != TrieNode::NONE)
         out << "[" << bitstr(iter) << "]";
       else
         out << "[]";
-    }
+    });
     out << "\"" << std::endl;
 
     out << "children: " << std::endl;

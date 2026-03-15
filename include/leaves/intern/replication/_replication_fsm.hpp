@@ -733,10 +733,8 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
   MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor,
                                   DstCursor& dst_cursor) {
-    _BigValue* dst_bvalue = &_big_value_storage;
-
     if (!big_value_offsets) {
-      return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+      return {Slice(), false};
     }
 
     const auto* bv = reinterpret_cast<const BigValueDataHeader*>(leaf.vdata());
@@ -745,14 +743,13 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
 
     auto it = big_value_offsets->find(wire_offset);
     if (it == big_value_offsets->end()) {
-      return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+      return {Slice(), false};
     }
 
-    // Return a MigratedValue pointing to the _BigValue with pre-allocated
-    // destination offset. The data was already copied during
-    // _handle_big_value_data
-    dst_bvalue->chunk_offset = (uint64_t)it->second;
-    dst_bvalue->value_size = value_size;
+    // Fill the inline _BigValue with pre-allocated destination offset.
+    // The data was already copied during _handle_big_value_data
+    _big_value_storage.chunk_offset = (uint64_t)it->second;
+    _big_value_storage.value_size = value_size;
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
