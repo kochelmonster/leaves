@@ -11,7 +11,7 @@
 
 using namespace leaves;
 
-typedef _FileStore DBFileStore;
+typedef _FileStore<> DBFileStore;
 
 struct DirPreparation {
   DirPreparation() {

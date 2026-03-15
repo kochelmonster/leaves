@@ -23,12 +23,14 @@
 
 using namespace leaves;
 
-static int FLAGS_num = 100000;
-static int FLAGS_vsize = 100;
-static int FLAGS_max_threads = 5;
-static int FLAGS_iterations = 3;
-static bool FLAGS_profile = false;
-static bool FLAGS_overlap = false;
+using Storage = MapStorage;
+using InternalDB = Storage::StorageImpl::DB;
+using CTraits = InternalDB::CursorTraits;
+using DstCursor = _TransactionalCursor<CTraits>;
+using SrcCursor = _Cursor<CTraits>;
+using TrieNode = _TrieNode<CTraits>;
+using LeafNode = _LeafNode<CTraits>;
+using offset_e = typename InternalDB::offset_e;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,14 +45,13 @@ struct BenchPool : _ThreadPoolMixin<BenchPool> {
   explicit BenchPool(size_t n) : _ThreadPoolMixin(n) {}
 };
 
-using Storage = MapStorage;
-using InternalDB = Storage::StorageImpl::DB;
-using CTraits = InternalDB::CursorTraits;
-using DstCursor = _TransactionalCursor<CTraits>;
-using SrcCursor = _Cursor<CTraits>;
-using TrieNode = _TrieNode<CTraits>;
-using LeafNode = _LeafNode<CTraits>;
-using offset_e = typename InternalDB::offset_e;
+static int FLAGS_num = 100000;
+static int FLAGS_vsize = 100;
+static int FLAGS_max_threads = Storage::StorageImpl::Traits::MERGE_POOL_THREADS;
+static int FLAGS_iterations = 3;
+static bool FLAGS_profile = false;
+static bool FLAGS_overlap = true;
+static int FLAGS_concurrency = Storage::StorageImpl::Traits::MERGE_DISPATCH_THRESHOLD;
 
 // ---------------------------------------------------------------------------
 // Populate data trie with N keys
@@ -135,6 +136,7 @@ static double bench_pooled(InternalDB* dst_db, InternalDB* src_db,
   _Merger<DstCursor, SrcCursor, StandardMergePolicy, _PoolExecutor> merger(
       dst_cursor, src_cursor, handler);
   _TaskGroup<_PoolExecutor> tg(exec);
+  tg._concurrency = FLAGS_concurrency;
   merger._tg = &tg;
 
   double start = now_seconds();
@@ -327,6 +329,7 @@ static void parse_flags(int argc, char** argv) {
     if (sscanf(argv[i], "--vsize=%d", &FLAGS_vsize) == 1) continue;
     if (sscanf(argv[i], "--max_threads=%d", &FLAGS_max_threads) == 1) continue;
     if (sscanf(argv[i], "--iterations=%d", &FLAGS_iterations) == 1) continue;
+    if (sscanf(argv[i], "--concurrency=%d", &FLAGS_concurrency) == 1) continue;
     if (strcmp(argv[i], "--profile") == 0) { FLAGS_profile = true; continue; }
     if (strcmp(argv[i], "--overlap") == 0) { FLAGS_overlap = true; continue; }
     fprintf(stderr, "Unknown flag: %s\n", argv[i]);

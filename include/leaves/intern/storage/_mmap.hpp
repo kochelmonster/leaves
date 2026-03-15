@@ -65,6 +65,8 @@ struct _MemoryMapTraits {
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
   static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 3;
+  static constexpr uint16_t MERGE_POOL_THREADS = 5;
+  static constexpr uint16_t MERGE_DISPATCH_THRESHOLD = 10;  // minimum trie fan-out
 
   static constexpr uint16_t PAGE_SIZES[] = {                         // Page sizes (header + node)
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9

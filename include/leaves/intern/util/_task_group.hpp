@@ -114,6 +114,7 @@ struct _TaskGroup<_PoolExecutor> {
   std::vector<Task> _current;  // tasks collected by spawn()
   std::vector<Task> _batch;    // current level being expanded
   size_t _batch_idx{0};        // next unprocessed task in _batch
+  size_t _concurrency{0};      // dispatch threshold; 0 = executor.concurrency()
   std::atomic<int> _outstanding{0};
   std::mutex _mutex;
   std::condition_variable _cv;
@@ -149,7 +150,9 @@ struct _TaskGroup<_PoolExecutor> {
     _wait_impl();
   }
 
-  size_t concurrency() const noexcept { return _executor.concurrency(); }
+  size_t concurrency() const noexcept {
+    return _concurrency ? _concurrency : _executor.concurrency();
+  }
 
   void _wait_impl() {
     // If _batch is active, we're reentrant — steal remaining siblings.

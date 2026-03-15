@@ -57,15 +57,18 @@ struct _ReplicationMemoryMapFile
   DB* operator[](const char* name) { return make(name); }
 };
 
-class ReplicatingMapStorage
-    : public std::enable_shared_from_this<ReplicatingMapStorage> {
- public:
-  typedef _ReplicationMemoryMapFile<_ReplicatingMemoryMapTraits> StorageImpl;
-  typedef typename StorageImpl::DB DBImpl;
-  typedef TDB<ReplicatingMapStorage> DB;
-  typedef std::shared_ptr<ReplicatingMapStorage> storage_ptr;
+typedef _ReplicatingMemoryMapTraits ReplicatingMapTraits;
 
-  ReplicatingMapStorage(const char* path, size_t map_size = 4 * G,
+template <typename Traits = ReplicatingMapTraits>
+class ReplicatingMapStorage_
+    : public std::enable_shared_from_this<ReplicatingMapStorage_<Traits>> {
+ public:
+  typedef _ReplicationMemoryMapFile<Traits> StorageImpl;
+  typedef typename StorageImpl::DB DBImpl;
+  typedef TDB<ReplicatingMapStorage_> DB;
+  typedef std::shared_ptr<ReplicatingMapStorage_> storage_ptr;
+
+  ReplicatingMapStorage_(const char* path, size_t map_size = 4 * G,
                         uint16_t db_count = 48, size_t pool_threads = 0,
                         size_t hash_threads = 4)
       : _storage(std::make_unique<StorageImpl>(path, map_size, db_count,
@@ -73,7 +76,7 @@ class ReplicatingMapStorage
 
   DB operator[](const char* name) {
     _storage->make(name);
-    return DB(shared_from_this(), name);
+    return DB(this->shared_from_this(), name);
   }
 
   void remove_db(const char* name) { _storage->remove_db(name); }
@@ -89,14 +92,16 @@ class ReplicatingMapStorage
   static storage_ptr create(const char* path, size_t map_size = 4 * G,
                             uint16_t db_count = 48, size_t pool_threads = 0,
                             size_t hash_threads = 4) {
-    return std::make_shared<ReplicatingMapStorage>(path, map_size, db_count,
+    return std::make_shared<ReplicatingMapStorage_>(path, map_size, db_count,
                                                    pool_threads, hash_threads);
   }
 
  private:
-  friend class TDB<ReplicatingMapStorage>;
+  friend class TDB<ReplicatingMapStorage_>;
   std::unique_ptr<StorageImpl> _storage;
 };
+
+using ReplicatingMapStorage = ReplicatingMapStorage_<>;
 
 }  // namespace leaves
 

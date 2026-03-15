@@ -29,18 +29,21 @@ struct MigratedValue {
  * Policies can inherit from this or implement their own migrate_big_value.
  */
 struct StandardMergePolicy {
-  // Always overwrite destination with source
+  // Always overwrite destination with source.
+  // Thread safety: may be called concurrently during parallel merge.
   bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
                      bool dst_is_big, bool src_is_big) {
     return true;
   }
 
-  // Always add new leaves from source
+  // Always add new leaves from source.
+  // Thread safety: may be called concurrently during parallel merge.
   bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
     return true;
   }
 
-  // Always recurse into source tries
+  // Always recurse into source tries.
+  // Thread safety: may be called concurrently during parallel merge.
   bool may_add_trie(const std::string& key) { return true; }
 
   // Called after a trie node is created/merged during the merge process.
@@ -154,13 +157,14 @@ struct _Merger {
   using BigMemory = typename CursorDst::BigMemory;
   using BigValue = typename BigMemory::BigValue;
 
+  static constexpr bool _has_may_add_leaf = !std::is_same_v<decltype(&MergePolicy::may_add_leaf), decltype(&StandardMergePolicy::may_add_leaf)>;
+  static constexpr bool _has_may_add_trie = !std::is_same_v<decltype(&MergePolicy::may_add_trie), decltype(&StandardMergePolicy::may_add_trie)>;
+
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
   MergePolicy& handler;
   _TaskGroup<Executor>* _tg{nullptr};
-  SpinLock _handler_lock_storage;
   SpinLock _bigmem_lock_storage;
-  SpinLock* _handler_lock{&_handler_lock_storage};
   SpinLock* _bigmem_lock{&_bigmem_lock_storage};
 
   _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
@@ -394,14 +398,16 @@ struct _Merger {
       Slice suffix_prefix((const char*)&src_trie->compressed()[src_split_pos],
                           suffix_len);
 
-      // Append suffix to current_key so may_add_trie/may_add_leaf see correct keys
       size_t saved_key_len = current_key.size();
-      current_key.append((const char*)suffix_prefix.data(), suffix_len);
+      if constexpr (_has_may_add_trie) {
+        // Append suffix to current_key so may_add_trie/may_add_leaf see correct keys
+        current_key.append((const char*)suffix_prefix.data(), suffix_len);
 
-      // Early-out: let the policy reject the entire subtree by prefix
-      if (!handler.may_add_trie(current_key)) {
-        current_key.resize(saved_key_len);
-        return;
+        // Early-out: let the policy reject the entire subtree by prefix
+        if (!handler.may_add_trie(current_key)) {
+          current_key.resize(saved_key_len);
+          return;
+        }
       }
 
       // Collect surviving children into a flat offset array
@@ -646,9 +652,6 @@ struct _Merger {
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
       suffix_trie->create(suffix_prefix, offsets_buf, upper);
 
-      // Compute hash for suffix_trie - children have valid hashes from deep copy
-      handler.after_trie_merged(suffix_trie, dst_cursor._db);
-
       uint16_t loffset;
       trie_ptr new_trie =
           expand_trie_with_branch(dst_trie, suffix_len, &loffset, current_key);
@@ -657,6 +660,9 @@ struct _Merger {
       dst.link_idx = loffset;
       *dst.link() = resolve_offset(suffix_trie);
       dst.update_trie_offset();
+
+      // Compute hash for suffix_trie - children have valid hashes from deep copy
+      handler.after_trie_merged(suffix_trie, dst_cursor._db);
 
       // Compute hash for new_trie - all children have valid hashes
       handler.after_trie_merged(new_trie, dst_cursor._db);
@@ -778,7 +784,6 @@ struct _Merger {
 
           SubMerger sub_merger(dst_sub, src_sub, handler);
           sub_merger._tg = _tg;
-          sub_merger._handler_lock = _handler_lock;
           sub_merger._bigmem_lock = _bigmem_lock;
           sub_merger.merge_node(key);
         });
@@ -875,20 +880,19 @@ struct _Merger {
                                 offset_e* parent_link,
                                 std::string& current_key) {
     auto src_leaf = resolve_src<SrcLeafNode>(src_offset);
-    size_t saved = current_key.size();
-    current_key.append((const char*)src_leaf->data, src_leaf->key_size);
 
-    bool accepted;
-    {
-      std::lock_guard<SpinLock> guard(*_handler_lock);
-      accepted = handler.may_add_leaf(current_key, src_leaf->value(),
-                                      src_leaf->is_big());
-    }
-    current_key.resize(saved);
+    if constexpr (_has_may_add_leaf) {
+      size_t saved = current_key.size();
+      current_key.append((const char*)src_leaf->data, src_leaf->key_size);
 
-    if (!accepted) {
-      *parent_link = offset_e();
-      return false;
+      bool accepted = handler.may_add_leaf(current_key, src_leaf->value(),
+                                             src_leaf->is_big());
+      current_key.resize(saved);
+
+      if (!accepted) {
+        *parent_link = offset_e();
+        return false;
+      }
     }
 
     leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
@@ -910,15 +914,17 @@ struct _Merger {
                                 std::string& current_key) {
     auto src_trie = resolve_src<SrcTrieNode>(src_offset);
 
-    // Append this trie's compressed prefix to current_key for descendants
     size_t saved = current_key.size();
-    current_key.append((const char*)src_trie->compressed(), src_trie->len());
+    if constexpr (_has_may_add_trie) {
+      // Append this trie's compressed prefix to current_key for descendants
+      current_key.append((const char*)src_trie->compressed(), src_trie->len());
 
-    // Early-out: let the policy reject the entire subtree by prefix
-    if (!handler.may_add_trie(current_key)) {
-      current_key.resize(saved);
-      *parent_link = offset_e();
-      return false;
+      // Early-out: let the policy reject the entire subtree by prefix
+      if (!handler.may_add_trie(current_key)) {
+        current_key.resize(saved);
+        *parent_link = offset_e();
+        return false;
+      }
     }
 
     // ── Pass 1: recurse children, collect survivors ──────────────────
@@ -967,16 +973,6 @@ struct _Merger {
     uint16_t new_size = TrieNode::size(prefix.size(), surviving);
     trie_ptr dst_trie = alloc_node<trie_ptr>(new_size);
     dst_trie->create(prefix, offsets_buf, upper);
-
-    // Copy hash from source trie if all children survived unchanged.
-    // If any child was filtered, compute the hash.
-    if constexpr (sizeof(dst_trie->hash) > 0) {
-      if (surviving == src_trie->count()) {
-        memcpy(dst_trie->hash, src_trie->hash, sizeof(dst_trie->hash));
-      } else {
-        handler.after_trie_merged(dst_trie, dst_cursor._db);
-      }
-    }
 
     *parent_link = resolve_offset(dst_trie);
     return true;

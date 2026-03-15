@@ -63,6 +63,8 @@ struct _StoreTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  static constexpr uint16_t MERGE_POOL_THREADS = 5;
+  static constexpr uint16_t MERGE_DISPATCH_THRESHOLD = 10;  // minimum trie fan-out
   static constexpr uint16_t PAGE_SIZES[] = {                    // Page sizes (header + node)
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 10),   // digits 0-9
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
@@ -248,48 +250,51 @@ struct _FileOperations : _CacheBase {
   Mutex& file_lock() { return _header->file_lock; }
 };
 
-struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
-  typedef _CacheStore<_StoreTraits, _FileOperations> base_t;
-  using DB = base_t::DB;
+template <typename Traits_ = _StoreTraits>
+struct _FileStore : _CacheStore<Traits_, _FileOperations> {
+  typedef _CacheStore<Traits_, _FileOperations> base_t;
+  using DB = typename base_t::DB;
 
   _FileStore(const char* path, uint16_t db_count = 48,
              size_t capacity = 500 * M, size_t pool_threads = 1)
-      : base_t(db_count, capacity, pool_threads, _StoreTraits::AREA_SIZE) {
+      : base_t(db_count, capacity, pool_threads, Traits_::AREA_SIZE) {
     init_dbfile(path, db_count);
     // Thread pool already started by base constructor
   }
 
   ~_FileStore() {
-    destroy();
-    delete[] (char*)_header;
+    this->destroy();
+    delete[] (char*)this->_header;
   }
 
   void init_dbfile(const char* path, uint16_t db_count) {
+    using FileHeader = typename _FileOperations::FileHeader;
+    using DBEntry = typename _FileOperations::DBEntry;
     // Compute header size based on requested db_count first
     size_t header_size =
         leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
     std::unique_ptr<char[]> buffer(new char[header_size]);
     if (!std::filesystem::is_regular_file(path)) {
-      open(path);
-      _header = new (buffer.get()) FileHeader(db_count);
+      this->open(path);
+      this->_header = new (buffer.get()) FileHeader(db_count);
       // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
-      _header->file_size = leaves::padding(header_size, AREA_SIZE);
-      resize(_header->file_size);
+      this->_header->file_size = leaves::padding(header_size, Traits_::AREA_SIZE);
+      this->resize(this->_header->file_size);
       // Write header
-      write(0, buffer.get(), header_size);
+      this->write(0, buffer.get(), header_size);
     } else {
-      open(path);
-      read(0, buffer.get(), header_size);
-      _header = (FileHeader*)buffer.get();
+      this->open(path);
+      this->read(0, buffer.get(), header_size);
+      this->_header = (FileHeader*)buffer.get();
 
-      if (strcmp(_header->signature, FSTORE_SIGNATURE)) {
+      if (strcmp(this->_header->signature, FSTORE_SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
       }
-      if (_header->db_count != db_count)
+      if (this->_header->db_count != db_count)
         throw WrongValue("db_count may not be changed.");
     }
 
-    assert(((uint64_t)_header & 7) == 0);
+    assert(((uint64_t)this->_header & 7) == 0);
     buffer.release();  // ownership transferred to _header (freed in ~_FileStore)
     sanitize();
   }
@@ -297,22 +302,22 @@ struct _FileStore : _CacheStore<_StoreTraits, _FileOperations> {
   void sanitize() {
     // No locking needed since we're single-process
     sanitize_dbs();
-    if (std::filesystem::file_size(filename()) != _header->file_size)
-      std::filesystem::resize_file(filename(), _header->file_size);
+    if (std::filesystem::file_size(this->filename()) != this->_header->file_size)
+      std::filesystem::resize_file(this->filename(), this->_header->file_size);
   }
 
   void sanitize_dbs() {
-    for (uint16_t i = 0; i < _header->db_count; i++) {
-      if (_header->dbs[i].offset) {
-        assert(!_dbs[i]);
-        _DB(*this, _header->dbs[i].offset, i).sanitize();
+    for (uint16_t i = 0; i < this->_header->db_count; i++) {
+      if (this->_header->dbs[i].offset) {
+        assert(!this->_dbs[i]);
+        _DB(*this, this->_header->dbs[i].offset, i).sanitize();
       }
     }
   }
 
   // Compatibility method for tests
   AreaSlice get_area(size_t size) {
-    auto area_ptr = alloc_multi_area(size);
+    auto area_ptr = this->alloc_multi_area(size);
     return *area_ptr;  // Convert Area* to AreaSlice
   }
 };

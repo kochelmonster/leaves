@@ -8,18 +8,21 @@
 
 namespace leaves {
 
-class FileStorage : public std::enable_shared_from_this<FileStorage> {
- public:
-  typedef _FileStore StorageImpl;
-  typedef TDB<FileStorage> DB;
-  typedef std::shared_ptr<FileStorage> storage_ptr;
+typedef _StoreTraits FileTraits;
 
-  FileStorage(const char* path, uint16_t db_count = 48,
+template <typename Traits = FileTraits>
+class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
+ public:
+  typedef _FileStore<Traits> StorageImpl;
+  typedef TDB<FileStorage_> DB;
+  typedef std::shared_ptr<FileStorage_> storage_ptr;
+
+  FileStorage_(const char* path, uint16_t db_count = 48,
               size_t cache_capacity = 500 * M)
       : _storage(
             std::make_unique<StorageImpl>(path, db_count, cache_capacity)) {}
 
-  DB operator[](const char* name) { return DB(shared_from_this(), name); }
+  DB operator[](const char* name) { return DB(this->shared_from_this(), name); }
 
   void remove_db(const char* name) { _storage->remove_db(name); }
 
@@ -33,16 +36,18 @@ class FileStorage : public std::enable_shared_from_this<FileStorage> {
 
   static storage_ptr create(const char* path, size_t cache_capacity = 500 * M,
                             uint16_t db_count = 48) {
-    return std::make_shared<FileStorage>(path, db_count, cache_capacity);
+    return std::make_shared<FileStorage_>(path, db_count, cache_capacity);
   }
 
   void debug_reset() { _storage->debug_reset(); }
   void debug_check_cache() const { _storage->debug_check_cache(); }
 
  private:
-  friend class TDB<FileStorage>;
+  friend class TDB<FileStorage_>;
   std::unique_ptr<StorageImpl> _storage;
 };
+
+using FileStorage = FileStorage_<>;
 
 }  // namespace leaves
 
