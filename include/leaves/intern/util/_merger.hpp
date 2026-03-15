@@ -197,13 +197,18 @@ struct _Merger {
   leaf_ptr fill_leaf(const Slice& key, SrcLeafNode& src_leaf) {
     Slice src_value;
     bool is_big = false;
+    // Local buffer for big value metadata — migrate_big_value writes to a
+    // shared _big_value_storage on the handler, so we snapshot the data
+    // while still under the lock to avoid races with parallel workers.
+    uint8_t big_value_buf[sizeof(BigValue)];
     if (src_leaf.is_big()) {
       MigratedValue migrated;
       {
         std::lock_guard<SpinLock> guard(*_bigmem_lock);
         migrated = handler.migrate_big_value(src_leaf, src_cursor, dst_cursor);
+        memcpy(big_value_buf, migrated.data.data(), migrated.data.size());
       }
-      src_value = migrated.data;
+      src_value = Slice(big_value_buf, migrated.data.size());
       is_big = migrated.is_big;
     } else {
       src_value = src_leaf.value();
@@ -915,10 +920,14 @@ struct _Merger {
     auto src_trie = resolve_src<SrcTrieNode>(src_offset);
 
     size_t saved = current_key.size();
-    if constexpr (_has_may_add_trie) {
-      // Append this trie's compressed prefix to current_key for descendants
-      current_key.append((const char*)src_trie->compressed(), src_trie->len());
 
+    // Append compressed prefix when may_add_leaf or may_add_trie needs
+    // the full reconstructed key for filtering decisions.
+    if constexpr (_has_may_add_trie || _has_may_add_leaf) {
+      current_key.append((const char*)src_trie->compressed(), src_trie->len());
+    }
+
+    if constexpr (_has_may_add_trie) {
       // Early-out: let the policy reject the entire subtree by prefix
       if (!handler.may_add_trie(current_key)) {
         current_key.resize(saved);

@@ -1591,6 +1591,25 @@ struct ReplicationReceiverFSM {
     _alloc_receive_buffer();
   }
 
+  // Run merger with parallel dispatch when the storage supports it.
+  void _exec_merger_parallel() {
+#if LEAVES_HAS_THREADS
+    if constexpr (Traits::MERGE_POOL_THREADS > 0) {
+      _PoolExecutor exec(_db->_storage, Traits::MERGE_POOL_THREADS);
+      _TaskGroup<_PoolExecutor> tg(exec);
+      tg._concurrency = Traits::MERGE_DISPATCH_THRESHOLD;
+      _Merger<LocalCursor, WireCursor, MergePolicy, _PoolExecutor> merger(
+          *_cursor, _wire_cursor, _merge_policy);
+      merger._tg = &tg;
+      merger.exec();
+      return;
+    }
+#endif
+    _Merger<LocalCursor, WireCursor, MergePolicy> merger(
+        *_cursor, _wire_cursor, _merge_policy);
+    merger.exec();
+  }
+
   // Merge all phases (deletion trie + deferred main trie) in one
   // short atomic transaction.  Called at COMPLETE or fraction-complete.
   //
@@ -1649,9 +1668,7 @@ struct ReplicationReceiverFSM {
           _merge_policy.bigmemory = nullptr;
         } else {
           _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
-          _Merger<LocalCursor, WireCursor, MergePolicy> merger(
-              *_cursor, _wire_cursor, _merge_policy);
-          merger.exec();
+          _exec_merger_parallel();
         }
       }
 
@@ -1669,9 +1686,7 @@ struct ReplicationReceiverFSM {
         _wire_cursor.clear();
 
         _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
-        _Merger<LocalCursor, WireCursor, MergePolicy> merger(
-            *_cursor, _wire_cursor, _merge_policy);
-        merger.exec();
+        _exec_merger_parallel();
 
         _deferred_wire_root = nullptr;
         _deferred_wire_root_type = 0;

@@ -401,10 +401,16 @@ struct _ReplicationDB
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*current);
 #if LEAVES_HAS_THREADS
-          _PoolExecutor exec(this->_storage, _hash_threads);
-          update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
-          update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
-                           &hc.deletion_hash_root);
+          if constexpr (Storage_::Traits::MERGE_POOL_THREADS > 0) {
+            _PoolExecutor exec(this->_storage, _hash_threads);
+            update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
+            update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
+                             &hc.deletion_hash_root);
+          } else {
+            update_hash_trie(this, &hdb, current->root, &hc.hash_root);
+            update_hash_trie(this, &hdb, rtxn->deletion_root,
+                             &hc.deletion_hash_root);
+          }
 #else
           update_hash_trie(this, &hdb, current->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,
