@@ -733,10 +733,8 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
   MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor,
                                   DstCursor& dst_cursor) {
-    _BigValue* dst_bvalue = &_big_value_storage;
-
     if (!big_value_offsets) {
-      return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+      return {Slice(), false};
     }
 
     const auto* bv = reinterpret_cast<const BigValueDataHeader*>(leaf.vdata());
@@ -745,14 +743,13 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
 
     auto it = big_value_offsets->find(wire_offset);
     if (it == big_value_offsets->end()) {
-      return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
+      return {Slice(), false};
     }
 
-    // Return a MigratedValue pointing to the _BigValue with pre-allocated
-    // destination offset. The data was already copied during
-    // _handle_big_value_data
-    dst_bvalue->chunk_offset = (uint64_t)it->second;
-    dst_bvalue->value_size = value_size;
+    // Fill the inline _BigValue with pre-allocated destination offset.
+    // The data was already copied during _handle_big_value_data
+    _big_value_storage.chunk_offset = (uint64_t)it->second;
+    _big_value_storage.value_size = value_size;
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
@@ -1594,6 +1591,25 @@ struct ReplicationReceiverFSM {
     _alloc_receive_buffer();
   }
 
+  // Run merger with parallel dispatch when the storage supports it.
+  void _exec_merger_parallel() {
+#if LEAVES_HAS_THREADS
+    if constexpr (Traits::MERGE_POOL_THREADS > 0) {
+      _PoolExecutor exec(_db->_storage, Traits::MERGE_POOL_THREADS);
+      _TaskGroup<_PoolExecutor> tg(exec);
+      tg._concurrency = Traits::MERGE_DISPATCH_THRESHOLD;
+      _Merger<LocalCursor, WireCursor, MergePolicy, _PoolExecutor> merger(
+          *_cursor, _wire_cursor, _merge_policy);
+      merger._tg = &tg;
+      merger.exec();
+      return;
+    }
+#endif
+    _Merger<LocalCursor, WireCursor, MergePolicy> merger(
+        *_cursor, _wire_cursor, _merge_policy);
+    merger.exec();
+  }
+
   // Merge all phases (deletion trie + deferred main trie) in one
   // short atomic transaction.  Called at COMPLETE or fraction-complete.
   //
@@ -1652,9 +1668,7 @@ struct ReplicationReceiverFSM {
           _merge_policy.bigmemory = nullptr;
         } else {
           _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
-          _Merger<LocalCursor, WireCursor, MergePolicy> merger(
-              *_cursor, _wire_cursor, _merge_policy);
-          merger.exec();
+          _exec_merger_parallel();
         }
       }
 
@@ -1672,9 +1686,7 @@ struct ReplicationReceiverFSM {
         _wire_cursor.clear();
 
         _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
-        _Merger<LocalCursor, WireCursor, MergePolicy> merger(
-            *_cursor, _wire_cursor, _merge_policy);
-        merger.exec();
+        _exec_merger_parallel();
 
         _deferred_wire_root = nullptr;
         _deferred_wire_root_type = 0;

@@ -383,18 +383,12 @@ struct _TrieNode {
  * @note The offsets array must have NONE at index -1, accessible as
  * offsets[NONE].
  */
-void create(const Slice& prefix, offset_e* offsets) {
+void create(const Slice& prefix, offset_e* offsets, uint8_t precomputed_upper) {
   assert(prefix.size() < 256);
   _compressed_len = prefix.size();
   memcpy(_compressed_data, prefix.data(), _compressed_len);
 
-  // First pass: determine _upper bitmap
-  _upper = 0;
-  for (int i = 0; i < 256; i++) {
-    if (offsets[i]) {
-      _upper |= (1u << ubit(i));
-    }
-  }
+  _upper = precomputed_upper;
 
   // Now we can correctly calculate offsets
   _lower_offset = calc_lower_start() / sizeof(uint32_e);
@@ -411,12 +405,21 @@ void create(const Slice& prefix, offset_e* offsets) {
     _array_len = 0;
   }
 
-  for (int i = 0; i < 256; i++) {
-    if (offsets[i]) {
-      _array_len++;
-      *array_++ = offsets[i];
-      lower_[bits::index(_upper, ubit(i))] |= 1u << lbit(i);
+  // Iterate only groups with bits set in _upper
+  uint8_t remaining = _upper;
+  while (remaining) {
+    int grp = bits::first(remaining);
+    remaining &= remaining - 1;  // clear lowest set bit
+    int base = grp << 5;
+    uint32_t lbits = 0;
+    for (int j = 0; j < 32; j++) {
+      if (offsets[base + j]) {
+        _array_len++;
+        *array_++ = offsets[base + j];
+        lbits |= 1u << j;
+      }
     }
+    lower_[bits::index(_upper, grp)] = lbits;
   }
 }
 
@@ -497,6 +500,44 @@ int next(int nchar) const {
 int first() const {
   if (has_none()) return NONE;
   return (bits::first(_upper) << 5) | bits::first(lower()[0]);
+}
+
+/**
+ * @brief Iterate all branches via direct bitmap scan — no per-step popcount.
+ *
+ * Calls fn(key, offset_ptr) for every branch in sorted order (NONE first,
+ * then 0-255).  array_idx is tracked with a simple increment instead of
+ * recomputing bits::index on every step.
+ */
+template <typename Fn>
+void for_each_branch(Fn fn) const {
+  offset_e* arr = array();
+  int arr_idx = 0;
+
+  // NONE branch (stored at array position 0 when present)
+  if (has_none()) {
+    fn(NONE, &arr[arr_idx]);
+    arr_idx++;
+  }
+
+  // Iterate upper bitmap groups
+  uint8_t remaining_upper = _upper;
+  const uint32_e* lower_ = lower();
+  int lower_idx = 0;
+  while (remaining_upper) {
+    int grp = bits::first(remaining_upper);
+    remaining_upper &= remaining_upper - 1;  // blsr: clear lowest set bit
+
+    uint32_t remaining_lower = static_cast<uint32_t>(lower_[lower_idx]);
+    int base = grp << 5;
+    while (remaining_lower) {
+      int bit = bits::first(remaining_lower);
+      remaining_lower &= remaining_lower - 1;  // blsr
+      fn(base | bit, &arr[arr_idx]);
+      arr_idx++;
+    }
+    lower_idx++;
+  }
 }
 
 };

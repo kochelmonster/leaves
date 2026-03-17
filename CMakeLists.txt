@@ -219,6 +219,9 @@ target_link_libraries(test_file_storage PUBLIC core test)
 add_executable(test_multithread tests/test_multithread.cpp)
 target_link_libraries(test_multithread PUBLIC core test pthread)
 
+add_executable(test_executor tests/test_executor.cpp)
+target_link_libraries(test_executor PUBLIC core test pthread)
+
 add_executable(test_aspect tests/test_aspect.cpp)
 target_link_libraries(test_aspect PUBLIC core test blake3)
 
@@ -293,16 +296,30 @@ add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
     benchmark leveldb pthread)
 
+add_executable(bench_hash_updater benchmarks/bench_hash_updater.cpp)
+target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
+
+add_executable(bench_merger benchmarks/bench_merger.cpp)
+target_link_libraries(bench_merger PUBLIC core pthread)
+
 if (DEBUG_BENCHMARKS)
     target_compile_options(db_bench_leaves PRIVATE -g -O0)
     target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
     target_compile_options(db_bench_memory PUBLIC  -g -O0)
     target_compile_definitions(db_bench_memory PRIVATE DEBUG)
+    target_compile_options(bench_hash_updater PRIVATE -g -O0)
+    target_compile_definitions(bench_hash_updater PRIVATE DEBUG)
+    target_compile_options(bench_merger PRIVATE -g -O0)
+    target_compile_definitions(bench_merger PRIVATE DEBUG)
 else()
     target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
     target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
     target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
+    target_compile_options(bench_hash_updater PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    target_compile_definitions(bench_hash_updater PRIVATE NDEBUG)
+    target_compile_options(bench_merger PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    target_compile_definitions(bench_merger PRIVATE NDEBUG)
 endif()
 
 

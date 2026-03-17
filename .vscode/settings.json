@@ -134,6 +134,10 @@
         "./$f": true,
         "wait": true,
         "pgrep": true,
-        "read": true
+        "read": true,
+        "./build/test_executor": true,
+        "./build/test_multithread": true,
+        "./bench_merger": true,
+        "./bench_hash_updater": true
     }
 }

@@ -99,6 +99,9 @@ different ends and starts of the queue.
 */
 
 template <typename Traits>
+struct _MemManager;
+
+template <typename Traits>
 struct _GarbageSlot {
   using PageHeader = typename Traits::PageHeader;
   using offset_e = typename Traits::offset_e;
@@ -111,7 +114,7 @@ struct _GarbageSlot {
 
   // Pop from the garbage slot queue
   template <typename Resolver>
-  ptr pop(Resolver& resolver) {
+  ptr pop(Resolver& resolver, _MemManager<Traits>& mgr) {
     if (count == 0) return nullptr;
 
     assert(ostart);
@@ -145,19 +148,19 @@ struct _GarbageSlot {
         iend = 0;
       }
       istart = 0;
-      resolver.free(front);
+      mgr.free(front, resolver);
     }
     return result;
   }
 
   template <typename Resolver>
-  void push(ptr& block, Resolver& resolver) {
+  void push(ptr& block, Resolver& resolver, _MemManager<Traits>& mgr) {
     cont_ptr back;
 
     if (oend) {
       back = resolver.template resolve<PageContainer>(&oend, WRITE);
       if (iend >= PageContainer::COUNT) {
-        cont_ptr new_back = resolver.alloc_slot(PageContainer::SLOT_ID);
+        cont_ptr new_back = mgr.alloc(PageContainer::SLOT_ID, resolver);
         assert(new_back->slot_id == PageContainer::SLOT_ID);
         new_back->next = 0;
         oend = back->next = resolver.resolve(new_back);
@@ -170,7 +173,7 @@ struct _GarbageSlot {
       assert(istart == 0);
       assert(iend == 0);
       assert(count == 0);
-      back = resolver.alloc_slot(PageContainer::SLOT_ID);
+      back = cont_ptr(mgr.alloc(PageContainer::SLOT_ID, resolver));
       assert(back->slot_id == PageContainer::SLOT_ID);
       back->next = 0;
       oend = ostart = resolver.resolve(back);
@@ -250,6 +253,8 @@ struct _MemManager {
     left_over_end = left_over_start = 0;
   }
 
+  void reinit_locks() {}
+
   static constexpr int assign_slot(uint16_t size) {
     assert(size > 0);
     return binary_search(&PAGE_SIZES[0], &PAGE_SIZES[COUNT], size);
@@ -261,7 +266,7 @@ struct _MemManager {
     uint16_t bsize = PAGE_SIZES[sidx];
 
     Slot& slot = slots[sidx];
-    page_ptr result = slot.pop(resolver);
+    page_ptr result = slot.pop(resolver, *this);
     if (result) {
       // Because of some rollback situations slot_id of result could be wrong
       // but the classification of the slot is right
@@ -297,7 +302,149 @@ struct _MemManager {
 
   template <typename Resolver>
   void free(page_ptr block, Resolver& resolver) {
-    slots[block->slot_id].push(block, resolver);
+    slots[block->slot_id].push(block, resolver, *this);
+  }
+};
+
+// =========================================================================
+// _MemManagerPool — drop-in replacement for _MemManager with N managers
+// =========================================================================
+//
+// Provides the same interface as _MemManager.  Internally holds POOL_SIZE
+// managers with per-manager try-lock spinlocks.
+//
+// POOL_SIZE is read from Traits::MEM_MANAGER_POOL_SIZE (default 4).
+// When POOL_SIZE == 1, all locking is eliminated at compile time — the
+// single manager is accessed directly with zero overhead.
+//
+// When POOL_SIZE > 1, alloc/free use round-robin try-lock to pick an
+// available manager.  Re-entrant calls from _GarbageSlot (push needing
+// a new PageContainer, pop freeing an exhausted one) stay on the same
+// _MemManager via the mgr reference passed to push/pop — no TLS or
+// wrapper types needed.
+//
+// Manager 0 is initialized with the primary area via init().  Managers
+// 1..N-1 start with empty ranges and lazily acquire areas through
+// alloc_single_area() on first allocation.
+//
+// Persists in mmap (all fields are hardware atomics or plain data).
+// After clone()/memcpy, call reinit_locks() to reset spinlocks.
+
+template <typename Traits>
+struct _MemManagerPool {
+  using uint32_e = typename Traits::uint32_e;
+  using offset_e = typename Traits::offset_e;
+  static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
+  static constexpr auto COUNT = Traits::PAGE_SIZES_COUNT;
+  static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
+  typedef typename Traits::PageHeader PageHeader;
+  typedef _MemManagerPool<Traits> MemManager;
+  using ptr = typename Traits::Pointer<MemManager>;
+  using page_ptr = typename Traits::ptr;
+
+  typedef _GarbageSlot<Traits> Slot;
+  using PageContainer = typename Slot::PageContainer;
+
+  static constexpr uint16_t PAGE_ID = _MemManager<Traits>::PAGE_ID;
+  static constexpr uint16_t MIN_PAGE_SIZE = _MemManager<Traits>::MIN_PAGE_SIZE;
+  static constexpr uint16_t MAX_PAGE_SIZE = _MemManager<Traits>::MAX_PAGE_SIZE;
+
+  // Read POOL_SIZE from Traits, default 4
+  template <typename T, typename = void>
+  struct _get_pool_size : std::integral_constant<int, 4> {};
+  template <typename T>
+  struct _get_pool_size<T, std::void_t<decltype(T::MEM_MANAGER_POOL_SIZE)>>
+      : std::integral_constant<int, T::MEM_MANAGER_POOL_SIZE> {};
+
+  static constexpr int POOL_SIZE = _get_pool_size<Traits>::value;
+
+  // Each lock on its own cache line to prevent false sharing.
+  struct alignas(64) _PaddedLock {
+    SpinLock _lk;
+  };
+
+  _MemManager<Traits> _managers[POOL_SIZE];
+  _PaddedLock _locks[POOL_SIZE];
+  alignas(64) std::atomic<uint32_t> _next{0};
+
+  void init(offset_t allocation_start_, offset_t allocation_end_) {
+    _managers[0].init(allocation_start_, allocation_end_);
+    for (int i = 1; i < POOL_SIZE; i++) {
+      memset(&_managers[i], 0, sizeof(_managers[i]));
+    }
+    reinit_locks();
+  }
+
+  void reinit_locks() {
+    for (int i = 0; i < POOL_SIZE; i++) {
+      _locks[i]._lk._flag.store(0, std::memory_order_relaxed);
+    }
+    _next.store(0, std::memory_order_relaxed);
+  }
+
+  static constexpr int assign_slot(uint16_t size) {
+    return _MemManager<Traits>::assign_slot(size);
+  }
+
+  // Forward primary manager's fields for compatibility with code
+  // that reads slots, allocation_start/end, etc.
+  auto& slots_at(int i) { return _managers[0].slots[i]; }
+  const auto& slots_at(int i) const { return _managers[0].slots[i]; }
+
+  auto& get_allocation_start() { return _managers[0].allocation_start; }
+  auto& get_allocation_end() { return _managers[0].allocation_end; }
+
+  template <typename Resolver>
+  page_ptr alloc(uint8_t sidx, Resolver& resolver) {
+    if constexpr (POOL_SIZE == 1) {
+      return _managers[0].alloc(sidx, resolver);
+    } else {
+      return _alloc_pooled(sidx, resolver);
+    }
+  }
+
+  template <typename Resolver>
+  void free(page_ptr block, Resolver& resolver) {
+    if constexpr (POOL_SIZE == 1) {
+      _managers[0].free(block, resolver);
+    } else {
+      _free_pooled(block, resolver);
+    }
+  }
+
+  template <typename Resolver>
+  page_ptr _alloc_pooled(uint8_t sidx, Resolver& resolver) {
+    uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
+    for (int j = 0; j < POOL_SIZE; j++) {
+      uint32_t idx = (start + j) % POOL_SIZE;
+      if (_locks[idx]._lk.try_lock()) {
+        page_ptr result = _managers[idx].alloc(sidx, resolver);
+        _locks[idx]._lk.unlock();
+        return result;
+      }
+    }
+    // All managers busy — TTAS spin-wait on the first choice
+    _locks[start]._lk.lock();
+    page_ptr result = _managers[start].alloc(sidx, resolver);
+    _locks[start]._lk.unlock();
+    return result;
+  }
+
+  template <typename Resolver>
+  void _free_pooled(page_ptr block, Resolver& resolver) {
+    uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
+    for (int j = 0; j < POOL_SIZE; j++) {
+      uint32_t idx = (start + j) % POOL_SIZE;
+      if (_locks[idx]._lk.try_lock()) {
+        _managers[idx].free(block, resolver);
+        _locks[idx]._lk.unlock();
+        return;
+      }
+    }
+    // All managers busy — TTAS spin-wait on the first choice
+    _locks[start]._lk.lock();
+    _managers[start].free(block, resolver);
+    _locks[start]._lk.unlock();
   }
 };
 

@@ -504,7 +504,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_pop) {
   GarbageSlot empty_slot = {};
   
   // Test popping from empty slot
-  auto result = empty_slot.pop(storage);
+  auto result = empty_slot.pop(storage, storage.mm);
   BOOST_CHECK(!result);
 }
 
@@ -569,7 +569,7 @@ BOOST_AUTO_TEST_CASE(test_may_not_recycle_scenarios) {
   int sid = storage.mm.assign_slot(SPACE);
   
   // Try to pop - should succeed since txn_id < accept_tid
-  auto result = storage.mm.slots[sid].pop(storage);
+  auto result = storage.mm.slots[sid].pop(storage, storage.mm);
   BOOST_CHECK(result);
   
   if (result) {
@@ -596,7 +596,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_push_few_blocks) {
   // Try to retrieve some blocks (may not get all due to internal structure)
   std::set<offset_t> retrieved_blocks;
   for (int i = 0; i < 5; ++i) { // Try up to 5 times
-    auto block = storage.mm.slots[sid].pop(storage);
+    auto block = storage.mm.slots[sid].pop(storage, storage.mm);
     if (!block) break;
     retrieved_blocks.insert(storage.resolve(block));
   }

@@ -8,12 +8,14 @@
 
 #include "../core/_node.hpp"
 #include "../core/_util.hpp"
+#include "../util/_task_group.hpp"
 
 namespace leaves {
 
 // Forward declaration — _Cursor is defined in ../db/_cursor.hpp.
 // Full include would create a circular dependency via _bigmemory.hpp.
-template <typename Traits_> struct _Cursor;
+template <typename Traits_>
+struct _Cursor;
 
 // Hash size for replication - 32 bytes (256 bits)
 static constexpr size_t HASH_SIZE = 32;
@@ -31,7 +33,9 @@ struct Blake3Hasher {
     blake3_hasher_update(&_hasher, data, size);
   }
 
-  void finalize(hash_t hash) { blake3_hasher_finalize(&_hasher, hash, BLAKE3_OUT_LEN); }
+  void finalize(hash_t hash) {
+    blake3_hasher_finalize(&_hasher, hash, BLAKE3_OUT_LEN);
+  }
 };
 
 namespace detail {
@@ -41,11 +45,13 @@ template <typename T, typename = void>
 struct has_big_memory : std::false_type {};
 
 template <typename T>
-struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {};
+struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
+};
 
 // Helper to hash big value data when BigMemory is available
 template <typename DB, typename LeafPtr, typename Hasher>
-void hash_leaf_value_impl(DB* db, LeafPtr leaf, Hasher& hasher, std::true_type /*has_big_memory*/) {
+void hash_leaf_value_impl(DB* db, LeafPtr leaf, Hasher& hasher,
+                          std::true_type /*has_big_memory*/) {
   if (leaf->is_big()) {
     using BigValue = typename DB::BigMemory::BigValue;
     BigValue* bvalue = (BigValue*)leaf->vdata();
@@ -58,7 +64,8 @@ void hash_leaf_value_impl(DB* db, LeafPtr leaf, Hasher& hasher, std::true_type /
 
 // Helper when BigMemory is not available - just hash inline value
 template <typename DB, typename LeafPtr, typename Hasher>
-void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher, std::false_type /*has_big_memory*/) {
+void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher,
+                          std::false_type /*has_big_memory*/) {
   hasher.update(leaf->vdata(), leaf->vsize());
 }
 
@@ -106,7 +113,7 @@ struct HashTrieTraits : BaseTraits {
  * @tparam DataDB The data database type (with data trie nodes)
  * @tparam HashDB The hash database type (with hash trie nodes)
  */
-template <typename DataDB, typename HashDB>
+template <typename DataDB, typename HashDB, typename Executor = _InlineExecutor>
 struct _HashUpdater {
   using DataTraits = typename DataDB::Traits;
   using DataCursorTraits = typename DataDB::CursorTraits;
@@ -134,22 +141,10 @@ struct _HashUpdater {
 
   DataDB* _data_db;
   HashDB* _hash_db;
-  std::string _key_path;
+  _TaskGroup<Executor>* _tg;
 
   _HashUpdater(DataDB* data_db, HashDB* hash_db)
-      : _data_db(data_db), _hash_db(hash_db) {
-    _key_path.reserve(255);
-  }
-
-  /**
-   * @brief Update hash trie to match data trie.
-   *
-   * @param data_root Root offset of data trie
-   * @param hash_root_ptr Pointer to hash trie root offset (modified in place)
-   */
-  void exec(data_offset_e data_root, hash_offset_e* hash_root_ptr) {
-    sync_nodes(data_root, hash_root_ptr);
-  }
+      : _data_db(data_db), _hash_db(hash_db), _tg(nullptr) {}
 
   // ── txn_id helpers ─────────────────────────────────────────────────────
 
@@ -193,8 +188,9 @@ struct _HashUpdater {
    *        Used when data prefix is longer and we're syncing against hash
    * child.
    */
-  void sync_nodes(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
-                  uint8_t hash_prefix_skip = 0, uint8_t data_prefix_skip = 0) {
+  void sync_nodes(std::string& key_path, data_offset_e data_offset,
+                  hash_offset_e* hash_offset_ptr, uint8_t hash_prefix_skip = 0,
+                  uint8_t data_prefix_skip = 0) {
     // Case: data is empty
     if (!data_offset) {
       if (*hash_offset_ptr) {
@@ -206,7 +202,7 @@ struct _HashUpdater {
 
     // Case: hash is empty - deep copy entire data subtree
     if (!*hash_offset_ptr) {
-      deep_copy_data_to_hash(data_offset, hash_offset_ptr);
+      deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
       return;
     }
 
@@ -224,9 +220,9 @@ struct _HashUpdater {
 
     // txn_id differs - need to sync structure
     if (data_offset.type() == LEAF) {
-      sync_data_leaf(data_offset, hash_offset_ptr, data_prefix_skip);
+      sync_data_leaf(key_path, data_offset, hash_offset_ptr, data_prefix_skip);
     } else {
-      sync_data_trie(data_offset, hash_offset_ptr, hash_prefix_skip,
+      sync_data_trie(key_path, data_offset, hash_offset_ptr, hash_prefix_skip,
                      data_prefix_skip);
     }
   }
@@ -234,14 +230,15 @@ struct _HashUpdater {
   /**
    * @brief Sync when data is a leaf.
    */
-  void sync_data_leaf(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
+  void sync_data_leaf(std::string& key_path, data_offset_e data_offset,
+                      hash_offset_e* hash_offset_ptr,
                       uint8_t data_prefix_skip = 0) {
     auto data_leaf = _data_db->template resolve<DataLeafNode>(&data_offset);
 
     // Save key path state
-    size_t saved_len = _key_path.size();
-    _key_path.append((const char*)data_leaf->data + data_prefix_skip,
-                     data_leaf->key_size - data_prefix_skip);
+    size_t saved_len = key_path.size();
+    key_path.append((const char*)data_leaf->data + data_prefix_skip,
+                    data_leaf->key_size - data_prefix_skip);
 
     // Replace whatever is in hash with a new hash leaf
     if (*hash_offset_ptr) {
@@ -249,10 +246,10 @@ struct _HashUpdater {
     }
 
     // Create hash leaf with computed hash
-    hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf);
+    hash_leaf_ptr hash_leaf = create_leaf_hash(key_path, data_leaf);
     *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
-    _key_path.resize(saved_len);
+    key_path.resize(saved_len);
   }
 
   /**
@@ -263,7 +260,8 @@ struct _HashUpdater {
    * @param data_prefix_skip Bytes to skip in data node's prefix (for prefix
    * alignment)
    */
-  void sync_data_trie(data_offset_e data_offset, hash_offset_e* hash_offset_ptr,
+  void sync_data_trie(std::string& key_path, data_offset_e data_offset,
+                      hash_offset_e* hash_offset_ptr,
                       uint8_t hash_prefix_skip = 0,
                       uint8_t data_prefix_skip = 0) {
     auto data_trie = _data_db->template resolve<DataTrieNode>(&data_offset);
@@ -272,7 +270,7 @@ struct _HashUpdater {
     if (hash_offset_ptr->type() == LEAF) {
       free_hash_subtree(*hash_offset_ptr);
       *hash_offset_ptr = hash_offset_e();
-      deep_copy_data_to_hash(data_offset, hash_offset_ptr);
+      deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
       return;
     }
 
@@ -297,7 +295,7 @@ struct _HashUpdater {
       // Prefixes diverge at position 'common' - replace hash entirely
       free_hash_subtree(*hash_offset_ptr);
       *hash_offset_ptr = hash_offset_e();
-      deep_copy_data_to_hash(data_offset, hash_offset_ptr);
+      deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
       return;
     }
 
@@ -312,46 +310,45 @@ struct _HashUpdater {
         // Hash is completely stale - replace entirely
         free_hash_subtree(*hash_offset_ptr);
         *hash_offset_ptr = hash_offset_e();
-        deep_copy_data_to_hash(data_offset, hash_offset_ptr);
+        deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
         return;
       }
 
       // Build new hash trie mirroring data's structure
-      size_t saved_len = _key_path.size();
-      _key_path.append((const char*)data_prefix, effective_data_len);
+      size_t saved_len = key_path.size();
+      key_path.append((const char*)data_prefix, effective_data_len);
 
       hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
       hash_offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 0;
+      uint8_t upper = 0;
       bool hash_consumed = false;
 
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        data_offset_e data_child = *data_trie->offset(k);
+      data_trie->for_each_branch([&](int k, auto* data_off) {
+        data_offset_e data_child = *data_off;
 
         hash_offset_e hash_child{};
         if (k == (int)diverge_byte && !hash_consumed) {
           // This data branch aligns with hash's embedded prefix.
-          // The child's compressed[0] is the branch char, which will be
-          // skipped via data_prefix_skip=1.  We must include it in
-          // _key_path so the hash covers the full key.
+          // The child's compressed[0] is the branch char; don't skip it
+          // so the recursive call naturally appends it to key_path.
+          // Keep the matching byte in hash's prefix too (no +1).
           hash_child = *hash_offset_ptr;
-          if (k != DataTrieNode::NONE) _key_path.push_back((char)k);
-          uint8_t new_hash_skip = hash_prefix_skip + common + 1;
-          uint8_t new_data_skip =
-              1;  // Skip the branch byte embedded in child's prefix
-          sync_nodes(data_child, &hash_child, new_hash_skip, new_data_skip);
-          if (k != DataTrieNode::NONE) _key_path.pop_back();
+          uint8_t new_hash_skip = hash_prefix_skip + common;
+          uint8_t new_data_skip = 0;
+          sync_nodes(key_path, data_child, &hash_child, new_hash_skip,
+                     new_data_skip);
           hash_consumed = true;
         } else {
           // Non-matching branch: child appends full compressed (no skip),
           // so branch char is included naturally — no push needed.
-          deep_copy_data_to_hash(data_child, &hash_child);
+          deep_copy_data_to_hash(key_path, data_child, &hash_child);
         }
 
         offsets_buf[k] = hash_child;
         branch_count++;
-      }
+        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+      });
 
       if (!hash_consumed) {
         free_hash_subtree(*hash_offset_ptr);
@@ -365,11 +362,11 @@ struct _HashUpdater {
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr new_hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-      new_hash_trie->create(prefix, offsets_buf);
+      new_hash_trie->create(prefix, offsets_buf, upper);
       compute_trie_hash(new_hash_trie);
       *hash_offset_ptr = _hash_db->resolve(new_hash_trie);
 
-      _key_path.resize(saved_len);
+      key_path.resize(saved_len);
       return;
     }
 
@@ -380,48 +377,46 @@ struct _HashUpdater {
       uint8_t next_byte = data_prefix[common];
 
       // Free hash branches that don't match
-      for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-           k = hash_trie->next(k)) {
+      hash_trie->for_each_branch([&](int k, auto* off) {
         if (k != (int)next_byte) {
-          free_hash_subtree(*hash_trie->offset(k));
+          free_hash_subtree(*off);
         }
-      }
+      });
 
       if (hash_trie->isset(next_byte)) {
-        // Sync data with hash's matching branch child
-        // Need to skip the consumed data prefix: data_prefix_skip + common + 1
-        // Hash child's first byte is the branch key, so skip 1 byte in hash too
+        // Sync data with hash's matching branch child.
+        // Don't skip the branch byte on either side — the recursive call
+        // will match it in the common prefix and append it to key_path.
         hash_offset_e hash_child = *hash_trie->offset(next_byte);
-        size_t saved_len = _key_path.size();
-        _key_path.append((const char*)data_prefix, common);
-        _key_path.push_back((char)next_byte);
+        size_t saved_len = key_path.size();
+        key_path.append((const char*)data_prefix, common);
 
-        uint8_t new_data_skip = data_prefix_skip + common + 1;
-        uint8_t new_hash_skip =
-            1;  // Skip the branch byte embedded in hash child's prefix
-        sync_nodes(data_offset, &hash_child, new_hash_skip, new_data_skip);
+        uint8_t new_data_skip = data_prefix_skip + common;
+        uint8_t new_hash_skip = 0;
+        sync_nodes(key_path, data_offset, &hash_child, new_hash_skip,
+                   new_data_skip);
 
         // Replace the hash trie with the synced result
         free_hash_node(hash_trie);
         *hash_offset_ptr = hash_child;
 
-        _key_path.resize(saved_len);
+        key_path.resize(saved_len);
       } else {
         // Hash doesn't have matching branch - deep copy data
         free_hash_node(hash_trie);
         *hash_offset_ptr = hash_offset_e();
-        deep_copy_data_to_hash(data_offset, hash_offset_ptr);
+        deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
       }
       return;
     }
 
     // Prefixes match exactly - sync branches
-    size_t saved_len = _key_path.size();
-    _key_path.append((const char*)data_prefix, effective_data_len);
+    size_t saved_len = key_path.size();
+    key_path.append((const char*)data_prefix, effective_data_len);
 
-    sync_matching_tries(data_trie, hash_offset_ptr, data_prefix_skip);
+    sync_matching_tries(key_path, data_trie, hash_offset_ptr, data_prefix_skip);
 
-    _key_path.resize(saved_len);
+    key_path.resize(saved_len);
   }
 
   /**
@@ -434,7 +429,7 @@ struct _HashUpdater {
    * @param data_prefix_skip Bytes to skip in data prefix (for virtual
    * alignment)
    */
-  void sync_matching_tries(data_trie_ptr data_trie,
+  void sync_matching_tries(std::string& key_path, data_trie_ptr data_trie,
                            hash_offset_e* hash_offset_ptr,
                            uint8_t data_prefix_skip = 0) {
     auto hash_trie = _hash_db->template resolve<HashTrieNode>(hash_offset_ptr);
@@ -443,54 +438,63 @@ struct _HashUpdater {
     hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
     hash_offset_e* offsets_buf = &offsets_raw[1];  // -1..255 indexing
     int branch_count = 0;
+    uint8_t upper = 0;
 
     // Track which hash branches exist
     bool hash_has[257] = {};
-    for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-         k = hash_trie->next(k)) {
+    hash_trie->for_each_branch([&](int k, auto*) {
       hash_has[k + 1] = true;  // +1 because NONE is -1
-    }
+    });
 
-    // Process all data branches
-    for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-         k = data_trie->next(k)) {
-      data_offset_e data_child = *data_trie->offset(k);
+    data_trie->for_each_branch([&](int k, auto* data_off) {
+      data_offset_e data_child = *data_off;
+      bool has_hash = hash_has[k + 1];
+      hash_offset_e hash_child_init =
+          has_hash ? *hash_trie->offset(k) : hash_offset_e{};
 
-      if (hash_has[k + 1]) {
-        // Common branch - recurse
-        hash_offset_e hash_child = *hash_trie->offset(k);
-        sync_nodes(data_child, &hash_child);
+      auto do_branch = [this, k, data_child, has_hash, hash_child_init,
+                        offsets_buf](std::string& kp) {
+        hash_offset_e hash_child = hash_child_init;
+        if (has_hash) {
+          sync_nodes(kp, data_child, &hash_child);
+        } else {
+          deep_copy_data_to_hash(kp, data_child, &hash_child);
+        }
         offsets_buf[k] = hash_child;
-      } else {
-        // Data-only branch - deep copy
-        hash_offset_e hash_child{};
-        deep_copy_data_to_hash(data_child, &hash_child);
-        offsets_buf[k] = hash_child;
+      };
+
+      if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+        do_branch(key_path);
       }
-
+#if LEAVES_HAS_THREADS
+      else if (_in_worker) {
+        do_branch(key_path);
+      } else {
+        _tg->spawn([do_branch, key = key_path]() mutable { do_branch(key); });
+      }
+#endif
       branch_count++;
+      if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+    });
+
+    if constexpr (!std::is_same_v<Executor, _InlineExecutor>) {
+      _tg->wait();
     }
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
     // Free them
-    for (int k = hash_trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-         k = hash_trie->next(k)) {
+    hash_trie->for_each_branch([&](int k, auto* off) {
       if (!data_trie->isset(k)) {
-        free_hash_subtree(*hash_trie->offset(k));
+        free_hash_subtree(*off);
       }
-    }
+    });
 
     // Create new hash trie mirroring data's full compressed prefix.
-    // Must use the FULL compressed (not effective/skipped), because
-    // compute_trie_hash hashes trie->compressed() and it must match
-    // what compute_node_hash would produce for this data trie node.
     Slice prefix((const char*)data_trie->compressed(), data_trie->len());
     data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
     hash_trie_ptr new_hash_trie =
         alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-    new_hash_trie->create(prefix, offsets_buf);
-
-    // Compute trie hash
+    new_hash_trie->create(prefix, offsets_buf, upper);
     compute_trie_hash(new_hash_trie);
 
     // Free old hash trie node and update pointer
@@ -503,7 +507,7 @@ struct _HashUpdater {
   /**
    * @brief Deep copy data subtree to hash trie, computing hashes.
    */
-  void deep_copy_data_to_hash(data_offset_e data_offset,
+  void deep_copy_data_to_hash(std::string& key_path, data_offset_e data_offset,
                               hash_offset_e* hash_offset_ptr) {
     if (!data_offset) {
       *hash_offset_ptr = hash_offset_e();
@@ -512,29 +516,48 @@ struct _HashUpdater {
 
     if (data_offset.type() == LEAF) {
       auto data_leaf = _data_db->template resolve<DataLeafNode>(&data_offset);
-      size_t saved_len = _key_path.size();
-      _key_path.append((const char*)data_leaf->data, data_leaf->key_size);
+      size_t saved_len = key_path.size();
+      key_path.append((const char*)data_leaf->data, data_leaf->key_size);
 
-      hash_leaf_ptr hash_leaf = create_leaf_hash(data_leaf);
+      hash_leaf_ptr hash_leaf = create_leaf_hash(key_path, data_leaf);
       *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
-      _key_path.resize(saved_len);
+      key_path.resize(saved_len);
     } else {
       auto data_trie = _data_db->template resolve<DataTrieNode>(&data_offset);
-      size_t saved_len = _key_path.size();
-      _key_path.append((const char*)data_trie->compressed(), data_trie->len());
+      size_t saved_len = key_path.size();
+      key_path.append((const char*)data_trie->compressed(), data_trie->len());
 
-      // Collect children
       hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
       hash_offset_e* offsets_buf = &offsets_raw[1];
       int branch_count = 0;
+      uint8_t upper = 0;
 
-      for (int k = data_trie->first(); k != DataTrieNode::OUT_OF_RANGE;
-           k = data_trie->next(k)) {
-        hash_offset_e child{};
-        deep_copy_data_to_hash(*data_trie->offset(k), &child);
-        offsets_buf[k] = child;
+      data_trie->for_each_branch([&](int k, auto* data_off) {
+        data_offset_e data_child = *data_off;
+
+        auto do_branch = [this, k, data_child, offsets_buf](std::string& kp) {
+          hash_offset_e result{};
+          deep_copy_data_to_hash(kp, data_child, &result);
+          offsets_buf[k] = result;
+        };
+
+        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+          do_branch(key_path);
+        }
+#if LEAVES_HAS_THREADS
+        else if (_in_worker) {
+          do_branch(key_path);
+        } else {
+          _tg->spawn([do_branch, key = key_path]() mutable { do_branch(key); });
+        }
+#endif
         branch_count++;
+        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+      });
+
+      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) {
+        _tg->wait();
       }
 
       // Create hash trie
@@ -542,13 +565,13 @@ struct _HashUpdater {
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-      hash_trie->create(prefix, offsets_buf);
+      hash_trie->create(prefix, offsets_buf, upper);
 
       // Compute trie hash
       compute_trie_hash(hash_trie);
 
       *hash_offset_ptr = _hash_db->resolve(hash_trie);
-      _key_path.resize(saved_len);
+      key_path.resize(saved_len);
     }
   }
 
@@ -557,12 +580,14 @@ struct _HashUpdater {
   /**
    * @brief Create hash leaf from data leaf.
    */
-  hash_leaf_ptr create_leaf_hash(data_leaf_ptr data_leaf) {
+  hash_leaf_ptr create_leaf_hash(const std::string& key_path,
+                                 data_leaf_ptr data_leaf) {
     // Derive branch key from data leaf's key: data[0] is the branch char,
     // or NONE if key_size == 0 (exact-match / NONE-branch leaf).
-    int branch_key = (data_leaf->key_size > 0)
-        ? static_cast<int>(static_cast<uint8_t>(data_leaf->data[0]))
-        : HashTrieNode::NONE;
+    int branch_key =
+        (data_leaf->key_size > 0)
+            ? static_cast<int>(static_cast<uint8_t>(data_leaf->data[0]))
+            : HashTrieNode::NONE;
 
     // Get data leaf's txn_id from its page header
     data_page_ptr data_page = data_leaf - sizeof(DataPageHeader);
@@ -570,7 +595,7 @@ struct _HashUpdater {
 
     // Compute leaf hash: Blake3(full_key || value)
     Blake3Hasher hasher;
-    hasher.update(_key_path.data(), _key_path.size());
+    hasher.update(key_path.data(), key_path.size());
 
     // Hash the value - handle big values if supported
     if constexpr (detail::has_big_memory<DataDB>::value) {
@@ -608,10 +633,11 @@ struct _HashUpdater {
 
   // ── Allocation helpers ─────────────────────────────────────────────────
 
-  hash_leaf_ptr alloc_hash_leaf(tid_t txn_id, int branch_key = HashTrieNode::NONE) {
+  hash_leaf_ptr alloc_hash_leaf(tid_t txn_id,
+                                int branch_key = HashTrieNode::NONE) {
     // NONE-branch leaf: key_size=0.  Non-NONE branch: data[0]=branch_char.
-    uint16_t size = static_cast<uint16_t>(sizeof(HashLeafNode) +
-                                          (branch_key == HashTrieNode::NONE ? 0 : 1));
+    uint16_t size = static_cast<uint16_t>(
+        sizeof(HashLeafNode) + (branch_key == HashTrieNode::NONE ? 0 : 1));
     hash_leaf_ptr leaf = _hash_db->template alloc_node<hash_leaf_ptr>(size);
     if (branch_key == HashTrieNode::NONE) {
       leaf->key_size = 0;
@@ -652,10 +678,9 @@ struct _HashUpdater {
       free_hash_node(leaf);
     } else {
       auto trie = _hash_db->template resolve<HashTrieNode>(&offset);
-      for (int k = trie->first(); k != HashTrieNode::OUT_OF_RANGE;
-           k = trie->next(k)) {
-        free_hash_subtree(*trie->offset(k));
-      }
+      trie->for_each_branch([&](int k, auto* off) {
+        free_hash_subtree(*off);
+      });
       free_hash_node(trie);
     }
   }
@@ -676,8 +701,22 @@ template <typename DataDB, typename HashDB>
 void update_hash_trie(DataDB* data_db, HashDB* hash_db,
                       typename DataDB::offset_e data_root,
                       typename HashDB::offset_e* hash_root_ptr) {
+  std::string key_path;
+  key_path.reserve(255);
   _HashUpdater<DataDB, HashDB> updater(data_db, hash_db);
-  updater.exec(data_root, hash_root_ptr);
+  updater.sync_nodes(key_path, data_root, hash_root_ptr);
+}
+
+template <typename Executor, typename DataDB, typename HashDB>
+void update_hash_trie(Executor& executor, DataDB* data_db, HashDB* hash_db,
+                      typename DataDB::offset_e data_root,
+                      typename HashDB::offset_e* hash_root_ptr) {
+  std::string key_path;
+  key_path.reserve(255);
+  _HashUpdater<DataDB, HashDB, Executor> updater(data_db, hash_db);
+  _TaskGroup<Executor> tg(executor);
+  updater._tg = &tg;
+  updater.sync_nodes(key_path, data_root, hash_root_ptr);
 }
 
 // =============================================================================
@@ -702,19 +741,22 @@ struct _HashLookup {
   HashCursor_ _cursor;
   offset_e* _root;
 
-  _HashLookup(DB* db, offset_e* root)
-      : _cursor(db, root), _root(root) {}
+  _HashLookup(DB* db, offset_e* root) : _cursor(db, root), _root(root) {}
 
   void set_root(offset_e* root) {
     _root = root;
     _cursor.set_root(root);
+    // Hash trie is non-COW: interior nodes may be freed/replaced
+    // without the root offset changing. Always invalidate the stack.
+    _cursor.clear();
   }
 
   /**
    * @brief Look up the hash for the node at `path` in the hash trie.
    *
    * @param path The key path to look up
-   * @param expected_type LEAF or TRIE — determines which hash-trie node we expect
+   * @param expected_type LEAF or TRIE — determines which hash-trie node we
+   * expect
    * @return Pointer to the 32-byte hash, or nullptr if not found
    */
   const uint8_t* find(const std::string& path, uint8_t expected_type) {

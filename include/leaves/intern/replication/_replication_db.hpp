@@ -25,7 +25,7 @@ template <typename Storage_>
 struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
   using offset_e = typename Traits::offset_e;
-  using MemManager = _MemManager<Traits>;
+  using MemManager = _MemManagerPool<Traits>;
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
   template <typename T, typename = void>
@@ -67,6 +67,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
     void reset() noexcept {
       new (&update_lock) SpinLock();
       ref_count.store(0, std::memory_order_relaxed);
+      hash_mem_manager.reinit_locks();
     }
   } hash_control;
 
@@ -108,11 +109,14 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
   template <typename Resolver>
   typename Traits_::template Pointer<_ReplicationTransaction> clone(
       Resolver& resolver) {
-    auto new_txn = Base::alloc_slot(SLOT_ID, resolver);
-    new_txn->used = sizeof(_ReplicationTransaction);
-    memcpy((char*)new_txn, this, sizeof(_ReplicationTransaction));
-    assert(new_txn->slot_id == SLOT_ID);
-    return new_txn;
+    auto page = Base::alloc_slot(SLOT_ID, resolver);
+    page->used = sizeof(_ReplicationTransaction);
+    memcpy((char*)page, this, sizeof(_ReplicationTransaction));
+    auto new_txn = reinterpret_cast<_ReplicationTransaction*>((char*)page);
+    new (&new_txn->refs) std::atomic<uint32_t>(0);
+    new_txn->mem_manager.reinit_locks();
+    assert(page->slot_id == SLOT_ID);
+    return page;
   }
 };
 
@@ -157,7 +161,7 @@ struct _ReplicationDB
   struct HashDB {
     using Traits = typename Storage_::Traits;
     using offset_e = typename Traits::offset_e;
-    using MemManager = _MemManager<Traits>;
+    using MemManager = _MemManagerPool<Traits>;
     using PageHeader = typename Traits::PageHeader;
     using page_ptr = typename Traits::ptr;
 
@@ -257,6 +261,9 @@ struct _ReplicationDB
   using Base::Base;
   using txn_ptr = typename Base::txn_ptr;
   using offset_e = typename CursorTraits::offset_e;
+
+  // --- Hash trie configuration ---
+  size_t _hash_threads = 4;  // max threads for parallel hash trie updates
 
   // --- Purge configuration ---
   std::atomic<uint64_t> _retention_seconds{
@@ -393,9 +400,22 @@ struct _ReplicationDB
         if (needs_update) {
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*current);
+#if LEAVES_HAS_THREADS
+          if constexpr (Storage_::Traits::MERGE_POOL_THREADS > 0) {
+            _PoolExecutor exec(this->_storage, _hash_threads);
+            update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
+            update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
+                             &hc.deletion_hash_root);
+          } else {
+            update_hash_trie(this, &hdb, current->root, &hc.hash_root);
+            update_hash_trie(this, &hdb, rtxn->deletion_root,
+                             &hc.deletion_hash_root);
+          }
+#else
           update_hash_trie(this, &hdb, current->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
+#endif
           hc.hashed_txn_offset.store((uint64_t)this->resolve(current),
                                      std::memory_order_release);
         }

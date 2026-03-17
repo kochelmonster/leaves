@@ -29,9 +29,12 @@ struct _ReplicationCacheStore
   using DBEntry = typename Base::DBEntry;
   using FileHeader = typename _FileOperations::FileHeader;
 
+  size_t _hash_threads = 4;
+
   _ReplicationCacheStore(const char* path, uint16_t db_count = 48,
-                         size_t capacity = 500 * M, size_t pool_threads = 0)
-      : Base(db_count, capacity, pool_threads) {
+                         size_t capacity = 500 * M, size_t pool_threads = 0,
+                         size_t hash_threads = 4)
+      : Base(db_count, capacity, pool_threads), _hash_threads(hash_threads) {
     init_dbfile(path, db_count);
   }
 
@@ -49,7 +52,8 @@ struct _ReplicationCacheStore
     if (!std::filesystem::is_regular_file(path)) {
       this->open(path);
       this->_header = new (buffer) FileHeader(db_count);
-      this->_header->file_size = header_size;
+      // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
+      this->_header->file_size = leaves::padding(header_size, Base::AREA_SIZE);
       this->resize(this->_header->file_size);
       this->write(0, buffer, header_size);
     } else {
@@ -80,6 +84,7 @@ struct _ReplicationCacheStore
   // Override make() to start purge on newly-created DBs
   DB* make(const char* name) {
     DB* db = Base::make(name);
+    db->_hash_threads = _hash_threads;
     db->start_purge();
     return db;
   }
@@ -96,9 +101,9 @@ class ReplicatingFileStorage
 
   ReplicatingFileStorage(const char* path, uint16_t db_count = 48,
                          size_t cache_capacity = 500 * M,
-                         size_t pool_threads = 0)
+                         size_t pool_threads = 0, size_t hash_threads = 4)
       : _storage(std::make_unique<StorageImpl>(path, db_count, cache_capacity,
-                                               pool_threads)) {}
+                                               pool_threads, hash_threads)) {}
 
   DB operator[](const char* name) { return DB(shared_from_this(), name); }
 
@@ -113,9 +118,10 @@ class ReplicatingFileStorage
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t cache_capacity = 500 * M,
-                            uint16_t db_count = 48, size_t pool_threads = 0) {
+                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t hash_threads = 4) {
     return std::make_shared<ReplicatingFileStorage>(
-        path, db_count, cache_capacity, pool_threads);
+        path, db_count, cache_capacity, pool_threads, hash_threads);
   }
 
   void debug_reset() { _storage->debug_reset(); }

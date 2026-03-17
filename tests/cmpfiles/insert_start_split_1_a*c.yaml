@@ -1,6 +1,6 @@
 type: trie
-id: 10416
-page: 10408
+id: 1052704
+page: 1052696
 freespace: 96
 txn: 3
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[*][b]"
 children: 
-  - 14641
-  - 10289
+  - 530641
+  - 530513
 ---
 type: leaf
-id: 14641
-page: 14633
+id: 530641
+page: 530633
 freespace: 120
 size: 8
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 3
 value: "a*c"
 ---
 type: leaf
-id: 10289
-page: 10281
+id: 530513
+page: 530505
 freespace: 120
 size: 8
 txn: 3

@@ -122,11 +122,5 @@ Does a standard proceeding exits to reach this goal?
 - Subtrie remove 
 - multi thread merger
 
-hash == 160Bit reicht?
 
-ReplicatinDB immer noch zu langsam
-
-
-- Multi thread Partitioner
-
-
+_db: optimierung start_transaction und commit.
