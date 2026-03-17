@@ -190,7 +190,7 @@ struct _Merger {
       }
     }
 
-    page_ptr page((char*)node - sizeof(PageHeader));
+    page_ptr page = node - sizeof(PageHeader);
     dst_cursor._db->free(page);
   }
 

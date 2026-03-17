@@ -4,10 +4,10 @@
 //   - Inline executor (single-threaded baseline)
 //   - _PoolExecutor with 1 through 8 threads
 //
-// Uses MapStorage (mmap-backed), matching the production call path.
+// Uses MapStorage (mmap-backed) or FileStorage (--fstore flag).
 //
 // Build:  cmake --build build -j --target bench_merger
-// Run:    ./build/bench_merger [--num=100000] [--vsize=100]
+// Run:    ./build/bench_merger [--num=100000] [--vsize=100] [--fstore]
 
 #include <chrono>
 #include <cstdio>
@@ -17,20 +17,12 @@
 #include <vector>
 
 #include "leaves/mmap.hpp"
+#include "leaves/fstore.hpp"
 #include "leaves/intern/db/_cursor.hpp"
 #include "leaves/intern/util/_merger.hpp"
 #include "leaves/intern/util/_threadpool.hpp"
 
 using namespace leaves;
-
-using Storage = MapStorage;
-using InternalDB = Storage::StorageImpl::DB;
-using CTraits = InternalDB::CursorTraits;
-using DstCursor = _TransactionalCursor<CTraits>;
-using SrcCursor = _Cursor<CTraits>;
-using TrieNode = _TrieNode<CTraits>;
-using LeafNode = _LeafNode<CTraits>;
-using offset_e = typename InternalDB::offset_e;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -47,17 +39,21 @@ struct BenchPool : _ThreadPoolMixin<BenchPool> {
 
 static int FLAGS_num = 100000;
 static int FLAGS_vsize = 100;
-static int FLAGS_max_threads = Storage::StorageImpl::Traits::MERGE_POOL_THREADS;
+static int FLAGS_max_threads = 5;
+static int FLAGS_min_threads = 1;
 static int FLAGS_iterations = 3;
 static bool FLAGS_profile = false;
 static bool FLAGS_overlap = true;
-static int FLAGS_concurrency = Storage::StorageImpl::Traits::MERGE_DISPATCH_THRESHOLD;
+static int FLAGS_concurrency = 10;
+static bool FLAGS_fstore = false;
+static bool FLAGS_no_inline = false;
 
 // ---------------------------------------------------------------------------
 // Populate data trie with N keys
 // ---------------------------------------------------------------------------
 
-static void populate(Storage::DB& db, int n, int vsize,
+template <typename Storage>
+static void populate(typename Storage::DB& db, int n, int vsize,
                      const char* prefix = "key/") {
   std::string val(vsize, 'x');
   auto cursor = db.cursor();
@@ -67,15 +63,19 @@ static void populate(Storage::DB& db, int n, int vsize,
     cursor.find(buf);
     cursor.value(val);
   }
-  cursor.commit();
+  cursor.commit(true);
 }
 
 // ---------------------------------------------------------------------------
 // Count nodes in data trie
 // ---------------------------------------------------------------------------
 
-static void count_nodes(InternalDB* db, offset_e offset,
+template <typename InternalDB>
+static void count_nodes(InternalDB* db,
+                        typename InternalDB::offset_e offset,
                         int& trie_count, int& leaf_count) {
+  using CTraits = typename InternalDB::CursorTraits;
+  using TrieNode = _TrieNode<CTraits>;
   if (!offset) return;
   if (offset.type() == LEAF) {
     leaf_count++;
@@ -92,7 +92,12 @@ static void count_nodes(InternalDB* db, offset_e offset,
 // Run merge — inline (single-threaded)
 // ---------------------------------------------------------------------------
 
+template <typename InternalDB>
 static double bench_inline(InternalDB* dst_db, InternalDB* src_db) {
+  using CTraits = typename InternalDB::CursorTraits;
+  using DstCursor = _TransactionalCursor<CTraits>;
+  using SrcCursor = _Cursor<CTraits>;
+
   auto src_root = &src_db->txn()->root;
   auto dst_root = &dst_db->txn()->root;
   uint64_t cursor_id = dst_db->new_cursor_id();
@@ -118,8 +123,13 @@ static double bench_inline(InternalDB* dst_db, InternalDB* src_db) {
 // Run merge — pooled (N threads)
 // ---------------------------------------------------------------------------
 
+template <typename InternalDB>
 static double bench_pooled(InternalDB* dst_db, InternalDB* src_db,
                            int threads) {
+  using CTraits = typename InternalDB::CursorTraits;
+  using DstCursor = _TransactionalCursor<CTraits>;
+  using SrcCursor = _Cursor<CTraits>;
+
   auto src_root = &src_db->txn()->root;
   auto dst_root = &dst_db->txn()->root;
   uint64_t cursor_id = dst_db->new_cursor_id();
@@ -151,7 +161,17 @@ static double bench_pooled(InternalDB* dst_db, InternalDB* src_db,
 // Cost breakdown — measure individual operations in isolation
 // ---------------------------------------------------------------------------
 
-static void profile_breakdown(InternalDB* src_db, offset_e data_root) {
+template <typename Storage>
+static void profile_breakdown(typename Storage::StorageImpl::DB* src_db,
+                               typename Storage::StorageImpl::DB::offset_e data_root) {
+  using InternalDB = typename Storage::StorageImpl::DB;
+  using CTraits = typename InternalDB::CursorTraits;
+  using DstCursor = _TransactionalCursor<CTraits>;
+  using SrcCursor = _Cursor<CTraits>;
+  using TrieNode = _TrieNode<CTraits>;
+  using LeafNode = _LeafNode<CTraits>;
+  using offset_e = typename InternalDB::offset_e;
+
   int trie_count = 0, leaf_count = 0;
   count_nodes(src_db, data_root, trie_count, leaf_count);
   int total_nodes = trie_count + leaf_count;
@@ -240,7 +260,6 @@ static void profile_breakdown(InternalDB* src_db, offset_e data_root) {
       dc.start_transaction();
 
       using page_ptr = typename InternalDB::page_ptr;
-      using PageHeader = typename CTraits::PageHeader;
 
       // Pre-allocate vector for pages
       std::vector<page_ptr> pages;
@@ -308,7 +327,8 @@ static void profile_breakdown(InternalDB* src_db, offset_e data_root) {
 // Verify merge correctness: count keys in destination
 // ---------------------------------------------------------------------------
 
-static int count_keys(Storage::DB& db) {
+template <typename Storage>
+static int count_keys(typename Storage::DB& db) {
   auto cursor = db.cursor();
   cursor.first();
   int count = 0;
@@ -320,32 +340,21 @@ static int count_keys(Storage::DB& db) {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Run benchmark for a given storage type
 // ---------------------------------------------------------------------------
 
-static void parse_flags(int argc, char** argv) {
-  for (int i = 1; i < argc; i++) {
-    if (sscanf(argv[i], "--num=%d", &FLAGS_num) == 1) continue;
-    if (sscanf(argv[i], "--vsize=%d", &FLAGS_vsize) == 1) continue;
-    if (sscanf(argv[i], "--max_threads=%d", &FLAGS_max_threads) == 1) continue;
-    if (sscanf(argv[i], "--iterations=%d", &FLAGS_iterations) == 1) continue;
-    if (sscanf(argv[i], "--concurrency=%d", &FLAGS_concurrency) == 1) continue;
-    if (strcmp(argv[i], "--profile") == 0) { FLAGS_profile = true; continue; }
-    if (strcmp(argv[i], "--overlap") == 0) { FLAGS_overlap = true; continue; }
-    fprintf(stderr, "Unknown flag: %s\n", argv[i]);
-    exit(1);
-  }
-}
-
-int main(int argc, char** argv) {
-  parse_flags(argc, argv);
+template <typename Storage>
+static void run_benchmark() {
+  using InternalDB = typename Storage::StorageImpl::DB;
+  using offset_e = typename InternalDB::offset_e;
 
   const char* src_path = "bench_merger_src.lvs";
   const char* dst_path = "bench_merger_dst.lvs";
   std::remove(src_path);
   std::remove(dst_path);
 
-  fprintf(stdout, "Merger benchmark\n");
+  fprintf(stdout, "Merger benchmark (%s)\n",
+          FLAGS_fstore ? "FileStorage" : "MapStorage");
   fprintf(stdout, "  keys:       %d\n", FLAGS_num);
   fprintf(stdout, "  value_size: %d\n", FLAGS_vsize);
   fprintf(stdout, "  iterations: %d\n", FLAGS_iterations);
@@ -357,7 +366,7 @@ int main(int argc, char** argv) {
   {
     fprintf(stdout, "Populating source with %d keys...\n", FLAGS_num);
     double t0 = now_seconds();
-    populate(src_db_handle, FLAGS_num, FLAGS_vsize);
+    populate<Storage>(src_db_handle, FLAGS_num, FLAGS_vsize);
     fprintf(stdout, "  done in %.1f ms\n\n", (now_seconds() - t0) * 1000);
   }
 
@@ -373,7 +382,7 @@ int main(int argc, char** argv) {
   }
 
   if (FLAGS_profile) {
-    profile_breakdown(src_internal, data_root);
+    profile_breakdown<Storage>(src_internal, data_root);
   }
 
   fprintf(stdout, "%-20s %10s %10s %10s\n",
@@ -384,34 +393,36 @@ int main(int argc, char** argv) {
   // --- Inline baseline ---
   double inline_best = 1e9;
   double inline_total = 0;
-  for (int it = 0; it < FLAGS_iterations; it++) {
-    std::remove(dst_path);
-    auto dst_storage = Storage::create(dst_path);
-    {
-      auto dst_db = (*dst_storage)["bench"];
-      if (FLAGS_overlap) {
-        populate(dst_db, FLAGS_num / 2, FLAGS_vsize);
-      }
-
-      double t = bench_inline(dst_db._internal(), src_internal);
-      if (t < inline_best) inline_best = t;
-      inline_total += t;
-
-      if (it == 0) {
-        int got = count_keys(dst_db);
-        if (got != FLAGS_num) {
-          fprintf(stderr, "ERROR: inline merge produced %d keys, expected %d\n",
-                  got, FLAGS_num);
+  if (!FLAGS_no_inline) {
+    for (int it = 0; it < FLAGS_iterations; it++) {
+      std::remove(dst_path);
+      auto dst_storage = Storage::create(dst_path);
+      {
+        auto dst_db = (*dst_storage)["bench"];
+        if (FLAGS_overlap) {
+          populate<Storage>(dst_db, FLAGS_num / 2, FLAGS_vsize);
         }
-      }
-    } // dst_db destroyed before storage
+
+        double t = bench_inline(dst_db._internal(), src_internal);
+        if (t < inline_best) inline_best = t;
+        inline_total += t;
+
+        if (it == 0) {
+          int got = count_keys<Storage>(dst_db);
+          if (got != FLAGS_num) {
+            fprintf(stderr, "ERROR: inline merge produced %d keys, expected %d\n",
+                    got, FLAGS_num);
+          }
+        }
+      } // dst_db destroyed before storage
+    }
+    double inline_avg = inline_total / FLAGS_iterations;
+    fprintf(stdout, "%-20s %10.1f %10.1f %10s\n",
+            "inline (1 thread)", inline_best * 1000, inline_avg * 1000, "1.00x");
   }
-  double inline_avg = inline_total / FLAGS_iterations;
-  fprintf(stdout, "%-20s %10.1f %10.1f %10s\n",
-          "inline (1 thread)", inline_best * 1000, inline_avg * 1000, "1.00x");
 
   // --- Pooled with varying thread counts ---
-  for (int threads = 1; threads <= FLAGS_max_threads; threads++) {
+  for (int threads = FLAGS_min_threads; threads <= FLAGS_max_threads; threads++) {
     double best = 1e9;
     double total = 0;
     for (int it = 0; it < FLAGS_iterations; it++) {
@@ -420,7 +431,7 @@ int main(int argc, char** argv) {
       {
         auto dst_db = (*dst_storage)["bench"];
         if (FLAGS_overlap) {
-          populate(dst_db, FLAGS_num / 2, FLAGS_vsize);
+          populate<Storage>(dst_db, FLAGS_num / 2, FLAGS_vsize);
         }
 
         double t = bench_pooled(dst_db._internal(), src_internal, threads);
@@ -428,7 +439,7 @@ int main(int argc, char** argv) {
         total += t;
 
         if (it == 0) {
-          int got = count_keys(dst_db);
+          int got = count_keys<Storage>(dst_db);
           if (got != FLAGS_num) {
             fprintf(stderr,
                     "ERROR: pool(%d) merge produced %d keys, expected %d\n",
@@ -445,7 +456,38 @@ int main(int argc, char** argv) {
   }
 
   fprintf(stdout, "\n");
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+static void parse_flags(int argc, char** argv) {
+  for (int i = 1; i < argc; i++) {
+    if (sscanf(argv[i], "--num=%d", &FLAGS_num) == 1) continue;
+    if (sscanf(argv[i], "--vsize=%d", &FLAGS_vsize) == 1) continue;
+    if (sscanf(argv[i], "--max_threads=%d", &FLAGS_max_threads) == 1) continue;
+    if (sscanf(argv[i], "--min_threads=%d", &FLAGS_min_threads) == 1) continue;
+    if (sscanf(argv[i], "--iterations=%d", &FLAGS_iterations) == 1) continue;
+    if (sscanf(argv[i], "--concurrency=%d", &FLAGS_concurrency) == 1) continue;
+    if (strcmp(argv[i], "--profile") == 0) { FLAGS_profile = true; continue; }
+    if (strcmp(argv[i], "--overlap") == 0) { FLAGS_overlap = true; continue; }
+    if (strcmp(argv[i], "--no-overlap") == 0) { FLAGS_overlap = false; continue; }
+    if (strcmp(argv[i], "--fstore") == 0) { FLAGS_fstore = true; continue; }
+    if (strcmp(argv[i], "--no-inline") == 0) { FLAGS_no_inline = true; continue; }
+    fprintf(stderr, "Unknown flag: %s\n", argv[i]);
+    exit(1);
+  }
+}
+
+int main(int argc, char** argv) {
+  parse_flags(argc, argv);
+
+  if (FLAGS_fstore) {
+    run_benchmark<FileStorage>();
+  } else {
+    run_benchmark<MapStorage>();
+  }
+
   return 0;
-  // src_db_handle, src_storage destroyed here by stack unwinding;
-  // files cleaned up by storage destructors
 }

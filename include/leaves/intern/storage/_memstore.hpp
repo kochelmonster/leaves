@@ -172,6 +172,7 @@ struct _MemoryDB {
 
   template <typename PtrType>
   void make_dirty(PtrType /*block*/) {}
+
   void prefetch(const offset_t& offset) const { prefetch(&offset); }
   void prefetch(const offset_t* /*offset_ptr*/,
                 Access /*access*/ = READ) const {}
