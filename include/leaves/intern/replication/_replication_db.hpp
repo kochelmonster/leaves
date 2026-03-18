@@ -111,10 +111,10 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
       Resolver& resolver) {
     auto page = Base::alloc_slot(SLOT_ID, resolver);
     page->used = sizeof(_ReplicationTransaction);
-    memcpy((char*)page, this, sizeof(_ReplicationTransaction));
-    auto new_txn = reinterpret_cast<_ReplicationTransaction*>((char*)page);
-    new (&new_txn->refs) std::atomic<uint32_t>(0);
+    memcpy(&*page, this, sizeof(_ReplicationTransaction));
+    auto new_txn = reinterpret_cast<_ReplicationTransaction*>(&*page);
     new_txn->mem_manager.reinit_locks();
+    new (&new_txn->refs) std::atomic<uint32_t>(0);
     assert(page->slot_id == SLOT_ID);
     return page;
   }
@@ -401,16 +401,10 @@ struct _ReplicationDB
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*current);
 #if LEAVES_HAS_THREADS
-          if constexpr (Storage_::Traits::MERGE_POOL_THREADS > 0) {
-            _PoolExecutor exec(this->_storage, _hash_threads);
-            update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
-            update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
-                             &hc.deletion_hash_root);
-          } else {
-            update_hash_trie(this, &hdb, current->root, &hc.hash_root);
-            update_hash_trie(this, &hdb, rtxn->deletion_root,
-                             &hc.deletion_hash_root);
-          }
+          _PoolExecutor exec(this->_storage, _hash_threads);
+          update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
+          update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
+                           &hc.deletion_hash_root);
 #else
           update_hash_trie(this, &hdb, current->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,
