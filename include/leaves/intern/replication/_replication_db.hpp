@@ -383,46 +383,62 @@ struct _ReplicationDB
   // deletion_hash_root. Caller MUST call release_hash_trie() when done.
   txn_ptr acquire_hash_trie() {
     auto& hc = this->_header->hash_control;
+    txn_ptr first_fsm_txn;  // non-null only for the first FSM
     {
       std::lock_guard<SpinLock> lock(hc.update_lock);
       uint32_t prev = hc.ref_count.fetch_add(1, std::memory_order_acq_rel);
       if (prev == 0) {
-        // First FSM: update hash trie if stale
-        txn_ptr current = this->txn_ref();
+        // First FSM: update hash trie if stale.
+        // Keep the ref on current alive — returning it directly avoids
+        // a window where refs==0 lets GC free the page before non-first
+        // FSMs can pin it via hashed_txn_offset.
+        first_fsm_txn = this->txn_ref();
         uint64_t htxn_off =
             hc.hashed_txn_offset.load(std::memory_order_relaxed);
         bool needs_update = (htxn_off == 0);
         if (!needs_update) {
           offset_t off(htxn_off);
           auto hashed = this->template resolve<Transaction>(&off);
-          needs_update = (hashed->txn_id < current->txn_id);
+          needs_update = (hashed->txn_id < first_fsm_txn->txn_id);
         }
         if (needs_update) {
           auto hdb = this->hash_db();
-          auto* rtxn = static_cast<Transaction*>(&*current);
+          auto* rtxn = static_cast<Transaction*>(&*first_fsm_txn);
 #if LEAVES_HAS_THREADS
           _PoolExecutor exec(this->_storage, _hash_threads);
-          update_hash_trie(exec, this, &hdb, current->root, &hc.hash_root);
+          update_hash_trie(exec, this, &hdb, first_fsm_txn->root, &hc.hash_root);
           update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
 #else
-          update_hash_trie(this, &hdb, current->root, &hc.hash_root);
+          update_hash_trie(this, &hdb, first_fsm_txn->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
 #endif
-          hc.hashed_txn_offset.store((uint64_t)this->resolve(current),
+          hc.hashed_txn_offset.store((uint64_t)this->resolve(first_fsm_txn),
                                      std::memory_order_release);
         }
-        current->refs.fetch_sub(1, std::memory_order_acq_rel);
+        // Do NOT drop the ref here — first_fsm_txn keeps it alive.
       }
     }  // update_lock released — subsequent FSMs will not recompute
 
-    // Pin the txn whose snapshot matches the hash trie
-    uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_acquire);
-    txn_ptr pinned = this->txn_ref_at(offset_t(htxn_off));
+    // First FSM already holds a pinned ref — return it directly.
+    if (first_fsm_txn) return first_fsm_txn;
+
+    // Non-first FSMs: pin the txn whose snapshot matches the hash trie.
+    // Read hashed_txn_offset inside txn_ref_lock so the GC walk
+    // (which zeros it and frees the page under the same lock)
+    // cannot free the page between our read and the refs++ pin.
+    txn_ptr pinned;
+    {
+      std::lock_guard<SpinLock> guard(this->_header->txn_ref_lock);
+      uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_acquire);
+      if (htxn_off) {
+        offset_t off(htxn_off);
+        pinned = this->template resolve<Transaction>(&off);
+        pinned->refs.fetch_add(1);
+      }
+    }
     if (!pinned) {
-      // Cleaned between update and pin — fall back to current, force recompute
-      // next time
       hc.hashed_txn_offset.store(0, std::memory_order_relaxed);
       pinned = this->txn_ref();
     }
