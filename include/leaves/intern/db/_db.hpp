@@ -74,9 +74,9 @@ struct _Transaction : public _TransactionBase<Traits_> {
   ptr clone(Resolver& resolver) {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
     new_txn->used = sizeof(TransactionBase);
-    memcpy((char*)new_txn, this, sizeof(TransactionBase));
-    new (&new_txn->refs) std::atomic<uint32_t>(0);
+    memcpy(&*new_txn, this, sizeof(TransactionBase));
     new_txn->mem_manager.reinit_locks();
+    new (&new_txn->refs) std::atomic<uint32_t>(0);
     assert(new_txn->slot_id == SLOT_ID);
     return new_txn;
   }
@@ -454,17 +454,13 @@ struct _DB {
     _header->next_txn_page = 0;
     _active_txn = &*_wtxn;
 
-    // ensure last_txn is not freed
-    last_txn->refs.fetch_add(1);
-
     _active_txn->txn_id = last_txn->txn_id + tid_t(1);
     _active_txn->next_txn = 0;
-    _start_txn_id = last_txn->txn_id;
 
-    _storage.prefetch(&_active_txn->mem_manager);
-    for (int i = 0; i < MemManager::COUNT; i++) {
-      _storage.prefetch(&_active_txn->mem_manager.slots_at(i));
-    }
+    // Pin last_txn so it isn't freed during the GC walk.
+    last_txn->refs.fetch_add(1);
+
+    _start_txn_id = last_txn->txn_id;
 
     // Find the oldest used transaction and free unused old transactions.
     // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
@@ -501,9 +497,9 @@ struct _DB {
     // Reuse _wtxn's page for next pre-allocated transaction.
     // _wtxn was allocated from read_txn's committed space, so it
     // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy((char*)&*_wtxn, &*read_txn, sizeof(Transaction));
-    new (&_wtxn->refs) std::atomic<uint32_t>(1);  // cursor still holds 1 ref
+    memcpy(&*_wtxn, &*read_txn, sizeof(Transaction));
     _wtxn->mem_manager.reinit_locks();
+    new (&_wtxn->refs) std::atomic<uint32_t>(1);  // cursor still holds 1 ref
     _header->next_txn_page = resolve(_wtxn);
 
     make_dirty(_wtxn);
