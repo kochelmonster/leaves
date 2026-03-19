@@ -1132,6 +1132,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
   // the transaction where the big values were freed
   for (int i = 0; i < 3; ++i) {
     auto cursor = receiver_db.cursor();
+    receiver_impl->_gc_counter = receiver_impl->GC_INTERVAL - 1; // force GC
     cursor.start_transaction();
     std::string key = "barrier_key_" + std::to_string(i);
     cursor.find(Slice(key));

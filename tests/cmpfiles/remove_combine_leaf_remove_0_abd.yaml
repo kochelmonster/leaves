@@ -1,6 +1,6 @@
 type: trie
-id: 1053216
-page: 1053208
+id: 532896
+page: 532888
 freespace: 88
 txn: 3
 size: 40
@@ -11,7 +11,7 @@ branches: "[][c][d]"
 children: 
   - 528417
   - 528545
-  - 532897
+  - 15025
 ---
 type: leaf
 id: 528417
@@ -36,8 +36,8 @@ valuesize: 3
 value: "abc"
 ---
 type: leaf
-id: 532897
-page: 532889
+id: 15025
+page: 15017
 freespace: 119
 size: 9
 txn: 3
