@@ -41,6 +41,7 @@ Crash Recovery:
 #include <cstring>
 
 #include "../core/_bits.hpp"
+#include "../core/_port.hpp"
 #include "../core/_util.hpp"
 
 namespace leaves {
@@ -114,7 +115,7 @@ struct _GarbageSlot {
 
   // Pop from the garbage slot queue
   template <typename Resolver>
-  ptr pop(Resolver& resolver, _MemManager<Traits>& mgr) {
+  FORCE_INLINE ptr pop(Resolver& resolver, _MemManager<Traits>& mgr) {
     if (count == 0) return nullptr;
 
     assert(ostart);
@@ -154,7 +155,7 @@ struct _GarbageSlot {
   }
 
   template <typename Resolver>
-  void push(ptr& block, Resolver& resolver, _MemManager<Traits>& mgr) {
+  FORCE_INLINE void push(ptr& block, Resolver& resolver, _MemManager<Traits>& mgr) {
     cont_ptr back;
 
     if (oend) {
@@ -395,7 +396,7 @@ struct _MemManagerPool {
   auto& get_allocation_end() { return _managers[0].allocation_end; }
 
   template <typename Resolver>
-  page_ptr alloc(uint8_t sidx, Resolver& resolver) {
+  FORCE_INLINE page_ptr alloc(uint8_t sidx, Resolver& resolver) {
     if constexpr (POOL_SIZE == 1) {
       return _managers[0].alloc(sidx, resolver);
     } else {
@@ -404,7 +405,7 @@ struct _MemManagerPool {
   }
 
   template <typename Resolver>
-  void free(page_ptr block, Resolver& resolver) {
+  FORCE_INLINE void free(page_ptr block, Resolver& resolver) {
     if constexpr (POOL_SIZE == 1) {
       _managers[0].free(block, resolver);
     } else {
@@ -413,7 +414,7 @@ struct _MemManagerPool {
   }
 
   template <typename Resolver>
-  page_ptr _alloc_pooled(uint8_t sidx, Resolver& resolver) {
+  FORCE_INLINE page_ptr _alloc_pooled(uint8_t sidx, Resolver& resolver) {
     uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
@@ -431,7 +432,7 @@ struct _MemManagerPool {
   }
 
   template <typename Resolver>
-  void _free_pooled(page_ptr block, Resolver& resolver) {
+  FORCE_INLINE void _free_pooled(page_ptr block, Resolver& resolver) {
     uint32_t start = _next.fetch_add(1, std::memory_order_relaxed) % POOL_SIZE;
     for (int j = 0; j < POOL_SIZE; j++) {
       uint32_t idx = (start + j) % POOL_SIZE;
