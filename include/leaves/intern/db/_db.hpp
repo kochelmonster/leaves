@@ -345,7 +345,7 @@ struct _DB {
     area_ptr->next = 0;
 
     // Append to transaction's area list tail
-    auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
+    auto tail = resolve<Area>(&_active_txn->area_list_tail_single, WRITE);
     tail->next = resolve(area_ptr);
     make_dirty(tail);
     _active_txn->area_list_tail_single = resolve(area_ptr);
@@ -364,7 +364,7 @@ struct _DB {
 
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
-      auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, READ);
+      auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, WRITE);
       tail->next = resolve(area_ptr);
       make_dirty(tail);
     } else {
@@ -627,7 +627,6 @@ struct _DB {
     iter_transactions([this, &stat](txn_ptr txn) -> bool {
       uint16_t bsize = PAGE_SIZES[txn->slot_id];
       stat.transaction.add(txn->slot_id, 1, bsize - sizeof(Transaction));
-      offset_t offset = resolve(txn);
       return false;
     });
   }
@@ -696,12 +695,20 @@ struct _DB {
       return false;
     });
 
-    // Reinit locks/refs on pre-allocated transaction page (stale after crash)
+    // Reinit locks/refs on pre-allocated transaction page (stale after crash).
+    // If next_txn_page is 0 (crash between start_transaction clearing it and
+    // prepare_commit allocating a replacement), re-create it from read_txn.
     if (_header->next_txn_page) {
       auto next = resolve<Transaction>(&_header->next_txn_page);
       next->refs.store(0);
       next->mem_manager.reinit_locks();
       make_dirty(next);
+    } else {
+      txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
+      _active_txn = &*read_txn;
+      auto next = read_txn->clone(*this);
+      _header->next_txn_page = resolve(next);
+      _active_txn = nullptr;
     }
 
     if (_header->prepared_txn == _header->read_txn) {
