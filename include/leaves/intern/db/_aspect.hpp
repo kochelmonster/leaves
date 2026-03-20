@@ -91,6 +91,7 @@ struct DefaultAspect {
                         CursorContext&) {
     return true;
   }
+
 };
 
 }  // namespace leaves

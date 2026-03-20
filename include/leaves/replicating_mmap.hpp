@@ -2,6 +2,7 @@
 #define _LEAVES_REPLICATING_MMAP_HPP
 
 #include <blake3.h>
+
 #include <memory>
 
 #include "db.hpp"
@@ -12,7 +13,7 @@
 namespace leaves {
 
 // Replication-enabled memory-mapped storage traits
-typedef _ReplicationTraits<_MemoryMapTraits> _ReplicatingMemoryMapTraits;
+typedef _MemoryMapTraits _ReplicatingMemoryMapTraits;
 
 // Forward-declare so Self_ can refer to it
 template <typename Traits_>
@@ -27,15 +28,18 @@ struct _ReplicationMemoryMapFile
     : public _MemoryMapFile<Traits_, _ReplicationDB,
                             _ReplicationMemoryMapFile<Traits_>>,
       public _ThreadPoolMixin<_ReplicationMemoryMapFile<Traits_>> {
-  using Base =
-      _MemoryMapFile<Traits_, _ReplicationDB,
-                     _ReplicationMemoryMapFile<Traits_>>;
+  using Base = _MemoryMapFile<Traits_, _ReplicationDB,
+                              _ReplicationMemoryMapFile<Traits_>>;
   using PoolMixin = _ThreadPoolMixin<_ReplicationMemoryMapFile<Traits_>>;
   using DB = typename Base::DB;
 
+  size_t _hash_threads = 4;
+
   _ReplicationMemoryMapFile(const char* path, size_t map_size = 2 * G,
-                            uint16_t db_count = 48)
-      : Base(path, map_size, db_count), PoolMixin(1) {}
+                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t hash_threads = 4)
+      : Base(path, map_size, db_count), PoolMixin(pool_threads),
+        _hash_threads(hash_threads) {}
 
   ~_ReplicationMemoryMapFile() {
     this->_dbs.clear();  // Destroy DBs first (cancels purge jobs)
@@ -45,6 +49,7 @@ struct _ReplicationMemoryMapFile
   // Override make() to start purge on newly-created DBs
   DB* make(const char* name) {
     DB* db = Base::make(name);
+    db->_hash_threads = _hash_threads;
     db->start_purge();
     return db;
   }
@@ -52,19 +57,29 @@ struct _ReplicationMemoryMapFile
   DB* operator[](const char* name) { return make(name); }
 };
 
-class ReplicatingMapStorage
-    : public std::enable_shared_from_this<ReplicatingMapStorage> {
+typedef _ReplicatingMemoryMapTraits ReplicatingMapTraits;
+
+template <typename Traits = ReplicatingMapTraits>
+class ReplicatingMapStorage_
+    : public std::enable_shared_from_this<ReplicatingMapStorage_<Traits>> {
  public:
-  typedef _ReplicationMemoryMapFile<_ReplicatingMemoryMapTraits> StorageImpl;
+  typedef _ReplicationMemoryMapFile<Traits> StorageImpl;
   typedef typename StorageImpl::DB DBImpl;
-  typedef TDB<ReplicatingMapStorage> DB;
-  typedef std::shared_ptr<ReplicatingMapStorage> storage_ptr;
+  typedef TDB<ReplicatingMapStorage_> DB;
+  typedef std::shared_ptr<ReplicatingMapStorage_> storage_ptr;
 
-  ReplicatingMapStorage(const char* path, size_t map_size = 4 * G,
-                        uint16_t db_count = 48)
-      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count)) {}
+  // map_size: virtual address space reservation. On mobile (iOS/Android), use a
+  // smaller value (e.g. 256*M) to avoid jetsam/OOM kills.
+  ReplicatingMapStorage_(const char* path, size_t map_size = 4 * G,
+                        uint16_t db_count = 48, size_t pool_threads = 0,
+                        size_t hash_threads = 4)
+      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count,
+                                               pool_threads, hash_threads)) {}
 
-  DB operator[](const char* name) { return DB(shared_from_this(), name); }
+  DB operator[](const char* name) {
+    _storage->make(name);
+    return DB(this->shared_from_this(), name);
+  }
 
   void remove_db(const char* name) { _storage->remove_db(name); }
 
@@ -77,14 +92,18 @@ class ReplicatingMapStorage
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t map_size = 4 * G,
-                            uint16_t db_count = 48) {
-    return std::make_shared<ReplicatingMapStorage>(path, map_size, db_count);
+                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t hash_threads = 4) {
+    return std::make_shared<ReplicatingMapStorage_>(path, map_size, db_count,
+                                                   pool_threads, hash_threads);
   }
 
  private:
-  friend class TDB<ReplicatingMapStorage>;
+  friend class TDB<ReplicatingMapStorage_>;
   std::unique_ptr<StorageImpl> _storage;
 };
+
+using ReplicatingMapStorage = ReplicatingMapStorage_<>;
 
 }  // namespace leaves
 

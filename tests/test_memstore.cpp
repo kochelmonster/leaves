@@ -50,3 +50,142 @@ BOOST_AUTO_TEST_CASE(test_memory_storage_resolve) {
   auto offset_back = db.resolve(resolved_block);
   BOOST_CHECK_EQUAL(offset_back, area_offset);
 }
+
+BOOST_AUTO_TEST_CASE(test_pageheader_alignment) {
+  // PageHeader must be 8 bytes to keep PAGE_SIZES 8-byte aligned
+  BOOST_CHECK_EQUAL(sizeof(_MemoryTraits::PageHeader), 8);
+  for (int i = 0; i < _MemoryTraits::PAGE_SIZES_COUNT; i++) {
+    BOOST_CHECK_EQUAL(_MemoryTraits::PAGE_SIZES[i] % 8, 0);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_cursor_insert_and_find) {
+  _MemoryStorage storage;
+  auto cursor = storage.create_cursor();
+
+  // Insert keys
+  for (int i = 0; i < 100; i++) {
+    char key[32];
+    snprintf(key, sizeof(key), "%016d", i);
+    Slice val("value");
+    cursor->find(key);
+    cursor->value(val);
+  }
+
+  // Find each key
+  for (int i = 0; i < 100; i++) {
+    char key[32];
+    snprintf(key, sizeof(key), "%016d", i);
+    cursor->find(key);
+    BOOST_CHECK(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value(), Slice("value"));
+  }
+
+  // Non-existent key
+  cursor->find("9999999999999999");
+  BOOST_CHECK(!cursor->is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_cursor_sequential_iteration) {
+  _MemoryStorage storage;
+  auto cursor = storage.create_cursor();
+
+  const int N = 50;
+  for (int i = 0; i < N; i++) {
+    char key[32];
+    snprintf(key, sizeof(key), "%08d", i);
+    cursor->find(key);
+    cursor->value(Slice("v"));
+  }
+
+  // Forward iteration
+  int count = 0;
+  std::string prev;
+  for (cursor->first(); cursor->is_valid(); cursor->next()) {
+    std::string k(cursor->key().data(), cursor->key().size());
+    if (count > 0) BOOST_CHECK_GT(k, prev);
+    prev = k;
+    count++;
+  }
+  BOOST_CHECK_EQUAL(count, N);
+
+  // Backward iteration
+  count = 0;
+  prev.clear();
+  for (cursor->last(); cursor->is_valid(); cursor->prev()) {
+    std::string k(cursor->key().data(), cursor->key().size());
+    if (count > 0) BOOST_CHECK_LT(k, prev);
+    prev = k;
+    count++;
+  }
+  BOOST_CHECK_EQUAL(count, N);
+}
+
+BOOST_AUTO_TEST_CASE(test_cursor_overwrite) {
+  _MemoryStorage storage;
+  auto cursor = storage.create_cursor();
+
+  cursor->find("mykey");
+  cursor->value(Slice("first"));
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("first"));
+
+  cursor->find("mykey");
+  cursor->value(Slice("second"));
+
+  cursor->find("mykey");
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("second"));
+}
+
+BOOST_AUTO_TEST_CASE(test_cursor_remove) {
+  _MemoryStorage storage;
+  auto cursor = storage.create_cursor();
+
+  for (int i = 0; i < 10; i++) {
+    char key[32];
+    snprintf(key, sizeof(key), "%04d", i);
+    cursor->find(key);
+    cursor->value(Slice("val"));
+  }
+
+  // Remove key "0005"
+  cursor->find("0005");
+  BOOST_CHECK(cursor->is_valid());
+  cursor->remove();
+
+  // Verify it's gone
+  cursor->find("0005");
+  BOOST_CHECK(!cursor->is_valid());
+
+  // Verify others still exist
+  int count = 0;
+  for (cursor->first(); cursor->is_valid(); cursor->next()) count++;
+  BOOST_CHECK_EQUAL(count, 9);
+}
+
+BOOST_AUTO_TEST_CASE(test_cursor_random_keys) {
+  _MemoryStorage storage;
+  auto cursor = storage.create_cursor();
+
+  // Insert 1000 random-order keys (shuffle via modular arithmetic)
+  const int N = 1000;
+  for (int i = 0; i < N; i++) {
+    int k = (i * 7919) % N;  // pseudo-random permutation
+    char key[32];
+    snprintf(key, sizeof(key), "%016d", k);
+    char val[32];
+    snprintf(val, sizeof(val), "v%d", k);
+    cursor->find(key);
+    cursor->value(Slice(val));
+  }
+
+  // Verify all present
+  int count = 0;
+  for (cursor->first(); cursor->is_valid(); cursor->next()) count++;
+  BOOST_CHECK_EQUAL(count, N);
+
+  // Spot-check a few
+  cursor->find("0000000000000042");
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("v42"));
+}

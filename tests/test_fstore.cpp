@@ -11,7 +11,7 @@
 
 using namespace leaves;
 
-typedef _FileStore DBFileStore;
+typedef _FileStore<> DBFileStore;
 
 struct DirPreparation {
   DirPreparation() {
@@ -268,7 +268,7 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
   size_t payload_off = sizeof(AreaSlice) + 128;
   std::memcpy(buf.data() + payload_off, &pattern, sizeof(pattern));
 
-  db.write(base + db.calc_header_size(), buf.data(), buf.size());
+  db.write(base, buf.data(), buf.size());
 
   db._cache = typename decltype(db)::Cache(db._capacity);  // Clear cache to force read from file
 
@@ -301,7 +301,7 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
   // Write a valid area buffer so resolve can read it
   std::vector<char> buf(area.size());
   std::memcpy(buf.data(), &area, sizeof(AreaSlice));
-  db.write(base + db.calc_header_size(), buf.data(), buf.size());
+  db.write(base, buf.data(), buf.size());
 
   // Resolve a location to get a page_ptr
   offset_t base_offset(base);
@@ -318,4 +318,45 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
 
   // No more dirty bit check - we only verify that the background thread doesn't
   // crash The actual test is now just ensuring the above calls don't throw
+}
+
+// ── ThreadPool schedule_after / cancel_job coverage ─────────────────────
+BOOST_AUTO_TEST_CASE(test_schedule_after_fires) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "sched.lvs";
+  DBFileStore db(dbFilePath.c_str());
+
+  std::atomic<int> counter{0};
+
+  // Schedule a task that fires after 0ms
+  db.schedule_after(std::chrono::milliseconds(0), [&]() {
+    counter.fetch_add(1);
+  });
+
+  // Wait for the pool to pick it up
+  db.wait_all();
+  BOOST_CHECK_EQUAL(counter.load(), 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_cancel_scheduled_job) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "cancel.lvs";
+  DBFileStore db(dbFilePath.c_str());
+
+  std::atomic<int> counter{0};
+
+  // Schedule two tasks far in the future, then cancel only the first.
+  // This exercises the cancel_job loop that keeps non-cancelled jobs (L141/L145)
+  // and the ScheduledJob operator> comparison (L47).
+  auto id1 = db.schedule_after(std::chrono::hours(1), [&]() {
+    counter.fetch_add(1);
+  });
+  db.schedule_after(std::chrono::hours(2), [&]() {
+    counter.fetch_add(10);
+  });
+  db.cancel_job(id1);
+
+  // Brief wait to confirm neither fires (both are hours away)
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  BOOST_CHECK_EQUAL(counter.load(), 0);
 }

@@ -98,6 +98,48 @@
         "build/test_aspect": true,
         "./db_bench": true,
         "./build/test_file_storage": true,
-        "./test_transfer": true
+        "./test_transfer": true,
+        "./build/test_cursor": true,
+        "ninja": true,
+        "diff": true,
+        "printf": true,
+        "nproc": true,
+        "touch": true,
+        "/tmp/test_rep": true,
+        "g++": true,
+        "./build/test_transfer": true,
+        "time": true,
+        "/^perl -i -p0e 's/ReceiverFSM receiver\\\\\\(\\(\\[\\^,\\]\\+\\), \\[\\^,\\]\\+->txn\\\\\\(\\\\\\),/ReceiverFSM receiver\\(\\\\1,/gs' tests/test_replication_fsm\\.cpp$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "uname": true,
+        "/usr/lib/linux-tools-6.8.0-100/perf": true,
+        "/^sudo /usr/lib/linux-tools-6\\.8\\.0-100/perf record -g -o perf-repl\\.data \\./db_bench_leaves --use_replicating=1 --benchmarks=fillseq --num=1000000 2>&1 \\| tail -8$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^sudo /usr/lib/linux-tools-6\\.8\\.0-100/perf report -i perf-repl\\.data --stdio --no-children 2>/dev/null \\| head -40$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "jobs": true,
+        "./test_hash_updater": true,
+        "./build/test_hash_updater": true,
+        "/tmp/test_hash_debug": true,
+        "/^python3 -c \"\nwith open\\('/home/michael/src/leaves/tests/test_replication_fsm\\.cpp', 'a'\\) as f:\n    f\\.write\\('\\\\n#endif  // closes SKIP_REPLICATION_TESTS\\\\n'\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "./$f": true,
+        "wait": true,
+        "pgrep": true,
+        "read": true,
+        "./build/test_executor": true,
+        "./build/test_multithread": true,
+        "./bench_merger": true,
+        "./bench_hash_updater": true,
+        "build/test_mmap": true,
+        "build-sp/test_mmap": true
     }
 }

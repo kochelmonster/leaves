@@ -5,6 +5,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef TESTING
@@ -19,6 +20,16 @@
 #include "leaves/intern/replication/_replication_fsm.hpp"
 
 using namespace leaves;
+
+// Wait for background hashing to catch up to the current transaction.
+// Call after commit() and before begin() to ensure hashes are available.
+// Hashing is now synchronous: acquire_hash_trie() always updates the hash
+// trie before returning, so there is nothing to poll for.
+template <typename DB>
+void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
+  auto hashed = db->acquire_hash_trie();
+  db->release_hash_trie(hashed);
+}
 
 // =============================================================================
 // Test Aspect — exercises all join points
@@ -154,9 +165,9 @@ struct _BigMetaTraits : public _MemoryMapTraits {
   typedef BigMetaAspect Aspect;
 };
 
-// For replication tests — inherits from _ReplicationTraits to get hashes
+// For replication tests — uses plain _MemoryMapTraits (no hash on data nodes)
 struct _ReplicationAspectTraits
-    : public _ReplicationTraits<_MemoryMapTraits> {
+    : public _MemoryMapTraits {
   typedef TestAspect Aspect;
 };
 
@@ -654,17 +665,18 @@ BOOST_AUTO_TEST_CASE(test_may_merge_overwrite_rejects_locked) {
     c->commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_db);
+  wait_for_hashing(receiver_db);
+
   // Replicate sender → receiver
   TestTransport st, rt;
   st.set_peer(&rt);
   rt.set_peer(&st);
   TestEvents se, re;
 
-  auto sender_txn = sender_db->txn();
-  auto receiver_txn = receiver_db->txn();
-
-  Sender sender(sender_db, sender_txn);
-  Receiver receiver(receiver_db, receiver_txn);
+  Sender sender(sender_db);
+  Receiver receiver(receiver_db);
 
   receiver.begin(&rt, &re);
   sender.begin(&st, &se);
@@ -720,13 +732,16 @@ BOOST_AUTO_TEST_CASE(test_may_merge_add_rejects_blocked) {
     c->commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_db);
+
   TestTransport st, rt;
   st.set_peer(&rt);
   rt.set_peer(&st);
   TestEvents se, re;
 
-  Sender sender(sender_db, sender_db->txn());
-  Receiver receiver(receiver_db, receiver_db->txn());
+  Sender sender(sender_db);
+  Receiver receiver(receiver_db);
 
   receiver.begin(&rt, &re);
   sender.begin(&st, &se);
@@ -785,14 +800,18 @@ BOOST_AUTO_TEST_CASE(test_may_merge_delete_rejects_pinned) {
     c->commit();
   }
 
+  // Wait for background hashing to complete before starting replication
+  wait_for_hashing(sender_db);
+  wait_for_hashing(receiver_db);
+
   // Replicate sender → receiver (deletions propagate via deletion trie)
   TestTransport st, rt;
   st.set_peer(&rt);
   rt.set_peer(&st);
   TestEvents se, re;
 
-  Sender sender(sender_db, sender_db->txn());
-  Receiver receiver(receiver_db, receiver_db->txn());
+  Sender sender(sender_db);
+  Receiver receiver(receiver_db);
 
   receiver.begin(&rt, &re);
   sender.begin(&st, &se);

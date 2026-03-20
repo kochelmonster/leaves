@@ -1,7 +1,7 @@
 type: trie
-id: 17480
-page: 17472
-freespace: 88
+id: 537984
+page: 537976
+freespace: 96
 txn: 7
 size: 32
 compressed: 
@@ -9,13 +9,13 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 10241
-  - 17360
+  - 530513
+  - 1061632
 ---
 type: leaf
-id: 10241
-page: 10233
-freespace: 116
+id: 530513
+page: 530505
+freespace: 124
 size: 4
 txn: 3
 keysize: 0
@@ -24,9 +24,9 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 17360
-page: 17352
-freespace: 88
+id: 1061632
+page: 1061624
+freespace: 96
 txn: 7
 size: 32
 compressed: 
@@ -34,13 +34,13 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 15249
-  - 17240
+  - 530769
+  - 16896
 ---
 type: leaf
-id: 15249
-page: 15241
-freespace: 115
+id: 530769
+page: 530761
+freespace: 123
 size: 5
 txn: 4
 keysize: 0
@@ -49,9 +49,9 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 17240
-page: 17232
-freespace: 88
+id: 16896
+page: 16888
+freespace: 96
 txn: 7
 size: 32
 compressed: 
@@ -59,13 +59,13 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 5473
-  - 15488
+  - 533121
+  - 537856
 ---
 type: leaf
-id: 5473
-page: 5465
-freespace: 114
+id: 533121
+page: 533113
+freespace: 122
 size: 6
 txn: 5
 keysize: 0
@@ -74,9 +74,9 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 15488
-page: 15480
-freespace: 88
+id: 537856
+page: 537848
+freespace: 96
 txn: 7
 size: 32
 compressed: 
@@ -84,13 +84,13 @@ compressed:
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 14577
-  - 15368
+  - 537473
+  - 1054928
 ---
 type: leaf
-id: 14577
-page: 14569
-freespace: 113
+id: 537473
+page: 537465
+freespace: 121
 size: 7
 txn: 6
 keysize: 0
@@ -99,9 +99,9 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 15368
-page: 15360
-freespace: 88
+id: 1054928
+page: 1054920
+freespace: 96
 txn: 7
 size: 32
 compressed: 
@@ -109,13 +109,13 @@ compressed:
   key: "[e]"
 branches: "[][f]"
 children: 
-  - 15609
-  - 17601
+  - 530897
+  - 17025
 ---
 type: leaf
-id: 15609
-page: 15601
-freespace: 112
+id: 530897
+page: 530889
+freespace: 120
 size: 8
 txn: 7
 keysize: 0
@@ -124,9 +124,9 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 17601
-page: 17593
-freespace: 110
+id: 17025
+page: 17017
+freespace: 118
 size: 10
 txn: 7
 keysize: 1

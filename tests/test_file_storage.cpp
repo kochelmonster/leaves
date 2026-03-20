@@ -338,3 +338,28 @@ BOOST_AUTO_TEST_CASE(test_multi_area_big_values) {
     }
   }
 }
+
+// ── CacheStore sync flush path (_cachestore.hpp L130) ───────────────────
+// commit(sync=true) forces a synchronous write_dirty_blocks() instead of
+// queuing to the background thread pool.
+BOOST_AUTO_TEST_CASE(test_sync_commit) {
+  DirPreparation prep;
+  auto path = prep.get_file_path();
+  {
+    auto storage = FileStorage::create(path.c_str());
+    auto db = (*storage)["sync"];
+    auto cursor = db.cursor();
+    cursor.find("hello");
+    cursor.value("world");
+    cursor.commit(true);  // sync=true → triggers CacheStore::flush(true)
+  }
+  // Re-open and verify data persisted via the sync path
+  {
+    auto storage = FileStorage::create(path.c_str());
+    auto db = (*storage)["sync"];
+    auto cursor = db.cursor();
+    cursor.find("hello");
+    BOOST_CHECK(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.value(), Slice("world"));
+  }
+}

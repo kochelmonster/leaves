@@ -4,6 +4,7 @@
 #include "../core/_bits.hpp"
 #include "../core/_node.hpp"
 #include "../db/_cursor.hpp"
+#include "_task_group.hpp"
 
 namespace leaves {
 
@@ -28,19 +29,29 @@ struct MigratedValue {
  * Policies can inherit from this or implement their own migrate_big_value.
  */
 struct StandardMergePolicy {
-  // Always overwrite destination with source
+  // Always overwrite destination with source.
+  // Thread safety: may be called concurrently during parallel merge.
   bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
                      bool dst_is_big, bool src_is_big) {
     return true;
   }
 
-  // Always add new leaves from source
+  // Always add new leaves from source.
+  // Thread safety: may be called concurrently during parallel merge.
   bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
     return true;
   }
 
-  // Always recurse into source tries
+  // Always recurse into source tries.
+  // Thread safety: may be called concurrently during parallel merge.
   bool may_add_trie(const std::string& key) { return true; }
+
+  // Called after a trie node is created/merged during the merge process.
+  // Override to compute the trie's hash based on its children's hashes.
+  // |trie| is the newly created trie node, |db| is the destination database.
+  // Children's hashes are already computed (either copied or computed earlier).
+  template <typename TriePtr, typename DB>
+  void after_trie_merged(TriePtr& trie, DB* db) {}
 
   // Free big value from destination BigMemory
   template <typename LeafNode, typename DstCursor>
@@ -52,25 +63,9 @@ struct StandardMergePolicy {
   // Storage for the _BigValue returned by migrate_big_value
   mutable _BigValue _big_value_storage;
 
-  /**
-   * @brief Migrate a big value from source to destination
-   *
-   * Reads the big value data from the source, allocates space in the
-   * destination BigMemory, copies the data, and returns a MigratedValue
-   * containing the new _BigValue struct.
-   *
-   * Since _BigValue uses fixed little-endian types, no endian conversion
-   * is needed between source and destination — the layout is always the same.
-   *
-   * @param leaf Source leaf containing the big value reference
-   * @param src_cursor Source cursor for resolving the big value data
-   * @param dst_cursor Destination cursor for allocating new big value
-   * @return MigratedValue with data pointing to _BigValue and is_big=true
-   */
   template <typename LeafNode, typename SrcCursor, typename DstCursor>
   MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor,
                                   DstCursor& dst_cursor) {
-    // Source BigValue uses fixed little-endian layout
     _BigValue* src_bvalue = (_BigValue*)leaf.vdata();
     offset_t src_offset(src_bvalue->chunk_offset);
     struct ChunkData {
@@ -80,7 +75,6 @@ struct StandardMergePolicy {
         src_cursor._db->template resolve<ChunkData>(&src_offset, READ);
     uint32_t value_size = src_bvalue->value_size;
 
-    // Allocate in destination BigMemory and copy data
     _BigValue* dst_bvalue = &_big_value_storage;
     dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
     offset_t dst_offset(dst_bvalue->chunk_offset);
@@ -93,6 +87,47 @@ struct StandardMergePolicy {
 };
 
 /**
+ * @brief Lightweight dst sub-cursor for parallel shared-branch merges.
+ *
+ * Rooted at a branch offset within an already-COW'd trie node.
+ * Shares the parent cursor's BigMemory (via pointer) and DB.
+ * Has its own stack and current_key, but skips a known prefix
+ * on find() so navigation starts from the branch root.
+ */
+template <typename Traits_>
+struct _DstSubCursor
+    : public _ICursor<Traits_, _DstSubCursor<Traits_>> {
+  typedef Traits_ Traits;
+  typedef _ICursor<Traits_, _DstSubCursor<Traits_>> Cursor;
+  using BigMemory = _BigMemory<_Cursor<Traits_>>;
+  using offset_e = typename Traits::offset_e;
+
+  BigMemory* _bigmemory_ref;
+  size_t _prefix_len;
+
+  _DstSubCursor(typename Traits::DB* db, offset_e* root,
+                const std::string& prefix, BigMemory& bm)
+      : Cursor(db, root), _bigmemory_ref(&bm), _prefix_len(prefix.size()) {
+    this->current_key = prefix;
+  }
+
+  void find(const Slice& key) {
+    this->rest_key = key;
+    if (this->stack.size && this->keep_stack()) return;
+    if (!this->stack.size) {
+      if (!*this->_root) return;
+      this->current_key.resize(_prefix_len);
+      this->rest_key = key;
+      this->rest_key.iadvance(_prefix_len);
+      this->push(this->_root);
+    }
+    this->stack.back().find();
+  }
+
+  BigMemory& get_bigmemory() { return *_bigmemory_ref; }
+};
+
+/**
  * @brief Merger for combining two tries
  *
  * Merges source trie into destination trie, using a MergePolicy to control
@@ -102,9 +137,10 @@ struct StandardMergePolicy {
  * Big values are migrated via the policy's migrate_big_value method, which
  * can copy them to the destination's BigMemory or convert them to small values.
  */
-template <typename CursorDst, typename CursorSrc, typename MergePolicy>
+template <typename CursorDst, typename CursorSrc, typename MergePolicy,
+          typename Executor = _InlineExecutor>
 struct _Merger {
-  typedef _Merger<CursorDst, CursorSrc, MergePolicy> Merger;
+  typedef _Merger<CursorDst, CursorSrc, MergePolicy, Executor> Merger;
   using Traits = typename CursorDst::Traits;
   using SrcTraits = typename CursorSrc::Traits;
   using Transition = typename CursorDst::Transition;
@@ -121,20 +157,22 @@ struct _Merger {
   using BigMemory = typename CursorDst::BigMemory;
   using BigValue = typename BigMemory::BigValue;
 
+  static constexpr bool _has_may_add_leaf = !std::is_same_v<decltype(&MergePolicy::may_add_leaf), decltype(&StandardMergePolicy::may_add_leaf)>;
+  static constexpr bool _has_may_add_trie = !std::is_same_v<decltype(&MergePolicy::may_add_trie), decltype(&StandardMergePolicy::may_add_trie)>;
+
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
   MergePolicy& handler;
-  std::string current_key;
+  _TaskGroup<Executor>* _tg{nullptr};
+  SpinLock _bigmem_lock_storage;
+  SpinLock* _bigmem_lock{&_bigmem_lock_storage};
 
   _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
-  // Allocate node with PageHeader prefix, return pointer to node
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
-    using PageHeader = typename Traits::PageHeader;
-    page_ptr page = dst_cursor.alloc(sizeof(PageHeader) + node_size);
-    return page + sizeof(PageHeader);
+    return dst_cursor._db->template alloc_node<NodePtr>(node_size);
   }
 
   // Free node by computing PageHeader pointer
@@ -146,22 +184,31 @@ struct _Merger {
         "free_node must be called with node pointers, not page pointers");
 
     if constexpr (NodePtr::type == LEAF) {
-      if (node->is_big()) handler.free_big(node, dst_cursor);
+      if (node->is_big()) {
+        std::lock_guard<SpinLock> guard(*_bigmem_lock);
+        handler.free_big(node, dst_cursor);
+      }
     }
 
-    page_ptr page((char*)node - sizeof(PageHeader));
+    page_ptr page = node - sizeof(PageHeader);
     dst_cursor._db->free(page);
   }
 
   leaf_ptr fill_leaf(const Slice& key, SrcLeafNode& src_leaf) {
     Slice src_value;
     bool is_big = false;
+    // Local buffer for big value metadata — migrate_big_value writes to a
+    // shared _big_value_storage on the handler, so we snapshot the data
+    // while still under the lock to avoid races with parallel workers.
+    uint8_t big_value_buf[sizeof(BigValue)];
     if (src_leaf.is_big()) {
-      // migrate_big_value reads from src, allocates in dst, returns
-      // MigratedValue
-      auto migrated =
-          handler.migrate_big_value(src_leaf, src_cursor, dst_cursor);
-      src_value = migrated.data;
+      MigratedValue migrated;
+      {
+        std::lock_guard<SpinLock> guard(*_bigmem_lock);
+        migrated = handler.migrate_big_value(src_leaf, src_cursor, dst_cursor);
+        memcpy(big_value_buf, migrated.data.data(), migrated.data.size());
+      }
+      src_value = Slice(big_value_buf, migrated.data.size());
       is_big = migrated.is_big;
     } else {
       src_value = src_leaf.value();
@@ -195,11 +242,14 @@ struct _Merger {
   }
 
   void exec() {
-    current_key = src_cursor.current_key;
-    merge_node();
+    // Pre-init BigMemory to avoid lazy-init race
+    dst_cursor.get_bigmemory();
+    std::string current_key = src_cursor.current_key;
+    current_key.reserve(255);
+    merge_node(current_key);
   }
 
-  void merge_node() {
+  void merge_node(std::string& current_key) {
     if (!src_cursor.stack.size) return;
     size_t size = current_key.size();
     auto src = src_cursor.stack.back();
@@ -221,7 +271,7 @@ struct _Merger {
       // re-append it when it resolves the root node.
       current_key.resize(size);
       selective_deep_copy_subtree(src_cursor.stack.front().offset,
-                                  dst_cursor._root);
+                                  dst_cursor._root, current_key);
       return;
     }
 
@@ -231,22 +281,23 @@ struct _Merger {
 
     auto& dst = dst_cursor.stack.back();
     if (dst.is_trie()) {
-      merge_trie_node(dst, src);
+      merge_trie_node(dst, src, current_key);
     } else {
       if (!dst.leaf()->key_size && src.is_trie() && !dst.is_root()) {
         // dst is a none branch leaf and src is a trie -> we want to merge the
         // trie
         dst_cursor.pop();
-        merge_trie_node(dst_cursor.stack.back(), src);
+        merge_trie_node(dst_cursor.stack.back(), src, current_key);
       } else
-        merge_leaf_node(dst, src);
+        merge_leaf_node(dst, src, current_key);
     }
     current_key.resize(size);
     src_cursor.pop();
   }
 
   void merge_leaf_node(typename CursorDst::Transition& dst,
-                       typename CursorSrc::Transition& src) {
+                       typename CursorSrc::Transition& src,
+                       std::string& current_key) {
     auto& dst_leaf = dst.leaf();
     assert(dst.prefix <= dst_leaf->key_size);
 
@@ -275,17 +326,18 @@ struct _Merger {
 
     resolve_divergence(dst, src,
                        new_leaf->key_size ? new_leaf->data[0] : TrieNode::NONE,
-                       resolve_offset(new_leaf));
+                       resolve_offset(new_leaf), current_key);
   }
 
   void merge_trie_node(typename CursorDst::Transition& dst,
-                       typename CursorSrc::Transition& src) {
+                       typename CursorSrc::Transition& src,
+                       std::string& current_key) {
     auto& dst_trie = dst.trie();
     assert(dst.prefix <= dst_trie->len());
     uint8_t suffix_len = dst_trie->len() - dst.prefix;
 
     if (suffix_len == 0) {
-      merge_into_trie(dst, src);
+      merge_into_trie(dst, src, current_key);
     } else {
       trie_ptr new_trie =
           alloc_node<trie_ptr>(dst_trie->changed_len(suffix_len));
@@ -294,13 +346,13 @@ struct _Merger {
       free_node(dst_trie);
       assert(new_trie->len() > 0);
       resolve_divergence(dst, src, new_trie->compressed()[0],
-                         resolve_offset(new_trie));
+                         resolve_offset(new_trie), current_key);
     }
   }
 
   void resolve_divergence(typename CursorDst::Transition& dst,
                           typename CursorSrc::Transition& src, int key1,
-                          offset_t child1) {
+                          offset_t child1, std::string& current_key) {
     uint16_t split_pos = dst.keypos + dst.prefix;
     assert(split_pos >= src.keypos);
     uint16_t src_split_pos = split_pos - src.keypos;
@@ -329,6 +381,9 @@ struct _Merger {
       leaf_ptr new_leaf = fill_leaf(
           Slice(&src_leaf->data[src_split_pos], suffix_len), *src_leaf);
       *dst.link() = resolve_offset(new_leaf);
+
+      // Compute hash for the new trie - both children have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -348,14 +403,16 @@ struct _Merger {
       Slice suffix_prefix((const char*)&src_trie->compressed()[src_split_pos],
                           suffix_len);
 
-      // Append suffix to current_key so may_add_trie/may_add_leaf see correct keys
       size_t saved_key_len = current_key.size();
-      current_key.append((const char*)suffix_prefix.data(), suffix_len);
+      if constexpr (_has_may_add_trie) {
+        // Append suffix to current_key so may_add_trie/may_add_leaf see correct keys
+        current_key.append((const char*)suffix_prefix.data(), suffix_len);
 
-      // Early-out: let the policy reject the entire subtree by prefix
-      if (!handler.may_add_trie(current_key)) {
-        current_key.resize(saved_key_len);
-        return;
+        // Early-out: let the policy reject the entire subtree by prefix
+        if (!handler.may_add_trie(current_key)) {
+          current_key.resize(saved_key_len);
+          return;
+        }
       }
 
       // Collect surviving children into a flat offset array
@@ -363,16 +420,36 @@ struct _Merger {
       offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
       int surviving = 0;
-      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
-           k = src_trie->next(k)) {
-        offset_e child_offset;
-        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
-          offsets_buf[k] = child_offset;
-          surviving++;
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
+          offset_e child_offset;
+          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
+            offsets_buf[k] = child_offset;
+          }
+        };
+        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+          do_branch(current_key);
         }
-      }
+#if LEAVES_HAS_THREADS
+        else if (_in_worker) {
+          do_branch(current_key);
+        } else {
+          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
+        }
+#endif
+      });
+      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
       current_key.resize(saved_key_len);
+
+      // Count survivors and compute upper bitmap
+      uint8_t upper = 0;
+      src_trie->for_each_branch([&](int k, auto*) {
+        if (offsets_buf[k] != offset_e()) {
+          surviving++;
+          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+        }
+      });
 
       if (!surviving) {
         return;  // nothing from source survived may_add
@@ -381,7 +458,10 @@ struct _Merger {
       // Build suffix trie from survivors
       trie_ptr suffix_trie =
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
-      suffix_trie->create(suffix_prefix, offsets_buf);
+      suffix_trie->create(suffix_prefix, offsets_buf, upper);
+
+      // Compute hash for suffix_trie - children have valid hashes from deep copy
+      handler.after_trie_merged(suffix_trie, dst_cursor._db);
 
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
@@ -392,6 +472,9 @@ struct _Merger {
       dst.link_idx = idxs.second;
       dst.update_trie_offset();
       *dst.link() = resolve_offset(suffix_trie);
+
+      // Compute hash for new_trie - child1 and suffix_trie have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -412,20 +495,41 @@ struct _Merger {
       offsets_buf[key1] = child1;
 
       // Selectively deep copy all other src branches
-      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
-           k = src_trie->next(k)) {
-        if (k == key1) continue;
-        offset_e child_offset;
-        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
-          offsets_buf[k] = child_offset;
-          branch_count++;
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        if (k == key1) return;
+        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
+          offset_e child_offset;
+          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
+            offsets_buf[k] = child_offset;
+          }
+        };
+        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+          do_branch(current_key);
         }
-      }
+#if LEAVES_HAS_THREADS
+        else if (_in_worker) {
+          do_branch(current_key);
+        } else {
+          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
+        }
+#endif
+      });
+      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
+
+      // Count branches (key1 + surviving deep copies) and compute upper bitmap
+      uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
+      src_trie->for_each_branch([&](int k, auto*) {
+        if (k == key1) return;
+        if (offsets_buf[k] != offset_e()) {
+          branch_count++;
+          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+        }
+      });
 
       Slice prefix((const char*)src_trie->compressed(), src_trie->len());
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
-      new_trie->create(prefix, offsets_buf);
+      new_trie->create(prefix, offsets_buf, upper);
 
       dst.trie() = new_trie;
       dst.update_trie_offset();
@@ -434,8 +538,11 @@ struct _Merger {
       if (*src_trie->offset(key1) != 0) {
         src_cursor.push(src_trie->offset(key1));
         dst_cursor.stack.clear();
-        merge_node();
+        merge_node(current_key);
       }
+
+      // Compute hash for new_trie - all children now have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -448,27 +555,51 @@ struct _Merger {
 
       offsets_buf[key1] = child1;
 
-      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
-           k = src_trie->next(k)) {
-        offset_e child_offset;
-        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
-          offsets_buf[k] = child_offset;
-          branch_count++;
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
+          offset_e child_offset;
+          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
+            offsets_buf[k] = child_offset;
+          }
+        };
+        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+          do_branch(current_key);
         }
-      }
+#if LEAVES_HAS_THREADS
+        else if (_in_worker) {
+          do_branch(current_key);
+        } else {
+          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
+        }
+#endif
+      });
+      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
+
+      // Count survivors and compute upper bitmap
+      uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
+      src_trie->for_each_branch([&](int k, auto*) {
+        if (offsets_buf[k] != offset_e()) {
+          branch_count++;
+          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+        }
+      });
 
       Slice prefix((const char*)src_trie->compressed(), src_trie->len());
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
-      new_trie->create(prefix, offsets_buf);
+      new_trie->create(prefix, offsets_buf, upper);
 
       dst.trie() = new_trie;
       dst.update_trie_offset();
+
+      // Compute hash for new_trie - all children have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
     }
   }
 
   void merge_into_trie(typename CursorDst::Transition& dst,
-                       typename CursorSrc::Transition& src) {
+                       typename CursorSrc::Transition& src,
+                       std::string& current_key) {
     using SrcTrieNode = typename CursorSrc::Transition::TrieNode;
     using DstTrieNode = typename CursorDst::Transition::TrieNode;
     assert(dst.is_trie());
@@ -478,7 +609,7 @@ struct _Merger {
     uint8_t suffix_len = current_key.size() - dst_cursor.current_key.size();
     auto dst_trie = dst.trie();
 
-    if (src.is_leaf()) return merge_leaf_into_trie(dst, src, suffix_len);
+    if (src.is_leaf()) return merge_leaf_into_trie(dst, src, suffix_len, current_key);
 
     auto& src_trie = src.trie();
     if (suffix_len) {
@@ -487,15 +618,35 @@ struct _Merger {
 
       offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
-      int surviving = 0;
-      for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
-           k = src_trie->next(k)) {
-        offset_e child_offset;
-        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
-          offsets_buf[k] = child_offset;
-          surviving++;
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
+          offset_e child_offset;
+          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
+            offsets_buf[k] = child_offset;
+          }
+        };
+        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+          do_branch(current_key);
         }
-      }
+#if LEAVES_HAS_THREADS
+        else if (_in_worker) {
+          do_branch(current_key);
+        } else {
+          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
+        }
+#endif
+      });
+      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
+
+      // Count survivors and compute upper bitmap
+      int surviving = 0;
+      uint8_t upper = 0;
+      src_trie->for_each_branch([&](int k, auto*) {
+        if (offsets_buf[k] != offset_e()) {
+          surviving++;
+          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+        }
+      });
 
       if (!surviving) return;  // nothing from source survived may_add
 
@@ -504,16 +655,22 @@ struct _Merger {
           suffix_len);
       trie_ptr suffix_trie =
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
-      suffix_trie->create(suffix_prefix, offsets_buf);
+      suffix_trie->create(suffix_prefix, offsets_buf, upper);
 
       uint16_t loffset;
       trie_ptr new_trie =
-          expand_trie_with_branch(dst_trie, suffix_len, &loffset);
+          expand_trie_with_branch(dst_trie, suffix_len, &loffset, current_key);
 
       dst.trie() = new_trie;
       dst.link_idx = loffset;
       *dst.link() = resolve_offset(suffix_trie);
       dst.update_trie_offset();
+
+      // Compute hash for suffix_trie - children have valid hashes from deep copy
+      handler.after_trie_merged(suffix_trie, dst_cursor._db);
+
+      // Compute hash for new_trie - all children have valid hashes
+      handler.after_trie_merged(new_trie, dst_cursor._db);
       return;
     }
 
@@ -534,58 +691,121 @@ struct _Merger {
     int branch_count = 0;
 
     // Copy all dst branches (they all survive)
-    for (int k = dst_trie->first(); k != DstTrieNode::OUT_OF_RANGE;
-         k = dst_trie->next(k)) {
-      offsets_buf[k] = *dst_trie->offset(k);
+    dst_trie->for_each_branch([&](int k, auto* off) {
+      offsets_buf[k] = *off;
       branch_count++;
-    }
+    });
 
     // Process src branches: record shared for later merge, selectively copy
     // src-only
-    for (int k = src_trie->first(); k != SrcTrieNode::OUT_OF_RANGE;
-         k = src_trie->next(k)) {
+    src_trie->for_each_branch([&](int k, auto* src_off) {
       if (dst_trie->isset(k)) {
         // Shared branch — merge recursively later (skip incomplete src)
-        if (*src_trie->offset(k) != 0) {
+        if (*src_off != 0) {
           shared[shared_count++] = {
-              k, const_cast<src_offset_e*>(src_trie->offset(k)),
+              k, const_cast<src_offset_e*>(src_off),
               *dst_trie->offset(k)};
         }
       } else {
         // Src-only — selectively deep copy
-        offset_e child_offset;
-        if (selective_deep_copy_subtree(src_trie->offset(k), &child_offset)) {
-          offsets_buf[k] = child_offset;
-          branch_count++;
+        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
+          offset_e child_offset;
+          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
+            offsets_buf[k] = child_offset;
+          }
+        };
+        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+          do_branch(current_key);
         }
+#if LEAVES_HAS_THREADS
+        else if (_in_worker) {
+          do_branch(current_key);
+        } else {
+          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
+        }
+#endif
       }
-    }
+    });
+    if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
+
+    // Count src-only survivors and compute upper bitmap
+    uint8_t upper = dst_trie->_upper;
+    src_trie->for_each_branch([&](int k, auto*) {
+      if (!dst_trie->isset(k) && offsets_buf[k] != offset_e()) {
+        branch_count++;
+        if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+      }
+    });
 
     // Build merged trie
     Slice prefix((const char*)dst_trie->compressed(), dst_trie->len());
     trie_ptr new_trie =
         alloc_node<trie_ptr>(DstTrieNode::size(prefix.size(), branch_count));
-    new_trie->create(prefix, offsets_buf);
+    new_trie->create(prefix, offsets_buf, upper);
 
     dst.trie() = new_trie;
     dst.update_trie_offset();
 
     // Recursively merge shared branches
-    for (int si = 0; si < shared_count; si++) {
-      int k = shared[si].key;
-      *new_trie->offset(k) = shared[si].dst_off;
+    if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+      for (int si = 0; si < shared_count; si++) {
+        int k = shared[si].key;
+        *new_trie->offset(k) = shared[si].dst_off;
 
-      src_cursor.push(shared[si].src_off);
-      dst_cursor.stack.clear();
-      merge_node();
+        src_cursor.push(shared[si].src_off);
+        dst_cursor.stack.clear();
+        merge_node(current_key);
+      }
     }
+#if LEAVES_HAS_THREADS
+    else if (_in_worker) {
+      for (int si = 0; si < shared_count; si++) {
+        int k = shared[si].key;
+        *new_trie->offset(k) = shared[si].dst_off;
+
+        src_cursor.push(shared[si].src_off);
+        dst_cursor.stack.clear();
+        merge_node(current_key);
+      }
+    } else {
+      // Parallel: each shared branch gets its own sub-cursors
+      using DstSubCursor = _DstSubCursor<Traits>;
+      using SrcSubCursor = _Cursor<SrcTraits>;
+      using SubMerger = _Merger<DstSubCursor, SrcSubCursor, MergePolicy, Executor>;
+
+      for (int si = 0; si < shared_count; si++) {
+        int k = shared[si].key;
+        *new_trie->offset(k) = shared[si].dst_off;
+
+        auto* dst_branch_off = new_trie->offset(k);
+        auto* src_branch_off = shared[si].src_off;
+
+        _tg->spawn([this, dst_branch_off, src_branch_off,
+                     key = current_key]() mutable {
+          DstSubCursor dst_sub(dst_cursor._db, dst_branch_off, key,
+                               dst_cursor.get_bigmemory());
+          SrcSubCursor src_sub(src_cursor._db, src_branch_off);
+          src_sub.push(src_branch_off);
+
+          SubMerger sub_merger(dst_sub, src_sub, handler);
+          sub_merger._tg = _tg;
+          sub_merger._bigmem_lock = _bigmem_lock;
+          sub_merger.merge_node(key);
+        });
+      }
+      _tg->wait();
+    }
+#endif
+
+    // Compute hash for new_trie - all children now have valid hashes
+    handler.after_trie_merged(new_trie, dst_cursor._db);
 
     free_node(dst_trie);
   }
 
   void merge_leaf_into_trie(typename CursorDst::Transition& dst,
                             typename CursorSrc::Transition& src,
-                            int suffix_len) {
+                            int suffix_len, std::string& current_key) {
     // src is a leaf -> insert into dst trie (if may_add allows)
     auto& src_leaf = src.leaf();
 
@@ -595,7 +815,7 @@ struct _Merger {
 
     uint16_t loffset;
     trie_ptr new_trie =
-        expand_trie_with_branch(dst.trie(), suffix_len, &loffset);
+        expand_trie_with_branch(dst.trie(), suffix_len, &loffset, current_key);
 
     assert(src_leaf->key_size >= suffix_len);
     uint8_t split_pos = src_leaf->key_size - suffix_len;
@@ -606,11 +826,14 @@ struct _Merger {
     dst.link_idx = loffset;
     *dst.link() = resolve_offset(new_leaf);
     dst.update_trie_offset();
+
+    // Compute hash for new_trie - all children have valid hashes
+    handler.after_trie_merged(new_trie, dst_cursor._db);
   }
 
   typename CursorDst::Transition::trie_ptr expand_trie_with_branch(
       typename CursorDst::Transition::trie_ptr& dst_trie, int suffix_len,
-      uint16_t* loffset) {
+      uint16_t* loffset, std::string& current_key) {
     int branch_key = suffix_len ? current_key[dst_cursor.current_key.size()]
                                 : TrieNode::NONE;
     assert(!(branch_key == TrieNode::NONE ? dst_trie->has_none()
@@ -638,16 +861,17 @@ struct _Merger {
    * @return true if at least one leaf was copied into the destination
    */
   bool selective_deep_copy_subtree(const src_offset_e* src_offset,
-                                   offset_e* parent_link) {
+                                   offset_e* parent_link,
+                                   std::string& current_key) {
     if (*src_offset == 0) {
       *parent_link = offset_e();
       return false;
     }
 
     if (src_offset->type() == LEAF) {
-      return selective_deep_copy_leaf(src_offset, parent_link);
+      return selective_deep_copy_leaf(src_offset, parent_link, current_key);
     } else {
-      return selective_deep_copy_trie(src_offset, parent_link);
+      return selective_deep_copy_trie(src_offset, parent_link, current_key);
     }
   }
 
@@ -658,18 +882,22 @@ struct _Merger {
    * calls handler.may_add_leaf(), and only copies the leaf if allowed.
    */
   bool selective_deep_copy_leaf(const src_offset_e* src_offset,
-                                offset_e* parent_link) {
+                                offset_e* parent_link,
+                                std::string& current_key) {
     auto src_leaf = resolve_src<SrcLeafNode>(src_offset);
-    size_t saved = current_key.size();
-    current_key.append((const char*)src_leaf->data, src_leaf->key_size);
 
-    bool accepted = handler.may_add_leaf(current_key, src_leaf->value(),
-                                         src_leaf->is_big());
-    current_key.resize(saved);
+    if constexpr (_has_may_add_leaf) {
+      size_t saved = current_key.size();
+      current_key.append((const char*)src_leaf->data, src_leaf->key_size);
 
-    if (!accepted) {
-      *parent_link = offset_e();
-      return false;
+      bool accepted = handler.may_add_leaf(current_key, src_leaf->value(),
+                                             src_leaf->is_big());
+      current_key.resize(saved);
+
+      if (!accepted) {
+        *parent_link = offset_e();
+        return false;
+      }
     }
 
     leaf_ptr new_leaf = fill_leaf(Slice(src_leaf->key()), *src_leaf);
@@ -687,38 +915,62 @@ struct _Merger {
    * Returns false (and writes a zero offset) when no child survives.
    */
   bool selective_deep_copy_trie(const src_offset_e* src_offset,
-                                offset_e* parent_link) {
+                                offset_e* parent_link,
+                                std::string& current_key) {
     auto src_trie = resolve_src<SrcTrieNode>(src_offset);
 
-    // Append this trie's compressed prefix to current_key for descendants
     size_t saved = current_key.size();
-    current_key.append((const char*)src_trie->compressed(), src_trie->len());
 
-    // Early-out: let the policy reject the entire subtree by prefix
-    if (!handler.may_add_trie(current_key)) {
-      current_key.resize(saved);
-      *parent_link = offset_e();
-      return false;
+    // Append compressed prefix when may_add_leaf or may_add_trie needs
+    // the full reconstructed key for filtering decisions.
+    if constexpr (_has_may_add_trie || _has_may_add_leaf) {
+      current_key.append((const char*)src_trie->compressed(), src_trie->len());
     }
 
-    // ── Pass 1: recurse children, collect survivors ──────────────────
-    // offsets_buf is indexed as: NONE → index (-1+1)=0, byte 0 → 1, …, 255 →
-    // 256 We offset the pointer so that offsets_buf[NONE] (i.e. [-1]) works.
-    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};  // all zero-initialised
-    offset_e* offsets_buf = &offsets_raw[1];  // now [-1] is valid
-
-    int surviving = 0;
-    auto src_array = src_trie->array();
-    for (int i = 0, k = src_trie->first(), scount = src_trie->count();
-         i < scount; i++, k = src_trie->next(k)) {
-      offset_e child_offset;
-      if (selective_deep_copy_subtree(&src_array[i], &child_offset)) {
-        offsets_buf[k] = child_offset;
-        surviving++;
+    if constexpr (_has_may_add_trie) {
+      // Early-out: let the policy reject the entire subtree by prefix
+      if (!handler.may_add_trie(current_key)) {
+        current_key.resize(saved);
+        *parent_link = offset_e();
+        return false;
       }
     }
 
+    // ── Pass 1: recurse children, collect survivors ──────────────────
+    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+    offset_e* offsets_buf = &offsets_raw[1];
+
+    src_trie->for_each_branch([&](int k, auto* src_off) {
+      auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
+          offsets_buf[k] = child_offset;
+        }
+      };
+      if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
+        do_branch(current_key);
+      }
+#if LEAVES_HAS_THREADS
+      else if (_in_worker) {
+        do_branch(current_key);
+      } else {
+        _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
+      }
+#endif
+    });
+    if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
+
     current_key.resize(saved);
+
+    // Count survivors and compute upper bitmap
+    int surviving = 0;
+    uint8_t upper = 0;
+    src_trie->for_each_branch([&](int k, auto*) {
+      if (offsets_buf[k] != offset_e()) {
+        surviving++;
+        if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+      }
+    });
 
     if (surviving == 0) {
       *parent_link = offset_e();
@@ -729,7 +981,7 @@ struct _Merger {
     Slice prefix((const char*)src_trie->compressed(), src_trie->len());
     uint16_t new_size = TrieNode::size(prefix.size(), surviving);
     trie_ptr dst_trie = alloc_node<trie_ptr>(new_size);
-    dst_trie->create(prefix, offsets_buf);
+    dst_trie->create(prefix, offsets_buf, upper);
 
     *parent_link = resolve_offset(dst_trie);
     return true;

@@ -5,7 +5,6 @@
 #include <memory>
 #include <mutex>
 
-#include "../core/_hash.hpp"
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
 #include "_aspect.hpp"
@@ -17,7 +16,7 @@ template <typename Traits_>
 struct _TransactionBase : public Traits_::PageHeader {
   typedef _TransactionBase<Traits_> TransactionBase;
   typedef Traits_ Traits;
-  typedef _MemManager<Traits> MemManager;
+  typedef _MemManagerPool<Traits> MemManager;
   using Traits::PageHeader::txn_id;
   using offset_e = typename Traits::offset_e;
 
@@ -33,7 +32,7 @@ struct _TransactionBase : public Traits_::PageHeader {
   // pointer to the oldest transaction
   offset_e start_txn;
 
-  // pointer ot the next higher transaction
+  // pointer to the next higher transaction
   offset_e next_txn;
 
   // count of cursors accessing this transaction
@@ -50,7 +49,7 @@ template <typename Traits_>
 struct _Transaction : public _TransactionBase<Traits_> {
   typedef Traits_ Traits;
   typedef _TransactionBase<Traits_> TransactionBase;
-  typedef _MemManager<Traits> MemManager;
+  typedef _MemManagerPool<Traits> MemManager;
   using ptr = typename Traits::Pointer<_Transaction>;
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
@@ -74,9 +73,10 @@ struct _Transaction : public _TransactionBase<Traits_> {
   template <typename Resolver>
   ptr clone(Resolver& resolver) {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
+    memcpy(&*new_txn, this, sizeof(TransactionBase));
     new_txn->used = sizeof(TransactionBase);
-    memcpy((char*)new_txn, this, sizeof(TransactionBase));
-    new (&new_txn->refs) std::atomic<uint32_t>(this->refs.load(std::memory_order_relaxed));
+    new_txn->mem_manager.reinit_locks();
+    new (&new_txn->refs) std::atomic<uint32_t>(0);
     assert(new_txn->slot_id == SLOT_ID);
     return new_txn;
   }
@@ -89,9 +89,11 @@ struct _DBHeader {
 
   offset_t read_txn;      // the current read transaction
   offset_t prepared_txn;  // the transaction being prepared for commit
+  offset_t next_txn_page; // Optimation: preprepared transaction
   Mutex txn_lock;
   std::atomic<uint64_t>
       txn_cursor_id;  // the id of the cursor holding the transaction
+  SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
 
   // Atomic area management - no AreaList objects, just head pointers
   // Areas are linked lists in storage, operations use atomic head/tail pattern
@@ -101,9 +103,12 @@ struct _DBHeader {
 };
 
 // Make _DB accept Transaction and Header as template parameters
+// Self_ enables CRTP: derived classes pass themselves so _DB can
+// statically dispatch to overrides (e.g. _on_txn_freed) without virtual.
 template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
-          typename Header_ = _DBHeader<Storage_>>
+          typename Header_ = _DBHeader<Storage_>,
+          typename Self_ = void>
 struct _DB {
   typedef Storage_ Storage;
   typedef Transaction_ Transaction;
@@ -115,23 +120,16 @@ struct _DB {
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
 
-  typedef _DB<Storage_, Transaction_, Header_> DB;
+  // CRTP self-type: derived class if provided, otherwise this class.
+  using Self = std::conditional_t<std::is_void_v<Self_>,
+      _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
+
+  typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
 
   struct CursorTraits : public Storage::Traits {
-    typedef _DB<Storage_, Transaction_, Header_> DB;
+    typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
     using tid_t = leaves::tid_t;
   };
-
-  // Detect ReplicationHasher from Traits, fallback to NullHasher
-  template <typename T, typename = void>
-  struct get_replication_hasher { using type = NullHasher; };
-  
-  template <typename T>
-  struct get_replication_hasher<T, std::void_t<typename T::ReplicationHasher>> {
-    using type = typename T::ReplicationHasher;
-  };
-  
-  using ReplicationHasher = typename get_replication_hasher<Traits>::type;
 
   // Detect Aspect from Traits, fallback to DefaultAspect
   template <typename T, typename = void>
@@ -174,7 +172,7 @@ struct _DB {
   [[no_unique_address]] Aspect _aspect{};
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
-  tid_t _start_txn_id;
+  tid_t _start_txn_id{0};
 
   _DB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
@@ -199,6 +197,7 @@ struct _DB {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     new (&_header->txn_lock) Mutex();
+    new (&_header->txn_ref_lock) SpinLock();
 
     // Initialize area lists with the first allocated area (area_ptr)
     offset_t first_area_offset = _storage.resolve(area_ptr);
@@ -211,8 +210,8 @@ struct _DB {
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
+    txn->used = sizeof(Transaction);
     txn->txn_id = tid_t(1);
-    txn->slot_id = Transaction::SLOT_ID;
     txn->root = txn->offset_root = txn->free_bigmem_root = 0;
     txn->next_txn = 0;
     txn->refs.store(0);
@@ -222,6 +221,14 @@ struct _DB {
     txn->area_list_tail_multi = 0;
     txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
                           area_ptr->end());
+
+    // Pre-allocate the next transaction page so start_transaction()
+    // can skip the double-copy on the very first call.
+    _active_txn = &*txn;
+    auto next = txn->clone(*this);
+    _header->next_txn_page = resolve(next);
+    _active_txn = nullptr;
+
     make_dirty(_header);
     flush();
   }
@@ -293,14 +300,23 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  // space without PageHeader
-  page_ptr alloc(uint16_t space) {
-    assert(space + sizeof(typename Traits::PageHeader) <=
-           PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+  // Allocate a page for content of 'space' bytes (PageHeader added internally).
+  // Returns page_ptr pointing at the PageHeader.
+  page_ptr alloc_page(uint16_t space) {
+    using PageHeader = typename Traits::PageHeader;
+    assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
     page_ptr result = alloc_slot(
-        MemManager::assign_slot(space + sizeof(typename Traits::PageHeader)));
+        MemManager::assign_slot(space + sizeof(PageHeader)));
     result->used = space;
     return result;
+  }
+
+  // Allocate a node of 'node_size' bytes, returning a pointer past PageHeader.
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc_page(node_size);
+    return page + sizeof(PageHeader);
   }
 
   page_ptr alloc_slot(uint16_t slot) {
@@ -327,15 +343,9 @@ struct _DB {
     area_ptr->next = 0;
 
     // Append to transaction's area list tail
-    if (_active_txn->area_list_tail_single) {
-      auto tail = resolve<Area>(&_active_txn->area_list_tail_single, READ);
-      tail->next = resolve(area_ptr);
-      make_dirty(tail);
-    } else {
-      // First area in this transaction - update head
-      _header->area_list_head_single = resolve(area_ptr);
-      make_dirty(_header);
-    }
+    auto tail = resolve<Area>(&_active_txn->area_list_tail_single, WRITE);
+    tail->next = resolve(area_ptr);
+    make_dirty(tail);
     _active_txn->area_list_tail_single = resolve(area_ptr);
 
     make_dirty(area_ptr);
@@ -352,7 +362,7 @@ struct _DB {
 
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
-      auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, READ);
+      auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, WRITE);
       tail->next = resolve(area_ptr);
       make_dirty(tail);
     } else {
@@ -380,6 +390,32 @@ struct _DB {
   }
 
   txn_ptr txn() const { return resolve<Transaction>(&_header->read_txn); }
+
+  // Atomically resolve current read txn and increment its refcount.
+  // Uses SpinLock to prevent a concurrent start_transaction() from
+  // freeing the txn between resolve and refs.fetch_add().
+  txn_ptr txn_ref() {
+    std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+    txn_ptr t = txn();
+    t->refs.fetch_add(1);
+    return t;
+  }
+
+  // Atomically pin a txn by raw storage offset and increment its refcount.
+  // Returns null if offset is 0 — txn was cleaned between the caller's read
+  // of the offset and acquiring txn_ref_lock. Caller must treat null as stale.
+  txn_ptr txn_ref_at(offset_t offset) {
+    std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+    if (!offset) return txn_ptr();
+    txn_ptr t = resolve<Transaction>(&offset);
+    t->refs.fetch_add(1);
+    return t;
+  }
+
+  // Called (under txn_ref_lock) just before a stale transaction is freed.
+  // Derived classes override via CRTP (Self_ parameter) to invalidate
+  // any cached references to the txn.  No virtual dispatch needed.
+  void _on_txn_freed(txn_ptr) {}
 
   tid_t transaction_active() const {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
@@ -412,36 +448,35 @@ struct _DB {
 
     txn_ptr last_txn = txn();
 
-    Transaction tmp;  // needed to alloc the next transaction itself
-    memcpy((void*)&tmp, &*last_txn, sizeof(Transaction));
-    new (&tmp.refs) std::atomic<uint32_t>(last_txn->refs.load(std::memory_order_relaxed));
-    _active_txn = &tmp;
-    _wtxn = tmp.clone(*this);
+    // Pre-allocated page is always ready (from commit, rollback, or init)
+    assert(_header->next_txn_page);
+    _wtxn = resolve<Transaction>(&_header->next_txn_page);
+    _header->next_txn_page = 0;
     _active_txn = &*_wtxn;
-    _active_txn->refs.store(0);
-
-    // ensure last_txn is not freed
-    last_txn->refs.fetch_add(1);
 
     _active_txn->txn_id = last_txn->txn_id + tid_t(1);
     _active_txn->next_txn = 0;
+
+    // Pin last_txn so it isn't freed during the GC walk.
+    last_txn->refs.fetch_add(1);
+
+    // Find the oldest used transaction and free unused old transactions.
+    // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
+    // a txn between the refs==0 check and free().
     _start_txn_id = last_txn->txn_id;
-
-    _storage.prefetch(&_active_txn->mem_manager);
-    for (int i = 0; i < MemManager::COUNT; i++) {
-      _storage.prefetch(&_active_txn->mem_manager.slots[i]);
+    {
+      std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+      iter_transactions([this](txn_ptr txn) -> bool {
+        if (txn->refs.load() > 0) {
+          _active_txn->start_txn = resolve(txn);
+          _start_txn_id = txn->txn_id;
+          return true;
+        }
+        static_cast<Self*>(this)->_on_txn_freed(txn);
+        free(txn);
+        return false;
+      });
     }
-
-    // find the oldest used transaction
-    iter_transactions([this](txn_ptr txn) -> bool {
-      if (txn->refs.load() > 0) {
-        _active_txn->start_txn = resolve(txn);
-        _start_txn_id = txn->txn_id;
-        return true;
-      }
-      free(txn);
-      return false;
-    });
 
     last_txn->refs.fetch_sub(1);
     return _wtxn;
@@ -457,6 +492,16 @@ struct _DB {
         read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
 
     _header->prepared_txn = _header->read_txn;
+
+    // Reuse _wtxn's page for next pre-allocated transaction.
+    // _wtxn was allocated from read_txn's committed space, so it
+    // remains valid after rollback. Just overwrite with read_txn state.
+    memcpy(&*_wtxn, &*read_txn, sizeof(Transaction));
+    _wtxn->mem_manager.reinit_locks();
+    new (&_wtxn->refs) std::atomic<uint32_t>(0);
+    _header->next_txn_page = resolve(_wtxn);
+
+    make_dirty(_wtxn);
     make_dirty(_header);
     flush();
     end_transaction();
@@ -470,8 +515,11 @@ struct _DB {
     // already prepared
     if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
 
-    // Compute merkle hashes for all new nodes in this transaction
-    compute_hashes(ReplicationHasher{}, this, _wtxn);
+    // Pre-allocate next transaction page before committing.
+    // The allocation modifies _wtxn->mem_manager, which gets persisted
+    // as part of this commit — no storage leak.
+    auto next = _wtxn->clone(*this);
+    _header->next_txn_page = resolve(next);
 
     _header->prepared_txn = resolve(_wtxn);
 
@@ -516,7 +564,7 @@ struct _DB {
     const int garbage =
         MemManager::assign_slot(MemManager::PageContainer::SIZE);
     for (int i = 0; i < MemManager::COUNT; i++) {
-      auto slot = txn_->mem_manager.slots[i];
+      auto slot = txn_->mem_manager.slots_at(i);
       // collect blocks
       offset_t o = slot.ostart;
       if (!o) {
@@ -570,7 +618,6 @@ struct _DB {
     iter_transactions([this, &stat](txn_ptr txn) -> bool {
       uint16_t bsize = PAGE_SIZES[txn->slot_id];
       stat.transaction.add(txn->slot_id, 1, bsize - sizeof(Transaction));
-      offset_t offset = resolve(txn);
       return false;
     });
   }
@@ -589,7 +636,7 @@ struct _DB {
     // Use the non-transactional cursor type for the free-bigmem trie.
     // _TransactionalCursor rewires its root to txn->root in update(), which
     // would ignore &txn->free_bigmem_root and prevent defrag from working.
-    using RawCursor = typename Cursor::Cursor;
+    using RawCursor = _Cursor<CursorTraits>;
     using BigMemory = _BigMemory<RawCursor>;
     BigMemory big_mem(this, &txn->free_bigmem_root);
     big_mem.defrag(txn);
@@ -604,9 +651,11 @@ struct _DB {
     // transaction
 
     if (start_single && end_single && start_single != end_single) {
-      area_ptr start_area = resolve<Area>(&start_single, READ);
+      area_ptr start_area = resolve<Area>(&start_single, WRITE);
       offset_t range_head = start_area->next;
       _storage.return_single_areas(range_head, end_single);
+      start_area->next = 0;
+      make_dirty(start_area);
     }
 
     if (end_multi && start_multi != end_multi) {
@@ -617,20 +666,41 @@ struct _DB {
             _header->area_list_head_multi, end_multi);
         _header->area_list_head_multi = 0;
       } else {
-        area_ptr start_area = resolve<Area>(&start_multi, READ);
+        area_ptr start_area = resolve<Area>(&start_multi, WRITE);
         offset_t range_head = start_area->next;
         _storage.return_multi_areas(range_head, end_multi);
+        start_area->next = 0;
+        make_dirty(start_area);
       }
     }
   }
 
   void sanitize() {
     new (&_header->txn_lock) Mutex();
+    new (&_header->txn_ref_lock) SpinLock();
     _header->txn_cursor_id.store(0);
-    iter_transactions([](txn_ptr txn) -> bool {
+    iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
+      txn->mem_manager.reinit_locks();
+      make_dirty(txn);
       return false;
     });
+
+    // Reinit locks/refs on pre-allocated transaction page (stale after crash).
+    // If next_txn_page is 0 (crash between start_transaction clearing it and
+    // prepare_commit allocating a replacement), re-create it from read_txn.
+    if (_header->next_txn_page) {
+      auto next = resolve<Transaction>(&_header->next_txn_page);
+      next->refs.store(0);
+      next->mem_manager.reinit_locks();
+      make_dirty(next);
+    } else {
+      txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
+      _active_txn = &*read_txn;
+      auto next = read_txn->clone(*this);
+      _header->next_txn_page = resolve(next);
+      _active_txn = nullptr;
+    }
 
     if (_header->prepared_txn == _header->read_txn) {
       // Return any uncommitted areas
@@ -649,6 +719,7 @@ struct _DB {
     }
     // otherwise we have to wait for rollback or commit
 
+    make_dirty(_header);
     flush();
   }
 };

@@ -4,8 +4,8 @@
 #include <boost/endian/arithmetic.hpp>
 
 #include "../db/_check.hpp"
-#include "../core/_hash.hpp"
 #include "../core/_util.hpp"
+#include "_memory.hpp"
 
 namespace leaves {
 
@@ -127,7 +127,7 @@ struct _BigMemory {
       found_size = found->size;
       _free_cursor.remove();
     } else {
-      uint64_t psize = padding(padded_size, AREA_SIZE);
+      uint64_t psize = padding(padded_size + sizeof(Area), AREA_SIZE);
       auto area = _db->alloc_multi_area(psize);
       found_offset = area->content_offset();
       found_size = area->end() - found_offset;

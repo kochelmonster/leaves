@@ -25,6 +25,7 @@ struct _MemoryTraits {
 
   struct PageHeader {
     typedef PageHeader Base;
+    tid_t txn_id;
     uint16_e used;  // used bytes in page
     uint8_t slot_id;
     template <typename DB>
@@ -34,14 +35,16 @@ struct _MemoryTraits {
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t AREA_SIZE = 128 * K;  // Same as file store
+  static constexpr size_t AREA_SIZE = 512 * K;  // Same as file store
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t PAGE_SIZES[] = {   // Typical node sizes
-      _TrieNode<_MemoryTraits>::size(1, 10),   // digits 0-9
-      _TrieNode<_MemoryTraits>::size(1, 16),   // hex 0-9A-F
-      _TrieNode<_MemoryTraits>::size(1, 64),   // base64
-      _TrieNode<_MemoryTraits>::size(1, 127),  // utf-8
-      _TrieNode<_MemoryTraits>::size(1, 256),  // binary
+  static constexpr uint16_t MERGE_POOL_THREADS = 5;
+  static constexpr uint16_t MERGE_DISPATCH_THRESHOLD = 10;  // minimum trie fan-out
+  static constexpr uint16_t PAGE_SIZES[] = {                      // Page sizes (header + node)
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 10),   // digits 0-9
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 16),   // hex 0-9A-F
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 64),   // base64
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 127),  // utf-8
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
@@ -73,6 +76,9 @@ struct _MemoryDB {
   static constexpr uint16_t MIN_PAGE_SIZE = PAGE_SIZES[0];
   static constexpr uint16_t MAX_PAGE_SIZE = PAGE_SIZES[PAGE_SIZES_COUNT - 1];
 
+  static_assert(sizeof(typename Traits::PageHeader) % 8 == 0,
+                "PageHeader size must be a multiple of 8 for offset alignment");
+
   typedef _Cursor<CursorTraits> Cursor;
   typedef _MemManager<Traits> MemManager;
   typedef std::unique_ptr<Cursor> cursor_ptr;
@@ -94,9 +100,28 @@ struct _MemoryDB {
   area_ptr alloc_single_area() { return _storage.alloc_single_area(); }
 
   // Block allocation - using memory manager properly
+  // Raw slot allocation (allocate slot for 'space' total bytes)
   page_ptr alloc(uint16_t space) {
     uint8_t slot = _mem_manager.assign_slot(space);
     return alloc_slot(slot);
+  }
+
+  // Allocate a page for content of 'space' bytes (PageHeader added internally).
+  // Returns page_ptr pointing at the PageHeader.
+  page_ptr alloc_page(uint16_t space) {
+    using PageHeader = typename Traits::PageHeader;
+    uint8_t slot = _mem_manager.assign_slot(space + sizeof(PageHeader));
+    page_ptr result = alloc_slot(slot);
+    result->used = space;
+    return result;
+  }
+
+  // Allocate a node of 'node_size' bytes, returning a pointer past PageHeader.
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = alloc_page(node_size);
+    return page + sizeof(PageHeader);
   }
 
   void free(page_ptr p) { _mem_manager.free(p, *this); }
@@ -116,21 +141,19 @@ struct _MemoryDB {
   }
 
   // Direct pointer/offset resolution - no storage delegation needed
+  // Uses raw() to preserve all bits — memstore offsets are raw pointers,
+  // not file offsets, so the low 3 metadata bits must not be stripped.
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
-    // memstore doesn't support relative offsets - all offsets are absolute
-    // pointers
-    return page_ptr(reinterpret_cast<void*>((uint64_t)offset));
+    return page_ptr(reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
   }
 
   template <typename T>
   typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
                                       Access access = READ) const {
     offset_t offset = *offset_ptr;
-    // memstore doesn't support relative offsets - all offsets are absolute
-    // pointers
-    return
-        typename Traits::Pointer<T>(reinterpret_cast<void*>((uint64_t)offset));
+    return typename Traits::Pointer<T>(
+        reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
   }
 
   // Non-template overload for page_ptr to avoid implicit conversion to
@@ -149,6 +172,7 @@ struct _MemoryDB {
 
   template <typename PtrType>
   void make_dirty(PtrType /*block*/) {}
+
   void prefetch(const offset_t& offset) const { prefetch(&offset); }
   void prefetch(const offset_t* /*offset_ptr*/,
                 Access /*access*/ = READ) const {}
@@ -161,17 +185,6 @@ struct _MemoryDB {
   template <typename ptr>
   ptr clone(const ptr& src) {
     return src;
-  }
-
-  // Big allocation methods - throw exceptions since memory storage doesn't
-  // support them
-  AreaSlice alloc_big(uint64_t /*size*/) {
-    throw std::runtime_error("Big allocation not supported in memory storage");
-  }
-
-  void free_big(offset_e /*offset*/, size_t /*size*/) {
-    throw std::runtime_error(
-        "Big deallocation not supported in memory storage");
   }
 
   // Cursor factory methods

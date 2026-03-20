@@ -4,9 +4,105 @@
 #include <algorithm>
 #include <iostream>
 #include <vector>
+#include <memory>
 #include "../third_party/unordered_dense.h"
 
 namespace leaves {
+
+/**
+ * Simple object pool allocator using a free list.
+ * Pre-allocates objects in chunks to reduce heap allocation overhead.
+ */
+template<typename T>
+class ObjectPool {
+    static constexpr size_t CHUNK_SIZE = 64;  // Objects per chunk
+    
+    union Slot {
+        alignas(T) char storage[sizeof(T)];
+        Slot* next_free;
+    };
+    
+    struct Chunk {
+        std::unique_ptr<Slot[]> slots;
+        Chunk* next;
+        
+        Chunk() : slots(std::make_unique<Slot[]>(CHUNK_SIZE)), next(nullptr) {}
+    };
+    
+    Chunk* _first_chunk = nullptr;
+    Slot* _free_list = nullptr;
+    
+    void add_chunk() {
+        Chunk* chunk = new Chunk();
+        chunk->next = _first_chunk;
+        _first_chunk = chunk;
+        
+        // Add all slots to free list
+        for (size_t i = 0; i < CHUNK_SIZE; ++i) {
+            Slot* slot = &chunk->slots[i];
+            slot->next_free = _free_list;
+            _free_list = slot;
+        }
+    }
+    
+public:
+    ObjectPool() = default;
+    
+    ~ObjectPool() {
+        // Just free the chunks - objects should already be destructed
+        while (_first_chunk) {
+            Chunk* next = _first_chunk->next;
+            delete _first_chunk;
+            _first_chunk = next;
+        }
+    }
+    
+    // Disable copy
+    ObjectPool(const ObjectPool&) = delete;
+    ObjectPool& operator=(const ObjectPool&) = delete;
+    
+    // Move support
+    ObjectPool(ObjectPool&& other) noexcept
+        : _first_chunk(other._first_chunk), _free_list(other._free_list) {
+        other._first_chunk = nullptr;
+        other._free_list = nullptr;
+    }
+    
+    ObjectPool& operator=(ObjectPool&& other) noexcept {
+        if (this != &other) {
+            // Destroy current chunks
+            while (_first_chunk) {
+                Chunk* next = _first_chunk->next;
+                delete _first_chunk;
+                _first_chunk = next;
+            }
+            _first_chunk = other._first_chunk;
+            _free_list = other._free_list;
+            other._first_chunk = nullptr;
+            other._free_list = nullptr;
+        }
+        return *this;
+    }
+    
+    // Allocate and construct an object
+    template<typename... Args>
+    T* alloc(Args&&... args) {
+        if (!_free_list) {
+            add_chunk();
+        }
+        Slot* slot = _free_list;
+        _free_list = slot->next_free;
+        return new (slot->storage) T(std::forward<Args>(args)...);
+    }
+    
+    // Destruct and return to pool
+    void free(T* obj) {
+        obj->~T();
+        Slot* slot = reinterpret_cast<Slot*>(obj);
+        slot->next_free = _free_list;
+        _free_list = slot;
+    }
+};
 
 /**
  * Intrusive doubly-linked list node for cache entries.
@@ -97,6 +193,7 @@ struct TwoQCache {
               size_t avg_item_size = 512 * 1024)  // Default to AREA_SIZE
         : _capacity(capacity),
           _size(0),
+          _a1in_current_size(0),
           _a1in_size_limit(capacity * kin_ratio),
           _a1out_size_limit(0) {
         // Pre-allocate hash maps to avoid rehashing during warmup
@@ -127,6 +224,7 @@ struct TwoQCache {
     TwoQCache(TwoQCache&& other) noexcept
         : _capacity(other._capacity),
           _size(other._size),
+          _a1in_current_size(other._a1in_current_size),
           _a1in_size_limit(other._a1in_size_limit),
           _a1out_size_limit(other._a1out_size_limit),
           _a1in_list(other._a1in_list),
@@ -134,11 +232,14 @@ struct TwoQCache {
           _a1out_list(other._a1out_list),
           _a1out_map(std::move(other._a1out_map)),
           _am_list(other._am_list),
-          _am_map(std::move(other._am_map)) {
+          _am_map(std::move(other._am_map)),
+          _entry_pool(std::move(other._entry_pool)),
+          _ghost_pool(std::move(other._ghost_pool)) {
         other._a1in_list = {};
         other._a1out_list = {};
         other._am_list = {};
         other._size = 0;
+        other._a1in_current_size = 0;
     }
     
     // Move assignment
@@ -150,6 +251,7 @@ struct TwoQCache {
             
             _capacity = other._capacity;
             _size = other._size;
+            _a1in_current_size = other._a1in_current_size;
             _a1in_size_limit = other._a1in_size_limit;
             _a1out_size_limit = other._a1out_size_limit;
             _a1in_list = other._a1in_list;
@@ -158,11 +260,14 @@ struct TwoQCache {
             _a1out_map = std::move(other._a1out_map);
             _am_list = other._am_list;
             _am_map = std::move(other._am_map);
+            _entry_pool = std::move(other._entry_pool);
+            _ghost_pool = std::move(other._ghost_pool);
             
             other._a1in_list = {};
             other._a1out_list = {};
             other._am_list = {};
             other._size = 0;
+            other._a1in_current_size = 0;
         }
         return *this;
     }
@@ -176,6 +281,7 @@ struct TwoQCache {
             Entry* entry = a1in_it->second;
             
             // Move from A1in to Am
+            _a1in_current_size -= get_item_size(entry->value);
             _am_list.splice_back(_a1in_list, entry);
             _am_map[key] = entry;
             _a1in_map.erase(a1in_it);
@@ -223,18 +329,19 @@ struct TwoQCache {
             // This is a recurring item, put directly in Am
             GhostEntry* ghost = a1out_it->second;
             _a1out_list.unlink(ghost);
-            delete ghost;
+            _ghost_pool.free(ghost);
             _a1out_map.erase(a1out_it);
             
-            Entry* entry = new Entry(key, value);
+            Entry* entry = _entry_pool.alloc(key, value);
             _am_list.push_back(entry);
             _am_map[key] = entry;
         }
         else {
             // New item, put in A1in
-            Entry* entry = new Entry(key, value);
+            Entry* entry = _entry_pool.alloc(key, value);
             _a1in_list.push_back(entry);
             _a1in_map[key] = entry;
+            _a1in_current_size += get_item_size(value);
         }
 
         // Maintain size limits
@@ -268,7 +375,7 @@ struct TwoQCache {
                     _size -= get_item_size(entry->value);
                     _am_map.erase(entry->key);
                     _am_list.unlink(entry);
-                    delete entry;
+                    _entry_pool.free(entry);
                     evicted = true;
                     break;
                 }
@@ -290,22 +397,19 @@ struct TwoQCache {
 
     // Make A1in queue respect size limit
     void maintain_a1in_size() {
-        size_t a1in_current_size = 0;
-        for (Entry* e = _a1in_list.front(); e != nullptr; e = e->next) {
-            a1in_current_size += get_item_size(e->value);
-        }
-        
-        if (a1in_current_size <= _a1in_size_limit) return;
+        if (_a1in_current_size <= _a1in_size_limit) return;
         
         // Collect all evictable entries in one pass
         std::vector<Entry*> to_evict;
         to_evict.reserve(16);  // Pre-allocate for common case
         
-        for (Entry* e = _a1in_list.front(); e != nullptr && a1in_current_size > _a1in_size_limit; e = e->next) {
+        size_t target_size = _a1in_current_size;
+        for (Entry* e = _a1in_list.front(); e != nullptr && target_size > _a1in_size_limit; e = e->next) {
             if (can_evict(e->value)) {
                 size_t item_size = get_item_size(e->value);
-                a1in_current_size -= item_size;
+                target_size -= item_size;
                 _size -= item_size;
+                _a1in_current_size -= item_size;
                 to_evict.push_back(e);
             }
         }
@@ -315,14 +419,14 @@ struct TwoQCache {
             Key key = entry->key;
             
             // Add to ghost list
-            GhostEntry* ghost = new GhostEntry(key, 0);
+            GhostEntry* ghost = _ghost_pool.alloc(key, 0);
             _a1out_list.push_back(ghost);
             _a1out_map[key] = ghost;
             
             // Remove from A1in
             _a1in_map.erase(key);
             _a1in_list.unlink(entry);
-            delete entry;
+            _entry_pool.free(entry);
         }
     }
 
@@ -332,7 +436,7 @@ struct TwoQCache {
             GhostEntry* ghost = _a1out_list.front();
             _a1out_map.erase(ghost->key);
             _a1out_list.unlink(ghost);
-            delete ghost;
+            _ghost_pool.free(ghost);
         }
     }
     
@@ -341,7 +445,7 @@ struct TwoQCache {
         Entry* e = list.front();
         while (e) {
             Entry* next = e->next;
-            delete e;
+            _entry_pool.free(e);
             e = next;
         }
         list = {};
@@ -351,7 +455,7 @@ struct TwoQCache {
         GhostEntry* e = list.front();
         while (e) {
             GhostEntry* next = e->next;
-            delete e;
+            _ghost_pool.free(e);
             e = next;
         }
         list = {};
@@ -377,6 +481,9 @@ struct TwoQCache {
     // Current size in bytes
     size_t _size;
     
+    // Current A1in size in bytes (tracked incrementally to avoid O(n) scans)
+    size_t _a1in_current_size;
+    
     // Size limits for the different queues
     size_t _a1in_size_limit;  // A1in should use about 25% of cache
     size_t _a1out_size_limit; // A1out should track about 50% of items
@@ -392,6 +499,10 @@ struct TwoQCache {
     // Am queue for frequently accessed items
     List _am_list;
     ankerl::unordered_dense::map<Key, Entry*> _am_map;
+    
+    // Object pools for cache entries (avoid per-entry heap allocations)
+    ObjectPool<Entry> _entry_pool;
+    ObjectPool<GhostEntry> _ghost_pool;
 };
 
 } // namespace leaves

@@ -75,21 +75,20 @@ struct _CacheStore : public Opers_,
 
   void debug_reset() {
     std::cout << "Resetting cache (clearing all entries)\n";
-    // Create a new cache instance
     _cache = Cache(_capacity);
 
-    // Also reset the dirty areas maps to avoid dangling references
+    // Also reset the dirty areas map to avoid dangling references
     {
-      std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
-      _pending_dirty_areas.clear();
-      _dirty_areas.clear();
+      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      _dirty_pending.clear();
+      _dirty_committed.clear();
     }
   }
 
-  // Handling for dirty areas - using mutex-protected map for thread safety
-  ankerl::unordered_dense::map<uint64_t, page_ptr> _pending_dirty_areas;
-  ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_areas;
-  std::mutex _dirty_areas_mutex;
+  // Dirty area tracking — guarded by _dirty_mutex (shared with background flush)
+  std::mutex _dirty_mutex;
+  ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_pending;
+  ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_committed;
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
@@ -109,7 +108,7 @@ struct _CacheStore : public Opers_,
     this->wait_all();
 
     // Final flush of any remaining dirty blocks
-    write_dirty_blocks(calc_header_size());
+    write_dirty_blocks();
     close();
   }
 
@@ -118,20 +117,22 @@ struct _CacheStore : public Opers_,
   }
 
   void flush(bool sync = false, bool /*force*/ = false) {
+    bool has_pending = false;
     {
-      std::lock_guard<std::mutex> lock(_dirty_areas_mutex);
-      _dirty_areas.insert(_pending_dirty_areas.begin(),
-                          _pending_dirty_areas.end());
+      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      if (!_dirty_pending.empty()) {
+        has_pending = true;
+        _dirty_committed.insert(_dirty_pending.begin(), _dirty_pending.end());
+        _dirty_pending.clear();
+      }
     }
-    bool has_pending = !_pending_dirty_areas.empty();
-    _pending_dirty_areas.clear();
 
     if (sync) {
-      write_dirty_blocks(calc_header_size());
+      write_dirty_blocks();
     } else if (has_pending && !_flush_pending.exchange(true)) {
       // Submit async flush task to thread pool (only if not already pending)
       this->submit_task([this]() {
-        write_dirty_blocks(calc_header_size());
+        write_dirty_blocks();
         _flush_pending.store(false);
       });
     }
@@ -139,9 +140,10 @@ struct _CacheStore : public Opers_,
 
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
+    if (!offset) return page_ptr();  // null offset → null pointer
     uint64_t raw_offset = (uint64_t)offset;
     uint64_t area_offset = raw_offset - (raw_offset % AREA_SIZE);
-    
+
     // Check cache first - use pointer-returning get to avoid copy
     // For multi-area allocations the offset may fall past the first
     // AREA_SIZE chunk.  Walk backwards by AREA_SIZE until we hit the
@@ -164,19 +166,20 @@ struct _CacheStore : public Opers_,
       return result;
     }
 
-    uint64_t read_offset = area_offset + calc_header_size();
+    // Cache miss - read from disk
 
     // Read on-disk header (could be partial / uninitialized)
     AreaSlice disk_header;
-    read((uint64_t)read_offset, &disk_header, sizeof(disk_header));
+    read(area_offset, &disk_header, sizeof(disk_header));
 
     // Allocate full region (header + payload)
     AreaSlice* slice = (AreaSlice*)::operator new(disk_header.size());
-    read((uint64_t)read_offset, slice, disk_header.size());
+    read(area_offset, slice, disk_header.size());
     slice->_ref.store(0);
 
     page_ptr result(slice);
     result._offset = static_cast<uint32_t>(raw_offset - area_offset);
+
     _cache.put(area_offset, result);
     return result;
   }
@@ -203,7 +206,9 @@ struct _CacheStore : public Opers_,
   template <typename PtrType>
   void make_dirty(PtrType block_arg) {
     page_ptr block = block_arg;
-    _pending_dirty_areas[block.area()->offset()] = block;
+    uint64_t offset = block.area()->offset();
+    std::lock_guard<std::mutex> lock(_dirty_mutex);
+    _dirty_pending[offset] = block;
   }
 
   // Mark the file header as dirty; background flush will write it
@@ -217,8 +222,6 @@ struct _CacheStore : public Opers_,
     _header->file_size = start + size;
     resize(_header->file_size);
     make_header_dirty();
-
-    start -= calc_header_size();  // adjust for header
 
     // Allocate a contiguous buffer for [AreaSlice/Area header + payload]
     Area* area = reinterpret_cast<Area*>(::operator new(size));
@@ -257,32 +260,25 @@ struct _CacheStore : public Opers_,
   }
 
   // Process all dirty blocks from the queue and write them to storage
-  void write_dirty_blocks(size_t header_size) {
+  void write_dirty_blocks() {
     // Process all dirty areas in the set
     // Use a batch approach for blocks with contiguous offsets
 
-    // We'll collect blocks to write in this vector
     std::vector<page_ptr> blocks_to_write;
-
-    // Get all dirty blocks under a single lock to reduce lock contention
     {
-      std::lock_guard<std::mutex> queue_lock(_dirty_areas_mutex);
-      blocks_to_write.reserve(_dirty_areas.size());
-
-      // Extract all dirty blocks
-      for (auto& entry : _dirty_areas) {
+      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      blocks_to_write.reserve(_dirty_committed.size());
+      for (auto& entry : _dirty_committed) {
         blocks_to_write.emplace_back(entry.second);
       }
-
-      // Clear the dirty areas map
-      _dirty_areas.clear();
+      _dirty_committed.clear();
     }
 
-    write_batch(blocks_to_write, header_size);
+    write_batch(blocks_to_write);
 
     if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {
       // Write the header
-      write(0, _header, header_size);
+      write(0, _header, calc_header_size());
     }
   }
 

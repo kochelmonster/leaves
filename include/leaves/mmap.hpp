@@ -8,16 +8,21 @@
 
 namespace leaves {
 
-class MapStorage : public std::enable_shared_from_this<MapStorage> {
- public:
-  typedef _MemoryMapFile<_MemoryMapTraits> StorageImpl;
-  typedef TDB<MapStorage> DB;
-  typedef std::shared_ptr<MapStorage> storage_ptr;
+typedef _MemoryMapTraits MapTraits;
 
-  MapStorage(const char* path, size_t map_size = 4 * G, uint16_t db_count = 48)
+template <typename Traits = MapTraits>
+class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
+ public:
+  typedef _MemoryMapFile<Traits> StorageImpl;
+  typedef TDB<MapStorage_> DB;
+  typedef std::shared_ptr<MapStorage_> storage_ptr;
+
+  // map_size: virtual address space reservation. On mobile (iOS/Android), use a
+  // smaller value (e.g. 256*M) to avoid jetsam/OOM kills.
+  MapStorage_(const char* path, size_t map_size = 4 * G, uint16_t db_count = 48)
       : _storage(std::make_unique<StorageImpl>(path, map_size, db_count)) {}
 
-  DB operator[](const char* name) { return DB(shared_from_this(), name); }
+  DB operator[](const char* name) { return DB(this->shared_from_this(), name); }
 
   void remove_db(const char* name) { _storage->remove_db(name); }
 
@@ -31,13 +36,15 @@ class MapStorage : public std::enable_shared_from_this<MapStorage> {
 
   static storage_ptr create(const char* path, size_t map_size = 4 * G,
                             uint16_t db_count = 48) {
-    return std::make_shared<MapStorage>(path, map_size, db_count);
+    return std::make_shared<MapStorage_>(path, map_size, db_count);
   }
 
  private:
-  friend class TDB<MapStorage>;
+  friend class TDB<MapStorage_>;
   std::unique_ptr<StorageImpl> _storage;
 };
+
+using MapStorage = MapStorage_<>;
 
 
 

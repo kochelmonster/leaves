@@ -21,7 +21,16 @@
 // Platform detection for SIMD optimizations
 #if defined(__x86_64__) || defined(_M_X64)
   #define LEAVES_X86_64 1
-  #if defined(__SSE2__) || (defined(_MSC_VER) && _M_X64)
+  #if defined(__AVX512BW__)
+    #include <immintrin.h>
+    #define LEAVES_HAS_AVX512 1
+    #define LEAVES_HAS_AVX2 1
+    #define LEAVES_HAS_SSE2 1
+  #elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define LEAVES_HAS_AVX2 1
+    #define LEAVES_HAS_SSE2 1
+  #elif defined(__SSE2__) || (defined(_MSC_VER) && _M_X64)
     #include <emmintrin.h>  // SSE2 for non-temporal stores
     #define LEAVES_HAS_SSE2 1
   #endif
@@ -146,6 +155,36 @@ typedef tid_serial tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
 typedef enum { READ = 0, WRITE = 1 } Access;
 
+// CAS spinlock using TTAS (test-and-test-and-set) pattern.
+// Safe in shared memory (mmap) — uses only hardware atomics, no kernel state.
+struct SpinLock {
+  std::atomic<uint32_t> _flag{0};
+
+  void lock() {
+    while (_flag.exchange(1, std::memory_order_acquire)) {
+      // Spin on load (shared cache line) to reduce bus traffic
+      while (_flag.load(std::memory_order_relaxed)) {
+#if defined(LEAVES_X86_64)
+        _mm_pause();
+#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
+        __yield();
+#elif defined(LEAVES_ARM64)
+        __asm__ __volatile__("yield");
+#endif
+      }
+    }
+  }
+
+  bool try_lock() {
+    uint32_t expected = 0;
+    return _flag.compare_exchange_weak(expected, 1,
+                                       std::memory_order_acquire,
+                                       std::memory_order_relaxed);
+  }
+
+  void unlock() { _flag.store(0, std::memory_order_release); }
+};
+
 class Slice {
  private:
   size_t _size;
@@ -194,6 +233,7 @@ class Slice {
   size_t size() const { return _size; }
 
   Slice advance(size_t size) const {
+    assert(size <= _size);
     return Slice(data() + size, _size - size);
   }
 
@@ -290,6 +330,9 @@ struct _Offset {
 
   // Get absolute offset value (mask out TYPE_MASK and RELATIVE_FLAG)
   operator uint64_t() const { return _offset & ~(TYPE_MASK | RELATIVE_FLAG); }
+
+  // Get the raw offset value including metadata bits (for memory-store pointer round-tripping)
+  uint64_t raw() const { return _offset; }
   
   NodeTypes type() const { return (NodeTypes)(_offset & TYPE_MASK); }
   const _Offset& type(NodeTypes type) {
@@ -483,6 +526,84 @@ inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {
   size_t i = 0;
   const size_t min_size = std::min(size1, size2);
+
+  // Fast path for short prefixes (< 8 bytes): covers compressed trie nodes
+  if (min_size < 8) {
+    if (min_size >= 4) {
+      uint32_t w1, w2;
+      memcpy(&w1, str1, 4);
+      memcpy(&w2, str2, 4);
+      if (w1 != w2) {
+        i = detail::count_trailing_zeros_32(w1 ^ w2) / 8;
+        cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+        return i;
+      }
+      i = 4;
+    }
+    while (i < min_size && str1[i] == str2[i]) i++;
+    if (i < min_size)
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+    else if (size1 > size2) cmp = 1;
+    else if (size2 > size1) cmp = -1;
+    else cmp = 0;
+    return i;
+  }
+
+  // Fast path: compare first 16 bytes without loops (covers 99.9% of cases)
+  {
+    uint64_t w1, w2;
+    memcpy(&w1, str1, 8);
+    memcpy(&w2, str2, 8);
+    if (w1 != w2) {
+      uint64_t diff = w1 ^ w2;
+      i = detail::count_trailing_zeros_64(diff) / 8;
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i = 8;
+    if (min_size >= 16) {
+      memcpy(&w1, str1 + 8, 8);
+      memcpy(&w2, str2 + 8, 8);
+      if (w1 != w2) {
+        uint64_t diff = w1 ^ w2;
+        i = 8 + detail::count_trailing_zeros_64(diff) / 8;
+        cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+        return i;
+      }
+      i = 16;
+    }
+  }
+
+#if defined(LEAVES_HAS_AVX512) && !defined(__EMSCRIPTEN__)
+  // AVX-512: Compare 64 bytes at a time
+  while (i + 64 <= min_size) {
+    __m512i a = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(str1 + i));
+    __m512i b = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(str2 + i));
+    __mmask64 mask = _mm512_cmpneq_epi8_mask(a, b);
+    if (mask != 0) {
+      i += detail::count_trailing_zeros_64(mask);
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i += 64;
+  }
+#endif
+
+#if defined(LEAVES_HAS_AVX2) && !defined(__EMSCRIPTEN__)
+  // AVX2: Compare 32 bytes at a time
+  while (i + 32 <= min_size) {
+    __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(str1 + i));
+    __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(str2 + i));
+    __m256i eq = _mm256_cmpeq_epi8(a, b);
+    int mask = _mm256_movemask_epi8(eq);
+    if (mask != -1) {  // -1 = 0xFFFFFFFF = all 32 bytes equal
+      i += detail::count_trailing_zeros_32(static_cast<uint32_t>(~mask));
+      cmp = (uint8_t)str1[i] > (uint8_t)str2[i] ? 1 : -1;
+      return i;
+    }
+    i += 32;
+  }
+#endif
 
 #if defined(LEAVES_HAS_SSE2) && !defined(__EMSCRIPTEN__)
   // SSE2: Compare 16 bytes at a time (x86-64 only, not Emscripten)

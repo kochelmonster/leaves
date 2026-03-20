@@ -97,6 +97,14 @@ struct SmartPointer {
     if (_iref) _iref->inc_ref();
   }
 
+  // Move conversion from SmartPointer of different types
+  template <typename U, NodeTypes u>
+  SmartPointer(SmartPointer<U, u>&& src) noexcept
+      : _iref(src._iref), _offset(src._offset) {
+    src._iref = nullptr;
+    src._offset = 0;
+  }
+
   SmartPointer& operator=(const SmartPointer& other) {
     if (this == &other) return *this;
     AreaSlice* old = _iref;
@@ -135,6 +143,20 @@ struct SmartPointer {
     return *this;
   }
 
+  // Move assignment from SmartPointer of different types
+  template <typename U, NodeTypes u>
+  SmartPointer& operator=(SmartPointer<U, u>&& other) noexcept {
+    AreaSlice* old = _iref;
+    _iref = other._iref;
+    _offset = other._offset;
+    other._iref = nullptr;
+    other._offset = 0;
+    if (old && old->dec_ref() == 0) {
+      ::operator delete((void*)old);
+    }
+    return *this;
+  }
+
   ~SmartPointer() {
     AreaSlice* tmp = _iref;
     if (tmp && tmp->dec_ref() == 0) {
@@ -142,34 +164,38 @@ struct SmartPointer {
     }
   }
 
-  operator char*() { return (char*)_iref + _offset; }
+  operator char*() const { return (char*)_iref + _offset; }
   operator const char*() const { return (const char*)_iref + _offset; }
   operator const uint8_t*() const { return (uint8_t*)_iref + _offset; }
   operator uint64_t() const { return (uint64_t)((char*)_iref + _offset); }
-  operator uint64_t() { return (uint64_t)((char*)_iref + _offset); }
   operator bool() const { return _iref != nullptr; }
-  operator bool() { return _iref != nullptr; }
 
-  operator T*() { return (T*)((char*)*this); }
-  operator const T*() const { return (const T*)((const char*)*this); }
-  T* operator->() { return (T*)*this; }
-  const T* operator->() const { return (const T*)*this; }
-  T& operator*() { return *reinterpret_cast<T*>((char*)*this); }
-  const T& operator*() const {
-    return *reinterpret_cast<const T*>((const char*)*this);
-  }
+  operator T*() const { return (T*)((char*)_iref + _offset); }
+  T* operator->() const { return (T*)((char*)_iref + _offset); }
+  T& operator*() const { return *reinterpret_cast<T*>((char*)_iref + _offset); }
 
-  SmartPointer operator-(uint64_t offset) {
+  SmartPointer operator-(uint64_t offset) const& {
     SmartPointer result = *this;
     assert(result._offset >= offset);
     result._offset -= offset;
     return result;
   }
 
-  SmartPointer operator+(uint64_t offset) {
+  SmartPointer operator-(uint64_t offset) && {
+    assert(_offset >= offset);
+    _offset -= static_cast<uint32_t>(offset);
+    return std::move(*this);
+  }
+
+  SmartPointer operator+(uint64_t offset) const& {
     SmartPointer result = *this;
     result._offset += offset;
     return result;
+  }
+
+  SmartPointer operator+(uint64_t offset) && {
+    _offset += static_cast<uint32_t>(offset);
+    return std::move(*this);
   }
 
   bool operator==(const SmartPointer& other) const {

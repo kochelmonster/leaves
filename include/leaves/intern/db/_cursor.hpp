@@ -62,8 +62,6 @@ struct _Transition {
 
   bool success() const { return cmp == 0 && is_leaf(); }
 
-  bool is_page_root() const { return !offset->is_relative(); }
-
   bool init(Cursor* cursor_, offset_e* offset_, uint16_t keypos_ = 0) {
     cursor = cursor_;
     keypos = keypos_;
@@ -90,12 +88,6 @@ struct _Transition {
 
   offset_e* update() {
     using PageHeader = typename Traits::PageHeader;
-
-    if (!is_page_root()) {
-      // not a page root: cow has to be done in page root
-      offset = parent().update();
-      return link();
-    }
 
     // Compute PageHeader addresses from node pointers
     page_ptr page_header = node - sizeof(PageHeader);
@@ -201,6 +193,7 @@ struct _Transition {
     if (key().empty()) {
       if (trie_.has_none()) {
         link_idx = 0;
+        cursor->_db->prefetch(&trie_.array()[link_idx]);
         push().find();
       } else
         cmp = -1;
@@ -208,12 +201,13 @@ struct _Transition {
     }
 
     branch_key = key()[0];
-    if (!trie_.isset(branch_key)) {
+    int idx = trie_.array_index(branch_key);
+    if (idx < 0) {
       cmp = NOT_FOUND;
       return;
     }
     cmp = 0;
-    link_idx = trie_.array_index(branch_key);
+    link_idx = idx;
     push().find();
   }
 
@@ -428,15 +422,12 @@ struct _CursorBase {
   }
 
   // Allocation methods delegated through cursor to DB
-  page_ptr alloc(uint16_t size) { return this->_db->alloc(size); }
-
-  AreaSlice alloc_big(uint64_t size) { return this->_db->alloc_big(size); }
+  page_ptr alloc_page(uint16_t size) { return this->_db->alloc_page(size); }
 };
 
 // Full cursor with find, transactions, and modification operations
 template <typename Traits_, typename Derived>
-struct _ICursor
-    : public _CursorBase<Traits_, Derived> {
+struct _ICursor : public _CursorBase<Traits_, Derived> {
   typedef Traits_ Traits;
   typedef _ICursor<Traits_, Derived> Cursor;
   typedef _CursorBase<Traits_, Derived> CursorBase;
@@ -592,7 +583,7 @@ struct _TransactionalCursor
     : public _ICursor<Traits_, _TransactionalCursor<Traits_>> {
   typedef Traits_ Traits;
   typedef _ICursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
-  typedef _BigMemory<Cursor> BigMemory;
+  typedef _BigMemory<_Cursor<Traits_>> BigMemory;
   using DB = typename Traits::DB;
   using txn_ptr = typename DB::txn_ptr;
   using offset_e = typename Traits::offset_e;
@@ -652,9 +643,8 @@ struct _TransactionalCursor
     static constexpr size_t BIG_INLINE_SIZE =
         sizeof(BigValue) + Aspect::big_meta_size;
 
-    uint16_t size_modified =
-        BigMemory::template modify_size<LeafNode>(this->rest_key.size(), size,
-                                                  BIG_INLINE_SIZE);
+    uint16_t size_modified = BigMemory::template modify_size<LeafNode>(
+        this->rest_key.size(), size, BIG_INLINE_SIZE);
     void* result = Cursor::reserve(size_modified);
     if (size_modified != size) {
       BigValue* bvalue = (BigValue*)result;
@@ -662,8 +652,7 @@ struct _TransactionalCursor
       this->stack.back().leaf()->set_big();
       // Let aspect write inline metadata after BigValue
       if constexpr (Aspect::big_meta_size > 0) {
-        _aspect().init_big_meta(this->key(),
-                                (char*)result + sizeof(BigValue),
+        _aspect().init_big_meta(this->key(), (char*)result + sizeof(BigValue),
                                 _aspect_context);
       }
       auto data_ptr = bvalue->data(this->_db);
@@ -750,13 +739,11 @@ struct _TransactionalCursor
 
   bool rollback() {
     if (this->_db->rollback(_id)) {
-      // Switch back to the committed read transaction (the write txn is
-      // now orphaned).  Must update _txn/_root before re-finding so
-      // find() navigates the committed trie.
-      auto read_txn = this->_db->txn();
-      if (this->_txn) this->_txn->refs.fetch_sub(1);
+      // Switch back to the committed read transaction.
+      // Don't decrement _txn->refs — rollback() already reset the recycled
+      // page to refs=0 and repurposed it as next_txn_page.
+      auto read_txn = this->_db->txn_ref();
       this->_txn = read_txn;
-      this->_txn->refs.fetch_add(1);
       this->_root = &this->_txn->root;
       if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
       this->stack.clear();
@@ -768,35 +755,36 @@ struct _TransactionalCursor
   }
 
   void update() {
-    auto new_txn = this->_db->txn();
+    // txn_ref() atomically resolves and increments refs under SpinLock,
+    // preventing a concurrent start_transaction() from freeing the txn.
+    auto new_txn = this->_db->txn_ref();
     assert(new_txn);
     if (!this->_txn || new_txn->txn_id > this->_txn->txn_id) {
       _set_txn(new_txn);
     }
+    new_txn->refs.fetch_sub(1);  // revert the prior increment
   }
 
   void _set_txn(txn_ptr& txn) {
     assert(txn);
-    if (this->_txn != txn) {
-      offset_e old_root_val = this->_root ? *this->_root : offset_e();
-      if (this->_txn) {
-        this->_txn->refs.fetch_sub(1);
-      }
-      this->_txn = txn;
-      this->_txn->refs.fetch_add(1);
-      this->_root = &this->_txn->root;
-      this->stack.front().offset = this->_root;
-      if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
-      if ((this->current_key.size() || this->rest_key.size()) &&
-          old_root_val != *this->_root) {
-        // adjust to new root
-        this->stack.clear();
-        _refind_buffer.reserve(this->current_key.size() +
-                               this->rest_key.size());
-        _refind_buffer = this->current_key;
-        _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
-        this->find(_refind_buffer);
-      }
+    assert(this->_txn != txn);
+    offset_e old_root_val = this->_root ? *this->_root : offset_e();
+    if (this->_txn) {
+      this->_txn->refs.fetch_sub(1);
+    }
+    this->_txn = txn;
+    this->_txn->refs.fetch_add(1);
+    this->_root = &this->_txn->root;
+    this->stack.front().offset = this->_root;
+    if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
+    if ((this->current_key.size() || this->rest_key.size()) &&
+        old_root_val != *this->_root) {
+      // adjust to new root
+      this->stack.clear();
+      _refind_buffer.reserve(this->current_key.size() + this->rest_key.size());
+      _refind_buffer = this->current_key;
+      _refind_buffer.append(this->rest_key.data(), this->rest_key.size());
+      this->find(_refind_buffer);
     }
   }
 };

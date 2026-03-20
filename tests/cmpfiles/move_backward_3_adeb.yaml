@@ -1,7 +1,7 @@
 type: trie
-id: 16280
-page: 16272
-freespace: 88
+id: 531152
+page: 531144
+freespace: 96
 txn: 5
 size: 32
 compressed: 
@@ -9,13 +9,13 @@ compressed:
   key: "[a]"
 branches: "[b][d]"
 children: 
-  - 15248
-  - 16160
+  - 530768
+  - 1057152
 ---
 type: trie
-id: 15248
-page: 15240
-freespace: 88
+id: 530768
+page: 530760
+freespace: 96
 txn: 4
 size: 32
 compressed: 
@@ -23,13 +23,13 @@ compressed:
   key: "[b][c]"
 branches: "[a][b]"
 children: 
-  - 10241
-  - 14577
+  - 530513
+  - 530641
 ---
 type: leaf
-id: 10241
-page: 10233
-freespace: 112
+id: 530513
+page: 530505
+freespace: 120
 size: 8
 txn: 3
 keysize: 1
@@ -38,9 +38,9 @@ valuesize: 4
 value: "abca"
 ---
 type: leaf
-id: 14577
-page: 14569
-freespace: 112
+id: 530641
+page: 530633
+freespace: 120
 size: 8
 txn: 3
 keysize: 1
@@ -49,9 +49,9 @@ valuesize: 4
 value: "abcb"
 ---
 type: trie
-id: 16160
-page: 16152
-freespace: 88
+id: 1057152
+page: 1057144
+freespace: 96
 txn: 5
 size: 32
 compressed: 
@@ -59,13 +59,13 @@ compressed:
   key: "[d][e]"
 branches: "[a][b]"
 children: 
-  - 5473
-  - 16401
+  - 531025
+  - 8577
 ---
 type: leaf
-id: 5473
-page: 5465
-freespace: 112
+id: 531025
+page: 531017
+freespace: 120
 size: 8
 txn: 5
 keysize: 1
@@ -74,9 +74,9 @@ valuesize: 4
 value: "adea"
 ---
 type: leaf
-id: 16401
-page: 16393
-freespace: 112
+id: 8577
+page: 8569
+freespace: 120
 size: 8
 txn: 5
 keysize: 1

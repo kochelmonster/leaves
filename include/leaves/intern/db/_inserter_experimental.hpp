@@ -161,7 +161,7 @@ struct _PageBuilder {
     page_size += _slots[0].size;  // add root slot size
     assert(page_size + sizeof(PageHeader) <= MAX_PAGE_SIZE);
 
-    _page = alloc.alloc(page_size);
+    _page = alloc.alloc_page(page_size);
     // fill the page
     uint16_t offset = sizeof(PageHeader);
     for (size_t j = 0; j < i; ++j) {
@@ -173,7 +173,7 @@ struct _PageBuilder {
     // fallback for remaining slots
     for (; i < _node_count; ++i) {
       if (_slots[i].size == 0) continue;  // skip place holders
-      _slots[i].page = alloc.alloc(_slots[i].size);
+      _slots[i].page = alloc.alloc_page(_slots[i].size);
       _slots[i].offset = sizeof(PageHeader);
     }
 
@@ -295,7 +295,7 @@ struct _LocalityInserter {
     return back->cursor->_db->template resolve<page_ptr>(offset_ptr);
   }
 
-  page_ptr alloc(uint16_t size) { return back->cursor->alloc(size); }
+  page_ptr alloc_page(uint16_t size) { return back->cursor->alloc_page(size); }
 
   Slice& key() { return back->key(); }
 

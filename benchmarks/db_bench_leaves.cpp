@@ -11,6 +11,8 @@
 #include <iomanip>
 #include <sstream>
 
+// Include replicating_mmap first so blake3.h is included before _hash.hpp
+#include "leaves/replicating_mmap.hpp"
 #include "leaves/fstore.hpp"
 #include "leaves/intern/db/_check.hpp"
 #include "leaves/leaves.hpp"
@@ -71,6 +73,9 @@ static bool FLAGS_metasync = false;
 
 // Use FileStorage instead of MapStorage
 static bool FLAGS_use_file_storage = false;
+
+// Use ReplicatingMapStorage (includes merkle hashing)
+static bool FLAGS_use_replicating = false;
 
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
@@ -176,7 +181,9 @@ class Benchmark {
   // Storage pointers - only one will be non-null based on configuration
   std::shared_ptr<leaves::FileStorage> file_storage_;
   std::shared_ptr<leaves::MapStorage> map_storage_;
+  std::shared_ptr<leaves::ReplicatingMapStorage> replicating_storage_;
   bool using_file_storage_;
+  bool using_replicating_;
   int db_num_;
   int num_;
   int reads_;
@@ -192,11 +199,16 @@ class Benchmark {
   int done_;
   int next_report_;  // When to report next
 
+  const char* storage_name() const {
+    if (using_replicating_) return "ReplicatingMapStorage";
+    if (using_file_storage_) return "FileStorage";
+    return "MapStorage";
+  }
+
   void PrintHeader() {
     const int kKeySize = 16;
     PrintEnvironment();
-    std::fprintf(stdout, "Storage:     %s\n",
-                 using_file_storage_ ? "FileStorage" : "MapStorage");
+    std::fprintf(stdout, "Storage:     %s\n", storage_name());
     std::fprintf(stdout, "Keys:        %d bytes each\n", kKeySize);
     std::fprintf(
         stdout, "Values:      %d bytes each (%d bytes after compression)\n",
@@ -348,7 +360,9 @@ class Benchmark {
   Benchmark()
       : file_storage_(nullptr),
         map_storage_(nullptr),
+        replicating_storage_(nullptr),
         using_file_storage_(FLAGS_use_file_storage),
+        using_replicating_(FLAGS_use_replicating),
         num_(FLAGS_num),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
         bytes_(0),
@@ -373,6 +387,7 @@ class Benchmark {
     // shared_ptr will automatically clean up
     file_storage_.reset();
     map_storage_.reset();
+    replicating_storage_.reset();
   }
 
   void Run() {
@@ -441,7 +456,11 @@ class Benchmark {
       if (known) {
         Stop(name);
 #ifdef STATISTICS
-        if (using_file_storage_ && file_storage_) {
+        if (using_replicating_ && replicating_storage_) {
+          std::cout << "File size: "
+                    << replicating_storage_->file_size() / (1024 * 1024) << " MB"
+                    << std::endl;
+        } else if (using_file_storage_ && file_storage_) {
           std::cout << "File size: "
                     << file_storage_->file_size() / (1024 * 1024) << " MB"
                     << std::endl;
@@ -517,7 +536,8 @@ class Benchmark {
 
  private:
   void Open(bool sync) {
-    assert(file_storage_ == nullptr && map_storage_ == nullptr);
+    assert(file_storage_ == nullptr && map_storage_ == nullptr &&
+           replicating_storage_ == nullptr);
 
     // Initialize db_
     char file_name[100], cmd[200];
@@ -533,7 +553,9 @@ class Benchmark {
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
 
-    if (using_file_storage_) {
+    if (using_replicating_) {
+      replicating_storage_ = leaves::ReplicatingMapStorage::create(test_fname.c_str(), 64 * leaves::G);
+    } else if (using_file_storage_) {
       file_storage_ = leaves::FileStorage::create(test_fname.c_str());
     } else {
       map_storage_ = leaves::MapStorage::create(test_fname.c_str(), 64 * leaves::G);
@@ -614,12 +636,13 @@ class Benchmark {
       }
 
       // Clean up existing storage if any
-      if (file_storage_ || map_storage_) {
+      if (file_storage_ || map_storage_ || replicating_storage_) {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
 
         file_storage_.reset();
         map_storage_.reset();
+        replicating_storage_.reset();
 
         int r = system(cmd);
       }
@@ -635,7 +658,13 @@ class Benchmark {
     }
 
     // Call the appropriate template implementation based on storage type
-    if (using_file_storage_) {
+    if (using_replicating_) {
+      if (!replicating_storage_) {
+        throw std::runtime_error("Replicating storage pointer is null");
+      }
+      WriteImpl(*replicating_storage_, sync, order, num_entries, value_size,
+                entries_per_batch);
+    } else if (using_file_storage_) {
       if (!file_storage_) {
         throw std::runtime_error("File storage pointer is null");
       }
@@ -666,7 +695,12 @@ class Benchmark {
 
   void ReadSequential() {
     // Call the appropriate template implementation based on storage type
-    if (using_file_storage_) {
+    if (using_replicating_) {
+      if (!replicating_storage_) {
+        throw std::runtime_error("Replicating storage pointer is null");
+      }
+      ReadSequentialImpl(*replicating_storage_);
+    } else if (using_file_storage_) {
       if (!file_storage_) {
         throw std::runtime_error("File storage pointer is null");
       }
@@ -700,7 +734,12 @@ class Benchmark {
 
   void ReadRandom() {
     // Call the appropriate template implementation based on storage type
-    if (using_file_storage_) {
+    if (using_replicating_) {
+      if (!replicating_storage_) {
+        throw std::runtime_error("Replicating storage pointer is null");
+      }
+      ReadRandomImpl(*replicating_storage_);
+    } else if (using_file_storage_) {
       if (!file_storage_) {
         throw std::runtime_error("File storage pointer is null");
       }
@@ -746,6 +785,12 @@ int main(int argc, char** argv) {
       FLAGS_use_file_storage = (n == 1) ? true : false;
       std::fprintf(stderr, "Using %s for storage\n",
                    FLAGS_use_file_storage ? "FileStorage" : "MapStorage");
+    } else if (sscanf(argv[i], "--use_replicating=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_use_replicating = (n == 1) ? true : false;
+      if (FLAGS_use_replicating) {
+        std::fprintf(stderr, "Using ReplicatingMapStorage for storage\n");
+      }
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;

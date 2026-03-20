@@ -83,9 +83,11 @@ BOOST_AUTO_TEST_CASE(test_sanitize) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap db(dbFilePath.c_str());
-  db._memory->processes[2] = 0xFFFFFFFF;
-  auto first = db.sanitize_processes();
-  BOOST_CHECK(!first);
+  if constexpr (DBMMap::MAX_PROCESSES > 1) {
+    db._memory->processes[2] = 0xFFFFFFFF;
+    auto first = db.sanitize_processes();
+    BOOST_CHECK(!first);
+  }
 
   std::filesystem::resize_file(dbFilePath.c_str(), db._memory->file_size + 20);
   db.sanitize();
@@ -107,6 +109,7 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
     BOOST_FAIL("Expected NoProcess exception not thrown");
   }
 
+#ifndef LEAVES_SINGLE_PROCESS
   for(int i = 0; i < db.MAX_PROCESSES; i++) {
     if (!db._memory->processes[i])
       db._memory->processes[i] = 0xFFFFFFFF;
@@ -121,6 +124,7 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
   catch(...) {
     BOOST_FAIL("Expected NoProcess exception not thrown");
   }
+#endif
 
   try {
     DBMMap db(dbFilePath.c_str(), 2 * G, 2);
@@ -131,6 +135,16 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
   catch(...) {
     BOOST_FAIL("Expected NoProcess exception not thrown");
   }
+
+  // Test max_processes mismatch detection
+  db._memory->max_processes = db.MAX_PROCESSES + 1;
+  try {
+    DBMMap db2(dbFilePath.c_str());
+    BOOST_FAIL("Expected WrongValue exception not thrown");
+  } catch (const WrongValue& e) {
+    BOOST_CHECK_EQUAL(std::string(e.what()), "max_processes does not match.");
+  }
+  db._memory->max_processes = db.MAX_PROCESSES;  // restore
 
   
 }

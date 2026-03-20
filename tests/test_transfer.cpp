@@ -21,7 +21,7 @@ using DBImpl = Storage::StorageImpl::DB;
 using Traits = DBImpl::Traits;
 using TrieNode = _TrieNode<Traits>;
 using LeafNode = _LeafNode<Traits>;
-using TransferBuffer = TransferTrie<Traits>;
+using TransferBuffer = ReplicationTransferTrie<>;
 using Sender = TransferTrieSender<DBImpl>;
 
 void test_header_size() {
@@ -322,7 +322,7 @@ void test_sender_empty_db() {
   
   auto db = (*storage)["testdb"];
   auto* db_impl = db._internal();
-  auto txn = db_impl->txn();
+  auto txn = db_impl->acquire_hash_trie();
   
   Sender sender(db_impl, txn);
   sender.begin();
@@ -337,6 +337,7 @@ void test_sender_empty_db() {
   assert(hdr != nullptr);
   assert(hdr->node_count == 0);
   
+  db_impl->release_hash_trie(txn);
   std::cout << "OK\n";
 }
 
@@ -355,7 +356,7 @@ void test_sender_single_leaf() {
   cursor.commit();
   
   auto* db_impl = db._internal();
-  auto txn = db_impl->txn();
+  auto txn = db_impl->acquire_hash_trie();
   
   Sender sender(db_impl, txn);
   sender.begin();
@@ -369,6 +370,7 @@ void test_sender_single_leaf() {
   assert(hdr != nullptr);
   assert(hdr->node_count == 1);  // Just the leaf
   
+  db_impl->release_hash_trie(txn);
   std::cout << "OK\n";
 }
 
@@ -392,7 +394,7 @@ void test_sender_multiple_keys() {
   cursor.commit();
   
   auto* db_impl = db._internal();
-  auto txn = db_impl->txn();
+  auto txn = db_impl->acquire_hash_trie();
   
   Sender sender(db_impl, txn);
   sender.begin();
@@ -425,6 +427,7 @@ void test_sender_multiple_keys() {
   // Should have trie nodes + leaf nodes
   assert(total_nodes >= 3);  // At least 3 leaves
   
+  db_impl->release_hash_trie(txn);
   std::cout << "OK\n";
 }
 
@@ -448,7 +451,7 @@ void test_sender_buffer_overflow() {
   cursor.commit();
   
   auto* db_impl = db._internal();
-  auto txn = db_impl->txn();
+  auto txn = db_impl->acquire_hash_trie();
   
   // With post-order DFS, the entire subtrie must fit in one buffer
   // Use a buffer large enough to hold all 100 keys
@@ -473,6 +476,7 @@ void test_sender_buffer_overflow() {
   assert(sender.is_complete());
   assert(total_nodes >= 100);  // At least 100 leaves
   
+  db_impl->release_hash_trie(txn);
   std::cout << "OK\n";
 }
 
@@ -497,7 +501,7 @@ void test_sender_process_ack() {
   cursor.commit();
   
   auto* db_impl = db._internal();
-  auto txn = db_impl->txn();
+  auto txn = db_impl->acquire_hash_trie();
   
   // With post-order DFS, entire subtrie must fit in buffer
   Sender sender(db_impl, txn, 32 * 1024);
@@ -514,6 +518,7 @@ void test_sender_process_ack() {
   // Should be complete after one round
   assert(sender.is_complete());
   
+  db_impl->release_hash_trie(txn);
   std::cout << "OK\n";
 }
 
@@ -539,7 +544,7 @@ void test_relative_offsets() {
   cursor.commit();
   
   auto* db_impl = db._internal();
-  auto txn = db_impl->txn();
+  auto txn = db_impl->acquire_hash_trie();
   
   Sender sender(db_impl, txn);
   sender.begin();
@@ -569,6 +574,8 @@ void test_relative_offsets() {
   assert(sender.is_complete());
   assert(total_nodes >= 3);  // At least 3 leaves
   
+  db_impl->release_hash_trie(txn);
+  
   // The test now verifies that BFS traversal works correctly across multiple rounds
   // Relative offset verification would require examining buffer contents which is
   // implementation-specific to the wire format
@@ -591,14 +598,12 @@ int main() {
   
   std::cout << "\n=== Sender Tests ===\n";
   setup_temp_dir();
-  
   test_sender_empty_db();
   test_sender_single_leaf();
   test_sender_multiple_keys();
   test_sender_buffer_overflow();
   test_sender_process_ack();
   test_relative_offsets();
-  
   cleanup_temp_dir();
   
   std::cout << "\nAll tests passed!\n";

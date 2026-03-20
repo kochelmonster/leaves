@@ -29,12 +29,12 @@ struct _TrieNode {
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
   static constexpr uint16_t MAX_BRANCH_COUNT = 257;  // 256 (chars) + 1 (NULL)
+  hash_t hash;
+  uint16_e _array_len;  // < MAX_BRANCH_COUNT
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;
   uint8_t _array_offset;
-  uint16_e _array_len;  // < MAX_BRANCH_COUNT
-  hash_t hash;
   uint8_t _compressed_data[];
 
   static constexpr uint16_t NULL_MASK = uint16_t(1) << 15;
@@ -279,7 +279,14 @@ struct _TrieNode {
 
       oidx = bits::count(lower_[lidx] & ((1u << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
-      for (int i = 0; i < lidx; i++) oidx += bits::count(lower_[i]);
+      // Unrolled loop - lidx is at most 7
+      if (lidx > 0) oidx += bits::count(lower_[0]);
+      if (lidx > 1) oidx += bits::count(lower_[1]);
+      if (lidx > 2) oidx += bits::count(lower_[2]);
+      if (lidx > 3) oidx += bits::count(lower_[3]);
+      if (lidx > 4) oidx += bits::count(lower_[4]);
+      if (lidx > 5) oidx += bits::count(lower_[5]);
+      if (lidx > 6) oidx += bits::count(lower_[6]);
     } else {
       assert((src._array_len & NULL_MASK) == 0);
       _array_len = _array_len | NULL_MASK;
@@ -319,7 +326,15 @@ struct _TrieNode {
       // Calculate oidx using source value
       oidx = bits::count(src_lower_val & ((1u << lbit(key)) - 1)) +
              bool(_array_len & NULL_MASK);
-      for (int i = 0; i < lidx; i++) oidx += bits::count(src.lower()[i]);
+      // Unrolled loop - lidx is at most 7
+      uint32_e* src_lower = src.lower();
+      if (lidx > 0) oidx += bits::count(src_lower[0]);
+      if (lidx > 1) oidx += bits::count(src_lower[1]);
+      if (lidx > 2) oidx += bits::count(src_lower[2]);
+      if (lidx > 3) oidx += bits::count(src_lower[3]);
+      if (lidx > 4) oidx += bits::count(src_lower[4]);
+      if (lidx > 5) oidx += bits::count(src_lower[5]);
+      if (lidx > 6) oidx += bits::count(src_lower[6]);
 
       // Check if removing this bit will empty the lower bucket
       uint32_e new_lower_val = src_lower_val & ~(1u << lbit(key));
@@ -368,18 +383,12 @@ struct _TrieNode {
  * @note The offsets array must have NONE at index -1, accessible as
  * offsets[NONE].
  */
-void create(const Slice& prefix, offset_e* offsets) {
+void create(const Slice& prefix, offset_e* offsets, uint8_t precomputed_upper) {
   assert(prefix.size() < 256);
   _compressed_len = prefix.size();
   memcpy(_compressed_data, prefix.data(), _compressed_len);
 
-  // First pass: determine _upper bitmap
-  _upper = 0;
-  for (int i = 0; i < 256; i++) {
-    if (offsets[i]) {
-      _upper |= (1u << ubit(i));
-    }
-  }
+  _upper = precomputed_upper;
 
   // Now we can correctly calculate offsets
   _lower_offset = calc_lower_start() / sizeof(uint32_e);
@@ -396,12 +405,21 @@ void create(const Slice& prefix, offset_e* offsets) {
     _array_len = 0;
   }
 
-  for (int i = 0; i < 256; i++) {
-    if (offsets[i]) {
-      _array_len++;
-      *array_++ = offsets[i];
-      lower_[bits::index(_upper, ubit(i))] |= 1u << lbit(i);
+  // Iterate only groups with bits set in _upper
+  uint8_t remaining = _upper;
+  while (remaining) {
+    int grp = bits::first(remaining);
+    remaining &= remaining - 1;  // clear lowest set bit
+    int base = grp << 5;
+    uint32_t lbits = 0;
+    for (int j = 0; j < 32; j++) {
+      if (offsets[base + j]) {
+        _array_len++;
+        *array_++ = offsets[base + j];
+        lbits |= 1u << j;
+      }
     }
+    lower_[bits::index(_upper, grp)] = lbits;
   }
 }
 
@@ -419,11 +437,16 @@ int array_index(int nchar) const {
   uint32_e* lower_ = lower();
   int lidx = bits::index(_upper, ubit(nchar));
   if (_upper & (1u << ubit(nchar))) {
+    if (!(lower_[lidx] & (1u << lbit(nchar)))) return -1;
     int oidx = bits::count(lower_[lidx] & ((1u << lbit(nchar)) - 1)) +
                bool(_array_len & NULL_MASK);
-    for (int i = 0; i < lidx; i++) {
-      oidx += bits::count(lower_[i]);
-    }
+    if (lidx > 0) oidx += bits::count(lower_[0]);
+    if (lidx > 1) oidx += bits::count(lower_[1]);
+    if (lidx > 2) oidx += bits::count(lower_[2]);
+    if (lidx > 3) oidx += bits::count(lower_[3]);
+    if (lidx > 4) oidx += bits::count(lower_[4]);
+    if (lidx > 5) oidx += bits::count(lower_[5]);
+    if (lidx > 6) oidx += bits::count(lower_[6]);
     assert(oidx < count());
     return oidx;
   }
@@ -479,6 +502,44 @@ int first() const {
   return (bits::first(_upper) << 5) | bits::first(lower()[0]);
 }
 
+/**
+ * @brief Iterate all branches via direct bitmap scan — no per-step popcount.
+ *
+ * Calls fn(key, offset_ptr) for every branch in sorted order (NONE first,
+ * then 0-255).  array_idx is tracked with a simple increment instead of
+ * recomputing bits::index on every step.
+ */
+template <typename Fn>
+void for_each_branch(Fn fn) const {
+  offset_e* arr = array();
+  int arr_idx = 0;
+
+  // NONE branch (stored at array position 0 when present)
+  if (has_none()) {
+    fn(NONE, &arr[arr_idx]);
+    arr_idx++;
+  }
+
+  // Iterate upper bitmap groups
+  uint8_t remaining_upper = _upper;
+  const uint32_e* lower_ = lower();
+  int lower_idx = 0;
+  while (remaining_upper) {
+    int grp = bits::first(remaining_upper);
+    remaining_upper &= remaining_upper - 1;  // blsr: clear lowest set bit
+
+    uint32_t remaining_lower = static_cast<uint32_t>(lower_[lower_idx]);
+    int base = grp << 5;
+    while (remaining_lower) {
+      int bit = bits::first(remaining_lower);
+      remaining_lower &= remaining_lower - 1;  // blsr
+      fn(base | bit, &arr[arr_idx]);
+      arr_idx++;
+    }
+    lower_idx++;
+  }
+}
+
 };
 #pragma pack(pop)
 
@@ -502,7 +563,7 @@ struct _LeafNode {
   uint8_t* vdata() { return data + key_size; }
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
-  Slice value() const { return Slice(data + key_size, value_size); }
+  Slice value() const { return Slice(data + key_size, vsize()); }
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
