@@ -40,7 +40,6 @@ struct TestTraits {
   static constexpr size_t MAX_KEY_SIZE = 256;
   static constexpr size_t AREA_SIZE = 128 * K;  // Larger area size for big value tests
   static constexpr uint16_t MAX_PROCESSES = 100;
-  static constexpr int GC_INTERVAL = 1;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t PAGE_SIZES[] = {64, 128, 256, 512, 1 * K, 4 * K};
   static constexpr size_t PAGE_SIZES_COUNT =

@@ -1,6 +1,6 @@
 type: trie
-id: 1059664
-page: 1059656
+id: 8576
+page: 8568
 freespace: 96
 txn: 8
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 8705
-  - 18656
+  - 530513
+  - 540208
 ---
 type: leaf
-id: 8705
-page: 8697
+id: 530513
+page: 530505
 freespace: 124
 size: 4
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 18656
-page: 18648
+id: 540208
+page: 540200
 freespace: 96
 txn: 8
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 8961
-  - 539824
+  - 530769
+  - 1059152
 ---
 type: leaf
-id: 8961
-page: 8953
+id: 530769
+page: 530761
 freespace: 123
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 539824
-page: 539816
+id: 1059152
+page: 1059144
 freespace: 96
 txn: 8
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 11313
-  - 1059536
+  - 533121
+  - 1059280
 ---
 type: leaf
-id: 11313
-page: 11305
+id: 533121
+page: 533113
 freespace: 122
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 1059536
-page: 1059528
+id: 1059280
+page: 1059272
 freespace: 96
 txn: 8
 size: 32
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 15665
-  - 18528
+  - 537473
+  - 533248
 ---
 type: leaf
-id: 15665
-page: 15657
+id: 537473
+page: 537465
 freespace: 121
 size: 7
 txn: 6
@@ -99,8 +99,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 18528
-page: 18520
+id: 533248
+page: 533240
 freespace: 88
 txn: 8
 size: 40
@@ -109,13 +109,13 @@ compressed:
   key: "[e]"
 branches: "[][f][g]"
 children: 
-  - 16049
-  - 1059409
-  - 539953
+  - 530897
+  - 17025
+  - 1061761
 ---
 type: leaf
-id: 16049
-page: 16041
+id: 530897
+page: 530889
 freespace: 120
 size: 8
 txn: 7
@@ -125,8 +125,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 1059409
-page: 1059401
+id: 17025
+page: 17017
 freespace: 118
 size: 10
 txn: 7
@@ -136,8 +136,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 539953
-page: 539945
+id: 1061761
+page: 1061753
 freespace: 118
 size: 10
 txn: 8

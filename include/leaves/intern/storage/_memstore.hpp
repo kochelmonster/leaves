@@ -36,7 +36,6 @@ struct _MemoryTraits {
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;  // Same as file store
-  static constexpr int GC_INTERVAL = 1;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MERGE_POOL_THREADS = 5;
   static constexpr uint16_t MERGE_DISPATCH_THRESHOLD = 10;  // minimum trie fan-out

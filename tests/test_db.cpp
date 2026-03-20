@@ -58,7 +58,6 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   }
 
   {
-    db->_gc_counter = db->GC_INTERVAL - 1; // force GC
     Transaction trans(db);
     db->free(block1);
     block2 = db->alloc_page(311);
@@ -67,7 +66,6 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   }
 
   {
-    db->_gc_counter = db->GC_INTERVAL - 1; // force GC
     Transaction trans(db);
     db->free(block2);
     block3 = db->alloc_page(311);
@@ -81,7 +79,6 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   txn->refs.fetch_sub(1);
 
   {
-    db->_gc_counter = db->GC_INTERVAL - 1; // force GC
     Transaction trans(db);
     block4 = db->alloc_page(311);
     BOOST_CHECK(block4 != block3);
@@ -186,7 +183,6 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     BOOST_REQUIRE(storage._memory->file_size == file_size);
 
     {
-      db->_gc_counter = db->GC_INTERVAL - 1; // force GC
       Transaction trans(db);
 
       for (offset_t bo : block_offsets) {
@@ -205,7 +201,6 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     // the last freed blocks;
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.make("test");
-    db->_gc_counter = db->GC_INTERVAL - 1; // force GC
     Transaction trans(db);
     file_size = storage._memory->file_size;
   }
@@ -217,7 +212,6 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     BOOST_REQUIRE_EQUAL(db->_storage._memory->file_size, file_size);
 
     {
-      db->_gc_counter = db->GC_INTERVAL - 1; // force GC
       Transaction trans(db);
       for (offset_t bo : block_offsets) {
         page_ptr block = db->alloc_page(4 * K - sizeof(PageHeader));
@@ -353,7 +347,6 @@ struct TestTraits {
   static constexpr size_t AREA_SIZE = 128 * K;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
-  static constexpr int GC_INTERVAL = 1;
   static constexpr uint16_t PAGE_SIZES[] = {100, 4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);

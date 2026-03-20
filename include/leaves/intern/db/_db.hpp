@@ -174,9 +174,6 @@ struct _DB {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id{0};
 
-  static constexpr int GC_INTERVAL = Traits::GC_INTERVAL;
-  int _gc_counter = GC_INTERVAL - 1;
-
   _DB(Storage& storage, offset_t header, uint16_t index)
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
@@ -466,9 +463,8 @@ struct _DB {
     // Find the oldest used transaction and free unused old transactions.
     // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
     // a txn between the refs==0 check and free().
-    if (++_gc_counter >= GC_INTERVAL) {
-      _gc_counter = 0;
-      _start_txn_id = last_txn->txn_id;
+    _start_txn_id = last_txn->txn_id;
+    {
       std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
       iter_transactions([this](txn_ptr txn) -> bool {
         if (txn->refs.load() > 0) {
@@ -480,12 +476,6 @@ struct _DB {
         free(txn);
         return false;
       });
-    } else {
-      // Inherit start_txn and _start_txn_id from previous transaction.
-      // Resolving the txn_id from the offset avoids stale _start_txn_id
-      // when refs change between GC cycles.
-      _active_txn->start_txn = last_txn->start_txn;
-      _start_txn_id = resolve<Transaction>(&last_txn->start_txn)->txn_id;
     }
 
     last_txn->refs.fetch_sub(1);
