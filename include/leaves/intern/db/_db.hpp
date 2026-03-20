@@ -32,7 +32,7 @@ struct _TransactionBase : public Traits_::PageHeader {
   // pointer to the oldest transaction
   offset_e start_txn;
 
-  // pointer ot the next higher transaction
+  // pointer to the next higher transaction
   offset_e next_txn;
 
   // count of cursors accessing this transaction
@@ -213,6 +213,7 @@ struct _DB {
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
+    txn->used = sizeof(Transaction);
     txn->txn_id = tid_t(1);
     txn->root = txn->offset_root = txn->free_bigmem_root = 0;
     txn->next_txn = 0;
