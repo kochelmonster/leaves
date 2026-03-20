@@ -24,6 +24,7 @@ option(LEAVES_GCOV "Add gconv support for tests" ON)
 option(LEAVES_ASAN "Build tests with AddressSanitizer" ON)
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
+option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded)" OFF)
 
 
 include(CheckCXXCompilerFlag)
@@ -103,7 +104,9 @@ target_sources(core INTERFACE
     include/leaves/intern/memory/_twoquecache.hpp
 )
 
-if (HAVE_BOOST_PROCESS)
+if (LEAVES_SINGLE_PROCESS)
+    target_compile_definitions(core INTERFACE LEAVES_SINGLE_PROCESS)
+elseif (HAVE_BOOST_PROCESS)
     target_link_libraries(core INTERFACE Boost::process)
 endif()
 

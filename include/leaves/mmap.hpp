@@ -17,6 +17,8 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   typedef TDB<MapStorage_> DB;
   typedef std::shared_ptr<MapStorage_> storage_ptr;
 
+  // map_size: virtual address space reservation. On mobile (iOS/Android), use a
+  // smaller value (e.g. 256*M) to avoid jetsam/OOM kills.
   MapStorage_(const char* path, size_t map_size = 4 * G, uint16_t db_count = 48)
       : _storage(std::make_unique<StorageImpl>(path, map_size, db_count)) {}
 

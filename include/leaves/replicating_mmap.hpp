@@ -68,6 +68,8 @@ class ReplicatingMapStorage_
   typedef TDB<ReplicatingMapStorage_> DB;
   typedef std::shared_ptr<ReplicatingMapStorage_> storage_ptr;
 
+  // map_size: virtual address space reservation. On mobile (iOS/Android), use a
+  // smaller value (e.g. 256*M) to avoid jetsam/OOM kills.
   ReplicatingMapStorage_(const char* path, size_t map_size = 4 * G,
                         uint16_t db_count = 48, size_t pool_threads = 0,
                         size_t hash_threads = 4)
