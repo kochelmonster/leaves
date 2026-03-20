@@ -1,6 +1,6 @@
 type: trie
-id: 33072
-page: 33064
+id: 30976
+page: 30968
 freespace: 16
 txn: 13
 size: 112
@@ -18,9 +18,9 @@ children:
   - 1057313
   - 1057441
   - 1057569
+  - 1057697
+  - 30849
   - 8577
-  - 1061793
-  - 1061921
 ---
 type: leaf
 id: 8705
@@ -122,8 +122,8 @@ valuesize: 3
 value: "abi"
 ---
 type: leaf
-id: 8577
-page: 8569
+id: 1057697
+page: 1057689
 freespace: 121
 size: 7
 txn: 11
@@ -133,8 +133,8 @@ valuesize: 3
 value: "abj"
 ---
 type: leaf
-id: 1061793
-page: 1061785
+id: 30849
+page: 30841
 freespace: 121
 size: 7
 txn: 12
@@ -144,8 +144,8 @@ valuesize: 3
 value: "abk"
 ---
 type: leaf
-id: 1061921
-page: 1061913
+id: 8577
+page: 8569
 freespace: 121
 size: 7
 txn: 13

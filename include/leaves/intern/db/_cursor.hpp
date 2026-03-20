@@ -739,14 +739,10 @@ struct _TransactionalCursor
 
   bool rollback() {
     if (this->_db->rollback(_id)) {
-      // Switch back to the committed read transaction (the write txn is
-      // now orphaned).  Must update _txn/_root before re-finding so
-      // find() navigates the committed trie.
-      // txn_ref() atomically resolves and increments refs under SpinLock,
-      // preventing a concurrent start_transaction() from freeing the txn.
+      // Switch back to the committed read transaction.
+      // Don't decrement _txn->refs — rollback() already reset the recycled
+      // page to refs=0 and repurposed it as next_txn_page.
       auto read_txn = this->_db->txn_ref();
-
-      if (this->_txn) this->_txn->refs.fetch_sub(1);
       this->_txn = read_txn;
       this->_root = &this->_txn->root;
       if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);

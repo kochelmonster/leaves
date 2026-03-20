@@ -73,8 +73,8 @@ struct _Transaction : public _TransactionBase<Traits_> {
   template <typename Resolver>
   ptr clone(Resolver& resolver) {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
-    new_txn->used = sizeof(TransactionBase);
     memcpy(&*new_txn, this, sizeof(TransactionBase));
+    new_txn->used = sizeof(TransactionBase);
     new_txn->mem_manager.reinit_locks();
     new (&new_txn->refs) std::atomic<uint32_t>(0);
     assert(new_txn->slot_id == SLOT_ID);
@@ -172,7 +172,7 @@ struct _DB {
   [[no_unique_address]] Aspect _aspect{};
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
-  tid_t _start_txn_id;
+  tid_t _start_txn_id{0};
 
   static constexpr int GC_INTERVAL = Traits::GC_INTERVAL;
   int _gc_counter = GC_INTERVAL - 1;
@@ -214,7 +214,6 @@ struct _DB {
     memset((char*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
     txn->txn_id = tid_t(1);
-    txn->slot_id = Transaction::SLOT_ID;
     txn->root = txn->offset_root = txn->free_bigmem_root = 0;
     txn->next_txn = 0;
     txn->refs.store(0);
@@ -508,7 +507,7 @@ struct _DB {
     // remains valid after rollback. Just overwrite with read_txn state.
     memcpy(&*_wtxn, &*read_txn, sizeof(Transaction));
     _wtxn->mem_manager.reinit_locks();
-    new (&_wtxn->refs) std::atomic<uint32_t>(1);  // cursor still holds 1 ref
+    new (&_wtxn->refs) std::atomic<uint32_t>(0);
     _header->next_txn_page = resolve(_wtxn);
 
     make_dirty(_wtxn);
