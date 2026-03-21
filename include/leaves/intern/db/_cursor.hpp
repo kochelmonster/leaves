@@ -21,9 +21,9 @@ struct _Transition {
   typedef _LeafNode<Traits> LeafNode;
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
-  using trie_ptr = typename Traits::Pointer<TrieNode>;
-  using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
-  using node_ptr = typename Traits::Pointer<_Node>;
+  using trie_ptr = typename Traits::template Pointer<TrieNode>;
+  using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
+  using node_ptr = typename Traits::template Pointer<_Node>;
 
   static const int NOT_FOUND = 2;  // branch_key was not found
   static const int UNDEFINED = 3;  // initial state of cmp

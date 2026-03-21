@@ -1,7 +1,6 @@
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 
-#include <boost/endian/arithmetic.hpp>
 #include <memory>
 #include <mutex>
 
@@ -50,7 +49,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   typedef Traits_ Traits;
   typedef _TransactionBase<Traits_> TransactionBase;
   typedef _MemManagerPool<Traits> MemManager;
-  using ptr = typename Traits::Pointer<_Transaction>;
+  using ptr = typename Traits::template Pointer<_Transaction>;
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using TransactionBase::area_list_tail_multi;
@@ -269,8 +268,8 @@ struct _DB {
   Slice name() const { return _storage.db_name(_index); }
 
   template <typename T>
-  typename Traits::Pointer<T> resolve(const offset_e* offset_ptr,
-                                      Access access = READ) const {
+  typename Traits::template Pointer<T> resolve(const offset_e* offset_ptr,
+                                               Access access = READ) const {
     return _storage.resolve(offset_ptr, access);
   }
 
@@ -587,8 +586,8 @@ struct _DB {
     typedef _TrieNode<Traits> TrieNode;
     typedef _LeafNode<Traits> LeafNode;
     using PageHeader = typename Traits::PageHeader;
-    using trie_ptr = typename Traits::Pointer<TrieNode>;
-    using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
+    using trie_ptr = typename Traits::template Pointer<TrieNode>;
+    using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
 
     if (offset.type() == TRIE) {
       trie_ptr branch = resolve<TrieNode>(&offset);

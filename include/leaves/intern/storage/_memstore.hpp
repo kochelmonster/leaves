@@ -149,10 +149,10 @@ struct _MemoryDB {
   }
 
   template <typename T>
-  typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
+  typename Traits::template Pointer<T> resolve(const offset_t* offset_ptr,
                                       Access access = READ) const {
     offset_t offset = *offset_ptr;
-    return typename Traits::Pointer<T>(
+    return typename Traits::template Pointer<T>(
         reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
   }
 
