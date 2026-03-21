@@ -29,14 +29,14 @@ constexpr uint16_t TRANSFER_VERSION = REPLICATION_TRANSFER_VERSION;
 // The root is the FIRST node in the buffer
 #pragma pack(push, 1)
 struct ReplicationTransferHeader {
-  boost::endian::little_uint32_t magic;
-  boost::endian::little_uint16_t version;
-  boost::endian::little_uint16_t subtrie_path_len;
-  _Offset<boost::endian::little_uint64_t> root;  // aligned 8
-  boost::endian::little_uint32_t node_count;
-  boost::endian::little_uint64_t total_size;
-  boost::endian::little_uint64_t session_id;
-  boost::endian::little_uint64_t snapshot_id;
+  _little_uint32_t magic;
+  _little_uint16_t version;
+  _little_uint16_t subtrie_path_len;
+  _Offset<_little_uint64_t> root;  // aligned 8
+  _little_uint32_t node_count;
+  _little_uint64_t total_size;
+  _little_uint64_t session_id;
+  _little_uint64_t snapshot_id;
   uint8_t db_type;
   // Followed by: subtrie_path bytes (variable), then nodes in post-order
 

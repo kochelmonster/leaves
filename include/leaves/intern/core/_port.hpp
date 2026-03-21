@@ -12,6 +12,10 @@
 #define FORCE_INLINE inline
 #endif
 
+#ifndef __EMSCRIPTEN__
+#include <boost/endian/arithmetic.hpp>
+#endif
+
 namespace leaves {
 
 // Cross-platform prefetch function
@@ -36,7 +40,33 @@ FORCE_INLINE void prefetch(const void* ptr, Access access = READ) {
 #endif
 }
 
-}  // namespace leaves
+// ---------------------------------------------------------------------------
+// Endian types — boost on native, lightweight wrappers on Emscripten (WASM).
+// WASM is always little-endian, so little-endian types are identity wrappers.
+// ---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
 
+struct _big_uint64_t {
+  uint64_t _be;
+  constexpr _big_uint64_t() = default;
+  constexpr _big_uint64_t(uint64_t v) : _be(__builtin_bswap64(v)) {}
+  operator uint64_t() const { return __builtin_bswap64(_be); }
+  _big_uint64_t& operator=(uint64_t v) { _be = __builtin_bswap64(v); return *this; }
+};
+
+using _little_uint64_t = uint64_t;
+using _little_uint32_t = uint32_t;
+using _little_uint16_t = uint16_t;
+
+#else
+
+using _big_uint64_t = boost::endian::big_uint64_t;
+using _little_uint64_t = boost::endian::little_uint64_t;
+using _little_uint32_t = boost::endian::little_uint32_t;
+using _little_uint16_t = boost::endian::little_uint16_t;
+
+#endif
+
+}  // namespace leaves
 
 #endif  // _LEAVES___PORT_HPP
