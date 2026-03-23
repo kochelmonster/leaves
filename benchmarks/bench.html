@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Leaves Browser Benchmark</title>
+<style>
+  body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; margin: 2em; }
+  h1 { color: #569cd6; font-size: 1.4em; }
+  #controls { margin: 1em 0; }
+  #controls label { margin-right: 1.5em; }
+  #controls input { width: 80px; background: #333; color: #d4d4d4; border: 1px solid #555; padding: 4px; font-family: monospace; }
+  button { background: #264f78; color: #d4d4d4; border: none; padding: 8px 16px;
+           cursor: pointer; font-family: monospace; margin-right: 8px; }
+  button:hover { background: #37699e; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #output { white-space: pre; background: #111; padding: 1em; border: 1px solid #333;
+            min-height: 400px; max-height: 80vh; overflow: auto; margin-top: 1em; font-size: 14px; }
+  .status { color: #569cd6; }
+</style>
+</head>
+<body>
+<h1>Leaves _BrowserStore &mdash; Browser Benchmark</h1>
+
+<div id="controls">
+  <label>Entries: <input type="number" id="num" value="10000" min="100"></label>
+  <label>Value size: <input type="number" id="valsize" value="100" min="1"></label>
+  <label>Batch size: <input type="number" id="batchsize" value="1000" min="1"></label>
+  <br><br>
+  <button onclick="runBench('all')">Run All</button>
+  <button onclick="runBench('leaves')">Leaves Only</button>
+  <button onclick="runBench('idb')">Raw IDB Only</button>
+</div>
+
+<div id="output">Ready. Click a button to start.</div>
+
+<script>
+var output = document.getElementById('output');
+var allButtons = document.querySelectorAll('button');
+var moduleReady = false;
+
+function log(msg) {
+  output.textContent += msg + '\n';
+  output.scrollTop = output.scrollHeight;
+}
+
+function setButtons(on) {
+  allButtons.forEach(function(b) { b.disabled = !on; });
+}
+
+// Emscripten Module configuration — must be set before loading the JS
+var Module = {
+  noInitialRun: true,
+  noExitRuntime: true,
+  arguments: [],
+  print: function(text) { log(text); },
+  printErr: function(text) { /* suppress progress spam */ },
+  onRuntimeInitialized: function() {
+    moduleReady = true;
+    log('WASM module loaded. Ready.\n');
+    setButtons(true);
+  }
+};
+
+var LEAVES = [
+  'fillseq','fillrandom','overwrite','readrandom','readseq',
+  'fillrand100K','fillseq100K','readseq100K','readrand100K'
+];
+var IDB = [
+  'idb_fillseq','idb_fillrandom','idb_overwrite','idb_readrandom','idb_readseq',
+  'idb_fillrand100K','idb_fillseq100K','idb_readseq100K','idb_readrand100K'
+];
+
+function runBench(which) {
+  if (!moduleReady) { alert('WASM not loaded yet'); return; }
+  setButtons(false);
+  output.textContent = '';
+
+  var num = document.getElementById('num').value;
+  var valsize = document.getElementById('valsize').value;
+  var batchsize = document.getElementById('batchsize').value;
+
+  var benchmarks;
+  if (which === 'leaves') benchmarks = LEAVES.join(',');
+  else if (which === 'idb') benchmarks = IDB.join(',');
+  else benchmarks = LEAVES.concat(IDB).join(',');
+
+  var args = [
+    '--num=' + num,
+    '--value_size=' + valsize,
+    '--batch_size=' + batchsize,
+    '--benchmarks=' + benchmarks
+  ];
+
+  log('Starting: ' + which + '  num=' + num + '\n');
+
+  // Yield to browser so UI updates before the blocking WASM call
+  setTimeout(function() {
+    try {
+      Module.callMain(args);
+    } catch (e) {
+      // ExitStatus is thrown on normal exit — only log real errors
+      if (e && e.name !== 'ExitStatus') {
+        log('\nERROR: ' + (e.message || e));
+      }
+    }
+    // Reset abort flag so module survives for re-runs
+    if (typeof Module['ABORT'] !== 'undefined') Module['ABORT'] = false;
+    log('\nDone.');
+    setButtons(true);
+  }, 50);
+}
+
+// Disable buttons until WASM is ready
+setButtons(false);
+output.textContent = 'Loading WASM module...\n';
+</script>
+<!-- Load emscripten-generated JS last so Module config is in place -->
+<script src="db_bench_browser.js"></script>
+</body>
+</html>

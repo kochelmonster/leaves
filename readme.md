@@ -123,4 +123,5 @@ Does a standard proceeding exits to reach this goal?
 - multi thread merger
 
 
-_db: optimierung start_transaction und commit.
+wasm
+what is fake-indexeddb?

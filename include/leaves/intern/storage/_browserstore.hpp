@@ -16,7 +16,7 @@
  *
  * Build requirements:
  * - Compile with Emscripten: emcc -sASYNCIFY
- * - Link flags: -sASYNCIFY_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete']
+ * - Link flags: -sASYNCIFY -sASYNCIFY_ADD_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete']
  */
 
 #ifdef __EMSCRIPTEN__
@@ -39,6 +39,25 @@
 #include "../memory/_memory.hpp"
 #include "../core/_node.hpp"
 #include "../core/_traits.hpp"
+
+// EM_JS functions must be at file scope (outside namespace).
+// Async IDB writes with a JS-only pending counter — avoids calling back
+// into WASM from IDB callbacks, which is unsafe during Asyncify sleep.
+EM_JS(void, leaves_idb_async_write,
+      (const char* db, const char* key, const void* data, int size), {
+  if (!Module._leavesWrites) Module._leavesWrites = 0;
+  Module._leavesWrites++;
+  IDBStore.setFile(UTF8ToString(db), UTF8ToString(key),
+    new Uint8Array(HEAPU8.subarray(data, data + size)),
+    function(error) {
+      Module._leavesWrites--;
+      if (error) err('[leaves] IDB async write error');
+    });
+});
+
+EM_JS(int, leaves_pending_writes, (), {
+  return Module._leavesWrites || 0;
+});
 
 namespace leaves {
 
@@ -91,6 +110,8 @@ struct _BrowserStoreTraits {
  * Each IDB operation is wrapped to provide a file-like interface.
  */
 struct _BrowserOperations : _CacheBase {
+  bool has_pending_writes() const { return leaves_pending_writes() > 0; }
+
   // No mutex needed for single-threaded browser environment
   struct Mutex {
     template <typename Time = std::chrono::seconds>
@@ -102,7 +123,7 @@ struct _BrowserOperations : _CacheBase {
   struct FileHeader {
     char signature[BROWSERSTORE_SIGNATURE_SIZE];
     uint16_t db_version;
-    size_t logical_size;  // Logical file size for compatibility
+    size_t file_size;  // Logical file size for compatibility
     Mutex file_lock;
     AreaPool area_pool;
     uint16_t db_count;
@@ -111,7 +132,7 @@ struct _BrowserOperations : _CacheBase {
     FileHeader(uint16_t db_count_)
         : signature{},
           db_version(0),
-          logical_size(0),
+          file_size(0),
           file_lock{},
           area_pool{},
           db_count(db_count_) {
@@ -130,7 +151,7 @@ struct _BrowserOperations : _CacheBase {
   // Internal buffer for IndexedDB operations
   mutable std::vector<char> _idb_buffer;
 
-  size_t file_size() const { return _header->logical_size; }
+  size_t file_size() const { return _header->file_size; }
 
   size_t calc_header_size() const {
     return leaves::padding(
@@ -169,18 +190,38 @@ struct _BrowserOperations : _CacheBase {
   }
 
   template <typename BlockVector>
-  void write_batch(BlockVector& blocks_to_write, size_t header_size) {
+  void write_batch(BlockVector& blocks_to_write, bool write_header = false) {
     // Sort by offset for locality (helps with browser cache)
     std::sort(blocks_to_write.begin(), blocks_to_write.end(),
               [](const auto& a, const auto& b) {
                 return a.area()->offset() < b.area()->offset();
               });
 
-    // Write each block as a separate IndexedDB record
-    // IDB handles its own batching internally
+    // Fire-and-forget async writes — data is copied by Emscripten JS glue
+    size_t total_bytes = 0;
     for (const auto& block : blocks_to_write) {
       const auto& area = block.area();
-      write(header_size + area->offset(), area, area->size());
+      total_bytes += area->size();
+      idb_async_store_data(area->offset(), area, area->size());
+    }
+
+    if (write_header) {
+      idb_async_store_data(0, _header, calc_header_size());
+    }
+#ifndef NDEBUG
+    if (!blocks_to_write.empty()) {
+      std::fprintf(stderr, "[flush] %zu areas, %zu KB async to IDB\n",
+                   blocks_to_write.size(), total_bytes / 1024);
+    }
+#endif
+  }
+
+  // Drain all in-flight async IDB writes by yielding to the event loop.
+  // The pending counter lives in JS (Module._leavesWrites) so IDB
+  // callbacks can decrement it without calling back into WASM.
+  void sync_writes() {
+    while (leaves_pending_writes() > 0) {
+      emscripten_sleep(1);
     }
   }
 
@@ -244,9 +285,20 @@ private:
     free(loaded_data);
   }
 
+  // Fire-and-forget async IDB write — JS glue copies buffer immediately
+  void idb_async_store_data(uint64_t key, const void* data, size_t size) {
+    std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
+    leaves_idb_async_write(
+        _db_name.c_str(),
+        key_str.c_str(),
+        data,
+        static_cast<int>(size)
+    );
+  }
+
   // Flush any pending data
   void flush_to_idb() const {
-    // IndexedDB operations are already synchronous with Asyncify
+    // Async writes drain via sync_writes() called from _CacheStore
   }
 };
 
@@ -287,7 +339,8 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     if (!exists) {
       // Create new database
       _header = new (buffer) FileHeader(db_count);
-      _header->logical_size = header_size;
+      // Align file_size to AREA_SIZE so areas are AREA_SIZE-aligned
+      _header->file_size = leaves::padding(header_size, _BrowserStoreTraits::AREA_SIZE);
       // Write initial header
       write(0, buffer, header_size);
     } else {
@@ -337,7 +390,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
   // Browser-specific: Export database to transferable format
   std::vector<char> export_to_buffer() const {
     std::vector<char> result;
-    size_t total_size = _header->logical_size;
+    size_t total_size = _header->file_size;
     result.resize(total_size);
 
     // Export header
@@ -357,7 +410,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     }
 
     size_t header_size = calc_header_size();
-    std::memcpy(_header, data.data(), header_size);
+    std::memcpy(static_cast<void*>(_header), data.data(), header_size);
 
     // Write header
     write(0, _header, header_size);
@@ -367,8 +420,9 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
 
   // Browser-specific: Clear all data
   void clear_database() {
-    // Delete the IndexedDB database
-    emscripten_idb_delete_database(_db_name.c_str(), nullptr, nullptr);
+    // Delete all known keys from IndexedDB
+    int error = 0;
+    emscripten_idb_delete(_db_name.c_str(), "header", &error);
     // Reinitialize
     init_browser_db(_db_name.c_str(), _header->db_count);
   }
