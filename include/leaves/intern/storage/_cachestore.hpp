@@ -82,13 +82,15 @@ struct _CacheStore : public Opers_,
       std::lock_guard<std::mutex> lock(_dirty_mutex);
       _dirty_pending.clear();
       _dirty_committed.clear();
+      _dirty_inflight.clear();
     }
   }
 
   // Dirty area tracking — guarded by _dirty_mutex (shared with background flush)
-  std::mutex _dirty_mutex;
+  mutable std::mutex _dirty_mutex;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_pending;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_committed;
+  ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_inflight;
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
@@ -109,6 +111,7 @@ struct _CacheStore : public Opers_,
 
     // Final flush of any remaining dirty blocks
     write_dirty_blocks();
+    this->sync_writes();
     close();
   }
 
@@ -129,12 +132,22 @@ struct _CacheStore : public Opers_,
 
     if (sync) {
       write_dirty_blocks();
-    } else if (has_pending && !_flush_pending.exchange(true)) {
-      // Submit async flush task to thread pool (only if not already pending)
-      this->submit_task([this]() {
+      this->sync_writes();
+    } else if (has_pending) {
+      if (this->has_workers()) {
+        // Native: thread pool coalescing via _flush_pending
+        if (!_flush_pending.exchange(true)) {
+          this->submit_task([this]() {
+            write_dirty_blocks();
+            _flush_pending.store(false);
+          });
+        }
+      } else if (!this->has_pending_writes()) {
+        // WASM: fire async IDB writes if previous batch is done.
+        // If IDB is still busy, dirty pages accumulate in
+        // _dirty_committed until the next flush sees them.
         write_dirty_blocks();
-        _flush_pending.store(false);
-      });
+      }
     }
   }
 
@@ -166,7 +179,21 @@ struct _CacheStore : public Opers_,
       return result;
     }
 
-    // Cache miss - read from disk
+    // Cache miss — check dirty maps before reading from storage.
+    // A dirty page may have been evicted from the cache but is still
+    // in-memory awaiting flush or async IDB write.
+    {
+      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      for (auto* map : {&_dirty_pending, &_dirty_committed, &_dirty_inflight}) {
+        auto it = map->find(area_offset);
+        if (it != map->end()) {
+          page_ptr result = it->second;
+          result._offset = static_cast<uint32_t>(raw_offset - area_offset);
+          _cache.put(area_offset, result);
+          return result;
+        }
+      }
+    }
 
     // Read on-disk header (could be partial / uninitialized)
     AreaSlice disk_header;
@@ -259,27 +286,28 @@ struct _CacheStore : public Opers_,
     make_header_dirty();
   }
 
-  // Process all dirty blocks from the queue and write them to storage
+  // Process all dirty blocks from the queue and write them to storage.
+  // On WASM, blocks move through _dirty_committed → _dirty_inflight
+  // so resolve() can still find them while async IDB writes are pending.
   void write_dirty_blocks() {
-    // Process all dirty areas in the set
-    // Use a batch approach for blocks with contiguous offsets
-
     std::vector<page_ptr> blocks_to_write;
     {
       std::lock_guard<std::mutex> lock(_dirty_mutex);
+      // If no async writes are pending, previous inflight batch has
+      // landed in IDB — safe to release those page_ptr refs.
+      if (!this->has_pending_writes()) {
+        _dirty_inflight.clear();
+      }
       blocks_to_write.reserve(_dirty_committed.size());
       for (auto& entry : _dirty_committed) {
         blocks_to_write.emplace_back(entry.second);
+        _dirty_inflight[entry.first] = entry.second;
       }
       _dirty_committed.clear();
     }
 
-    write_batch(blocks_to_write);
-
-    if (_header_dirty.exchange(false, std::memory_order_acq_rel)) {
-      // Write the header
-      write(0, _header, calc_header_size());
-    }
+    bool header_dirty = _header_dirty.exchange(false, std::memory_order_acq_rel);
+    write_batch(blocks_to_write, header_dirty);
   }
 
   void list_dbs(std::vector<std::string>& result) {

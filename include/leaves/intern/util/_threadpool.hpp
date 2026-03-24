@@ -60,7 +60,11 @@ struct _ThreadPoolMixin {
 
   explicit _ThreadPoolMixin(size_t num_threads = 0) {
     if (num_threads == 0) {
+#ifndef __EMSCRIPTEN__
       num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+#else
+      return;  // no threads in WASM
+#endif
     }
     start_pool(num_threads);
   }
@@ -98,6 +102,10 @@ struct _ThreadPoolMixin {
    * @brief Submit a task to the thread pool for immediate execution
    */
   void submit_task(Task task) {
+    if (_workers.empty()) {
+      task();  // execute inline when no thread pool
+      return;
+    }
     {
       std::lock_guard<std::mutex> lock(_queue_mutex);
       if (_pool_shutdown.load()) return;
@@ -105,6 +113,8 @@ struct _ThreadPoolMixin {
     }
     _queue_cv.notify_one();
   }
+
+  bool has_workers() const { return !_workers.empty(); }
 
   /**
    * @brief Schedule a task to execute after a delay

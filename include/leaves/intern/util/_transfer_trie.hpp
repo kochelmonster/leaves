@@ -1,14 +1,13 @@
 #ifndef _LEAVES__TRANSFER_TRIE_HPP
 #define _LEAVES__TRANSFER_TRIE_HPP
 
-#include <boost/endian/arithmetic.hpp>
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
 #include "../core/_node.hpp"
+#include "../core/_port.hpp"
 #include "../core/_traits.hpp"
-#include "../core/_util.hpp"
 
 namespace leaves {
 
@@ -26,10 +25,10 @@ struct _TransferTrie {
   // Uses explicit little-endian types for cross-platform compatibility
   struct Traits {
     typedef uint8_t hash_t[WIRE_HASH_SIZE];
-    typedef boost::endian::little_uint32_t uint32_e;
-    typedef boost::endian::little_uint16_t uint16_e;
-    typedef boost::endian::little_uint64_t uint64_e;
-    typedef _Offset<boost::endian::little_uint64_t> offset_e;
+    typedef _little_uint32_t uint32_e;
+    typedef _little_uint16_t uint16_e;
+    typedef _little_uint64_t uint64_e;
+    typedef _Offset<_little_uint64_t> offset_e;
     // Wire nodes live in a flat buffer - use a large sentinel PAGE_SIZES
     // so _LeafNode<Traits>::MAX_SIZE can hold any wire leaf.
     static constexpr uint16_t PAGE_SIZES[] = {65534};

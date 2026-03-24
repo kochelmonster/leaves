@@ -72,8 +72,8 @@ struct _Dumper {
   typedef _LeafNode<Traits> LeafNode;
   using offset_e = typename Traits::offset_e;
   using uint16_e = typename Traits::uint16_e;
-  using trie_ptr = typename Traits::Pointer<TrieNode>;
-  using leaf_ptr = typename Traits::Pointer<LeafNode, LEAF>;
+  using trie_ptr = typename Traits::template Pointer<TrieNode>;
+  using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
   using page_ptr = typename Traits::ptr;
 
   const DB& _db;

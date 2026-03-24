@@ -1,16 +1,16 @@
 #ifndef _LEAVES__BIT_HPP
 #define _LEAVES__BIT_HPP
 
-#include <boost/core/bit.hpp>
+#include <bit>
 #include <cassert>
 #include <cstdint>
 #include <type_traits>
 
 namespace leaves {
 
-using boost::core::countl_zero;
-using boost::core::countr_zero;
-using boost::core::popcount;
+using std::countl_zero;
+using std::countr_zero;
+using std::popcount;
 
 namespace bits {
 

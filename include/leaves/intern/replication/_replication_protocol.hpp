@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include <boost/endian/arithmetic.hpp>
+#include "../core/_port.hpp"
 
 namespace leaves {
 
@@ -34,10 +34,10 @@ constexpr uint8_t REPLICATION_PROTOCOL_VERSION = 1;
 
 #pragma pack(push, 1)
 struct ReplicationMsgHeader {
-  boost::endian::little_uint32_t magic;
+  _little_uint32_t magic;
   uint8_t msg_type;  // ReplicationMsgType
-  boost::endian::little_uint64_t session_id;
-  boost::endian::little_uint32_t payload_size;
+  _little_uint64_t session_id;
+  _little_uint32_t payload_size;
   uint8_t version;      // Protocol version (REPLICATION_PROTOCOL_VERSION)
   uint8_t reserved[6];  // Padding to 24 bytes for 8-byte payload alignment
   // Followed by: payload bytes
@@ -56,9 +56,8 @@ static_assert(sizeof(ReplicationMsgHeader) == 24,
 // Multiple big values can be batched in one message
 #pragma pack(push, 1)
 struct BigValueDataHeader {
-  boost::endian::little_uint64_t
-      wire_chunk_offset;                      // Original offset (lookup key)
-  boost::endian::little_uint32_t value_size;  // Size of value data
+  _little_uint64_t wire_chunk_offset;          // Original offset (lookup key)
+  _little_uint32_t value_size;                  // Size of value data
   // Followed by: value_size bytes of data
 };
 #pragma pack(pop)
@@ -70,9 +69,8 @@ static_assert(sizeof(BigValueDataHeader) == 12,
 // Announces total count and aligned size so receiver can pre-allocate
 #pragma pack(push, 1)
 struct BigValueStartHeader {
-  boost::endian::little_uint32_t count;  // Number of big values to follow
-  boost::endian::little_uint64_t
-      total_aligned_size;  // Total size with MAX_PAGE_SIZE alignment
+  _little_uint32_t count;                       // Number of big values to follow
+  _little_uint64_t total_aligned_size;            // Total size with MAX_PAGE_SIZE alignment
 };
 #pragma pack(pop)
 

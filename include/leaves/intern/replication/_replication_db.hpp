@@ -558,7 +558,7 @@ struct _ReplicationDB
 
       Slice val = del_cursor.value();
       if (val.size() >= sizeof(uint64_t)) {
-        boost::endian::little_uint64_t ts_le;
+        _little_uint64_t ts_le;
         std::memcpy(&ts_le, val.data(), sizeof(ts_le));
         uint64_t ts = ts_le;
         if (ts <= older_than) {
@@ -644,7 +644,7 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
-    boost::endian::little_uint64_t ts_le = now;
+    _little_uint64_t ts_le = now;
     if (meta.size() == 0) {
       Slice ts_value(reinterpret_cast<const char*>(&ts_le), sizeof(ts_le));
       del_cursor.value(ts_value);

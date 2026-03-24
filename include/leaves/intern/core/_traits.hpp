@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "_util.hpp"
 
@@ -47,11 +48,13 @@ struct SimplePointer {
   T& operator*() { return *static_cast<T*>(p); }
   const T& operator*() const { return *static_cast<const T*>(p); }
 
-  SimplePointer operator-(uint64_t offset) const {
+  template <typename U, typename = std::enable_if_t<std::is_integral_v<U>>>
+  SimplePointer operator-(U offset) const {
     return SimplePointer((char*)p - offset);
   }
 
-  SimplePointer operator+(uint64_t offset) const {
+  template <typename U, typename = std::enable_if_t<std::is_integral_v<U>>>
+  SimplePointer operator+(U offset) const {
     return SimplePointer((char*)p + offset);
   }
 
@@ -174,26 +177,30 @@ struct SmartPointer {
   T* operator->() const { return (T*)((char*)_iref + _offset); }
   T& operator*() const { return *reinterpret_cast<T*>((char*)_iref + _offset); }
 
-  SmartPointer operator-(uint64_t offset) const& {
+  template <typename U, typename = std::enable_if_t<std::is_integral_v<U>>>
+  SmartPointer operator-(U offset) const& {
     SmartPointer result = *this;
-    assert(result._offset >= offset);
-    result._offset -= offset;
+    assert(result._offset >= static_cast<uint32_t>(offset));
+    result._offset -= static_cast<uint32_t>(offset);
     return result;
   }
 
-  SmartPointer operator-(uint64_t offset) && {
-    assert(_offset >= offset);
+  template <typename U, typename = std::enable_if_t<std::is_integral_v<U>>>
+  SmartPointer operator-(U offset) && {
+    assert(_offset >= static_cast<uint32_t>(offset));
     _offset -= static_cast<uint32_t>(offset);
     return std::move(*this);
   }
 
-  SmartPointer operator+(uint64_t offset) const& {
+  template <typename U, typename = std::enable_if_t<std::is_integral_v<U>>>
+  SmartPointer operator+(U offset) const& {
     SmartPointer result = *this;
-    result._offset += offset;
+    result._offset += static_cast<uint32_t>(offset);
     return result;
   }
 
-  SmartPointer operator+(uint64_t offset) && {
+  template <typename U, typename = std::enable_if_t<std::is_integral_v<U>>>
+  SmartPointer operator+(U offset) && {
     _offset += static_cast<uint32_t>(offset);
     return std::move(*this);
   }

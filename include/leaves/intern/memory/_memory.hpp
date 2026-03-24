@@ -124,7 +124,7 @@ struct _GarbageSlot {
     assert(istart + count > PageContainer::COUNT || ostart == oend);
 
     cont_ptr front(resolver.template resolve<PageContainer>(&ostart, WRITE));
-    if (!resolver.template may_recycle(front->blocks[istart])) return nullptr;
+    if (!resolver.may_recycle(front->blocks[istart])) return nullptr;
 
     assert(front->blocks[istart].link != 0);
     ptr result = resolver.template resolve<PageHeader>(
@@ -181,7 +181,7 @@ struct _GarbageSlot {
     }
     back->blocks[iend].link = resolver.resolve(block);
     assert(back->blocks[iend].link != 0);
-    resolver.template mark_for_recycle(back->blocks[iend]);
+    resolver.mark_for_recycle(back->blocks[iend]);
     resolver.make_dirty(back);
     resolver.make_dirty(block);
     iend++;
@@ -230,7 +230,7 @@ struct _MemManager {
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
   typedef typename Traits::PageHeader PageHeader;
   typedef _MemManager<Traits> MemManager;
-  using ptr = typename Traits::Pointer<MemManager>;
+  using ptr = typename Traits::template Pointer<MemManager>;
   using page_ptr = typename Traits::ptr;
 
   typedef _GarbageSlot<Traits> Slot;
@@ -340,7 +340,7 @@ struct _MemManagerPool {
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
   typedef typename Traits::PageHeader PageHeader;
   typedef _MemManagerPool<Traits> MemManager;
-  using ptr = typename Traits::Pointer<MemManager>;
+  using ptr = typename Traits::template Pointer<MemManager>;
   using page_ptr = typename Traits::ptr;
 
   typedef _GarbageSlot<Traits> Slot;
@@ -371,7 +371,7 @@ struct _MemManagerPool {
   void init(offset_t allocation_start_, offset_t allocation_end_) {
     _managers[0].init(allocation_start_, allocation_end_);
     for (int i = 1; i < POOL_SIZE; i++) {
-      memset(&_managers[i], 0, sizeof(_managers[i]));
+      memset((void*)&_managers[i], 0, sizeof(_managers[i]));
     }
     reinit_locks();
   }

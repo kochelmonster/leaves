@@ -684,7 +684,7 @@ constexpr size_t padding(size_t a, size_t b) {
   return ((a + b - 1) / b) * b;  // Round up to the next multiple of b
 }
 
-const static uint32_t ALIGN = sizeof(void*);
+const static uint32_t ALIGN = sizeof(offset_t);
 constexpr uint32_t align(uint32_t s) { return (s + ALIGN - 1) & ~(ALIGN - 1); }
 
 template <typename DstBlock, typename SrcBlock>

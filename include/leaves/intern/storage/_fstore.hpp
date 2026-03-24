@@ -244,7 +244,7 @@ struct _FileOperations : _CacheBase {
   }
 
   template <typename BlockVector>
-  void write_batch(BlockVector& blocks_to_write) {
+  void write_batch(BlockVector& blocks_to_write, bool write_header = false) {
     std::sort(blocks_to_write.begin(), blocks_to_write.end(),
               [](const auto& a, const auto& b) {
                 return a.area()->offset() < b.area()->offset();
@@ -296,7 +296,15 @@ struct _FileOperations : _CacheBase {
         i = batch_end + 1;
       }
     }
+
+    if (write_header) {
+      write(0, _header, calc_header_size());
+    }
   }
+
+  // No-op: native pwrite/WriteFile calls are synchronous
+  void sync_writes() {}
+  bool has_pending_writes() const { return false; }
 
   const char* filename() const { return _filepath.c_str(); }
 
