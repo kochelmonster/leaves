@@ -72,7 +72,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
   template <typename Resolver>
   ptr clone(Resolver& resolver) {
     ptr new_txn = alloc_slot(SLOT_ID, resolver);
-    memcpy(&*new_txn, this, sizeof(TransactionBase));
+    memcpy((void*)&*new_txn, this, sizeof(TransactionBase));
     new_txn->used = sizeof(TransactionBase);
     new_txn->mem_manager.reinit_locks();
     new (&new_txn->refs) std::atomic<uint32_t>(0);

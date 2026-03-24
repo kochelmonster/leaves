@@ -371,7 +371,7 @@ struct _MemManagerPool {
   void init(offset_t allocation_start_, offset_t allocation_end_) {
     _managers[0].init(allocation_start_, allocation_end_);
     for (int i = 1; i < POOL_SIZE; i++) {
-      memset(&_managers[i], 0, sizeof(_managers[i]));
+      memset((void*)&_managers[i], 0, sizeof(_managers[i]));
     }
     reinit_locks();
   }

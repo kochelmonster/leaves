@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Leaves JS API Test</title></head>
+<body>
+<pre id="output">Loading...</pre>
+<script>
+var Module = {
+  noInitialRun: true,
+  onRuntimeInitialized: function() {
+    window.moduleReady = true;
+  }
+};
+</script>
+<script src="leaves.js"></script>
+<script>
+async function runTest() {
+  var out = document.getElementById('output');
+  function log(msg) { out.textContent += msg + '\n'; console.log(msg); }
+  out.textContent = '';
+
+  try {
+    log('=== Leaves JS API Test ===');
+    var ok = true;
+    function check(label, actual, expected) {
+      if (actual !== expected) {
+        log('FAIL: ' + label + ': got ' + JSON.stringify(actual) + ', expected ' + JSON.stringify(expected));
+        ok = false;
+      } else {
+        log('OK: ' + label);
+      }
+    }
+
+    var store = await Module.LeavesStore.create('test_api_' + Date.now(), 8, 10 * 1024 * 1024);
+    log('Store created');
+
+    // --- String key/value ---
+    var db = await store.db('mydb');
+    var c = await db.createCursor();
+
+    await c.find('aaa');
+    await c.setValue('val_a');
+    await c.find('bbb');
+    await c.setValue('val_b');
+    await c.find('ccc');
+    await c.setValue('val_c');
+    await c.commit(false);
+    log('Wrote 3 string entries');
+
+    // Find and read back
+    await c.find('bbb');
+    check('find(bbb) isValid', c.isValid(), true);
+    check('find(bbb) key', c.key(), 'bbb');
+    check('find(bbb) value', await c.getValue(), 'val_b');
+
+    // Not found
+    await c.find('zzz');
+    check('find(zzz) isValid', c.isValid(), false);
+
+    // --- Binary key/value ---
+    var binData = new Uint8Array([0, 1, 2, 255, 128]);
+    await c.find('bin_key');
+    await c.setValueBytes(binData);
+    await c.commit(false);
+    log('Wrote binary value');
+
+    await c.find('bin_key');
+    check('bin isValid', c.isValid(), true);
+    var got = new Uint8Array(await c.getValueBytes());
+    check('bin value', Array.from(got).join(','), '0,1,2,255,128');
+
+    // --- Sequential iteration ---
+    var keys = [];
+    await c.first();
+    while (c.isValid()) {
+      keys.push(c.key());
+      await c.next();
+    }
+    check('seq count', keys.length, 4);
+    check('seq sorted', keys.join(','), 'aaa,bbb,bin_key,ccc');
+
+    // --- Reverse iteration ---
+    var rkeys = [];
+    await c.last();
+    while (c.isValid()) {
+      rkeys.push(c.key());
+      await c.prev();
+    }
+    check('rev count', rkeys.length, 4);
+    check('rev sorted', rkeys.join(','), 'ccc,bin_key,bbb,aaa');
+
+    // --- Delete ---
+    await c.find('bbb');
+    check('pre-delete isValid', c.isValid(), true);
+    await c.remove();
+    await c.commit(false);
+    await c.find('bbb');
+    check('post-delete isValid', c.isValid(), false);
+
+    var afterDel = [];
+    await c.first();
+    while (c.isValid()) { afterDel.push(c.key()); await c.next(); }
+    check('after-delete count', afterDel.length, 3);
+
+    // --- List databases ---
+    var dbs = store.listDbs();
+    log('listDbs result type: ' + typeof dbs);
+    var dbNames = [];
+    for (var i = 0; i < dbs.size(); i++) dbNames.push(dbs.get(i));
+    check('listDbs contains mydb', dbNames.indexOf('mydb') >= 0, true);
+    dbs.delete();
+
+    // --- Rollback ---
+    await c.find('rollback_test');
+    await c.setValue('temp');
+    await c.rollback();
+    await c.find('rollback_test');
+    check('rollback isValid', c.isValid(), false);
+
+    // Cleanup
+    c.delete();
+    await store.close();
+    store.delete();
+
+    if (ok) {
+      log('\n=== ALL TESTS PASSED ===');
+    } else {
+      log('\n=== SOME TESTS FAILED ===');
+    }
+  } catch (e) {
+    log('ERROR: ' + e.message + '\n' + e.stack);
+  }
+}
+
+// Wait for module then run
+(function poll() {
+  if (window.moduleReady) runTest();
+  else setTimeout(poll, 50);
+})();
+</script>
+</body>
+</html>

@@ -93,10 +93,10 @@ function runBench(which) {
 
   log('Starting: ' + which + '  num=' + num + '\n');
 
-  // Yield to browser so UI updates before the blocking WASM call
-  setTimeout(function() {
+  // Yield to browser so UI updates before the WASM call
+  setTimeout(async function() {
     try {
-      Module.callMain(args);
+      await Module.callMain(args);
     } catch (e) {
       // ExitStatus is thrown on normal exit — only log real errors
       if (e && e.name !== 'ExitStatus') {

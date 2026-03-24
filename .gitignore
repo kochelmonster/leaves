@@ -6,3 +6,11 @@ waf
 graphs
 tmp
 .wasm
+benchmarks/db_bench_browser.js
+benchmarks/.playwright-profile/Default
+benchmarks/db_bench_browser.wasm
+benchmarks/profile.cpuprofile
+benchmarks/trace.json
+benchmarks/profile_browser.mjs
+js/leaves.js
+js/leaves.wasm

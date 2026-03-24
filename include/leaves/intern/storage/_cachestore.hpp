@@ -179,8 +179,6 @@ struct _CacheStore : public Opers_,
       return result;
     }
 
-    // Cache miss - read from disk
-
     // Cache miss — check dirty maps before reading from storage.
     // A dirty page may have been evicted from the cache but is still
     // in-memory awaiting flush or async IDB write.

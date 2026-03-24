@@ -35,19 +35,22 @@ if(EMSCRIPTEN)
     target_compile_options(wasm_core INTERFACE -fwasm-exceptions)
     target_link_options(wasm_core INTERFACE
         -fwasm-exceptions
-        -sASYNCIFY
-        "-sASYNCIFY_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+        --profiling-funcs
+        -sJSPI
+        "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
         -sALLOW_MEMORY_GROWTH=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         -sENVIRONMENT=web,node
     )
 
     add_executable(test_browserstore tests/test_browserstore.cpp)
     target_link_libraries(test_browserstore PRIVATE wasm_core blake3)
     target_compile_definitions(test_browserstore PRIVATE TESTING)
+    target_link_options(test_browserstore PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']")
 
     add_executable(db_bench_browser benchmarks/db_bench_browser.cpp)
     target_link_libraries(db_bench_browser PRIVATE wasm_core blake3)
+    target_link_options(db_bench_browser PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']")
 
     # Copy WASM artifacts to benchmarks/ for browser serving
     add_custom_command(TARGET db_bench_browser POST_BUILD
@@ -58,6 +61,25 @@ if(EMSCRIPTEN)
             $<TARGET_FILE_DIR:db_bench_browser>/db_bench_browser.wasm
             ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/db_bench_browser.wasm
         COMMENT "Copying benchmark WASM to benchmarks/"
+    )
+
+    # ── Leaves JS library (embind) ──────────────────────────────
+    add_executable(leaves js/leaves_embind.cpp)
+    target_link_libraries(leaves PRIVATE wasm_core blake3)
+    target_link_options(leaves PRIVATE
+        -lembind
+        --no-entry
+    )
+    set_target_properties(leaves PROPERTIES OUTPUT_NAME "leaves")
+
+    add_custom_command(TARGET leaves POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            $<TARGET_FILE:leaves>
+            ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.js
+        COMMAND ${CMAKE_COMMAND} -E copy
+            $<TARGET_FILE_DIR:leaves>/leaves.wasm
+            ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
+        COMMENT "Copying leaves library WASM to js/"
     )
 
     return()   # stop here; nothing below applies to WASM

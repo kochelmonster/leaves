@@ -148,8 +148,10 @@ struct _BrowserOperations : _CacheBase {
   FileHeader* _header;
   mutable std::mutex _io_mutex;  // For thread-safety even in browser
 
-  // Internal buffer for IndexedDB operations
-  mutable std::vector<char> _idb_buffer;
+  // Read-ahead buffer: avoids double IDB round-trips when resolve()
+  // first reads the AreaSlice header, then the full area from the same key.
+  mutable uint64_t _read_cache_key = UINT64_MAX;
+  mutable std::vector<char> _read_cache;
 
   size_t file_size() const { return _header->file_size; }
 
@@ -167,20 +169,20 @@ struct _BrowserOperations : _CacheBase {
 
   void close() {
     // IndexedDB connections auto-close; flush any pending data
-    flush_to_idb();
+    _flush_to_idb();
   }
 
   // Write data to IndexedDB
   // We batch operations by storing entire areas as single records
   void write(offset_t offset, const void* ptr, size_t size) const {
     std::lock_guard<std::mutex> lock(_io_mutex);
-    idb_store_data(offset, ptr, size);
+    _idb_store_data(offset, ptr, size);
   }
 
   // Read data from IndexedDB
   void read(offset_t offset, void* ptr, size_t size) const {
     std::lock_guard<std::mutex> lock(_io_mutex);
-    idb_load_data(offset, ptr, size);
+    _idb_load_data(offset, ptr, size);
   }
 
   // Resize is a no-op for IndexedDB (no fixed file size)
@@ -202,11 +204,11 @@ struct _BrowserOperations : _CacheBase {
     for (const auto& block : blocks_to_write) {
       const auto& area = block.area();
       total_bytes += area->size();
-      idb_async_store_data(area->offset(), area, area->size());
+      _idb_async_store_data(area->offset(), area, area->size());
     }
 
     if (write_header) {
-      idb_async_store_data(0, _header, calc_header_size());
+      _idb_async_store_data(0, _header, calc_header_size());
     }
 #ifndef NDEBUG
     if (!blocks_to_write.empty()) {
@@ -229,13 +231,10 @@ struct _BrowserOperations : _CacheBase {
 
   Mutex& file_lock() { return _header->file_lock; }
 
-private:
   // IndexedDB store operation using Emscripten Asyncify
-  void idb_store_data(uint64_t key, const void* data, size_t size) const {
-    // Key format: "area_<offset>" for data blocks, "header" for metadata
+  void _idb_store_data(uint64_t key, const void* data, size_t size) const {
     std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
 
-    // emscripten_idb_store is synchronous with Asyncify enabled
     int error = 0;
     emscripten_idb_store(
         _db_name.c_str(),
@@ -251,8 +250,20 @@ private:
   }
 
   // IndexedDB load operation using Emscripten Asyncify
-  void idb_load_data(uint64_t key, void* data, size_t size) const {
+  void _idb_load_data(uint64_t key, void* data, size_t size) const {
     std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
+
+    // Serve from read-ahead buffer if same key (avoids double IDB load)
+    if (key == _read_cache_key && !_read_cache.empty()) {
+      size_t copy_size = std::min(size, _read_cache.size());
+      std::memcpy(data, _read_cache.data(), copy_size);
+      if (copy_size < size) {
+        std::memset(static_cast<char*>(data) + copy_size, 0, size - copy_size);
+      }
+      // Second read consumes the buffer (resolve pattern: header then full)
+      _read_cache_key = UINT64_MAX;
+      return;
+    }
 
     void* loaded_data = nullptr;
     int loaded_size = 0;
@@ -281,12 +292,21 @@ private:
       std::memset(static_cast<char*>(data) + copy_size, 0, size - copy_size);
     }
 
+    // Buffer this read so the second read for the same key is free
+    if (static_cast<size_t>(loaded_size) > size) {
+      _read_cache_key = key;
+      _read_cache.assign(static_cast<char*>(loaded_data),
+                         static_cast<char*>(loaded_data) + loaded_size);
+    } else {
+      _read_cache_key = UINT64_MAX;
+    }
+
     // Free the allocated buffer from emscripten
     free(loaded_data);
   }
 
   // Fire-and-forget async IDB write — JS glue copies buffer immediately
-  void idb_async_store_data(uint64_t key, const void* data, size_t size) {
+  void _idb_async_store_data(uint64_t key, const void* data, size_t size) {
     std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
     leaves_idb_async_write(
         _db_name.c_str(),
@@ -297,7 +317,7 @@ private:
   }
 
   // Flush any pending data
-  void flush_to_idb() const {
+  void _flush_to_idb() const {
     // Async writes drain via sync_writes() called from _CacheStore
   }
 };
@@ -318,7 +338,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
                 size_t capacity = 100 * M, size_t pool_threads = 0)
       : base_t(db_count, capacity, pool_threads, _BrowserStoreTraits::AREA_SIZE) {
     // Note: pool_threads=0 for browser (single-threaded)
-    init_browser_db(db_name, db_count);
+    _init_browser_db(db_name, db_count);
   }
 
   ~_BrowserStore() {
@@ -326,7 +346,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     delete[] reinterpret_cast<char*>(_header);
   }
 
-  void init_browser_db(const char* db_name, uint16_t db_count) {
+  void _init_browser_db(const char* db_name, uint16_t db_count) {
     size_t header_size =
         leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
     char* buffer = new char[header_size];
@@ -334,7 +354,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     open(db_name);
 
     // Try to load existing header from IndexedDB
-    bool exists = try_load_header(buffer, header_size);
+    bool exists = _try_load_header(buffer, header_size);
 
     if (!exists) {
       // Create new database
@@ -355,10 +375,10 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     }
 
     assert(((uint64_t)_header & 7) == 0);
-    sanitize();
+    _sanitize();
   }
 
-  bool try_load_header(char* buffer, size_t header_size) {
+  bool _try_load_header(char* buffer, size_t header_size) {
     try {
       read(0, buffer, header_size);
       auto* h = reinterpret_cast<FileHeader*>(buffer);
@@ -368,11 +388,11 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     }
   }
 
-  void sanitize() {
-    sanitize_dbs();
+  void _sanitize() {
+    _sanitize_dbs();
   }
 
-  void sanitize_dbs() {
+  void _sanitize_dbs() {
     for (uint16_t i = 0; i < _header->db_count; i++) {
       if (_header->dbs[i].offset) {
         assert(!_dbs[i]);
@@ -424,7 +444,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     int error = 0;
     emscripten_idb_delete(_db_name.c_str(), "header", &error);
     // Reinitialize
-    init_browser_db(_db_name.c_str(), _header->db_count);
+    _init_browser_db(_db_name.c_str(), _header->db_count);
   }
 };
 

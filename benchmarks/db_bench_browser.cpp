@@ -158,6 +158,8 @@ class Benchmark {
   int db_num_;
   // Raw IDB counter for fresh databases
   int idb_num_;
+  // Unique per-run ID to avoid IDB name collisions across repeated runs
+  int run_id_;
 
   void PrintHeader() {
     const int kKeySize = 16;
@@ -204,8 +206,8 @@ class Benchmark {
         message_ = rate;
     }
 
-    std::fprintf(stdout, "%-16s : %11.3f micros/op;%s%s\n", name,
-                 (finish - start_) * 1e6 / done_,
+    std::fprintf(stdout, "%-16s : %11.3f micros/op;%s%s\n",
+                 name, (finish - start_) * 1e6 / done_,
                  (message_.empty() ? "" : " "), message_.c_str());
     std::fflush(stdout);
   }
@@ -217,7 +219,7 @@ class Benchmark {
     store_ = nullptr;
     db_num_++;
     char name[64];
-    std::snprintf(name, sizeof(name), "bench_leaves_%d", db_num_);
+    std::snprintf(name, sizeof(name), "bl_%d_%d", run_id_, db_num_);
     store_ = new leaves::_BrowserStore(name, 8, 10 * leaves::M, 0);
   }
 
@@ -287,7 +289,7 @@ class Benchmark {
   void OpenRawIDB() {
     idb_num_++;
     char name[64];
-    std::snprintf(name, sizeof(name), "bench_raw_%d", idb_num_);
+    std::snprintf(name, sizeof(name), "br_%d_%d", run_id_, idb_num_);
     raw_db_name_ = name;
   }
 
@@ -368,7 +370,8 @@ class Benchmark {
         done_(0),
         store_(nullptr),
         db_num_(0),
-        idb_num_(0) {}
+        idb_num_(0),
+        run_id_(static_cast<int>(NowSeconds() * 1000) & 0xFFFFFFF) {}
 
   ~Benchmark() { delete store_; }
 
@@ -415,13 +418,11 @@ class Benchmark {
       } else if (name == "readrandom") {
         LeavesReadRandom();
       } else if (name == "readseq100K") {
-        int n = reads_;
-        reads_ /= 1000;
-        LeavesReadSequential();
-        reads_ = n;
+        int repeats = std::max(1, num_ / 1000);
+        for (int r = 0; r < repeats; r++) LeavesReadSequential();
       } else if (name == "readrand100K") {
         int n = reads_;
-        reads_ /= 1000;
+        reads_ = std::max(100, num_ / 1000);
         LeavesReadRandom();
         reads_ = n;
       }
@@ -448,13 +449,14 @@ class Benchmark {
       } else if (name == "idb_readrandom") {
         RawIDBReadRandom();
       } else if (name == "idb_readseq100K") {
-        int n = reads_;
-        reads_ /= 1000;
-        RawIDBReadSequential();
-        reads_ = n;
+        int n = num_;
+        num_ /= 1000;
+        int repeats = std::max(1, n / 1000);
+        for (int r = 0; r < repeats; r++) RawIDBReadSequential();
+        num_ = n;
       } else if (name == "idb_readrand100K") {
         int n = reads_;
-        reads_ /= 1000;
+        reads_ = std::max(100, num_ / 1000);
         RawIDBReadRandom();
         reads_ = n;
       } else {
