@@ -596,68 +596,62 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   }
 }
 
-#if 0
 BOOST_AUTO_TEST_CASE(test_numbers) {
   Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = (*storage)["test"];
+  auto cursor = db.cursor();
   int i;
-  DB::db_ptr db(DB::open(TEST_FILE, SEGMENT_SIZE));
-  DB::cursor_ptr cursor(db->create_cursor());
 
-  for(i = 0; i < 10000; i+=2) {
+  for (i = 0; i < 10000; i += 2) {
     std::string n = number(i, 6);
-    cursor->find(n);
-    cursor->set_value(n);
+    cursor.find(n);
+    cursor.value(n);
   }
-  std::cout << "generated! " << i << std::endl;
+  cursor.commit();
 
-  for(cursor->first(), i = 0; cursor->valid(); cursor->next(), i+=2) {
+  for (cursor.first(), i = 0; cursor.is_valid(); cursor.next(), i += 2) {
     std::string n = number(i, 6);
-    BOOST_REQUIRE(cursor->key() == n);
-    BOOST_REQUIRE(cursor->value() == n);
+    BOOST_REQUIRE_EQUAL(cursor.key().string(), n);
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), n);
   }
+  BOOST_REQUIRE_EQUAL(i, 10000);
 
-  BOOST_REQUIRE(i == 10000);
-  std::cout << "forward iteration passed" << std::endl;
-
-  for(cursor->last(), i = 10000-2; cursor->valid(); cursor->prev(), i-=2) {
+  for (cursor.last(), i = 10000 - 2; cursor.is_valid(); cursor.prev(), i -= 2) {
     std::string n = number(i, 6);
-    BOOST_REQUIRE(cursor->key() == n);
-    BOOST_REQUIRE(cursor->value() == n);
+    BOOST_REQUIRE_EQUAL(cursor.key().string(), n);
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), n);
   }
-
-  BOOST_REQUIRE(i == -2);
-  std::cout << "backward iteration passed" << std::endl;
+  BOOST_REQUIRE_EQUAL(i, -2);
 
   std::string n = number(1000, 6);
-  cursor->find(n);
-  BOOST_REQUIRE(cursor->valid());
-  BOOST_REQUIRE(cursor->key() == n);
-  BOOST_REQUIRE(cursor->value() == n);
+  cursor.find(n);
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key().string(), n);
+  BOOST_REQUIRE_EQUAL(cursor.value().string(), n);
 
   n = number(1001, 6);
-  cursor->find(n);
-  BOOST_REQUIRE(!cursor->valid());
-  cursor->next();
+  cursor.find(n);
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.next();
   n = number(1002, 6);
-  BOOST_REQUIRE(cursor->valid());
-  BOOST_REQUIRE(cursor->key() == n);
-  BOOST_REQUIRE(cursor->value() == n);
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key().string(), n);
+  BOOST_REQUIRE_EQUAL(cursor.value().string(), n);
 
   n = number(1001, 6);
-  cursor->find(n);
-  BOOST_REQUIRE(!cursor->valid());
-  cursor->prev();
+  cursor.find(n);
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.prev();
   n = number(1000, 6);
-  BOOST_REQUIRE(cursor->valid());
-  BOOST_REQUIRE(cursor->key() == n);
-  BOOST_REQUIRE(cursor->value() == n);
-  std::cout << "find passed" << std::endl;
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_REQUIRE_EQUAL(cursor.key().string(), n);
+  BOOST_REQUIRE_EQUAL(cursor.value().string(), n);
 
-  for(cursor->first(); cursor->valid(); cursor->first())
-    cursor->remove();
+  for (cursor.first(); cursor.is_valid(); cursor.first())
+    cursor.remove();
+  cursor.commit();
 
-  std::cout << "removed passed" << std::endl;
-  for(cursor->first(); cursor->valid(); cursor->next())
-    BOOST_REQUIRE(0);
+  cursor.first();
+  BOOST_REQUIRE(!cursor.is_valid());
 }
-#endif

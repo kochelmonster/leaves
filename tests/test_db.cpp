@@ -307,25 +307,6 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   db1->rollback(0);
 }
 
-struct BigSizeKey {
-  boost::endian::big_uint64_t first;
-  uint64_t second;
-};
-
-static constexpr uint64_t SIZE_BIT = uint64_t(1) << 63;
-
-// TODO: Adapt for new BigMemory architecture
-/*
-void check_memtrie_count(DBMMap::DB* db, int count) {
-  auto memc = db->_mem_cursor;
-  int c = 0;
-  for (memc.first(); memc.is_valid(); memc.next()) {
-    c++;
-  }
-  BOOST_CHECK_EQUAL(count, c);
-}
-*/
-
 template <typename DB>
 void dump(DB db, const char* prefix, int index) {
   std::stringstream cstr;

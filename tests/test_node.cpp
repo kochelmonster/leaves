@@ -252,43 +252,48 @@ BOOST_AUTO_TEST_CASE(test_many_branches) {
   test_add(trie, 'A');
 }
 
-#if 0
-BOOST_AUTO_TEST_CASE(test_clear) {
-  char buffer[AREA_SIZE];
-  TrieNode& trie = *(TrieNode*)buffer;
+BOOST_AUTO_TEST_CASE(test_remove) {
+  char buf1[AREA_SIZE], buf2[AREA_SIZE];
+  TrieNode& t1 = *(TrieNode*)buf1;
+  TrieNode& t2 = *(TrieNode*)buf2;
+  Slice prefix;
 
-  trie.init();
-  *trie.add(5) = 5;
-  *trie.add(70) = 70;
-  *trie.add(130) = 130;
+  // Build trie with branches {5, 70, 130}, storing key value as offset
+  uint16_t idx = t1.create(prefix, 5);
+  t1.array()[idx] = 5;
 
-  BOOST_CHECK_EQUAL(trie.count(), 3);
-  trie.remove(70);
-  BOOST_CHECK(trie.isset(5));
-  BOOST_CHECK(!trie.isset(70));
-  BOOST_CHECK(trie.isset(130));
-  BOOST_CHECK_EQUAL(trie.count(), 2);
-  BOOST_CHECK_EQUAL(*trie.offset(5), 5);
-  BOOST_CHECK_EQUAL(*trie.offset(130), 130);
+  idx = t2.create(t1, 70);
+  t2.array()[idx] = 70;
 
-  *trie.add(TrieNode::NONE) = 0;
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
-  trie.remove(TrieNode::NONE);
-  BOOST_CHECK_EQUAL(trie.offset(TrieNode::NONE), nullptr);
+  idx = t1.create(t2, 130);
+  t1.array()[idx] = 130;
 
-  BOOST_CHECK_EQUAL(trie.size(), 32);
-  trie.remove(250);
-  BOOST_CHECK_EQUAL(trie.size(), 32);
-  trie.remove(6);
-  BOOST_CHECK_EQUAL(trie.size(), 32);
+  BOOST_CHECK_EQUAL(t1.count(), 3);
 
-  trie.remove(5);
-  BOOST_CHECK(!trie.isset(5));
-  BOOST_CHECK_EQUAL(trie.offset(5), nullptr);
-  BOOST_CHECK_EQUAL(trie.count(), 1);
-  BOOST_CHECK_EQUAL(trie.size(), 24);
+  // Remove branch 70
+  t2.create_remove(t1, 70);
+  BOOST_CHECK(t2.isset(5));
+  BOOST_CHECK(!t2.isset(70));
+  BOOST_CHECK(t2.isset(130));
+  BOOST_CHECK_EQUAL(t2.count(), 2);
+  BOOST_CHECK_EQUAL(*t2.offset(5), 5);
+  BOOST_CHECK_EQUAL(*t2.offset(130), 130);
+
+  // Add NONE branch
+  idx = t1.create(t2, TrieNode::NONE);
+  t1.array()[idx] = 0;
+  BOOST_CHECK_EQUAL(*t1.offset(TrieNode::NONE), 0);
+
+  // Remove NONE branch
+  t2.create_remove(t1, TrieNode::NONE);
+  BOOST_CHECK_EQUAL(t2.offset(TrieNode::NONE), nullptr);
+
+  // Remove branch 5
+  t1.create_remove(t2, 5);
+  BOOST_CHECK(!t1.isset(5));
+  BOOST_CHECK_EQUAL(t1.offset(5), nullptr);
+  BOOST_CHECK_EQUAL(t1.count(), 1);
 }
-#endif
 
 BOOST_AUTO_TEST_CASE(test_index_bit) {
   uint64_t test = 0b1001;

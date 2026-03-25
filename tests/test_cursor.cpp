@@ -355,8 +355,6 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
     test_movement(storage, strings);
   }
 #endif
-
-  // TODO: move test for all
 }
 
 BOOST_AUTO_TEST_CASE(insert_leaf_split) {
