@@ -10,16 +10,18 @@
 // strategy that packs related nodes onto the same page for better cache
 // performance.
 //
-// STATUS: Disabled — slower than _Inserter in benchmarks
+// STATUS: Disabled — slower than _Inserter in benchmarks.
+//         Moved to experimental/ to preserve as documentation.
 //
 // This implementation was intended to improve cache locality by co-locating
 // related nodes on the same page. However, the overhead of the PageBuilder
 // abstraction and multi-pass allocation makes it slower than the simpler
 // _Inserter approach in practice.
 //
-// TO RE-ENABLE:
-//   1. Add comprehensive tests for big keys (>510 bytes)
-//   2. Uncomment the _LocalityInserter usage in _cursor.hpp lines 508/514
+// KNOWN BUG:
+//   _LocalityInserter::create_leaf() duplicates a trie segment for keys
+//   longer than 510 bytes. The multi-page key-chain logic miscalculates
+//   the split point, causing the same compressed prefix to appear twice.
 //
 // =============================================================================
 

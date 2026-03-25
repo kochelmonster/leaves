@@ -496,13 +496,11 @@ struct _ICursor : public _CursorBase<Traits_, Derived> {
     if (!this->stack.size) {
       if (!*this->_root) {
         static_cast<Derived*>(this)->push(this->_root);
-        //_LocalityInserter(&this->stack.back(), size).first_exec();
         _Inserter(&this->stack.back(), size).first_exec();
         return (void*)this->stack.back().value().data();
       }
       throw NoValidPosition();
     }
-    //_LocalityInserter(&this->stack.back(), size).exec();
     _Inserter(&this->stack.back(), size).exec();
     return (void*)this->stack.back().value().data();
   }

@@ -77,9 +77,8 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
   // Start transaction before doing big allocations
   cursor->start_transaction();
   
-  // Test allocating and storing big values through cursor
-  // For now use normal-sized values (TODO: fix BigMemory alloc bug with size flags)
-  const size_t BIG_SIZE = 1 * K;
+  // 8K exceeds MAX_PAGE_SIZE (4K), forcing BigMemory allocation path
+  const size_t BIG_SIZE = 8 * K;
   std::vector<char> big_data(BIG_SIZE, 'X');
   
   // Store a big value
