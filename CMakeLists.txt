@@ -241,6 +241,9 @@ target_link_libraries(test_transfer PUBLIC core test blake3)
 add_executable(test_replication_fsm tests/test_replication_fsm.cpp)
 target_link_libraries(test_replication_fsm PUBLIC core test blake3)
 
+add_executable(test_replication_api tests/test_replication_api.cpp)
+target_link_libraries(test_replication_api PUBLIC core test blake3)
+
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
     include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
@@ -339,6 +342,7 @@ COMMAND ./test_merger
 COMMAND ./test_serial
 COMMAND ./test_transfer
 COMMAND ./test_replication_fsm
+COMMAND ./test_replication_api
 COMMAND ./test_hash_lookup
 COMMAND ./test_hash_updater
 COMMAND ./test_fstore
@@ -349,7 +353,7 @@ COMMAND ./test_aspect
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_serial test_twoquecache test_transfer test_replication_fsm test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
 )
 
 endif(LEAVES_BUILD_TESTS)

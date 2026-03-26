@@ -35,6 +35,9 @@ class TDB {
   bool rollback() { return _db->rollback(0); }
   void defrag() { _db->defrag(); }
 
+  // Replication configuration (only available on replicating storages)
+  void set_retention(uint64_t seconds) { _db->set_retention(seconds); }
+
  private:
   storage_ptr _storage;
   DBImpl *_db;
