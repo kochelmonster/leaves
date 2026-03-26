@@ -30,6 +30,7 @@ struct DirPreparation {
 };
 
 struct TestTraits {
+  using Aspect = DefaultAspect;
   typedef uint8_t hash_t[0];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;

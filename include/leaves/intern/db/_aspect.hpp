@@ -12,8 +12,8 @@ namespace leaves {
 // operations.  Users define a custom Aspect struct in their Traits to
 // intercept writes, reads, deletes, and merge decisions.
 //
-// The Aspect type is detected from Traits via SFINAE (Traits::Aspect).
-// When absent, DefaultAspect is used — all methods are identity / allow-all,
+// Traits must define `using Aspect = ...;` (DefaultAspect for default behavior).
+// All methods are identity / allow-all,
 // and the empty CursorContext is optimised away via [[no_unique_address]].
 //
 // Aspects are shared: one instance per _DB.  Per-cursor state lives in

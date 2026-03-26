@@ -130,16 +130,7 @@ struct _DB {
     using tid_t = leaves::tid_t;
   };
 
-  // Detect Aspect from Traits, fallback to DefaultAspect
-  template <typename T, typename = void>
-  struct get_aspect { using type = DefaultAspect; };
-  
-  template <typename T>
-  struct get_aspect<T, std::void_t<typename T::Aspect>> {
-    using type = typename T::Aspect;
-  };
-  
-  using Aspect = typename get_aspect<Traits>::type;
+  using Aspect = typename Traits::Aspect;
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
