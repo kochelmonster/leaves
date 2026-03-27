@@ -6,6 +6,10 @@
 #include <cstdint>
 #include <string>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "../core/_node.hpp"
 #include "../core/_util.hpp"
 #include "../util/_task_group.hpp"
@@ -142,6 +146,9 @@ struct _HashUpdater {
   DataDB* _data_db;
   HashDB* _hash_db;
   _TaskGroup<Executor>* _tg;
+#ifdef __EMSCRIPTEN__
+  uint32_t _yield_counter = 0;
+#endif
 
   _HashUpdater(DataDB* data_db, HashDB* hash_db)
       : _data_db(data_db), _hash_db(hash_db), _tg(nullptr) {}
@@ -191,6 +198,9 @@ struct _HashUpdater {
   void sync_nodes(std::string& key_path, data_offset_e data_offset,
                   hash_offset_e* hash_offset_ptr, uint8_t hash_prefix_skip = 0,
                   uint8_t data_prefix_skip = 0) {
+#ifdef __EMSCRIPTEN__
+    if (++_yield_counter % 100 == 0) emscripten_sleep(0);
+#endif
     // Case: data is empty
     if (!data_offset) {
       if (*hash_offset_ptr) {

@@ -26,6 +26,19 @@ if(EMSCRIPTEN)
         include/leaves/intern/db/_db.hpp
         include/leaves/intern/storage/_cachestore.hpp
         include/leaves/intern/storage/_browserstore.hpp
+        include/leaves/intern/replication/_replication_protocol.hpp
+        include/leaves/intern/replication/_replication_slot.hpp
+        include/leaves/intern/replication/_big_value_receiver.hpp
+        include/leaves/intern/replication/_hash.hpp
+        include/leaves/intern/replication/_replication_db.hpp
+        include/leaves/intern/replication/_replication_fsm.hpp
+        include/leaves/intern/replication/_transfer.hpp
+        include/leaves/intern/util/_executor.hpp
+        include/leaves/intern/util/_task_group.hpp
+        include/leaves/intern/util/_threadpool.hpp
+        include/leaves/intern/util/_transfer_trie.hpp
+        include/leaves/replicating_browserstore.hpp
+        include/leaves/replication.hpp
     )
     target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
     target_include_directories(wasm_core INTERFACE
@@ -39,7 +52,7 @@ if(EMSCRIPTEN)
         -sJSPI
         "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
         -sALLOW_MEMORY_GROWTH=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
         -sENVIRONMENT=web,node
     )
 
@@ -80,6 +93,13 @@ if(EMSCRIPTEN)
             $<TARGET_FILE_DIR:leaves>/leaves.wasm
             ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
         COMMENT "Copying leaves library WASM to js/"
+    )
+
+    add_executable(ws_replication_client tests/ws_replication/client.cpp)
+    target_link_libraries(ws_replication_client PRIVATE wasm_core blake3)
+    target_compile_definitions(ws_replication_client PRIVATE TESTING)
+    target_link_options(ws_replication_client PRIVATE
+        -sEXIT_RUNTIME=1
     )
 
     return()   # stop here; nothing below applies to WASM
@@ -243,6 +263,9 @@ target_link_libraries(test_replication_fsm PUBLIC core test blake3)
 
 add_executable(test_replication_api tests/test_replication_api.cpp)
 target_link_libraries(test_replication_api PUBLIC core test blake3)
+
+add_executable(ws_replication_server tests/ws_replication/server.cpp)
+target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE

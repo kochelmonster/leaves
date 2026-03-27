@@ -233,14 +233,16 @@ using TransferTrie = ReplicationTransferTrie<Traits::MAX_KEY_SIZE>;
 //              [path_len(2), path(var)]...
 constexpr uint32_t REQUEST_CHILDREN_MAGIC = 0x4C565352;  // "LVSR"
 
+#pragma pack(push, 1)
 struct RequestChildrenHeader {
-  boost::endian::little_uint32_t magic;
-  boost::endian::little_uint64_t session_id;
+  _little_uint32_t magic;
+  _little_uint64_t session_id;
   uint8_t db_type;
-  boost::endian::little_uint32_t path_count;
+  _little_uint32_t path_count;
 
   bool is_valid() const { return magic == REQUEST_CHILDREN_MAGIC; }
 };
+#pragma pack(pop)
 
 static_assert(sizeof(RequestChildrenHeader) == 17,
               "RequestChildrenHeader must be 17 bytes");
@@ -278,7 +280,7 @@ struct RequestChildrenBuilder {
 
     uint16_t raw_len = (uint16_t)path.size();
     if (is_leaf) raw_len |= 0x8000u;  // set leaf flag in MSB
-    boost::endian::little_uint16_t path_len = raw_len;
+    _little_uint16_t path_len = raw_len;
     std::memcpy(_buffer.data() + offset, &path_len, 2);
     std::memcpy(_buffer.data() + offset + 2, path.data(), path.size());
 
@@ -316,7 +318,7 @@ struct RequestChildrenIterator {
   // Raw 16-bit field: bit 15 = leaf flag, bits 0-14 = path length
   uint16_t raw_path_len() const {
     // _current is guaranteed to be 2-byte aligned
-    return *(boost::endian::little_uint16_t*)_current;
+    return *(_little_uint16_t*)_current;
   }
 
   uint16_t path_len() const { return raw_path_len() & 0x7FFFu; }
