@@ -1,0 +1,10 @@
+{
+  "name": "leaves-ws-replication-test",
+  "private": true,
+  "type": "module",
+  "description": "Integration test: replicate ReplicatingMapStorage → ReplicatingBrowserStorage over WebSocket",
+  "dependencies": {
+    "fake-indexeddb": "^6.0.0",
+    "ws": "^8.0.0"
+  }
+}

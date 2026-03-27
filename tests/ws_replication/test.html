@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WebSocket Replication Test</title>
+  <style>
+    body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; margin: 2em; }
+    #output { white-space: pre-wrap; line-height: 1.5; }
+    .pass { color: #4ec9b0; font-weight: bold; }
+    .fail { color: #f44747; font-weight: bold; }
+    .info { color: #9cdcfe; }
+    h1 { color: #dcdcaa; font-size: 1.2em; }
+  </style>
+</head>
+<body>
+<h1>Leaves — WebSocket Replication Test</h1>
+<div id="output">Loading WASM module...</div>
+
+<script>
+// Get port from URL query string: ?port=19876
+const params = new URLSearchParams(location.search);
+const PORT = params.get("port") || "19876";
+
+function log(msg, cls) {
+  const el = document.getElementById("output");
+  if (cls) {
+    const span = document.createElement("span");
+    span.className = cls;
+    span.textContent = msg + "\n";
+    el.appendChild(span);
+  } else {
+    el.appendChild(document.createTextNode(msg + "\n"));
+  }
+  console.log(msg);
+}
+
+var Module = {
+  noInitialRun: true,
+  onRuntimeInitialized: function() {
+    log("WASM module loaded", "info");
+    runTest();
+  },
+  print: function(text) { log(text); },
+  printErr: function(text) { log(text, "info"); }
+};
+</script>
+<script src="ws_replication_client.js"></script>
+<script>
+async function runTest() {
+  const el = document.getElementById("output");
+  el.textContent = "";
+  log("=== WebSocket Replication Browser Test ===");
+  log("Connecting to ws://localhost:" + PORT);
+
+  try {
+    const ret = await Module.callMain([PORT]);
+    log("");
+    if (ret === 0) {
+      log("=== PASS ===", "pass");
+    } else {
+      log("=== FAIL (exit " + ret + ") ===", "fail");
+    }
+  } catch (e) {
+    log("Exception: " + e.message, "fail");
+    log("=== FAIL ===", "fail");
+  }
+}
+</script>
+</body>
+</html>
