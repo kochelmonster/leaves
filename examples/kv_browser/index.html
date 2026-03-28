@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Leaves — KV Browser Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #0d1117; color: #c9d1d9; padding: 2em; max-width: 800px; margin: 0 auto;
+    }
+    h1 { color: #58a6ff; font-size: 1.4em; margin-bottom: 0.3em; }
+    .subtitle { color: #8b949e; font-size: 0.9em; margin-bottom: 1.5em; }
+
+    /* Status bar */
+    #status {
+      display: flex; align-items: center; gap: 0.5em;
+      padding: 0.6em 1em; border-radius: 6px; margin-bottom: 1.5em;
+      font-size: 0.85em; background: #161b22; border: 1px solid #30363d;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    }
+    .dot.green { background: #3fb950; }
+    .dot.yellow { background: #d29922; }
+    .dot.red { background: #f85149; }
+    #status-text { flex: 1; }
+    #last-sync { color: #8b949e; }
+
+    /* Add form */
+    .add-form {
+      display: flex; gap: 0.5em; margin-bottom: 1.5em;
+    }
+    .add-form input {
+      flex: 1; padding: 0.5em 0.8em; border-radius: 6px; border: 1px solid #30363d;
+      background: #0d1117; color: #c9d1d9; font-size: 0.95em;
+    }
+    .add-form input:focus { outline: none; border-color: #58a6ff; }
+    .add-form input::placeholder { color: #484f58; }
+    button {
+      padding: 0.5em 1.2em; border-radius: 6px; border: 1px solid #30363d;
+      background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 0.9em;
+      transition: background 0.15s;
+    }
+    button:hover { background: #30363d; }
+    button.primary { background: #238636; border-color: #2ea043; color: #fff; }
+    button.primary:hover { background: #2ea043; }
+    button.danger { color: #f85149; }
+    button.danger:hover { background: #3d1214; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Table */
+    table {
+      width: 100%; border-collapse: collapse; margin-bottom: 1em;
+    }
+    th {
+      text-align: left; padding: 0.6em 0.8em; border-bottom: 2px solid #21262d;
+      color: #8b949e; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    td {
+      padding: 0.5em 0.8em; border-bottom: 1px solid #21262d; font-family: monospace;
+      font-size: 0.9em;
+    }
+    tr:hover td { background: #161b22; }
+    .empty-row td {
+      text-align: center; color: #484f58; font-style: italic; font-family: sans-serif;
+    }
+    .empty-row:hover td { background: transparent; }
+
+    .action-col { width: 100px; text-align: right; }
+
+    /* Toolbar */
+    .toolbar {
+      display: flex; gap: 0.5em; margin-bottom: 1em;
+    }
+
+    /* Loading overlay */
+    #loading {
+      position: fixed; inset: 0; background: #0d1117ee; display: flex;
+      align-items: center; justify-content: center; z-index: 100;
+      font-size: 1.1em; color: #8b949e;
+    }
+    #loading.hidden { display: none; }
+
+    .count { color: #8b949e; font-size: 0.85em; margin-bottom: 1em; }
+  </style>
+</head>
+<body>
+
+<div id="loading">Loading WASM module...</div>
+
+<h1>Leaves — Key-Value Browser Demo</h1>
+<p class="subtitle">
+  Bidirectional replication via WebSocket. Open multiple tabs to see live sync.
+</p>
+
+<div id="status">
+  <span class="dot yellow" id="status-dot"></span>
+  <span id="status-text">Initializing...</span>
+  <span id="last-sync"></span>
+</div>
+
+<div class="add-form">
+  <input type="text" id="key-input" placeholder="Key" autocomplete="off">
+  <input type="text" id="val-input" placeholder="Value" autocomplete="off">
+  <button class="primary" id="add-btn" onclick="addKV()" disabled>Add</button>
+</div>
+
+<div class="toolbar">
+  <button id="sync-btn" onclick="manualSync()" disabled>Sync Now</button>
+  <button id="clear-btn" class="danger" onclick="clearAll()" disabled>Clear All</button>
+</div>
+
+<div class="count" id="count"></div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Value</th>
+      <th class="action-col">Action</th>
+    </tr>
+  </thead>
+  <tbody id="kv-body">
+    <tr class="empty-row"><td colspan="3">No data yet</td></tr>
+  </tbody>
+</table>
+
+<script>
+// ── State ───────────────────────────────────────────────────────
+
+const params = new URLSearchParams(location.search);
+const PORT = params.get("port") || "19876";
+let ready = false;
+let syncing = false;
+
+// ── Module setup ────────────────────────────────────────────────
+
+var Module = {
+  onRuntimeInitialized: function() {
+    init();
+  },
+  print: function(t) { console.log(t); },
+  printErr: function(t) { console.warn(t); },
+};
+</script>
+<script src="kv_demo.js"></script>
+<script>
+
+// ── UI helpers ──────────────────────────────────────────────────
+
+function setStatus(text, color) {
+  document.getElementById("status-text").textContent = text;
+  const dot = document.getElementById("status-dot");
+  dot.className = "dot " + color;
+}
+
+function setButtons(enabled) {
+  document.getElementById("add-btn").disabled = !enabled;
+  document.getElementById("sync-btn").disabled = !enabled;
+  document.getElementById("clear-btn").disabled = !enabled;
+}
+
+function renderTable(rows) {
+  const tbody = document.getElementById("kv-body");
+  const countEl = document.getElementById("count");
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="3">No data yet</td></tr>';
+    countEl.textContent = "0 entries";
+    return;
+  }
+
+  countEl.textContent = rows.length + " entr" + (rows.length === 1 ? "y" : "ies");
+
+  tbody.innerHTML = rows.map(function(row) {
+    // Escape HTML to prevent XSS
+    const ek = escapeHtml(row.key);
+    const ev = escapeHtml(row.value);
+    return '<tr>'
+      + '<td>' + ek + '</td>'
+      + '<td>' + ev + '</td>'
+      + '<td class="action-col"><button class="danger" onclick="removeKV(\'' + escapeAttr(row.key) + '\')">Remove</button></td>'
+      + '</tr>';
+  }).join("");
+}
+
+function escapeHtml(s) {
+  var d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function escapeAttr(s) {
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
+
+function updateSyncTime() {
+  document.getElementById("last-sync").textContent =
+    "Last sync: " + new Date().toLocaleTimeString();
+}
+
+// ── Core operations ─────────────────────────────────────────────
+
+async function refresh() {
+  const rows = await Module.kvGetAll();
+  // Convert val proxy to plain array
+  const arr = [];
+  for (let i = 0; i < rows.length; i++) {
+    arr.push({ key: rows[i].key, value: rows[i].value });
+  }
+  renderTable(arr);
+}
+
+async function doSync() {
+  if (syncing) return;
+  syncing = true;
+  setStatus("Syncing...", "yellow");
+  try {
+    const ok = await Module.kvSync();
+    if (ok) {
+      await refresh();
+      setStatus("Connected", "green");
+      updateSyncTime();
+    } else {
+      setStatus("Sync failed", "red");
+    }
+  } catch (e) {
+    console.error("sync error:", e);
+    setStatus("Sync error", "red");
+  }
+  syncing = false;
+}
+
+// ── User actions ────────────────────────────────────────────────
+
+async function addKV() {
+  const keyEl = document.getElementById("key-input");
+  const valEl = document.getElementById("val-input");
+  const key = keyEl.value.trim();
+  const value = valEl.value.trim();
+  if (!key) { keyEl.focus(); return; }
+
+  setButtons(false);
+  await Module.kvPut(key, value);
+  keyEl.value = "";
+  valEl.value = "";
+  keyEl.focus();
+  await refresh();
+  await doSync();
+  setButtons(true);
+}
+
+async function removeKV(key) {
+  setButtons(false);
+  await Module.kvRemove(key);
+  await refresh();
+  await doSync();
+  setButtons(true);
+}
+
+async function clearAll() {
+  const rows = await Module.kvGetAll();
+  setButtons(false);
+  for (let i = 0; i < rows.length; i++) {
+    await Module.kvRemove(rows[i].key);
+  }
+  await refresh();
+  await doSync();
+  setButtons(true);
+}
+
+async function manualSync() {
+  setButtons(false);
+  await doSync();
+  setButtons(true);
+}
+
+// ── Notification polling ────────────────────────────────────────
+
+async function pollNotifications() {
+  if (!ready || syncing) return;
+  try {
+    await doSync();
+  } catch (e) {
+    console.error("poll error:", e);
+  }
+}
+
+// ── Keyboard shortcut ───────────────────────────────────────────
+
+document.addEventListener("keydown", function(e) {
+  if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+    const active = document.activeElement;
+    if (active && (active.id === "key-input" || active.id === "val-input")) {
+      addKV();
+    }
+  }
+});
+
+// ── Init ────────────────────────────────────────────────────────
+
+async function init() {
+  document.getElementById("loading").textContent = "Connecting...";
+
+  try {
+    const dbName = "kv_demo_" + location.port;
+    await Module.kvCreate(dbName);
+
+    const url = "ws://" + location.hostname + ":" + PORT;
+    await Module.kvConnect(url);
+
+    if (!Module.kvIsConnected()) {
+      setStatus("Connection failed", "red");
+      document.getElementById("loading").classList.add("hidden");
+      return;
+    }
+
+    setStatus("Connected — initial sync...", "yellow");
+    document.getElementById("loading").classList.add("hidden");
+
+    // Initial sync
+    await doSync();
+
+    ready = true;
+    setButtons(true);
+    setStatus("Connected", "green");
+
+    // Poll for server notifications every 2s
+    setInterval(pollNotifications, 2000);
+
+  } catch (e) {
+    console.error("init error:", e);
+    setStatus("Init failed: " + e.message, "red");
+    document.getElementById("loading").classList.add("hidden");
+  }
+}
+</script>
+
+</body>
+</html>
