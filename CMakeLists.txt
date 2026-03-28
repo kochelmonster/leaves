@@ -52,18 +52,18 @@ if(EMSCRIPTEN)
         -sJSPI
         "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
         -sALLOW_MEMORY_GROWTH=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         -sENVIRONMENT=web,node
     )
 
     add_executable(test_browserstore tests/test_browserstore.cpp)
     target_link_libraries(test_browserstore PRIVATE wasm_core blake3)
     target_compile_definitions(test_browserstore PRIVATE TESTING)
-    target_link_options(test_browserstore PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']")
+    target_link_options(test_browserstore PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
 
     add_executable(db_bench_browser benchmarks/db_bench_browser.cpp)
     target_link_libraries(db_bench_browser PRIVATE wasm_core blake3)
-    target_link_options(db_bench_browser PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']")
+    target_link_options(db_bench_browser PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
 
     # Copy WASM artifacts to benchmarks/ for browser serving
     add_custom_command(TARGET db_bench_browser POST_BUILD
@@ -100,7 +100,13 @@ if(EMSCRIPTEN)
     target_compile_definitions(ws_replication_client PRIVATE TESTING)
     target_link_options(ws_replication_client PRIVATE
         -sEXIT_RUNTIME=1
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
     )
+
+    # ── KV Browser Demo (embind, no main) ───────────────────────
+    add_executable(kv_demo_client examples/kv_browser/client.cpp)
+    target_link_libraries(kv_demo_client PRIVATE wasm_core blake3)
+    target_link_options(kv_demo_client PRIVATE -lembind --no-entry)
 
     return()   # stop here; nothing below applies to WASM
 endif()
@@ -266,6 +272,9 @@ target_link_libraries(test_replication_api PUBLIC core test blake3)
 
 add_executable(ws_replication_server tests/ws_replication/server.cpp)
 target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
+
+add_executable(kv_demo_server examples/kv_browser/server.cpp)
+target_link_libraries(kv_demo_server PUBLIC core blake3 pthread)
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
