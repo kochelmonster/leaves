@@ -4,12 +4,18 @@
 
 #include <lmdb.h>
 
+#include <boost/endian/conversion.hpp>
 #include <cstdio>
 #include <cstdlib>
 
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
+
+using boost::endian::native_to_big;
+
+// Use binary (big-endian uint64) keys instead of decimal string keys
+static bool FLAGS_binary_key = false;
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -150,9 +156,10 @@ class Benchmark {
   int next_report_;  // When to report next
 
   void PrintHeader() {
-    const int kKeySize = 16;
+    const int kKeySize = FLAGS_binary_key ? 8 : 16;
     PrintEnvironment();
-    std::fprintf(stdout, "Keys:       %d bytes each\n", kKeySize);
+    std::fprintf(stdout, "Keys:       %d bytes each (%s)\n", kKeySize,
+                 FLAGS_binary_key ? "binary uint64 big-endian" : "decimal string");
     std::fprintf(
         stdout, "Values:     %d bytes each (%d bytes after compression)\n",
         FLAGS_value_size,
@@ -464,9 +471,13 @@ class Benchmark {
       for (int j=0; j < entries_per_batch; j++) {
         const int k = (order == SEQUENTIAL) ? i+j : (rand_.Next() % num_entries);
         
-        mkey.mv_size = snprintf(key, sizeof(key), "%016d", k);
-        
-        std::snprintf(key, sizeof(key), "%016d", k);
+        if (FLAGS_binary_key) {
+          uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+          __builtin_memcpy(key, &bk, sizeof(bk));
+          mkey.mv_size = sizeof(uint64_t);
+        } else {
+          mkey.mv_size = snprintf(key, sizeof(key), "%016d", k);
+        }
         bytes_ += value_size + mkey.mv_size;
         mval.mv_data = (void *)gen_.Generate(value_size).data();
         mval.mv_size = value_size;
@@ -507,7 +518,13 @@ class Benchmark {
     mdb_cursor_open(txn, dbi_, &cursor);
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
-      key.mv_size = snprintf(ckey, sizeof(ckey), "%016d", k);
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(ckey, &bk, sizeof(bk));
+        key.mv_size = sizeof(uint64_t);
+      } else {
+        key.mv_size = snprintf(ckey, sizeof(ckey), "%016d", k);
+      }
       mdb_cursor_get(cursor, &key, &data, MDB_SET);
       FinishedSingleOp();
     }
@@ -548,6 +565,12 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;
+    } else if (sscanf(argv[i], "--binary_key=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_binary_key = (n == 1);
+      if (FLAGS_binary_key) {
+        std::fprintf(stderr, "Using binary keys (big-endian uint64, 8 bytes)\n");
+      }
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {

@@ -19,6 +19,10 @@
 #include "../leveldb/util/histogram.h"
 #include "../leveldb/util/random.h"
 
+#include <boost/endian/conversion.hpp>
+
+using boost::endian::native_to_big;
+
 // Type aliases for compatibility
 using Slice = rocksdb::Slice;
 using Env = rocksdb::Env;
@@ -92,6 +96,9 @@ static bool FLAGS_use_existing_db = false;
 
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
+
+// Use binary (big-endian uint64) keys instead of decimal string keys
+static bool FLAGS_binary_key = false;
 
 // Use bloom filter
 static bool FLAGS_bloom_bits = true;
@@ -193,16 +200,18 @@ class Benchmark {
   int next_report_;  // When to report next
 
   void PrintHeader() {
+    const int kKeySize = FLAGS_binary_key ? 8 : 16;
     PrintEnvironment();
-    std::fprintf(stdout, "Keys:       %d bytes each\n", 16);
+    std::fprintf(stdout, "Keys:       %d bytes each (%s)\n", kKeySize,
+                 FLAGS_binary_key ? "binary uint64 big-endian" : "decimal string");
     std::fprintf(stdout, "Values:     %d bytes each (%d bytes after compression)\n",
                  FLAGS_value_size,
                  static_cast<int>(FLAGS_value_size * FLAGS_compression_ratio + 0.5));
     std::fprintf(stdout, "Entries:    %d\n", num_);
     std::fprintf(stdout, "RawSize:    %.1f MB (estimated)\n",
-                 ((static_cast<int64_t>(16 + FLAGS_value_size) * num_) / 1048576.0));
+                 ((static_cast<int64_t>(kKeySize + FLAGS_value_size) * num_) / 1048576.0));
     std::fprintf(stdout, "FileSize:   %.1f MB (estimated)\n",
-                 (((16 + FLAGS_value_size * FLAGS_compression_ratio) * num_) / 1048576.0));
+                 (((kKeySize + FLAGS_value_size * FLAGS_compression_ratio) * num_) / 1048576.0));
     PrintWarnings();
     std::fprintf(stdout, "------------------------------------------------\n");
   }
@@ -614,13 +623,21 @@ class Benchmark {
     for (int i = 0; i < num_; i++) {
       const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % FLAGS_num);
       char key[100];
-      std::snprintf(key, sizeof(key), "%016d", k);
-      rocksdb::Status s = db_->Put(write_options, key, gen_.Generate(FLAGS_value_size));
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d", k);
+        mkey = rocksdb::Slice(key);
+      }
+      rocksdb::Status s = db_->Put(write_options, mkey, gen_.Generate(FLAGS_value_size));
       if (!s.ok()) {
         std::fprintf(stderr, "put error: %s\n", s.ToString().c_str());
         exit(1);
       }
-      bytes_ += FLAGS_value_size + strlen(key);
+      bytes_ += FLAGS_value_size + mkey.size();
       FinishedSingleOp();
     }
 
@@ -665,8 +682,16 @@ class Benchmark {
     for (int i = 0; i < reads_; i++) {
       char key[100];
       const int k = rand_.Next() % FLAGS_num;
-      std::snprintf(key, sizeof(key), "%016d", k);
-      if (db_->Get(options, key, &value).ok()) {
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d", k);
+        mkey = rocksdb::Slice(key);
+      }
+      if (db_->Get(options, mkey, &value).ok()) {
         found++;
       }
       FinishedSingleOp();
@@ -684,8 +709,16 @@ class Benchmark {
     for (int i = 0; i < reads_; i++) {
       char key[100];
       const int k = rand_.Next() % FLAGS_num;
-      std::snprintf(key, sizeof(key), "%016d.", k);
-      db_->Get(options, key, &value);
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k + (uint64_t)FLAGS_num);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d.", k);
+        mkey = rocksdb::Slice(key);
+      }
+      db_->Get(options, mkey, &value);
       FinishedSingleOp();
     }
     Stop(name);
@@ -699,9 +732,17 @@ class Benchmark {
       rocksdb::Iterator* iter = db_->NewIterator(options);
       char key[100];
       const int k = rand_.Next() % FLAGS_num;
-      std::snprintf(key, sizeof(key), "%016d", k);
-      iter->Seek(key);
-      if (iter->Valid() && iter->key() == key) found++;
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d", k);
+        mkey = rocksdb::Slice(key);
+      }
+      iter->Seek(mkey);
+      if (iter->Valid() && iter->key() == mkey) found++;
       delete iter;
       FinishedSingleOp();
     }
@@ -719,8 +760,16 @@ class Benchmark {
     for (int i = 0; i < reads_; i++) {
       char key[100];
       const int k = rand_.Next() % range;
-      std::snprintf(key, sizeof(key), "%016d", k);
-      db_->Get(options, key, &value);
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d", k);
+        mkey = rocksdb::Slice(key);
+      }
+      db_->Get(options, mkey, &value);
       FinishedSingleOp();
     }
     Stop(name);
@@ -731,8 +780,16 @@ class Benchmark {
     Start();
     for (int i = 0; i < num_; i++) {
       char key[100];
-      std::snprintf(key, sizeof(key), "%016d", i);
-      db_->Delete(write_options, key);
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)i);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d", i);
+        mkey = rocksdb::Slice(key);
+      }
+      db_->Delete(write_options, mkey);
       FinishedSingleOp();
     }
     Stop(name);
@@ -744,8 +801,16 @@ class Benchmark {
     for (int i = 0; i < num_; i++) {
       char key[100];
       const int k = rand_.Next() % FLAGS_num;
-      std::snprintf(key, sizeof(key), "%016d", k);
-      db_->Delete(write_options, key);
+      rocksdb::Slice mkey;
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(key, &bk, sizeof(bk));
+        mkey = rocksdb::Slice(key, sizeof(uint64_t));
+      } else {
+        std::snprintf(key, sizeof(key), "%016d", k);
+        mkey = rocksdb::Slice(key);
+      }
+      db_->Delete(write_options, mkey);
       FinishedSingleOp();
     }
     Stop(name);
@@ -875,6 +940,12 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--disable_wal=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_disable_wal = n;
+    } else if (sscanf(argv[i], "--binary_key=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_binary_key = (n == 1);
+      if (FLAGS_binary_key) {
+        std::fprintf(stderr, "Using binary keys (big-endian uint64, 8 bytes)\n");
+      }
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {

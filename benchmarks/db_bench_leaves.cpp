@@ -24,7 +24,8 @@
 using boost::endian::big_to_native;
 using boost::endian::native_to_big;
 
-// #define BINARY_KEY
+// Use binary (big-endian uint64) keys instead of decimal string keys
+static bool FLAGS_binary_key = false;
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -206,10 +207,11 @@ class Benchmark {
   }
 
   void PrintHeader() {
-    const int kKeySize = 16;
+    const int kKeySize = FLAGS_binary_key ? 8 : 16;
     PrintEnvironment();
     std::fprintf(stdout, "Storage:     %s\n", storage_name());
-    std::fprintf(stdout, "Keys:        %d bytes each\n", kKeySize);
+    std::fprintf(stdout, "Keys:        %d bytes each (%s)\n", kKeySize,
+                 FLAGS_binary_key ? "binary uint64 big-endian" : "decimal string");
     std::fprintf(
         stdout, "Values:      %d bytes each (%d bytes after compression)\n",
         FLAGS_value_size,
@@ -578,13 +580,14 @@ class Benchmark {
         const int k =
             (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
 
-#ifdef BINARY_KEY
-        *(uint64_t*)key = native_to_big(k);
-        mkey = leaves::Slice(key, sizeof(uint64_t));
-#else
-        snprintf(key, sizeof(key), "%016d", k);
-        mkey = leaves::Slice(key);
-#endif
+        if (FLAGS_binary_key) {
+          uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+          __builtin_memcpy(key, &bk, sizeof(bk));
+          mkey = leaves::Slice(key, sizeof(uint64_t));
+        } else {
+          snprintf(key, sizeof(key), "%016d", k);
+          mkey = leaves::Slice(key);
+        }
         int iter = i + j;
 
         bytes_ += value_size + mkey.size();
@@ -722,9 +725,14 @@ class Benchmark {
     auto cursor = storage["benchmark"].cursor();
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
-      snprintf(ckey, sizeof(ckey), "%016d", k);
-
-      cursor.find(ckey);
+      if (FLAGS_binary_key) {
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        __builtin_memcpy(ckey, &bk, sizeof(bk));
+        cursor.find(leaves::Slice(ckey, sizeof(uint64_t)));
+      } else {
+        snprintf(ckey, sizeof(ckey), "%016d", k);
+        cursor.find(ckey);
+      }
       if (cursor.is_valid()) {
         bytes_ += cursor.key().size() + cursor.value().size();
       }
@@ -794,6 +802,12 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;
+    } else if (sscanf(argv[i], "--binary_key=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_binary_key = (n == 1);
+      if (FLAGS_binary_key) {
+        std::fprintf(stderr, "Using binary keys (big-endian uint64, 8 bytes)\n");
+      }
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {
