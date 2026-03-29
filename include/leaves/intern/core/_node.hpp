@@ -366,6 +366,114 @@ struct _TrieNode {
            (count() - oidx) * sizeof(offset_e));
   }
 
+  /**
+   * @brief Insert a new branch for @p key in-place, without allocating a new
+   * node.  The caller must guarantee:
+   *   1. The page that owns this node belongs to the current write transaction
+   *      (needs_cow() == false), so no reader can observe intermediate states.
+   *   2. The page's slot budget allows at least increment_size(key) bytes.
+   *
+   * Memory layout invariant after return:
+   *   lower[] may grow by one uint32_e entry; array[] shifts up by 8 bytes
+   *   (one offset_e slot) when lower[] crosses an 8-byte alignment boundary.
+   *   All moves are performed with memmove in an order that avoids aliasing.
+   *
+   * @return The array index of the freshly inserted (uninitialized) slot.
+   */
+  uint16_t insert_branch(int key) {
+    assert(key != OUT_OF_RANGE);
+    assert(!isset(key));
+    assert(count() < int(MAX_BRANCH_COUNT) - 1);
+
+    uint16_t old_count = (uint16_t)count();
+
+    // NONE branch: stored at array[0], flagged by NULL_MASK in _array_len.
+    if (key == NONE) {
+      assert(!has_none());
+      memmove((void*)(array() + 1), (void*)array(),
+              old_count * sizeof(offset_e));
+      _array_len = (_array_len + 1) | NULL_MASK;
+      return 0;
+    }
+
+    uint8_t bit = ubit(key);
+
+    if (_upper & (1u << bit)) {
+      // Upper group already present: only the lower bitmap changes.
+      // The lower[] array does not grow → array_start stays fixed.
+      uint32_e* lower_ = lower();
+      int lidx = bits::index(_upper, bit);
+
+      // Compute insertion index before modifying the bitmap.
+      int oidx = bits::count(lower_[lidx] & ((1u << lbit(key)) - 1)) +
+                 bool(_array_len & NULL_MASK);
+      if (lidx > 0) oidx += bits::count(lower_[0]);
+      if (lidx > 1) oidx += bits::count(lower_[1]);
+      if (lidx > 2) oidx += bits::count(lower_[2]);
+      if (lidx > 3) oidx += bits::count(lower_[3]);
+      if (lidx > 4) oidx += bits::count(lower_[4]);
+      if (lidx > 5) oidx += bits::count(lower_[5]);
+      if (lidx > 6) oidx += bits::count(lower_[6]);
+
+      lower_[lidx] |= 1u << lbit(key);
+
+      // Shift array right to open a slot at oidx.
+      offset_e* array_ = array();
+      memmove((void*)(array_ + oidx + 1), (void*)(array_ + oidx),
+              (old_count - oidx) * sizeof(offset_e));
+      _array_len++;
+      return (uint16_t)oidx;
+    }
+
+    // New upper group: lower[] grows by one uint32_e entry.
+    // array_start may move up by 8 bytes (one alignment step).
+    uint16_t ls = lower_start();
+    uint32_e* lower_ = lower();
+    uint16_t old_bcount = bits::count(_upper);
+
+    _upper |= (1u << bit);
+    int new_lidx = bits::index(_upper, bit);
+
+    // Insertion index: sum bit-counts of all lower groups before new_lidx
+    // using the OLD lower[] (new entry not yet written).
+    int oidx = bool(_array_len & NULL_MASK);
+    for (int i = 0; i < new_lidx; i++) oidx += bits::count(lower_[i]);
+
+    uint16_t old_as = align(ls + old_bcount * (uint16_t)sizeof(uint32_e));
+    uint16_t new_as = align(ls + (old_bcount + 1) * (uint16_t)sizeof(uint32_e));
+    int shift = new_as - old_as;  // 0 or 8
+
+    offset_e* old_arr = (offset_e*)((char*)this + old_as);
+    offset_e* new_arr = (offset_e*)((char*)this + new_as);
+
+    if (shift > 0) {
+      // lower_[old_bcount] sits exactly at old_arr; move array FIRST to avoid
+      // clobbering when we extend lower[].
+      // Move suffix (higher addresses first so memmove handles the overlap).
+      memmove((void*)(new_arr + oidx + 1), (void*)(old_arr + oidx),
+              (old_count - oidx) * sizeof(offset_e));
+      // Move prefix.
+      if (oidx > 0)
+        memmove((void*)new_arr, (void*)old_arr, oidx * sizeof(offset_e));
+      // Now safe to extend lower[].
+      memmove((void*)(lower_ + new_lidx + 1), (void*)(lower_ + new_lidx),
+              (old_bcount - new_lidx) * sizeof(uint32_e));
+      lower_[new_lidx] = 1u << lbit(key);
+    } else {
+      // Array stays at old_as. Extend lower[] into the padding gap first,
+      // then shift array right in place.
+      memmove((void*)(lower_ + new_lidx + 1), (void*)(lower_ + new_lidx),
+              (old_bcount - new_lidx) * sizeof(uint32_e));
+      lower_[new_lidx] = 1u << lbit(key);
+      memmove((void*)(old_arr + oidx + 1), (void*)(old_arr + oidx),
+              (old_count - oidx) * sizeof(offset_e));
+    }
+
+    _array_offset = new_as / (uint16_t)sizeof(offset_e);
+    _array_len++;
+    return (uint16_t)oidx;
+  }
+
 /**
  * @brief Creates a TrieNode from an array of offsets for all possible byte
  * values.

@@ -181,7 +181,29 @@ struct _Inserter {
   void add_to_array() {
     int key = back->key() ? (uint8_t)back->branch_key : TrieNode::NONE;
     trie_ptr otrie = back->trie();
-    trie_ptr new_trie = alloc_node<trie_ptr>(otrie->increment_size(key));
+
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = otrie - sizeof(PageHeader);
+
+    uint16_t needed = otrie->increment_size(key);
+    uint16_t slot_budget = Traits::PAGE_SIZES[page->slot_id] - sizeof(PageHeader);
+
+    if (!page->needs_cow(back->cursor->_db) && needed <= slot_budget) {
+      // The node is owned by the current write transaction and the page has
+      // enough room: mutate in-place — no alloc, no copy, no free.
+      // Readers observe the previous committed root, so the intermediate
+      // state is invisible to them.
+      back->link_idx = otrie->insert_branch(key);
+      page->used = needed;
+      back->cursor->_db->make_dirty(otrie);
+      // No offset change — parent already points to this node.
+      back->cmp = 0;
+      create_leaf();
+      return;
+    }
+
+    // COW path: allocate a new (larger) node, copy, free the old one.
+    trie_ptr new_trie = alloc_node<trie_ptr>(needed);
 
     back->trie() = new_trie;
     back->link_idx = new_trie->create(*otrie, key);

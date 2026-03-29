@@ -10,7 +10,7 @@ compressed:
 branches: "[][1]"
 children: 
   - 528417
-  - 13360
+  - 13232
 ---
 type: leaf
 id: 528417
@@ -24,8 +24,8 @@ valuesize: 255
 value: "000000000000000000000000000000"
 ---
 type: trie
-id: 13360
-page: 13352
+id: 13232
+page: 13224
 freespace: 88
 txn: 2
 size: 40
@@ -36,7 +36,7 @@ branches: "[][1][2]"
 children: 
   - 1053265
   - 1053825
-  - 1054385
+  - 13361
 ---
 type: leaf
 id: 1053265
@@ -61,8 +61,8 @@ valuesize: 257
 value: "000000000000000000000000000000"
 ---
 type: leaf
-id: 1054385
-page: 1054377
+id: 13361
+page: 13353
 freespace: 299
 size: 261
 txn: 2
