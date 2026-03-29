@@ -23,12 +23,15 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -42,13 +45,30 @@ namespace net   = boost::asio;
 using tcp = net::ip::tcp;
 using namespace leaves;
 
+static constexpr auto SYNC_DEBOUNCE = std::chrono::milliseconds(100);
+
+thread_local int g_commit_origin_client_id = -1;
+
+struct ServerCommitScope {
+  explicit ServerCommitScope(int client_id) {
+    g_commit_origin_client_id = client_id;
+  }
+
+  ~ServerCommitScope() {
+    g_commit_origin_client_id = -1;
+  }
+};
+
 // ── WebSocket transport adapter ─────────────────────────────────
 
 struct BeastWsTransport : ReplicationTransport {
+  std::mutex& _write_mutex;
   ws::stream<tcp::socket>& _ws;
-  explicit BeastWsTransport(ws::stream<tcp::socket>& w) : _ws(w) {}
+  BeastWsTransport(ws::stream<tcp::socket>& w, std::mutex& write_mutex)
+      : _write_mutex(write_mutex), _ws(w) {}
 
   void send(const uint8_t* data, size_t size) override {
+    std::lock_guard<std::mutex> lock(_write_mutex);
     _ws.binary(true);
     _ws.write(net::buffer(data, size));
   }
@@ -60,6 +80,7 @@ struct ClientSession {
   std::shared_ptr<ws::stream<tcp::socket>> wss;
   int id;
   std::atomic<bool> alive{true};
+  std::mutex write_mutex;
 };
 
 // ── Globals ─────────────────────────────────────────────────────
@@ -68,6 +89,77 @@ static std::mutex g_db_mutex;
 static std::mutex g_clients_mutex;
 static std::vector<std::shared_ptr<ClientSession>> g_clients;
 static std::atomic<int> g_next_id{1};
+
+static void broadcast_sync_notification(const std::set<int>& excluded_clients) {
+  std::vector<std::shared_ptr<ClientSession>> clients;
+  {
+    std::lock_guard<std::mutex> lock(g_clients_mutex);
+    clients = g_clients;
+  }
+
+  for (const auto& session : clients) {
+    if (!session || !session->alive.load()) continue;
+    if (excluded_clients.count(session->id)) continue;
+
+    try {
+      std::lock_guard<std::mutex> lock(session->write_mutex);
+      session->wss->text(true);
+      session->wss->write(net::buffer(std::string("SYNC")));
+    } catch (const std::exception&) {
+      session->alive = false;
+    }
+  }
+}
+
+struct ServerSyncNotifier {
+  std::mutex mutex;
+  uint64_t pending_job_id = 0;
+  tid_t _last_txn_id{};
+  std::set<int> excluded_clients;
+
+  template <typename DB>
+  void schedule(DB& db, int origin_client_id) {
+    auto txn_id_snapshot = db.txn()->txn_id;
+
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      _last_txn_id = txn_id_snapshot;
+      if (origin_client_id > 0) {
+        excluded_clients.insert(origin_client_id);
+      }
+      if (pending_job_id) {
+        db._storage.cancel_job(pending_job_id);
+      }
+      pending_job_id = db._storage.schedule_after(
+          SYNC_DEBOUNCE, [this, txn_id_snapshot]() {
+            std::set<int> excluded;
+            {
+              std::lock_guard<std::mutex> lock(mutex);
+              if (txn_id_snapshot != _last_txn_id) return;
+              pending_job_id = 0;
+              excluded.swap(excluded_clients);
+            }
+            broadcast_sync_notification(excluded);
+          });
+    }
+  }
+};
+
+static ServerSyncNotifier g_sync_notifier;
+
+struct ServerAspect : public DefaultAspect {
+  template <typename DB, typename Ctx>
+  void on_commit(DB& db, Ctx&) {
+    if (g_commit_origin_client_id <= 0) return;
+    g_sync_notifier.schedule(db, g_commit_origin_client_id);
+  }
+};
+
+struct ServerReplicatingMapTraits : public _MemoryMapTraits {
+  using Aspect = ServerAspect;
+};
+
+using ServerStorage = ReplicatingMapStorage_<ServerReplicatingMapTraits>;
 
 static void remove_client(int id) {
   std::lock_guard<std::mutex> lock(g_clients_mutex);
@@ -96,7 +188,7 @@ struct DemoEvents : ReplicationEvents {
 
 static void handle_client(
     std::shared_ptr<ClientSession> session,
-    ReplicatingMapStorage::storage_ptr storage) {
+  ServerStorage::storage_ptr storage) {
   auto& wss = *session->wss;
   int client_id = session->id;
 
@@ -131,8 +223,8 @@ static void handle_client(
       // Phase 1: Server → Client (we send)
       {
         DemoEvents events;
-        BeastWsTransport transport(wss);
-        ReplicationSender<ReplicatingMapStorage> sender(db);
+        BeastWsTransport transport(wss, session->write_mutex);
+        ReplicationSender<ServerStorage> sender(db);
         sender.begin(&transport, &events);
 
         while (sender.state() == ReplicationState::ACTIVE) {
@@ -151,14 +243,18 @@ static void handle_client(
       }
 
       // Send "PULL" to signal client should now send
-      wss.text(true);
-      wss.write(net::buffer(std::string("PULL")));
+      {
+        std::lock_guard<std::mutex> lock(session->write_mutex);
+        wss.text(true);
+        wss.write(net::buffer(std::string("PULL")));
+      }
 
       // Phase 2: Client → Server (we receive)
       {
+        ServerCommitScope commit_scope(client_id);
         DemoEvents events;
-        BeastWsTransport transport(wss);
-        ReplicationReceiver<ReplicatingMapStorage> receiver(db);
+        BeastWsTransport transport(wss, session->write_mutex);
+        ReplicationReceiver<ServerStorage> receiver(db);
         receiver.begin(&transport, &events);
 
         while (receiver.state() == ReplicationState::ACTIVE) {
@@ -195,8 +291,11 @@ static void handle_client(
       }
 
       // Send "DONE" to signal sync complete
-      wss.text(true);
-      wss.write(net::buffer(std::string("DONE")));
+      {
+        std::lock_guard<std::mutex> lock(session->write_mutex);
+        wss.text(true);
+        wss.write(net::buffer(std::string("DONE")));
+      }
 
       std::cerr << "[server] client " << client_id << " sync done\n";
     }
@@ -227,7 +326,7 @@ int main(int argc, char* argv[]) {
   const char* path = argv[2];
 
   // Create storage
-  auto storage = ReplicatingMapStorage::create(path);
+  auto storage = ServerStorage::create(path);
   // Ensure DB "main" exists
   { auto db = (*storage)["main"]; }
 

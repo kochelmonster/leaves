@@ -281,6 +281,7 @@ async function manualSync() {
 async function pollNotifications() {
   if (!ready || syncing) return;
   try {
+    if (!Module.kvHasNotification()) return;
     await doSync();
   } catch (e) {
     console.error("poll error:", e);
@@ -326,8 +327,9 @@ async function init() {
     setButtons(true);
     setStatus("Connected", "green");
 
-    // Poll for server notifications every 2s
-    setInterval(pollNotifications, 2000);
+    // Poll the local WebSocket notification queue.
+    // This is cheap and lets server-pushed SYNC hints trigger promptly.
+    setInterval(pollNotifications, 250);
 
   } catch (e) {
     console.error("init error:", e);

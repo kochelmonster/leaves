@@ -733,7 +733,13 @@ struct _TransactionalCursor
     return this->_db->prepare_commit(_id, sync);
   }
 
-  bool commit(bool sync = false) { return this->_db->commit(_id, sync); }
+  bool commit(bool sync = false) {
+    bool committed = this->_db->commit(_id, sync);
+    if (committed) {
+      this->_aspect().on_commit(*this->_db, _aspect_context);
+    }
+    return committed;
+  }
 
   bool rollback() {
     if (this->_db->rollback(_id)) {
