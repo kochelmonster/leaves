@@ -44,13 +44,14 @@ void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
 //   may_merge_add:       rejects add of keys starting with "blocked_"
 //   may_merge_delete:    rejects deletion of keys starting with "pinned_"
 
-struct TestAspect {
+struct TestAspect : public DefaultAspect {
   static constexpr size_t big_meta_size = 0;
 
   struct CursorContext {
     int write_count = 0;   // counts on_write calls
     int read_count = 0;    // counts on_read calls
     int delete_count = 0;  // counts may_delete calls
+    int commit_count = 0;  // counts successful commits
     std::string write_buf; // scratch buffer for value transformation
   };
 
@@ -58,6 +59,7 @@ struct TestAspect {
     ctx.write_count = 0;
     ctx.read_count = 0;
     ctx.delete_count = 0;
+    ctx.commit_count = 0;
   }
 
   Slice on_write(const Slice& key, const Slice& value, CursorContext& ctx) {
@@ -106,13 +108,18 @@ struct TestAspect {
     std::string k(key.data(), key.size());
     return k.find("pinned_") != 0;
   }
+
+  template <typename DB>
+  void on_commit(DB&, CursorContext& ctx) {
+    ctx.commit_count++;
+  }
 };
 
 // =============================================================================
 // BigMeta Aspect — stores 8 bytes of inline metadata alongside big values
 // =============================================================================
 
-struct BigMetaAspect {
+struct BigMetaAspect : public DefaultAspect {
   static constexpr size_t big_meta_size = 8;
 
   struct CursorContext {
@@ -355,6 +362,22 @@ BOOST_AUTO_TEST_CASE(test_on_write_transforms_value) {
   // Verify cursor context counts
   BOOST_CHECK(cursor->_aspect_context.write_count >= 1);
   BOOST_CHECK(cursor->_aspect_context.read_count >= 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_on_commit_runs_after_successful_commit) {
+  TempDir tmp("test_aspect_commit");
+  auto path = tmp.path("commit.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  cursor->find(Slice("commit_key"));
+  cursor->value(Slice("commit_value"));
+
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.commit_count, 0);
+  BOOST_CHECK(cursor->commit());
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.commit_count, 1);
 }
 
 BOOST_AUTO_TEST_CASE(test_on_write_actually_stored_with_tag) {

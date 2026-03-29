@@ -2134,6 +2134,56 @@ BOOST_AUTO_TEST_CASE(test_merger_shared_trie_prefix) {
   BOOST_CHECK_EQUAL(v.value(), Slice("v_src_abf"));
 }
 
+BOOST_AUTO_TEST_CASE(test_merger_recursive_merge_src_keypos_bug) {
+  // Regression: src_cursor.push() in resolve_divergence recorded keypos=0
+  // because src_cursor.current_key was never synced with the local current_key
+  // string. The recursive merge_node then computed src_split_pos = split_pos - 0
+  // (too large), violating assert(src_leaf->key_size >= src_split_pos).
+  //
+  // Crash path:
+  //   merge_node("") → resolve_divergence(split_pos=5, src=trie "hello")
+  //     → src_cursor.push('/'-branch leaf "/world")  ← keypos=0 (bug)
+  //     → merge_node("hello") → resolve_divergence(split_pos=11, src.keypos=0)
+  //     → src_split_pos=11, assert(key_size=6 >= 11) → CRASH
+  //
+  // dst:  "hello/world/X" = "V1"
+  // src:  "hello" = "V2"        (forces NONE branch in src trie root)
+  //       "hello/world" = "V3"  (forces '/' branch shared with dst's path)
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = (*src_storage)["test"];
+  auto src_cursor_pub = src_db.cursor();
+  src_cursor_pub.find("hello");
+  src_cursor_pub.value("V2");
+  src_cursor_pub.find("hello/world");
+  src_cursor_pub.value("V3");
+  src_cursor_pub.commit();
+
+  auto dst_db = (*dest_storage)["test"];
+  auto dst_cursor_pub = dst_db.cursor();
+  dst_cursor_pub.find("hello/world/X");
+  dst_cursor_pub.value("V1");
+  dst_cursor_pub.commit();
+
+  OverwritePolicy handler;
+  // Before fix: assert(src_leaf->key_size >= src_split_pos) i.e. assert(6 >= 11) → crash
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  // After fix: all three keys merged into destination
+  auto v = (*dest_storage)["test"].cursor();
+  v.find("hello");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("V2"));
+  v.find("hello/world");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("V3"));
+  v.find("hello/world/X");
+  BOOST_CHECK(v.is_valid());
+  BOOST_CHECK_EQUAL(v.value(), Slice("V1"));
+}
+
 // ── Parallel execution tests ────────────────────────────────────────────
 #if LEAVES_HAS_THREADS
 

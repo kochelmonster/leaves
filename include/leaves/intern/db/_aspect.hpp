@@ -21,7 +21,10 @@ namespace leaves {
 //
 // Join points:
 //   Cursor-level — on_write, on_read, may_delete, init_big_meta
+//                  on_commit
 //   Merge-level  — may_merge_overwrite, may_merge_add, may_merge_delete
+//
+// All custom aspects must publicly derive from DefaultAspect.
 
 struct DefaultAspect {
   /// Extra bytes stored inline alongside _BigValue in big-value leaves.
@@ -67,6 +70,10 @@ struct DefaultAspect {
   /// Called when a big value is allocated.  Write metadata into |meta_ptr|
   /// (exactly big_meta_size bytes).
   void init_big_meta(const Slice& key, char* meta_ptr, CursorContext&) {}
+
+  /// Called after a successful transaction commit.
+  template <typename DB, typename Ctx>
+  void on_commit(DB&, Ctx&) {}
 
   // --- Merge join points --------------------------------------------------
   // These are called during replication merge.  The CursorContext belongs

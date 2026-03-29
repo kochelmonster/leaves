@@ -536,6 +536,7 @@ struct _Merger {
 
       // Recursively merge the shared branch (skip if src offset is incomplete)
       if (*src_trie->offset(key1) != 0) {
+        src_cursor.current_key.resize(current_key.size());
         src_cursor.push(src_trie->offset(key1));
         dst_cursor.stack.clear();
         merge_node(current_key);
@@ -752,6 +753,7 @@ struct _Merger {
         int k = shared[si].key;
         *new_trie->offset(k) = shared[si].dst_off;
 
+        src_cursor.current_key.resize(current_key.size());
         src_cursor.push(shared[si].src_off);
         dst_cursor.stack.clear();
         merge_node(current_key);
@@ -763,6 +765,7 @@ struct _Merger {
         int k = shared[si].key;
         *new_trie->offset(k) = shared[si].dst_off;
 
+        src_cursor.current_key.resize(current_key.size());
         src_cursor.push(shared[si].src_off);
         dst_cursor.stack.clear();
         merge_node(current_key);
@@ -785,6 +788,7 @@ struct _Merger {
           DstSubCursor dst_sub(dst_cursor._db, dst_branch_off, key,
                                dst_cursor.get_bigmemory());
           SrcSubCursor src_sub(src_cursor._db, src_branch_off);
+          src_sub.current_key.resize(key.size());
           src_sub.push(src_branch_off);
 
           SubMerger sub_merger(dst_sub, src_sub, handler);
