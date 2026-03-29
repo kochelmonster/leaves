@@ -457,7 +457,7 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
-#ifdef STATISTICS
+#if 0  // old STATISTICS block - moved to WriteImpl
         if (using_replicating_ && replicating_storage_) {
           std::cout << "File size: "
                     << replicating_storage_->file_size() / (1024 * 1024) << " MB"
@@ -477,9 +477,9 @@ class Benchmark {
         size_t size = 0;
         size_t counts = 0;
         std::cout << "GARBAGE" << std::endl;
-        Storage::Statistics stat;
-        db_->statistics(stat);
-        for (auto slot : stat.garbage.slots) {
+        Storage::Statistics db_stat;
+        db_->statistics(db_stat);
+        for (auto slot : db_stat.garbage.slots) {
           std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << std::endl;
           size += slot.page_size * slot.count;
@@ -490,14 +490,14 @@ class Benchmark {
 
         std::cout << "BRANCHES" << std::endl;
         size_t nsize = 0;
-        for (auto slot : stat.branch.slots) {
+        for (auto slot : db_stat.branch.slots) {
           std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
           nsize += slot.page_size * slot.count;
         }
 
         std::cout << "LEAVES" << std::endl;
-        for (auto slot : stat.leaf.slots) {
+        for (auto slot : db_stat.leaf.slots) {
           std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
           nsize += slot.page_size * slot.count;
@@ -506,7 +506,7 @@ class Benchmark {
 
         nsize = 0;
         std::cout << "TRANSACTION" << std::endl;
-        for (auto slot : stat.transaction.slots) {
+        for (auto slot : db_stat.transaction.slots) {
           std::cout << "Slot: " << slot.page_size << ": " << slot.count
                     << " : " << slot.free << std::endl;
           nsize += slot.page_size * slot.count;
@@ -627,6 +627,43 @@ class Benchmark {
       }
       cursor.commit(sync);
     }
+
+#ifdef STATISTICS
+    {
+      auto db_for_stat = storage["benchmark"];
+      auto* db_internal = db_for_stat._internal();
+      using DB_type = std::remove_pointer_t<decltype(db_internal)>;
+      typename DB_type::Statistics db_stat;
+      db_internal->statistics(db_stat);
+      std::cout << "\n--- Memory Statistics ---\n";
+      std::cout << "GARBAGE:\n";
+      for (auto& slot : db_stat.garbage.slots)
+        if (slot.count > 0)
+          std::cout << "  slot[" << slot.page_size << "]: " << slot.count << " pages = " << (slot.count * slot.page_size / 1024) << " KB\n";
+      std::cout << "BRANCH NODES:\n";
+      size_t total_branch = 0;
+      for (auto& slot : db_stat.branch.slots)
+        if (slot.count > 0) {
+          std::cout << "  slot[" << slot.page_size << "]: " << slot.count << " pages = " << (slot.count * slot.page_size / 1024) << " KB\n";
+          total_branch += slot.count * slot.page_size;
+        }
+      std::cout << "LEAF NODES:\n";
+      size_t total_leaf = 0;
+      for (auto& slot : db_stat.leaf.slots)
+        if (slot.count > 0) {
+          std::cout << "  slot[" << slot.page_size << "]: " << slot.count << " pages = " << (slot.count * slot.page_size / 1024) << " KB\n";
+          total_leaf += slot.count * slot.page_size;
+        }
+      std::cout << "TRANSACTIONS:\n";
+      size_t total_txn = 0;
+      for (auto& slot : db_stat.transaction.slots)
+        if (slot.count > 0) {
+          std::cout << "  slot[" << slot.page_size << "]: " << slot.count << " pages = " << (slot.count * slot.page_size / 1024) << " KB\n";
+          total_txn += slot.count * slot.page_size;
+        }
+      std::cout << "Branches=" << total_branch/1024 << " KB, Leaves=" << total_leaf/1024 << " KB, Txns=" << total_txn/1024 << " KB\n";
+    }
+#endif
   }
 
   void Write(bool sync, Order order, DBState state, int num_entries,

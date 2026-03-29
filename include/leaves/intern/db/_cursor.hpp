@@ -208,6 +208,7 @@ struct _Transition {
     }
     cmp = 0;
     link_idx = idx;
+    cursor->_db->prefetch(link());
     push().find();
   }
 
