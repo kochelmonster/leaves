@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -670,6 +671,10 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   // BigMemory for freeing big values when deleting keys from main trie
   BigMemory* bigmemory = nullptr;
 
+  // Snapshot of the local deletion trie root taken before Phase 1.
+  // Each merger thread creates its own cursor on first use (thread-safe).
+  typename CursorTraits_::offset_e _deletion_root_snapshot{};
+
   // Aspect-based merge policy (owned by _DB, accessed via pointer)
   Aspect* aspect = nullptr;
   [[no_unique_address]] CursorContext _merge_context;
@@ -719,7 +724,26 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
         main_cursor->remove();
       }
     } else {
-      // Main trie merge — consult may_merge_add
+      // Main trie merge — reject items the local client has already deleted
+      if (_deletion_root_snapshot) {
+        // Per-thread cursor navigates the immutable deletion trie snapshot.
+        // Reuses keep_stack() — valid because the merger visits each thread's
+        // portion in sorted key order.
+        thread_local DstDB* tl_db = nullptr;
+        thread_local typename CursorTraits_::offset_e tl_cached_root{};
+        thread_local typename CursorTraits_::offset_e tl_root_slot{};
+        thread_local std::unique_ptr<InternalCursor> tl_cursor;
+
+        if (!tl_cursor || tl_db != db || tl_cached_root != _deletion_root_snapshot) {
+          tl_root_slot = _deletion_root_snapshot;
+          tl_cached_root = _deletion_root_snapshot;
+          tl_db = db;
+          tl_cursor = std::make_unique<InternalCursor>(db, &tl_root_slot);
+        }
+
+        tl_cursor->find(Slice(key));
+        if (tl_cursor->is_valid()) return false;
+      }
       if (!aspect->may_merge_add(Slice(key), src, is_big, _merge_context)) {
         return false;
       }
@@ -838,7 +862,8 @@ struct ReplicationReceiverFSM {
   alignas(8)
       TempOffset _temp_root;  // Root offset of temp DB (first received subtrie)
   WireTempDB _wire_db;        // Stateless adapter for resolving wire offsets
-  WireCursor _wire_cursor;    // Reusable cursor for navigating temp DB
+  WireCursor _wire_cursor;    // Reusable cursor for navigating temp DB (used by merger)
+  WireCursor _parent_cursor;  // Dedicated cursor for _find_temp_parent_offset (isolated from merger)
 
   // Overwrite handler for merge conflicts
   MergePolicy _merge_policy;
@@ -889,6 +914,7 @@ struct ReplicationReceiverFSM {
         _initial_buffer_size(receive_buffer_size),
         _temp_root(0),
         _wire_cursor(&_wire_db, &_temp_root),
+        _parent_cursor(&_wire_db, &_temp_root),
         _merge_policy(std::move(handler)),
         _hash_lookup(db, &db->_header->hash_control.hash_root),
         _big_value(max_big_value_size),
@@ -1347,14 +1373,17 @@ struct ReplicationReceiverFSM {
     if (path.empty() || !_temp_root) return nullptr;
     if (_temp_root.type() != TRIE) return nullptr;
 
-    // Navigate to the path using member cursor (already bound to _temp_root)
-    _wire_cursor.find(path);
+    // Use the dedicated _parent_cursor (never shared with the merger) so that
+    // resetting its stack does not disturb _wire_cursor state.  The temp DB
+    // is mutated between calls (_connect_subtrie_to_parent writes into offset
+    // slots), so any cached node pointers are stale — force fresh navigation
+    // by resetting the stack before each call.
+    _parent_cursor.stack.size = 0;
+    _parent_cursor.current_key.clear();
+    _parent_cursor.find(path);
 
-    // After find(), check if we found the parent's offset slot
-    // The cursor navigates to where the path would be, with link_idx set
-    if (_wire_cursor.stack.size == 0) return nullptr;
-
-    return _wire_cursor.stack.back().offset;
+    if (_parent_cursor.stack.size == 0) return nullptr;
+    return _parent_cursor.stack.back().offset;
   }
 
   // Handle a wire leaf node: bounds-check, hash compare, prune/mismatch.
@@ -1637,6 +1666,17 @@ struct ReplicationReceiverFSM {
       // (must happen before any merge phase that references big values)
       _big_value.link_area(_db, _replication_slot);
 
+      // Snapshot the local deletion trie root so may_add_leaf() can reject
+      // re-delivery of locally deleted keys during main trie merge.
+      // Taken before Phase 1 so only local (pre-session) deletions are captured.
+      if constexpr (requires {
+                      std::declval<typename DB::Transaction>().deletion_root;
+                    }) {
+        using Transaction = typename DB::Transaction;
+        auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
+        _merge_policy._deletion_root_snapshot = txn->deletion_root;
+      }
+
       // Phase 1: Merge current (deletion trie) data and apply deletions
       if (current_wire_root) {
         // Switch cursor root to deletion trie within the same transaction
@@ -1692,13 +1732,16 @@ struct ReplicationReceiverFSM {
         _deferred_wire_root_type = 0;
       }
 
+      _merge_policy._deletion_root_snapshot = {};
       _cursor->commit();
     } catch (const StorageFull&) {
+      _merge_policy._deletion_root_snapshot = {};
       _cursor->rollback();
       _transition_to_error(ReplicationError::STORAGE_FULL,
                            "Storage full during replication merge");
       return false;
     } catch (const std::exception& e) {
+      _merge_policy._deletion_root_snapshot = {};
       _cursor->rollback();
       _transition_to_error(ReplicationError::INTERNAL_ERROR, e.what());
       return false;
