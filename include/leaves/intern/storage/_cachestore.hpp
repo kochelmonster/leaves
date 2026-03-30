@@ -4,11 +4,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <cstring>  // for std::memcpy
 #include <memory>
-#include <mutex>
 #include <thread>
 #include "../third_party/unordered_dense.h"
 
@@ -61,9 +59,11 @@ struct _CacheStore : public Opers_,
   using Cache = TwoQCache<uint64_t, page_ptr>;
 
   mutable Cache _cache;
+  mutable SpinLock _cache_mutex;
   size_t _capacity;  // Cache capacity in bytes
 
   void debug_check_cache() const {
+    std::lock_guard<SpinLock> lock(_cache_mutex);
     std::cout << "\n==== DEBUG CACHE CHECK ====\n";
     std::cout << "Cache entries: " << _cache.size() << " entries\n";
 
@@ -75,11 +75,14 @@ struct _CacheStore : public Opers_,
 
   void debug_reset() {
     std::cout << "Resetting cache (clearing all entries)\n";
-    _cache = Cache(_capacity);
+    {
+      std::lock_guard<SpinLock> lock(_cache_mutex);
+      _cache = Cache(_capacity);
+    }
 
     // Also reset the dirty areas map to avoid dangling references
     {
-      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      std::lock_guard<SpinLock> lock(_dirty_mutex);
       _dirty_pending.clear();
       _dirty_committed.clear();
       _dirty_inflight.clear();
@@ -87,7 +90,7 @@ struct _CacheStore : public Opers_,
   }
 
   // Dirty area tracking — guarded by _dirty_mutex (shared with background flush)
-  mutable std::mutex _dirty_mutex;
+  mutable SpinLock _dirty_mutex;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_pending;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_committed;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_inflight;
@@ -122,7 +125,7 @@ struct _CacheStore : public Opers_,
   void flush(bool sync = false, bool /*force*/ = false) {
     bool has_pending = false;
     {
-      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      std::lock_guard<SpinLock> lock(_dirty_mutex);
       if (!_dirty_pending.empty()) {
         has_pending = true;
         _dirty_committed.insert(_dirty_pending.begin(), _dirty_pending.end());
@@ -161,34 +164,38 @@ struct _CacheStore : public Opers_,
     // For multi-area allocations the offset may fall past the first
     // AREA_SIZE chunk.  Walk backwards by AREA_SIZE until we hit the
     // cached entry for the area's true start.
-    auto* cached = _cache.get(area_offset);
-    uint64_t probe = area_offset;
-    while (!cached && probe >= AREA_SIZE) {
-      probe -= AREA_SIZE;
-      cached = _cache.get(probe);
-      // Make sure the found entry actually spans our offset
-      if (cached && cached->area()->offset() + cached->area()->size() <= area_offset) {
-        cached = nullptr;  // belongs to a different, earlier area
-        break;
+    {
+      std::lock_guard<SpinLock> cache_lock(_cache_mutex);
+      auto* cached = _cache.get(area_offset);
+      uint64_t probe = area_offset;
+      while (!cached && probe >= AREA_SIZE) {
+        probe -= AREA_SIZE;
+        cached = _cache.get(probe);
+        // Make sure the found entry actually spans our offset
+        if (cached && cached->area()->offset() + cached->area()->size() <= area_offset) {
+          cached = nullptr;  // belongs to a different, earlier area
+          break;
+        }
       }
-    }
-    if (cached) {
-      uint64_t true_start = cached->area()->offset();
-      page_ptr result = *cached;
-      result._offset = static_cast<uint32_t>(raw_offset - true_start);
-      return result;
+      if (cached) {
+        uint64_t true_start = cached->area()->offset();
+        page_ptr result = *cached;
+        result._offset = static_cast<uint32_t>(raw_offset - true_start);
+        return result;
+      }
     }
 
     // Cache miss — check dirty maps before reading from storage.
     // A dirty page may have been evicted from the cache but is still
     // in-memory awaiting flush or async IDB write.
     {
-      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      std::lock_guard<SpinLock> lock(_dirty_mutex);
       for (auto* map : {&_dirty_pending, &_dirty_committed, &_dirty_inflight}) {
         auto it = map->find(area_offset);
         if (it != map->end()) {
           page_ptr result = it->second;
           result._offset = static_cast<uint32_t>(raw_offset - area_offset);
+          std::lock_guard<SpinLock> cache_lock(_cache_mutex);
           _cache.put(area_offset, result);
           return result;
         }
@@ -207,7 +214,10 @@ struct _CacheStore : public Opers_,
     page_ptr result(slice);
     result._offset = static_cast<uint32_t>(raw_offset - area_offset);
 
-    _cache.put(area_offset, result);
+    {
+      std::lock_guard<SpinLock> cache_lock(_cache_mutex);
+      _cache.put(area_offset, result);
+    }
     return result;
   }
 
@@ -234,7 +244,7 @@ struct _CacheStore : public Opers_,
   void make_dirty(PtrType block_arg) {
     page_ptr block = block_arg;
     uint64_t offset = block.area()->offset();
-    std::lock_guard<std::mutex> lock(_dirty_mutex);
+    std::lock_guard<SpinLock> lock(_dirty_mutex);
     _dirty_pending[offset] = block;
   }
 
@@ -258,7 +268,10 @@ struct _CacheStore : public Opers_,
     // Insert into cache as a block starting at area base
     page_ptr blk(area);
     blk._offset = 0;
-    _cache.put(start, blk);
+    {
+      std::lock_guard<SpinLock> cache_lock(_cache_mutex);
+      _cache.put(start, blk);
+    }
     return area_ptr(area);
   }
 
@@ -292,7 +305,7 @@ struct _CacheStore : public Opers_,
   void write_dirty_blocks() {
     std::vector<page_ptr> blocks_to_write;
     {
-      std::lock_guard<std::mutex> lock(_dirty_mutex);
+      std::lock_guard<SpinLock> lock(_dirty_mutex);
       // If no async writes are pending, previous inflight batch has
       // landed in IDB — safe to release those page_ptr refs.
       if (!this->has_pending_writes()) {

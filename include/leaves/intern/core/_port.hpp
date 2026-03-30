@@ -1,6 +1,22 @@
 #ifndef _LEAVES___PORT_HPP
 #define _LEAVES___PORT_HPP
 
+// Platform / threading detection
+// Native threading (pthreads / win32 threads) is assumed available unless:
+//  - Emscripten without pthread support
+//  - Explicitly disabled by LEAVES_SINGLE_THREADED
+#if defined(__EMSCRIPTEN__)
+  #if defined(__EMSCRIPTEN_PTHREADS__)
+    #define LEAVES_HAS_THREADS 1
+  #else
+    #define LEAVES_HAS_THREADS 0
+  #endif
+#elif defined(LEAVES_SINGLE_THREADED)
+  #define LEAVES_HAS_THREADS 0
+#else
+  #define LEAVES_HAS_THREADS 1
+#endif
+
 #include "_util.hpp"
 
 #if defined(_MSC_VER)

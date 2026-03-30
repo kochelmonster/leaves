@@ -397,20 +397,20 @@ struct _MemManagerPool {
 
   template <typename Resolver>
   FORCE_INLINE page_ptr alloc(uint8_t sidx, Resolver& resolver) {
-    if constexpr (POOL_SIZE == 1) {
-      return _managers[0].alloc(sidx, resolver);
-    } else {
-      return _alloc_pooled(sidx, resolver);
-    }
+#if LEAVES_HAS_THREADS
+    return _alloc_pooled(sidx, resolver);
+#else
+    return _managers[0].alloc(sidx, resolver);
+#endif
   }
 
   template <typename Resolver>
   FORCE_INLINE void free(page_ptr block, Resolver& resolver) {
-    if constexpr (POOL_SIZE == 1) {
-      _managers[0].free(block, resolver);
-    } else {
-      _free_pooled(block, resolver);
-    }
+#if LEAVES_HAS_THREADS
+    _free_pooled(block, resolver);
+#else
+    _managers[0].free(block, resolver);
+#endif
   }
 
   template <typename Resolver>
