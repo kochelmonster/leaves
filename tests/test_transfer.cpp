@@ -418,7 +418,8 @@ void test_sender_multiple_keys() {
     Slice ack_data = ack_builder.finalize();
     RequestChildrenHeader ack_hdr;
     parse_request_children(ack_data, &ack_hdr);
-    sender.process_ack(request_children_iterator(ack_data, ack_hdr));
+    auto ack_iter = request_children_iterator(ack_data, ack_hdr);
+    sender.process_ack(ack_iter);
     
     rounds++;
   } while (sender.has_pending() && rounds < 20);
@@ -568,7 +569,8 @@ void test_relative_offsets() {
     Slice ack_data = ack_builder.finalize();
     RequestChildrenHeader ack_hdr;
     parse_request_children(ack_data, &ack_hdr);
-    sender.process_ack(request_children_iterator(ack_data, ack_hdr));
+    auto ack_iter = request_children_iterator(ack_data, ack_hdr);
+    sender.process_ack(ack_iter);
   } while (sender.has_pending());
   
   assert(sender.is_complete());

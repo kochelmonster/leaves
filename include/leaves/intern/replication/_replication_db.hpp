@@ -479,7 +479,6 @@ struct _ReplicationDB
     this->make_dirty(this->_header);
   }
 
- private:
   struct PurgeResult {
     size_t purged;
     uint64_t oldest_remaining_ts;  // 0 = deletion trie empty
@@ -493,7 +492,7 @@ struct _ReplicationDB
   }
 
   // The scheduled purge job — runs on the storage's thread pool.
-  // After purging, schedules the next run based on the oldest remaining
+  // After purging, schedules the next run based on the oldest remainings
   // entry and the retention period.
   void _run_purge() {
     _in_purge.store(true, std::memory_order_relaxed);

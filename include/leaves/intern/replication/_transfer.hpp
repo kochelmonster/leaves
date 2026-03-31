@@ -560,7 +560,7 @@ struct TransferTrieSender {
   // to _pending. No need to prune descendants from _pending — they're only
   // added when transmitted.
   template <typename Iter>
-  void process_ack(Iter iter) {
+  void process_ack(Iter& iter) {
     // Remove ACKed trie nodes and their descendants from _last_batch.
     // Leaf ACKs never prune _last_batch — the trie node may still have
     // un-ACKed child branches whose deferred continuations must be kept.
