@@ -367,6 +367,12 @@ struct _MemManagerPool {
   _MemManager<Traits> _managers[POOL_SIZE];
   _PaddedLock _locks[POOL_SIZE];
   alignas(64) std::atomic<uint32_t> _next{0};
+  uint32_t _single_thread{1};
+  uint32_t _st_idx{0};
+  uint32_t _st_counter{0};
+
+  // Number of transactions between single-thread manager rotations.
+  static constexpr uint32_t ROTATION_INTERVAL = 64;
 
   void init(offset_t allocation_start_, offset_t allocation_end_) {
     _managers[0].init(allocation_start_, allocation_end_);
@@ -381,6 +387,23 @@ struct _MemManagerPool {
       _locks[i]._lk._flag.store(0, std::memory_order_relaxed);
     }
     _next.store(0, std::memory_order_relaxed);
+    _single_thread = 1;
+    _st_idx = 0;
+    _st_counter = 0;
+  }
+
+  // Toggle single-thread mode for parallel operations.
+  void set_single_thread(bool st) {
+    _single_thread = st ? 1 : 0;
+  }
+
+  // Rotate single-thread manager index every ROTATION_INTERVAL transactions.
+  void on_end_transaction() {
+    if constexpr (POOL_SIZE <= 1) return;
+    if (++_st_counter >= ROTATION_INTERVAL) {
+      _st_counter = 0;
+      _st_idx = (_st_idx + 1) % POOL_SIZE;
+    }
   }
 
   static constexpr int assign_slot(uint16_t size) {
@@ -397,20 +420,19 @@ struct _MemManagerPool {
 
   template <typename Resolver>
   FORCE_INLINE page_ptr alloc(uint8_t sidx, Resolver& resolver) {
-#if LEAVES_HAS_THREADS
+    if (_single_thread) {
+      return _managers[_st_idx].alloc(sidx, resolver);
+    }
     return _alloc_pooled(sidx, resolver);
-#else
-    return _managers[0].alloc(sidx, resolver);
-#endif
   }
 
   template <typename Resolver>
   FORCE_INLINE void free(page_ptr block, Resolver& resolver) {
-#if LEAVES_HAS_THREADS
+    if (_single_thread) {
+      _managers[_st_idx].free(block, resolver);
+      return;
+    }
     _free_pooled(block, resolver);
-#else
-    _managers[0].free(block, resolver);
-#endif
   }
 
   template <typename Resolver>

@@ -1184,7 +1184,9 @@ void run_hash_update_parallel(DB* internal_db, _PoolExecutor& exec,
   InternalCursor cursor(internal_db, hash_root_ptr);
   cursor.start_transaction();
 
+  internal_db->_active_txn->mem_manager.set_single_thread(false);
   update_hash_trie(exec, internal_db, internal_db, data_root, hash_root_ptr);
+  internal_db->_active_txn->mem_manager.set_single_thread(true);
 
   cursor.commit(internal_db->new_cursor_id());
 }

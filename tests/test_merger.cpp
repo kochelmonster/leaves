@@ -79,7 +79,9 @@ void exec_merger_parallel(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
       dst_cursor, src_cursor, handler);
   _TaskGroup<_PoolExecutor> tg(exec);
   merger._tg = &tg;
+  dst_db._active_txn->mem_manager.set_single_thread(false);
   merger.exec();
+  dst_db._active_txn->mem_manager.set_single_thread(true);
   dst_cursor.commit(cursor_id);
 }
 #endif  // LEAVES_HAS_THREADS

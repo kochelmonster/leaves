@@ -1624,6 +1624,7 @@ struct ReplicationReceiverFSM {
   void _exec_merger_parallel() {
 #if LEAVES_HAS_THREADS
     if constexpr (Traits::MERGE_POOL_THREADS > 0) {
+      _db->_active_txn->mem_manager.set_single_thread(false);
       _PoolExecutor exec(_db->_storage, Traits::MERGE_POOL_THREADS);
       _TaskGroup<_PoolExecutor> tg(exec);
       tg._concurrency = Traits::MERGE_DISPATCH_THRESHOLD;
@@ -1631,6 +1632,7 @@ struct ReplicationReceiverFSM {
           *_cursor, _wire_cursor, _merge_policy);
       merger._tg = &tg;
       merger.exec();
+      _db->_active_txn->mem_manager.set_single_thread(true);
       return;
     }
 #endif

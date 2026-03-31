@@ -537,6 +537,7 @@ struct _DB {
 
   void end_transaction() {
     _header->txn_cursor_id.store(0);
+    _active_txn->mem_manager.on_end_transaction();
     _wtxn.reset();
     _active_txn = nullptr;
     _header->txn_lock.unlock();
