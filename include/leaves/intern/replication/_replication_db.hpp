@@ -405,10 +405,12 @@ struct _ReplicationDB
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*first_fsm_txn);
 #if LEAVES_HAS_THREADS
+          hc.hash_mem_manager.set_single_thread(false);
           _PoolExecutor exec(this->_storage, _hash_threads);
           update_hash_trie(exec, this, &hdb, first_fsm_txn->root, &hc.hash_root);
           update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
+          hc.hash_mem_manager.set_single_thread(true);
 #else
           update_hash_trie(this, &hdb, first_fsm_txn->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,

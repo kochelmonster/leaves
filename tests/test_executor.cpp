@@ -216,6 +216,7 @@ struct TestResolver {
   _MemManager<TestTraits> _backing_mm;  // for alloc_slot
   tid_t mark_tid{1};
   tid_t accept_tid{1};
+  SpinLock _area_mutex;  // protects memory + _owned_areas
 
   // Simulated _active_txn for container txn_id stamping
   struct FakeTxn { tid_t txn_id{1}; };
@@ -259,6 +260,7 @@ struct TestResolver {
   void make_dirty(PtrType) {}
 
   area_ptr alloc_single_area() {
+    _area_mutex.lock();
     size_t old_size = memory.size();
     memory.resize(old_size + AREA_SIZE);
     Area* area = new Area();
@@ -266,12 +268,15 @@ struct TestResolver {
     area->offset(old_size);
     area->size(AREA_SIZE);
     area->_ref.store(0);
+    _area_mutex.unlock();
     return area_ptr(area);
   }
 
   page_ptr alloc_slot(uint16_t slot) {
+    _area_mutex.lock();
     page_ptr result = _backing_mm.alloc(slot, *this);
     result->txn_id = _active_txn->txn_id;
+    _area_mutex.unlock();
     return result;
   }
 
@@ -321,6 +326,7 @@ BOOST_AUTO_TEST_CASE(concurrent_alloc_free) {
   TestResolver resolver;
   _MemManagerPool<TestTraits> pool;
   pool.init(sizeof(void*), AREA_SIZE);
+  pool.set_single_thread(false);
 
   constexpr int N_THREADS = 8;
   constexpr int N_ALLOCS = 100;
