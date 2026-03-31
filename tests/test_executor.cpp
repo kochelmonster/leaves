@@ -173,6 +173,39 @@ BOOST_AUTO_TEST_CASE(nested_spawn_expansion) {
   BOOST_TEST(leaf_count.load() == 4);
 }
 
+// Covers _task_group.hpp L136: spawn() called from a pool worker (_in_worker
+// == true) runs the task immediately rather than queuing it.
+BOOST_AUTO_TEST_CASE(spawn_from_worker_runs_inline) {
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  _TaskGroup<_PoolExecutor> tg(exec);
+
+  std::atomic<int> inner{0};
+  // Dispatch 4 tasks (== concurrency) so they run on pool workers.
+  // Each dispatched task calls tg.spawn() from the worker thread,
+  // triggering the _in_worker == true branch at L136.
+  for (int i = 0; i < 4; i++) {
+    tg.spawn([&] {
+      tg.spawn([&] { inner.fetch_add(1, std::memory_order_relaxed); });
+    });
+  }
+  tg.wait([&](auto&& task) { exec.post(std::move(task)); });
+  BOOST_TEST(inner.load() == 4);
+}
+
+// Covers _task_group.hpp L198-200: exception thrown during _steal_loop()
+// (inline BFS expansion, not dispatched to pool workers).
+BOOST_AUTO_TEST_CASE(exception_in_steal_loop) {
+  TestPool pool(4);
+  _PoolExecutor exec(pool);
+  _TaskGroup<_PoolExecutor> tg(exec);
+
+  // 1 task < concurrency(4) → BFS expansion path → _steal_loop().
+  // The throw is caught at L198-200 and rethrown by wait() at L185-188.
+  tg.spawn([] { throw std::runtime_error("steal_error"); });
+  BOOST_CHECK_THROW(tg.wait(), std::runtime_error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // =========================================================================

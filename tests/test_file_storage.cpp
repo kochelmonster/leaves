@@ -363,3 +363,36 @@ BOOST_AUTO_TEST_CASE(test_sync_commit) {
     BOOST_CHECK_EQUAL(cursor.value(), Slice("world"));
   }
 }
+
+// ── _deleter.hpp combine() leaf-child path ────────────────────────────────
+// Insert two keys sharing a prefix so the trie has exactly 2 leaf children.
+// Deleting one triggers combine(): the remaining child is a leaf, covering
+// the else branch at L141, L157, and L167 in _deleter.hpp (also L92).
+BOOST_AUTO_TEST_CASE(test_remove_combine_leaf_child) {
+  DirPreparation prep;
+  auto path = prep.get_file_path();
+  auto storage = FileStorage::create(path.c_str());
+  auto db = (*storage)["leaf_combine"];
+  auto cursor = db.cursor();
+
+  // Insert two keys that share the prefix "xy", creating a 2-branch trie
+  cursor.find("xya");
+  cursor.value("val_a");
+  cursor.find("xyb");
+  cursor.value("val_b");
+  cursor.commit();
+
+  // Delete "xya" — the parent trie now has exactly 1 child (leaf "xyb").
+  // _Deleter::combine() is called and takes the else (leaf) branch.
+  cursor.find("xya");
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.remove();
+  cursor.commit();
+
+  // "xya" must be gone, "xyb" must survive
+  cursor.find("xya");
+  BOOST_CHECK(!cursor.is_valid());
+  cursor.find("xyb");
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("val_b"));
+}

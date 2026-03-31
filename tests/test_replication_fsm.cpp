@@ -8,7 +8,9 @@
 #include <fstream>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #define LEAVES_DEBUG
@@ -34,6 +36,13 @@ using ReceiverFSM = ReplicationReceiverFSM<DBImpl>;
 using FileDBImpl = ReplicatingFileStorage::StorageImpl::DB;
 using FileSenderFSM = ReplicationSenderFSM<FileDBImpl>;
 using FileReceiverFSM = ReplicationReceiverFSM<FileDBImpl>;
+
+BOOST_AUTO_TEST_CASE(test_storage_full_what_message) {
+  StorageFull ex;
+  BOOST_CHECK_EQUAL(
+      std::string(ex.what()),
+      "storage full: file size would exceed mapped region");
+}
 
 // =============================================================================
 // Test Transport - connects sender and receiver directly
@@ -3595,6 +3604,135 @@ BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff, ReplicationFixture
   BOOST_CHECK_EQUAL(result2.oldest_remaining_ts, 0);
 }
 
+BOOST_FIXTURE_TEST_CASE(test_purge_legacy_entry_removed, ReplicationFixture) {
+  auto path = (test_temp_dir / "purge_legacy_entry.lvs").string();
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["test"];
+  auto* impl = db._internal();
+
+  // Inject a legacy deletion entry with payload shorter than timestamp size.
+  {
+    auto cursor = impl->create_cursor();
+    [[maybe_unused]] bool started = cursor->start_transaction();
+    auto& del_cursor = cursor->get_deletion_cursor();
+    del_cursor.find(Slice("legacy_key"));
+    del_cursor.value(Slice("x"));
+    cursor->commit();
+  }
+
+  auto result = impl->_do_purge(0);
+  BOOST_CHECK_EQUAL(result.purged, 1);
+  BOOST_CHECK_EQUAL(result.oldest_remaining_ts, 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_run_purge_schedules_from_oldest_remaining,
+                        ReplicationFixture) {
+  auto path = (test_temp_dir / "purge_schedule_oldest.lvs").string();
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["test"];
+
+  // Create a deletion entry that should remain after purge.
+  {
+    auto cursor = db.cursor();
+    cursor.start_transaction();
+    cursor.find(Slice("k"));
+    cursor.value(Slice("v"));
+    cursor.commit();
+  }
+  {
+    auto cursor = db.cursor();
+    cursor.start_transaction();
+    cursor.find(Slice("k"));
+    BOOST_REQUIRE(cursor.is_valid());
+    cursor.remove();
+    cursor.commit();
+  }
+
+  auto* impl = db._internal();
+  // Keep retention high so older_than stays below the fresh deletion timestamp.
+  impl->set_retention(365ull * 24ull * 60ull * 60ull);
+
+  impl->_run_purge();
+
+  // _run_purge should have scheduled the next run from oldest_remaining_ts.
+  BOOST_CHECK(impl->_purge_job_id.load(std::memory_order_acquire) != 0);
+
+  // Avoid background-job leakage across tests.
+  impl->cancel_purge();
+}
+
+BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
+                        ReplicationFixture) {
+  auto path = (test_temp_dir / "purge_interrupt_hint.lvs").string();
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["test"];
+  auto* impl = db._internal();
+
+  bool covered_interrupt_branch = false;
+  for (int attempt = 0; attempt < 5 && !covered_interrupt_branch; ++attempt) {
+    // Refill deletion trie with many purgeable entries so the interrupt can
+    // land mid-walk.
+    {
+      auto cursor = impl->create_cursor();
+      [[maybe_unused]] bool started = cursor->start_transaction();
+      auto& del_cursor = cursor->get_deletion_cursor();
+      _little_uint64_t ts_le = 1;
+      for (int i = 0; i < 5000; ++i) {
+        std::string key = "intr_" + std::to_string(attempt) + "_" +
+                          std::to_string(i);
+        del_cursor.find(Slice(key));
+        del_cursor.value(Slice((uint8_t*)&ts_le, sizeof(ts_le)));
+      }
+      cursor->commit();
+    }
+
+    std::atomic<bool> stop{false};
+    std::thread interrupter([&] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      while (!stop.load(std::memory_order_relaxed)) {
+        impl->_purge_interrupt.store(true, std::memory_order_relaxed);
+        std::this_thread::yield();
+      }
+    });
+
+    const uint64_t older_than = 2;
+    auto result = impl->_do_purge(older_than);
+
+    stop.store(true, std::memory_order_relaxed);
+    interrupter.join();
+
+    // When interrupted after purging at least one entry and before seeing any
+    // survivor, _do_purge returns oldest_remaining_ts == older_than.
+    if (result.purged > 0 && result.oldest_remaining_ts == older_than) {
+      covered_interrupt_branch = true;
+    }
+  }
+
+  BOOST_CHECK_MESSAGE(covered_interrupt_branch,
+                      "Failed to trigger purge interruption branch");
+}
+
+BOOST_FIXTURE_TEST_CASE(test_acquire_hash_trie_fallback_when_offset_missing,
+                        ReplicationFixture) {
+  auto path = (test_temp_dir / "hash_fallback_offset_missing.lvs").string();
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["test"];
+  auto* impl = db._internal();
+
+  // Hold a first session so the next acquire() takes the non-first path.
+  auto first = impl->acquire_hash_trie();
+
+  // Simulate a lost hashed snapshot pointer before another session arrives.
+  impl->_header->hash_control.hashed_txn_offset.store(0,
+                                                      std::memory_order_release);
+
+  auto second = impl->acquire_hash_trie();
+  BOOST_REQUIRE(!!second);
+
+  impl->release_hash_trie(second);
+  impl->release_hash_trie(first);
+}
+
 BOOST_FIXTURE_TEST_CASE(test_purge_cancel, ReplicationFixture) {
   auto path = (test_temp_dir / "purge_cancel.lvs").string();
   auto storage = Storage::create(path.c_str());
@@ -3781,6 +3919,42 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize, ReplicationFixture) {
       auto cursor = db.cursor();
       cursor.find(Slice("post_recovery"));
       BOOST_CHECK(cursor.is_valid());
+    }
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize_tracked_area,
+                        ReplicationFixture) {
+  auto path = (test_temp_dir / "slot_crash_tracked.lvs").string();
+
+  // Phase 1: leave a claimed slot pointing to a real multi-area.
+  {
+    auto storage = ReplicatingFileStorage::create(path.c_str());
+    auto db = (*storage)["test"];
+    auto* impl = db._internal();
+
+    _ReplicationSlot<FileDBImpl> slot(impl);
+    slot.claim();
+    BOOST_REQUIRE(slot.has_slot());
+    int16_t idx = slot.slot_index();
+
+    auto area = impl->_storage.alloc_multi_area(impl->AREA_SIZE);
+    slot.track_area(area);
+    BOOST_CHECK(impl->_header->replication_slots[idx]);
+
+    // Simulate crash: avoid slot destructor cleanup.
+    slot._slot = -1;
+  }
+
+  // Phase 2: sanitize should return the orphaned area and clear slot entries.
+  {
+    auto storage = ReplicatingFileStorage::create(path.c_str());
+    auto db = (*storage)["test"];
+    auto* impl = db._internal();
+
+    constexpr auto N = FileDBImpl::Header::MAX_REPLICATION_SLOTS;
+    for (uint16_t i = 0; i < N; ++i) {
+      BOOST_CHECK_EQUAL(impl->_header->replication_slots[i]._offset, 0u);
     }
   }
 }
@@ -4017,6 +4191,73 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_deletion_replication, ReplicationFixture)
     del_cursor.first();
     while (del_cursor.is_valid()) { count++; del_cursor.next(); }
     BOOST_CHECK_EQUAL(count, 3);
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(
+    test_big_value_replication_with_existing_multi_area_tail,
+    ReplicationFixture) {
+  auto src_path = (test_temp_dir / "bv_existing_tail_src.lvs").string();
+  auto dst_path = (test_temp_dir / "bv_existing_tail_dst.lvs").string();
+
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src_db = (*src_storage)["test"];
+  auto dst_db = (*dst_storage)["test"];
+
+  constexpr size_t BIG_SIZE = 8 * 1024;
+
+  // Pre-existing big value on destination makes area_list_tail_multi non-zero.
+  {
+    auto c = dst_db.cursor();
+    c.start_transaction();
+    std::vector<char> pre(BIG_SIZE, 'D');
+    c.find(Slice("dst_pre"));
+    c.value(Slice(pre.data(), pre.size()));
+    c.commit();
+  }
+
+  // Source carries a different big value to replicate.
+  {
+    auto c = src_db.cursor();
+    c.start_transaction();
+    std::vector<char> val(BIG_SIZE, 'S');
+    c.find(Slice("src_new"));
+    c.value(Slice(val.data(), val.size()));
+    c.commit();
+  }
+
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+  wait_for_hashing(src_impl);
+  wait_for_hashing(dst_impl);
+
+  TestTransport s2r, r2s;
+  s2r.set_peer(&r2s);
+  r2s.set_peer(&s2r);
+  TestEvents se, re;
+
+  SenderFSM sender(src_impl);
+  ReceiverFSM receiver(dst_impl);
+  receiver.begin(&r2s, &re);
+  sender.begin(&s2r, &se);
+  run_protocol(sender, receiver, s2r, r2s, 200);
+
+  BOOST_REQUIRE(sender.state() == SenderFSM::State::IDLE);
+  BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::IDLE);
+
+  // Destination keeps old big value and receives the new one.
+  {
+    auto c = dst_db.cursor();
+    c.find(Slice("dst_pre"));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().size(), BIG_SIZE);
+    BOOST_CHECK_EQUAL(c.value().data()[0], 'D');
+
+    c.find(Slice("src_new"));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().size(), BIG_SIZE);
+    BOOST_CHECK_EQUAL(c.value().data()[0], 'S');
   }
 }
 
@@ -5718,6 +5959,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_merge_overwrite, ReplicationFixture) {
   auto dst_stor = Storage::create(dst_p.c_str());
   auto src_db = (*src_stor)["test"];
   auto dst_db = (*dst_stor)["test"];
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
 
   // Both sides start with the same 10 keys
   for (auto* db : {&src_db, &dst_db}) {
@@ -5733,25 +5976,27 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_merge_overwrite, ReplicationFixture) {
 
   // Sender deletes keys 0-4 (creates sender deletion trie with keys 0-4)
   {
-    auto c = src_db.cursor();
+    auto c = src_impl->create_cursor();
+    const std::string src_meta = "src_del_meta";
     for (int i = 0; i < 5; ++i) {
       std::string key = "overlap_" + std::to_string(i);
-      c.find(Slice(key));
-      if (c.is_valid()) c.remove();
+      c->find(Slice(key));
+      if (c->is_valid()) c->remove(Slice(src_meta));
     }
-    c.commit();
+    c->commit();
   }
 
   // Receiver deletes keys 3-7 (creates receiver deletion trie with keys 3-7)
   // Overlap: keys 3,4 exist in both deletion tries → may_overwrite
   {
-    auto c = dst_db.cursor();
+    auto c = dst_impl->create_cursor();
+    const std::string dst_meta = "dst_del_meta";
     for (int i = 3; i < 8; ++i) {
       std::string key = "overlap_" + std::to_string(i);
-      c.find(Slice(key));
-      if (c.is_valid()) c.remove();
+      c->find(Slice(key));
+      if (c->is_valid()) c->remove(Slice(dst_meta));
     }
-    c.commit();
+    c->commit();
   }
 
   // Sender also adds new keys to force main trie sync
@@ -5766,8 +6011,6 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_merge_overwrite, ReplicationFixture) {
     c.commit();
   }
 
-  auto* src_impl = src_db._internal();
-  auto* dst_impl = dst_db._internal();
   wait_for_hashing(src_impl);
   wait_for_hashing(dst_impl);
 
@@ -5794,6 +6037,159 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_merge_overwrite, ReplicationFixture) {
       BOOST_CHECK_MESSAGE(c.is_valid(), "Key " + key + " should exist on dst");
     }
   }
+}
+
+BOOST_AUTO_TEST_CASE(test_merge_policy_big_value_migration_guards) {
+  struct FakeLeaf {
+    uint8_t data[sizeof(BigValueDataHeader)]{};
+    char* vdata() { return reinterpret_cast<char*>(data); }
+  };
+  struct DummyCursor {};
+
+  FakeLeaf leaf;
+  auto* hdr = reinterpret_cast<BigValueDataHeader*>(leaf.vdata());
+  hdr->wire_chunk_offset = 12345;
+  hdr->value_size = 64;
+
+  DummyCursor src;
+  DummyCursor dst;
+
+  ReplicationMergePolicy<DBImpl> policy;
+
+  // big_value_offsets pointer not set
+  auto missing_storage = policy.migrate_big_value(leaf, src, dst);
+  BOOST_CHECK(!missing_storage.is_big);
+
+  // big_value_offsets set, but wire offset missing in map
+  std::unordered_map<uint64_t, offset_t> offsets;
+  policy.set_big_value_storage(&offsets, nullptr);
+  auto missing_offset = policy.migrate_big_value(leaf, src, dst);
+  BOOST_CHECK(!missing_offset.is_big);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_area_overflow,
+                        ReplicationFixture) {
+  auto path = test_temp_dir / "recv_bv_data_overflow.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = (*storage)["testdb"];
+  auto* impl = db._internal();
+
+  TestTransport transport, peer;
+  transport.set_peer(&peer);
+  TestEvents events;
+
+  ReceiverFSM receiver(impl);
+  receiver.begin(&transport, &events);
+
+  BigValueStartHeader start{};
+  start.count = 1;
+  start.total_aligned_size = 4096;
+
+  auto start_msg = build_raw_msg(
+      ReplicationMsgType::BIG_VALUE_START, 1,
+      reinterpret_cast<const uint8_t*>(&start), sizeof(start));
+  feed_receiver(receiver, start_msg.data(), start_msg.size());
+  BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::AWAITING_BIG_VALUES);
+
+  BigValueDataHeader data_hdr{};
+  data_hdr.wire_chunk_offset = 777;
+  data_hdr.value_size = 16 * 1024 * 1024;  // force area overflow in handle_data
+
+  auto data_msg = build_raw_msg(
+      ReplicationMsgType::BIG_VALUE_DATA, 1,
+      reinterpret_cast<const uint8_t*>(&data_hdr), sizeof(data_hdr));
+  feed_receiver(receiver, data_msg.data(), data_msg.size());
+
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
+  BOOST_CHECK(events.errored);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_storage_full,
+                        ReplicationFixture) {
+  struct ThrowStorageFullPolicy : ReplicationMergePolicy<DBImpl> {
+    bool may_add_leaf(const std::string&, const Slice&, bool) {
+      throw StorageFull();
+    }
+  };
+
+  auto src_p = (test_temp_dir / "merge_throw_sf_src.lvs").string();
+  auto dst_p = (test_temp_dir / "merge_throw_sf_dst.lvs").string();
+  auto src_stor = Storage::create(src_p.c_str());
+  auto dst_stor = Storage::create(dst_p.c_str());
+  auto src_db = (*src_stor)["test"];
+  auto dst_db = (*dst_stor)["test"];
+
+  {
+    auto c = src_db.cursor();
+    c.find(Slice("k"));
+    c.value(Slice("v"));
+    c.commit();
+  }
+
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+  wait_for_hashing(src_impl);
+  wait_for_hashing(dst_impl);
+
+  TestTransport s2r, r2s;
+  s2r.set_peer(&r2s);
+  r2s.set_peer(&s2r);
+  TestEvents se, re;
+
+  using ThrowReceiver = ReplicationReceiverFSM<DBImpl, ThrowStorageFullPolicy>;
+  SenderFSM sender(src_impl);
+  ThrowReceiver receiver(dst_impl, {});
+  receiver.begin(&r2s, &re);
+  sender.begin(&s2r, &se);
+  run_protocol(sender, receiver, s2r, r2s, 200);
+
+  BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::STORAGE_FULL);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
+                        ReplicationFixture) {
+  struct ThrowStdExceptionPolicy : ReplicationMergePolicy<DBImpl> {
+    bool may_add_leaf(const std::string&, const Slice&, bool) {
+      throw std::runtime_error("merge failure");
+    }
+  };
+
+  auto src_p = (test_temp_dir / "merge_throw_ex_src.lvs").string();
+  auto dst_p = (test_temp_dir / "merge_throw_ex_dst.lvs").string();
+  auto src_stor = Storage::create(src_p.c_str());
+  auto dst_stor = Storage::create(dst_p.c_str());
+  auto src_db = (*src_stor)["test"];
+  auto dst_db = (*dst_stor)["test"];
+
+  {
+    auto c = src_db.cursor();
+    c.find(Slice("k"));
+    c.value(Slice("v"));
+    c.commit();
+  }
+
+  auto* src_impl = src_db._internal();
+  auto* dst_impl = dst_db._internal();
+  wait_for_hashing(src_impl);
+  wait_for_hashing(dst_impl);
+
+  TestTransport s2r, r2s;
+  s2r.set_peer(&r2s);
+  r2s.set_peer(&s2r);
+  TestEvents se, re;
+
+  using ThrowReceiver =
+      ReplicationReceiverFSM<DBImpl, ThrowStdExceptionPolicy>;
+  SenderFSM sender(src_impl);
+  ThrowReceiver receiver(dst_impl, {});
+  receiver.begin(&r2s, &re);
+  sender.begin(&s2r, &se);
+  run_protocol(sender, receiver, s2r, r2s, 200);
+
+  BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERROR);
+  BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

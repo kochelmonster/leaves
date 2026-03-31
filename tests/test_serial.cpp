@@ -308,4 +308,13 @@ BOOST_AUTO_TEST_CASE(test_serial_comparison_with_raw_values) {
   // Wraparound comparison with raw values
   serial32 s2(0xFFFFFFFF);
   BOOST_CHECK(s2 < 1u);  // 0xFFFFFFFF < 1 in serial arithmetic
+
+}
+
+// Covers _serial.hpp L102: operator- when one operand is 0 (uninitialized).
+BOOST_AUTO_TEST_CASE(test_serial_subtract_with_zero) {
+  serial32 s0;      // default-constructed: _value == 0
+  serial32 s5(5);
+  BOOST_CHECK_EQUAL(s5 - s0, 5LL);   // 5 - 0 via raw subtraction path
+  BOOST_CHECK_EQUAL(s0 - s5, -5LL);  // 0 - 5 via raw subtraction path
 }

@@ -163,3 +163,16 @@ BOOST_AUTO_TEST_CASE(test_count_uint8) {
   BOOST_CHECK_EQUAL(count<uint8_t>(0), 0);
   BOOST_CHECK_EQUAL(count<uint8_t>(0xFF), 8);
 }
+
+// Covers bits::to_native() for non-integral types (_bits.hpp L26-28).
+// On big-endian platforms this is used with boost::endian types;
+// we test it here using a minimal wrapper with the same interface.
+BOOST_AUTO_TEST_CASE(test_to_native_non_integral) {
+  struct IntWrapper {
+    using value_type = uint64_t;
+    uint64_t v;
+    explicit operator uint64_t() const { return v; }
+  };
+  IntWrapper w{42};
+  BOOST_CHECK_EQUAL(bits::to_native(w), 42u);
+}
