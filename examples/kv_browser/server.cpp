@@ -149,7 +149,7 @@ static ServerSyncNotifier g_sync_notifier;
 
 struct ServerAspect : public DefaultAspect {
   template <typename DB, typename Ctx>
-  void on_commit(DB& db, Ctx&) {
+  void on_commit(DB& db, TransactionOrigin, Ctx&) {
     if (g_commit_origin_client_id <= 0) return;
     g_sync_notifier.schedule(db, g_commit_origin_client_id);
   }

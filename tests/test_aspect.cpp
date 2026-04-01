@@ -52,6 +52,16 @@ struct TestAspect : public DefaultAspect {
     int read_count = 0;    // counts on_read calls
     int delete_count = 0;  // counts may_delete calls
     int commit_count = 0;  // counts successful commits
+    int start_txn_count = 0;
+    int rollback_count = 0;
+    int find_count = 0;
+    int next_count = 0;
+    int prev_count = 0;
+    TransactionOrigin last_origin = TransactionOrigin::user;
+    bool reject_start_txn = false;
+    bool reject_commit = false;
+    bool reject_rollback = false;
+    bool reject_find = false;
     std::string write_buf; // scratch buffer for value transformation
   };
 
@@ -60,6 +70,16 @@ struct TestAspect : public DefaultAspect {
     ctx.read_count = 0;
     ctx.delete_count = 0;
     ctx.commit_count = 0;
+    ctx.start_txn_count = 0;
+    ctx.rollback_count = 0;
+    ctx.find_count = 0;
+    ctx.next_count = 0;
+    ctx.prev_count = 0;
+    ctx.last_origin = TransactionOrigin::user;
+    ctx.reject_start_txn = false;
+    ctx.reject_commit = false;
+    ctx.reject_rollback = false;
+    ctx.reject_find = false;
   }
 
   Slice on_write(const Slice& key, const Slice& value, CursorContext& ctx) {
@@ -110,8 +130,54 @@ struct TestAspect : public DefaultAspect {
   }
 
   template <typename DB>
-  void on_commit(DB&, CursorContext& ctx) {
+  void on_commit(DB&, TransactionOrigin origin, CursorContext& ctx) {
     ctx.commit_count++;
+    ctx.last_origin = origin;
+  }
+
+  // --- Cursor-level transaction hooks ---
+  template <typename DB>
+  bool before_start_transaction(DB&, TransactionOrigin, CursorContext& ctx) {
+    return !ctx.reject_start_txn;
+  }
+
+  template <typename DB>
+  void on_start_transaction(DB&, tid_t, TransactionOrigin origin, CursorContext& ctx) {
+    ctx.start_txn_count++;
+    ctx.last_origin = origin;
+  }
+
+  template <typename DB>
+  bool before_rollback(DB&, tid_t, TransactionOrigin, CursorContext& ctx) {
+    return !ctx.reject_rollback;
+  }
+
+  template <typename DB>
+  void on_rollback(DB&, tid_t, TransactionOrigin origin, CursorContext& ctx) {
+    ctx.rollback_count++;
+    ctx.last_origin = origin;
+  }
+
+  template <typename DB>
+  bool before_commit(DB&, TransactionOrigin, CursorContext& ctx) {
+    return !ctx.reject_commit;
+  }
+
+  // --- Cursor navigation hooks ---
+  bool before_find(const Slice& key, CursorContext& ctx) {
+    return !ctx.reject_find;
+  }
+
+  void on_find(const Slice& key, bool found, CursorContext& ctx) {
+    ctx.find_count++;
+  }
+
+  void on_next(bool has_next, CursorContext& ctx) {
+    ctx.next_count++;
+  }
+
+  void on_prev(bool has_prev, CursorContext& ctx) {
+    ctx.prev_count++;
   }
 };
 
@@ -902,6 +968,187 @@ BOOST_AUTO_TEST_CASE(test_replication_cursor_allows_normal_delete) {
 
   cursor->find(Slice("normal_item"));
   BOOST_CHECK(!cursor->is_valid());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// =============================================================================
+// Tests — Transaction lifecycle hooks
+// =============================================================================
+
+BOOST_AUTO_TEST_SUITE(TransactionHookTests)
+
+BOOST_AUTO_TEST_CASE(test_start_transaction_hook_fires) {
+  TempDir tmp("test_aspect_start_txn");
+  auto path = tmp.path("starttxn.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.start_txn_count, 0);
+  cursor->find(Slice("key"));
+  cursor->value(Slice("val"));
+  // value() implicitly starts a transaction
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.start_txn_count, 1);
+  cursor->commit();
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.commit_count, 1);
+  BOOST_CHECK(cursor->_aspect_context.last_origin == TransactionOrigin::user);
+}
+
+BOOST_AUTO_TEST_CASE(test_rollback_hook_fires) {
+  TempDir tmp("test_aspect_rollback_hook");
+  auto path = tmp.path("rollback.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  cursor->find(Slice("key"));
+  cursor->value(Slice("val"));
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.rollback_count, 0);
+  cursor->rollback();
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.rollback_count, 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_before_start_transaction_rejects) {
+  TempDir tmp("test_aspect_reject_start");
+  auto path = tmp.path("reject_start.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  // Reject transaction start
+  cursor->_aspect_context.reject_start_txn = true;
+  bool result = cursor->start_transaction();
+  BOOST_CHECK(!result);
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.start_txn_count, 0);
+}
+
+BOOST_AUTO_TEST_CASE(test_before_commit_rejects) {
+  TempDir tmp("test_aspect_reject_commit");
+  auto path = tmp.path("reject_commit.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  cursor->find(Slice("key"));
+  cursor->value(Slice("val"));
+
+  // Reject commit — transaction stays open
+  cursor->_aspect_context.reject_commit = true;
+  bool committed = cursor->commit();
+  BOOST_CHECK(!committed);
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.commit_count, 0);
+
+  // Allow commit now
+  cursor->_aspect_context.reject_commit = false;
+  committed = cursor->commit();
+  BOOST_CHECK(committed);
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.commit_count, 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_before_rollback_rejects) {
+  TempDir tmp("test_aspect_reject_rollback");
+  auto path = tmp.path("reject_rollback.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  cursor->find(Slice("key"));
+  cursor->value(Slice("val"));
+
+  // Reject rollback — transaction stays open
+  cursor->_aspect_context.reject_rollback = true;
+  bool rolled_back = cursor->rollback();
+  BOOST_CHECK(!rolled_back);
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.rollback_count, 0);
+
+  // Allow rollback now
+  cursor->_aspect_context.reject_rollback = false;
+  rolled_back = cursor->rollback();
+  BOOST_CHECK(rolled_back);
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.rollback_count, 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// =============================================================================
+// Tests — Cursor navigation hooks
+// =============================================================================
+
+BOOST_AUTO_TEST_SUITE(NavigationHookTests)
+
+BOOST_AUTO_TEST_CASE(test_find_hook_fires) {
+  TempDir tmp("test_aspect_find_hook");
+  auto path = tmp.path("find_hook.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  cursor->find(Slice("key"));
+  cursor->value(Slice("val"));
+  cursor->commit();
+
+  BOOST_CHECK_GE(cursor->_aspect_context.find_count, 1);
+
+  int prev_count = cursor->_aspect_context.find_count;
+  cursor->find(Slice("key"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.find_count, prev_count + 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_next_prev_hooks_fire) {
+  TempDir tmp("test_aspect_nav_hooks");
+  auto path = tmp.path("nav_hooks.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  // Insert multiple keys
+  cursor->find(Slice("a"));
+  cursor->value(Slice("1"));
+  cursor->find(Slice("b"));
+  cursor->value(Slice("2"));
+  cursor->find(Slice("c"));
+  cursor->value(Slice("3"));
+  cursor->commit();
+
+  cursor->_aspect_context.next_count = 0;
+  cursor->_aspect_context.prev_count = 0;
+
+  cursor->first();
+  cursor->next();
+  cursor->next();
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.next_count, 2);
+
+  cursor->prev();
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.prev_count, 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_before_find_rejects) {
+  TempDir tmp("test_aspect_reject_find");
+  auto path = tmp.path("reject_find.lvs");
+
+  AspectMMap storage(path.c_str());
+  auto* db = storage.make("test");
+  auto cursor = db->create_cursor();
+
+  cursor->find(Slice("key"));
+  cursor->value(Slice("val"));
+  cursor->commit();
+
+  // Reject find — cursor should not navigate
+  cursor->_aspect_context.reject_find = true;
+  int prev_find_count = cursor->_aspect_context.find_count;
+  cursor->find(Slice("other_key"));
+  // find was rejected — find_count should NOT increment (on_find not called)
+  BOOST_CHECK_EQUAL(cursor->_aspect_context.find_count, prev_find_count);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

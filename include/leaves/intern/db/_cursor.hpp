@@ -7,6 +7,7 @@
 #include "../core/_exception.hpp"
 #include "../core/_node.hpp"
 #include "../memory/_bigmemory.hpp"
+#include "_aspect.hpp"
 #include "_deleter.hpp"
 #include "_inserter.hpp"
 
@@ -720,12 +721,16 @@ struct _TransactionalCursor
     _Deleter(*this).exec();
   }
 
-  bool start_transaction(bool non_blocking = false) {
+  bool start_transaction(bool non_blocking = false,
+                         TransactionOrigin origin = TransactionOrigin::user) {
     if (this->_db->txn_cursor_id() != _id) {
-      txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking);
+      if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
+        return false;
+      txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking, origin);
       if (!new_txn) return false;
       assert(new_txn->refs.load() == 0);  // no one can reference it yet
       _set_txn(new_txn);
+      _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
     }
     return true;
   }
@@ -734,16 +739,23 @@ struct _TransactionalCursor
     return this->_db->prepare_commit(_id, sync);
   }
 
-  bool commit(bool sync = false) {
-    bool committed = this->_db->commit(_id, sync);
+  bool commit(bool sync = false,
+              TransactionOrigin origin = TransactionOrigin::user) {
+    if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
+      return false;
+    bool committed = this->_db->commit(_id, sync, origin);
     if (committed) {
-      this->_aspect().on_commit(*this->_db, _aspect_context);
+      _aspect().on_commit(*this->_db, origin, _aspect_context);
     }
     return committed;
   }
 
-  bool rollback() {
-    if (this->_db->rollback(_id)) {
+  bool rollback(TransactionOrigin origin = TransactionOrigin::user) {
+    if (this->_db->txn_cursor_id() != _id) return false;
+    if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context))
+      return false;
+    if (this->_db->rollback(_id, origin)) {
+      _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context);
       // Switch back to the committed read transaction.
       // Don't decrement _txn->refs — rollback() already reset the recycled
       // page to refs=0 and repurposed it as next_txn_page.
@@ -757,6 +769,24 @@ struct _TransactionalCursor
       return true;
     }
     return false;
+  }
+
+  // --- Navigation overrides with aspect hooks ---
+
+  void find(const Slice& key) {
+    if (!_aspect().before_find(key, _aspect_context)) return;
+    Cursor::find(key);
+    _aspect().on_find(key, this->is_valid(), _aspect_context);
+  }
+
+  void next() {
+    Cursor::next();
+    _aspect().on_next(this->is_valid(), _aspect_context);
+  }
+
+  void prev() {
+    Cursor::prev();
+    _aspect().on_prev(this->is_valid(), _aspect_context);
   }
 
   void update() {

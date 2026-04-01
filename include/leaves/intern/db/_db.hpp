@@ -180,6 +180,8 @@ struct _DB {
     init(header);
   }
 
+  Self& self() { return *static_cast<Self*>(this); }
+
   void init(offset_t* header) {
     auto area_ptr = _storage.alloc_single_area();
 
@@ -239,8 +241,10 @@ struct _DB {
   // Reset the DB by returning all areas to storage and reinitializing
   void reset(offset_t* header) {
     if (is_active()) throw TransactionActive();
+    if (!_aspect.before_reset(self())) return;
     return_areas();
     init(header);
+    _aspect.on_reset(self());
   }
 
   Aspect& aspect() { return _aspect; }
@@ -426,7 +430,8 @@ struct _DB {
   // Start a write transaction. If nonblocking is true, this will return false
   // immediately when the txn_lock cannot be acquired.
   // May only be called by cursor
-  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
+  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
+                            TransactionOrigin origin = TransactionOrigin::user) {
     if (!nonblocking)
       _header->txn_lock.lock();
     else if (!_header->txn_lock.try_lock())
@@ -472,7 +477,7 @@ struct _DB {
     return _wtxn;
   }
 
-  bool rollback(uint64_t cursor_id) {
+  bool rollback(uint64_t cursor_id, TransactionOrigin origin = TransactionOrigin::user) {
     if (_header->txn_cursor_id.load() != cursor_id) return false;
 
     // Return areas allocated during write transaction
@@ -498,7 +503,8 @@ struct _DB {
     return true;
   }
 
-  tid_t prepare_commit(uint64_t cursor_id, bool sync = false) {
+  tid_t prepare_commit(uint64_t cursor_id, bool sync = false,
+                       TransactionOrigin origin = TransactionOrigin::user) {
     // Not my transaction or not started
     if (_header->txn_cursor_id.load() != cursor_id) return tid_t(0);
 
@@ -523,8 +529,9 @@ struct _DB {
     return _wtxn->txn_id;
   }
 
-  bool commit(uint64_t cursor_id, bool sync = false) {
-    if (!prepare_commit(cursor_id, false)) return false;
+  bool commit(uint64_t cursor_id, bool sync = false,
+              TransactionOrigin origin = TransactionOrigin::user) {
+    if (!prepare_commit(cursor_id, false, origin)) return false;
 
     // Atomically switch to new transaction (area tails are preserved in
     // transaction)
@@ -614,12 +621,14 @@ struct _DB {
 
   // Defragment big memory - merge adjacent free chunks
   void defrag() {
+    if (!_aspect.before_defrag(self())) return;
+
     uint64_t defrag_cursor_id = new_cursor_id();
-    auto txn = start_transaction(defrag_cursor_id);
+    auto txn = start_transaction(defrag_cursor_id, false, TransactionOrigin::defrag);
     assert(txn);
 
     if (!txn->free_bigmem_root) {
-      rollback(defrag_cursor_id);
+      rollback(defrag_cursor_id, TransactionOrigin::defrag);
       return;  // No big memory allocated yet
     }
 
@@ -631,7 +640,8 @@ struct _DB {
     BigMemory big_mem(this, &txn->free_bigmem_root);
     big_mem.defrag(txn);
     flush();
-    commit(defrag_cursor_id);
+    commit(defrag_cursor_id, false, TransactionOrigin::defrag);
+    _aspect.on_defrag(self());
   }
 
   void return_areas_range(offset_t start_single, offset_t end_single,
@@ -711,6 +721,7 @@ struct _DB {
 
     make_dirty(_header);
     flush();
+    _aspect.on_sanitize(self());
   }
 };
 

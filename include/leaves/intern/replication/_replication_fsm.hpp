@@ -1641,7 +1641,7 @@ struct ReplicationReceiverFSM {
       current_wire_root_type = _temp_root.type();
     }
 
-    _cursor->start_transaction();
+    _cursor->start_transaction(false, TransactionOrigin::merge);
     try {
       // Link pre-allocated big value multi-area to this transaction
       // (must happen before any merge phase that references big values)
@@ -1718,16 +1718,16 @@ struct ReplicationReceiverFSM {
       }
 
       _merge_policy._deletion_root_snapshot = {};
-      _cursor->commit();
+      _cursor->commit(false, TransactionOrigin::merge);
     } catch (const StorageFull&) {
       _merge_policy._deletion_root_snapshot = {};
-      _cursor->rollback();
+      _cursor->rollback(TransactionOrigin::merge);
       _transition_to_error(ReplicationError::STORAGE_FULL,
                            "Storage full during replication merge");
       return false;
     } catch (const std::exception& e) {
       _merge_policy._deletion_root_snapshot = {};
-      _cursor->rollback();
+      _cursor->rollback(TransactionOrigin::merge);
       _transition_to_error(ReplicationError::INTERNAL_ERROR, e.what());
       return false;
     }

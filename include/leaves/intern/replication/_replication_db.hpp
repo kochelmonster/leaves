@@ -299,9 +299,10 @@ struct _ReplicationDB
   }
 
   // Override commit.
-  bool commit(uint64_t cursor_id, bool sync = false) {
+  bool commit(uint64_t cursor_id, bool sync = false,
+              TransactionOrigin origin = TransactionOrigin::user) {
     // Prepare commit without computing hashes (base doesn't hash either)
-    if (!Base::prepare_commit(cursor_id, false)) return false;
+    if (!Base::prepare_commit(cursor_id, false, origin)) return false;
 
     // Atomically switch to new transaction
     this->_header->read_txn = this->_header->prepared_txn;
@@ -354,11 +355,12 @@ struct _ReplicationDB
 
   // Override: signal background purge to stop before acquiring txn_lock.
   // No waiting for hashes - they run independently.
-  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false) {
+  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
+                            TransactionOrigin origin = TransactionOrigin::user) {
     if (_in_purge.load(std::memory_order_relaxed)) {
       _purge_interrupt.store(true, std::memory_order_release);
     }
-    return Base::start_transaction(cursor_id, nonblocking);
+    return Base::start_transaction(cursor_id, nonblocking, origin);
   }
 
   // Called under txn_ref_lock just before a stale txn is freed.
