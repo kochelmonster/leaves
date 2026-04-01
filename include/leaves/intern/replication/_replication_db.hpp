@@ -195,13 +195,10 @@ struct _ReplicationDB
     // requires an active write transaction).
     template <typename NodePtr>
     NodePtr alloc_node(uint16_t size) {
-      uint8_t slot_id = MemManager::assign_slot(size);
+      uint8_t slot_id = MemManager::assign_slot(size + sizeof(PageHeader));
       auto& hash_mem = _parent->_header->hash_control.hash_mem_manager;
       page_ptr page = hash_mem.alloc(slot_id, *this);
       _parent->make_dirty(page);
-      // Use page_ptr arithmetic to preserve area tracking (SmartPointer _iref).
-      // Constructing from raw char* would break _CacheStore's SmartPointer
-      // by treating the data pointer as an AreaSlice header.
       return NodePtr(page + sizeof(PageHeader));
     }
 

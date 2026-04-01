@@ -91,11 +91,13 @@ struct _BrowserStoreTraits {
   static constexpr size_t AREA_SIZE = 64 * K;  // Smaller blocks for IDB
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t PAGE_SIZES[] = {
-      _TrieNode<_BrowserStoreTraits>::size(1, 10),
-      _TrieNode<_BrowserStoreTraits>::size(1, 16),
-      _TrieNode<_BrowserStoreTraits>::size(1, 64),
-      _TrieNode<_BrowserStoreTraits>::size(1, 127),
-      _TrieNode<_BrowserStoreTraits>::size(1, 256),
+      _TrieNode<_BrowserStoreTraits>::size(1, 2),    // 2 branches
+      _TrieNode<_BrowserStoreTraits>::size(1, 3),    // 3 branches
+      _TrieNode<_BrowserStoreTraits>::size(1, 4),    // 4 branches
+      _TrieNode<_BrowserStoreTraits>::size(1, 10),   // 5-10 branches
+      _TrieNode<_BrowserStoreTraits>::size(1, 16),   // hex 0-9A-F
+      _TrieNode<_BrowserStoreTraits>::size(1, 64),   // base64
+      _TrieNode<_BrowserStoreTraits>::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);

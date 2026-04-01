@@ -1,7 +1,7 @@
 type: trie
-id: 15456
-page: 15448
-freespace: 96
+id: 14976
+page: 14968
+freespace: 8
 txn: 4
 size: 32
 compressed: 
@@ -9,13 +9,13 @@ compressed:
   key: "[a][b]"
 branches: "[*][c]"
 children: 
-  - 15585
-  - 15328
+  - 19113
+  - 14936
 ---
 type: leaf
-id: 15585
-page: 15577
-freespace: 109
+id: 19113
+page: 19105
+freespace: 21
 size: 19
 txn: 4
 keysize: 7
@@ -24,9 +24,9 @@ valuesize: 9
 value: "ab*defghi"
 ---
 type: trie
-id: 15328
-page: 15320
-freespace: 96
+id: 14936
+page: 14928
+freespace: 8
 txn: 4
 size: 32
 compressed: 
@@ -34,13 +34,13 @@ compressed:
   key: "[c]"
 branches: "[*][d]"
 children: 
-  - 14641
-  - 10289
+  - 14337
+  - 10145
 ---
 type: leaf
-id: 14641
-page: 14633
-freespace: 110
+id: 14337
+page: 14329
+freespace: 22
 size: 18
 txn: 3
 keysize: 6
@@ -49,9 +49,9 @@ valuesize: 9
 value: "abc*efghi"
 ---
 type: leaf
-id: 10289
-page: 10281
-freespace: 110
+id: 10145
+page: 10137
+freespace: 22
 size: 18
 txn: 3
 keysize: 6

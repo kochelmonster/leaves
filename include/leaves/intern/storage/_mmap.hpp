@@ -78,10 +78,12 @@ struct _MemoryMapTraits {
   static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 3;
 
   static constexpr uint16_t PAGE_SIZES[] = {                         // Page sizes (header + node)
-      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 10),   // digits 0-9
+      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 2),    // 2 branches
+      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 3),    // 3 branches
+      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 4),    // 4 branches
+      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 10),   // 5-10 branches
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 16),   // hex 0-9A-F
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
-      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 127),  // utf-8
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =

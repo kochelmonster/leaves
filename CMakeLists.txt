@@ -426,6 +426,9 @@ target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest
 add_executable(bench_hash_updater benchmarks/bench_hash_updater.cpp)
 target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
 
+add_executable(bench_page_sizes benchmarks/bench_page_sizes.cpp)
+target_link_libraries(bench_page_sizes PUBLIC core pthread)
+
 if (DEBUG_BENCHMARKS)
     target_compile_options(db_bench_leaves PRIVATE -g -O0)
     target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
