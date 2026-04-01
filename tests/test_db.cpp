@@ -901,3 +901,201 @@ BOOST_AUTO_TEST_CASE(test_nonblocking_transaction) {
   BOOST_CHECK(txn3);
   BOOST_CHECK(db->commit(2));
 }
+
+BOOST_AUTO_TEST_CASE(test_multi_area_rollback) {
+  // Exercises return_areas_to_pool multi-area path (L649-664)
+  // Allocating multi-areas during a transaction then rolling back should
+  // return those areas to the storage pool.
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_multi_rollback.lvs";
+  
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.make("test");
+  
+  // Start transaction and allocate multi-areas directly
+  BOOST_REQUIRE(db->start_transaction(0));
+  
+  // Record the read transaction's multi-area tail before allocation
+  using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
+  auto read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
+  offset_t read_multi_tail = read_txn->area_list_tail_multi;
+  
+  // Allocate a multi-area (triggers alloc_multi_area path)
+  auto area1 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
+  BOOST_CHECK(area1);
+  
+  // The write transaction should have a different multi-area tail now
+  BOOST_CHECK_NE(db->_wtxn->area_list_tail_multi, read_multi_tail);
+  
+  // Allocate another multi-area
+  auto area2 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 3);
+  BOOST_CHECK(area2);
+  
+  // Rollback should return multi-areas to pool
+  BOOST_CHECK(db->rollback(0));
+  
+  // DB should be in clean state
+  BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
+  
+  // Start a new transaction to verify DB is still usable
+  BOOST_REQUIRE(db->start_transaction(0));
+  auto block = db->alloc_page(100);
+  BOOST_CHECK(block);
+  BOOST_CHECK(db->commit(0));
+}
+
+BOOST_AUTO_TEST_CASE(test_multi_area_rollback_with_prior_committed) {
+  // Tests return_areas_to_pool with start_multi != 0
+  // (prior committed multi-area exists, then new ones added and rolled back)
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_multi_rollback2.lvs";
+  
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.make("test");
+  
+  // First transaction: allocate and commit a multi-area
+  BOOST_REQUIRE(db->start_transaction(0));
+  auto area1 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
+  BOOST_CHECK(area1);
+  BOOST_CHECK(db->commit(0));
+  
+  // Second transaction: allocate more multi-areas then rollback
+  BOOST_REQUIRE(db->start_transaction(0));
+  
+  using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
+  auto read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
+  offset_t committed_multi_tail = read_txn->area_list_tail_multi;
+  BOOST_CHECK_NE(committed_multi_tail, offset_t(0)); // Should have committed multi-area
+  
+  auto area2 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
+  BOOST_CHECK(area2);
+  
+  // Write txn's multi tail should have advanced beyond committed
+  BOOST_CHECK_NE(db->_wtxn->area_list_tail_multi, committed_multi_tail);
+  
+  // Rollback should return only the new multi-areas, keeping committed ones
+  BOOST_CHECK(db->rollback(0));
+  
+  // Verify DB still works
+  BOOST_REQUIRE(db->start_transaction(0));
+  auto block = db->alloc_page(100);
+  BOOST_CHECK(block);
+  BOOST_CHECK(db->commit(0));
+}
+
+BOOST_AUTO_TEST_CASE(test_return_areas_multi) {
+  // Exercises return_areas() multi-area path (L234-235)
+  // Commit multi-areas, then call return_areas() via remove_db
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_return_multi.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Allocate and commit multi-areas
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto area1 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
+    BOOST_CHECK(area1);
+    BOOST_CHECK(db->commit(0));
+    
+    // Verify multi-area head is set
+    BOOST_CHECK_NE(db->_header->area_list_head_multi, offset_t(0));
+    
+    // return_areas() should return the committed multi-areas to pool
+    db->return_areas();
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_garbage_statistics_multi_container) {
+  // Exercises _garbage_statistics while loop (L565, L569)
+  // Need to free enough pages that a garbage slot has >1 PageContainer
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_gc_stats.lvs";
+  
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.make("test");
+  
+  // We need to free many pages to overflow one PageContainer.
+  // PageContainer::COUNT is ~254 for 4K containers with 16-byte items.
+  // We'll allocate ~300 pages, commit, then allocate them again (forcing the
+  // old ones to be freed into the garbage collector via transaction recycling).
+  
+  // Transaction 1: allocate 300 pages
+  BOOST_REQUIRE(db->start_transaction(0));
+  std::vector<offset_t> offsets;
+  for (int i = 0; i < 300; i++) {
+    auto p = db->alloc_page(80); // size 80 => slot 0 (size 100)
+    offsets.push_back(db->resolve(p));
+  }
+  BOOST_CHECK(db->commit(0));
+  
+  // Transaction 2: free all those pages by calling db->free()
+  // This puts them in the garbage collector
+  BOOST_REQUIRE(db->start_transaction(0));
+  for (auto off : offsets) {
+    page_ptr p = db->resolve<PageHeader>(&off);
+    db->free(p);
+  }
+  BOOST_CHECK(db->commit(0));
+  
+  // Now call _garbage_statistics which exercises the while loop
+  // when a garbage slot has >254 entries (multiple PageContainers)
+  using MemStatistics = typename std::remove_pointer_t<decltype(db)>::MemStatistics;
+  MemStatistics stat{};
+  db->_garbage_statistics(stat);
+  
+  // The garbage collector should have recorded our freed pages
+  // Check that at least one slot has many entries (>250 freed pages)
+  uint64_t max_count = 0;
+  for (int i = 0; i < stat.COUNT; i++) {
+    max_count = std::max(max_count, (uint64_t)stat.slots[i].count);
+  }
+  BOOST_CHECK_GT(max_count, 250u);
+}
+
+BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
+  // Exercises sanitize() else branch (L688-693)
+  // Simulates crash where next_txn_page was cleared to 0 during
+  // start_transaction but before prepare_commit allocated a replacement.
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_sanitize_ntp0.lvs";
+  
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Do one commit so the DB is in a consistent state with data
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto p = db->alloc_page(100);
+    BOOST_CHECK(db->commit(0));
+    
+    // Simulate the crash window: clear next_txn_page as start_transaction does
+    db->_header->next_txn_page = 0;
+    
+    // Write a fake stale PID so sanitize_processes() triggers sanitize_dbs()
+    // Use PID 99999999 which should not be running
+    storage._memory->processes[0] = 99999999;
+    
+    storage.flush();
+    
+    // Skip destructor's remove_pid by leaving the fake PID in place
+    // (destructor removes current PID, not the fake one)
+  }
+  
+  // Reopen: sanitize() detects stale PID → calls sanitize_dbs() → db.sanitize()
+  // db.sanitize() sees next_txn_page == 0, exercises the else branch
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.make("test");
+    
+    // Verify next_txn_page was recreated
+    BOOST_CHECK_NE(db->_header->next_txn_page, offset_t(0));
+    
+    // DB should be fully operational
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto p = db->alloc_page(100);
+    BOOST_CHECK(p);
+    BOOST_CHECK(db->commit(0));
+  }
+}

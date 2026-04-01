@@ -6192,4 +6192,197 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
   BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
 }
 
+BOOST_FIXTURE_TEST_CASE(test_big_value_overwrite_replication, ReplicationFixture) {
+  // Replicate big values, modify them, and replicate again.
+  // The second merge overwrites a big-value leaf in the receiver,
+  // exercising StandardMergePolicy::free_big via ReplicationMergePolicy.
+  auto sender_path = test_temp_dir / "sender_bvow.lvs";
+  auto receiver_path = test_temp_dir / "receiver_bvow.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  const size_t BIG_VALUE_SIZE = 8 * 1024;
+
+  // Insert big value on sender
+  {
+    auto cursor = sender_db.cursor();
+    std::vector<char> value(BIG_VALUE_SIZE, 'A');
+    cursor.find(Slice("bigkey"));
+    cursor.value(Slice(value.data(), value.size()));
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  // First replication — big value arrives at receiver
+  wait_for_hashing(sender_impl);
+  {
+    TestTransport s2r, r2s;
+    s2r.set_peer(&r2s);
+    r2s.set_peer(&s2r);
+    TestEvents se, re;
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl);
+    receiver.begin(&r2s, &re);
+    sender.begin(&s2r, &se);
+    run_protocol(sender, receiver, s2r, r2s);
+    BOOST_REQUIRE(se.completed);
+    BOOST_REQUIRE(re.completed);
+  }
+
+  // Verify receiver has the big value
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find(Slice("bigkey"));
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+    BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A');
+  }
+
+  // Modify the big value on sender (different content, same key)
+  {
+    auto cursor = sender_db.cursor();
+    std::vector<char> value(BIG_VALUE_SIZE, 'B');
+    cursor.find(Slice("bigkey"));
+    cursor.value(Slice(value.data(), value.size()));
+    cursor.commit();
+  }
+
+  // Second replication — receiver's big-value leaf is overwritten (free_big)
+  wait_for_hashing(sender_impl);
+  {
+    TestTransport s2r, r2s;
+    s2r.set_peer(&r2s);
+    r2s.set_peer(&s2r);
+    TestEvents se, re;
+    SenderFSM sender(sender_impl);
+    ReceiverFSM receiver(receiver_impl);
+    receiver.begin(&r2s, &re);
+    sender.begin(&s2r, &se);
+    run_protocol(sender, receiver, s2r, r2s);
+    BOOST_REQUIRE(se.completed);
+    BOOST_REQUIRE(re.completed);
+  }
+
+  // Verify receiver has the updated big value
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find(Slice("bigkey"));
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
+    BOOST_CHECK_EQUAL(cursor.value().data()[0], 'B');
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_replication_merge_diverse_trie_shapes, ReplicationFixture) {
+  // Exercise diverse merge paths in the ReplicationDB instantiation of _Merger:
+  //  - leaf-leaf exact match overwrite (merge_leaf_node cmp==0)
+  //  - leaf divergence creating new trie (resolve_divergence with leaf)
+  //  - trie split (merge_trie_node with suffix_len > 0)
+  //  - merge_into_trie with suffix_len > 0 and suffix_len == 0
+  //  - expand_trie_with_branch (merge_leaf_into_trie)
+  auto sender_path = test_temp_dir / "sender_diverse.lvs";
+  auto receiver_path = test_temp_dir / "receiver_diverse.lvs";
+
+  auto sender_storage = Storage::create(sender_path.c_str());
+  auto receiver_storage = Storage::create(receiver_path.c_str());
+
+  auto sender_db = (*sender_storage)["test"];
+  auto receiver_db = (*receiver_storage)["test"];
+
+  // Receiver: build a trie with long compressed prefixes
+  {
+    auto cursor = receiver_db.cursor();
+    cursor.find("abcdefghij");  cursor.value("r1");
+    cursor.find("abcdefghik");  cursor.value("r2");
+    cursor.find("xyz");         cursor.value("r3");
+    cursor.find("xyw");         cursor.value("r4");
+    cursor.find("mno");         cursor.value("r5");
+    cursor.commit();
+  }
+
+  // Sender: overlapping and non-overlapping keys that force various merge paths
+  {
+    auto cursor = sender_db.cursor();
+    // Exact overwrite
+    cursor.find("xyz");         cursor.value("s_xyz");
+    // Leaf divergence: sender has "xya" where receiver has "xyw"/"xyz" trie
+    cursor.find("xya");         cursor.value("s_xya");
+    // Trie split: sender matches partial prefix "abcde" of receiver's "abcdefghi"
+    cursor.find("abcde1");      cursor.value("s1");
+    cursor.find("abcde2");      cursor.value("s2");
+    // New branch in existing trie
+    cursor.find("mnop");        cursor.value("s_mnop");
+    // Completely new subtree
+    cursor.find("qqq");         cursor.value("s_qqq");
+    cursor.commit();
+  }
+
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+
+  wait_for_hashing(sender_impl);
+
+  TestTransport s2r, r2s;
+  s2r.set_peer(&r2s);
+  r2s.set_peer(&s2r);
+  TestEvents se, re;
+  SenderFSM sender(sender_impl);
+  ReceiverFSM receiver(receiver_impl);
+  receiver.begin(&r2s, &re);
+  sender.begin(&s2r, &se);
+  run_protocol(sender, receiver, s2r, r2s);
+
+  BOOST_REQUIRE(se.completed);
+  BOOST_REQUIRE(re.completed);
+
+  // Verify all keys exist with correct values
+  auto cursor = receiver_db.cursor();
+
+  cursor.find("abcdefghij");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("r1"));
+
+  cursor.find("abcdefghik");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("r2"));
+
+  cursor.find("abcde1");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("s1"));
+
+  cursor.find("abcde2");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("s2"));
+
+  cursor.find("xyz");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("s_xyz"));
+
+  cursor.find("xyw");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("r4"));
+
+  cursor.find("xya");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("s_xya"));
+
+  cursor.find("mno");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("r5"));
+
+  cursor.find("mnop");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("s_mnop"));
+
+  cursor.find("qqq");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.value(), Slice("s_qqq"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
