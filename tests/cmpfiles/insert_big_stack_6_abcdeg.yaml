@@ -1,6 +1,6 @@
 type: trie
-id: 25616
-page: 25608
+id: 17936
+page: 17928
 freespace: 96
 txn: 8
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 14897
-  - 24336
+  - 10289
+  - 16656
 ---
 type: leaf
-id: 14897
-page: 14889
+id: 10289
+page: 10281
 freespace: 124
 size: 4
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 24336
-page: 24328
+id: 16656
+page: 16648
 freespace: 96
 txn: 8
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 21473
-  - 24208
+  - 15329
+  - 16528
 ---
 type: leaf
-id: 21473
-page: 21465
+id: 15329
+page: 15321
 freespace: 123
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 24208
-page: 24200
+id: 16528
+page: 16520
 freespace: 96
 txn: 8
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 8577
-  - 24080
+  - 5505
+  - 16400
 ---
 type: leaf
-id: 8577
-page: 8569
+id: 5505
+page: 5497
 freespace: 122
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 24080
-page: 24072
+id: 16400
+page: 16392
 freespace: 96
 txn: 8
 size: 32
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 19249
-  - 24464
+  - 14641
+  - 16784
 ---
 type: leaf
-id: 19249
-page: 19241
+id: 14641
+page: 14633
 freespace: 121
 size: 7
 txn: 6
@@ -99,8 +99,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 24464
-page: 24456
+id: 16784
+page: 16776
 freespace: 88
 txn: 8
 size: 40
@@ -109,13 +109,13 @@ compressed:
   key: "[e]"
 branches: "[][f][g]"
 children: 
-  - 21857
-  - 25489
-  - 25745
+  - 15713
+  - 17809
+  - 18065
 ---
 type: leaf
-id: 21857
-page: 21849
+id: 15713
+page: 15705
 freespace: 120
 size: 8
 txn: 7
@@ -125,8 +125,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 25489
-page: 25481
+id: 17809
+page: 17801
 freespace: 118
 size: 10
 txn: 7
@@ -136,8 +136,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 25745
-page: 25737
+id: 18065
+page: 18057
 freespace: 118
 size: 10
 txn: 8
