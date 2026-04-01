@@ -196,11 +196,14 @@ class Slice {
 
   Slice(const char* str) : _size(std::strlen(str)), _data(str) {}
 
-  Slice(const std::string& src) : _size(src.size()), _data(src.data()) {}
+  // Accept any type with data()/size() (std::string, KeyBuilder,
+  // string_view, etc.) without requiring their headers.
+  template <typename T,
+            typename = decltype(std::declval<const T&>().data()),
+            typename = decltype(std::declval<const T&>().size())>
+  Slice(const T& t) : _size(t.size()), _data((const char*)t.data()) {}
 
   Slice() : _size(0), _data(NULL) {}
-
-  Slice(const Slice& other) : _size(other._size), _data(other._data) {}
 
   Slice slice(size_t len) const { return Slice(data(), len); }
 
