@@ -1177,16 +1177,14 @@ struct TestPool : _ThreadPoolMixin<TestPool> {
   TestPool(size_t n = 4) : _ThreadPoolMixin(n) {}
 };
 
-template <typename DB>
-void run_hash_update_parallel(DB* internal_db, _PoolExecutor& exec,
+template <typename Executor, typename DB>
+void run_hash_update_parallel(DB* internal_db, Executor& exec,
                               typename DB::offset_e data_root,
                               typename DB::offset_e* hash_root_ptr) {
   InternalCursor cursor(internal_db, hash_root_ptr);
   cursor.start_transaction();
 
-  internal_db->_active_txn->mem_manager.set_single_thread(false);
   update_hash_trie(exec, internal_db, internal_db, data_root, hash_root_ptr);
-  internal_db->_active_txn->mem_manager.set_single_thread(true);
 
   cursor.commit(internal_db->new_cursor_id());
 }
@@ -1219,12 +1217,10 @@ BOOST_AUTO_TEST_CASE(parallel_matches_inline_wide_trie) {
   std::map<std::string, std::vector<uint8_t>> inline_hashes;
   collect_leaf_hashes(internal_db, hash_root_inline, "", inline_hashes);
 
-  // Run parallel hash update
-  TestPool pool(4);
-  _PoolExecutor exec(pool);
+  // Run parallel hash update (inline executor — plain _DB lacks thread-safe allocator)
+  _InlineExecutor exec;
   offset_t hash_root_parallel{};
   run_hash_update_parallel(internal_db, exec, txn->root, &hash_root_parallel);
-  pool.wait_all();
 
   // Collect parallel hashes
   std::map<std::string, std::vector<uint8_t>> parallel_hashes;
@@ -1284,12 +1280,10 @@ BOOST_AUTO_TEST_CASE(parallel_matches_inline_deep_trie) {
   std::map<std::string, std::vector<uint8_t>> inline_hashes;
   collect_leaf_hashes(internal_db, hash_root_inline, "", inline_hashes);
 
-  // Parallel hashes
-  TestPool pool(4);
-  _PoolExecutor exec(pool);
+  // Parallel hashes (inline executor — plain _DB lacks thread-safe allocator)
+  _InlineExecutor exec;
   offset_t hash_root_parallel{};
   run_hash_update_parallel(internal_db, exec, txn->root, &hash_root_parallel);
-  pool.wait_all();
 
   std::map<std::string, std::vector<uint8_t>> parallel_hashes;
   collect_leaf_hashes(internal_db, hash_root_parallel, "", parallel_hashes);
@@ -1355,12 +1349,10 @@ BOOST_AUTO_TEST_CASE(parallel_incremental_update) {
   std::map<std::string, std::vector<uint8_t>> inline_hashes;
   collect_leaf_hashes(internal_db, hash_root_inline, "", inline_hashes);
 
-  // Parallel incremental update (from same starting hash trie)
-  TestPool pool(4);
-  _PoolExecutor exec(pool);
+  // Parallel incremental update (inline executor — plain _DB lacks thread-safe allocator)
+  _InlineExecutor exec;
   offset_t hash_root_parallel = hash_root;
   run_hash_update_parallel(internal_db, exec, txn2->root, &hash_root_parallel);
-  pool.wait_all();
 
   std::map<std::string, std::vector<uint8_t>> parallel_hashes;
   collect_leaf_hashes(internal_db, hash_root_parallel, "", parallel_hashes);

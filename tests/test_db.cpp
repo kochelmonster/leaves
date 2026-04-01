@@ -263,8 +263,8 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   db1->start_transaction(0);
   // These last_area checks are no longer applicable in the new architecture
   // force the alloc of a new area
-  const uint64_t ALLOC_SIZE = db1->_wtxn->mem_manager.get_allocation_end() + 16 * K -
-                              db1->_wtxn->mem_manager.get_allocation_start();
+  const uint64_t ALLOC_SIZE = db1->_wtxn->mem_manager.allocation_end + 16 * K -
+                              db1->_wtxn->mem_manager.allocation_start;
   uint64_t size = 0;
   while (size < ALLOC_SIZE) {
     offsets.push_back(storage.resolve(db1->alloc_page(MAX_PAYLOAD)));

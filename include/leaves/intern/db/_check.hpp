@@ -315,7 +315,7 @@ struct _MemoryChecker {
 
     // 2. Mark garbage container blocks and freed pages
     for (int i = 0; i < MemManager::COUNT; i++) {
-      auto& slot = mm.slots_at(i);
+      auto& slot = mm.slots[i];
 
       // Mark garbage container blocks (PageContainer linked list)
       if (slot.ostart) {

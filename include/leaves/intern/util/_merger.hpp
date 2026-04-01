@@ -4,7 +4,6 @@
 #include "../core/_bits.hpp"
 #include "../core/_node.hpp"
 #include "../db/_cursor.hpp"
-#include "_task_group.hpp"
 
 namespace leaves {
 
@@ -87,47 +86,6 @@ struct StandardMergePolicy {
 };
 
 /**
- * @brief Lightweight dst sub-cursor for parallel shared-branch merges.
- *
- * Rooted at a branch offset within an already-COW'd trie node.
- * Shares the parent cursor's BigMemory (via pointer) and DB.
- * Has its own stack and current_key, but skips a known prefix
- * on find() so navigation starts from the branch root.
- */
-template <typename Traits_>
-struct _DstSubCursor
-    : public _ICursor<Traits_, _DstSubCursor<Traits_>> {
-  typedef Traits_ Traits;
-  typedef _ICursor<Traits_, _DstSubCursor<Traits_>> Cursor;
-  using BigMemory = _BigMemory<_Cursor<Traits_>>;
-  using offset_e = typename Traits::offset_e;
-
-  BigMemory* _bigmemory_ref;
-  size_t _prefix_len;
-
-  _DstSubCursor(typename Traits::DB* db, offset_e* root,
-                const std::string& prefix, BigMemory& bm)
-      : Cursor(db, root), _bigmemory_ref(&bm), _prefix_len(prefix.size()) {
-    this->current_key = prefix;
-  }
-
-  void find(const Slice& key) {
-    this->rest_key = key;
-    if (this->stack.size && this->keep_stack()) return;
-    if (!this->stack.size) {
-      if (!*this->_root) return;
-      this->current_key.resize(_prefix_len);
-      this->rest_key = key;
-      this->rest_key.iadvance(_prefix_len);
-      this->push(this->_root);
-    }
-    this->stack.back().find();
-  }
-
-  BigMemory& get_bigmemory() { return *_bigmemory_ref; }
-};
-
-/**
  * @brief Merger for combining two tries
  *
  * Merges source trie into destination trie, using a MergePolicy to control
@@ -137,10 +95,9 @@ struct _DstSubCursor
  * Big values are migrated via the policy's migrate_big_value method, which
  * can copy them to the destination's BigMemory or convert them to small values.
  */
-template <typename CursorDst, typename CursorSrc, typename MergePolicy,
-          typename Executor = _InlineExecutor>
+template <typename CursorDst, typename CursorSrc, typename MergePolicy>
 struct _Merger {
-  typedef _Merger<CursorDst, CursorSrc, MergePolicy, Executor> Merger;
+  typedef _Merger<CursorDst, CursorSrc, MergePolicy> Merger;
   using Traits = typename CursorDst::Traits;
   using SrcTraits = typename CursorSrc::Traits;
   using Transition = typename CursorDst::Transition;
@@ -155,7 +112,6 @@ struct _Merger {
   using SrcLeafNode = typename SrcTransition::LeafNode;
   using src_offset_e = typename SrcTransition::offset_e;
   using BigMemory = typename CursorDst::BigMemory;
-  using BigValue = typename BigMemory::BigValue;
 
   static constexpr bool _has_may_add_leaf = !std::is_same_v<decltype(&MergePolicy::may_add_leaf), decltype(&StandardMergePolicy::may_add_leaf)>;
   static constexpr bool _has_may_add_trie = !std::is_same_v<decltype(&MergePolicy::may_add_trie), decltype(&StandardMergePolicy::may_add_trie)>;
@@ -163,9 +119,6 @@ struct _Merger {
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
   MergePolicy& handler;
-  _TaskGroup<Executor>* _tg{nullptr};
-  SpinLock _bigmem_lock_storage;
-  SpinLock* _bigmem_lock{&_bigmem_lock_storage};
 
   _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
@@ -185,7 +138,6 @@ struct _Merger {
 
     if constexpr (NodePtr::type == LEAF) {
       if (node->is_big()) {
-        std::lock_guard<SpinLock> guard(*_bigmem_lock);
         handler.free_big(node, dst_cursor);
       }
     }
@@ -197,18 +149,10 @@ struct _Merger {
   leaf_ptr fill_leaf(const Slice& key, SrcLeafNode& src_leaf) {
     Slice src_value;
     bool is_big = false;
-    // Local buffer for big value metadata — migrate_big_value writes to a
-    // shared _big_value_storage on the handler, so we snapshot the data
-    // while still under the lock to avoid races with parallel workers.
-    uint8_t big_value_buf[sizeof(BigValue)];
     if (src_leaf.is_big()) {
-      MigratedValue migrated;
-      {
-        std::lock_guard<SpinLock> guard(*_bigmem_lock);
-        migrated = handler.migrate_big_value(src_leaf, src_cursor, dst_cursor);
-        memcpy(big_value_buf, migrated.data.data(), migrated.data.size());
-      }
-      src_value = Slice(big_value_buf, migrated.data.size());
+      MigratedValue migrated =
+          handler.migrate_big_value(src_leaf, src_cursor, dst_cursor);
+      src_value = migrated.data;
       is_big = migrated.is_big;
     } else {
       src_value = src_leaf.value();
@@ -427,18 +371,8 @@ struct _Merger {
             offsets_buf[k] = child_offset;
           }
         };
-        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-          do_branch(current_key);
-        }
-#if LEAVES_HAS_THREADS
-        else if (_in_worker) {
-          do_branch(current_key);
-        } else {
-          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
-        }
-#endif
+        do_branch(current_key);
       });
-      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
       current_key.resize(saved_key_len);
 
@@ -503,18 +437,8 @@ struct _Merger {
             offsets_buf[k] = child_offset;
           }
         };
-        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-          do_branch(current_key);
-        }
-#if LEAVES_HAS_THREADS
-        else if (_in_worker) {
-          do_branch(current_key);
-        } else {
-          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
-        }
-#endif
+        do_branch(current_key);
       });
-      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
       // Count branches (key1 + surviving deep copies) and compute upper bitmap
       uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
@@ -563,18 +487,8 @@ struct _Merger {
             offsets_buf[k] = child_offset;
           }
         };
-        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-          do_branch(current_key);
-        }
-#if LEAVES_HAS_THREADS
-        else if (_in_worker) {
-          do_branch(current_key);
-        } else {
-          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
-        }
-#endif
+        do_branch(current_key);
       });
-      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
       // Count survivors and compute upper bitmap
       uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
@@ -626,18 +540,8 @@ struct _Merger {
             offsets_buf[k] = child_offset;
           }
         };
-        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-          do_branch(current_key);
-        }
-#if LEAVES_HAS_THREADS
-        else if (_in_worker) {
-          do_branch(current_key);
-        } else {
-          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
-        }
-#endif
+        do_branch(current_key);
       });
-      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
       // Count survivors and compute upper bitmap
       int surviving = 0;
@@ -715,19 +619,9 @@ struct _Merger {
             offsets_buf[k] = child_offset;
           }
         };
-        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-          do_branch(current_key);
-        }
-#if LEAVES_HAS_THREADS
-        else if (_in_worker) {
-          do_branch(current_key);
-        } else {
-          _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
-        }
-#endif
+        do_branch(current_key);
       }
     });
-    if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
     // Count src-only survivors and compute upper bitmap
     uint8_t upper = dst_trie->_upper;
@@ -747,59 +641,16 @@ struct _Merger {
     dst.trie() = new_trie;
     dst.update_trie_offset();
 
-    // Recursively merge shared branches
-    if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-      for (int si = 0; si < shared_count; si++) {
-        int k = shared[si].key;
-        *new_trie->offset(k) = shared[si].dst_off;
+    // Recursively merge shared branches.
+    for (int si = 0; si < shared_count; si++) {
+      int k = shared[si].key;
+      *new_trie->offset(k) = shared[si].dst_off;
 
-        src_cursor.current_key.resize(current_key.size());
-        src_cursor.push(shared[si].src_off);
-        dst_cursor.stack.clear();
-        merge_node(current_key);
-      }
+      src_cursor.current_key.resize(current_key.size());
+      src_cursor.push(shared[si].src_off);
+      dst_cursor.stack.clear();
+      merge_node(current_key);
     }
-#if LEAVES_HAS_THREADS
-    else if (_in_worker) {
-      for (int si = 0; si < shared_count; si++) {
-        int k = shared[si].key;
-        *new_trie->offset(k) = shared[si].dst_off;
-
-        src_cursor.current_key.resize(current_key.size());
-        src_cursor.push(shared[si].src_off);
-        dst_cursor.stack.clear();
-        merge_node(current_key);
-      }
-    } else {
-      // Parallel: each shared branch gets its own sub-cursors
-      using DstSubCursor = _DstSubCursor<Traits>;
-      using SrcSubCursor = _Cursor<SrcTraits>;
-      using SubMerger = _Merger<DstSubCursor, SrcSubCursor, MergePolicy, Executor>;
-
-      for (int si = 0; si < shared_count; si++) {
-        int k = shared[si].key;
-        *new_trie->offset(k) = shared[si].dst_off;
-
-        auto* dst_branch_off = new_trie->offset(k);
-        auto* src_branch_off = shared[si].src_off;
-
-        _tg->spawn([this, dst_branch_off, src_branch_off,
-                     key = current_key]() mutable {
-          DstSubCursor dst_sub(dst_cursor._db, dst_branch_off, key,
-                               dst_cursor.get_bigmemory());
-          SrcSubCursor src_sub(src_cursor._db, src_branch_off);
-          src_sub.current_key.resize(key.size());
-          src_sub.push(src_branch_off);
-
-          SubMerger sub_merger(dst_sub, src_sub, handler);
-          sub_merger._tg = _tg;
-          sub_merger._bigmem_lock = _bigmem_lock;
-          sub_merger.merge_node(key);
-        });
-      }
-      _tg->wait();
-    }
-#endif
 
     // Compute hash for new_trie - all children now have valid hashes
     handler.after_trie_merged(new_trie, dst_cursor._db);
@@ -951,18 +802,8 @@ struct _Merger {
           offsets_buf[k] = child_offset;
         }
       };
-      if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-        do_branch(current_key);
-      }
-#if LEAVES_HAS_THREADS
-      else if (_in_worker) {
-        do_branch(current_key);
-      } else {
-        _tg->spawn([do_branch, key = current_key]() mutable { do_branch(key); });
-      }
-#endif
+      do_branch(current_key);
     });
-    if constexpr (!std::is_same_v<Executor, _InlineExecutor>) { _tg->wait(); }
 
     current_key.resize(saved);
 
