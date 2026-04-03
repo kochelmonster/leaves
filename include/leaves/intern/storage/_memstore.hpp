@@ -228,6 +228,9 @@ struct _MemoryStorage {
         "areas only");
   }
 
+  void return_single_areas(offset_t, offset_t) {}
+  void return_multi_areas(offset_t, offset_t) {}
+
   // Single DB access
   DB& db() { return _db; }
 

@@ -341,6 +341,9 @@ target_link_libraries(test_twoquecache PUBLIC test)
 add_executable(test_keycodec tests/test_keycodec.cpp)
 target_link_libraries(test_keycodec PUBLIC test)
 
+add_executable(test_range_filter tests/test_range_filter.cpp)
+target_link_libraries(test_range_filter PUBLIC test)
+
 target_link_libraries(test_file_storage PUBLIC core test)
 
 add_executable(test_multithread tests/test_multithread.cpp)

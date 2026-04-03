@@ -364,9 +364,26 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
 
   void sanitize() {
     // No locking needed since we're single-process
+    recover_areas();
     sanitize_dbs();
     if (std::filesystem::file_size(this->filename()) != this->_header->file_size)
       std::filesystem::resize_file(this->filename(), this->_header->file_size);
+  }
+
+  // Rebuild the free area pool by scanning the file.
+  void recover_areas() {
+    auto* self = this;
+    _recover_areas<typename DB::Header, Traits_::AREA_SIZE>(
+        this->_header->area_pool, this->_header->db_count,
+        [self](uint16_t i) { return self->_header->dbs[i].offset; },
+        this->_header->file_size,
+        leaves::padding(this->calc_header_size(), Traits_::AREA_SIZE),
+        [self](uint64_t pos, void* buf, size_t size) {
+          self->read(pos, buf, size);
+        },
+        [self](uint64_t pos, const void* buf, size_t size) {
+          self->write(pos, buf, size);
+        });
   }
 
   void sanitize_dbs() {
