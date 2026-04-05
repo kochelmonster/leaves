@@ -385,6 +385,10 @@ struct _DB {
 
   txn_ptr txn() const { return resolve<Transaction>(&_header->read_txn); }
 
+  // Return the raw offset of the current read transaction.
+  // This is a plain aligned 64-bit load — no lock required.
+  offset_t read_txn_offset() const { return _header->read_txn; }
+
   // Atomically resolve current read txn and increment its refcount.
   // Uses SpinLock to prevent a concurrent start_transaction() from
   // freeing the txn between resolve and refs.fetch_add().
