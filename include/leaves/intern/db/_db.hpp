@@ -98,7 +98,6 @@ struct _DBHeader {
   // Areas are linked lists in storage, operations use atomic head/tail pattern
   offset_t area_list_head_single;  // head of single AREA_SIZE areas linked list
   offset_t area_list_head_multi;   // head of multi-AREA_SIZE areas linked list
-  AreaPool area_pool;              // area pool for allocating areas
 };
 
 // Make _DB accept Transaction and Header as template parameters
@@ -195,7 +194,6 @@ struct _DB {
     offset_t first_area_offset = _storage.resolve(area_ptr);
     _header->area_list_head_single = first_area_offset;
     _header->area_list_head_multi = 0;
-    _header->area_pool.init();
 
     uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
@@ -343,8 +341,7 @@ struct _DB {
     _active_txn->area_list_tail_single = resolve(area_ptr);
 
     make_dirty(area_ptr);
-    flush();
-    return area_ptr;  // Convert Area* to AreaSlice for return
+    return area_ptr;
   }
 
   area_ptr alloc_multi_area(uint64_t size) {
@@ -367,8 +364,7 @@ struct _DB {
     _active_txn->area_list_tail_multi = resolve(area_ptr);
 
     make_dirty(area_ptr);
-    flush();
-    return area_ptr;  // Convert Area* to AreaSlice for return
+    return area_ptr;
   }
 
   template <typename T>
@@ -705,23 +701,6 @@ struct _DB {
       _header->next_txn_page = resolve(next);
       _active_txn = nullptr;
     }
-
-    if (_header->prepared_txn == _header->read_txn) {
-      // Return any uncommitted areas
-      txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-
-      // Find actual tail by iterating single area list
-      offset_t stail = Area::get_end(read_txn->area_list_tail_single, *this);
-      offset_t mtail = Area::get_end(read_txn->area_list_tail_multi, *this);
-      return_areas_range(read_txn->area_list_tail_single, stail,
-                         read_txn->area_list_tail_multi, mtail);
-
-      // Clear transaction state after rolling back
-      _header->prepared_txn = _header->read_txn;
-      _wtxn.reset();
-      _active_txn = nullptr;
-    }
-    // otherwise we have to wait for rollback or commit
 
     make_dirty(_header);
     flush();

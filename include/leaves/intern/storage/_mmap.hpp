@@ -179,6 +179,10 @@ struct _MemoryMapFile {
 
   Mutex& file_lock() { return _memory->file_lock; }
 
+  size_t calc_header_size() const {
+    return padding(sizeof(FileHeader) + sizeof(DBEntry) * _memory->db_count, 4 * K);
+  }
+
   size_t file_size() const { return _memory->file_size; }
 
   void init_dbfile(const char* path, size_t map_size, uint16_t db_count) {
@@ -260,6 +264,20 @@ struct _MemoryMapFile {
     }
   }
 
+  void recover_areas() {
+    char* base = (char*)_memory;
+    _recover_areas<typename DB::Header, AREA_SIZE>(
+        _memory->area_pool, _memory->db_count,
+        [&](uint16_t i) { return _memory->dbs[i].offset; },
+        _memory->file_size, calc_header_size(),
+        [base](uint64_t pos, void* buf, size_t size) {
+          memcpy(buf, base + pos, size);
+        },
+        [base](uint64_t pos, const void* buf, size_t size) {
+          memcpy(base + pos, buf, size);
+        });
+  }
+
   void sanitize() {
     // Coordinate sanitization across processes with an OS file lock that is
     // automatically released if a process crashes.
@@ -273,6 +291,7 @@ struct _MemoryMapFile {
 
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
+      recover_areas();
       sanitize_dbs();
       _memory->last_cursor_id.store(0);
     }

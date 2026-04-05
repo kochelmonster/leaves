@@ -39,6 +39,7 @@ Crash Recovery:
 #include <cassert>
 #include <cstddef>
 #include <cstring>
+#include <unordered_set>
 
 #include "../core/_bits.hpp"
 #include "../core/_port.hpp"
@@ -155,7 +156,8 @@ struct _GarbageSlot {
   }
 
   template <typename Resolver>
-  FORCE_INLINE void push(ptr& block, Resolver& resolver, _MemManager<Traits>& mgr) {
+  FORCE_INLINE void push(ptr& block, Resolver& resolver,
+                         _MemManager<Traits>& mgr) {
     cont_ptr back;
 
     if (oend) {
@@ -393,9 +395,7 @@ struct _MemManagerPool {
   }
 
   // Toggle single-thread mode for parallel operations.
-  void set_single_thread(bool st) {
-    _single_thread = st ? 1 : 0;
-  }
+  void set_single_thread(bool st) { _single_thread = st ? 1 : 0; }
 
   // Rotate single-thread manager index every ROTATION_INTERVAL transactions.
   void on_end_transaction() {
@@ -728,6 +728,102 @@ struct AreaPool {
     multi_areas.add(head, tail, resolver);
   }
 };
+
+// Rebuild the free area pool by scanning the file.
+// Unified implementation used by all storage backends (mmap, fstore,
+// browserstore). ReadFn:  void(uint64_t pos, void* buf, size_t size) WriteFn:
+// void(uint64_t pos, const void* buf, size_t size) GetDBOffsetFn:
+// offset_t(uint16_t db_index)
+template <typename DBHeader, size_t AREA_SIZE, typename ReadFn,
+          typename WriteFn, typename GetDBOffsetFn>
+void _recover_areas(AreaPool& pool, uint16_t db_count,
+                    GetDBOffsetFn get_db_offset, uint64_t file_size,
+                    uint64_t first_area_pos, ReadFn read_bytes,
+                    WriteFn write_bytes) {
+  pool.init();
+
+  // Phase 1: Walk owned DB chains, collect all AREA_SIZE sub-blocks as occupied
+  std::unordered_set<uint64_t> occupied;
+  for (uint16_t i = 0; i < db_count; i++) {
+    offset_t db_off = get_db_offset(i);
+    if (!db_off) continue;
+
+    DBHeader db_header;
+    read_bytes((uint64_t)db_off, &db_header, sizeof(DBHeader));
+
+    auto walk = [&](offset_t head) {
+      while (head) {
+        Area area_hdr;
+        read_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+
+        // Restore _offset on owned areas
+        area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
+        write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+
+        // Mark all AREA_SIZE sub-blocks as occupied
+        uint64_t area_size = area_hdr.size();
+        for (uint64_t off = (uint64_t)head; off < (uint64_t)head + area_size;
+             off += AREA_SIZE) {
+          occupied.insert(off);
+        }
+        head = area_hdr.next;
+      }
+    };
+    walk(db_header.area_list_head_single);
+    walk(db_header.area_list_head_multi);
+  }
+
+  // Phase 2: Scan in AREA_SIZE steps, collect contiguous free runs.
+  // Single AREA_SIZE blocks go to single_areas, contiguous runs to multi_areas.
+  offset_t single_head = 0, single_tail = 0;
+  offset_t multi_head = 0, multi_tail = 0;
+
+  auto link_area = [&](offset_t& head, offset_t& tail, uint64_t pos,
+                       uint64_t size) {
+    Area area_hdr;
+    area_hdr.init(pos, size, 0);
+    area_hdr._ref.store(0, std::memory_order_relaxed);
+    write_bytes(pos, &area_hdr, sizeof(Area));
+    if (!head) {
+      head = pos;
+    } else {
+      Area tail_hdr;
+      read_bytes((uint64_t)tail, &tail_hdr, sizeof(Area));
+      tail_hdr.next = pos;
+      write_bytes((uint64_t)tail, &tail_hdr, sizeof(Area));
+    }
+    tail = pos;
+  };
+
+  uint64_t run_start = 0;
+  uint64_t run_blocks = 0;
+
+  auto flush_run = [&]() {
+    if (run_blocks == 1)
+      link_area(single_head, single_tail, run_start, AREA_SIZE);
+    else if (run_blocks > 1)
+      link_area(multi_head, multi_tail, run_start, run_blocks * AREA_SIZE);
+    run_blocks = 0;
+  };
+
+  for (uint64_t pos = first_area_pos; pos + AREA_SIZE <= file_size;
+       pos += AREA_SIZE) {
+    if (occupied.count(pos)) {
+      flush_run();
+      continue;
+    }
+    if (run_blocks == 0) run_start = pos;
+    run_blocks++;
+  }
+  flush_run();
+
+  if (single_head) {
+    pool.single_areas.atomic_switch(single_head, single_tail);
+  }
+  if (multi_head) {
+    pool.multi_areas.atomic_switch(multi_head, multi_tail);
+  }
+}
 
 }  // namespace leaves
 

@@ -392,7 +392,23 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
   }
 
   void _sanitize() {
+    _recover_areas();
     _sanitize_dbs();
+  }
+
+  void _recover_areas() {
+    auto* self = this;
+    _recover_areas<typename DB::Header, _BrowserStoreTraits::AREA_SIZE>(
+        _header->area_pool, _header->db_count,
+        [self](uint16_t i) { return self->_header->dbs[i].offset; },
+        _header->file_size,
+        leaves::padding(calc_header_size(), _BrowserStoreTraits::AREA_SIZE),
+        [self](uint64_t pos, void* buf, size_t size) {
+          self->read(pos, buf, size);
+        },
+        [self](uint64_t pos, const void* buf, size_t size) {
+          self->write(pos, buf, size);
+        });
   }
 
   void _sanitize_dbs() {
