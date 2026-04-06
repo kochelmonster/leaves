@@ -364,26 +364,17 @@ struct _Merger {
       offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
       int surviving = 0;
-      src_trie->for_each_branch([&](int k, auto* src_off) {
-        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
-          offset_e child_offset;
-          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
-            offsets_buf[k] = child_offset;
-          }
-        };
-        do_branch(current_key);
-      });
-
-      current_key.resize(saved_key_len);
-
-      // Count survivors and compute upper bitmap
       uint8_t upper = 0;
-      src_trie->for_each_branch([&](int k, auto*) {
-        if (offsets_buf[k] != offset_e()) {
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
+          offsets_buf[k] = child_offset;
           surviving++;
           if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
         }
       });
+
+      current_key.resize(saved_key_len);
 
       if (!surviving) {
         return;  // nothing from source survived may_add
@@ -428,23 +419,13 @@ struct _Merger {
 
       offsets_buf[key1] = child1;
 
-      // Selectively deep copy all other src branches
+      // Selectively deep copy all other src branches, count survivors inline
+      uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
       src_trie->for_each_branch([&](int k, auto* src_off) {
         if (k == key1) return;
-        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
-          offset_e child_offset;
-          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
-            offsets_buf[k] = child_offset;
-          }
-        };
-        do_branch(current_key);
-      });
-
-      // Count branches (key1 + surviving deep copies) and compute upper bitmap
-      uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
-      src_trie->for_each_branch([&](int k, auto*) {
-        if (k == key1) return;
-        if (offsets_buf[k] != offset_e()) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
+          offsets_buf[k] = child_offset;
           branch_count++;
           if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
         }
@@ -480,20 +461,11 @@ struct _Merger {
 
       offsets_buf[key1] = child1;
 
-      src_trie->for_each_branch([&](int k, auto* src_off) {
-        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
-          offset_e child_offset;
-          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
-            offsets_buf[k] = child_offset;
-          }
-        };
-        do_branch(current_key);
-      });
-
-      // Count survivors and compute upper bitmap
       uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::ubit(key1)) : 0;
-      src_trie->for_each_branch([&](int k, auto*) {
-        if (offsets_buf[k] != offset_e()) {
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
+          offsets_buf[k] = child_offset;
           branch_count++;
           if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
         }
@@ -533,21 +505,12 @@ struct _Merger {
 
       offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
       offset_e* offsets_buf = &offsets_raw[1];
-      src_trie->for_each_branch([&](int k, auto* src_off) {
-        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
-          offset_e child_offset;
-          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
-            offsets_buf[k] = child_offset;
-          }
-        };
-        do_branch(current_key);
-      });
-
-      // Count survivors and compute upper bitmap
       int surviving = 0;
       uint8_t upper = 0;
-      src_trie->for_each_branch([&](int k, auto*) {
-        if (offsets_buf[k] != offset_e()) {
+      src_trie->for_each_branch([&](int k, auto* src_off) {
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
+          offsets_buf[k] = child_offset;
           surviving++;
           if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
         }
@@ -602,7 +565,8 @@ struct _Merger {
     });
 
     // Process src branches: record shared for later merge, selectively copy
-    // src-only
+    // src-only. Count src-only survivors inline to avoid a second bitmap walk.
+    uint8_t upper = dst_trie->_upper;
     src_trie->for_each_branch([&](int k, auto* src_off) {
       if (dst_trie->isset(k)) {
         // Shared branch — merge recursively later (skip incomplete src)
@@ -613,22 +577,12 @@ struct _Merger {
         }
       } else {
         // Src-only — selectively deep copy
-        auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
-          offset_e child_offset;
-          if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
-            offsets_buf[k] = child_offset;
-          }
-        };
-        do_branch(current_key);
-      }
-    });
-
-    // Count src-only survivors and compute upper bitmap
-    uint8_t upper = dst_trie->_upper;
-    src_trie->for_each_branch([&](int k, auto*) {
-      if (!dst_trie->isset(k) && offsets_buf[k] != offset_e()) {
-        branch_count++;
-        if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+        offset_e child_offset;
+        if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
+          offsets_buf[k] = child_offset;
+          branch_count++;
+          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
+        }
       }
     });
 
@@ -795,27 +749,18 @@ struct _Merger {
     offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
     offset_e* offsets_buf = &offsets_raw[1];
 
-    src_trie->for_each_branch([&](int k, auto* src_off) {
-      auto do_branch = [this, src_off, offsets_buf, k](std::string& ck) {
-        offset_e child_offset;
-        if (selective_deep_copy_subtree(src_off, &child_offset, ck)) {
-          offsets_buf[k] = child_offset;
-        }
-      };
-      do_branch(current_key);
-    });
-
-    current_key.resize(saved);
-
-    // Count survivors and compute upper bitmap
     int surviving = 0;
     uint8_t upper = 0;
-    src_trie->for_each_branch([&](int k, auto*) {
-      if (offsets_buf[k] != offset_e()) {
+    src_trie->for_each_branch([&](int k, auto* src_off) {
+      offset_e child_offset;
+      if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
+        offsets_buf[k] = child_offset;
         surviving++;
         if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::ubit(k));
       }
     });
+
+    current_key.resize(saved);
 
     if (surviving == 0) {
       *parent_link = offset_e();

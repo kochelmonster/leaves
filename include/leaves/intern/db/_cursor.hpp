@@ -543,10 +543,11 @@ struct _ICursor : public _CursorBase<Traits_, Derived> {
       return true;
     }
 
-    size_t i = 0;
-    for (; i < this->stack.size; i++) {
-      Transition& item = this->stack.data[i];
-      if (item.keypos >= same) break;
+    // Scan backwards — keypos is monotonically non-decreasing, so the
+    // split point is usually near the end for high-locality workloads.
+    size_t i = this->stack.size;
+    while (i > 0 && this->stack.data[i - 1].keypos >= same) {
+      i--;
     }
 
     this->stack.clear(i);
@@ -790,6 +791,13 @@ struct _TransactionalCursor
   }
 
   void update() {
+    // Hot path: check if the committed transaction has changed before
+    // acquiring the SpinLock inside txn_ref(). read_txn_offset() is a
+    // plain aligned 64-bit load — no lock needed.
+    if (this->_txn &&
+        this->_db->read_txn_offset() == this->_db->resolve(this->_txn))
+      return;
+
     // txn_ref() atomically resolves and increments refs under SpinLock,
     // preventing a concurrent start_transaction() from freeing the txn.
     auto new_txn = this->_db->txn_ref();
