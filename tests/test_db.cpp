@@ -263,8 +263,8 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   db1->start_transaction(0);
   // These last_area checks are no longer applicable in the new architecture
   // force the alloc of a new area
-  const uint64_t ALLOC_SIZE = db1->_wtxn->mem_manager.allocation_end + 16 * K -
-                              db1->_wtxn->mem_manager.allocation_start;
+  const uint64_t ALLOC_SIZE = db1->_active_txn->mem_manager.allocation_end + 16 * K -
+                              db1->_active_txn->mem_manager.allocation_start;
   uint64_t size = 0;
   while (size < ALLOC_SIZE) {
     offsets.push_back(storage.resolve(db1->alloc_page(MAX_PAYLOAD)));
@@ -313,7 +313,7 @@ void dump(DB db, const char* prefix, int index) {
   cstr << "errors/" << prefix << std::setw(2) << std::setfill('0') << index
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  _Dumper(*db, db->_internal()->_wtxn->offset_root, false).dump(out);
+  _Dumper(*db, db->_internal()->_active_txn->offset_root, false).dump(out);
 }
 
 struct TestTraits {
@@ -478,7 +478,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     
     // Verify prepared state
     BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
-    BOOST_CHECK_EQUAL(db->_wtxn->txn_id, prepared_tid);
+    BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
     
     // Save offsets for verification
     prepared_offset = db->_header->prepared_txn;
@@ -680,8 +680,8 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     BOOST_REQUIRE(db->start_transaction(0));
     
     // Get initial area tail offsets from the write transaction
-    offset_t initial_single_tail = db->_wtxn->area_list_tail_single;
-    offset_t initial_multi_tail = db->_wtxn->area_list_tail_multi;
+    offset_t initial_single_tail = db->_active_txn->area_list_tail_single;
+    offset_t initial_multi_tail = db->_active_txn->area_list_tail_multi;
     
     std::vector<page_ptr> blocks;
     // Allocate enough blocks to force multiple area allocations
@@ -694,8 +694,8 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     }
     
     // Get the transaction state after allocations
-    offset_t final_single_tail = db->_wtxn->area_list_tail_single;
-    offset_t final_multi_tail = db->_wtxn->area_list_tail_multi;
+    offset_t final_single_tail = db->_active_txn->area_list_tail_single;
+    offset_t final_multi_tail = db->_active_txn->area_list_tail_multi;
     
     // Verify that single areas were allocated (tail should have moved)
     BOOST_CHECK_NE(final_single_tail, initial_single_tail);
@@ -752,7 +752,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
       
       // 4. Manually rollback by setting prepared_txn = read_txn
       db->_header->prepared_txn = db->_header->read_txn;
-      db->_wtxn.reset();
+      db->_active_txn.reset();
       db->_active_txn = nullptr;
       db->flush();
       
@@ -790,7 +790,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
       blocks.push_back(db->alloc_page(page_size));
     }
     
-    offset_t tail_before_prepare = db->_wtxn->area_list_tail_single;
+    offset_t tail_before_prepare = db->_active_txn->area_list_tail_single;
     
     // Prepare the transaction
     tid_t tid = db->prepare_commit(0);
@@ -844,7 +844,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     if (db->_header->prepared_txn != db->_header->read_txn) {
       // Manually rollback by setting prepared_txn = read_txn
       db->_header->prepared_txn = db->_header->read_txn;
-      db->_wtxn.reset();
+      db->_active_txn.reset();
       db->_active_txn = nullptr;
       db->flush();
       
@@ -925,7 +925,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback) {
   BOOST_CHECK(area1);
   
   // The write transaction should have a different multi-area tail now
-  BOOST_CHECK_NE(db->_wtxn->area_list_tail_multi, read_multi_tail);
+  BOOST_CHECK_NE(db->_active_txn->area_list_tail_multi, read_multi_tail);
   
   // Allocate another multi-area
   auto area2 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 3);
@@ -971,7 +971,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback_with_prior_committed) {
   BOOST_CHECK(area2);
   
   // Write txn's multi tail should have advanced beyond committed
-  BOOST_CHECK_NE(db->_wtxn->area_list_tail_multi, committed_multi_tail);
+  BOOST_CHECK_NE(db->_active_txn->area_list_tail_multi, committed_multi_tail);
   
   // Rollback should return only the new multi-areas, keeping committed ones
   BOOST_CHECK(db->rollback(0));

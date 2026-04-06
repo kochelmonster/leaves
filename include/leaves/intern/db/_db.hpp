@@ -153,8 +153,7 @@ struct _DB {
   using header_ptr = typename Traits::template Pointer<Header>;
 
   Storage& _storage;
-  Transaction* _active_txn = nullptr;
-  txn_ptr _wtxn;
+  txn_ptr _active_txn;
   header_ptr _header;
   uint16_t _index;
 
@@ -168,9 +167,7 @@ struct _DB {
         _header(storage.resolve(&header, READ)),
         _index(index) {
     if (_header->prepared_txn != _header->read_txn) {
-      // Recover a prepared transaction - set both _active_txn and _wtxn
-      _wtxn = resolve<Transaction>(&_header->prepared_txn);
-      _active_txn = &*_wtxn;
+      _active_txn = resolve<Transaction>(&_header->prepared_txn);
     }
   }
 
@@ -214,10 +211,10 @@ struct _DB {
 
     // Pre-allocate the next transaction page so start_transaction()
     // can skip the double-copy on the very first call.
-    _active_txn = &*txn;
+    _active_txn = txn;
     auto next = txn->clone(*this);
     _header->next_txn_page = resolve(next);
-    _active_txn = nullptr;
+    _active_txn.reset();
 
     make_dirty(_header);
     flush();
@@ -279,7 +276,7 @@ struct _DB {
 
   template <typename T>
   void mark_for_recycle(T& garbage_block) const {
-    assert(_active_txn);
+    assert(bool(_active_txn));
     garbage_block.txn_id = _active_txn->txn_id;
   }
 
@@ -313,13 +310,13 @@ struct _DB {
 
   page_ptr alloc_slot(uint16_t slot) {
     assert(transaction_active());
-    assert(_active_txn);
+    assert(bool(_active_txn));
     return _active_txn->alloc_slot(slot, *this);
   }
 
   void free(page_ptr page) {
     assert(transaction_active());
-    assert(_active_txn);
+    assert(bool(_active_txn));
     _active_txn->mem_manager.free(page, *this);
   }
 
@@ -328,7 +325,7 @@ struct _DB {
   }
 
   area_ptr alloc_single_area() {
-    assert(_active_txn);
+    assert(bool(_active_txn));
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_single_area();
@@ -345,7 +342,7 @@ struct _DB {
   }
 
   area_ptr alloc_multi_area(uint64_t size) {
-    assert(_active_txn);
+    assert(bool(_active_txn));
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_multi_area(size);
@@ -411,6 +408,7 @@ struct _DB {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
   }
 
+
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
   bool is_active() const {
@@ -441,9 +439,8 @@ struct _DB {
 
     // Pre-allocated page is always ready (from commit, rollback, or init)
     assert(_header->next_txn_page);
-    _wtxn = resolve<Transaction>(&_header->next_txn_page);
+    _active_txn = resolve<Transaction>(&_header->next_txn_page);
     _header->next_txn_page = 0;
-    _active_txn = &*_wtxn;
 
     _active_txn->txn_id = last_txn->txn_id + tid_t(1);
     _active_txn->next_txn = 0;
@@ -470,7 +467,7 @@ struct _DB {
     }
 
     last_txn->refs.fetch_sub(1);
-    return _wtxn;
+    return _active_txn;
   }
 
   bool rollback(uint64_t cursor_id, TransactionOrigin origin = TransactionOrigin::user) {
@@ -479,20 +476,20 @@ struct _DB {
     // Return areas allocated during write transaction
     txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
     return_areas_range(
-        read_txn->area_list_tail_single, _wtxn->area_list_tail_single,
-        read_txn->area_list_tail_multi, _wtxn->area_list_tail_multi);
+        read_txn->area_list_tail_single, _active_txn->area_list_tail_single,
+        read_txn->area_list_tail_multi, _active_txn->area_list_tail_multi);
 
     _header->prepared_txn = _header->read_txn;
 
-    // Reuse _wtxn's page for next pre-allocated transaction.
-    // _wtxn was allocated from read_txn's committed space, so it
+    // Reuse _active_txn's page for next pre-allocated transaction.
+    // _active_txn was allocated from read_txn's committed space, so it
     // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy(&*_wtxn, &*read_txn, sizeof(Transaction));
-    _wtxn->mem_manager.reinit_locks();
-    new (&_wtxn->refs) std::atomic<uint32_t>(0);
-    _header->next_txn_page = resolve(_wtxn);
+    memcpy(&*_active_txn, &*read_txn, sizeof(Transaction));
+    _active_txn->mem_manager.reinit_locks();
+    new (&_active_txn->refs) std::atomic<uint32_t>(0);
+    _header->next_txn_page = resolve(_active_txn);
 
-    make_dirty(_wtxn);
+    make_dirty(_active_txn);
     make_dirty(_header);
     flush();
     end_transaction();
@@ -505,24 +502,24 @@ struct _DB {
     if (_header->txn_cursor_id.load() != cursor_id) return tid_t(0);
 
     // already prepared
-    if (_header->prepared_txn != _header->read_txn) return _wtxn->txn_id;
+    if (_header->prepared_txn != _header->read_txn) return _active_txn->txn_id;
 
     // Pre-allocate next transaction page before committing.
-    // The allocation modifies _wtxn->mem_manager, which gets persisted
+    // The allocation modifies _active_txn->mem_manager, which gets persisted
     // as part of this commit — no storage leak.
-    auto next = _wtxn->clone(*this);
+    auto next = _active_txn->clone(*this);
     _header->next_txn_page = resolve(next);
 
-    _header->prepared_txn = resolve(_wtxn);
+    _header->prepared_txn = resolve(_active_txn);
 
     txn_ptr active = resolve<Transaction>(&_header->read_txn);
     active->next_txn = _header->prepared_txn;
     make_dirty(_header);
     make_dirty(active);
-    make_dirty(_wtxn);
+    make_dirty(_active_txn);
 
     if (sync) flush(true, true);  // Only flush if explicitly requested
-    return _wtxn->txn_id;
+    return _active_txn->txn_id;
   }
 
   bool commit(uint64_t cursor_id, bool sync = false,
@@ -540,8 +537,7 @@ struct _DB {
 
   void end_transaction() {
     _header->txn_cursor_id.store(0);
-    _wtxn.reset();
-    _active_txn = nullptr;
+    _active_txn.reset();
     _header->txn_lock.unlock();
   }
 
@@ -692,10 +688,10 @@ struct _DB {
       make_dirty(next);
     } else {
       txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-      _active_txn = &*read_txn;
+      _active_txn = read_txn;
       auto next = read_txn->clone(*this);
       _header->next_txn_page = resolve(next);
-      _active_txn = nullptr;
+      _active_txn.reset();
     }
 
     make_dirty(_header);
