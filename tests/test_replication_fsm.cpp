@@ -3669,7 +3669,7 @@ BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
   auto* impl = db._internal();
 
   bool covered_interrupt_branch = false;
-  for (int attempt = 0; attempt < 5 && !covered_interrupt_branch; ++attempt) {
+  for (int attempt = 0; attempt < 20 && !covered_interrupt_branch; ++attempt) {
     // Refill deletion trie with many purgeable entries so the interrupt can
     // land mid-walk.
     {
@@ -3688,7 +3688,7 @@ BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
 
     std::atomic<bool> stop{false};
     std::thread interrupter([&] {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
       while (!stop.load(std::memory_order_relaxed)) {
         impl->_purge_interrupt.store(true, std::memory_order_relaxed);
         std::this_thread::yield();
