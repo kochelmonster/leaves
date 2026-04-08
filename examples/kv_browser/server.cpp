@@ -1,7 +1,7 @@
 /**
  * KV Browser Demo — Native WebSocket server
  *
- * Hosts a ReplicatingMapStorage and handles multiple browser clients
+ * Hosts a MapStorage and handles multiple browser clients
  * via WebSocket. Each client connection runs on its own thread; a
  * global mutex serializes replication access to the DB.
  *
@@ -37,7 +37,8 @@
 #include <vector>
 
 #include "leaves/replication.hpp"
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 namespace beast = boost::beast;
 namespace ws    = beast::websocket;
@@ -159,7 +160,7 @@ struct ServerReplicatingMapTraits : public _MemoryMapTraits {
   using Aspect = ServerAspect;
 };
 
-using ServerStorage = ReplicatingMapStorage_<ServerReplicatingMapTraits>;
+using ServerStorage = MapStorage_<ServerReplicatingMapTraits>;
 
 static void remove_client(int id) {
   std::lock_guard<std::mutex> lock(g_clients_mutex);
@@ -218,7 +219,7 @@ static void handle_client(
       // Lock DB for exclusive replication access
       std::lock_guard<std::mutex> db_lock(g_db_mutex);
 
-      auto db = (*storage)["main"];
+      auto db = storage->open<_ReplicationDB>("main");
 
       // Phase 1: Server → Client (we send)
       {
@@ -328,7 +329,7 @@ int main(int argc, char* argv[]) {
   // Create storage
   auto storage = ServerStorage::create(path);
   // Ensure DB "main" exists
-  { auto db = (*storage)["main"]; }
+  { auto db = storage->open<_ReplicationDB>("main"); }
 
   std::cerr << "[server] storage opened: " << path << "\n";
 

@@ -6,7 +6,9 @@
 #include <cstring>
 
 #include "../include/leaves/intern/replication/_hash.hpp"
+#include "../include/leaves/intern/replication/_replication_db.hpp"
 #include "../include/leaves/mmap.hpp"
+#include "../include/leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -25,7 +27,7 @@ struct FreshFile {
 };
 
 typedef MapStorage Storage;
-typedef Storage::StorageImpl::DB InternalDB;
+typedef _ReplicationDB<Storage::StorageImpl> InternalDB;
 typedef InternalDB::CursorTraits CursorTraits;
 typedef InternalDB::Traits Traits;
 typedef _TransactionalCursor<CursorTraits> InternalCursor;
@@ -55,7 +57,7 @@ void build_hash_trie(DB* idb, typename DB::offset_e data_root,
 /**
  * Helper: insert key/value and commit.
  */
-void insert(MapStorage::DB& db, const std::string& key,
+void insert(TDB<Storage, _ReplicationDB>& db, const std::string& key,
             const std::string& value) {
   auto cursor = db.cursor();
   cursor.find(key);
@@ -176,8 +178,8 @@ int verify_all_lookups(DB* db,
 // ─────────────────────────────────────────────────────────────────────────────
 
 BOOST_FIXTURE_TEST_CASE(lookup_empty_hash_trie, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* idb = db._internal();
 
   offset_t hash_root{};
@@ -190,8 +192,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_empty_hash_trie, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_single_leaf, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "hello", "world");
 
   auto* idb = db._internal();
@@ -211,8 +213,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_single_leaf, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_two_divergent_keys, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "aaa", "v1");
   insert(db, "bbb", "v2");
 
@@ -229,8 +231,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_two_divergent_keys, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_shared_prefix, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "apple", "v1");
   insert(db, "apply", "v2");
 
@@ -247,8 +249,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_shared_prefix, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_many_keys, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   std::vector<std::string> keys = {"apple", "application", "apply",
                                     "banana", "bandana", "cat",
@@ -275,8 +277,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_many_keys, FreshFile) {
 BOOST_FIXTURE_TEST_CASE(lookup_exact_match_none_branch, FreshFile) {
   // Create a structure where one key is a prefix of another,
   // producing a NONE-branch leaf.
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "hello", "v1");
   insert(db, "hellox", "v2");
 
@@ -297,8 +299,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_deterministic_hash, FreshFile) {
 
   std::remove(TEST_FILE);
   {
-    auto storage = MapStorage::create(TEST_FILE);
-    auto db = (*storage)["test"];
+    auto storage = Storage::create(TEST_FILE);
+    auto db = storage->open<_ReplicationDB>("test");
     insert(db, "testkey", "testvalue");
 
     auto* idb = db._internal();
@@ -317,8 +319,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_deterministic_hash, FreshFile) {
 
   std::remove(TEST_FILE);
   {
-    auto storage = MapStorage::create(TEST_FILE);
-    auto db = (*storage)["test"];
+    auto storage = Storage::create(TEST_FILE);
+    auto db = storage->open<_ReplicationDB>("test");
     insert(db, "testkey", "testvalue");
 
     auto* idb = db._internal();
@@ -338,8 +340,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_deterministic_hash, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_different_values_different_hashes, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "key_a", "value_A");
   insert(db, "key_b", "value_B");
 
@@ -379,8 +381,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_different_values_different_hashes, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_after_update, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "alpha", "v1");
   insert(db, "beta", "v2");
 
@@ -402,8 +404,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_after_update, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_after_delete, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "keep", "v1");
   insert(db, "remove_me", "v2");
 
@@ -430,9 +432,9 @@ BOOST_FIXTURE_TEST_CASE(lookup_after_delete, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_set_root, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db1 = (*storage)["db1"];
-  auto db2 = (*storage)["db2"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db1 = storage->open<_ReplicationDB>("db1");
+  auto db2 = storage->open<_ReplicationDB>("db2");
 
   insert(db1, "only_in_db1", "v1");
   insert(db2, "only_in_db2", "v2");
@@ -461,8 +463,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_set_root, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_long_shared_prefix, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   insert(db, "prefix_shared_abc", "v1");
   insert(db, "prefix_shared_def", "v2");
@@ -479,8 +481,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_long_shared_prefix, FreshFile) {
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_repeated_calls, FreshFile) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "aaa", "v1");
   insert(db, "bbb", "v2");
   insert(db, "ccc", "v3");
@@ -503,8 +505,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_repeated_calls, FreshFile) {
 BOOST_FIXTURE_TEST_CASE(lookup_trie_root_hash, FreshFile) {
   // When the root trie has empty compressed prefix, find("", TRIE)
   // should return its hash.
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Two keys with different first bytes → root trie has empty compressed
   insert(db, "aaa", "v1");
@@ -536,8 +538,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_leaf_key_longer_than_one, FreshFile) {
   // splitting "application"), the hash leaf key is still only 1 byte
   // (the branch byte 'i'). The lookup path must use that 1 byte, not
   // the full data leaf key.
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   // "apple" and "application" share prefix "appl", branch 'e' vs 'i'.
   // Leaf for "application" has data key "ication" (7 bytes) in data trie
@@ -560,8 +562,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_leaf_key_longer_than_one, FreshFile) {
 BOOST_FIXTURE_TEST_CASE(lookup_trie_with_shared_prefix, FreshFile) {
   // Two keys sharing a prefix produce a trie node with multi-byte compressed.
   // find(accumulated_compressed, TRIE) must return that trie's hash.
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   // "apple", "apply" → trie compressed="appl" with branches 'e' and 'y'
   insert(db, "apple", "v1");
@@ -593,8 +595,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_nested_trie_hashes, FreshFile) {
   // Keys: "abc", "abd", "xyz" → root trie (compressed="") with branches
   //   'a' → sub-trie (compressed="ab") with branches 'c','d'
   //   'x' → leaf "xyz"
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "abc", "v1");
   insert(db, "abd", "v2");
   insert(db, "xyz", "v3");
@@ -642,8 +644,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_with_none_branch, FreshFile) {
   // When a trie has a NONE-branch leaf (key is prefix of another key),
   // find(path, TRIE) should still work — it finds the trie via the
   // parent frame after cursor follows the NONE branch into the leaf.
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "ab", "v1");     // NONE-branch leaf under trie "ab"
   insert(db, "abc", "v2");    // branch 'c' under trie "ab"
 
@@ -678,8 +680,8 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
   // boundary may return a non-matching hash (harmlessly rejected by the
   // caller's hash comparison) or nullptr.  Either way, the caller won't
   // incorrectly prune because the hash won't match.
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   insert(db, "apple", "v1");
   insert(db, "apply", "v2");
 

@@ -9,6 +9,7 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
+#include <blake3.h>
 
 #include "../core/_node.hpp"
 #include "../core/_util.hpp"

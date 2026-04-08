@@ -122,8 +122,8 @@ int main(int argc, char* argv[]) {
         
         // Load the YCSB database
         std::cout << "\nLoading YCSB database: " << db_path << std::endl;
-        MapStorage storage(db_path.c_str());
-        auto db = storage["usertable"];
+        auto storage = MapStorage::create(db_path.c_str());
+        auto db = storage->open("usertable");
         
         std::cout << "Database loaded successfully" << std::endl;
         

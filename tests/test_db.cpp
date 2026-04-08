@@ -43,7 +43,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
   // Create a temporary file path
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
   auto txn = db->txn();
   txn->refs.fetch_add(1);
 
@@ -90,7 +90,7 @@ BOOST_AUTO_TEST_CASE(test_extend) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
   const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
   const size_t MAX_PAYLOAD =
       DBMMap::Traits::PAGE_SIZES[DBMMap::Traits::PAGE_SIZES_COUNT - 1] -
@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE(test_rollback) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
 
   db->start_transaction(0, true);
   auto block1 = db->alloc_page(1123);
@@ -145,7 +145,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   std::vector<offset_t> block_offsets;
   size_t file_size;
-  const size_t MAX_REF_COUNT = DBMMap::DB::MemManager::PageContainer::COUNT;
+  const size_t MAX_REF_COUNT = _DB<DBMMap>::MemManager::PageContainer::COUNT;
 
   [[maybe_unused]] uint32_t* refs = nullptr;
   {
@@ -153,7 +153,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       DBMMap storage(dbFilePath.c_str());
     }
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
 
     BOOST_REQUIRE(db->txn()->txn_id == tid_t(1));
     BOOST_REQUIRE(db->txn()->refs.load() == 0);
@@ -169,7 +169,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       file_size = storage._memory->file_size;
     }
 
-    DBMMap::DB::txn_ptr txn = db->txn();
+    _DB<DBMMap>::txn_ptr txn = db->txn();
     BOOST_REQUIRE(txn->txn_id == tid_t(2));
     BOOST_REQUIRE(txn->refs.load() == 0);
     refs = (uint32_t*)&txn->refs;
@@ -179,7 +179,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   {
     // fill the garbage page (txn=2)
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     BOOST_REQUIRE(storage._memory->file_size == file_size);
 
     {
@@ -192,7 +192,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       }
     }
 
-    DBMMap::DB::txn_ptr txn = db->txn();
+    _DB<DBMMap>::txn_ptr txn = db->txn();
     BOOST_REQUIRE(txn->txn_id == tid_t(3));
   }
 
@@ -200,7 +200,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     // go one transaction ahead, to be able to harvest
     // the last freed blocks;
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     Transaction trans(db);
     file_size = storage._memory->file_size;
   }
@@ -208,7 +208,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
   {
     // free the first page page (txn=2)
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     BOOST_REQUIRE_EQUAL(db->_storage._memory->file_size, file_size);
 
     {
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       }
     }
 
-    DBMMap::DB::txn_ptr txn = db->txn();
+    _DB<DBMMap>::txn_ptr txn = db->txn();
     BOOST_REQUIRE(txn->txn_id == tid_t(5));
   }
 }
@@ -230,8 +230,8 @@ BOOST_AUTO_TEST_CASE(test_recycle_db) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
 
-  auto db1 = storage.make("test1");
-  auto db2 = storage.make("test2");
+  auto db1 = storage.open("test1");
+  auto db2 = storage.open("test2");
 
   {
     Transaction t(db1);
@@ -241,7 +241,7 @@ BOOST_AUTO_TEST_CASE(test_recycle_db) {
   size_t initial_file_size = storage._memory->file_size;
   storage.remove_db("test1");
 
-  auto db3 = storage.make("test3");
+  auto db3 = storage.open("test3");
   size_t final_file_size = storage._memory->file_size;
 
   // Check that no significant additional memory was allocated (indicating
@@ -255,7 +255,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
 
-  auto db1 = storage.make("test1");
+  auto db1 = storage.open("test1");
   const uint64_t MAX_PAYLOAD = 4 * K - sizeof(DBMMap::Traits::PageHeader);
 
   std::vector<offset_t> offsets;
@@ -275,7 +275,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   BOOST_CHECK(!offsets.empty());
 
   // create a new area for db2
-  auto db2 = storage.make("test2");
+  auto db2 = storage.open("test2");
 
   db1->rollback(0);
   // the new area in db1 is "orphaned" and must be recycled the next time
@@ -462,7 +462,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
   // Phase 1: Prepare a transaction but don't commit (simulate crash)
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Start transaction and allocate some data
     BOOST_REQUIRE(db->start_transaction(0));
@@ -492,7 +492,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
   // Phase 2: Reopen DB - should detect and recover prepared transaction
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Check that prepared transaction was detected
     BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
@@ -519,7 +519,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
   // Phase 3: Verify data persisted correctly
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Everything should be committed now
     BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
@@ -533,7 +533,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Normal two-phase commit: prepare then commit
     BOOST_REQUIRE(db->start_transaction(0));
@@ -553,7 +553,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
   // Verify state persisted correctly
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
   }
 }
@@ -564,7 +564,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Start transaction
     BOOST_REQUIRE(db->start_transaction(0));
@@ -602,7 +602,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_idempotency) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     BOOST_REQUIRE(db->start_transaction(0));
     auto block1 = db->alloc_page(512);
@@ -630,7 +630,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Allocate enough blocks to force new area allocation
     BOOST_REQUIRE(db->start_transaction(0));
@@ -674,7 +674,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Start a transaction and allocate many areas
     BOOST_REQUIRE(db->start_transaction(0));
@@ -718,7 +718,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
   // Reopen the database - this simulates crash recovery
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Check if database recovered a prepared transaction
     bool has_prepared_txn = (db->_header->prepared_txn != db->_header->read_txn);
@@ -775,7 +775,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Start transaction and allocate enough to create a chain of areas
     BOOST_REQUIRE(db->start_transaction(0));
@@ -803,7 +803,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
   // Reopen and sanitize
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // After recovery, read the read transaction's area tail
     auto read_txn_before = db->txn();  // Use txn() method to get proper transaction pointer
@@ -867,7 +867,7 @@ BOOST_AUTO_TEST_CASE(test_defrag_empty_db) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
 
   // defrag() on a fresh DB with no big memory should return early
   db->defrag();
@@ -883,7 +883,7 @@ BOOST_AUTO_TEST_CASE(test_nonblocking_transaction) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
 
   // Start a blocking transaction (holds the lock)
   auto txn1 = db->start_transaction(1);
@@ -910,7 +910,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback) {
   std::filesystem::path dbFilePath = prep.tempDir / "test_multi_rollback.lvs";
   
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
   
   // Start transaction and allocate multi-areas directly
   BOOST_REQUIRE(db->start_transaction(0));
@@ -951,7 +951,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback_with_prior_committed) {
   std::filesystem::path dbFilePath = prep.tempDir / "test_multi_rollback2.lvs";
   
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
   
   // First transaction: allocate and commit a multi-area
   BOOST_REQUIRE(db->start_transaction(0));
@@ -991,7 +991,7 @@ BOOST_AUTO_TEST_CASE(test_return_areas_multi) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Allocate and commit multi-areas
     BOOST_REQUIRE(db->start_transaction(0));
@@ -1014,7 +1014,7 @@ BOOST_AUTO_TEST_CASE(test_garbage_statistics_multi_container) {
   std::filesystem::path dbFilePath = prep.tempDir / "test_gc_stats.lvs";
   
   DBMMap storage(dbFilePath.c_str());
-  auto db = storage.make("test");
+  auto db = storage.open("test");
   
   // We need to free many pages to overflow one PageContainer.
   // PageContainer::COUNT is ~254 for 4K containers with 16-byte items.
@@ -1063,7 +1063,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
   
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Do one commit so the DB is in a consistent state with data
     BOOST_REQUIRE(db->start_transaction(0));
@@ -1073,7 +1073,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     // Simulate the crash window: clear next_txn_page as start_transaction does
     db->_header->next_txn_page = 0;
     
-    // Write a fake stale PID so sanitize_processes() triggers sanitize_dbs()
+    // Write a fake stale PID so sanitize_processes() increments sanitize_generation
     // Use PID 99999999 which should not be running
     storage._memory->processes[0] = 99999999;
     
@@ -1083,11 +1083,11 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     // (destructor removes current PID, not the fake one)
   }
   
-  // Reopen: sanitize() detects stale PID → calls sanitize_dbs() → db.sanitize()
-  // db.sanitize() sees next_txn_page == 0, exercises the else branch
+  // Reopen: sanitize() detects stale PID → increments sanitize_generation
+  // open() sees generation mismatch → db.sanitize() sees next_txn_page == 0
   {
     DBMMap storage(dbFilePath.c_str());
-    auto db = storage.make("test");
+    auto db = storage.open("test");
     
     // Verify next_txn_page was recreated
     BOOST_CHECK_NE(db->_header->next_txn_page, offset_t(0));

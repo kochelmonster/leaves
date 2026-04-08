@@ -4,6 +4,7 @@
 #include <blake3.h>
 
 #include "db.hpp"
+#include "intern/replication/_replication_db.hpp"
 #include "intern/replication/_replication_fsm.hpp"
 
 namespace leaves {
@@ -20,20 +21,21 @@ enum class ReplicationState {
 // ============================================================================
 //
 // Usage:
-//   auto storage = ReplicatingMapStorage::create("path.lvs");
-//   auto db = (*storage)["mydb"];
+//   auto storage = MapStorage::create("path.lvs");
+//   auto db = storage->open<_ReplicationDB>("mydb");
 //   // ... insert data, commit ...
 //
-//   ReplicationSender<ReplicatingMapStorage> sender(db);
+//   ReplicationSender<MapStorage> sender(db);
 //   sender.begin(&transport, &events);
 //   // In your event loop: feed responses via on_message_received()
 //
-template <typename Storage>
+template <typename Storage,
+          template <typename> class DBClass = _ReplicationDB>
 class ReplicationSender {
  public:
-  using DBImpl = typename Storage::StorageImpl::DB;
+  using DBImpl = DBClass<typename Storage::StorageImpl>;
   using SenderFSM = ReplicationSenderFSM<DBImpl>;
-  using DB = TDB<Storage>;
+  using DB = TDB<Storage, DBClass>;
 
   explicit ReplicationSender(DB& db) : _fsm(db._internal()) {}
 
@@ -79,19 +81,20 @@ class ReplicationSender {
 // ============================================================================
 //
 // Usage:
-//   auto storage = ReplicatingMapStorage::create("path.lvs");
-//   auto db = (*storage)["mydb"];
+//   auto storage = MapStorage::create("path.lvs");
+//   auto db = storage->open<_ReplicationDB>("mydb");
 //
-//   ReplicationReceiver<ReplicatingMapStorage> receiver(db);
+//   ReplicationReceiver<MapStorage> receiver(db);
 //   receiver.begin(&transport, &events);
 //   // In your event loop: write into receive_buffer(), call on_data_received()
 //
-template <typename Storage>
+template <typename Storage,
+          template <typename> class DBClass = _ReplicationDB>
 class ReplicationReceiver {
  public:
-  using DBImpl = typename Storage::StorageImpl::DB;
+  using DBImpl = DBClass<typename Storage::StorageImpl>;
   using ReceiverFSM = ReplicationReceiverFSM<DBImpl>;
-  using DB = TDB<Storage>;
+  using DB = TDB<Storage, DBClass>;
 
   explicit ReplicationReceiver(DB& db) : _fsm(db._internal()) {}
 

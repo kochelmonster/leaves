@@ -2,7 +2,7 @@
  * KV Browser Demo — WASM client with Embind
  *
  * Exposes a KVDemo class to JavaScript that wraps:
- *   - ReplicatingBrowserStorage (IndexedDB) for local key-value storage
+ *   - BrowserStorage (IndexedDB) for local key-value storage
  *   - Bidirectional WebSocket replication with a native server
  *
  * The sync protocol per cycle:
@@ -28,7 +28,8 @@
 #include <vector>
 
 #include "leaves/replication.hpp"
-#include "leaves/replicating_browserstore.hpp"
+#include "leaves/browserstore.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 using namespace emscripten;
@@ -112,7 +113,7 @@ static constexpr size_t MAX_MSG = 4 * 1024 * 1024;
 
 // Run receiver FSM loop: drain binary WS queue until FSM leaves ACTIVE
 static bool run_receiver_loop(
-    ReplicationReceiver<ReplicatingBrowserStorage>& receiver,
+    ReplicationReceiver<BrowserStorage>& receiver,
     std::vector<uint8_t>& msg_buf) {
   while (receiver.state() == ReplicationState::ACTIVE) {
     while (ws_bin_queue_size() > 0) {
@@ -144,7 +145,7 @@ static bool run_receiver_loop(
 // Run sender FSM loop: the sender pushes messages via transport.send(),
 // and we read binary responses from the WS queue
 static bool run_sender_loop(
-    ReplicationSender<ReplicatingBrowserStorage>& sender,
+    ReplicationSender<BrowserStorage>& sender,
     std::vector<uint8_t>& msg_buf) {
   while (sender.state() == ReplicationState::ACTIVE) {
     while (ws_bin_queue_size() > 0) {
@@ -179,16 +180,16 @@ static bool wait_for_text(const char* expected) {
 // ── KVDemo class ────────────────────────────────────────────────
 
 struct KVDemo {
-  ReplicatingBrowserStorage::storage_ptr _storage;
-  TDB<ReplicatingBrowserStorage> _db;
+  BrowserStorage::storage_ptr _storage;
+  TDB<BrowserStorage, _ReplicationDB> _db;
   WasmWsTransport _transport;
   std::vector<uint8_t> _msg_buf;
   bool _connected = false;
   bool _has_notification = false;
 
   KVDemo(const std::string& name)
-      : _storage(ReplicatingBrowserStorage::create(name.c_str(), 10*1024*1024)),
-        _db((*_storage)["main"]),
+      : _storage(BrowserStorage::create(name.c_str(), 10*1024*1024)),
+        _db(_storage->open<_ReplicationDB>("main")),
         _msg_buf(MAX_MSG) {}
 
   // Connect to WebSocket server
@@ -279,7 +280,7 @@ struct KVDemo {
     } events;
 
     {
-      ReplicationReceiver<ReplicatingBrowserStorage> receiver(_db);
+      ReplicationReceiver<BrowserStorage> receiver(_db);
       receiver.begin(&_transport, &events);
       if (!run_receiver_loop(receiver, _msg_buf)) {
         std::fprintf(stderr, "[kv_demo] receiver failed\n");
@@ -297,7 +298,7 @@ struct KVDemo {
 
     // 4. Phase 2: Send to server (we send, server receives)
     {
-      ReplicationSender<ReplicatingBrowserStorage> sender(_db);
+      ReplicationSender<BrowserStorage> sender(_db);
       sender.begin(&_transport, &events);
       if (!run_sender_loop(sender, _msg_buf)) {
         std::fprintf(stderr, "[kv_demo] sender failed\n");

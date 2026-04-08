@@ -47,8 +47,8 @@ int main() {
     // Create or open a database file
     auto storage = leaves::MapStorage::create("mydata.lvs");
 
-    // Access a named database
-    auto db = (*storage)["mydb"];
+    // Open a named database
+    auto db = storage->open("mydb");
 
     // Get a cursor for reading and writing
     auto cursor = db.cursor();
@@ -124,8 +124,8 @@ A single storage file can contain many independent databases:
 ```cpp
 auto storage = leaves::MapStorage::create("data.lvs");
 
-auto users = (*storage)["users"];
-auto logs  = (*storage)["logs"];
+auto users = storage->open("users");
+auto logs  = storage->open("logs");
 
 // List all databases
 std::vector<std::string> names;
@@ -185,18 +185,18 @@ cursor.rollback();
 ### Replication
 
 ```cpp
-#include <leaves/replicating_mmap.hpp>
+#include <leaves/mmap.hpp>
 #include <leaves/replication.hpp>
 
-auto storage = leaves::ReplicatingMapStorage::create("data.lvs");
-auto db = (*storage)["mydb"];
+auto storage = leaves::MapStorage::create("data.lvs");
+auto db = storage->open<leaves::_ReplicationDB>("mydb");
 
 // Sender side
-leaves::ReplicationSender<leaves::ReplicatingMapStorage> sender(db);
+leaves::ReplicationSender<leaves::MapStorage> sender(db);
 sender.begin(&transport, &events);
 
 // Receiver side
-leaves::ReplicationReceiver<leaves::ReplicatingMapStorage> receiver(db);
+leaves::ReplicationReceiver<leaves::MapStorage> receiver(db);
 receiver.begin(&transport, &events);
 ```
 
@@ -206,9 +206,7 @@ receiver.begin(&transport, &events);
 |---|---|---|
 | `MapStorage` | `mmap.hpp` | Default. Memory-mapped files. Fastest random access. |
 | `FileStorage` | `fstore.hpp` | File-based with LRU cache. Better for large-data or memory-constrained environments. |
-| `ReplicatingMapStorage` | `replicating_mmap.hpp` | MapStorage with built-in replication support. |
-| `ReplicatingFileStorage` | `replicating_fstore.hpp` | FileStorage with replication support. |
-| `ReplicatingBrowserStore` | `replicating_browserstore.hpp` | IndexedDB backend for WebAssembly (Emscripten). |
+| `BrowserStorage` | `browserstore.hpp` | IndexedDB backend for WebAssembly (Emscripten). |
 
 ## Tests
 

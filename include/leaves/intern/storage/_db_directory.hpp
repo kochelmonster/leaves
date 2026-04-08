@@ -12,6 +12,66 @@ struct _DBDirectoryEntry {
   offset_t offset;
 };
 
+// Type-erased DB slot for caching opened DB instances.
+// Stores function pointers for type-specific operations without
+// requiring virtual methods or knowledge of the concrete DB type.
+struct _DBSlot {
+  void* db = nullptr;
+  uint16_t type_id = 0;
+  void (*deleter)(void*) = nullptr;
+  void (*return_areas_fn)(void*) = nullptr;
+  bool (*is_active_fn)(const void*) = nullptr;
+
+  _DBSlot() = default;
+
+  template <typename DB>
+  static _DBSlot make(DB* ptr) {
+    _DBSlot slot;
+    slot.db = ptr;
+    slot.type_id = DB::DB_TYPE_ID;
+    slot.deleter = [](void* p) { delete static_cast<DB*>(p); };
+    slot.return_areas_fn = [](void* p) { static_cast<DB*>(p)->return_areas(); };
+    slot.is_active_fn = [](const void* p) {
+      return static_cast<const DB*>(p)->is_active();
+    };
+    return slot;
+  }
+
+  ~_DBSlot() { reset(); }
+
+  void reset() {
+    if (deleter && db) {
+      deleter(db);
+      db = nullptr;
+    }
+  }
+
+  _DBSlot(_DBSlot&& o) noexcept
+      : db(o.db),
+        type_id(o.type_id),
+        deleter(o.deleter),
+        return_areas_fn(o.return_areas_fn),
+        is_active_fn(o.is_active_fn) {
+    o.db = nullptr;
+  }
+
+  _DBSlot& operator=(_DBSlot&& o) noexcept {
+    if (this != &o) {
+      reset();
+      db = o.db;
+      type_id = o.type_id;
+      deleter = o.deleter;
+      return_areas_fn = o.return_areas_fn;
+      is_active_fn = o.is_active_fn;
+      o.db = nullptr;
+    }
+    return *this;
+  }
+
+  _DBSlot(const _DBSlot&) = delete;
+  _DBSlot& operator=(const _DBSlot&) = delete;
+};
+
 // Overflow directory page for linked DB entries.
 // The first page is embedded in FileHeader; overflow pages are full 4K.
 struct _DBDirectoryPage {

@@ -8,17 +8,25 @@
 
 namespace leaves {
 
-template <typename Storage>
+template <typename Storage,
+          template <typename> class DBClass = _DB>
 class TDB {
  public:
   typedef typename Storage::storage_ptr storage_ptr;
   typedef typename Storage::StorageImpl StorageImpl;
-  typedef typename StorageImpl::DB DBImpl;
+  typedef DBClass<StorageImpl> DBImpl;
   typedef DBImpl db_type;
-  typedef TCursor<Storage> Cursor;
+  typedef TCursor<Storage, DBClass> Cursor;
 
   TDB(storage_ptr storage, const char* name)
-      : _storage(storage), _db(storage->_storage->make(name)) {}
+      : _storage(storage),
+        _db(storage->_storage->template open<DBClass>(name)) {}
+
+  template <typename... Args>
+  TDB(storage_ptr storage, const char* name, Args&&... args)
+      : _storage(storage),
+        _db(storage->_storage->template open<DBClass>(
+            name, std::forward<Args>(args)...)) {}
 
   Cursor cursor() { return Cursor(_storage, _db); }
 

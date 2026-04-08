@@ -70,7 +70,7 @@ struct TestStorage {
 
 BOOST_AUTO_TEST_CASE(test_big_allocs) {
   TestStorage storage;
-  auto db = storage.db->make("test");
+  auto db = storage.db->open("test");
   
   // Create a cursor with transaction support
   auto cursor = db->create_cursor();
@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE(test_big_allocs) {
 
 BOOST_AUTO_TEST_CASE(test_big_area_allocate) {
   TestStorage storage;
-  auto db = storage.db->make("test");
+  auto db = storage.db->open("test");
   
   // Create a cursor with transaction support
   auto cursor = db->create_cursor();
@@ -174,7 +174,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_allocate) {
 
 BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
   TestStorage storage;
-  auto db = storage.db->make("test");
+  auto db = storage.db->open("test");
   
   // Create a cursor with transaction support
   auto cursor = db->create_cursor();
@@ -224,7 +224,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_revolve) {
 
 BOOST_AUTO_TEST_CASE(test_big_area_defrag) {
   TestStorage storage;
-  auto db = storage.db->make("test");
+  auto db = storage.db->open("test");
 
   // Create fragmentation by allocating and freeing within the same transaction.
   // Use sizes large enough to force BigMemory usage (otherwise db->defrag() early-returns).
@@ -303,7 +303,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag) {
 
 BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
   TestStorage storage;
-  auto db = storage.db->make("test");
+  auto db = storage.db->open("test");
 
   // Set up two adjacent free chunks in BigMemory explicitly (with headers), so
   // defrag() must walk successor headers and merge.

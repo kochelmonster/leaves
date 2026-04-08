@@ -8,7 +8,8 @@
 #include "../include/leaves/intern/replication/_hash.hpp"
 #include "../include/leaves/intern/util/_threadpool.hpp"
 #include "../include/leaves/mmap.hpp"
-#include "../include/leaves/replicating_mmap.hpp"
+#include "../include/leaves/mmap.hpp"
+#include "../include/leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -26,7 +27,7 @@ BOOST_GLOBAL_FIXTURE(HashUpdaterPreparation);
 // In production, the hash trie root would be in the DB header.
 
 typedef MapStorage Storage;
-typedef Storage::StorageImpl::DB InternalDB;
+typedef _ReplicationDB<Storage::StorageImpl> InternalDB;
 typedef InternalDB::CursorTraits CursorTraits;
 typedef InternalDB::Traits Traits;
 typedef _TransactionalCursor<CursorTraits> InternalCursor;
@@ -193,8 +194,8 @@ bool verify_structure(DataDB* data_db, HashDB* hash_db,
 }
 
 BOOST_AUTO_TEST_CASE(empty_data_trie) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Empty data trie
@@ -209,8 +210,8 @@ BOOST_AUTO_TEST_CASE(empty_data_trie) {
 }
 
 BOOST_AUTO_TEST_CASE(single_leaf) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert a single key
   auto cursor = db.cursor();
@@ -242,8 +243,8 @@ BOOST_AUTO_TEST_CASE(single_leaf) {
 }
 
 BOOST_AUTO_TEST_CASE(multiple_keys_structure_match) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert multiple keys to create a trie structure
   std::vector<std::string> keys = {"apple", "application", "apply", "banana",
@@ -273,8 +274,8 @@ BOOST_AUTO_TEST_CASE(multiple_keys_structure_match) {
 }
 
 BOOST_AUTO_TEST_CASE(incremental_update) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Insert initial keys
@@ -346,16 +347,16 @@ BOOST_AUTO_TEST_CASE(deterministic_hashes) {
   uint8_t hash1[HASH_SIZE];
   
   {
-    auto storage1 = MapStorage::create(TEST_FILE);
+    auto storage1 = Storage::create(TEST_FILE);
     {
-      auto db = (*storage1)["test"];
+      auto db = storage1->open<_ReplicationDB>("test");
       auto cursor = db.cursor();
       cursor.find("testkey");
       cursor.value("testvalue");
       cursor.commit();
     }
 
-    auto db1 = (*storage1)["test"];
+    auto db1 = storage1->open<_ReplicationDB>("test");
     auto* internal_db1 = db1._internal();
     auto txn1 = internal_db1->txn();
 
@@ -373,16 +374,16 @@ BOOST_AUTO_TEST_CASE(deterministic_hashes) {
   uint8_t hash2[HASH_SIZE];
   
   {
-    auto storage2 = MapStorage::create(TEST_FILE);
+    auto storage2 = Storage::create(TEST_FILE);
     {
-      auto db = (*storage2)["test"];
+      auto db = storage2->open<_ReplicationDB>("test");
       auto cursor = db.cursor();
       cursor.find("testkey");
       cursor.value("testvalue");
       cursor.commit();
     }
 
-    auto db2 = (*storage2)["test"];
+    auto db2 = storage2->open<_ReplicationDB>("test");
     auto* internal_db2 = db2._internal();
     auto txn2 = internal_db2->txn();
 
@@ -399,8 +400,8 @@ BOOST_AUTO_TEST_CASE(deterministic_hashes) {
 }
 
 BOOST_AUTO_TEST_CASE(prune_deleted_branches) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Insert keys to create structure
@@ -464,8 +465,8 @@ BOOST_AUTO_TEST_CASE(prune_deleted_branches) {
  *    This triggers common < effective_hash_len
  */
 BOOST_AUTO_TEST_CASE(prefix_alignment_hash_longer) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Step 1: Create initial structure with long prefixes
@@ -525,8 +526,8 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_hash_longer) {
  *    This triggers common < effective_data_len
  */
 BOOST_AUTO_TEST_CASE(prefix_alignment_data_longer) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Step 1: Create initial structure
@@ -601,8 +602,8 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_data_longer) {
  * branches multiple levels deep with prefix skipping.
  */
 BOOST_AUTO_TEST_CASE(deep_prefix_mismatch) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Create a deep structure with long prefixes
@@ -660,8 +661,8 @@ BOOST_AUTO_TEST_CASE(deep_prefix_mismatch) {
  * replace the hash subtree.
  */
 BOOST_AUTO_TEST_CASE(divergent_prefixes) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Create initial structure
@@ -744,8 +745,8 @@ BOOST_AUTO_TEST_CASE(divergent_prefixes) {
  *    - Recurse with hash_prefix_skip = 4
  */
 BOOST_AUTO_TEST_CASE(hash_prefix_skip_root_level) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Step 1: Create structure with long common prefix
@@ -811,8 +812,8 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_root_level) {
  *    - Recurse with data_prefix_skip = 4
  */
 BOOST_AUTO_TEST_CASE(data_prefix_skip_root_level) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Step 1: Create structure with short common prefix
@@ -902,8 +903,8 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_root_level) {
  */
 BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   std::remove(TEST_FILE);  // Start with clean slate
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   using HashTraits = HashTrieTraits<Traits>;
@@ -1074,8 +1075,8 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
  * data_prefix_skip should still work correctly.
  */
 BOOST_AUTO_TEST_CASE(data_prefix_skip_structural_verification) {
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Step 1: Create initial structure
@@ -1193,8 +1194,8 @@ BOOST_AUTO_TEST_CASE(parallel_matches_inline_wide_trie) {
   // Create a wide trie (many branches at root) and verify parallel hashes
   // match inline hashes
   std::remove(TEST_FILE);
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Insert keys that create many branches at the root level
@@ -1253,8 +1254,8 @@ BOOST_AUTO_TEST_CASE(parallel_matches_inline_wide_trie) {
 BOOST_AUTO_TEST_CASE(parallel_matches_inline_deep_trie) {
   // Create a deep trie with moderate branching at multiple levels
   std::remove(TEST_FILE);
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   std::vector<std::string> keys = {
@@ -1301,8 +1302,8 @@ BOOST_AUTO_TEST_CASE(parallel_matches_inline_deep_trie) {
 BOOST_AUTO_TEST_CASE(parallel_incremental_update) {
   // Test parallel incremental update after modifications
   std::remove(TEST_FILE);
-  auto storage = MapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* internal_db = db._internal();
 
   // Create initial wide trie
@@ -1372,8 +1373,8 @@ BOOST_AUTO_TEST_CASE(parallel_long_key_prefix) {
   // _key_path copying inside spawned tasks.
   // Uses ReplicatingMapStorage with separate HashDB (no transaction needed).
   std::remove(TEST_FILE);
-  auto storage = ReplicatingMapStorage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
   auto* rdb = db._internal();
 
   // 1000-char common prefix
@@ -1392,7 +1393,7 @@ BOOST_AUTO_TEST_CASE(parallel_long_key_prefix) {
   auto txn = rdb->txn();
   auto hdb = rdb->hash_db();
   using RDB = std::remove_pointer_t<decltype(rdb)>;
-  using HDB = RDB::HashDB;
+  using HDB = typename RDB::HashDB;
 
   // Inline hash update
   offset_t hash_root_inline{};

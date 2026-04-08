@@ -15,7 +15,8 @@
 #include <blake3.h>
 
 #include "leaves/mmap.hpp"
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
 #include "leaves/intern/replication/_replication_fsm.hpp"
 
@@ -257,29 +258,23 @@ using BigMetaMMap = _MemoryMapFile<_BigMetaTraits>;
 // Replication storage with TestAspect
 template <typename Traits_>
 struct _AspectReplicationMMapFile
-    : public _MemoryMapFile<Traits_, _ReplicationDB,
-                            _AspectReplicationMMapFile<Traits_>>,
-      public _ThreadPoolMixin<_AspectReplicationMMapFile<Traits_>> {
-  using Base = _MemoryMapFile<Traits_, _ReplicationDB,
+    : public _MemoryMapFile<Traits_,
+                            _AspectReplicationMMapFile<Traits_>> {
+  using Base = _MemoryMapFile<Traits_,
                               _AspectReplicationMMapFile<Traits_>>;
-  using PoolMixin = _ThreadPoolMixin<_AspectReplicationMMapFile<Traits_>>;
-  using DB = typename Base::DB;
+  using DB = _ReplicationDB<_AspectReplicationMMapFile>;
 
   _AspectReplicationMMapFile(const char* path, size_t map_size = 2 * G)
-      : Base(path, map_size), PoolMixin(1) {}
+      : Base(path, map_size, 1) {}
 
   ~_AspectReplicationMMapFile() {
-    this->_dbs.clear();
-    this->stop_pool();
+    // _dbs.clear() and stop_pool() handled by ~_MemoryMapFile
   }
 
-  DB* make(const char* name) {
-    DB* db = Base::make(name);
-    db->start_purge();
-    return db;
+  template <template <typename> class DBClass = _ReplicationDB, typename... Args>
+  DBClass<_AspectReplicationMMapFile>* open(const char* name, Args&&... args) {
+    return Base::template open<DBClass>(name, std::forward<Args>(args)...);
   }
-
-  DB* operator[](const char* name) { return make(name); }
 };
 
 using AspectReplicationMMap = _AspectReplicationMMapFile<_ReplicationAspectTraits>;
@@ -378,7 +373,7 @@ BOOST_AUTO_TEST_CASE(test_default_aspect_passthrough) {
   auto path = tmp.path("default.lvs");
 
   auto storage = MapStorage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   cursor.find(Slice("key1"));
@@ -410,7 +405,7 @@ BOOST_AUTO_TEST_CASE(test_on_write_transforms_value) {
   auto path = tmp.path("write.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("mykey"));
@@ -434,7 +429,7 @@ BOOST_AUTO_TEST_CASE(test_on_commit_runs_after_successful_commit) {
   auto path = tmp.path("commit.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("commit_key"));
@@ -450,7 +445,7 @@ BOOST_AUTO_TEST_CASE(test_on_write_actually_stored_with_tag) {
   auto path = tmp.path("rawtag.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("key"));
@@ -470,7 +465,7 @@ BOOST_AUTO_TEST_CASE(test_on_read_strips_tag) {
   auto path = tmp.path("read.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Write several keys
@@ -498,7 +493,7 @@ BOOST_AUTO_TEST_CASE(test_may_delete_allows_normal_keys) {
   auto path = tmp.path("delete.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("normal_key"));
@@ -519,7 +514,7 @@ BOOST_AUTO_TEST_CASE(test_may_delete_rejects_protected_keys) {
   auto path = tmp.path("protected.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("protected_secret"));
@@ -544,7 +539,7 @@ BOOST_AUTO_TEST_CASE(test_init_cursor_context_resets_counters) {
   auto path = tmp.path("ctx.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
 
   // First cursor
   auto c1 = db->create_cursor();
@@ -572,7 +567,7 @@ BOOST_AUTO_TEST_CASE(test_multiple_writes_increment_counter) {
   auto path = tmp.path("multi.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   for (int i = 0; i < 5; i++) {
@@ -590,7 +585,7 @@ BOOST_AUTO_TEST_CASE(test_aspect_accessor_on_db) {
   auto path = tmp.path("accessor.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
 
   // Verify aspect() returns a TestAspect reference
   TestAspect& a = db->aspect();
@@ -602,7 +597,7 @@ BOOST_AUTO_TEST_CASE(test_overwrite_preserves_aspect_transform) {
   auto path = tmp.path("overwrite.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Write initial value
@@ -631,7 +626,7 @@ BOOST_AUTO_TEST_CASE(test_iteration_with_aspect) {
   auto path = tmp.path("iter.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Insert keys in order
@@ -669,7 +664,7 @@ BOOST_AUTO_TEST_CASE(test_big_value_has_inline_meta) {
   auto path = tmp.path("bigmeta.lvs");
 
   BigMetaMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Write a big value (> MAX_PAGE_SIZE so it uses BigValue path)
@@ -696,7 +691,7 @@ BOOST_AUTO_TEST_CASE(test_small_value_no_big_meta) {
   auto path = tmp.path("smallnometa.lvs");
 
   BigMetaMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Write a small inline value — should NOT have big_meta
@@ -731,8 +726,8 @@ BOOST_AUTO_TEST_CASE(test_may_merge_overwrite_rejects_locked) {
   AspectReplicationMMap sender_storage(sender_path.c_str());
   AspectReplicationMMap receiver_storage(receiver_path.c_str());
 
-  auto* sender_db = sender_storage.make("test");
-  auto* receiver_db = receiver_storage.make("test");
+  auto* sender_db = sender_storage.open("test");
+  auto* receiver_db = receiver_storage.open("test");
 
   // Insert a key in both sender and receiver with different values.
   // "locked_key" should have its overwrite blocked by the aspect.
@@ -807,8 +802,8 @@ BOOST_AUTO_TEST_CASE(test_may_merge_add_rejects_blocked) {
   AspectReplicationMMap sender_storage(sender_path.c_str());
   AspectReplicationMMap receiver_storage(receiver_path.c_str());
 
-  auto* sender_db = sender_storage.make("test");
-  auto* receiver_db = receiver_storage.make("test");
+  auto* sender_db = sender_storage.open("test");
+  auto* receiver_db = receiver_storage.open("test");
 
   // Sender has keys that receiver does not
   {
@@ -865,8 +860,8 @@ BOOST_AUTO_TEST_CASE(test_may_merge_delete_rejects_pinned) {
   AspectReplicationMMap sender_storage(sender_path.c_str());
   AspectReplicationMMap receiver_storage(receiver_path.c_str());
 
-  auto* sender_db = sender_storage.make("test");
-  auto* receiver_db = receiver_storage.make("test");
+  auto* sender_db = sender_storage.open("test");
+  auto* receiver_db = receiver_storage.open("test");
 
   // Both have the same keys initially
   for (auto* db : {sender_db, receiver_db}) {
@@ -928,7 +923,7 @@ BOOST_AUTO_TEST_CASE(test_replication_cursor_may_delete_rejects_protected) {
   auto path = tmp.path("repl.lvs");
 
   AspectReplicationMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Write a protected key
@@ -953,7 +948,7 @@ BOOST_AUTO_TEST_CASE(test_replication_cursor_allows_normal_delete) {
   auto path = tmp.path("replok.lvs");
 
   AspectReplicationMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("normal_item"));
@@ -982,7 +977,7 @@ BOOST_AUTO_TEST_CASE(test_start_transaction_hook_fires) {
   auto path = tmp.path("starttxn.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   BOOST_CHECK_EQUAL(cursor->_aspect_context.start_txn_count, 0);
@@ -1000,7 +995,7 @@ BOOST_AUTO_TEST_CASE(test_rollback_hook_fires) {
   auto path = tmp.path("rollback.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("key"));
@@ -1015,7 +1010,7 @@ BOOST_AUTO_TEST_CASE(test_before_start_transaction_rejects) {
   auto path = tmp.path("reject_start.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Reject transaction start
@@ -1030,7 +1025,7 @@ BOOST_AUTO_TEST_CASE(test_before_commit_rejects) {
   auto path = tmp.path("reject_commit.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("key"));
@@ -1054,7 +1049,7 @@ BOOST_AUTO_TEST_CASE(test_before_rollback_rejects) {
   auto path = tmp.path("reject_rollback.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("key"));
@@ -1086,7 +1081,7 @@ BOOST_AUTO_TEST_CASE(test_find_hook_fires) {
   auto path = tmp.path("find_hook.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("key"));
@@ -1106,7 +1101,7 @@ BOOST_AUTO_TEST_CASE(test_next_prev_hooks_fire) {
   auto path = tmp.path("nav_hooks.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   // Insert multiple keys
@@ -1135,7 +1130,7 @@ BOOST_AUTO_TEST_CASE(test_before_find_rejects) {
   auto path = tmp.path("reject_find.lvs");
 
   AspectMMap storage(path.c_str());
-  auto* db = storage.make("test");
+  auto* db = storage.open("test");
   auto cursor = db->create_cursor();
 
   cursor->find(Slice("key"));
@@ -1160,7 +1155,7 @@ BOOST_AUTO_TEST_SUITE(SFINAETests)
 
 BOOST_AUTO_TEST_CASE(test_traits_without_aspect_uses_default) {
   // _MemoryMapTraits does not define Aspect, so DefaultAspect is used
-  using DB = _MemoryMapFile<_MemoryMapTraits>::DB;
+  using DB = _DB<_MemoryMapFile<_MemoryMapTraits>>;
   static_assert(std::is_same_v<DB::Aspect, DefaultAspect>,
                 "Should fall back to DefaultAspect");
   BOOST_CHECK(true);
@@ -1168,14 +1163,14 @@ BOOST_AUTO_TEST_CASE(test_traits_without_aspect_uses_default) {
 
 BOOST_AUTO_TEST_CASE(test_traits_with_aspect_uses_custom) {
   // _AspectTraits defines Aspect = TestAspect
-  using DB = AspectMMap::DB;
+  using DB = _DB<AspectMMap>;
   static_assert(std::is_same_v<DB::Aspect, TestAspect>,
                 "Should use TestAspect from traits");
   BOOST_CHECK(true);
 }
 
 BOOST_AUTO_TEST_CASE(test_cursor_context_type_matches_aspect) {
-  using Cursor = AspectMMap::DB::Cursor;
+  using Cursor = _DB<AspectMMap>::Cursor;
   static_assert(
       std::is_same_v<typename Cursor::CursorContext, TestAspect::CursorContext>,
       "CursorContext should come from TestAspect");
@@ -1183,7 +1178,7 @@ BOOST_AUTO_TEST_CASE(test_cursor_context_type_matches_aspect) {
 }
 
 BOOST_AUTO_TEST_CASE(test_default_cursor_context_is_empty) {
-  using Cursor = _MemoryMapFile<_MemoryMapTraits>::DB::Cursor;
+  using Cursor = _DB<_MemoryMapFile<_MemoryMapTraits>>::Cursor;
   static_assert(std::is_empty_v<typename Cursor::CursorContext>,
                 "DefaultAspect::CursorContext should be empty");
   BOOST_CHECK(true);

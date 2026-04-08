@@ -25,7 +25,7 @@ BOOST_AUTO_TEST_CASE(insert_bigkeys) {
 BOOST_AUTO_TEST_CASE(insert_bigvalues) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto cursor = (*storage)["test"].cursor();
+  auto cursor = storage->open("test").cursor();
 
   std::string value(5000, '0');
   cursor.find("abc");
@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(change_leaf_with_bigvalue) {
   // This tests the if (back->cmp == 0) branch in change_leaf()
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto cursor = (*storage)["test"].cursor();
+  auto cursor = storage->open("test").cursor();
 
   // Insert a leaf with a big value at key "abc"
   std::string big_value(5000, 'X');
@@ -124,7 +124,7 @@ BOOST_AUTO_TEST_CASE(split_leaf_keep_bigvalue) {
   // leaf node is freed (not the big value, since copy now owns it)
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto cursor = (*storage)["test"].cursor();
+  auto cursor = storage->open("test").cursor();
 
   // Insert a leaf with a big value at key "abc"
   std::string big_value(5000, 'Z');
@@ -235,7 +235,7 @@ BOOST_AUTO_TEST_CASE(insert_start_short) {
   // A variant of insert_compress_extend
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   cursor.find("abc");
   cursor.value(string("abc"));
@@ -252,7 +252,7 @@ BOOST_AUTO_TEST_CASE(insert_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   cursor.find("");
   cursor.value(string("aaa"));
@@ -269,7 +269,7 @@ BOOST_AUTO_TEST_CASE(change_start) {
   // A variant of insert_compress_extend
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   cursor.find("abc");
   cursor.value(string("aaa"));
@@ -286,7 +286,7 @@ BOOST_AUTO_TEST_CASE(change_start_null) {
   // A variant of insert_compress_extend
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   cursor.find("");
   cursor.value(string("aaa"));
@@ -327,7 +327,7 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
                         "abcde", "abcdef", "abcdeg", NULL};
   test_insertion(storage, "insert_big_stack", keys);
 
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   std::cout << "insert 7: abcd*" << std::endl;
 
@@ -399,7 +399,7 @@ BOOST_AUTO_TEST_CASE(overflow_trie) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
   uint16_t i;
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   for (i = 0; i < 258; i++) {
     uint16_t key = native_to_big(i);
@@ -529,7 +529,7 @@ BOOST_AUTO_TEST_CASE(remove_after_first) {
   auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abc", "abd", "abe", "abf", "abg", NULL};
   
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   
   // Insert keys
@@ -576,7 +576,7 @@ BOOST_AUTO_TEST_CASE(remove_after_last) {
   auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"abc", "abd", "abe", "abf", "abg", NULL};
   
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   
   // Insert keys
@@ -624,7 +624,7 @@ BOOST_AUTO_TEST_CASE(remove_after_first_trie) {
   // Create a scenario with trie nodes
   const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", NULL};
   
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   
   // Insert keys
@@ -662,7 +662,7 @@ BOOST_AUTO_TEST_CASE(remove_after_last_trie) {
   // Create a scenario with trie nodes
   const char *keys[] = {"a@", "aM", "aA", "aB", "aD", "aE", "aF", NULL};
   
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   
   // Insert keys
@@ -699,7 +699,7 @@ BOOST_AUTO_TEST_CASE(replace_value) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
   Slice key("abcdefg");
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   cursor.find(key);
@@ -738,7 +738,7 @@ BOOST_AUTO_TEST_CASE(move_backward) {
   const char *keys[] = {"abca", "abcb", "adea", "adeb", NULL};
   test_insertion(storage, "move_backward", keys);
 
-  auto cursor = (*storage)["test"].cursor();
+  auto cursor = storage->open("test").cursor();
   cursor.find("ad");
   BOOST_REQUIRE(!cursor.is_valid());
   cursor.prev();
@@ -753,7 +753,7 @@ BOOST_AUTO_TEST_CASE(move_backward) {
 
   // no extra test for this
   try {
-    auto cursor = (*storage)["test"].cursor();
+    auto cursor = storage->open("test").cursor();
     cursor.value("abcb");
     BOOST_REQUIRE(false);
   } catch (const leaves::NoValidPosition &e) {
@@ -766,7 +766,7 @@ BOOST_AUTO_TEST_CASE(move_backward) {
 BOOST_AUTO_TEST_CASE(test_statistics) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // Insert enough keys to create multiple trie and leaf nodes
@@ -778,7 +778,7 @@ BOOST_AUTO_TEST_CASE(test_statistics) {
     cursor.commit();
   }
 
-  Storage::StorageImpl::DB::Statistics stat;
+  _DB<Storage::StorageImpl>::Statistics stat;
   db._internal()->statistics(stat);
 
   // Both branch and leaf stats should be populated
@@ -797,7 +797,7 @@ BOOST_AUTO_TEST_CASE(rollback_sees_committed_trie) {
   // not the orphaned write transaction.
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // 1. Insert and commit some keys
@@ -860,7 +860,7 @@ BOOST_AUTO_TEST_CASE(rollback_position_preserved) {
   // Verify that rollback re-finds the cursor at its current key position
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // Commit some keys
@@ -899,7 +899,7 @@ BOOST_AUTO_TEST_CASE(rollback_with_big_values) {
   // allocator must be reset to the committed free list.
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // Commit a key with a big value
@@ -929,7 +929,7 @@ BOOST_AUTO_TEST_CASE(rollback_with_big_values) {
 BOOST_AUTO_TEST_CASE(test_memory_checker) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // Insert keys, committing periodically to create multiple transactions
@@ -952,7 +952,7 @@ BOOST_AUTO_TEST_CASE(test_memory_checker) {
   cursor.commit();
 
   // Run the memory checker — should not throw
-  using db_type = Storage::StorageImpl::DB;
+  using db_type = _DB<Storage::StorageImpl>;
   _MemoryChecker<db_type> checker(*db._internal());
   BOOST_CHECK_NO_THROW(checker.check());
   BOOST_CHECK_GT(checker.total_pages, 0);
@@ -965,7 +965,7 @@ BOOST_AUTO_TEST_CASE(test_memory_checker) {
 BOOST_AUTO_TEST_CASE(remove_combine_first_child) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // Insert two keys that create a trie with 2 branches where the first
@@ -1005,7 +1005,7 @@ BOOST_AUTO_TEST_CASE(remove_combine_first_child) {
 BOOST_AUTO_TEST_CASE(rollback_without_transaction) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   // Insert some data so the DB isn't empty

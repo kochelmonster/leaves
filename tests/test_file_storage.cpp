@@ -66,7 +66,7 @@ std::vector<std::string> generate_random_strings(size_t count, size_t min_length
   return strings;
 }
 
-void check(leaves::FileStorage::DB::Cursor& cursor, std::vector<std::string>& test_strings, size_t count) {
+void check(TDB<leaves::FileStorage>::Cursor& cursor, std::vector<std::string>& test_strings, size_t count) {
   cursor.find(""); // Reset cursor
   BOOST_REQUIRE(!cursor.is_valid()); // Should not exist
 
@@ -97,7 +97,7 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
     auto start_time = std::chrono::high_resolution_clock::now();
     
     auto storage = FileStorage::create(db_path.c_str());
-    auto db = (*storage)[db_name.c_str()];
+    auto db = storage->open(db_name.c_str());
     auto cursor = db.cursor();
     
     size_t inserted = 0;
@@ -135,7 +135,7 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
     auto start_time = std::chrono::high_resolution_clock::now();
     
     auto storage = FileStorage::create(db_path.c_str());
-    auto db = (*storage)[db_name.c_str()];
+    auto db = storage->open(db_name.c_str());
     auto cursor = db.cursor();
     
     // Shuffle the test strings for random access pattern
@@ -179,7 +179,7 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
   // Phase 3: Verify sequential iteration works correctly
   {
     auto storage = FileStorage::create(db_path.c_str());
-    auto db = (*storage)[db_name.c_str()];
+    auto db = storage->open(db_name.c_str());
     auto cursor = db.cursor();
     
     // Sort the original strings for comparison
@@ -205,7 +205,7 @@ void test_file_storage_random_insert_and_read(const std::string& db_path, const 
   // Phase 4: Test some non-existent keys
   {
     auto storage = FileStorage::create(db_path.c_str());
-    auto db = (*storage)[db_name.c_str()];
+    auto db = storage->open(db_name.c_str());
     auto cursor = db.cursor();
     
     // Test some keys that should not exist
@@ -240,7 +240,7 @@ BOOST_AUTO_TEST_CASE(test_file_storage_key_patterns) {
     BOOST_TEST_MESSAGE("Testing FileStorage key pattern: " << pattern_name);
     
     auto storage = FileStorage::create(file_path.c_str());
-    auto db = (*storage)["pattern_test"];
+    auto db = storage->open("pattern_test");
     auto cursor = db.cursor();
     
     BOOST_REQUIRE(cursor.start_transaction());
@@ -293,7 +293,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_big_values) {
 
   {
     auto storage = FileStorage::create(path.c_str());
-    auto db = (*storage)["big"];
+    auto db = storage->open("big");
     auto cursor = db.cursor();
 
     // Insert several big values so BigMemory allocates multi-areas
@@ -324,7 +324,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_big_values) {
   // from disk and handle offsets past the first AREA_SIZE chunk.
   {
     auto storage = FileStorage::create(path.c_str());
-    auto db = (*storage)["big"];
+    auto db = storage->open("big");
     auto cursor = db.cursor();
 
     for (int i = 0; i < 5; i++) {
@@ -347,7 +347,7 @@ BOOST_AUTO_TEST_CASE(test_sync_commit) {
   auto path = prep.get_file_path();
   {
     auto storage = FileStorage::create(path.c_str());
-    auto db = (*storage)["sync"];
+    auto db = storage->open("sync");
     auto cursor = db.cursor();
     cursor.find("hello");
     cursor.value("world");
@@ -356,7 +356,7 @@ BOOST_AUTO_TEST_CASE(test_sync_commit) {
   // Re-open and verify data persisted via the sync path
   {
     auto storage = FileStorage::create(path.c_str());
-    auto db = (*storage)["sync"];
+    auto db = storage->open("sync");
     auto cursor = db.cursor();
     cursor.find("hello");
     BOOST_CHECK(cursor.is_valid());
@@ -372,7 +372,7 @@ BOOST_AUTO_TEST_CASE(test_remove_combine_leaf_child) {
   DirPreparation prep;
   auto path = prep.get_file_path();
   auto storage = FileStorage::create(path.c_str());
-  auto db = (*storage)["leaf_combine"];
+  auto db = storage->open("leaf_combine");
   auto cursor = db.cursor();
 
   // Insert two keys that share the prefix "xy", creating a 2-branch trie

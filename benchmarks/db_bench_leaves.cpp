@@ -11,9 +11,8 @@
 #include <iomanip>
 #include <sstream>
 
-// Include replicating_mmap first so blake3.h is included before _hash.hpp
-#include "leaves/replicating_mmap.hpp"
 #include "leaves/fstore.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
 #include "leaves/leaves.hpp"
 #include "leaves/mmap.hpp"
@@ -182,7 +181,6 @@ class Benchmark {
   // Storage pointers - only one will be non-null based on configuration
   std::shared_ptr<leaves::FileStorage> file_storage_;
   std::shared_ptr<leaves::MapStorage> map_storage_;
-  std::shared_ptr<leaves::ReplicatingMapStorage> replicating_storage_;
   bool using_file_storage_;
   bool using_replicating_;
   int db_num_;
@@ -201,7 +199,7 @@ class Benchmark {
   int next_report_;  // When to report next
 
   const char* storage_name() const {
-    if (using_replicating_) return "ReplicatingMapStorage";
+    if (using_replicating_) return "MapStorage (replicating)";
     if (using_file_storage_) return "FileStorage";
     return "MapStorage";
   }
@@ -362,7 +360,6 @@ class Benchmark {
   Benchmark()
       : file_storage_(nullptr),
         map_storage_(nullptr),
-        replicating_storage_(nullptr),
         using_file_storage_(FLAGS_use_file_storage),
         using_replicating_(FLAGS_use_replicating),
         num_(FLAGS_num),
@@ -389,7 +386,6 @@ class Benchmark {
     // shared_ptr will automatically clean up
     file_storage_.reset();
     map_storage_.reset();
-    replicating_storage_.reset();
   }
 
   void Run() {
@@ -458,9 +454,9 @@ class Benchmark {
       if (known) {
         Stop(name);
 #if 0  // old STATISTICS block - moved to WriteImpl
-        if (using_replicating_ && replicating_storage_) {
+        if (using_replicating_ && map_storage_) {
           std::cout << "File size: "
-                    << replicating_storage_->file_size() / (1024 * 1024) << " MB"
+                    << map_storage_->file_size() / (1024 * 1024) << " MB"
                     << std::endl;
         } else if (using_file_storage_ && file_storage_) {
           std::cout << "File size: "
@@ -538,8 +534,7 @@ class Benchmark {
 
  private:
   void Open(bool sync) {
-    assert(file_storage_ == nullptr && map_storage_ == nullptr &&
-           replicating_storage_ == nullptr);
+    assert(file_storage_ == nullptr && map_storage_ == nullptr);
 
     // Initialize db_
     char file_name[100], cmd[200];
@@ -556,7 +551,7 @@ class Benchmark {
     test_fname.append("/bench.lvs");
 
     if (using_replicating_) {
-      replicating_storage_ = leaves::ReplicatingMapStorage::create(test_fname.c_str(), 64 * leaves::G);
+      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), 64 * leaves::G);
     } else if (using_file_storage_) {
       file_storage_ = leaves::FileStorage::create(test_fname.c_str());
     } else {
@@ -565,14 +560,14 @@ class Benchmark {
   }
 
   // Template method for writing operations
-  template <typename StorageType>
+  template <typename StorageType, template<typename> class DBClass = leaves::_DB>
   void WriteImpl(StorageType& storage, bool sync, Order order, int num_entries,
                  int value_size, int entries_per_batch) {
     leaves::Slice mkey, mval;
     char key[100];
 
-    auto cursor = storage["benchmark"].cursor();
-    auto db = storage["benchmark"];
+    auto cursor = storage.template open<DBClass>("benchmark").cursor();
+    auto db = storage.template open<DBClass>("benchmark");
 
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
@@ -630,7 +625,7 @@ class Benchmark {
 
 #ifdef STATISTICS
     {
-      auto db_for_stat = storage["benchmark"];
+      auto db_for_stat = storage.template open<DBClass>("benchmark");
       auto* db_internal = db_for_stat._internal();
       using DB_type = std::remove_pointer_t<decltype(db_internal)>;
       typename DB_type::Statistics db_stat;
@@ -676,13 +671,12 @@ class Benchmark {
       }
 
       // Clean up existing storage if any
-      if (file_storage_ || map_storage_ || replicating_storage_) {
+      if (file_storage_ || map_storage_) {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
 
         file_storage_.reset();
         map_storage_.reset();
-        replicating_storage_.reset();
 
         int r = system(cmd);
       }
@@ -699,10 +693,10 @@ class Benchmark {
 
     // Call the appropriate template implementation based on storage type
     if (using_replicating_) {
-      if (!replicating_storage_) {
-        throw std::runtime_error("Replicating storage pointer is null");
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
       }
-      WriteImpl(*replicating_storage_, sync, order, num_entries, value_size,
+      WriteImpl<leaves::MapStorage, leaves::_ReplicationDB>(*map_storage_, sync, order, num_entries, value_size,
                 entries_per_batch);
     } else if (using_file_storage_) {
       if (!file_storage_) {
@@ -720,11 +714,11 @@ class Benchmark {
   }
 
   // Template method for sequential reading
-  template <typename StorageType>
+  template <typename StorageType, template<typename> class DBClass = leaves::_DB>
   void ReadSequentialImpl(StorageType& storage) {
     leaves::Slice key, value;
 
-    auto cursor = storage["benchmark"].cursor();
+    auto cursor = storage.template open<DBClass>("benchmark").cursor();
     for (cursor.first(); cursor.is_valid(); cursor.next()) {
       key = cursor.key();
       value = cursor.value();
@@ -736,10 +730,10 @@ class Benchmark {
   void ReadSequential() {
     // Call the appropriate template implementation based on storage type
     if (using_replicating_) {
-      if (!replicating_storage_) {
-        throw std::runtime_error("Replicating storage pointer is null");
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
       }
-      ReadSequentialImpl(*replicating_storage_);
+      ReadSequentialImpl<leaves::MapStorage, leaves::_ReplicationDB>(*map_storage_);
     } else if (using_file_storage_) {
       if (!file_storage_) {
         throw std::runtime_error("File storage pointer is null");
@@ -754,12 +748,12 @@ class Benchmark {
   }
 
   // Template method for random reading
-  template <typename StorageType>
+  template <typename StorageType, template<typename> class DBClass = leaves::_DB>
   void ReadRandomImpl(StorageType& storage) {
     leaves::Slice key;
     char ckey[100];
 
-    auto cursor = storage["benchmark"].cursor();
+    auto cursor = storage.template open<DBClass>("benchmark").cursor();
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;
       if (FLAGS_binary_key) {
@@ -780,10 +774,10 @@ class Benchmark {
   void ReadRandom() {
     // Call the appropriate template implementation based on storage type
     if (using_replicating_) {
-      if (!replicating_storage_) {
-        throw std::runtime_error("Replicating storage pointer is null");
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
       }
-      ReadRandomImpl(*replicating_storage_);
+      ReadRandomImpl<leaves::MapStorage, leaves::_ReplicationDB>(*map_storage_);
     } else if (using_file_storage_) {
       if (!file_storage_) {
         throw std::runtime_error("File storage pointer is null");
@@ -834,7 +828,7 @@ int main(int argc, char** argv) {
                (n == 0 || n == 1)) {
       FLAGS_use_replicating = (n == 1) ? true : false;
       if (FLAGS_use_replicating) {
-        std::fprintf(stderr, "Using ReplicatingMapStorage for storage\n");
+        std::fprintf(stderr, "Using MapStorage with _ReplicationDB for storage\n");
       }
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {

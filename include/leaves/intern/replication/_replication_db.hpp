@@ -254,13 +254,29 @@ struct _ReplicationDB
     return &this->_header->hash_control.deletion_hash_root;
   }
 
-  // Inherit constructors
-  using Base::Base;
+  static constexpr uint16_t DB_TYPE_ID = 1;
+
   using txn_ptr = typename Base::txn_ptr;
   using offset_e = typename CursorTraits::offset_e;
 
   // --- Hash trie configuration ---
   size_t _hash_threads = 4;  // max threads for parallel hash trie updates
+
+  // Construct from existing DB (open)
+  _ReplicationDB(typename Base::Storage& storage, offset_t header,
+                 std::string_view name, size_t hash_threads = 4,
+                 bool auto_purge = true)
+      : Base(storage, header, name), _hash_threads(hash_threads) {
+    if (auto_purge) start_purge();
+  }
+
+  // Construct new DB (create)
+  _ReplicationDB(typename Base::Storage& storage, offset_t* header,
+                 std::string_view name, size_t hash_threads = 4,
+                 bool auto_purge = true)
+      : Base(storage, header, name), _hash_threads(hash_threads) {
+    if (auto_purge) start_purge();
+  }
 
   // --- Purge configuration ---
   std::atomic<uint64_t> _retention_seconds{
