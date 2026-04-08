@@ -36,9 +36,9 @@ struct _ReplicationMemoryMapFile
   size_t _hash_threads = 4;
 
   _ReplicationMemoryMapFile(const char* path, size_t map_size = 2 * G,
-                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t pool_threads = 0,
                             size_t hash_threads = 4)
-      : Base(path, map_size, db_count), PoolMixin(pool_threads),
+      : Base(path, map_size), PoolMixin(pool_threads),
         _hash_threads(hash_threads) {}
 
   ~_ReplicationMemoryMapFile() {
@@ -71,9 +71,9 @@ class ReplicatingMapStorage_
   // map_size: virtual address space reservation. On mobile (iOS/Android), use a
   // smaller value (e.g. 256*M) to avoid jetsam/OOM kills.
   ReplicatingMapStorage_(const char* path, size_t map_size = 4 * G,
-                        uint16_t db_count = 48, size_t pool_threads = 0,
+                        size_t pool_threads = 0,
                         size_t hash_threads = 4)
-      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count,
+      : _storage(std::make_unique<StorageImpl>(path, map_size,
                                                pool_threads, hash_threads)) {}
 
   DB operator[](const char* name) {
@@ -92,9 +92,9 @@ class ReplicatingMapStorage_
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t map_size = 4 * G,
-                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t pool_threads = 0,
                             size_t hash_threads = 4) {
-    return std::make_shared<ReplicatingMapStorage_>(path, map_size, db_count,
+    return std::make_shared<ReplicatingMapStorage_>(path, map_size,
                                                    pool_threads, hash_threads);
   }
 

@@ -187,7 +187,7 @@ struct KVDemo {
   bool _has_notification = false;
 
   KVDemo(const std::string& name)
-      : _storage(ReplicatingBrowserStorage::create(name.c_str(), 8, 10*1024*1024)),
+      : _storage(ReplicatingBrowserStorage::create(name.c_str(), 10*1024*1024)),
         _db((*_storage)["main"]),
         _msg_buf(MAX_MSG) {}
 

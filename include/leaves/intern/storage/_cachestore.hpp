@@ -17,14 +17,12 @@
 #include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
 #include "../memory/_twoquecache.hpp"
 #include "../util/_threadpool.hpp"
+#include "_db_directory.hpp"
 
 namespace leaves {
 
 struct _CacheBase {
-  struct DBEntry {
-    char name[21];
-    offset_t offset;
-  };
+  using DBEntry = _DBDirectoryEntry;
 };
 
 template <typename Traits_, typename Opers_,
@@ -97,14 +95,13 @@ struct _CacheStore : public Opers_,
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
-  std::vector<_db_ptr> _dbs;
+  ankerl::unordered_dense::map<std::string, _db_ptr> _dbs;
 
-  _CacheStore(uint16_t db_count = 48, size_t capacity = 500 * M,
+  _CacheStore(size_t capacity = 500 * M,
               size_t pool_threads = 1, size_t avg_item_size = 512 * K)
       : _ThreadPoolMixin<_CacheStore>(pool_threads),
         _cache(capacity, 0.25f, 0.5f, avg_item_size),
         _capacity(capacity) {
-    _dbs.resize(db_count);
   }
 
   // must be called in the subclasses' destructor
@@ -324,57 +321,253 @@ struct _CacheStore : public Opers_,
   }
 
   void list_dbs(std::vector<std::string>& result) {
-    for (uint16_t i = 0; i < _header->db_count; i++) {
-      result.push_back(_header->dbs[i].name);
-    }
+    _for_each_db_entry([&](DBEntry& entry) {
+      if (entry.offset) result.push_back(entry.name);
+    });
   }
-
-  Slice db_name(int index) const { return Slice(_header->dbs[index].name); }
 
   DB* operator[](const char* name) { return make(name); }
 
   DB* make(const char* name) {
     if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) throw KeyTooBig();
 
-    // No locking needed since we're single-process
-    int free = -1;
-    for (uint16_t i = 0; i < _header->db_count; i++) {
-      if (_header->dbs[i].offset) {
-        if (!strcmp(_header->dbs[i].name, name)) {
-          if (!_dbs[i]) {
-            _dbs[i] = std::make_unique<DB>(_self(), _header->dbs[i].offset, i);
-            make_header_dirty();
-            return _dbs[i].get();
-          }
-          return _dbs[i].get();
+    // Check in-memory cache first
+    auto it = _dbs.find(name);
+    if (it != _dbs.end()) return it->second.get();
+
+    // Scan first page (pointers are stable — _header is heap-allocated)
+    uint16_t cap = _first_page_capacity();
+    uint16_t hwm = std::min(_header->db_entry_count, cap);
+    DBEntry* free_slot = nullptr;
+
+    for (uint16_t i = 0; i < hwm; i++) {
+      auto& entry = _header->dbs[i];
+      if (entry.offset) {
+        if (!strcmp(entry.name, name)) {
+          auto& ptr = _dbs[name];
+          ptr = std::make_unique<DB>(_self(), entry.offset, std::string_view(name));
+          return ptr.get();
         }
-      } else if (free < 0)
-        free = i;
+      } else if (!free_slot) {
+        free_slot = &entry;
+      }
     }
 
-    if (free < 0) throw LeavesException();
-    std::strncpy(_header->dbs[free].name, name,
-                 sizeof(_header->dbs[free].name) - 1);
-    _header->dbs[free].name[sizeof(_header->dbs[free].name) - 1] = '\0';
-    _dbs[free] = std::make_unique<DB>(_self(), &_header->dbs[free].offset, free);
-    make_header_dirty();
-    return _dbs[free].get();
+    // Scan overflow pages (read-only — don't hold pointers)
+    offset_t existing = _find_in_overflow_pages(name);
+    if (existing) {
+      auto& ptr = _dbs[name];
+      ptr = std::make_unique<DB>(_self(), existing, std::string_view(name));
+      return ptr.get();
+    }
+
+    // Not found — create new DB
+    // Prefer a free slot in first page
+    if (free_slot) {
+      std::strncpy(free_slot->name, name, sizeof(DBEntry::name) - 1);
+      free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
+      auto& ptr = _dbs[name];
+      ptr = std::make_unique<DB>(_self(), &free_slot->offset, std::string_view(name));
+      make_header_dirty();
+      return ptr.get();
+    }
+
+    // Expand first-page high-water mark
+    if (hwm < cap) {
+      auto& slot = _header->dbs[hwm];
+      _header->db_entry_count = hwm + 1;
+      std::strncpy(slot.name, name, sizeof(DBEntry::name) - 1);
+      slot.name[sizeof(DBEntry::name) - 1] = '\0';
+      auto& ptr = _dbs[name];
+      ptr = std::make_unique<DB>(_self(), &slot.offset, std::string_view(name));
+      make_header_dirty();
+      return ptr.get();
+    }
+
+    // Create in overflow page via read-modify-write
+    offset_t db_offset = _create_in_overflow_page(name);
+    auto& ptr = _dbs[name];
+    ptr = std::make_unique<DB>(_self(), db_offset, std::string_view(name));
+    return ptr.get();
   }
 
   void remove_db(const char* name) {
-    // No locking needed since we're single-process
+    auto it = _dbs.find(name);
+    if (it != _dbs.end() && it->second && it->second->is_active())
+      throw TransactionActive();
 
-    for (uint16_t i = 0; i < _header->db_count; i++) {
-      if (_header->dbs[i].offset && !strcmp(_header->dbs[i].name, name)) {
-        if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
-        DB tmp(_self(), _header->dbs[i].offset, i);
+    // Check first page
+    uint16_t cap = _first_page_capacity();
+    uint16_t hwm = std::min(_header->db_entry_count, cap);
+    for (uint16_t i = 0; i < hwm; i++) {
+      auto& entry = _header->dbs[i];
+      if (entry.offset && !strcmp(entry.name, name)) {
+        DB tmp(_self(), entry.offset, std::string_view(name));
         tmp.return_areas();
-        _header->dbs[i].offset = 0;
+        entry.offset = 0;
+        _dbs.erase(name);
+        make_header_dirty();
         flush(true, true);
         return;
       }
     }
+
+    // Check overflow pages
+    if (_remove_from_overflow_pages(name)) {
+      _dbs.erase(name);
+      flush(true, true);
+      return;
+    }
+
     throw WrongValue("database does not exist.");
+  }
+
+  // First-page capacity for DB entries
+  uint16_t _first_page_capacity() const {
+    return _DBDirectoryPage::capacity_for(
+        4 * K - sizeof(typename Opers_::FileHeader));
+  }
+
+  // Overflow page capacity
+  static constexpr uint16_t _overflow_page_capacity() {
+    return _DBDirectoryPage::capacity_for(
+        4 * K - offsetof(_DBDirectoryPage, entries));
+  }
+
+  // Walk all DB entries across all directory pages, calling fn(DBEntry&)
+  template <typename Fn>
+  void _for_each_db_entry(Fn fn) {
+    // First page: entries embedded in FileHeader
+    uint16_t cap = _first_page_capacity();
+    uint16_t count = std::min(_header->db_entry_count, cap);
+    for (uint16_t i = 0; i < count; i++) fn(_header->dbs[i]);
+
+    // Overflow pages
+    offset_t next = _header->db_next_page;
+    while (next) {
+      alignas(8) char buf[4 * K];
+      this->read((uint64_t)next, buf, 4 * K);
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+      uint16_t pcap = _overflow_page_capacity();
+      uint16_t pcount = std::min(page->count, pcap);
+      for (uint16_t i = 0; i < pcount; i++) fn(page->entries[i]);
+      next = page->next;
+    }
+  }
+
+  // Search overflow pages for an existing DB by name; return its offset or 0.
+  offset_t _find_in_overflow_pages(const char* name) {
+    offset_t next = _header->db_next_page;
+    while (next) {
+      alignas(8) char buf[4 * K];
+      this->read((uint64_t)next, buf, 4 * K);
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+      uint16_t pcap = _overflow_page_capacity();
+      uint16_t pcount = std::min(page->count, pcap);
+      for (uint16_t i = 0; i < pcount; i++) {
+        if (page->entries[i].offset && !strcmp(page->entries[i].name, name))
+          return page->entries[i].offset;
+      }
+      next = page->next;
+    }
+    return 0;
+  }
+
+  // Create a new DB in an overflow page via read-modify-write.
+  // Returns the offset of the newly created DB root.
+  offset_t _create_in_overflow_page(const char* name) {
+    uint64_t prev_offset = 0;
+    offset_t cur = _header->db_next_page;
+
+    while (cur) {
+      alignas(8) char buf[4 * K];
+      this->read((uint64_t)cur, buf, 4 * K);
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+      uint16_t pcap = _overflow_page_capacity();
+
+      // Re-use a free slot (zeroed offset) in existing entries
+      for (uint16_t i = 0; i < page->count; i++) {
+        if (!page->entries[i].offset) {
+          offset_t tmp_offset = 0;
+          DB tmp(_self(), &tmp_offset, std::string_view(name));
+          std::strncpy(page->entries[i].name, name, sizeof(DBEntry::name) - 1);
+          page->entries[i].name[sizeof(DBEntry::name) - 1] = '\0';
+          page->entries[i].offset = tmp_offset;
+          this->write((uint64_t)cur, buf, 4 * K);
+          return tmp_offset;
+        }
+      }
+
+      // Expand high-water mark if room
+      if (page->count < pcap) {
+        offset_t tmp_offset = 0;
+        DB tmp(_self(), &tmp_offset, std::string_view(name));
+        auto& slot = page->entries[page->count];
+        std::strncpy(slot.name, name, sizeof(DBEntry::name) - 1);
+        slot.name[sizeof(DBEntry::name) - 1] = '\0';
+        slot.offset = tmp_offset;
+        page->count++;
+        this->write((uint64_t)cur, buf, 4 * K);
+        return tmp_offset;
+      }
+
+      prev_offset = (uint64_t)cur;
+      cur = page->next;
+    }
+
+    // Allocate a new overflow page
+    uint64_t new_off = prev_offset ? prev_offset + 4 * K : 4 * K;
+    if (new_off + 4 * K > AREA_SIZE) throw LeavesException();
+
+    alignas(8) char buf[4 * K];
+    std::memset(buf, 0, 4 * K);
+    auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+
+    offset_t tmp_offset = 0;
+    DB tmp(_self(), &tmp_offset, std::string_view(name));
+    std::strncpy(page->entries[0].name, name, sizeof(DBEntry::name) - 1);
+    page->entries[0].name[sizeof(DBEntry::name) - 1] = '\0';
+    page->entries[0].offset = tmp_offset;
+    page->count = 1;
+    page->next = 0;
+    this->write(new_off, buf, 4 * K);
+
+    // Link from predecessor
+    if (prev_offset) {
+      alignas(8) char prev_buf[4 * K];
+      this->read(prev_offset, prev_buf, 4 * K);
+      auto* prev = reinterpret_cast<_DBDirectoryPage*>(prev_buf);
+      prev->next = new_off;
+      this->write(prev_offset, prev_buf, 4 * K);
+    } else {
+      _header->db_next_page = new_off;
+    }
+    make_header_dirty();
+    return tmp_offset;
+  }
+
+  // Remove a DB from overflow pages via read-modify-write. Returns true if found.
+  bool _remove_from_overflow_pages(const char* name) {
+    offset_t next = _header->db_next_page;
+    while (next) {
+      alignas(8) char buf[4 * K];
+      this->read((uint64_t)next, buf, 4 * K);
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+      uint16_t pcap = _overflow_page_capacity();
+      uint16_t pcount = std::min(page->count, pcap);
+      for (uint16_t i = 0; i < pcount; i++) {
+        if (page->entries[i].offset && !strcmp(page->entries[i].name, name)) {
+          DB tmp(_self(), page->entries[i].offset, std::string_view(name));
+          tmp.return_areas();
+          page->entries[i].offset = 0;
+          this->write((uint64_t)next, buf, 4 * K);
+          make_header_dirty();
+          return true;
+        }
+      }
+      next = page->next;
+    }
+    return false;
   }
 };
 

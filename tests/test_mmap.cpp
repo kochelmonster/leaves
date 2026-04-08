@@ -126,16 +126,6 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
   }
 #endif
 
-  try {
-    DBMMap db(dbFilePath.c_str(), 2 * G, 2);
-    BOOST_FAIL("Expected WrongValue exception not thrown");
-  } catch (const WrongValue& e) {
-    BOOST_CHECK_EQUAL(std::string(e.what()), "db_count may not be changed.");
-  }
-  catch(...) {
-    BOOST_FAIL("Expected NoProcess exception not thrown");
-  }
-
   // Test max_processes mismatch detection
   db._memory->max_processes = db.MAX_PROCESSES + 1;
   try {

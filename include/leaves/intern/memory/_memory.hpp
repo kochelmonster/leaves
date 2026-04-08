@@ -732,21 +732,20 @@ struct AreaPool {
 // Rebuild the free area pool by scanning the file.
 // Unified implementation used by all storage backends (mmap, fstore,
 // browserstore). ReadFn:  void(uint64_t pos, void* buf, size_t size) WriteFn:
-// void(uint64_t pos, const void* buf, size_t size) GetDBOffsetFn:
-// offset_t(uint16_t db_index)
+// void(uint64_t pos, const void* buf, size_t size) ForEachDBFn:
+// void(Fn) where Fn is void(offset_t db_offset) — calls Fn for each active DB
 template <typename DBHeader, size_t AREA_SIZE, typename ReadFn,
-          typename WriteFn, typename GetDBOffsetFn>
-void _recover_areas(AreaPool& pool, uint16_t db_count,
-                    GetDBOffsetFn get_db_offset, uint64_t file_size,
+          typename WriteFn, typename ForEachDBFn>
+void _recover_areas(AreaPool& pool,
+                    ForEachDBFn for_each_db, uint64_t file_size,
                     uint64_t first_area_pos, ReadFn read_bytes,
                     WriteFn write_bytes) {
   pool.init();
 
   // Phase 1: Walk owned DB chains, collect all AREA_SIZE sub-blocks as occupied
   std::unordered_set<uint64_t> occupied;
-  for (uint16_t i = 0; i < db_count; i++) {
-    offset_t db_off = get_db_offset(i);
-    if (!db_off) continue;
+  for_each_db([&](offset_t db_off) {
+    if (!db_off) return;
 
     DBHeader db_header;
     read_bytes((uint64_t)db_off, &db_header, sizeof(DBHeader));
@@ -771,7 +770,7 @@ void _recover_areas(AreaPool& pool, uint16_t db_count,
     };
     walk(db_header.area_list_head_single);
     walk(db_header.area_list_head_multi);
-  }
+  });
 
   // Phase 2: Scan in AREA_SIZE steps, collect contiguous free runs.
   // Single AREA_SIZE blocks go to single_areas, contiguous runs to multi_areas.

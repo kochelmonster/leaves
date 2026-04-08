@@ -265,9 +265,8 @@ struct _AspectReplicationMMapFile
   using PoolMixin = _ThreadPoolMixin<_AspectReplicationMMapFile<Traits_>>;
   using DB = typename Base::DB;
 
-  _AspectReplicationMMapFile(const char* path, size_t map_size = 2 * G,
-                             uint16_t db_count = 48)
-      : Base(path, map_size, db_count), PoolMixin(1) {}
+  _AspectReplicationMMapFile(const char* path, size_t map_size = 2 * G)
+      : Base(path, map_size), PoolMixin(1) {}
 
   ~_AspectReplicationMMapFile() {
     this->_dbs.clear();

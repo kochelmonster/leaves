@@ -24,6 +24,8 @@
 #include "../core/_util.hpp"
 #include "../db/_db.hpp"
 #include "../memory/_memory.hpp"
+#include "../third_party/unordered_dense.h"
+#include "_db_directory.hpp"
 
 using boost::interprocess::create_only;
 using boost::interprocess::create_only_t;
@@ -119,10 +121,7 @@ struct _MemoryMapFile {
   using Mutex = boost::interprocess::interprocess_mutex;
 #endif
 
-  struct DBEntry {
-    char name[21];
-    offset_t offset;
-  };
+  using DBEntry = _DBDirectoryEntry;
 
   struct FileHeader {
     char signature[MMAP_SIGNATURE_SIZE];
@@ -132,23 +131,26 @@ struct _MemoryMapFile {
     Mutex file_lock;
     AreaPool area_pool;  // pool for both single and multi areas
     pid_type processes[MAX_PROCESSES];
-    uint16_t db_count;
     std::atomic<int64_t> last_cursor_id;
-    DBEntry dbs[0];
+    uint16_t db_entry_count;  // entries used in first directory page
+    offset_t db_next_page;    // link to overflow directory page (0 = none)
+    DBEntry dbs[];            // flexible array fills to 4K boundary
 
-    FileHeader(uint16_t db_count_)
+    FileHeader()
         : db_version(0),
           max_processes(MAX_PROCESSES),
           file_size(0),
           file_lock(),
           processes{},
-          db_count(db_count_) {
+          last_cursor_id(0),
+          db_entry_count(0),
+          db_next_page(0) {
       // Set signature and initialize pools/arrays
       memset(signature, 0, sizeof(signature));
       strcpy(signature, MMAP_SIGNATURE);
       area_pool.init();
-      // processes[] already zero-initialized via aggregate init
-      memset((void*)dbs, 0, sizeof(DBEntry) * db_count);
+      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };
 
@@ -156,17 +158,15 @@ struct _MemoryMapFile {
   mapped_region _region;
   FileHeader* _memory;
   pid_type _pid;
-  std::vector<_db_ptr> _dbs;
+  ankerl::unordered_dense::map<std::string, _db_ptr> _dbs;
 
-  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
-                 uint16_t db_count = 48) {
+  _MemoryMapFile(const char* path, size_t map_size = 2 * G) {
 #ifndef LEAVES_SINGLE_PROCESS
     _pid = current_pid();
 #else
     _pid = 1;
 #endif
-    _dbs.resize(db_count);
-    init_dbfile(path, map_size, db_count);
+    init_dbfile(path, map_size);
   }
 
   ~_MemoryMapFile() {
@@ -180,22 +180,21 @@ struct _MemoryMapFile {
   Mutex& file_lock() { return _memory->file_lock; }
 
   size_t calc_header_size() const {
-    return padding(sizeof(FileHeader) + sizeof(DBEntry) * _memory->db_count, 4 * K);
+    return 4 * K;
   }
 
   size_t file_size() const { return _memory->file_size; }
 
-  void init_dbfile(const char* path, size_t map_size, uint16_t db_count) {
+  void init_dbfile(const char* path, size_t map_size) {
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
       fhead.close();
-      uint64_t fsize =
-          padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+      uint64_t fsize = 4 * K;
       std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
-      _memory = new (_region.get_address()) FileHeader(db_count);
+      _memory = new (_region.get_address()) FileHeader();
       _memory->file_size = fsize;
       _region.flush();
     } else {
@@ -210,8 +209,6 @@ struct _MemoryMapFile {
       _memory = (FileHeader*)_region.get_address();
       if (_memory->max_processes != MAX_PROCESSES)
         throw WrongValue("max_processes does not match.");
-      if (db_count && _memory->db_count != db_count)
-        throw WrongValue("db_count may not be changed.");
     }
 
     assert(((uint64_t)_memory & 7) == 0);
@@ -267,8 +264,8 @@ struct _MemoryMapFile {
   void recover_areas() {
     char* base = (char*)_memory;
     _recover_areas<typename DB::Header, AREA_SIZE>(
-        _memory->area_pool, _memory->db_count,
-        [&](uint16_t i) { return _memory->dbs[i].offset; },
+        _memory->area_pool,
+        [this](auto fn) { _for_each_db_entry([&](DBEntry& e) { if (e.offset) fn(e.offset); }); },
         _memory->file_size, calc_header_size(),
         [base](uint64_t pos, void* buf, size_t size) {
           memcpy(buf, base + pos, size);
@@ -302,12 +299,11 @@ struct _MemoryMapFile {
   }
 
   void sanitize_dbs() {
-    for (uint16_t i = 0; i < _memory->db_count; i++) {
-      if (_memory->dbs[i].offset) {
-        assert(!_dbs[i]);
-        DB(_self(), _memory->dbs[i].offset, i).sanitize();
+    _for_each_db_entry([&](DBEntry& entry) {
+      if (entry.offset) {
+        DB(_self(), entry.offset, std::string_view(entry.name)).sanitize();
       }
-    }
+    });
   }
 
   bool sanitize_processes() {
@@ -437,12 +433,10 @@ struct _MemoryMapFile {
   }
 
   void list_dbs(std::vector<std::string>& result) {
-    for (uint16_t i = 0; i < _memory->db_count; i++) {
-      result.push_back(_memory->dbs[i].name);
-    }
+    _for_each_db_entry([&](DBEntry& entry) {
+      if (entry.offset) result.push_back(entry.name);
+    });
   }
-
-  Slice db_name(int index) const { return Slice(_memory->dbs[index].name); }
 
   DB* operator[](const char* name) { return make(name); }
 
@@ -456,24 +450,44 @@ struct _MemoryMapFile {
     boost::interprocess::scoped_lock<boost::interprocess::file_lock>
         flock_guard(flock);
 #endif
-    int free = -1;
-    for (uint16_t i = 0; i < _memory->db_count; i++) {
-      if (_memory->dbs[i].offset) {
-        if (!strcmp(_memory->dbs[i].name, name)) {
-          if (!_dbs[i]) {
-            _dbs[i] = std::make_unique<DB>(_self(), _memory->dbs[i].offset, i);
-            return _dbs[i].get();
-          }
-          return _dbs[i].get();
-        }
-      } else if (free < 0)
-        free = i;
+    auto it = _dbs.find(name);
+    if (it != _dbs.end()) return it->second.get();
+
+    DBEntry* free_slot = nullptr;
+    DBEntry* found = nullptr;
+    _for_each_db_entry([&](DBEntry& entry) {
+      if (found) return;
+      if (entry.offset) {
+        if (!strcmp(entry.name, name)) found = &entry;
+      } else if (!free_slot) {
+        free_slot = &entry;
+      }
+    });
+
+    if (found) {
+      auto& ptr = _dbs[name];
+      ptr = std::make_unique<DB>(_self(), found->offset, std::string_view(name));
+      return ptr.get();
     }
 
-    if (free < 0) throw LeavesException();
-    strcpy(_memory->dbs[free].name, name);
-    _dbs[free] = std::make_unique<DB>(_self(), &_memory->dbs[free].offset, free);
-    return _dbs[free].get();
+    if (!free_slot) {
+      // Expand first-page hwm or allocate overflow slot
+      uint16_t cap = _first_page_capacity();
+      uint16_t hwm = std::min(_memory->db_entry_count, cap);
+      if (hwm < cap) {
+        free_slot = &_memory->dbs[hwm];
+        _memory->db_entry_count = hwm + 1;
+      } else {
+        free_slot = _alloc_overflow_slot();
+        if (!free_slot) throw LeavesException();
+      }
+    }
+
+    std::strncpy(free_slot->name, name, sizeof(DBEntry::name) - 1);
+    free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
+    auto& ptr = _dbs[name];
+    ptr = std::make_unique<DB>(_self(), &free_slot->offset, std::string_view(name));
+    return ptr.get();
   }
 
   void remove_db(const char* name) {
@@ -484,18 +498,89 @@ struct _MemoryMapFile {
     boost::interprocess::scoped_lock<boost::interprocess::file_lock>
         flock_guard(flock);
 #endif
+    auto it = _dbs.find(name);
+    if (it != _dbs.end() && it->second && it->second->is_active())
+      throw TransactionActive();
 
-    for (uint16_t i = 0; i < _memory->db_count; i++) {
-      if (_memory->dbs[i].offset && !strcmp(_memory->dbs[i].name, name)) {
-        if (_dbs[i] && _dbs[i]->is_active()) throw TransactionActive();
-        DB tmp(_self(), _memory->dbs[i].offset, i);
+    bool found = false;
+    _for_each_db_entry([&](DBEntry& entry) {
+      if (found) return;
+      if (entry.offset && !strcmp(entry.name, name)) {
+        DB tmp(_self(), entry.offset, std::string_view(name));
         tmp.return_areas();
-        _memory->dbs[i].offset = 0;
-        flush();
-        return;
+        entry.offset = 0;
+        found = true;
       }
+    });
+    if (!found) throw WrongValue("database does not exist.");
+    _dbs.erase(name);
+    flush();
+  }
+
+  // Directory page helpers (mmap: all data is memory-mapped, pointers stable)
+  uint16_t _first_page_capacity() const {
+    return _DBDirectoryPage::capacity_for(
+        4 * K - sizeof(FileHeader));
+  }
+
+  static constexpr uint16_t _overflow_page_capacity() {
+    return _DBDirectoryPage::capacity_for(
+        4 * K - offsetof(_DBDirectoryPage, entries));
+  }
+
+  template <typename Fn>
+  void _for_each_db_entry(Fn fn) {
+    uint16_t cap = _first_page_capacity();
+    uint16_t count = std::min(_memory->db_entry_count, cap);
+    for (uint16_t i = 0; i < count; i++) fn(_memory->dbs[i]);
+
+    offset_t next = _memory->db_next_page;
+    while (next) {
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(
+          (char*)_memory + (uint64_t)next);
+      uint16_t pcap = _overflow_page_capacity();
+      uint16_t pcount = std::min(page->count, pcap);
+      for (uint16_t i = 0; i < pcount; i++) fn(page->entries[i]);
+      next = page->next;
     }
-    throw WrongValue("database does not exist.");
+  }
+
+  // Allocate a slot in an overflow page. Returns stable pointer (mmap).
+  DBEntry* _alloc_overflow_slot() {
+    uint64_t last_page_offset = 0;
+    offset_t next = _memory->db_next_page;
+    while (next) {
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(
+          (char*)_memory + (uint64_t)next);
+      uint16_t pcap = _overflow_page_capacity();
+      for (uint16_t i = 0; i < page->count; i++) {
+        if (!page->entries[i].offset) return &page->entries[i];
+      }
+      if (page->count < pcap) {
+        DBEntry* slot = &page->entries[page->count];
+        page->count++;
+        return slot;
+      }
+      last_page_offset = (uint64_t)next;
+      next = page->next;
+    }
+
+    uint64_t new_off = last_page_offset ? last_page_offset + 4 * K : 4 * K;
+    if (new_off + 4 * K > AREA_SIZE) return nullptr;
+
+    auto* page = reinterpret_cast<_DBDirectoryPage*>(
+        (char*)_memory + new_off);
+    page->init(4 * K - offsetof(_DBDirectoryPage, entries));
+    page->count = 1;
+
+    if (last_page_offset) {
+      auto* prev = reinterpret_cast<_DBDirectoryPage*>(
+          (char*)_memory + last_page_offset);
+      prev->next = new_off;
+    } else {
+      _memory->db_next_page = new_off;
+    }
+    return &page->entries[0];
   }
 };
 

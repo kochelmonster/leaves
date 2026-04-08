@@ -80,10 +80,10 @@ struct _ReplicationBrowserStore
 
   size_t _hash_threads = 1;  // always single-threaded in browser
 
-  _ReplicationBrowserStore(const char* db_name, uint16_t db_count = 48,
+  _ReplicationBrowserStore(const char* db_name,
                            size_t capacity = 100 * M)
-      : Base(db_count, capacity, 0, _BrowserStoreTraits::AREA_SIZE) {
-    _init_browser_db(db_name, db_count);
+      : Base(capacity, 0, _BrowserStoreTraits::AREA_SIZE) {
+    _init_browser_db(db_name);
   }
 
   ~_ReplicationBrowserStore() {
@@ -137,9 +137,8 @@ struct _ReplicationBrowserStore
 
   // ── Init / sanitize (mirrors _BrowserStore) ───────────────────
 
-  void _init_browser_db(const char* db_name, uint16_t db_count) {
-    size_t header_size =
-        leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+  void _init_browser_db(const char* db_name) {
+    size_t header_size = 4 * K;
     char* buffer = new char[header_size];
 
     open(db_name);
@@ -147,7 +146,7 @@ struct _ReplicationBrowserStore
     bool exists = _try_load_header(buffer, header_size);
 
     if (!exists) {
-      _header = new (buffer) FileHeader(db_count);
+      _header = new (buffer) FileHeader();
       _header->file_size =
           leaves::padding(header_size, _BrowserStoreTraits::AREA_SIZE);
       write(0, buffer, header_size);
@@ -155,8 +154,6 @@ struct _ReplicationBrowserStore
       _header = reinterpret_cast<FileHeader*>(buffer);
       if (strcmp(_header->signature, BROWSERSTORE_SIGNATURE))
         throw std::runtime_error("Invalid browser store signature");
-      if (_header->db_count != db_count)
-        throw WrongValue("db_count may not be changed.");
     }
 
     assert(((uint64_t)_header & 7) == 0);
@@ -174,12 +171,11 @@ struct _ReplicationBrowserStore
   }
 
   void _sanitize() {
-    for (uint16_t i = 0; i < _header->db_count; i++) {
-      if (_header->dbs[i].offset) {
-        assert(!_dbs[i]);
-        DB(*this, _header->dbs[i].offset, i).sanitize();
+    this->_for_each_db_entry([&](auto& entry) {
+      if (entry.offset) {
+        DB(*this, entry.offset, std::string_view(entry.name)).sanitize();
       }
-    }
+    });
   }
 
   // Override make() to set hash_threads and start purge
@@ -202,10 +198,10 @@ class ReplicatingBrowserStorage
   typedef TDB<ReplicatingBrowserStorage> DB;
   typedef std::shared_ptr<ReplicatingBrowserStorage> storage_ptr;
 
-  ReplicatingBrowserStorage(const char* db_name, uint16_t db_count = 48,
+  ReplicatingBrowserStorage(const char* db_name,
                             size_t capacity = 100 * M)
       : _storage(
-            std::make_unique<StorageImpl>(db_name, db_count, capacity)) {}
+            std::make_unique<StorageImpl>(db_name, capacity)) {}
 
   DB operator[](const char* name) { return DB(shared_from_this(), name); }
 
@@ -215,9 +211,9 @@ class ReplicatingBrowserStorage
     return _storage->list_dbs(result);
   }
 
-  static storage_ptr create(const char* db_name, uint16_t db_count = 48,
+  static storage_ptr create(const char* db_name,
                             size_t capacity = 100 * M) {
-    return std::make_shared<ReplicatingBrowserStorage>(db_name, db_count,
+    return std::make_shared<ReplicatingBrowserStorage>(db_name,
                                                       capacity);
   }
 

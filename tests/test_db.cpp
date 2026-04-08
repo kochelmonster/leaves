@@ -378,7 +378,7 @@ struct TestStorage {
     memory.resize(AREA_SIZE);
     single_areas.init();
     multi_areas.init();
-    db = std::make_shared<DB>(*this, &db_offset, 0);
+    db = std::make_shared<DB>(*this, &db_offset, "test");
   }
 
   Mutex& file_lock() { return mutex; }

@@ -31,11 +31,11 @@ struct _ReplicationCacheStore
 
   size_t _hash_threads = 4;
 
-  _ReplicationCacheStore(const char* path, uint16_t db_count = 48,
+  _ReplicationCacheStore(const char* path,
                          size_t capacity = 500 * M, size_t pool_threads = 0,
                          size_t hash_threads = 4)
-      : Base(db_count, capacity, pool_threads), _hash_threads(hash_threads) {
-    init_dbfile(path, db_count);
+      : Base(capacity, pool_threads), _hash_threads(hash_threads) {
+    init_dbfile(path);
   }
 
   ~_ReplicationCacheStore() {
@@ -45,13 +45,12 @@ struct _ReplicationCacheStore
     delete[] (char*)this->_header;  // Free header last
   }
 
-  void init_dbfile(const char* path, uint16_t db_count) {
-    size_t header_size =
-        leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+  void init_dbfile(const char* path) {
+    size_t header_size = 4 * K;
     char* buffer = new char[header_size];
     if (!std::filesystem::is_regular_file(path)) {
       this->open(path);
-      this->_header = new (buffer) FileHeader(db_count);
+      this->_header = new (buffer) FileHeader();
       // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
       this->_header->file_size = leaves::padding(header_size, Base::AREA_SIZE);
       this->resize(this->_header->file_size);
@@ -62,20 +61,33 @@ struct _ReplicationCacheStore
       this->_header = (FileHeader*)buffer;
       if (strcmp(this->_header->signature, FSTORE_SIGNATURE))
         throw std::runtime_error("wrong filetype");
-      if (this->_header->db_count != db_count)
-        throw WrongValue("db_count may not be changed.");
     }
     assert(((uint64_t)this->_header & 7) == 0);
     sanitize();
   }
 
+  void recover_areas() {
+    auto* self = this;
+    _recover_areas<typename DB::Header, Base::AREA_SIZE>(
+        this->_header->area_pool,
+        [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
+        this->_header->file_size,
+        leaves::padding(this->calc_header_size(), Base::AREA_SIZE),
+        [self](uint64_t pos, void* buf, size_t size) {
+          self->read(pos, buf, size);
+        },
+        [self](uint64_t pos, const void* buf, size_t size) {
+          self->write(pos, buf, size);
+        });
+  }
+
   void sanitize() {
-    for (uint16_t i = 0; i < this->_header->db_count; i++) {
-      if (this->_header->dbs[i].offset) {
-        assert(!this->_dbs[i]);
-        DB(*this, this->_header->dbs[i].offset, i).sanitize();
+    this->recover_areas();
+    this->_for_each_db_entry([&](auto& entry) {
+      if (entry.offset) {
+        DB(*this, entry.offset, std::string_view(entry.name)).sanitize();
       }
-    }
+    });
     if (std::filesystem::file_size(this->filename()) !=
         this->_header->file_size)
       std::filesystem::resize_file(this->filename(), this->_header->file_size);
@@ -99,10 +111,10 @@ class ReplicatingFileStorage
   typedef TDB<ReplicatingFileStorage> DB;
   typedef std::shared_ptr<ReplicatingFileStorage> storage_ptr;
 
-  ReplicatingFileStorage(const char* path, uint16_t db_count = 48,
+  ReplicatingFileStorage(const char* path,
                          size_t cache_capacity = 500 * M,
                          size_t pool_threads = 0, size_t hash_threads = 4)
-      : _storage(std::make_unique<StorageImpl>(path, db_count, cache_capacity,
+      : _storage(std::make_unique<StorageImpl>(path, cache_capacity,
                                                pool_threads, hash_threads)) {}
 
   DB operator[](const char* name) { return DB(shared_from_this(), name); }
@@ -118,10 +130,10 @@ class ReplicatingFileStorage
   size_t file_size() const { return _storage->file_size(); }
 
   static storage_ptr create(const char* path, size_t cache_capacity = 500 * M,
-                            uint16_t db_count = 48, size_t pool_threads = 0,
+                            size_t pool_threads = 0,
                             size_t hash_threads = 4) {
     return std::make_shared<ReplicatingFileStorage>(
-        path, db_count, cache_capacity, pool_threads, hash_threads);
+        path, cache_capacity, pool_threads, hash_threads);
   }
 
   void debug_reset() { _storage->debug_reset(); }

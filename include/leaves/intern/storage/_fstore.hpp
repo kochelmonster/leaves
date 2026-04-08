@@ -102,20 +102,23 @@ struct _FileOperations : _CacheBase {
     size_t file_size;
     Mutex file_lock;     // Kept for compatibility but no longer needed
     AreaPool area_pool;  // pool for both single and multi areas
-    uint16_t db_count;
-    DBEntry dbs[0];
+    uint16_t db_entry_count;  // entries used in first directory page
+    offset_t db_next_page;    // link to overflow directory page (0 = none)
+    DBEntry dbs[];            // flexible array fills to 4K boundary
 
-    FileHeader(uint16_t db_count_)
+    FileHeader()
         : signature{},
           db_version(0),
           file_size(0),
           file_lock{},
           area_pool{},
-          db_count(db_count_) {
+          db_entry_count(0),
+          db_next_page(0) {
       std::memset(signature, 0, sizeof(signature));
       std::strcpy(signature, FSTORE_SIGNATURE);
       area_pool.init();
-      std::memset((void*)dbs, 0, sizeof(DBEntry) * db_count);
+      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      std::memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };
 
@@ -132,8 +135,7 @@ struct _FileOperations : _CacheBase {
   size_t file_size() const { return _header->file_size; }
 
   size_t calc_header_size() const {
-    return leaves::padding(
-        sizeof(FileHeader) + sizeof(DBEntry) * _header->db_count, 4 * K);
+    return 4 * K;
   }
 
   void open(const char* path) {
@@ -318,10 +320,10 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
   typedef _CacheStore<Traits_, _FileOperations> base_t;
   using DB = typename base_t::DB;
 
-  _FileStore(const char* path, uint16_t db_count = 48,
+  _FileStore(const char* path,
              size_t capacity = 500 * M, size_t pool_threads = 1)
-      : base_t(db_count, capacity, pool_threads, Traits_::AREA_SIZE) {
-    init_dbfile(path, db_count);
+      : base_t(capacity, pool_threads, Traits_::AREA_SIZE) {
+    init_dbfile(path);
     // Thread pool already started by base constructor
   }
 
@@ -330,16 +332,13 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
     delete[] (char*)this->_header;
   }
 
-  void init_dbfile(const char* path, uint16_t db_count) {
+  void init_dbfile(const char* path) {
     using FileHeader = typename _FileOperations::FileHeader;
-    using DBEntry = typename _FileOperations::DBEntry;
-    // Compute header size based on requested db_count first
-    size_t header_size =
-        leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+    size_t header_size = 4 * K;
     std::unique_ptr<char[]> buffer(new char[header_size]);
     if (!std::filesystem::is_regular_file(path)) {
       this->open(path);
-      this->_header = new (buffer.get()) FileHeader(db_count);
+      this->_header = new (buffer.get()) FileHeader();
       // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
       this->_header->file_size = leaves::padding(header_size, Traits_::AREA_SIZE);
       this->resize(this->_header->file_size);
@@ -353,8 +352,6 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
       if (strcmp(this->_header->signature, FSTORE_SIGNATURE)) {
         throw std::runtime_error("wrong filetype");
       }
-      if (this->_header->db_count != db_count)
-        throw WrongValue("db_count may not be changed.");
     }
 
     assert(((uint64_t)this->_header & 7) == 0);
@@ -374,8 +371,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
   void recover_areas() {
     auto* self = this;
     _recover_areas<typename DB::Header, Traits_::AREA_SIZE>(
-        this->_header->area_pool, this->_header->db_count,
-        [self](uint16_t i) { return self->_header->dbs[i].offset; },
+        this->_header->area_pool,
+        [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
         this->_header->file_size,
         leaves::padding(this->calc_header_size(), Traits_::AREA_SIZE),
         [self](uint64_t pos, void* buf, size_t size) {
@@ -387,12 +384,11 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
   }
 
   void sanitize_dbs() {
-    for (uint16_t i = 0; i < this->_header->db_count; i++) {
-      if (this->_header->dbs[i].offset) {
-        assert(!this->_dbs[i]);
-        _DB(*this, this->_header->dbs[i].offset, i).sanitize();
+    this->_for_each_db_entry([&](auto& entry) {
+      if (entry.offset) {
+        _DB(*this, entry.offset, std::string_view(entry.name)).sanitize();
       }
-    }
+    });
   }
 
   // Compatibility method for tests

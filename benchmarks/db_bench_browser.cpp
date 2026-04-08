@@ -220,7 +220,7 @@ class Benchmark {
     db_num_++;
     char name[64];
     std::snprintf(name, sizeof(name), "bl_%d_%d", run_id_, db_num_);
-    store_ = new leaves::_BrowserStore(name, 8, 10 * leaves::M, 0);
+    store_ = new leaves::_BrowserStore(name, 10 * leaves::M, 0);
   }
 
   void LeavesWrite(bool sync, Order order, DBState state, int num_entries,

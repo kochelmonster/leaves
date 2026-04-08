@@ -3,6 +3,8 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
+#include <string_view>
 
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
@@ -155,24 +157,24 @@ struct _DB {
   Storage& _storage;
   txn_ptr _active_txn;
   header_ptr _header;
-  uint16_t _index;
+  std::string _name;
 
   [[no_unique_address]] Aspect _aspect{};
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id{0};
 
-  _DB(Storage& storage, offset_t header, uint16_t index)
+  _DB(Storage& storage, offset_t header, std::string_view name)
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
-        _index(index) {
+        _name(name) {
     if (_header->prepared_txn != _header->read_txn) {
       _active_txn = resolve<Transaction>(&_header->prepared_txn);
     }
   }
 
-  _DB(Storage& storage, offset_t* header, uint16_t index)
-      : _storage(storage), _index(index) {
+  _DB(Storage& storage, offset_t* header, std::string_view name)
+      : _storage(storage), _name(name) {
     init(header);
   }
 
@@ -255,7 +257,7 @@ struct _DB {
 
   uint64_t new_cursor_id() { return _storage.new_cursor_id(); }
 
-  Slice name() const { return _storage.db_name(_index); }
+  Slice name() const { return Slice(_name); }
 
   template <typename T>
   typename Traits::template Pointer<T> resolve(const offset_e* offset_ptr,

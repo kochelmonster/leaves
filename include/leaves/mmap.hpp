@@ -19,8 +19,8 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
 
   // map_size: virtual address space reservation. On mobile (iOS/Android), use a
   // smaller value (e.g. 256*M) to avoid jetsam/OOM kills.
-  MapStorage_(const char* path, size_t map_size = 4 * G, uint16_t db_count = 48)
-      : _storage(std::make_unique<StorageImpl>(path, map_size, db_count)) {}
+  MapStorage_(const char* path, size_t map_size = 4 * G)
+      : _storage(std::make_unique<StorageImpl>(path, map_size)) {}
 
   DB operator[](const char* name) { return DB(this->shared_from_this(), name); }
 
@@ -34,9 +34,8 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
 
   size_t file_size() const { return _storage->file_size(); }
 
-  static storage_ptr create(const char* path, size_t map_size = 4 * G,
-                            uint16_t db_count = 48) {
-    return std::make_shared<MapStorage_>(path, map_size, db_count);
+  static storage_ptr create(const char* path, size_t map_size = 4 * G) {
+    return std::make_shared<MapStorage_>(path, map_size);
   }
 
  private:

@@ -43,7 +43,6 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE_EQUAL(std::string(db._header->signature),
                         std::string(FSTORE_SIGNATURE));
     BOOST_REQUIRE_EQUAL(db._header->db_version, 0);
-    BOOST_REQUIRE_EQUAL(db._header->db_count, 48);  // default db_count
     BOOST_REQUIRE_GE(db._header->file_size, db.calc_header_size());
   }
 
@@ -65,24 +64,6 @@ BOOST_AUTO_TEST_CASE(test_init) {
   }
 
   BOOST_CHECK_THROW(wrong_signature(dbFilePath.c_str()), std::runtime_error);
-}
-
-BOOST_AUTO_TEST_CASE(test_db_count_validation) {
-  DirPreparation prep;
-  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-
-  // Create a file with db_count = 10
-  {
-    DBFileStore db(dbFilePath.c_str(), 10);
-    BOOST_REQUIRE_EQUAL(db._header->db_count, 10);
-  }
-
-  // Try to reopen with different db_count - should throw
-  BOOST_CHECK_THROW(DBFileStore db(dbFilePath.c_str(), 20), WrongValue);
-
-  // But opening with same db_count should work
-  DBFileStore db(dbFilePath.c_str(), 10);
-  BOOST_CHECK_EQUAL(db._header->db_count, 10);
 }
 
 BOOST_AUTO_TEST_CASE(test_file_operations) {
@@ -133,20 +114,16 @@ BOOST_AUTO_TEST_CASE(test_signature_constants) {
 BOOST_AUTO_TEST_CASE(test_file_header_structure) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  DBFileStore db(dbFilePath.c_str(), 10);  // Custom db_count
+  DBFileStore db(dbFilePath.c_str());
 
   // Verify FileHeader structure
   BOOST_CHECK_EQUAL(std::string(db._header->signature),
                     std::string(FSTORE_SIGNATURE));
   BOOST_CHECK_EQUAL(db._header->db_version, 0);
-  BOOST_CHECK_EQUAL(db._header->db_count, 10);
   BOOST_CHECK_GT(db._header->file_size, 0);
 
-  // Verify header size calculation
-  size_t expected_header_size = padding(
-      sizeof(DBFileStore::FileHeader) + sizeof(DBFileStore::DBEntry) * 10,
-      4 * K);
-  BOOST_CHECK_EQUAL(db.calc_header_size(), expected_header_size);
+  // Header size is always 4K
+  BOOST_CHECK_EQUAL(db.calc_header_size(), 4 * K);
 }
 
 BOOST_AUTO_TEST_CASE(test_concurrent_access) {
@@ -164,7 +141,6 @@ BOOST_AUTO_TEST_CASE(test_concurrent_access) {
   // They should see the same signature and basic properties
   BOOST_CHECK_EQUAL(std::string(db1._header->signature),
                     std::string(db2._header->signature));
-  BOOST_CHECK_EQUAL(db1._header->db_count, db2._header->db_count);
 }
 
 BOOST_AUTO_TEST_CASE(test_dirty_processor_thread) {

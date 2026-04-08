@@ -37,13 +37,12 @@ static int tests_passed = 0;
 
 // ── Test: create a fresh store and verify header ─────────────────────
 static bool test_init() {
-  _BrowserStore store("test_init_db", 16, 10 * M, 0);
+  _BrowserStore store("test_init_db", 10 * M, 0);
 
   TEST_ASSERT(store._header != nullptr, "header should be non-null");
   TEST_ASSERT(
       strcmp(store._header->signature, BROWSERSTORE_SIGNATURE) == 0,
       "signature must match");
-  TEST_ASSERT(store._header->db_count == 16, "db_count must match");
   TEST_ASSERT(store._header->db_version == 0, "initial version is 0");
   TEST_ASSERT(store._header->file_size > 0, "file_size > 0");
 
@@ -53,7 +52,7 @@ static bool test_init() {
 // ── Test: reopen an existing store ───────────────────────────────────
 static bool test_reopen() {
   {
-    _BrowserStore store("test_reopen_db", 8, 10 * M, 0);
+    _BrowserStore store("test_reopen_db", 10 * M, 0);
     // insert something so the header is persisted
     auto* db = store["mydb"];
     auto cursor = db->create_cursor();
@@ -62,36 +61,18 @@ static bool test_reopen() {
   }
 
   // Reopen the same IDB database
-  _BrowserStore store("test_reopen_db", 8, 10 * M, 0);
+  _BrowserStore store("test_reopen_db", 10 * M, 0);
   TEST_ASSERT(store._header != nullptr, "header non-null after reopen");
   TEST_ASSERT(
       strcmp(store._header->signature, BROWSERSTORE_SIGNATURE) == 0,
       "signature valid after reopen");
-  TEST_ASSERT(store._header->db_count == 8, "db_count preserved");
-
-  return true;
-}
-
-// ── Test: wrong db_count on reopen ───────────────────────────────────
-static bool test_wrong_db_count() {
-  {
-    _BrowserStore store("test_wrong_count_db", 10, 10 * M, 0);
-  }
-
-  bool threw = false;
-  try {
-    _BrowserStore store("test_wrong_count_db", 20, 10 * M, 0);
-  } catch (const WrongValue&) {
-    threw = true;
-  }
-  TEST_ASSERT(threw, "mismatched db_count must throw WrongValue");
 
   return true;
 }
 
 // ── Test: single put / get ───────────────────────────────────────────
 static bool test_put_get() {
-  _BrowserStore store("test_put_get_db", 16, 10 * M, 0);
+  _BrowserStore store("test_put_get_db", 10 * M, 0);
   auto* db = store["collection"];
   auto cursor = db->create_cursor();
 
@@ -108,7 +89,7 @@ static bool test_put_get() {
 
 // ── Test: overwrite existing key ─────────────────────────────────────
 static bool test_overwrite() {
-  _BrowserStore store("test_overwrite_db", 16, 10 * M, 0);
+  _BrowserStore store("test_overwrite_db", 10 * M, 0);
   auto* db = store["data"];
   auto cursor = db->create_cursor();
 
@@ -128,7 +109,7 @@ static bool test_overwrite() {
 
 // ── Test: delete a key ───────────────────────────────────────────────
 static bool test_remove() {
-  _BrowserStore store("test_remove_db", 16, 10 * M, 0);
+  _BrowserStore store("test_remove_db", 10 * M, 0);
   auto* db = store["rm"];
   auto cursor = db->create_cursor();
 
@@ -147,7 +128,7 @@ static bool test_remove() {
 
 // ── Test: multiple keys with iteration ───────────────────────────────
 static bool test_iteration() {
-  _BrowserStore store("test_iter_db", 16, 10 * M, 0);
+  _BrowserStore store("test_iter_db", 10 * M, 0);
   auto* db = store["iter"];
   auto cursor = db->create_cursor();
 
@@ -175,7 +156,7 @@ static bool test_iteration() {
 
 // ── Test: bulk insert ────────────────────────────────────────────────
 static bool test_bulk_insert() {
-  _BrowserStore store("test_bulk_db", 16, 50 * M, 0);
+  _BrowserStore store("test_bulk_db", 50 * M, 0);
   auto* db = store["bulk"];
   auto cursor = db->create_cursor();
 
@@ -208,7 +189,7 @@ static bool test_bulk_insert() {
 
 // ── Test: multiple DBs in one store ──────────────────────────────────
 static bool test_multiple_dbs() {
-  _BrowserStore store("test_multi_db", 16, 10 * M, 0);
+  _BrowserStore store("test_multi_db", 10 * M, 0);
 
   auto* db_a = store["alpha"];
   auto* db_b = store["beta"];
@@ -236,7 +217,6 @@ int main() {
 
   RUN_TEST(test_init);
   RUN_TEST(test_reopen);
-  RUN_TEST(test_wrong_db_count);
   RUN_TEST(test_put_get);
   RUN_TEST(test_overwrite);
   RUN_TEST(test_remove);

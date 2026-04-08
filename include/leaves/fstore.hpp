@@ -17,10 +17,10 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
   typedef TDB<FileStorage_> DB;
   typedef std::shared_ptr<FileStorage_> storage_ptr;
 
-  FileStorage_(const char* path, uint16_t db_count = 48,
+  FileStorage_(const char* path,
               size_t cache_capacity = 500 * M)
       : _storage(
-            std::make_unique<StorageImpl>(path, db_count, cache_capacity)) {}
+            std::make_unique<StorageImpl>(path, cache_capacity)) {}
 
   DB operator[](const char* name) { return DB(this->shared_from_this(), name); }
 
@@ -34,9 +34,8 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
 
   size_t file_size() const { return _storage->file_size(); }
 
-  static storage_ptr create(const char* path, size_t cache_capacity = 500 * M,
-                            uint16_t db_count = 48) {
-    return std::make_shared<FileStorage_>(path, db_count, cache_capacity);
+  static storage_ptr create(const char* path, size_t cache_capacity = 500 * M) {
+    return std::make_shared<FileStorage_>(path, cache_capacity);
   }
 
   void debug_reset() { _storage->debug_reset(); }

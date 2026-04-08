@@ -25,8 +25,8 @@ using Cursor = DB::Cursor;
 using cursor_ptr = DB::cursor_ptr;
 
 // Factory — embind passes std::string; constructor wants const char*
-static Store* make_store(const std::string& name, uint16_t db_count, size_t capacity) {
-  return new Store(name.c_str(), db_count, capacity, 0);
+static Store* make_store(const std::string& name, size_t capacity) {
+  return new Store(name.c_str(), capacity, 0);
 }
 
 // Close — async IDB flush. Must be called before .delete() to avoid crash.

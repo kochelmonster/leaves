@@ -129,20 +129,23 @@ struct _BrowserOperations : _CacheBase {
     size_t file_size;  // Logical file size for compatibility
     Mutex file_lock;
     AreaPool area_pool;
-    uint16_t db_count;
-    DBEntry dbs[0];
+    uint16_t db_entry_count;  // entries used in first directory page
+    offset_t db_next_page;    // link to overflow directory page (0 = none)
+    DBEntry dbs[];            // flexible array fills to 4K boundary
 
-    FileHeader(uint16_t db_count_)
+    FileHeader()
         : signature{},
           db_version(0),
           file_size(0),
           file_lock{},
           area_pool{},
-          db_count(db_count_) {
+          db_entry_count(0),
+          db_next_page(0) {
       std::memset(signature, 0, sizeof(signature));
       std::strcpy(signature, BROWSERSTORE_SIGNATURE);
       area_pool.init();
-      std::memset((void*)dbs, 0, sizeof(DBEntry) * db_count);
+      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      std::memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };
 
@@ -159,8 +162,7 @@ struct _BrowserOperations : _CacheBase {
   size_t file_size() const { return _header->file_size; }
 
   size_t calc_header_size() const {
-    return leaves::padding(
-        sizeof(FileHeader) + sizeof(DBEntry) * _header->db_count, 4 * K);
+    return 4 * K;
   }
 
   // Initialize IndexedDB connection
@@ -337,11 +339,11 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
   typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations> base_t;
   using DB = base_t::DB;
 
-  _BrowserStore(const char* db_name, uint16_t db_count = 48,
+  _BrowserStore(const char* db_name,
                 size_t capacity = 100 * M, size_t pool_threads = 0)
-      : base_t(db_count, capacity, pool_threads, _BrowserStoreTraits::AREA_SIZE) {
+      : base_t(capacity, pool_threads, _BrowserStoreTraits::AREA_SIZE) {
     // Note: pool_threads=0 for browser (single-threaded)
-    _init_browser_db(db_name, db_count);
+    _init_browser_db(db_name);
   }
 
   ~_BrowserStore() {
@@ -349,9 +351,8 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     delete[] reinterpret_cast<char*>(_header);
   }
 
-  void _init_browser_db(const char* db_name, uint16_t db_count) {
-    size_t header_size =
-        leaves::padding(sizeof(FileHeader) + sizeof(DBEntry) * db_count, 4 * K);
+  void _init_browser_db(const char* db_name) {
+    size_t header_size = 4 * K;
     char* buffer = new char[header_size];
 
     open(db_name);
@@ -361,7 +362,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
 
     if (!exists) {
       // Create new database
-      _header = new (buffer) FileHeader(db_count);
+      _header = new (buffer) FileHeader();
       // Align file_size to AREA_SIZE so areas are AREA_SIZE-aligned
       _header->file_size = leaves::padding(header_size, _BrowserStoreTraits::AREA_SIZE);
       // Write initial header
@@ -371,9 +372,6 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
 
       if (strcmp(_header->signature, BROWSERSTORE_SIGNATURE)) {
         throw std::runtime_error("Invalid browser store signature");
-      }
-      if (_header->db_count != db_count) {
-        throw WrongValue("db_count may not be changed.");
       }
     }
 
@@ -399,8 +397,8 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
   void _recover_areas() {
     auto* self = this;
     _recover_areas<typename DB::Header, _BrowserStoreTraits::AREA_SIZE>(
-        _header->area_pool, _header->db_count,
-        [self](uint16_t i) { return self->_header->dbs[i].offset; },
+        _header->area_pool,
+        [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
         _header->file_size,
         leaves::padding(calc_header_size(), _BrowserStoreTraits::AREA_SIZE),
         [self](uint64_t pos, void* buf, size_t size) {
@@ -412,12 +410,11 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
   }
 
   void _sanitize_dbs() {
-    for (uint16_t i = 0; i < _header->db_count; i++) {
-      if (_header->dbs[i].offset) {
-        assert(!_dbs[i]);
-        _DB(*this, _header->dbs[i].offset, i).sanitize();
+    this->_for_each_db_entry([&](auto& entry) {
+      if (entry.offset) {
+        _DB(*this, entry.offset, std::string_view(entry.name)).sanitize();
       }
-    }
+    });
   }
 
   // Compatibility method
@@ -463,7 +460,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
     int error = 0;
     emscripten_idb_delete(_db_name.c_str(), "header", &error);
     // Reinitialize
-    _init_browser_db(_db_name.c_str(), _header->db_count);
+    _init_browser_db(_db_name.c_str());
   }
 };
 
