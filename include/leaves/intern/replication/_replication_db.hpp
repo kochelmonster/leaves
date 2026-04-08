@@ -25,7 +25,7 @@ template <typename Storage_>
 struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
   using offset_e = typename Traits::offset_e;
-  using MemManager = _MemManagerPool<Traits>;
+  using HashMemManager = _MemManagerPool<Traits>;
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
   template <typename T, typename = void>
@@ -57,7 +57,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
     std::atomic<uint32_t> ref_count;  // Active replication session count
     std::atomic<uint64_t>
         hashed_txn_offset;  // Raw offset of txn matching hash trie (0=stale)
-    MemManager hash_mem_manager;  // Separate allocator for hash trie nodes
+    HashMemManager hash_mem_manager;  // Separate allocator for hash trie nodes
     offset_e hash_root;           // Root of main hash trie
     offset_e deletion_hash_root;  // Root of deletion hash trie
 
