@@ -1,7 +1,7 @@
 /**
  * WebSocket replication server (native binary)
  *
- * Hosts a ReplicatingMapStorage with test data, serves one WebSocket
+ * Hosts a MapStorage with test data, serves one WebSocket
  * connection on localhost:<port>, runs the LVRP sender FSM over it.
  *
  * Usage: ./test_ws_replication_server <port> <db_path>
@@ -21,7 +21,8 @@
 #include <vector>
 
 #include "leaves/replication.hpp"
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 namespace beast = boost::beast;
 namespace ws    = beast::websocket;
@@ -58,8 +59,8 @@ int main(int argc, char* argv[]) {
 
   {
     // Create source storage and populate with test data
-    auto src_storage = ReplicatingMapStorage::create(path);
-    auto src_db = (*src_storage)["testdb"];
+    auto src_storage = MapStorage::create(path);
+    auto src_db = src_storage->open<_ReplicationDB>("testdb");
     {
       auto c = src_db.cursor();
       c.start_transaction();
@@ -106,7 +107,7 @@ int main(int argc, char* argv[]) {
       void on_progress(uint64_t, size_t, size_t) override {}
     } events(completed);
 
-    ReplicationSender<ReplicatingMapStorage> sender(src_db);
+    ReplicationSender<MapStorage> sender(src_db);
     sender.begin(&transport, &events);
 
     // Protocol loop — read receiver responses

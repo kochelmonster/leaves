@@ -102,6 +102,7 @@ struct _FileOperations : _CacheBase {
     size_t file_size;
     Mutex file_lock;     // Kept for compatibility but no longer needed
     AreaPool area_pool;  // pool for both single and multi areas
+    uint32_t sanitize_generation;  // incremented on each storage open
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
     DBEntry dbs[];            // flexible array fills to 4K boundary
@@ -112,6 +113,7 @@ struct _FileOperations : _CacheBase {
           file_size(0),
           file_lock{},
           area_pool{},
+          sanitize_generation(0),
           db_entry_count(0),
           db_next_page(0) {
       std::memset(signature, 0, sizeof(signature));
@@ -316,9 +318,8 @@ struct _FileOperations : _CacheBase {
 };
 
 template <typename Traits_ = _StoreTraits>
-struct _FileStore : _CacheStore<Traits_, _FileOperations> {
-  typedef _CacheStore<Traits_, _FileOperations> base_t;
-  using DB = typename base_t::DB;
+struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
+  typedef _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> base_t;
 
   _FileStore(const char* path,
              size_t capacity = 500 * M, size_t pool_threads = 1)
@@ -337,7 +338,7 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
     size_t header_size = 4 * K;
     std::unique_ptr<char[]> buffer(new char[header_size]);
     if (!std::filesystem::is_regular_file(path)) {
-      this->open(path);
+      _FileOperations::open(path);
       this->_header = new (buffer.get()) FileHeader();
       // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
       this->_header->file_size = leaves::padding(header_size, Traits_::AREA_SIZE);
@@ -345,7 +346,7 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
       // Write header
       this->write(0, buffer.get(), header_size);
     } else {
-      this->open(path);
+      _FileOperations::open(path);
       this->read(0, buffer.get(), header_size);
       this->_header = (FileHeader*)buffer.get();
 
@@ -362,7 +363,7 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
   void sanitize() {
     // No locking needed since we're single-process
     recover_areas();
-    sanitize_dbs();
+    ++this->_header->sanitize_generation;
     if (std::filesystem::file_size(this->filename()) != this->_header->file_size)
       std::filesystem::resize_file(this->filename(), this->_header->file_size);
   }
@@ -370,7 +371,7 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
   // Rebuild the free area pool by scanning the file.
   void recover_areas() {
     auto* self = this;
-    _recover_areas<typename DB::Header, Traits_::AREA_SIZE>(
+    _recover_areas<_DBHeader<base_t>, Traits_::AREA_SIZE>(
         this->_header->area_pool,
         [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
         this->_header->file_size,
@@ -381,14 +382,6 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations> {
         [self](uint64_t pos, const void* buf, size_t size) {
           self->write(pos, buf, size);
         });
-  }
-
-  void sanitize_dbs() {
-    this->_for_each_db_entry([&](auto& entry) {
-      if (entry.offset) {
-        _DB(*this, entry.offset, std::string_view(entry.name)).sanitize();
-      }
-    });
   }
 
   // Compatibility method for tests

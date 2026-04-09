@@ -2,7 +2,7 @@
  * WebSocket replication client (WASM / Emscripten)
  *
  * Connects to a native server via WebSocket, receives replication data
- * into a ReplicatingBrowserStorage, then verifies the replicated keys.
+ * into a BrowserStorage, then verifies the replicated keys.
  *
  * Build: emcmake cmake ... && cmake --build build-wasm -j
  * Run:   node --experimental-wasm-jspi tests/ws_replication/run.mjs
@@ -30,7 +30,8 @@
 #include <vector>
 
 #include "leaves/replication.hpp"
-#include "leaves/replicating_browserstore.hpp"
+#include "leaves/browserstore.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 using emscripten::val;
@@ -148,8 +149,8 @@ int main(int argc, char* argv[]) {
   std::fprintf(stderr, "[client] connected\n");
 
   // Create receiver-side storage
-  auto dst_storage = ReplicatingBrowserStorage::create("test_ws_repl");
-  auto dst_db = (*dst_storage)["testdb"];
+  auto dst_storage = BrowserStorage::create("test_ws_repl");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   WasmWsTransport transport;
 
@@ -167,7 +168,7 @@ int main(int argc, char* argv[]) {
     void on_progress(uint64_t, size_t, size_t) override {}
   } events;
 
-  ReplicationReceiver<ReplicatingBrowserStorage> receiver(dst_db);
+  ReplicationReceiver<BrowserStorage> receiver(dst_db);
   receiver.begin(&transport, &events);
 
   // Receive buffer for pulling messages from JS queue

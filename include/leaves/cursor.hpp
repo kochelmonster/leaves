@@ -4,16 +4,18 @@
 #include <memory>
 
 #include "intern/db/_cursor.hpp"
+#include "intern/db/_db.hpp"
 #include "intern/core/_util.hpp"
 
 namespace leaves {
 
-template <typename Storage>
+template <typename Storage,
+          template <typename> class DBClass = _DB>
 class TCursor {
  public:
   typedef typename Storage::storage_ptr storage_ptr;
   typedef typename Storage::StorageImpl StorageImpl;
-  typedef typename StorageImpl::DB DBImpl;
+  typedef DBClass<StorageImpl> DBImpl;
   typedef typename DBImpl::cursor_ptr cursor_ptr;
 
   TCursor(storage_ptr storage, DBImpl* db)

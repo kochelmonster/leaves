@@ -28,6 +28,14 @@ class NotImplemented : public LeavesException {};
 
 class KeyTooBig : public LeavesException {};
 
+class TypeMismatch : public LeavesException {
+ private:
+  const char* _msg;
+ public:
+  TypeMismatch(const char* msg = "db type mismatch") : _msg(msg) {}
+  const char* what() const NOEXCEPT { return _msg; }
+};
+
 class StorageFull : public LeavesException {
  public:
   const char* what() const NOEXCEPT { return "storage full: file size would exceed mapped region"; }

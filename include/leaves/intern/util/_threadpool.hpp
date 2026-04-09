@@ -35,6 +35,11 @@ namespace leaves {
  *   auto id = storage.schedule_after(std::chrono::seconds(60), [&]() { ... });
  *   storage.cancel_job(id);  // cancel before it fires
  */
+// Tag type for constructing _ThreadPoolMixin without starting workers.
+// Workers are lazy-started on the first schedule_after() call.
+struct _lazy_pool_t {};
+static constexpr _lazy_pool_t _lazy_pool{};
+
 template <typename Derived>
 struct _ThreadPoolMixin {
   using Task = std::function<void()>;
@@ -57,6 +62,9 @@ struct _ThreadPoolMixin {
   std::atomic<bool> _pool_shutdown{false};
   std::atomic<uint32_t> _active_tasks{0};
   std::atomic<uint64_t> _next_job_id{1};
+
+  // Lazy mode: no workers started, pool auto-starts on first schedule_after()
+  explicit _ThreadPoolMixin(_lazy_pool_t) {}
 
   explicit _ThreadPoolMixin(size_t num_threads = 0) {
     if (num_threads == 0) {
@@ -129,6 +137,11 @@ struct _ThreadPoolMixin {
     {
       std::lock_guard<std::mutex> lock(_queue_mutex);
       if (_pool_shutdown.load()) return id;
+      // Lazy-start: ensure at least 1 worker for scheduled jobs
+      if (_workers.empty()) {
+        _workers.reserve(1);
+        _workers.emplace_back([this]() { _worker_loop(); });
+      }
       _sched_queue.push({id, when, std::move(task)});
     }
     _queue_cv.notify_one();  // wake a worker to recalculate its deadline

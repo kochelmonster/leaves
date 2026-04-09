@@ -236,7 +236,7 @@ class Benchmark {
     }
 
     char key[100];
-    auto* db = (*store_)["benchmark"];
+    auto* db = store_->open("benchmark");
     auto cursor = db->create_cursor();
 
     for (int i = 0; i < num_entries; i += entries_per_batch) {
@@ -257,7 +257,7 @@ class Benchmark {
   }
 
   void LeavesReadSequential() {
-    auto* db = (*store_)["benchmark"];
+    auto* db = store_->open("benchmark");
     auto cursor = db->create_cursor();
     for (cursor->first(); cursor->is_valid(); cursor->next()) {
       leaves::Slice k = cursor->key();
@@ -269,7 +269,7 @@ class Benchmark {
 
   void LeavesReadRandom() {
     char key[100];
-    auto* db = (*store_)["benchmark"];
+    auto* db = store_->open("benchmark");
     auto cursor = db->create_cursor();
     for (int i = 0; i < reads_; i++) {
       const int k = rand_.Next() % reads_;

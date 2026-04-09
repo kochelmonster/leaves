@@ -48,8 +48,8 @@ StorageType detect_storage_type(const std::string& input_path) {
 
 void dump_mmap_storage(const std::string& input_path, const std::string& db_name, std::ostream& output) {
     try {
-        MapStorage storage(input_path.c_str());
-        auto db = storage[db_name.c_str()];
+        auto storage = MapStorage::create(input_path.c_str());
+        auto db = storage->open(db_name.c_str());
         
         _Dumper dumper(db, &db._internal()->_active_txn->root, false);
         dumper.dump(output);
@@ -60,8 +60,8 @@ void dump_mmap_storage(const std::string& input_path, const std::string& db_name
 
 void dump_fstore_storage(const std::string& input_path, const std::string& db_name, std::ostream& output) {
     try {
-        FileStorage storage(input_path.c_str());
-        auto db = storage[db_name.c_str()];
+        auto storage = FileStorage::create(input_path.c_str());
+        auto db = storage->open(db_name.c_str());
 
         _Dumper dumper(db, &db._internal()->_active_txn->root, false);
         dumper.dump(output);

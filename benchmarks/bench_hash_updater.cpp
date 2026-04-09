@@ -4,7 +4,7 @@
 //   - Inline executor (single-threaded baseline)
 //   - _PoolExecutor with 1, 2, 4, 8 threads
 //
-// Uses ReplicatingMapStorage + HashDB adapter (non-transactional),
+// Uses MapStorage + HashDB adapter (non-transactional),
 // matching the production call path in _ReplicationDB::acquire_hash_trie.
 //
 // Build:  cmake --build build -j --target bench_hash_updater
@@ -17,7 +17,8 @@
 #include <string>
 #include <vector>
 
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/replication/_hash.hpp"
 #include "leaves/intern/util/_threadpool.hpp"
 
@@ -42,9 +43,9 @@ struct BenchPool : _ThreadPoolMixin<BenchPool> {
   explicit BenchPool(size_t n) : _ThreadPoolMixin(n) {}
 };
 
-// Type aliases — use ReplicatingMapStorage to get the real HashDB adapter
-using RStorage = ReplicatingMapStorage;
-using RDB = RStorage::StorageImpl::DB;  // _ReplicationDB
+// Type aliases — use MapStorage to get the real HashDB adapter
+using RStorage = MapStorage;
+using RDB = _ReplicationDB<RStorage::StorageImpl>;  // _ReplicationDB
 using HashDB = RDB::HashDB;
 using CTraits = RDB::CursorTraits;
 using offset_e = typename RDB::offset_e;
@@ -58,7 +59,7 @@ using HashLeafNode = _LeafNode<HashTraits>;
 // Populate data trie with N keys
 // ---------------------------------------------------------------------------
 
-static void populate(RStorage::DB& db, int n, int vsize) {
+static void populate(TDB<RStorage, _ReplicationDB>& db, int n, int vsize) {
   std::string val(vsize, 'x');
   for (int i = 0; i < n; i++) {
     char buf[32];
@@ -271,7 +272,7 @@ int main(int argc, char** argv) {
   // --- Setup: populate data trie ---
   auto storage = RStorage::create(db_path);
   {
-  auto db = (*storage)["bench"];
+  auto db = storage->open<_ReplicationDB>("bench");
   populate(db, FLAGS_num, FLAGS_vsize);
 
   auto* rdb = db._internal();

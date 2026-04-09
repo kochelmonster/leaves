@@ -12,6 +12,56 @@ struct _DBDirectoryEntry {
   offset_t offset;
 };
 
+// Type-erased DB slot for caching opened DB instances.
+// Stores function pointers for type-specific operations without
+// requiring virtual methods or knowledge of the concrete DB type.
+struct _DBSlot {
+  void* db = nullptr;
+  uint16_t type_id = 0;
+  void (*deleter)(void*) = nullptr;
+
+  _DBSlot() = default;
+
+  template <typename DB>
+  static _DBSlot make(DB* ptr) {
+    _DBSlot slot;
+    slot.db = ptr;
+    slot.type_id = DB::DB_TYPE_ID;
+    slot.deleter = [](void* p) { delete static_cast<DB*>(p); };
+    return slot;
+  }
+
+  ~_DBSlot() { reset(); }
+
+  void reset() {
+    if (deleter && db) {
+      deleter(db);
+      db = nullptr;
+    }
+  }
+
+  _DBSlot(_DBSlot&& o) noexcept
+      : db(o.db),
+        type_id(o.type_id),
+        deleter(o.deleter) {
+    o.db = nullptr;
+  }
+
+  _DBSlot& operator=(_DBSlot&& o) noexcept {
+    if (this != &o) {
+      reset();
+      db = o.db;
+      type_id = o.type_id;
+      deleter = o.deleter;
+      o.db = nullptr;
+    }
+    return *this;
+  }
+
+  _DBSlot(const _DBSlot&) = delete;
+  _DBSlot& operator=(const _DBSlot&) = delete;
+};
+
 // Overflow directory page for linked DB entries.
 // The first page is embedded in FileHeader; overflow pages are full 4K.
 struct _DBDirectoryPage {

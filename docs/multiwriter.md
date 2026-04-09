@@ -341,3 +341,19 @@ cursor->commit();
 ```
 
 `MW(db)` casts the type-erased `_DBSlot` to `_MultiWriterDB*`.
+
+
+
+```cpp
+
+MultiWriterCoordinator coordinator(main_db);
+start_thread([&coordinator, &queue]{
+  WriterDB wdb(coordinator);
+  auto cursor = wdb.create_cursor();
+  // write into cursor
+
+});
+
+```
+
+The coordinator shall apply the changes sequentially to the main DB.

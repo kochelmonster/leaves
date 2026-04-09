@@ -349,12 +349,9 @@ struct _Merger {
 
       size_t saved_key_len = current_key.size();
       if constexpr (_has_may_add_trie) {
-        // Append suffix to current_key so may_add_trie/may_add_leaf see correct keys
-        current_key.append((const char*)suffix_prefix.data(), suffix_len);
-
-        // Early-out: let the policy reject the entire subtree by prefix
+        // current_key already has the full src prefix (appended by merge_node),
+        // so it's the correct key for may_add_trie without further appending.
         if (!handler.may_add_trie(current_key)) {
-          current_key.resize(saved_key_len);
           return;
         }
       }

@@ -545,7 +545,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
   }
 
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
 
   std::ostream null_stream(nullptr);
@@ -599,7 +599,7 @@ BOOST_AUTO_TEST_CASE(test_strings) {
 BOOST_AUTO_TEST_CASE(test_numbers) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   auto cursor = db.cursor();
   int i;
 

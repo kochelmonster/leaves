@@ -100,6 +100,14 @@ struct _DBHeader {
   // Areas are linked lists in storage, operations use atomic head/tail pattern
   offset_t area_list_head_single;  // head of single AREA_SIZE areas linked list
   offset_t area_list_head_multi;   // head of multi-AREA_SIZE areas linked list
+
+  // Identifies the DB subtype for runtime type verification on open.
+  // Written by init(), checked by open<>() to prevent type mismatches.
+  uint16_t db_type_id;
+
+  // Tracks whether this DB has been sanitized for the current storage
+  // generation.  Compared against the FileHeader counter at open() time.
+  uint32_t sanitize_generation;
 };
 
 // Make _DB accept Transaction and Header as template parameters
@@ -145,6 +153,8 @@ struct _DB {
   typedef DB db_type;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
+  static constexpr uint16_t DB_TYPE_ID = 0;
+
   static_assert(
       sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
       "Size of Transaction must be at least size of _TransactionBase");
@@ -186,6 +196,7 @@ struct _DB {
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
+    _header->db_type_id = Self::DB_TYPE_ID;
     new (&_header->txn_lock) Mutex();
     new (&_header->txn_ref_lock) SpinLock();
 
@@ -418,6 +429,7 @@ struct _DB {
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
   bool is_active() const {
+    if (_active_txn) return true;
     bool is_active_ = false;
     iter_transactions([&is_active_](txn_ptr txn) -> bool {
       if (txn->refs.load() > 0) is_active_ = true;

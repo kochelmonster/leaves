@@ -8,6 +8,7 @@
 #endif
 
 #include "leaves/intern/storage/_fstore.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -335,4 +336,52 @@ BOOST_AUTO_TEST_CASE(test_cancel_scheduled_job) {
   // Brief wait to confirm neither fires (both are hours away)
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   BOOST_CHECK_EQUAL(counter.load(), 0);
+}
+
+// ── _CacheStore::open cache hit + type mismatch (L336-337) ─────────────
+
+BOOST_AUTO_TEST_CASE(test_fstore_open_cached_twice) {
+  // Exercises _cachestore.hpp L337 — returning cached DB on second open()
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "cache_hit.lvs";
+  DBFileStore storage(dbFilePath.c_str());
+
+  auto* db1 = storage.open("test");
+  auto* db2 = storage.open("test");  // cache hit → L337
+  BOOST_CHECK_EQUAL(db1, db2);
+}
+
+BOOST_AUTO_TEST_CASE(test_fstore_type_mismatch_cached) {
+  // Exercises _cachestore.hpp L336 — TypeMismatch on cached DB
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "typemismatch.lvs";
+  DBFileStore storage(dbFilePath.c_str());
+
+  storage.open("test");  // Creates as _DB
+  BOOST_CHECK_THROW(
+      (storage.template open<_ReplicationDB>("test")),
+      TypeMismatch);
+}
+
+// ── _CacheStore::_return_areas_at uncached (L597-602) ──────────────────
+
+BOOST_AUTO_TEST_CASE(test_fstore_remove_uncached_db) {
+  // Exercises _cachestore.hpp L597-602 — _return_areas_at for uncached DB
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "remove_uncached.lvs";
+
+  // Create file with a DB
+  {
+    DBFileStore storage(dbFilePath.c_str());
+    auto* db = storage.open("mydb");
+    db->start_transaction(0);
+    db->alloc_page(80);
+    db->commit(0);
+  }
+
+  // Reopen — DB not in cache — then remove
+  {
+    DBFileStore storage(dbFilePath.c_str());
+    BOOST_CHECK_NO_THROW(storage.template remove<_DB>("mydb"));
+  }
 }

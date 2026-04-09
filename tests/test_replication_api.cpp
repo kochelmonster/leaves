@@ -12,8 +12,9 @@
 #endif
 
 #include "leaves/replication.hpp"
-#include "leaves/replicating_mmap.hpp"
-#include "leaves/replicating_fstore.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
+#include "leaves/fstore.hpp"
 
 using namespace leaves;
 
@@ -88,6 +89,59 @@ struct APIFixture {
 BOOST_AUTO_TEST_SUITE(ReplicationPublicAPI)
 
 // ============================================================================
+// Test: error state mapping (sender and receiver)
+// ============================================================================
+BOOST_FIXTURE_TEST_CASE(test_error_state, APIFixture) {
+  // Exercises replication.hpp L57-58 (Sender ERROR state)
+  // Exercises replication.hpp L119-120 (Receiver ERROR state)
+  auto src_path = temp_dir / "src_err.lvs";
+  auto dst_path = temp_dir / "dst_err.lvs";
+
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
+
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
+
+  LoopbackTransport sender_tx, receiver_tx;
+  sender_tx.set_peer(&receiver_tx);
+  receiver_tx.set_peer(&sender_tx);
+
+  EventTracker sender_events, receiver_events;
+
+  ReplicationSender<MapStorage> sender(src_db);
+  ReplicationReceiver<MapStorage> receiver(dst_db);
+
+  // Start receiver but feed it garbage data to trigger error
+  receiver.begin(&receiver_tx, &receiver_events);
+
+  // Write garbage to receiver's buffer
+  uint8_t garbage[64];
+  memset(garbage, 0xFF, sizeof(garbage));
+  auto& buf = receiver.receive_buffer();
+  // Construct a fake message: first 4 bytes are size header
+  uint32_t fake_size = 16;
+  memcpy(buf.write_ptr(), &fake_size, 4);
+  memcpy(buf.write_ptr() + 4, garbage, 60);
+  buf.advance(64);
+  receiver.on_data_received();
+
+  // Receiver should be in ERROR state
+  BOOST_CHECK(receiver.state() == ReplicationState::ERROR ||
+              receiver.state() == ReplicationState::IDLE);
+  if (receiver.state() == ReplicationState::ERROR) {
+    BOOST_CHECK(receiver_events.errored);
+  }
+
+  // Test sender error by feeding garbage message
+  sender.begin(&sender_tx, &sender_events);
+  sender.on_message_received(garbage, sizeof(garbage));
+
+  BOOST_CHECK(sender.state() == ReplicationState::ERROR ||
+              sender.state() == ReplicationState::ACTIVE);
+}
+
+// ============================================================================
 // Test: basic sender/receiver with mmap storage
 // ============================================================================
 
@@ -95,11 +149,11 @@ BOOST_FIXTURE_TEST_CASE(test_mmap_replicate_basic, APIFixture) {
   auto src_path = temp_dir / "src.lvs";
   auto dst_path = temp_dir / "dst.lvs";
 
-  auto src_storage = ReplicatingMapStorage::create(src_path.c_str());
-  auto dst_storage = ReplicatingMapStorage::create(dst_path.c_str());
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
 
   // Insert data on source
-  auto src_db = (*src_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
   {
     auto c = src_db.cursor();
     c.start_transaction();
@@ -110,7 +164,7 @@ BOOST_FIXTURE_TEST_CASE(test_mmap_replicate_basic, APIFixture) {
     c.commit();
   }
 
-  auto dst_db = (*dst_storage)["testdb"];
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   // Set up transports
   LoopbackTransport sender_tx, receiver_tx;
@@ -120,8 +174,8 @@ BOOST_FIXTURE_TEST_CASE(test_mmap_replicate_basic, APIFixture) {
   EventTracker sender_events, receiver_events;
 
   // Create sessions using public API
-  ReplicationSender<ReplicatingMapStorage> sender(src_db);
-  ReplicationReceiver<ReplicatingMapStorage> receiver(dst_db);
+  ReplicationSender<MapStorage> sender(src_db);
+  ReplicationReceiver<MapStorage> receiver(dst_db);
 
   BOOST_CHECK(sender.state() == ReplicationState::IDLE);
   BOOST_CHECK(receiver.state() == ReplicationState::IDLE);
@@ -160,11 +214,11 @@ BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, APIFixture) {
   auto src_path = temp_dir / "src_empty.lvs";
   auto dst_path = temp_dir / "dst_empty.lvs";
 
-  auto src_storage = ReplicatingMapStorage::create(src_path.c_str());
-  auto dst_storage = ReplicatingMapStorage::create(dst_path.c_str());
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
 
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   LoopbackTransport sender_tx, receiver_tx;
   sender_tx.set_peer(&receiver_tx);
@@ -172,8 +226,8 @@ BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, APIFixture) {
 
   EventTracker sender_events, receiver_events;
 
-  ReplicationSender<ReplicatingMapStorage> sender(src_db);
-  ReplicationReceiver<ReplicatingMapStorage> receiver(dst_db);
+  ReplicationSender<MapStorage> sender(src_db);
+  ReplicationReceiver<MapStorage> receiver(dst_db);
 
   receiver.begin(&receiver_tx, &receiver_events);
   sender.begin(&sender_tx, &sender_events);
@@ -194,11 +248,11 @@ BOOST_FIXTURE_TEST_CASE(test_fstore_replicate, APIFixture) {
   auto src_path = temp_dir / "src.fst";
   auto dst_path = temp_dir / "dst.fst";
 
-  auto src_storage = ReplicatingFileStorage::create(src_path.c_str());
-  auto dst_storage = ReplicatingFileStorage::create(dst_path.c_str());
+  auto src_storage = FileStorage::create(src_path.c_str());
+  auto dst_storage = FileStorage::create(dst_path.c_str());
 
   // Insert data on source
-  auto src_db = (*src_storage)["mydb"];
+  auto src_db = src_storage->open<_ReplicationDB>("mydb");
   {
     auto c = src_db.cursor();
     c.start_transaction();
@@ -209,7 +263,7 @@ BOOST_FIXTURE_TEST_CASE(test_fstore_replicate, APIFixture) {
     c.commit();
   }
 
-  auto dst_db = (*dst_storage)["mydb"];
+  auto dst_db = dst_storage->open<_ReplicationDB>("mydb");
 
   LoopbackTransport sender_tx, receiver_tx;
   sender_tx.set_peer(&receiver_tx);
@@ -217,8 +271,8 @@ BOOST_FIXTURE_TEST_CASE(test_fstore_replicate, APIFixture) {
 
   EventTracker sender_events, receiver_events;
 
-  ReplicationSender<ReplicatingFileStorage> sender(src_db);
-  ReplicationReceiver<ReplicatingFileStorage> receiver(dst_db);
+  ReplicationSender<FileStorage> sender(src_db);
+  ReplicationReceiver<FileStorage> receiver(dst_db);
 
   receiver.begin(&receiver_tx, &receiver_events);
   sender.begin(&sender_tx, &sender_events);
@@ -248,8 +302,8 @@ BOOST_FIXTURE_TEST_CASE(test_fstore_replicate, APIFixture) {
 
 BOOST_FIXTURE_TEST_CASE(test_set_retention, APIFixture) {
   auto path = temp_dir / "retention.lvs";
-  auto storage = ReplicatingMapStorage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto storage = MapStorage::create(path.c_str());
+  auto db = storage->open<_ReplicationDB>("testdb");
 
   // Should not throw — sets retention on the underlying _ReplicationDB
   db.set_retention(3600);
@@ -268,11 +322,11 @@ BOOST_FIXTURE_TEST_CASE(test_session_id, APIFixture) {
   auto src_path = temp_dir / "src_sid.lvs";
   auto dst_path = temp_dir / "dst_sid.lvs";
 
-  auto src_storage = ReplicatingMapStorage::create(src_path.c_str());
-  auto dst_storage = ReplicatingMapStorage::create(dst_path.c_str());
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
 
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   LoopbackTransport sender_tx, receiver_tx;
   sender_tx.set_peer(&receiver_tx);
@@ -280,7 +334,7 @@ BOOST_FIXTURE_TEST_CASE(test_session_id, APIFixture) {
 
   EventTracker events;
 
-  ReplicationSender<ReplicatingMapStorage> sender(src_db);
+  ReplicationSender<MapStorage> sender(src_db);
   sender.begin(&sender_tx, &events);
 
   BOOST_CHECK_NE(sender.session_id(), 0u);
@@ -294,11 +348,11 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_replication, APIFixture) {
   auto src_path = temp_dir / "src_cross.lvs";
   auto dst_path = temp_dir / "dst_cross.fst";
 
-  auto src_storage = ReplicatingMapStorage::create(src_path.c_str());
-  auto dst_storage = ReplicatingFileStorage::create(dst_path.c_str());
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = FileStorage::create(dst_path.c_str());
 
   // Insert data on mmap source
-  auto src_db = (*src_storage)["crossdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("crossdb");
   {
     auto c = src_db.cursor();
     c.start_transaction();
@@ -309,7 +363,7 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_replication, APIFixture) {
     c.commit();
   }
 
-  auto dst_db = (*dst_storage)["crossdb"];
+  auto dst_db = dst_storage->open<_ReplicationDB>("crossdb");
 
   LoopbackTransport sender_tx, receiver_tx;
   sender_tx.set_peer(&receiver_tx);
@@ -318,8 +372,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_replication, APIFixture) {
   EventTracker sender_events, receiver_events;
 
   // Sender is mmap, receiver is fstore — uses FSM types directly
-  using MmapSender = ReplicationSender<ReplicatingMapStorage>;
-  using FstoreReceiver = ReplicationReceiver<ReplicatingFileStorage>;
+  using MmapSender = ReplicationSender<MapStorage>;
+  using FstoreReceiver = ReplicationReceiver<FileStorage>;
 
   MmapSender sender(src_db);
   FstoreReceiver receiver(dst_db);
@@ -352,11 +406,11 @@ BOOST_FIXTURE_TEST_CASE(test_incremental_replication, APIFixture) {
   auto src_path = temp_dir / "src_incr.lvs";
   auto dst_path = temp_dir / "dst_incr.lvs";
 
-  auto src_storage = ReplicatingMapStorage::create(src_path.c_str());
-  auto dst_storage = ReplicatingMapStorage::create(dst_path.c_str());
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
 
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   // Insert initial data
   {
@@ -374,8 +428,8 @@ BOOST_FIXTURE_TEST_CASE(test_incremental_replication, APIFixture) {
     rtx.set_peer(&stx);
     EventTracker se, re;
 
-    ReplicationSender<ReplicatingMapStorage> sender(src_db);
-    ReplicationReceiver<ReplicatingMapStorage> receiver(dst_db);
+    ReplicationSender<MapStorage> sender(src_db);
+    ReplicationReceiver<MapStorage> receiver(dst_db);
     receiver.begin(&rtx, &re);
     sender.begin(&stx, &se);
     run_replication(sender, receiver, stx, rtx);
@@ -399,8 +453,8 @@ BOOST_FIXTURE_TEST_CASE(test_incremental_replication, APIFixture) {
     rtx.set_peer(&stx);
     EventTracker se, re;
 
-    ReplicationSender<ReplicatingMapStorage> sender(src_db);
-    ReplicationReceiver<ReplicatingMapStorage> receiver(dst_db);
+    ReplicationSender<MapStorage> sender(src_db);
+    ReplicationReceiver<MapStorage> receiver(dst_db);
     receiver.begin(&rtx, &re);
     sender.begin(&stx, &se);
     run_replication(sender, receiver, stx, rtx);

@@ -527,3 +527,54 @@ BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
                           (char*)&dst + sizeof(TestTraits::PageHeader),
                           src.size() - sizeof(TestTraits::PageHeader)), 0);
 }
+
+// Test insert_branch with shift > 0 (array_start moves when lower[] crosses
+// an 8-byte alignment boundary).  With compressed_len=1 and hash_t[0],
+// lower_start=8.  old_bcount=0 → old_as=align(8)=8, new_as=align(12)=16 →
+// shift=8.
+BOOST_AUTO_TEST_CASE(test_insert_branch_shift_positive) {
+  char buf[AREA_SIZE];
+  memset(buf, 0, AREA_SIZE);
+  TrieNode& trie = *(TrieNode*)buf;
+
+  // Create a trie with only a NONE branch (old_bcount=0, _upper=0).
+  uint16_t idx = trie.create(Slice("x", 1), TrieNode::NONE);
+  BOOST_CHECK_EQUAL(trie.count(), 1);
+  BOOST_CHECK(trie.has_none());
+  BOOST_CHECK_EQUAL(trie._upper, 0);  // no non-NONE branches
+  trie.array()[idx] = offset_t(100);
+
+  // insert_branch(5) adds upper group 0 (ubit(5)=0).
+  // old_bcount=0, shift = align(8+4) - align(8) = 16 - 8 = 8.
+  // oidx=1 (NONE branch at index 0), so the prefix-move path (oidx>0) fires.
+  uint16_t idx2 = trie.insert_branch(5);
+  BOOST_CHECK_EQUAL(trie.count(), 2);
+  BOOST_CHECK(trie.isset(5));
+  BOOST_CHECK(trie.has_none());
+  // NONE branch (idx 0) must have survived the shift
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 100);
+  trie.array()[idx2] = offset_t(200);
+  BOOST_CHECK_EQUAL(*trie.offset(5), 200);
+
+  // Second shift test: old_bcount=1 → shift=0 (no shift).
+  // Then add a 3rd upper group: old_bcount=2 → shift=8 again.
+  // Add key 70 (ubit=2, group 2) — old_bcount=1, shift=0.
+  uint16_t idx3 = trie.insert_branch(70);
+  trie.array()[idx3] = offset_t(300);
+  BOOST_CHECK_EQUAL(trie.count(), 3);
+  BOOST_CHECK_EQUAL(*trie.offset(70), 300);
+  BOOST_CHECK_EQUAL(*trie.offset(5), 200);
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 100);
+
+  // Add key 130 (ubit=4, group 4) — old_bcount=2, shift=8.
+  // oidx = 1(NONE) + count(lower[0]) + count(lower[1]) = 1 + 1 + 1 = 3
+  // old_count = 3, so suffix = old_count - oidx = 0 (no suffix to move).
+  // prefix = oidx = 3 > 0, so prefix-move fires again.
+  uint16_t idx4 = trie.insert_branch(130);
+  trie.array()[idx4] = offset_t(400);
+  BOOST_CHECK_EQUAL(trie.count(), 4);
+  BOOST_CHECK_EQUAL(*trie.offset(130), 400);
+  BOOST_CHECK_EQUAL(*trie.offset(70), 300);
+  BOOST_CHECK_EQUAL(*trie.offset(5), 200);
+  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 100);
+}

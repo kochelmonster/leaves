@@ -14,7 +14,6 @@ template <typename Traits = MapTraits>
 class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
  public:
   typedef _MemoryMapFile<Traits> StorageImpl;
-  typedef TDB<MapStorage_> DB;
   typedef std::shared_ptr<MapStorage_> storage_ptr;
 
   // map_size: virtual address space reservation. On mobile (iOS/Android), use a
@@ -22,9 +21,14 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   MapStorage_(const char* path, size_t map_size = 4 * G)
       : _storage(std::make_unique<StorageImpl>(path, map_size)) {}
 
-  DB operator[](const char* name) { return DB(this->shared_from_this(), name); }
+  template <template <typename> class DBClass = _DB, typename... Args>
+  TDB<MapStorage_, DBClass> open(const char* name, Args&&... args) {
+    return TDB<MapStorage_, DBClass>(
+        this->shared_from_this(), name, std::forward<Args>(args)...);
+  }
 
-  void remove_db(const char* name) { _storage->remove_db(name); }
+  template <template <typename> class DBClass = _DB>
+  void remove(const char* name) { _storage->template remove<DBClass>(name); }
 
   void list_dbs(std::vector<std::string>& result) {
     return _storage->list_dbs(result);
@@ -39,7 +43,7 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   }
 
  private:
-  friend class TDB<MapStorage_>;
+  template <typename, template <typename> class> friend class TDB;
   std::unique_ptr<StorageImpl> _storage;
 };
 

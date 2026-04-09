@@ -6,7 +6,7 @@
  *   - Each client removes 500 of its own items (one transaction), then syncs
  *   - All actions are logged in chronological order for deterministic replay
  *
- * The "server" is an in-process ReplicatingMapStorage protected by a mutex,
+ * The "server" is an in-process MapStorage protected by a mutex,
  * mirroring the g_db_mutex in kv_demo_server.
  *
  * Sync mirrors the kv_demo_server bidirectional LVRP protocol:
@@ -40,7 +40,8 @@
 #endif
 
 #include "leaves/replication.hpp"
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -71,11 +72,11 @@ struct LoopbackTransport : ReplicationTransport {
 struct SyncResult { bool ok; std::string error; };
 
 static SyncResult sync_bidirectional(
-    ReplicatingMapStorage::storage_ptr& server_storage,
-    TDB<ReplicatingMapStorage>& client_db) {
+    MapStorage::storage_ptr& server_storage,
+    TDB<MapStorage, _ReplicationDB>& client_db) {
   // Open fresh from the calling thread — TDB must be used from the thread
   // that creates it; server_storage is shared but opening a DB handle is safe.
-  auto server_db = (*server_storage)["main"];
+  auto server_db = server_storage->open<_ReplicationDB>("main");
 
   struct Events : ReplicationEvents {
     bool completed = false;
@@ -95,8 +96,8 @@ static SyncResult sync_bidirectional(
     srv_tx.set_peer(&cli_tx);
     cli_tx.set_peer(&srv_tx);
     Events se, re;
-    ReplicationSender<ReplicatingMapStorage>   sender(server_db);
-    ReplicationReceiver<ReplicatingMapStorage> receiver(client_db);
+    ReplicationSender<MapStorage>   sender(server_db);
+    ReplicationReceiver<MapStorage> receiver(client_db);
     sender.begin(&srv_tx, &se);
     receiver.begin(&cli_tx, &re);
     run_replication(sender, receiver, srv_tx, cli_tx, 100000);
@@ -112,8 +113,8 @@ static SyncResult sync_bidirectional(
     cli_tx.set_peer(&srv_tx);
     srv_tx.set_peer(&cli_tx);
     Events se, re;
-    ReplicationSender<ReplicatingMapStorage>   sender(client_db);
-    ReplicationReceiver<ReplicatingMapStorage> receiver(server_db);
+    ReplicationSender<MapStorage>   sender(client_db);
+    ReplicationReceiver<MapStorage> receiver(server_db);
     sender.begin(&cli_tx, &se);
     receiver.begin(&srv_tx, &re);
     run_replication(sender, receiver, cli_tx, srv_tx, 100000);
@@ -192,21 +193,21 @@ BOOST_FIXTURE_TEST_CASE(test_three_clients_put_and_remove, Fixture) {
       (ITEMS_PER_CLIENT - REMOVES_PER_CLIENT) * NUM_CLIENTS;
 
   // Shared server storage — protected by server_mutex for exclusive sync access
-  auto server_storage = ReplicatingMapStorage::create((dir / "server.lvs").c_str());
+  auto server_storage = MapStorage::create((dir / "server.lvs").c_str());
   std::mutex server_mutex;
 
   // Per-client storages
-  std::vector<ReplicatingMapStorage::storage_ptr> client_storages;
+  std::vector<MapStorage::storage_ptr> client_storages;
   for (int i = 0; i < NUM_CLIENTS; i++) {
     auto path = dir / ("client" + std::to_string(i) + ".lvs");
-    client_storages.push_back(ReplicatingMapStorage::create(path.c_str()));
+    client_storages.push_back(MapStorage::create(path.c_str()));
   }
 
   // Per-thread errors — checked by main thread after join
   std::vector<std::string> thread_errors(NUM_CLIENTS);
 
   auto worker = [&](int id) {
-    auto client_db = (*client_storages[id])["main"];
+    auto client_db = client_storages[id]->open<_ReplicationDB>("main");
 
     // Fixed seed per client — deterministic key/value sequence for replay
     std::mt19937 rng(static_cast<uint32_t>(0xdeadbeef ^ static_cast<uint32_t>(id)));
@@ -294,7 +295,7 @@ BOOST_FIXTURE_TEST_CASE(test_three_clients_put_and_remove, Fixture) {
 
   // ── Verify server state ───────────────────────────────────────────────────
   {
-    auto server_db = (*server_storage)["main"];
+    auto server_db = server_storage->open<_ReplicationDB>("main");
     auto c = server_db.cursor();
     std::vector<std::string> server_keys;
     c.first();
@@ -314,7 +315,7 @@ BOOST_FIXTURE_TEST_CASE(test_three_clients_put_and_remove, Fixture) {
 
   // ── Final sync: each client converges to the full server state ────────────
   for (int i = 0; i < NUM_CLIENTS; i++) {
-    auto client_db = (*client_storages[i])["main"];
+    auto client_db = client_storages[i]->open<_ReplicationDB>("main");
     {
       std::lock_guard<std::mutex> lock(server_mutex);
       auto r = sync_bidirectional(server_storage, client_db);

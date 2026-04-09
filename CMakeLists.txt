@@ -37,7 +37,7 @@ if(EMSCRIPTEN)
         include/leaves/intern/util/_task_group.hpp
         include/leaves/intern/util/_threadpool.hpp
         include/leaves/intern/util/_transfer_trie.hpp
-        include/leaves/replicating_browserstore.hpp
+        include/leaves/browserstore.hpp
         include/leaves/replication.hpp
     )
     target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)

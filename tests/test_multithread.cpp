@@ -67,7 +67,7 @@ std::string generate_value(size_t size = 100) {
   return value;
 }
 
-void worker_thread(MapStorage::DB& db, int thread_id, size_t operations_per_thread, 
+void worker_thread(TDB<MapStorage>& db, int thread_id, size_t operations_per_thread, 
                    ThreadStats& stats, std::atomic<bool>& start_flag) {
   // Wait for all threads to be ready
   while (!start_flag.load()) {
@@ -139,7 +139,7 @@ void stress_test_concurrent_writes(const std::string& test_name, size_t num_thre
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test_multithread.lvs";
   auto storage = MapStorage::create(dbFilePath.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   
   // Clear any existing data by seeking to first and removing all entries
   {
@@ -253,7 +253,7 @@ BOOST_AUTO_TEST_CASE(Simple_MultiThread_Test) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "simple_test.lvs";
   auto storage = MapStorage::create(dbFilePath.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   
   const size_t num_threads = 2;
   const size_t ops_per_thread = 10;
@@ -325,7 +325,7 @@ BOOST_AUTO_TEST_CASE(AtomicTransactionIds) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test_atomic_txn.lvs";
   auto storage = MapStorage::create(dbFilePath.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   
   // Clear database
   {
@@ -409,7 +409,7 @@ BOOST_AUTO_TEST_CASE(DeadlockResistance) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test_deadlock.lvs";
   auto storage = MapStorage::create(dbFilePath.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
   
   // Setup initial data
   {

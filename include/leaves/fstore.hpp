@@ -14,7 +14,6 @@ template <typename Traits = FileTraits>
 class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
  public:
   typedef _FileStore<Traits> StorageImpl;
-  typedef TDB<FileStorage_> DB;
   typedef std::shared_ptr<FileStorage_> storage_ptr;
 
   FileStorage_(const char* path,
@@ -22,9 +21,14 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
       : _storage(
             std::make_unique<StorageImpl>(path, cache_capacity)) {}
 
-  DB operator[](const char* name) { return DB(this->shared_from_this(), name); }
+  template <template <typename> class DBClass = _DB, typename... Args>
+  TDB<FileStorage_, DBClass> open(const char* name, Args&&... args) {
+    return TDB<FileStorage_, DBClass>(
+        this->shared_from_this(), name, std::forward<Args>(args)...);
+  }
 
-  void remove_db(const char* name) { _storage->remove_db(name); }
+  template <template <typename> class DBClass = _DB>
+  void remove(const char* name) { _storage->template remove<DBClass>(name); }
 
   void list_dbs(std::vector<std::string>& result) {
     return _storage->list_dbs(result);
@@ -42,7 +46,7 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
   void debug_check_cache() const { _storage->debug_check_cache(); }
 
  private:
-  friend class TDB<FileStorage_>;
+  template <typename, template <typename> class> friend class TDB;
   std::unique_ptr<StorageImpl> _storage;
 };
 

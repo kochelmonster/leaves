@@ -25,6 +25,7 @@
 #include "../db/_db.hpp"
 #include "../memory/_memory.hpp"
 #include "../third_party/unordered_dense.h"
+#include "../util/_threadpool.hpp"
 #include "_db_directory.hpp"
 
 using boost::interprocess::create_only;
@@ -96,20 +97,19 @@ struct _MemoryMapTraits {
   using Pointer = SimplePointer<T, type>;
 };
 
-template <typename Traits_, template <typename> class DB_ = _DB,
-          typename Self_ = void>
-struct _MemoryMapFile {
+template <typename Traits_, typename Self_ = void>
+struct _MemoryMapFile
+    : public _ThreadPoolMixin<_MemoryMapFile<Traits_, Self_>> {
   typedef Traits_ Traits;
+  using PoolMixin = _ThreadPoolMixin<_MemoryMapFile<Traits_, Self_>>;
   // CRTP: if Self_ is provided, use it as the storage type seen by DB;
   // otherwise default to this class itself (non-derived usage).
   using MemoryMapFile = std::conditional_t<
-      std::is_void_v<Self_>, _MemoryMapFile<Traits_, DB_, Self_>, Self_>;
+      std::is_void_v<Self_>, _MemoryMapFile<Traits_, Self_>, Self_>;
   using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto MAX_PROCESSES = Traits::MAX_PROCESSES;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
-  typedef DB_<MemoryMapFile> DB;
-  typedef std::unique_ptr<DB> _db_ptr;
 
   // When Self_ is provided, DB's Storage_ is the derived type.
   // _self() downcasts *this so references match DB's constructor.
@@ -132,6 +132,7 @@ struct _MemoryMapFile {
     AreaPool area_pool;  // pool for both single and multi areas
     pid_type processes[MAX_PROCESSES];
     std::atomic<int64_t> last_cursor_id;
+    uint32_t sanitize_generation;  // incremented when first process opens file
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
     DBEntry dbs[];            // flexible array fills to 4K boundary
@@ -143,6 +144,7 @@ struct _MemoryMapFile {
           file_lock(),
           processes{},
           last_cursor_id(0),
+          sanitize_generation(0),
           db_entry_count(0),
           db_next_page(0) {
       // Set signature and initialize pools/arrays
@@ -158,18 +160,28 @@ struct _MemoryMapFile {
   mapped_region _region;
   FileHeader* _memory;
   pid_type _pid;
-  ankerl::unordered_dense::map<std::string, _db_ptr> _dbs;
+  ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 
-  _MemoryMapFile(const char* path, size_t map_size = 2 * G) {
+  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
+                 size_t pool_threads = SIZE_MAX)
+      : PoolMixin(_lazy_pool) {
 #ifndef LEAVES_SINGLE_PROCESS
     _pid = current_pid();
 #else
     _pid = 1;
 #endif
     init_dbfile(path, map_size);
+    if (pool_threads != SIZE_MAX) {
+      size_t n = pool_threads;
+      if (n == 0)
+        n = std::max<size_t>(1, std::thread::hardware_concurrency() / 2);
+      this->start_pool(n);
+    }
   }
 
   ~_MemoryMapFile() {
+    _dbs.clear();          // destroy DBs first (cancels any scheduled jobs)
+    this->stop_pool();     // stop worker threads before unmapping
     if constexpr (MAX_PROCESSES > 1)
       remove_pid();
     _region.flush();
@@ -190,7 +202,7 @@ struct _MemoryMapFile {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
       fhead.close();
-      uint64_t fsize = 4 * K;
+      uint64_t fsize = AREA_SIZE;  // reserve first area for header + overflow dir pages
       std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
@@ -263,10 +275,10 @@ struct _MemoryMapFile {
 
   void recover_areas() {
     char* base = (char*)_memory;
-    _recover_areas<typename DB::Header, AREA_SIZE>(
+    _recover_areas<_DBHeader<MemoryMapFile>, AREA_SIZE>(
         _memory->area_pool,
         [this](auto fn) { _for_each_db_entry([&](DBEntry& e) { if (e.offset) fn(e.offset); }); },
-        _memory->file_size, calc_header_size(),
+        _memory->file_size, padding(calc_header_size(), AREA_SIZE),
         [base](uint64_t pos, void* buf, size_t size) {
           memcpy(buf, base + pos, size);
         },
@@ -289,21 +301,13 @@ struct _MemoryMapFile {
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
       recover_areas();
-      sanitize_dbs();
+      ++_memory->sanitize_generation;
       _memory->last_cursor_id.store(0);
     }
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);
 
     assert(_region.get_size() >= _memory->file_size);
-  }
-
-  void sanitize_dbs() {
-    _for_each_db_entry([&](DBEntry& entry) {
-      if (entry.offset) {
-        DB(_self(), entry.offset, std::string_view(entry.name)).sanitize();
-      }
-    });
   }
 
   bool sanitize_processes() {
@@ -438,9 +442,11 @@ struct _MemoryMapFile {
     });
   }
 
-  DB* operator[](const char* name) { return make(name); }
-
-  DB* make(const char* name) {
+  // Open or create a DB of the given type. Additional args are forwarded
+  // to the DB constructor (e.g. hash_threads for _ReplicationDB).
+  template <template <typename> class DBClass = _DB, typename... Args>
+  DBClass<MemoryMapFile>* open(const char* name, Args&&... args) {
+    using DB = DBClass<MemoryMapFile>;
     if (strlen(name) >= sizeof(DBEntry::name)) throw KeyTooBig();
 
 #ifdef LEAVES_SINGLE_PROCESS
@@ -450,9 +456,14 @@ struct _MemoryMapFile {
     boost::interprocess::scoped_lock<boost::interprocess::file_lock>
         flock_guard(flock);
 #endif
+    // 1. Check cache
     auto it = _dbs.find(name);
-    if (it != _dbs.end()) return it->second.get();
+    if (it != _dbs.end()) {
+      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      return static_cast<DB*>(it->second.db);
+    }
 
+    // 2. Scan directory for existing entry
     DBEntry* free_slot = nullptr;
     DBEntry* found = nullptr;
     _for_each_db_entry([&](DBEntry& entry) {
@@ -465,13 +476,24 @@ struct _MemoryMapFile {
     });
 
     if (found) {
-      auto& ptr = _dbs[name];
-      ptr = std::make_unique<DB>(_self(), found->offset, std::string_view(name));
-      return ptr.get();
+      // Verify type before constructing
+      auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
+          (char*)_memory + (uint64_t)found->offset);
+      if (base_header->db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+
+      auto* db = new DB(_self(), found->offset, std::string_view(name),
+                        std::forward<Args>(args)...);
+      // Sanitize if this DB hasn't been sanitized for the current generation
+      if (db->_header->sanitize_generation != _memory->sanitize_generation) {
+        db->sanitize();
+        db->_header->sanitize_generation = _memory->sanitize_generation;
+      }
+      _dbs[name] = _DBSlot::make(db);
+      return db;
     }
 
+    // 3. Create new — find or allocate a slot
     if (!free_slot) {
-      // Expand first-page hwm or allocate overflow slot
       uint16_t cap = _first_page_capacity();
       uint16_t hwm = std::min(_memory->db_entry_count, cap);
       if (hwm < cap) {
@@ -485,12 +507,16 @@ struct _MemoryMapFile {
 
     std::strncpy(free_slot->name, name, sizeof(DBEntry::name) - 1);
     free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
-    auto& ptr = _dbs[name];
-    ptr = std::make_unique<DB>(_self(), &free_slot->offset, std::string_view(name));
-    return ptr.get();
+    auto* db = new DB(_self(), &free_slot->offset, std::string_view(name),
+                      std::forward<Args>(args)...);
+    db->_header->sanitize_generation = _memory->sanitize_generation;
+    _dbs[name] = _DBSlot::make(db);
+    return db;
   }
 
-  void remove_db(const char* name) {
+  template <template <typename> class DBClass = _DB>
+  void remove(const char* name) {
+    using DB = DBClass<MemoryMapFile>;
 #ifdef LEAVES_SINGLE_PROCESS
     std::scoped_lock flock_guard(file_lock());
 #else
@@ -499,15 +525,27 @@ struct _MemoryMapFile {
         flock_guard(flock);
 #endif
     auto it = _dbs.find(name);
-    if (it != _dbs.end() && it->second && it->second->is_active())
-      throw TransactionActive();
+    if (it != _dbs.end()) {
+      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
+        throw TransactionActive();
+    }
 
     bool found = false;
     _for_each_db_entry([&](DBEntry& entry) {
       if (found) return;
       if (entry.offset && !strcmp(entry.name, name)) {
-        DB tmp(_self(), entry.offset, std::string_view(name));
-        tmp.return_areas();
+        // Return areas via cached slot or typed DB
+        auto dit = _dbs.find(name);
+        if (dit != _dbs.end() && dit->second.db) {
+          static_cast<DB*>(dit->second.db)->return_areas();
+        } else {
+          auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
+              (char*)_memory + (uint64_t)entry.offset);
+          if (base_header->db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+          DB tmp(_self(), entry.offset, std::string_view(name));
+          tmp.return_areas();
+        }
         entry.offset = 0;
         found = true;
       }
@@ -546,9 +584,11 @@ struct _MemoryMapFile {
   }
 
   // Allocate a slot in an overflow page. Returns stable pointer (mmap).
+  // Overflow pages live within the reserved first AREA_SIZE block (after the
+  // 4K file header), so they never conflict with the area pool.
   DBEntry* _alloc_overflow_slot() {
-    uint64_t last_page_offset = 0;
     offset_t next = _memory->db_next_page;
+    uint64_t last_page_offset = 0;
     while (next) {
       auto* page = reinterpret_cast<_DBDirectoryPage*>(
           (char*)_memory + (uint64_t)next);

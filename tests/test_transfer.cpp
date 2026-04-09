@@ -8,16 +8,17 @@
 #define TESTING
 #endif
 
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/replication/_transfer.hpp"
 
 using namespace leaves;
 
 // Use replicating map storage for testing
-using Storage = ReplicatingMapStorage;
+using Storage = MapStorage;
 
 // Get traits from the internal DB type
-using DBImpl = Storage::StorageImpl::DB;
+using DBImpl = _ReplicationDB<Storage::StorageImpl>;
 using Traits = DBImpl::Traits;
 using TrieNode = _TrieNode<Traits>;
 using LeafNode = _LeafNode<Traits>;
@@ -320,7 +321,7 @@ void test_sender_empty_db() {
   auto storage = Storage::create(db_path.c_str());
   assert(storage);
   
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* db_impl = db._internal();
   auto txn = db_impl->acquire_hash_trie();
   
@@ -348,7 +349,7 @@ void test_sender_single_leaf() {
   auto storage = Storage::create(db_path.c_str());
   assert(storage);
   
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto cursor = db.cursor();
   
   cursor.find(Slice("key1"));
@@ -381,7 +382,7 @@ void test_sender_multiple_keys() {
   auto storage = Storage::create(db_path.c_str());
   assert(storage);
   
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto cursor = db.cursor();
   
   // Insert multiple keys to create a trie structure
@@ -439,7 +440,7 @@ void test_sender_buffer_overflow() {
   auto storage = Storage::create(db_path.c_str());
   assert(storage);
   
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto cursor = db.cursor();
   
   // Insert many keys
@@ -488,7 +489,7 @@ void test_sender_process_ack() {
   auto storage = Storage::create(db_path.c_str());
   assert(storage);
   
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto cursor = db.cursor();
   
   // Insert many keys with unique prefixes to force multi-level trie
@@ -532,7 +533,7 @@ void test_relative_offsets() {
   auto storage = Storage::create(db_path.c_str());
   assert(storage);
   
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto cursor = db.cursor();
   
   // Insert keys that will create a trie structure

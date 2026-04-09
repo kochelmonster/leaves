@@ -21,7 +21,7 @@ struct Preparation {
 
 void create() {
   auto storage = MapStorage::create(TEST_FILE);
-  auto cursor = (*storage)["test"].cursor();
+  auto cursor = storage->open("test").cursor();
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);
@@ -54,7 +54,7 @@ void create() {
 
 void read() {
   auto storage = MapStorage::create(TEST_FILE);
-  auto cursor = (*storage)["test"].cursor();
+  auto cursor = storage->open("test").cursor();
 
   std::string val = std::string(100, 1);
   leaves::Slice mkey, mval(val);

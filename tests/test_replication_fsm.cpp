@@ -19,21 +19,22 @@
 #define TESTING
 #endif
 
-#include "leaves/replicating_fstore.hpp"
-#include "leaves/replicating_mmap.hpp"
+#include "leaves/fstore.hpp"
+#include "leaves/mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
 #include "leaves/intern/replication/_replication_fsm.hpp"
 
 using namespace leaves;
 
 // Use replicating map storage for testing
-using Storage = ReplicatingMapStorage;
-using DBImpl = Storage::StorageImpl::DB;
+using Storage = MapStorage;
+using DBImpl = _ReplicationDB<Storage::StorageImpl>;
 using SenderFSM = ReplicationSenderFSM<DBImpl>;
 using ReceiverFSM = ReplicationReceiverFSM<DBImpl>;
 
 // File-backed replicating storage types
-using FileDBImpl = ReplicatingFileStorage::StorageImpl::DB;
+using FileDBImpl = _ReplicationDB<FileStorage::StorageImpl>;
 using FileSenderFSM = ReplicationSenderFSM<FileDBImpl>;
 using FileReceiverFSM = ReplicationReceiverFSM<FileDBImpl>;
 
@@ -241,8 +242,8 @@ BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
@@ -276,8 +277,8 @@ BOOST_FIXTURE_TEST_CASE(test_single_key_replication, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert a key in sender
   {
@@ -333,8 +334,8 @@ BOOST_FIXTURE_TEST_CASE(test_multiple_keys_replication, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert multiple keys in sender
   {
@@ -404,8 +405,8 @@ BOOST_FIXTURE_TEST_CASE(test_session_id_mismatch, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
@@ -441,8 +442,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_buffer_subtrie, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert many keys to create a large trie that won't fit in small buffer
   {
@@ -519,8 +520,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Create a larger dataset with common data distributed throughout the tree
   // This ensures pruning happens across multiple buffer transmissions
@@ -685,8 +686,8 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   TestTransport sender_transport;
   TestTransport receiver_transport;
@@ -816,8 +817,8 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert keys with varied prefixes so that completed subtrees can be
   // pruned by hash comparison on subsequent fraction rounds.
@@ -906,8 +907,8 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Common keys on both sides
   {
@@ -1031,11 +1032,11 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
   auto sender_path = test_temp_dir / "sender_bigval.lvs";
   auto receiver_path = test_temp_dir / "receiver_bigval.lvs";
 
-  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
-  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+  auto sender_storage = MapStorage::create(sender_path.c_str());
+  auto receiver_storage = MapStorage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   // Big value size - must exceed MAX_PAGE_SIZE (4K) minus leaf overhead
   // to trigger big value storage
@@ -1209,7 +1210,7 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_tracks_removes, ReplicationFixture) {
   // Test that _ReplicationCursor records deleted keys in deletion_root
   auto src_path = (test_temp_dir / "del_src.lvs").string();
   auto storage = Storage::create(src_path.c_str());
-  auto db = storage->operator[]("test");
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert some keys
   {
@@ -1287,8 +1288,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_replication, ReplicationFixture) {
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = src_storage->operator[]("test");
-  auto dst_db = dst_storage->operator[]("test");
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   // Insert keys on source
   {
@@ -1410,8 +1411,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = src_storage->operator[]("test");
-  auto dst_db = dst_storage->operator[]("test");
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   // Insert keys on source and destination
   {
@@ -1628,7 +1629,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_garbage, ReplicationFixture) {
   // Sender receives completely invalid bytes -> ERROR
   auto path = test_temp_dir / "sender_garbage.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport sender_transport, receiver_transport;
@@ -1652,7 +1653,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_wrong_state_message, ReplicationFixture) {
   // Sender in SENDING state receives a message -> INVALID_STATE
   auto path = test_temp_dir / "sender_wrongstate.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   // Insert a key so sending doesn't complete immediately
@@ -1693,7 +1694,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload, ReplicationFixture)
   // Sender receives SUBTRIE_ACK with malformed RequestChildren payload
   auto path = test_temp_dir / "sender_badack.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   {
@@ -1735,7 +1736,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_magic, ReplicationFixture) {
   // Receiver gets a message with wrong magic -> ERROR
   auto path = test_temp_dir / "recv_badmagic.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -1767,8 +1768,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   {
     auto cursor = src_db.cursor();
@@ -1823,7 +1824,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_payload_too_large, ReplicationFixture) {
   // Receiver rejects message whose payload_size exceeds _max_payload_size
   auto path = test_temp_dir / "recv_toolarge.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -1860,7 +1861,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_in_idle_state, ReplicationFixture) {
   // Receiver in IDLE state ignores incoming messages (doesn't crash)
   auto path = test_temp_dir / "recv_idle.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -1885,7 +1886,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_unexpected_msg_type, ReplicationFixture) {
   // Receiver gets an unknown or inappropriate msg_type -> ERROR
   auto path = test_temp_dir / "recv_badtype.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -1914,7 +1915,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header, ReplicationFixture) 
   // Receiver gets TRIE_DATA with truncated/invalid TransferTrieHeader
   auto path = test_temp_dir / "recv_badtrie.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -1938,7 +1939,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_magic, ReplicationFixture) {
   // Receiver gets TRIE_DATA with valid size but wrong TransferTrieHeader magic
   auto path = test_temp_dir / "recv_badtriemagic.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -1967,7 +1968,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_subtrie_path_overflow,
   // TransferTrieHeader claims subtrie_path_len larger than remaining buffer
   auto path = test_temp_dir / "recv_pathoverflow.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -2001,7 +2002,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
   // when the root is a leaf, but a malicious or buggy sender could.
   auto path = test_temp_dir / "parentnf.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -2075,7 +2076,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_truncated,
   // BIG_VALUE_START with payload smaller than BigValueStartHeader
   auto path = test_temp_dir / "recv_bvs_trunc.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -2100,7 +2101,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_too_large,
   // BIG_VALUE_START claims total_aligned_size > _max_big_value_size
   auto path = test_temp_dir / "recv_bvs_huge.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -2132,7 +2133,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_integer_overflow,
   // BIG_VALUE_START with total_aligned_size near SIZE_MAX to trigger overflow
   auto path = test_temp_dir / "recv_bvs_overflow.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -2168,8 +2169,8 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   {
     auto cursor = src_db.cursor();
@@ -2250,8 +2251,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_ignores_late_messages,
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
@@ -2288,7 +2289,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
   // SUBTRIE_ACK with wrong session_id in the outer message -> SESSION_MISMATCH
   auto path = test_temp_dir / "sender_acksess.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   {
@@ -2330,7 +2331,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
 
 BOOST_AUTO_TEST_CASE(test_transfer_header_parse_truncated) {
   // parse_header with data smaller than TransferTrieHeader -> nullptr
-  using Transfer = TransferTrie<_ReplicatingMemoryMapTraits>;
+  using Transfer = TransferTrie<_MemoryMapTraits>;
   uint8_t tiny[10] = {0};
   const auto* hdr = Transfer::parse_header(Slice(tiny, sizeof(tiny)));
   BOOST_CHECK(hdr == nullptr);
@@ -2338,7 +2339,7 @@ BOOST_AUTO_TEST_CASE(test_transfer_header_parse_truncated) {
 
 BOOST_AUTO_TEST_CASE(test_transfer_header_parse_bad_magic) {
   // parse_header with wrong magic -> nullptr
-  using Transfer = TransferTrie<_ReplicatingMemoryMapTraits>;
+  using Transfer = TransferTrie<_MemoryMapTraits>;
   std::vector<uint8_t> buf(sizeof(TransferTrieHeader), 0);
   auto* tth = reinterpret_cast<TransferTrieHeader*>(buf.data());
   tth->magic = 0x00000000;
@@ -2378,11 +2379,11 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
   auto sender_path = test_temp_dir / "sender_slot_lifecycle.lvs";
   auto receiver_path = test_temp_dir / "receiver_slot_lifecycle.lvs";
 
-  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
-  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+  auto sender_storage = MapStorage::create(sender_path.c_str());
+  auto receiver_storage = MapStorage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   const size_t BIG_VALUE_SIZE = 8 * 1024;
 
@@ -2473,11 +2474,11 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
   auto sender_path = test_temp_dir / "sender_crash_slot.lvs";
   auto receiver_path = test_temp_dir / "receiver_crash_slot.lvs";
 
-  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
-  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+  auto sender_storage = MapStorage::create(sender_path.c_str());
+  auto receiver_storage = MapStorage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   const size_t BIG_VALUE_SIZE = 8 * 1024;
 
@@ -2622,11 +2623,11 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
   auto sender_path = test_temp_dir / "sender_slot_exhaust.lvs";
   auto receiver_path = test_temp_dir / "receiver_slot_exhaust.lvs";
 
-  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
-  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+  auto sender_storage = MapStorage::create(sender_path.c_str());
+  auto receiver_storage = MapStorage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   auto* sender_impl = sender_db._internal();
   auto* receiver_impl = receiver_db._internal();
@@ -2698,11 +2699,11 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
   auto sender_path = test_temp_dir / "sender_err_area.lvs";
   auto receiver_path = test_temp_dir / "receiver_err_area.lvs";
 
-  auto sender_storage = ReplicatingMapStorage::create(sender_path.c_str());
-  auto receiver_storage = ReplicatingMapStorage::create(receiver_path.c_str());
+  auto sender_storage = MapStorage::create(sender_path.c_str());
+  auto receiver_storage = MapStorage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   const size_t BIG_VALUE_SIZE = 8 * 1024;
 
@@ -2841,11 +2842,11 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
   auto mmap_path = test_temp_dir / "sender_mmap.lvs";
   auto file_path = (test_temp_dir / "receiver_file.lvs").string();
 
-  auto mmap_storage = ReplicatingMapStorage::create(mmap_path.c_str());
-  auto file_storage = ReplicatingFileStorage::create(file_path.c_str());
+  auto mmap_storage = MapStorage::create(mmap_path.c_str());
+  auto file_storage = FileStorage::create(file_path.c_str());
 
-  auto mmap_db = (*mmap_storage)["test"];
-  auto file_db = (*file_storage)["test"];
+  auto mmap_db = mmap_storage->open<_ReplicationDB>("test");
+  auto file_db = file_storage->open<_ReplicationDB>("test");
 
   // Insert a mix of small and big values on the mmap sender
   const size_t BIG_VALUE_SIZE = 8 * 1024;
@@ -2934,8 +2935,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
 
   // Phase 2: Replicate back from file → fresh mmap
   auto mmap2_path = test_temp_dir / "receiver_mmap2.lvs";
-  auto mmap2_storage = ReplicatingMapStorage::create(mmap2_path.c_str());
-  auto mmap2_db = (*mmap2_storage)["test"];
+  auto mmap2_storage = MapStorage::create(mmap2_path.c_str());
+  auto mmap2_db = mmap2_storage->open<_ReplicationDB>("test");
   auto* mmap2_impl = mmap2_db._internal();
 
   // Wait for file storage hashing to complete before second replication
@@ -3012,8 +3013,8 @@ BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixtu
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Populate sender with enough keys to create a multi-level trie
   // (branch nodes with compressed paths) — this ensures the root is a
@@ -3137,8 +3138,8 @@ BOOST_FIXTURE_TEST_CASE(test_multithreaded_replication, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert test data
   {
@@ -3244,8 +3245,8 @@ BOOST_FIXTURE_TEST_CASE(test_partial_failure_disconnect, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert enough data that replication takes multiple round trips
   {
@@ -3352,8 +3353,8 @@ BOOST_FIXTURE_TEST_CASE(test_last_activity_timeout, ReplicationFixture) {
   BOOST_REQUIRE(sender_storage);
   BOOST_REQUIRE(receiver_storage);
 
-  auto sender_db = (*sender_storage)["testdb"];
-  auto receiver_db = (*receiver_storage)["testdb"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("testdb");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("testdb");
 
   // Insert data so replication takes multiple rounds
   {
@@ -3481,7 +3482,7 @@ BOOST_FIXTURE_TEST_CASE(test_last_activity_timeout, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_purge_basic_lifecycle, ReplicationFixture) {
   auto path = (test_temp_dir / "purge_basic.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert 10 keys
   {
@@ -3554,7 +3555,7 @@ BOOST_FIXTURE_TEST_CASE(test_purge_basic_lifecycle, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff, ReplicationFixture) {
   auto path = (test_temp_dir / "purge_cutoff.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert and delete 5 keys
   {
@@ -3607,7 +3608,7 @@ BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff, ReplicationFixture
 BOOST_FIXTURE_TEST_CASE(test_purge_legacy_entry_removed, ReplicationFixture) {
   auto path = (test_temp_dir / "purge_legacy_entry.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   // Inject a legacy deletion entry with payload shorter than timestamp size.
@@ -3629,7 +3630,7 @@ BOOST_FIXTURE_TEST_CASE(test_run_purge_schedules_from_oldest_remaining,
                         ReplicationFixture) {
   auto path = (test_temp_dir / "purge_schedule_oldest.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Create a deletion entry that should remain after purge.
   {
@@ -3665,7 +3666,7 @@ BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
                         ReplicationFixture) {
   auto path = (test_temp_dir / "purge_interrupt_hint.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   bool covered_interrupt_branch = false;
@@ -3716,7 +3717,7 @@ BOOST_FIXTURE_TEST_CASE(test_acquire_hash_trie_fallback_when_offset_missing,
                         ReplicationFixture) {
   auto path = (test_temp_dir / "hash_fallback_offset_missing.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   // Hold a first session so the next acquire() takes the non-first path.
@@ -3736,7 +3737,7 @@ BOOST_FIXTURE_TEST_CASE(test_acquire_hash_trie_fallback_when_offset_missing,
 BOOST_FIXTURE_TEST_CASE(test_purge_cancel, ReplicationFixture) {
   auto path = (test_temp_dir / "purge_cancel.lvs").string();
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert and delete many keys
   {
@@ -3791,8 +3792,8 @@ BOOST_FIXTURE_TEST_CASE(test_purge_cancel, ReplicationFixture) {
 
 BOOST_FIXTURE_TEST_CASE(test_slot_claim_track_release, ReplicationFixture) {
   auto path = (test_temp_dir / "slot_lifecycle.lvs").string();
-  auto storage = ReplicatingFileStorage::create(path.c_str());
-  auto db = (*storage)["test"];
+  auto storage = FileStorage::create(path.c_str());
+  auto db = storage->open<_ReplicationDB>("test");
 
   // Insert some data to ensure DB is initialized
   {
@@ -3850,8 +3851,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize, ReplicationFixture) {
 
   // Phase 1: Create DB, claim a slot, then "crash" (close without releasing)
   {
-    auto storage = ReplicatingFileStorage::create(path.c_str());
-    auto db = (*storage)["test"];
+    auto storage = FileStorage::create(path.c_str());
+    auto db = storage->open<_ReplicationDB>("test");
 
     // Insert data so the DB is non-trivial
     {
@@ -3885,8 +3886,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize, ReplicationFixture) {
 
   // Phase 2: Reopen — sanitize() should clear the orphaned SENTINEL slot
   {
-    auto storage = ReplicatingFileStorage::create(path.c_str());
-    auto db = (*storage)["test"];
+    auto storage = FileStorage::create(path.c_str());
+    auto db = storage->open<_ReplicationDB>("test");
     auto* impl = db._internal();
 
     // All slots should be 0 after sanitize
@@ -3929,8 +3930,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize_tracked_area,
 
   // Phase 1: leave a claimed slot pointing to a real multi-area.
   {
-    auto storage = ReplicatingFileStorage::create(path.c_str());
-    auto db = (*storage)["test"];
+    auto storage = FileStorage::create(path.c_str());
+    auto db = storage->open<_ReplicationDB>("test");
     auto* impl = db._internal();
 
     _ReplicationSlot<FileDBImpl> slot(impl);
@@ -3948,8 +3949,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize_tracked_area,
 
   // Phase 2: sanitize should return the orphaned area and clear slot entries.
   {
-    auto storage = ReplicatingFileStorage::create(path.c_str());
-    auto db = (*storage)["test"];
+    auto storage = FileStorage::create(path.c_str());
+    auto db = storage->open<_ReplicationDB>("test");
     auto* impl = db._internal();
 
     constexpr auto N = FileDBImpl::Header::MAX_REPLICATION_SLOTS;
@@ -3969,8 +3970,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_multiple_chunks, ReplicationFixture) {
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   // Insert big values of increasing sizes
   const size_t sizes[] = {16 * 1024, 32 * 1024, 64 * 1024};
@@ -4028,8 +4029,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_with_small_interleaved, ReplicationFixtur
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   const size_t BIG_VALUE_SIZE = 8 * 1024;
   const int TOTAL = 20;
@@ -4100,8 +4101,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_deletion_replication, ReplicationFixture)
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   const size_t BIG_VALUE_SIZE = 8 * 1024;
 
@@ -4202,8 +4203,8 @@ BOOST_FIXTURE_TEST_CASE(
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   constexpr size_t BIG_SIZE = 8 * 1024;
 
@@ -4271,8 +4272,8 @@ BOOST_FIXTURE_TEST_CASE(test_concurrent_purge_and_replication, ReplicationFixtur
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   // Insert 100 keys
   {
@@ -4349,8 +4350,8 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_fractional_replication, ReplicationFixt
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   const int NUM_KEYS = 10000;
 
@@ -4422,8 +4423,8 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_incremental_update, ReplicationFixture)
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   const int NUM_KEYS = 10000;
 
@@ -4563,8 +4564,8 @@ BOOST_FIXTURE_TEST_CASE(test_replication_empty_deletion_trie, ReplicationFixture
 
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["testdb"];
-  auto dst_db = (*dst_storage)["testdb"];
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
 
   // Insert keys on source (no deletions)
   {
@@ -4647,7 +4648,7 @@ static void feed_message_to_receiver(Receiver& receiver, const uint8_t* data,
 BOOST_FIXTURE_TEST_CASE(test_sender_receives_error, ReplicationFixture) {
   auto src_path = (test_temp_dir / "snd_err_src.lvs").string();
   auto src_storage = Storage::create(src_path.c_str());
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
 
   {
     auto cursor = src_db.cursor();
@@ -4684,7 +4685,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_error_empty_payload,
                         ReplicationFixture) {
   auto src_path = (test_temp_dir / "snd_err_empty.lvs").string();
   auto src_storage = Storage::create(src_path.c_str());
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
 
   {
     auto cursor = src_db.cursor();
@@ -4718,7 +4719,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_unexpected_msg_type,
                         ReplicationFixture) {
   auto src_path = (test_temp_dir / "snd_unexp.lvs").string();
   auto src_storage = Storage::create(src_path.c_str());
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
 
   {
     auto cursor = src_db.cursor();
@@ -4752,8 +4753,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_message, ReplicationFixture) {
   auto dst_path = (test_temp_dir / "rcv_err_dst.lvs").string();
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   {
     auto cursor = src_db.cursor();
@@ -4802,8 +4803,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_empty_payload,
   auto dst_path = (test_temp_dir / "rcv_err_empty_dst.lvs").string();
   auto src_storage = Storage::create(src_path.c_str());
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dst_storage)["test"];
+  auto src_db = src_storage->open<_ReplicationDB>("test");
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
 
   {
     auto cursor = src_db.cursor();
@@ -4845,7 +4846,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_empty_payload,
 BOOST_FIXTURE_TEST_CASE(test_receiver_parse_expected_invalid, ReplicationFixture) {
   auto dst_path = (test_temp_dir / "rcv_parse_inv.lvs").string();
   auto dst_storage = Storage::create(dst_path.c_str());
-  auto dst_db = (*dst_storage)["test"];
+  auto dst_db = dst_storage->open<_ReplicationDB>("test");
   auto* dst_impl = dst_db._internal();
 
   TestTransport r2s;
@@ -4881,7 +4882,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_parse_expected_invalid, ReplicationFixture
 BOOST_FIXTURE_TEST_CASE(test_sender_receives_complete, ReplicationFixture) {
   auto p = (test_temp_dir / "snd_complete.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   { auto c = db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
   auto* impl = db._internal();
   wait_for_hashing(impl);
@@ -4910,8 +4911,8 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_idle, ReplicationFixture) {
   auto dst_p = (test_temp_dir / "snd_idle_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
   auto dst_stor = Storage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
   { auto c = src_db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
@@ -4941,7 +4942,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_idle, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_error, ReplicationFixture) {
   auto p = (test_temp_dir / "snd_errstate.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   { auto c = db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
   auto* impl = db._internal();
   wait_for_hashing(impl);
@@ -4970,7 +4971,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_error, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_sender_subtrie_ack_iterator_error, ReplicationFixture) {
   auto p = (test_temp_dir / "snd_ackiter.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   { auto c = db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
   auto* impl = db._internal();
   wait_for_hashing(impl);
@@ -5003,7 +5004,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_subtrie_ack_iterator_error, ReplicationFixtu
 BOOST_FIXTURE_TEST_CASE(test_receiver_partial_header, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_partial.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5028,7 +5029,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_partial_header, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_receiver_msg_corrupt_after_grow, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_corrupt.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5068,7 +5069,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_corrupt_after_grow, ReplicationFixture
 BOOST_FIXTURE_TEST_CASE(test_receiver_msg_after_error, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_errstate.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5140,7 +5141,7 @@ static std::vector<uint8_t> build_trie_data_msg(
 BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_zero_root, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_zeroroot.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5161,7 +5162,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_zero_root, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_badroot.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5204,7 +5205,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset, ReplicationFixt
 BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_truncleaf.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5252,7 +5253,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf, ReplicationFixtu
 BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_trunctrie.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5302,8 +5303,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_with_meta_replication, ReplicationFix
   auto dst_p = (test_temp_dir / "del_meta_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
   auto dst_stor = Storage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
   // Pre-populate destination with keys that will be deleted by sender
   {
@@ -5386,8 +5387,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_storage_full_during_merge, ReplicationFixt
     auto src_stor = Storage::create(src_p.c_str());
     // Create destination with enough room to start, but too small for all data
     auto dst_stor = Storage::create(dst_p.c_str(), 512 * 1024);  // 512KB
-    auto src_db = (*src_stor)["test"];
-    auto dst_db = (*dst_stor)["test"];
+    auto src_db = src_stor->open<_ReplicationDB>("test");
+    auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
     // Insert enough data on sender to overflow the destination during merge
     {
@@ -5457,7 +5458,7 @@ BOOST_AUTO_TEST_CASE(test_receive_buffer_parse_expected_insufficient_data) {
 BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_leafsize.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5503,7 +5504,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixtu
 BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_triesize.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5548,7 +5549,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer, ReplicationFixtu
 BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_bvleafsmall.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5599,7 +5600,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, Replicatio
 BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_bvleaflarge.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5652,7 +5653,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large, Repli
 BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_triearray.lvs").string();
   auto stor = Storage::create(p.c_str());
-  auto db = (*stor)["test"];
+  auto db = stor->open<_ReplicationDB>("test");
   auto* impl = db._internal();
 
   TestTransport r2s;
@@ -5716,10 +5717,10 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer, Replicatio
 BOOST_FIXTURE_TEST_CASE(test_big_value_multi_chunk_sender, ReplicationFixture) {
   auto src_p = (test_temp_dir / "bv_multi_src.lvs").string();
   auto dst_p = (test_temp_dir / "bv_multi_dst.lvs").string();
-  auto src_stor = ReplicatingMapStorage::create(src_p.c_str());
-  auto dst_stor = ReplicatingMapStorage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_stor = MapStorage::create(src_p.c_str());
+  auto dst_stor = MapStorage::create(dst_p.c_str());
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
   // Insert a big value > 1MB to force multi-chunk sending
   const size_t BIG_SIZE = 1500 * 1024;  // 1.5MB
@@ -5768,10 +5769,10 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_multi_chunk_sender, ReplicationFixture) {
 BOOST_FIXTURE_TEST_CASE(test_big_value_header_spans_chunk, ReplicationFixture) {
   auto src_p = (test_temp_dir / "bv_hdr_span_src.lvs").string();
   auto dst_p = (test_temp_dir / "bv_hdr_span_dst.lvs").string();
-  auto src_stor = ReplicatingMapStorage::create(src_p.c_str());
-  auto dst_stor = ReplicatingMapStorage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_stor = MapStorage::create(src_p.c_str());
+  auto dst_stor = MapStorage::create(dst_p.c_str());
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
   // Value1: sized so that header(12) + data fills to within 5 bytes of 1MB
   // BIG_VALUE_CHUNK_SIZE = 1048576 (1MB)
@@ -5832,8 +5833,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_deletion_root_snapshot, ReplicationFixture
   auto dst_p = (test_temp_dir / "snap_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
   auto dst_stor = Storage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
   // Both sides start with the same data
   for (auto* db : {&src_db, &dst_db}) {
@@ -5904,8 +5905,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_deletion_root_snapshot, ReplicationFixture
 // =============================================================================
 BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow, ReplicationFixture) {
   auto dst_p = (test_temp_dir / "bvd_err.lvs").string();
-  auto dst_stor = ReplicatingMapStorage::create(dst_p.c_str());
-  auto dst_db = (*dst_stor)["test"];
+  auto dst_stor = MapStorage::create(dst_p.c_str());
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
   auto* dst_impl = dst_db._internal();
 
   TestTransport r2s;
@@ -5957,8 +5958,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_merge_overwrite, ReplicationFixture) {
   auto dst_p = (test_temp_dir / "del_ow_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
   auto dst_stor = Storage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
 
@@ -6071,7 +6072,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_area_overflow,
                         ReplicationFixture) {
   auto path = test_temp_dir / "recv_bv_data_overflow.lvs";
   auto storage = Storage::create(path.c_str());
-  auto db = (*storage)["testdb"];
+  auto db = storage->open<_ReplicationDB>("testdb");
   auto* impl = db._internal();
 
   TestTransport transport, peer;
@@ -6117,8 +6118,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_storage_full,
   auto dst_p = (test_temp_dir / "merge_throw_sf_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
   auto dst_stor = Storage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
   {
     auto c = src_db.cursor();
@@ -6160,8 +6161,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
   auto dst_p = (test_temp_dir / "merge_throw_ex_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
   auto dst_stor = Storage::create(dst_p.c_str());
-  auto src_db = (*src_stor)["test"];
-  auto dst_db = (*dst_stor)["test"];
+  auto src_db = src_stor->open<_ReplicationDB>("test");
+  auto dst_db = dst_stor->open<_ReplicationDB>("test");
 
   {
     auto c = src_db.cursor();
@@ -6202,8 +6203,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_overwrite_replication, ReplicationFixture
   auto sender_storage = Storage::create(sender_path.c_str());
   auto receiver_storage = Storage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   const size_t BIG_VALUE_SIZE = 8 * 1024;
 
@@ -6292,8 +6293,8 @@ BOOST_FIXTURE_TEST_CASE(test_replication_merge_diverse_trie_shapes, ReplicationF
   auto sender_storage = Storage::create(sender_path.c_str());
   auto receiver_storage = Storage::create(receiver_path.c_str());
 
-  auto sender_db = (*sender_storage)["test"];
-  auto receiver_db = (*receiver_storage)["test"];
+  auto sender_db = sender_storage->open<_ReplicationDB>("test");
+  auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
   // Receiver: build a trie with long compressed prefixes
   {

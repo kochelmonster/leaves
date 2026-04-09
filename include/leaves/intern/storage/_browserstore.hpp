@@ -129,6 +129,7 @@ struct _BrowserOperations : _CacheBase {
     size_t file_size;  // Logical file size for compatibility
     Mutex file_lock;
     AreaPool area_pool;
+    uint32_t sanitize_generation;  // incremented on each storage open
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
     DBEntry dbs[];            // flexible array fills to 4K boundary
@@ -139,6 +140,7 @@ struct _BrowserOperations : _CacheBase {
           file_size(0),
           file_lock{},
           area_pool{},
+          sanitize_generation(0),
           db_entry_count(0),
           db_next_page(0) {
       std::memset(signature, 0, sizeof(signature));
@@ -335,9 +337,8 @@ struct _BrowserOperations : _CacheBase {
  *   auto* db = store["my_collection"];
  *   db->put(key, value);
  */
-struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
-  typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations> base_t;
-  using DB = base_t::DB;
+struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> {
+  typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> base_t;
 
   _BrowserStore(const char* db_name,
                 size_t capacity = 100 * M, size_t pool_threads = 0)
@@ -391,12 +392,12 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
 
   void _sanitize() {
     _recover_areas();
-    _sanitize_dbs();
+    ++_header->sanitize_generation;
   }
 
   void _recover_areas() {
     auto* self = this;
-    _recover_areas<typename DB::Header, _BrowserStoreTraits::AREA_SIZE>(
+    _recover_areas<_DBHeader<base_t>, _BrowserStoreTraits::AREA_SIZE>(
         _header->area_pool,
         [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
         _header->file_size,
@@ -407,14 +408,6 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations> {
         [self](uint64_t pos, const void* buf, size_t size) {
           self->write(pos, buf, size);
         });
-  }
-
-  void _sanitize_dbs() {
-    this->_for_each_db_entry([&](auto& entry) {
-      if (entry.offset) {
-        _DB(*this, entry.offset, std::string_view(entry.name)).sanitize();
-      }
-    });
   }
 
   // Compatibility method

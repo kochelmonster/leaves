@@ -10,7 +10,7 @@
 using namespace leaves;
 
 typedef MapStorage Storage;
-typedef Storage::StorageImpl::DB InternalDB;
+typedef _DB<Storage::StorageImpl> InternalDB;
 typedef InternalDB::CursorTraits CursorTraits;
 typedef _TransactionalCursor<CursorTraits> InternalCursor;
 
@@ -162,15 +162,15 @@ BOOST_AUTO_TEST_CASE(test_merger_empty_to_empty) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_internal = (*src_storage)["test"]._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto src_internal = src_storage->open("test")._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   // Both are empty - merger should handle this
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Both should still be empty
-  auto dst_cursor = (*dest_storage)["test"].cursor();
+  auto dst_cursor = dest_storage->open("test").cursor();
   dst_cursor.first();
   BOOST_CHECK(!dst_cursor.is_valid());
 }
@@ -181,20 +181,20 @@ BOOST_AUTO_TEST_CASE(test_merger_single_leaf_to_empty) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("key1");
   src_cursor_pub.value("value1");
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify destination has the value
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
   dst_cursor_pub.find("key1");
   BOOST_CHECK(dst_cursor_pub.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice("value1"));
@@ -209,14 +209,14 @@ BOOST_AUTO_TEST_CASE(test_merger_single_leaf_same_key) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create source with single key
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("samekey");
   src_cursor_pub.value("src_value");
   src_cursor_pub.commit();
 
   // Create destination with same key but different value
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("samekey");
   dst_cursor_pub.value("dst_value");
@@ -229,7 +229,7 @@ BOOST_AUTO_TEST_CASE(test_merger_single_leaf_same_key) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify value was overwritten
-  auto dst_cursor_pub2 = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub2 = dest_storage->open("test").cursor();
   dst_cursor_pub2.find("samekey");
   BOOST_CHECK(dst_cursor_pub2.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub2.value(), Slice("src_value"));
@@ -241,7 +241,7 @@ BOOST_AUTO_TEST_CASE(test_merger_multiple_leaves_to_empty) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
 
   src_cursor_pub.find("apple");
@@ -253,13 +253,13 @@ BOOST_AUTO_TEST_CASE(test_merger_multiple_leaves_to_empty) {
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all values in destination
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
 
   dst_cursor_pub.find("apple");
   BOOST_CHECK(dst_cursor_pub.is_valid());
@@ -280,13 +280,13 @@ BOOST_AUTO_TEST_CASE(test_merger_overwrite_existing) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("key1");
   src_cursor_pub.value("new_value");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("key1");
   dst_cursor_pub.value("old_value");
@@ -299,7 +299,7 @@ BOOST_AUTO_TEST_CASE(test_merger_overwrite_existing) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify value was overwritten - need fresh cursor to see committed changes
-  auto dst_cursor_pub2 = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub2 = dest_storage->open("test").cursor();
   dst_cursor_pub2.find("key1");
   BOOST_CHECK(dst_cursor_pub2.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub2.value(), Slice("new_value"));
@@ -311,13 +311,13 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_destination) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("key1");
   src_cursor_pub.value("new_value");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("key1");
   dst_cursor_pub.value("old_value");
@@ -331,7 +331,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_destination) {
 
   // Verify value was NOT overwritten
   // Get fresh cursor to see committed changes
-  auto dst_cursor_verify = (*dest_storage)["test"].cursor();
+  auto dst_cursor_verify = dest_storage->open("test").cursor();
   dst_cursor_verify.find("key1");
   BOOST_CHECK(dst_cursor_verify.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_verify.value(), Slice("old_value"));
@@ -343,7 +343,7 @@ BOOST_AUTO_TEST_CASE(test_merger_disjoint_keys) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("key1");
   src_cursor_pub.value("value1");
@@ -351,7 +351,7 @@ BOOST_AUTO_TEST_CASE(test_merger_disjoint_keys) {
   src_cursor_pub.value("value2");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("key3");
   dst_cursor_pub.value("value3");
@@ -367,7 +367,7 @@ BOOST_AUTO_TEST_CASE(test_merger_disjoint_keys) {
 
   // Verify all four keys exist
   // Get fresh cursor to see committed changes
-  auto dst_cursor_verify = (*dest_storage)["test"].cursor();
+  auto dst_cursor_verify = dest_storage->open("test").cursor();
   dst_cursor_verify.find("key1");
   BOOST_CHECK(dst_cursor_verify.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_verify.value(), Slice("value1"));
@@ -391,7 +391,7 @@ BOOST_AUTO_TEST_CASE(test_merger_prefix_keys) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("prefix_1");
   src_cursor_pub.value("val1");
@@ -399,7 +399,7 @@ BOOST_AUTO_TEST_CASE(test_merger_prefix_keys) {
   src_cursor_pub.value("val2");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("prefix_3");
   dst_cursor_pub.value("val3");
@@ -413,7 +413,7 @@ BOOST_AUTO_TEST_CASE(test_merger_prefix_keys) {
 
   // Verify all values
   // Get fresh cursor to see committed changes
-  auto dst_cursor_verify = (*dest_storage)["test"].cursor();
+  auto dst_cursor_verify = dest_storage->open("test").cursor();
 
   dst_cursor_verify.find("prefix_1");
   BOOST_CHECK(dst_cursor_verify.is_valid());
@@ -436,20 +436,20 @@ BOOST_AUTO_TEST_CASE(test_merger_big_values) {
 
   std::string big_value(5000, 'X');
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("bigkey");
   src_cursor_pub.value(big_value);
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify big value was copied
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
   dst_cursor_pub.find("bigkey");
   BOOST_CHECK(dst_cursor_pub.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice(big_value));
@@ -463,20 +463,20 @@ BOOST_AUTO_TEST_CASE(test_merger_big_keys) {
 
   std::string big_key(260, 'K');
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find(big_key);
   src_cursor_pub.value("bigkey_value");
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify big key was copied
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
   dst_cursor_pub.find(big_key);
   BOOST_CHECK(dst_cursor_pub.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice("bigkey_value"));
@@ -488,7 +488,7 @@ BOOST_AUTO_TEST_CASE(test_merger_compressed_trie_nodes) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
 
   // Create keys that will form compressed tries
@@ -499,13 +499,13 @@ BOOST_AUTO_TEST_CASE(test_merger_compressed_trie_nodes) {
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify values
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
   dst_cursor_pub.find("abcdefghi");
   BOOST_CHECK(dst_cursor_pub.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice("val1"));
@@ -521,7 +521,7 @@ BOOST_AUTO_TEST_CASE(test_merger_split_scenarios) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abc");
   src_cursor_pub.value("src_abc");
@@ -529,7 +529,7 @@ BOOST_AUTO_TEST_CASE(test_merger_split_scenarios) {
   src_cursor_pub.value("src_abcdef");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("abd");
   dst_cursor_pub.value("dst_abd");
@@ -543,7 +543,7 @@ BOOST_AUTO_TEST_CASE(test_merger_split_scenarios) {
 
   // Verify all values
   // Get fresh cursor to see committed changes
-  auto dst_cursor_verify = (*dest_storage)["test"].cursor();
+  auto dst_cursor_verify = dest_storage->open("test").cursor();
   dst_cursor_verify.find("abc");
   BOOST_CHECK(dst_cursor_verify.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_verify.value(), Slice("src_abc"));
@@ -563,7 +563,7 @@ BOOST_AUTO_TEST_CASE(test_merger_minimal_debug) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
 
   // Insert just 3 keys that should split
@@ -586,7 +586,7 @@ BOOST_AUTO_TEST_CASE(test_merger_minimal_debug) {
   }
 
   auto src_internal = src_db._internal();
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_internal = dst_db._internal();
 
   // Create dumper for detailed merge analysis
@@ -628,7 +628,7 @@ BOOST_AUTO_TEST_CASE(test_merger_large_dataset) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
 
   // Insert 200 keys into source
@@ -640,7 +640,7 @@ BOOST_AUTO_TEST_CASE(test_merger_large_dataset) {
   }
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
 
   // Insert 100 overlapping keys into destination
@@ -716,20 +716,20 @@ BOOST_AUTO_TEST_CASE(test_merger_empty_key) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("");
   src_cursor_pub.value("empty_key_value");
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify empty key
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
   dst_cursor_pub.find("");
   BOOST_CHECK(dst_cursor_pub.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice("empty_key_value"));
@@ -741,7 +741,7 @@ BOOST_AUTO_TEST_CASE(test_merger_null_branch) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("ab");
   src_cursor_pub.value("ab_val");
@@ -752,13 +752,13 @@ BOOST_AUTO_TEST_CASE(test_merger_null_branch) {
   src_cursor_pub.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all values including NONE branch
-  auto dst_cursor_pub = (*dest_storage)["test"].cursor();
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
   dst_cursor_pub.find("ab");
   BOOST_CHECK(dst_cursor_pub.is_valid());
   BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice("ab_val"));
@@ -781,7 +781,7 @@ BOOST_AUTO_TEST_CASE(test_merger_big_value_overwrite) {
 
   // Create destination with a BIG value (> 4096 bytes triggers big value)
   // MAX_SIZE is 4K, so total leaf size must exceed that
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   std::string big_value(5000, 'X');  // Much bigger than 4K
   dst_cursor_pub.find("longkey");    // Longer key
@@ -789,7 +789,7 @@ BOOST_AUTO_TEST_CASE(test_merger_big_value_overwrite) {
   dst_cursor_pub.commit();
 
   // Create source that causes a split - matches only prefix of dst key
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("long");
   src_cursor_pub.value("short_val");
@@ -805,7 +805,7 @@ BOOST_AUTO_TEST_CASE(test_merger_big_value_overwrite) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify both keys exist
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("long");
   BOOST_CHECK(verify_cursor.is_valid());
   BOOST_CHECK_EQUAL(verify_cursor.value(), Slice("short_val"));
@@ -823,7 +823,7 @@ BOOST_AUTO_TEST_CASE(test_merger_dst_trie_split) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create destination with keys that share a long prefix
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("abcdefghij");
   dst_cursor_pub.value("val1");
@@ -833,7 +833,7 @@ BOOST_AUTO_TEST_CASE(test_merger_dst_trie_split) {
 
   // Create source with TRIE that matches only part of the prefix
   // Need multiple keys to form a trie
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abcde1");
   src_cursor_pub.value("valA");
@@ -850,7 +850,7 @@ BOOST_AUTO_TEST_CASE(test_merger_dst_trie_split) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all keys exist
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("abcde1");
   BOOST_CHECK(verify_cursor.is_valid());
   BOOST_CHECK_EQUAL(verify_cursor.value(), Slice("valA"));
@@ -876,7 +876,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_into_dst_leaf) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create destination with a single key "abc"
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("abc");
   dst_cursor_pub.value("dst_val");
@@ -884,7 +884,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_into_dst_leaf) {
 
   // Create source with keys that extend "abc" to form a trie
   // Need more keys to ensure we get a trie at "abc" level
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abcd");
   src_cursor_pub.value("val_d");
@@ -902,7 +902,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_into_dst_leaf) {
   OverwritePolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
 
   verify_cursor.find("abc");
   BOOST_CHECK(verify_cursor.is_valid());  // "abc" shouldn't exist
@@ -929,14 +929,14 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_with_none_branch) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create destination with single leaf "abc"
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("abc");
   dst_cursor_pub.value("dst_abc");
   dst_cursor_pub.commit();
 
   // Create source with "abc" (creates NONE branch) plus "abcd" and "abce"
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abc");
   src_cursor_pub.value("src_abc");
@@ -954,7 +954,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_with_none_branch) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all keys merged correctly
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
 
   verify_cursor.find("abc");
   BOOST_CHECK(verify_cursor.is_valid());
@@ -977,7 +977,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_longer_prefix) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create destination trie with short prefix
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("ab1");
   dst_cursor_pub.value("val1");
@@ -986,7 +986,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_longer_prefix) {
   dst_cursor_pub.commit();
 
   // Create source trie with longer prefix that extends dst's prefix
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abcde1");
   src_cursor_pub.value("valX");
@@ -1002,7 +1002,7 @@ BOOST_AUTO_TEST_CASE(test_merger_src_trie_longer_prefix) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all keys
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("ab1");
   BOOST_CHECK(verify_cursor.is_valid());
   BOOST_CHECK_EQUAL(verify_cursor.value(), Slice("val1"));
@@ -1028,7 +1028,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_complex_trie) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   // Create multiple keys with common prefix in source
   src_cursor.find("prefix_a");
@@ -1039,7 +1039,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_complex_trie) {
   src_cursor.value("src_c");
   src_cursor.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor = dst_db.cursor();
   // Destination has different keys with same prefix
   dst_cursor.find("prefix_d");
@@ -1055,7 +1055,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_complex_trie) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all keys exist
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("prefix_a");
   BOOST_CHECK(verify_cursor.is_valid());
   verify_cursor.find("prefix_b");
@@ -1075,14 +1075,14 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_leaf_into_trie) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   // Source has a single longer key
   src_cursor.find("commonprefixXYZ");
   src_cursor.value("src_value");
   src_cursor.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor = dst_db.cursor();
   // Destination has multiple keys with shared prefix
   dst_cursor.find("commonprefix1");
@@ -1097,7 +1097,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_leaf_into_trie) {
   KeepDestPolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("commonprefixXYZ");
   BOOST_CHECK(verify_cursor.is_valid());
   BOOST_CHECK_EQUAL(verify_cursor.value(), Slice("src_value"));
@@ -1109,7 +1109,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_trie_split) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   // Source with various keys
   src_cursor.find("abc1");
@@ -1120,7 +1120,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_trie_split) {
   src_cursor.value("src3");
   src_cursor.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor = dst_db.cursor();
   // Destination with different branching
   dst_cursor.find("abf1");
@@ -1135,7 +1135,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_trie_split) {
   KeepDestPolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("abc1");
   BOOST_CHECK(verify_cursor.is_valid());
   verify_cursor.find("abd1");
@@ -1154,7 +1154,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_deep_copy) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   // Create a deep tree structure in source
   for (int i = 0; i < 20; i++) {
@@ -1165,7 +1165,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_deep_copy) {
   }
   src_cursor.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor = dst_db.cursor();
   // Destination has non-overlapping keys
   for (int i = 20; i < 40; i++) {
@@ -1183,7 +1183,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_deep_copy) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all keys from both sources exist
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   for (int i = 0; i < 40; i++) {
     std::string key = "key_" + std::to_string(i);
     verify_cursor.find(key);
@@ -1197,7 +1197,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_merge_trie_node) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   src_cursor.find("xyz1");
   src_cursor.value("v1");
@@ -1205,7 +1205,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_merge_trie_node) {
   src_cursor.value("v2");
   src_cursor.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor = dst_db.cursor();
   dst_cursor.find("xyz3");
   dst_cursor.value("v3");
@@ -1217,7 +1217,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_merge_trie_node) {
   KeepDestPolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("xyz1");
   BOOST_CHECK(verify_cursor.is_valid());
   verify_cursor.find("xyz2");
@@ -1232,7 +1232,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_big_value) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   // Create a big value in source
   std::string big_value(5000, 'X');
@@ -1240,7 +1240,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_big_value) {
   src_cursor.value(big_value);
   src_cursor.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor = dst_db.cursor();
   // Destination has a different value for same key
   dst_cursor.find("bigkey");
@@ -1254,7 +1254,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_big_value) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // With KeepDestPolicy, destination value should be kept
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("bigkey");
   BOOST_CHECK(verify_cursor.is_valid());
   BOOST_CHECK_EQUAL(verify_cursor.value(), Slice("small_dst"));
@@ -1266,7 +1266,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_empty_to_populated) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor = src_db.cursor();
   // Create complex tree in source
   src_cursor.find("a1");
@@ -1280,7 +1280,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_empty_to_populated) {
   src_cursor.commit();
 
   // Destination is empty
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
 
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
@@ -1288,7 +1288,7 @@ BOOST_AUTO_TEST_CASE(test_merger_keep_dest_empty_to_populated) {
   KeepDestPolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto verify_cursor = (*dest_storage)["test"].cursor();
+  auto verify_cursor = dest_storage->open("test").cursor();
   verify_cursor.find("a1");
   BOOST_CHECK(verify_cursor.is_valid());
   BOOST_CHECK_EQUAL(verify_cursor.value(), Slice("v1"));
@@ -1356,7 +1356,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_into_empty) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("apple");
   src_cursor_pub.value("v_apple");
@@ -1368,14 +1368,14 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_into_empty) {
   src_cursor_pub.value("v_cherry");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
 
   PrefixFilterPolicy handler("a");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("apple");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v_apple"));
@@ -1396,7 +1396,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_with_existing_keys) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Populate destination
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("apple");
   dst_cursor_pub.value("dst_apple");
@@ -1405,7 +1405,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_with_existing_keys) {
   dst_cursor_pub.commit();
 
   // Populate source with overlapping and new keys
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("banana");
   src_cursor_pub.value("src_banana");
@@ -1422,7 +1422,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_filter_with_existing_keys) {
   PrefixFilterPolicy handler("b");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   // Original dst keys should still be present
   v.find("apple");
   BOOST_CHECK(v.is_valid());
@@ -1449,7 +1449,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Populate destination
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("keep1");
   dst_cursor_pub.value("v_keep1");
@@ -1458,7 +1458,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all) {
   dst_cursor_pub.commit();
 
   // Populate source
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("reject1");
   src_cursor_pub.value("v_reject1");
@@ -1473,7 +1473,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all) {
   PrefixFilterPolicy handler("NOMATCH");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("keep1");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v_keep1"));
@@ -1492,7 +1492,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all_into_empty) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("nope1");
   src_cursor_pub.value("v1");
@@ -1500,14 +1500,14 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_reject_all_into_empty) {
   src_cursor_pub.value("v2");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
 
   PrefixFilterPolicy handler("NOMATCH");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.first();
   BOOST_CHECK(!v.is_valid());
 }
@@ -1518,13 +1518,13 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_single_leaf_rejected) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("existing");
   dst_cursor_pub.value("v_existing");
   dst_cursor_pub.commit();
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("newkey");
   src_cursor_pub.value("v_newkey");
@@ -1536,7 +1536,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_single_leaf_rejected) {
   PrefixFilterPolicy handler("NOMATCH");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("existing");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v_existing"));
@@ -1605,7 +1605,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_prunes_subtree) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("aa1");
   src_cursor_pub.value("v_aa1");
@@ -1619,14 +1619,14 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_prunes_subtree) {
   src_cursor_pub.value("v_bb3");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
 
   TrackingFilterPolicy handler("aa");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("aa1");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v_aa1"));
@@ -1652,7 +1652,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_rejects_all_subtrees) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("aa1");
   src_cursor_pub.value("v1");
@@ -1664,14 +1664,14 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_rejects_all_subtrees) {
   src_cursor_pub.value("v4");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
 
   TrackingFilterPolicy handler("ZZZZZ");  // matches nothing
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.first();
   BOOST_CHECK(!v.is_valid());
 
@@ -1726,7 +1726,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_leaf_is_big_param) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("key1");
   src_cursor_pub.value("small_val1");
@@ -1734,14 +1734,14 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_leaf_is_big_param) {
   src_cursor_pub.value("small_val2");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
 
   RejectBigPolicy handler;
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("key1");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("small_val1"));
@@ -1760,14 +1760,14 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_with_existing_dst) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Destination has keys under "data_"
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("data_existing");
   dst_cursor_pub.value("v_existing");
   dst_cursor_pub.commit();
 
   // Source has keys under "data_" (should merge) and "meta_" (should be pruned)
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("data_new1");
   src_cursor_pub.value("v_new1");
@@ -1785,7 +1785,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_with_existing_dst) {
   PrefixFilterPolicy handler("data_");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   // Original dst key preserved
   v.find("data_existing");
   BOOST_CHECK(v.is_valid());
@@ -1812,7 +1812,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   // Keys that share "prefix_ab" but diverge after
   src_cursor_pub.find("prefix_abc_key1");
@@ -1827,7 +1827,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
   src_cursor_pub.value("v5");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto src_internal = src_db._internal();
   auto dst_internal = dst_db._internal();
 
@@ -1835,7 +1835,7 @@ BOOST_AUTO_TEST_CASE(test_merger_may_add_trie_deep_prefix_filter) {
   PrefixFilterPolicy handler("prefix_abc");
   exec_merger(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("prefix_abc_key1");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v1"));
@@ -1870,14 +1870,14 @@ BOOST_AUTO_TEST_CASE(test_merger_into_empty_leaf_root) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create dst with only empty key
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("");
   dst_cursor_pub.value("root_value");
   dst_cursor_pub.commit();
 
   // Create src with a normal key
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abc");
   src_cursor_pub.value("abc_value");
@@ -1890,7 +1890,7 @@ BOOST_AUTO_TEST_CASE(test_merger_into_empty_leaf_root) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify both keys exist
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("root_value"));
@@ -1927,7 +1927,7 @@ BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // Create dst with "ab" (NONE branch) and "abc"
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("ab");
   dst_cursor_pub.value("ab_value");
@@ -1936,7 +1936,7 @@ BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
   dst_cursor_pub.commit();
 
   // Create src with "abd" and "abe" (forms a trie at "ab")
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abd");
   src_cursor_pub.value("abd_value");
@@ -1951,7 +1951,7 @@ BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify all keys exist after merge
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   
   v.find("ab");
   BOOST_CHECK(v.is_valid());
@@ -1985,7 +1985,7 @@ BOOST_AUTO_TEST_CASE(test_merger_none_branch_leaf_with_src_trie) {
 BOOST_AUTO_TEST_CASE(test_dumper_simple_mode) {
   MergerPreparation p;
   auto storage = Storage::create(TEST_FILE);
-  auto db = (*storage)["test"];
+  auto db = storage->open("test");
 
   // Insert a few keys so we have both trie and leaf nodes
   auto c = db.cursor();
@@ -2031,7 +2031,7 @@ BOOST_AUTO_TEST_CASE(test_merger_leaf_into_trie_rejected) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // dst has multiple keys under "ab" → creates a trie at "ab"
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("abd");
   dst_cursor_pub.value("v_abd");
@@ -2040,7 +2040,7 @@ BOOST_AUTO_TEST_CASE(test_merger_leaf_into_trie_rejected) {
   dst_cursor_pub.commit();
 
   // src has a single leaf "abc" → leaf node in src root
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abc");
   src_cursor_pub.value("v_abc");
@@ -2054,7 +2054,7 @@ BOOST_AUTO_TEST_CASE(test_merger_leaf_into_trie_rejected) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify dst unchanged: "abd" and "abe" remain, "abc" not added
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("abd");
   BOOST_CHECK(v.is_valid());
   v.find("abe");
@@ -2073,7 +2073,7 @@ BOOST_AUTO_TEST_CASE(test_merger_shared_trie_prefix) {
   auto dest_storage = Storage::create(TEST_FILE "2");
 
   // dst has keys that create a trie with prefix "ab" and branches d,e
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("abd");
   dst_cursor_pub.value("v_dst_abd");
@@ -2082,7 +2082,7 @@ BOOST_AUTO_TEST_CASE(test_merger_shared_trie_prefix) {
   dst_cursor_pub.commit();
 
   // src also has keys under "ab" trie with branches d (shared), f (new)
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("abd");
   src_cursor_pub.value("v_src_abd");
@@ -2097,7 +2097,7 @@ BOOST_AUTO_TEST_CASE(test_merger_shared_trie_prefix) {
   exec_merger(*dst_internal, *src_internal, handler);
 
   // Verify: "abd" overwritten by src, "abe" kept from dst, "abf" added from src
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("abd");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("v_src_abd"));
@@ -2128,7 +2128,7 @@ BOOST_AUTO_TEST_CASE(test_merger_recursive_merge_src_keypos_bug) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto src_cursor_pub = src_db.cursor();
   src_cursor_pub.find("hello");
   src_cursor_pub.value("V2");
@@ -2136,7 +2136,7 @@ BOOST_AUTO_TEST_CASE(test_merger_recursive_merge_src_keypos_bug) {
   src_cursor_pub.value("V3");
   src_cursor_pub.commit();
 
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dst_cursor_pub = dst_db.cursor();
   dst_cursor_pub.find("hello/world/X");
   dst_cursor_pub.value("V1");
@@ -2147,7 +2147,7 @@ BOOST_AUTO_TEST_CASE(test_merger_recursive_merge_src_keypos_bug) {
   exec_merger(*dst_db._internal(), *src_db._internal(), handler);
 
   // After fix: all three keys merged into destination
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   v.find("hello");
   BOOST_CHECK(v.is_valid());
   BOOST_CHECK_EQUAL(v.value(), Slice("V2"));
@@ -2168,7 +2168,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_multiple_to_empty) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto c = src_db.cursor();
   for (int i = 0; i < 26; i++) {
     std::string key(1, 'a' + i);
@@ -2179,12 +2179,12 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_multiple_to_empty) {
   c.commit();
 
   auto src_internal = src_db._internal();
-  auto dst_internal = (*dest_storage)["test"]._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
 
   OverwritePolicy handler;
   exec_merger_threaded_path(*dst_internal, *src_internal, handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   int count = 0;
   v.first();
   while (v.is_valid()) { count++; v.next(); }
@@ -2197,8 +2197,8 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_disjoint_keys) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dest_storage)["test"];
+  auto src_db = src_storage->open("test");
+  auto dst_db = dest_storage->open("test");
   auto sc = src_db.cursor();
   auto dc = dst_db.cursor();
 
@@ -2214,7 +2214,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_disjoint_keys) {
   OverwritePolicy handler;
   exec_merger_threaded_path(*dst_db._internal(), *src_db._internal(), handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   int count = 0;
   v.first();
   while (v.is_valid()) { count++; v.next(); }
@@ -2227,7 +2227,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_large_dataset) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto sc = src_db.cursor();
   for (int i = 0; i < 300; i++) {
     std::string key = "key_" + std::to_string(i);
@@ -2237,7 +2237,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_large_dataset) {
   sc.commit();
 
   // Pre-populate destination with some overlapping keys
-  auto dst_db = (*dest_storage)["test"];
+  auto dst_db = dest_storage->open("test");
   auto dc = dst_db.cursor();
   for (int i = 0; i < 50; i++) {
     std::string key = "key_" + std::to_string(i);
@@ -2249,7 +2249,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_large_dataset) {
   OverwritePolicy handler;
   exec_merger_threaded_path(*dst_db._internal(), *src_db._internal(), handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   int count = 0;
   v.first();
   while (v.is_valid()) { count++; v.next(); }
@@ -2270,7 +2270,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_matches_inline) {
 
   // Build source tree with varied structure
   auto src_storage = Storage::create(TEST_FILE);
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   auto sc = src_db.cursor();
   for (int i = 0; i < 100; i++) {
     std::string key = "prefix_" + std::string(1, 'a' + (i % 26)) + "_" + std::to_string(i);
@@ -2284,9 +2284,9 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_matches_inline) {
   {
     auto dst1_storage = Storage::create(TEST_FILE "2");
     OverwritePolicy handler;
-    exec_merger(*(*dst1_storage)["test"]._internal(),
+    exec_merger(*dst1_storage->open("test")._internal(),
                 *src_db._internal(), handler);
-    auto v = (*dst1_storage)["test"].cursor();
+    auto v = dst1_storage->open("test").cursor();
     v.first();
     while (v.is_valid()) {
       inline_results.emplace_back(v.key().string(), v.value().string());
@@ -2300,9 +2300,9 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_matches_inline) {
   {
     auto dst2_storage = Storage::create(TEST_FILE "2");
     OverwritePolicy handler;
-    exec_merger_threaded_path(*(*dst2_storage)["test"]._internal(),
+    exec_merger_threaded_path(*dst2_storage->open("test")._internal(),
                          *src_db._internal(), handler);
-    auto v = (*dst2_storage)["test"].cursor();
+    auto v = dst2_storage->open("test").cursor();
     v.first();
     while (v.is_valid()) {
       parallel_results.emplace_back(v.key().string(), v.value().string());
@@ -2325,7 +2325,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_with_filter) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
+  auto src_db = src_storage->open("test");
   // Insert keys with distinct first-char prefixes: 'a' for accept, 'r' for reject
   {
     auto sc = src_db.cursor();
@@ -2345,10 +2345,10 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_with_filter) {
   // Filter: only keys starting with "a"
   TrackingFilterPolicy handler("a");
 
-  exec_merger_threaded_path(*(*dest_storage)["test"]._internal(),
+  exec_merger_threaded_path(*dest_storage->open("test")._internal(),
                        *src_db._internal(), handler);
 
-  auto v = (*dest_storage)["test"].cursor();
+  auto v = dest_storage->open("test").cursor();
   int count = 0;
   v.first();
   while (v.is_valid()) {
@@ -2367,8 +2367,8 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dest_storage)["test"];
+  auto src_db = src_storage->open("test");
+  auto dst_db = dest_storage->open("test");
 
   // Use single-char prefix + zero-padded numbers to avoid the key1==key2 bug.
   // dst: A00..A09, C00..C09, E00..E09  (30 keys)
@@ -2402,7 +2402,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches) {
   {
     auto dst1_storage = Storage::create(TEST_FILE "3");
     {
-      auto dst1_db = (*dst1_storage)["test"];
+      auto dst1_db = dst1_storage->open("test");
       auto dc1 = dst1_db.cursor();
       for (int i = 0; i < 10; i++) dc1.find(mk('A', i)), dc1.value(mk('a', i));
       for (int i = 0; i < 10; i++) dc1.find(mk('C', i)), dc1.value(mk('c', i));
@@ -2411,7 +2411,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches) {
       OverwritePolicy handler;
       exec_merger(*dst1_db._internal(), *src_db._internal(), handler);
     }
-    auto v = (*dst1_storage)["test"].cursor();
+    auto v = dst1_storage->open("test").cursor();
     v.first();
     while (v.is_valid()) {
       inline_results.emplace_back(v.key().string(), v.value().string());
@@ -2426,7 +2426,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches) {
 
   std::vector<std::pair<std::string, std::string>> parallel_results;
   {
-    auto v = (*dest_storage)["test"].cursor();
+    auto v = dest_storage->open("test").cursor();
     v.first();
     while (v.is_valid()) {
       parallel_results.emplace_back(v.key().string(), v.value().string());
@@ -2450,8 +2450,8 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
   auto src_storage = Storage::create(TEST_FILE);
   auto dest_storage = Storage::create(TEST_FILE "2");
 
-  auto src_db = (*src_storage)["test"];
-  auto dst_db = (*dest_storage)["test"];
+  auto src_db = src_storage->open("test");
+  auto dst_db = dest_storage->open("test");
 
   // Keys: "P<branch>D<nn>" in dst, "P<branch>S<nn>" in src
   // branch = A..E (5 branches), nn = 00..09 (10 each)
@@ -2490,7 +2490,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
   {
     auto dst1_storage = Storage::create(TEST_FILE "3");
     {
-      auto dst1_db = (*dst1_storage)["test"];
+      auto dst1_db = dst1_storage->open("test");
       auto dc1 = dst1_db.cursor();
       for (int b = 0; b < 5; b++) {
         for (int i = 0; i < 10; i++) {
@@ -2502,7 +2502,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
       OverwritePolicy handler;
       exec_merger(*dst1_db._internal(), *src_db._internal(), handler);
     }
-    auto v = (*dst1_storage)["test"].cursor();
+    auto v = dst1_storage->open("test").cursor();
     v.first();
     while (v.is_valid()) {
       inline_results.emplace_back(v.key().string(), v.value().string());
@@ -2517,7 +2517,7 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
 
   std::vector<std::pair<std::string, std::string>> parallel_results;
   {
-    auto v = (*dest_storage)["test"].cursor();
+    auto v = dest_storage->open("test").cursor();
     v.first();
     while (v.is_valid()) {
       parallel_results.emplace_back(v.key().string(), v.value().string());
@@ -2534,3 +2534,354 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
 }
 
 #endif  // LEAVES_HAS_THREADS
+
+// Selective policy that rejects specific keys
+struct SelectivePolicy {
+  std::set<std::string> rejected_keys;
+  std::set<std::string> rejected_overwrites;
+
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
+    return rejected_overwrites.find(key) == rejected_overwrites.end();
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return rejected_keys.find(key) == rejected_keys.end();
+  }
+
+  bool may_add_trie(const std::string& key) {
+    return true;
+  }
+
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
+
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    return {Slice(), false};
+  }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
+};
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_reject_overwrite) {
+  // Exercises _merger.hpp L262: may_overwrite returns false
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("hello");
+  src_cursor.value("src_value");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("hello");
+  dst_cursor.value("dst_value");
+  dst_cursor.commit();
+
+  SelectivePolicy handler;
+  handler.rejected_overwrites.insert("hello");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("hello");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_value"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_reject_add) {
+  // Exercises selective deep copy paths where may_add rejects leaves
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("abc1");
+  src_cursor.value("val1");
+  src_cursor.find("abc2");
+  src_cursor.value("val2");
+  src_cursor.find("abc3");
+  src_cursor.value("val3");
+  src_cursor.find("def1");
+  src_cursor.value("val4");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("ghi");
+  dst_cursor.value("dst_val");
+  dst_cursor.commit();
+
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("abc1");
+  handler.rejected_keys.insert("abc2");
+  handler.rejected_keys.insert("abc3");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("ghi");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_val"));
+  verify.find("def1");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("val4"));
+  verify.find("abc1");
+  BOOST_CHECK(!verify.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_with_shared_and_srconly) {
+  // Exercises merge_into_trie: shared branches merged + src-only deep-copied
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  for (char c = 'a'; c <= 'f'; c++) {
+    std::string key(1, c);
+    key += "suffix";
+    src_cursor.find(key);
+    src_cursor.value("src_" + key);
+  }
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("asuffix");
+  dst_cursor.value("dst_a");
+  dst_cursor.find("bsuffix");
+  dst_cursor.value("dst_b");
+  dst_cursor.find("xsuffix");
+  dst_cursor.value("dst_x");
+  dst_cursor.commit();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("asuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_asuffix"));
+  verify.find("csuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_csuffix"));
+  verify.find("xsuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_x"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_leaf_into_existing_trie) {
+  // Exercises merge_leaf_into_trie and expand_trie_with_branch
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("bsuffix");
+  src_cursor.value("src_b");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("asuffix");
+  dst_cursor.value("dst_a");
+  dst_cursor.find("csuffix");
+  dst_cursor.value("dst_c");
+  dst_cursor.commit();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("asuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_a"));
+  verify.find("bsuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_b"));
+  verify.find("csuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_c"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_src_trie_no_shared_branch) {
+  // Tests where src trie does NOT have dst's branch key
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("prefix_x1");
+  src_cursor.value("sx1");
+  src_cursor.find("prefix_x2");
+  src_cursor.value("sx2");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("prefix_y1");
+  dst_cursor.value("dy1");
+  dst_cursor.commit();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("prefix_x1");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("sx1"));
+  verify.find("prefix_x2");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("sx2"));
+  verify.find("prefix_y1");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dy1"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_trie_into_trie) {
+  // Exercises selective deep copy during trie-to-trie merge.
+  // src and dst share a common prefix trie so merge_into_trie fires,
+  // and selective_deep_copy_subtree filters leaves.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  // Create src trie with branch structure at root: 'a' and 'b'
+  src_cursor.find("ax");
+  src_cursor.value("vax");
+  src_cursor.find("ay");
+  src_cursor.value("vay");
+  src_cursor.find("bx");
+  src_cursor.value("vbx");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  // Create dst trie with same root structure: branch 'a' exists
+  dst_cursor.find("az");
+  dst_cursor.value("vaz");
+  dst_cursor.commit();
+
+  // Reject "bx" — src-only branch 'b' should still be selectively copied
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("bx");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("ax");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vax"));
+  verify.find("ay");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vay"));
+  verify.find("bx");
+  BOOST_CHECK(!verify.is_valid());  // rejected by may_add_leaf
+  verify.find("az");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vaz"));  // dst unchanged
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_reject_all_src_trie_children) {
+  // Exercises _merger.hpp L380 — all children of source trie rejected by may_add
+  // When src has a trie branch that diverges from dst and ALL leaves are rejected,
+  // the "if (!surviving) return;" path is taken.
+  MergerPreparation p;
+
+  auto src_storage = Storage::create(TEST_FILE);
+  auto src_db = src_storage->open("test");
+  auto dest_storage = Storage::create(TEST_FILE "2");
+  auto dst_db = dest_storage->open("test");
+
+  // Src: trie with multiple branches under "x"
+  {
+    auto c = src_db.cursor();
+    c.find("xa"); c.value("v1"); c.commit();
+  }
+  {
+    auto c = src_db.cursor();
+    c.find("xb"); c.value("v2"); c.commit();
+  }
+
+  // Dst: leaf "y" (different first byte, so resolve_divergence is triggered)
+  {
+    auto c = dst_db.cursor();
+    c.find("y"); c.value("vy"); c.commit();
+  }
+
+  // Reject ALL src keys — nothing from src trie survives
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("xa");
+  handler.rejected_keys.insert("xb");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  // Only dst key should remain
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("y");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vy"));
+  verify.find("xa");
+  BOOST_CHECK(!verify.is_valid());
+  verify.find("xb");
+  BOOST_CHECK(!verify.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_merge_into_trie_all_rejected) {
+  // Exercises merge_into_trie with suffix_len > 0 where all src children rejected.
+  // This is the "if (!surviving) return;" inside merge_into_trie.
+  MergerPreparation p;
+
+  auto src_storage = Storage::create(TEST_FILE);
+  auto src_db = src_storage->open("test");
+  auto dest_storage = Storage::create(TEST_FILE "2");
+  auto dst_db = dest_storage->open("test");
+
+  // Dst: trie with prefix "ab" and branches "abc", "abd"
+  {
+    auto c = dst_db.cursor();
+    c.find("abc"); c.value("v_abc"); c.commit();
+  }
+  {
+    auto c = dst_db.cursor();
+    c.find("abd"); c.value("v_abd"); c.commit();
+  }
+
+  // Src: trie with prefix "ab" and branches "abx", "aby" (suffix differs)
+  {
+    auto c = src_db.cursor();
+    c.find("abx"); c.value("v_abx"); c.commit();
+  }
+  {
+    auto c = src_db.cursor();
+    c.find("aby"); c.value("v_aby"); c.commit();
+  }
+
+  // Reject all src keys
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("abx");
+  handler.rejected_keys.insert("aby");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  // Dst should be unchanged
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("abc");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("v_abc"));
+  verify.find("abd");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("v_abd"));
+  verify.find("abx");
+  BOOST_CHECK(!verify.is_valid());
+  verify.find("aby");
+  BOOST_CHECK(!verify.is_valid());
+}

@@ -189,3 +189,27 @@ BOOST_AUTO_TEST_CASE(test_cursor_random_keys) {
   BOOST_CHECK(cursor->is_valid());
   BOOST_CHECK_EQUAL(cursor->value(), Slice("v42"));
 }
+
+BOOST_AUTO_TEST_CASE(test_memory_db_alloc_single_area) {
+  // Exercises _memstore.hpp L101 — _MemoryDB::alloc_single_area()
+  // Write enough data to exhaust the initial area (512K) and trigger growth.
+  _MemoryStorage storage;
+  auto& db = storage.db();
+  auto cursor = db.create_cursor();
+
+  // Each area is 512K. Use moderately-sized values with many keys to fill it.
+  std::string value(200, 'x');
+  for (int i = 0; i < 5000; i++) {
+    char key[32];
+    snprintf(key, sizeof(key), "key_%05d", i);
+    cursor->find(key);
+    cursor->value(Slice(value));
+  }
+
+  // Verify we allocated more than the initial area
+  BOOST_CHECK_GT(storage._areas.size(), 1u);
+
+  // Verify data is accessible
+  cursor->find("key_00000");
+  BOOST_CHECK(cursor->is_valid());
+}

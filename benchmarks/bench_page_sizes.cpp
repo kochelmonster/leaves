@@ -233,7 +233,7 @@ static ScenarioResult run_scenario(const char* name,
   auto fpath = tmp.path((std::string(name) + ".lvs").c_str());
 
   auto storage = MapStorage::create(fpath.c_str());
-  auto db = (*storage)["bench"];
+  auto db = storage->open("bench");
   auto cursor = db.cursor();
 
   std::string val(vsize, 'x');
@@ -360,8 +360,8 @@ static void print_summary(const std::vector<ScenarioResult>& results) {
 
   // Print current page sizes
   auto* db_internal_dummy =
-      static_cast<MapStorage::StorageImpl::DB*>(nullptr);
-  using DB_type = MapStorage::StorageImpl::DB;
+      static_cast<_DB<MapStorage::StorageImpl>*>(nullptr);
+  using DB_type = _DB<MapStorage::StorageImpl>;
 
   printf("  Current PAGE_SIZES:\n");
   for (int i = 0; i < DB_type::MemStatistics::COUNT; i++) {
@@ -449,7 +449,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  using DB_type = MapStorage::StorageImpl::DB;
+  using DB_type = _DB<MapStorage::StorageImpl>;
 
   printf("Page Size Benchmark\n");
   printf("  Keys:       %d\n", FLAGS_num);
