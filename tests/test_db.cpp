@@ -239,7 +239,7 @@ BOOST_AUTO_TEST_CASE(test_recycle_db) {
   }
 
   size_t initial_file_size = storage._memory->file_size;
-  storage.remove_db("test1");
+  storage.remove("test1");
 
   auto db3 = storage.open("test3");
   size_t final_file_size = storage._memory->file_size;
@@ -985,7 +985,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback_with_prior_committed) {
 
 BOOST_AUTO_TEST_CASE(test_return_areas_multi) {
   // Exercises return_areas() multi-area path (L234-235)
-  // Commit multi-areas, then call return_areas() via remove_db
+  // Commit multi-areas, then call return_areas() via remove
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test_return_multi.lvs";
   

@@ -28,7 +28,8 @@ class BrowserStorage
         this->shared_from_this(), name, std::forward<Args>(args)...);
   }
 
-  void remove_db(const char* name) { _storage->remove_db(name); }
+  template <template <typename> class DBClass = _DB>
+  void remove(const char* name) { _storage->template remove<DBClass>(name); }
 
   void list_dbs(std::vector<std::string>& result) {
     return _storage->list_dbs(result);

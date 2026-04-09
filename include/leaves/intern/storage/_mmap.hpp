@@ -514,7 +514,9 @@ struct _MemoryMapFile
     return db;
   }
 
-  void remove_db(const char* name) {
+  template <template <typename> class DBClass = _DB>
+  void remove(const char* name) {
+    using DB = DBClass<MemoryMapFile>;
 #ifdef LEAVES_SINGLE_PROCESS
     std::scoped_lock flock_guard(file_lock());
 #else
@@ -524,8 +526,8 @@ struct _MemoryMapFile
 #endif
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
-      if (it->second.is_active_fn && it->second.db &&
-          it->second.is_active_fn(it->second.db))
+      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
         throw TransactionActive();
     }
 
@@ -533,12 +535,15 @@ struct _MemoryMapFile
     _for_each_db_entry([&](DBEntry& entry) {
       if (found) return;
       if (entry.offset && !strcmp(entry.name, name)) {
-        // Return areas via cached slot or base _DB
+        // Return areas via cached slot or typed DB
         auto dit = _dbs.find(name);
         if (dit != _dbs.end() && dit->second.db) {
-          dit->second.return_areas_fn(dit->second.db);
+          static_cast<DB*>(dit->second.db)->return_areas();
         } else {
-          _DB<MemoryMapFile> tmp(_self(), entry.offset, std::string_view(name));
+          auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
+              (char*)_memory + (uint64_t)entry.offset);
+          if (base_header->db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+          DB tmp(_self(), entry.offset, std::string_view(name));
           tmp.return_areas();
         }
         entry.offset = 0;

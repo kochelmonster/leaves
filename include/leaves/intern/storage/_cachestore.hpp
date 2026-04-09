@@ -389,11 +389,13 @@ struct _CacheStore : public Opers_,
     return _create_in_overflow<DBClass>(name, std::forward<Args>(args)...);
   }
 
-  void remove_db(const char* name) {
+  template <template <typename> class DBClass = _DB>
+  void remove(const char* name) {
+    using DB = DBClass<CacheStore>;
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
-      if (it->second.is_active_fn && it->second.db &&
-          it->second.is_active_fn(it->second.db))
+      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
         throw TransactionActive();
     }
 
@@ -403,7 +405,7 @@ struct _CacheStore : public Opers_,
     for (uint16_t i = 0; i < hwm; i++) {
       auto& entry = _header->dbs[i];
       if (entry.offset && !strcmp(entry.name, name)) {
-        _return_areas_at(entry.offset, name);
+        _return_areas_at<DBClass>(entry.offset, name);
         entry.offset = 0;
         _dbs.erase(name);
         make_header_dirty();
@@ -413,7 +415,7 @@ struct _CacheStore : public Opers_,
     }
 
     // Check overflow pages
-    if (_remove_from_overflow_pages(name)) {
+    if (_remove_from_overflow_pages<DBClass>(name)) {
       _dbs.erase(name);
       flush(true, true);
       return;
@@ -581,20 +583,26 @@ struct _CacheStore : public Opers_,
     return db;
   }
 
-  // Return all areas owned by a DB at the given offset (type-agnostic).
+  // Return all areas owned by a DB at the given offset.
+  template <template <typename> class DBClass = _DB>
   void _return_areas_at(offset_t offset, const char* name) {
-    // If DB is cached, use the type-erased return_areas
+    using DB = DBClass<CacheStore>;
+    // If DB is cached, use it directly
     auto it = _dbs.find(name);
     if (it != _dbs.end() && it->second.db) {
-      it->second.return_areas_fn(it->second.db);
+      static_cast<DB*>(it->second.db)->return_areas();
       return;
     }
-    // Otherwise construct a base _DB to return areas (works for all types)
-    _DB<CacheStore> tmp(_self(), offset, std::string_view(name));
+    // Otherwise construct the correctly-typed DB to return areas
+    _DBHeader<CacheStore> base_header;
+    read((uint64_t)offset, &base_header, sizeof(base_header));
+    if (base_header.db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+    DB tmp(_self(), offset, std::string_view(name));
     tmp.return_areas();
   }
 
   // Remove a DB from overflow pages via read-modify-write. Returns true if found.
+  template <template <typename> class DBClass = _DB>
   bool _remove_from_overflow_pages(const char* name) {
     offset_t next = _header->db_next_page;
     while (next) {
@@ -605,7 +613,7 @@ struct _CacheStore : public Opers_,
       uint16_t pcount = std::min(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
         if (page->entries[i].offset && !strcmp(page->entries[i].name, name)) {
-          _return_areas_at(page->entries[i].offset, name);
+          _return_areas_at<DBClass>(page->entries[i].offset, name);
           page->entries[i].offset = 0;
           this->write((uint64_t)next, buf, 4 * K);
           make_header_dirty();

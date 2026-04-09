@@ -170,7 +170,7 @@ _BrowserStore(
 // Database access
 DB* operator[](const char* name);  // Get/create database
 DB* make(const char* name);        // Same as operator[]
-void remove_db(const char* name);  // Delete database
+void remove(const char* name);  // Delete database
 
 // Lifecycle
 void flush(bool sync = false);     // Write dirty blocks

@@ -132,7 +132,7 @@ std::vector<std::string> names;
 storage->list_dbs(names);
 
 // Remove a database
-storage->remove_db("logs");
+storage->remove("logs");
 ```
 
 ### Cursor Operations

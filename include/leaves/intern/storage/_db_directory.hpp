@@ -19,8 +19,6 @@ struct _DBSlot {
   void* db = nullptr;
   uint16_t type_id = 0;
   void (*deleter)(void*) = nullptr;
-  void (*return_areas_fn)(void*) = nullptr;
-  bool (*is_active_fn)(const void*) = nullptr;
 
   _DBSlot() = default;
 
@@ -30,10 +28,6 @@ struct _DBSlot {
     slot.db = ptr;
     slot.type_id = DB::DB_TYPE_ID;
     slot.deleter = [](void* p) { delete static_cast<DB*>(p); };
-    slot.return_areas_fn = [](void* p) { static_cast<DB*>(p)->return_areas(); };
-    slot.is_active_fn = [](const void* p) {
-      return static_cast<const DB*>(p)->is_active();
-    };
     return slot;
   }
 
@@ -49,9 +43,7 @@ struct _DBSlot {
   _DBSlot(_DBSlot&& o) noexcept
       : db(o.db),
         type_id(o.type_id),
-        deleter(o.deleter),
-        return_areas_fn(o.return_areas_fn),
-        is_active_fn(o.is_active_fn) {
+        deleter(o.deleter) {
     o.db = nullptr;
   }
 
@@ -61,8 +53,6 @@ struct _DBSlot {
       db = o.db;
       type_id = o.type_id;
       deleter = o.deleter;
-      return_areas_fn = o.return_areas_fn;
-      is_active_fn = o.is_active_fn;
       o.db = nullptr;
     }
     return *this;

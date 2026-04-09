@@ -100,7 +100,7 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
   DBMMap db(dbFilePath.c_str());
   try {
-    db.remove_db("test");
+    db.remove("test");
     BOOST_FAIL("Expected WrongValue exception not thrown");
   } catch (const WrongValue& e) {
     BOOST_CHECK_EQUAL(std::string(e.what()), "database does not exist.");
