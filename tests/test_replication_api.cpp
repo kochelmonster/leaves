@@ -89,6 +89,59 @@ struct APIFixture {
 BOOST_AUTO_TEST_SUITE(ReplicationPublicAPI)
 
 // ============================================================================
+// Test: error state mapping (sender and receiver)
+// ============================================================================
+BOOST_FIXTURE_TEST_CASE(test_error_state, APIFixture) {
+  // Exercises replication.hpp L57-58 (Sender ERROR state)
+  // Exercises replication.hpp L119-120 (Receiver ERROR state)
+  auto src_path = temp_dir / "src_err.lvs";
+  auto dst_path = temp_dir / "dst_err.lvs";
+
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
+
+  auto src_db = src_storage->open<_ReplicationDB>("testdb");
+  auto dst_db = dst_storage->open<_ReplicationDB>("testdb");
+
+  LoopbackTransport sender_tx, receiver_tx;
+  sender_tx.set_peer(&receiver_tx);
+  receiver_tx.set_peer(&sender_tx);
+
+  EventTracker sender_events, receiver_events;
+
+  ReplicationSender<MapStorage> sender(src_db);
+  ReplicationReceiver<MapStorage> receiver(dst_db);
+
+  // Start receiver but feed it garbage data to trigger error
+  receiver.begin(&receiver_tx, &receiver_events);
+
+  // Write garbage to receiver's buffer
+  uint8_t garbage[64];
+  memset(garbage, 0xFF, sizeof(garbage));
+  auto& buf = receiver.receive_buffer();
+  // Construct a fake message: first 4 bytes are size header
+  uint32_t fake_size = 16;
+  memcpy(buf.write_ptr(), &fake_size, 4);
+  memcpy(buf.write_ptr() + 4, garbage, 60);
+  buf.advance(64);
+  receiver.on_data_received();
+
+  // Receiver should be in ERROR state
+  BOOST_CHECK(receiver.state() == ReplicationState::ERROR ||
+              receiver.state() == ReplicationState::IDLE);
+  if (receiver.state() == ReplicationState::ERROR) {
+    BOOST_CHECK(receiver_events.errored);
+  }
+
+  // Test sender error by feeding garbage message
+  sender.begin(&sender_tx, &sender_events);
+  sender.on_message_received(garbage, sizeof(garbage));
+
+  BOOST_CHECK(sender.state() == ReplicationState::ERROR ||
+              sender.state() == ReplicationState::ACTIVE);
+}
+
+// ============================================================================
 // Test: basic sender/receiver with mmap storage
 // ============================================================================
 

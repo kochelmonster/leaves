@@ -69,18 +69,18 @@ struct TestStorage {
   tid_t accept_tid;
   tid_t mark_tid;
 
-  page_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) {
-    return page_ptr(&memory[*offset_ptr]);
+  page_ptr resolve(const offset_t* offset_ptr, Access /* access */ = READ) const {
+    return page_ptr(const_cast<char*>(&memory[*offset_ptr]));
   }
 
   template <typename T>
   typename Traits::Pointer<T> resolve(const offset_t* offset_ptr,
-                                      Access access = READ) {
-    return typename Traits::Pointer<T>(&memory[*offset_ptr]);
+                                      Access access = READ) const {
+    return typename Traits::Pointer<T>(const_cast<char*>(&memory[*offset_ptr]));
   }
 
-  offset_t resolve(const page_ptr& p) {
-    return offset_t((const char*)p - (char*)&memory[0]);
+  offset_t resolve(const page_ptr& p) const {
+    return offset_t((const char*)p - (const char*)&memory[0]);
   }
 
   page_ptr alloc(uint16_t space) { return alloc_slot(mm.assign_slot(space)); }
@@ -856,4 +856,134 @@ BOOST_AUTO_TEST_CASE(test_garbage_slot_empty_cleanup) {
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].oend, 0);
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].istart, 0);
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].iend, 0);
+}
+
+BOOST_AUTO_TEST_CASE(test_slot_push_overflow_container) {
+  // Exercises _memory.hpp L173 — push overflow to new PageContainer
+  // Fill two full containers to trigger the overflow path.
+  TestStorage storage;
+
+  static const uint16_t SPACE = 200;
+  const int sid = storage.mm.assign_slot(SPACE);
+  const int COUNT = TestStorage::MemManager::PageContainer::COUNT;
+
+  // Allocate COUNT+1 blocks, free them all → fills one container, overflows into a second
+  std::vector<offset_t> offsets;
+  for (int i = 0; i < COUNT + 1; ++i) {
+    auto result = storage.alloc(SPACE);
+    offsets.push_back(storage.resolve(result));
+  }
+
+  for (auto offset : offsets) {
+    auto p = storage.resolve(&offset);
+    storage.free(p);
+  }
+
+  // We should now have two PageContainers (ostart != oend)
+  BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, COUNT + 1);
+  BOOST_CHECK(storage.mm.slots[sid].ostart != 0);
+  BOOST_CHECK(storage.mm.slots[sid].oend != 0);
+  BOOST_CHECK(storage.mm.slots[sid].ostart != storage.mm.slots[sid].oend);
+}
+
+BOOST_AUTO_TEST_CASE(test_area_list_add_empty) {
+  // Exercises _memory.hpp L670 — AreaList::add with empty other_head
+  TestStorage storage;
+
+  AreaList list;
+  list.init();
+
+  // Push one area to make list non-empty
+  AreaSlice slice(sizeof(Area), AREA_SIZE);
+  list.push(slice, storage);
+  BOOST_CHECK(list.get_head() != 0);
+
+  // Add empty range — should return immediately (L670)
+  list.add(0, 0, storage);
+  BOOST_CHECK(list.get_head() != 0);  // unchanged
+}
+
+BOOST_AUTO_TEST_CASE(test_area_get_end_chain) {
+  // Exercises _memory.hpp L526-527 — Area::get_end following next pointers
+  TestStorage storage;
+
+  // Create a chain of 3 areas in storage memory
+  size_t base = storage.memory.size();
+  storage.memory.resize(base + 3 * sizeof(Area) + 64);
+
+  offset_t a1_off(base);
+  offset_t a2_off(base + sizeof(Area));
+  offset_t a3_off(base + 2 * sizeof(Area));
+
+  Area* a1 = (Area*)&storage.memory[base];
+  Area* a2 = (Area*)&storage.memory[base + sizeof(Area)];
+  Area* a3 = (Area*)&storage.memory[base + 2 * sizeof(Area)];
+
+  a1->init(a1_off, sizeof(Area), a2_off);
+  a2->init(a2_off, sizeof(Area), a3_off);
+  a3->init(a3_off, sizeof(Area), 0);   // tail
+
+  offset_t end = Area::get_end(a1_off, storage);
+  BOOST_CHECK_EQUAL(uint64_t(end), uint64_t(a3_off));
+
+  // Empty list
+  offset_t empty_end = Area::get_end(0, storage);
+  BOOST_CHECK_EQUAL(uint64_t(empty_end), 0u);
+}
+
+BOOST_AUTO_TEST_CASE(test_area_find_and_remove_head) {
+  // Exercises _memory.hpp L625 — find_and_remove removing head element
+  TestStorage storage;
+
+  AreaList list;
+  list.init();
+
+  // Create two areas in memory, link them into the list
+  size_t base = storage.memory.size();
+  size_t area_size = AREA_SIZE;  // large enough
+  storage.memory.resize(base + 2 * area_size);
+
+  offset_t a1_off(base);
+  offset_t a2_off(base + area_size);
+
+  Area* a1 = (Area*)&storage.memory[base];
+  Area* a2 = (Area*)&storage.memory[base + area_size];
+
+  a1->init(a1_off, area_size, a2_off);
+  a1->_ref.store(0);
+  a2->init(a2_off, area_size, 0);
+  a2->_ref.store(0);
+
+  // Manually set up the list with a1 as head and a2 as tail
+  list.atomic_switch(a1_off, a2_off);
+
+  // find_and_remove matching head — exercises L625 (head removal, else branch)
+  auto result = list.find_and_remove(area_size, storage);
+  BOOST_CHECK(result);
+  BOOST_CHECK_EQUAL(uint64_t(list.get_head()), uint64_t(a2_off));
+}
+
+BOOST_AUTO_TEST_CASE(test_alloc_single_from_multi) {
+  // Exercises _memory.hpp L715 — alloc_single_area falling through to multi_areas
+  TestStorage storage;
+
+  // Drain all single areas
+  while (true) {
+    auto a = storage.single_areas.pop(storage);
+    if (!a) break;
+  }
+  BOOST_CHECK_EQUAL(uint64_t(storage.single_areas.get_head()), 0u);
+
+  // Add an area to multi_areas that's exactly AREA_SIZE
+  size_t base = storage.memory.size();
+  storage.memory.resize(base + AREA_SIZE);
+  offset_t area_off(base);
+  Area* area = (Area*)&storage.memory[base];
+  area->init(area_off, AREA_SIZE, 0);
+  area->_ref.store(0);
+  storage.multi_areas.atomic_switch(area_off, area_off);
+
+  // Now alloc_single_area should fall through from pop(single) → find_and_remove(multi)
+  auto result = storage.alloc_single_area();
+  BOOST_CHECK(result);
 }

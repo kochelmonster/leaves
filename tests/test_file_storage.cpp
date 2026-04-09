@@ -14,6 +14,7 @@
 #include <chrono>
 
 #include "leaves/fstore.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -395,4 +396,296 @@ BOOST_AUTO_TEST_CASE(test_remove_combine_leaf_child) {
   cursor.find("xyb");
   BOOST_REQUIRE(cursor.is_valid());
   BOOST_CHECK_EQUAL(cursor.value(), Slice("val_b"));
+}
+
+// ── Overflow page tests for _CacheStore coverage ────────────────────────
+// The first directory page holds 123 DB entries; creating more forces
+// overflow page creation (_create_in_overflow), list_dbs across pages,
+// find_in_overflow_pages, and remove_from_overflow_pages.
+
+BOOST_AUTO_TEST_CASE(test_overflow_page_creation) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "overflow.lvs").string();
+
+  const int NUM_DBS = 130;  // > 123 first-page capacity
+
+  {
+    auto storage = FileStorage::create(path.c_str());
+
+    // Create enough DBs to overflow the first directory page
+    for (int i = 0; i < NUM_DBS; i++) {
+      char name[22];
+      snprintf(name, sizeof(name), "db_%04d", i);
+      auto db = storage->open(name);
+      auto cursor = db.cursor();
+      cursor.find("key");
+      cursor.value(std::string("val_") + name);
+      cursor.commit();
+    }
+
+    // Verify list_dbs returns all of them (exercises _for_each_db_entry overflow)
+    std::vector<std::string> names;
+    storage->list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+
+  // Reopen from disk — exercises _find_in_overflow_pages
+  {
+    auto storage = FileStorage::create(path.c_str());
+
+    // Open a DB from the first page
+    auto db0 = storage->open("db_0000");
+    auto c0 = db0.cursor();
+    c0.find("key");
+    BOOST_REQUIRE(c0.is_valid());
+    BOOST_CHECK_EQUAL(c0.value(), Slice("val_db_0000"));
+
+    // Open a DB from the overflow page (index > 123)
+    auto db_over = storage->open("db_0125");
+    auto c_over = db_over.cursor();
+    c_over.find("key");
+    BOOST_REQUIRE(c_over.is_valid());
+    BOOST_CHECK_EQUAL(c_over.value(), Slice("val_db_0125"));
+
+    // list_dbs should still return all
+    std::vector<std::string> names;
+    storage->list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_overflow_page_remove) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "overflow_rm.lvs").string();
+
+  const int NUM_DBS = 128;
+
+  {
+    auto storage = FileStorage::create(path.c_str());
+    for (int i = 0; i < NUM_DBS; i++) {
+      char name[22];
+      snprintf(name, sizeof(name), "db_%04d", i);
+      auto db = storage->open(name);
+      auto cursor = db.cursor();
+      cursor.find("k");
+      cursor.value("v");
+      cursor.commit();
+    }
+
+    // Remove a DB from the overflow page (exercises _remove_from_overflow_pages)
+    storage->remove("db_0125");
+
+    std::vector<std::string> names;
+    storage->list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS - 1);
+
+    // Remove a DB from the first page
+    storage->remove("db_0000");
+    names.clear();
+    storage->list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS - 2);
+  }
+
+  // Reopen and verify the removed DBs are gone
+  {
+    auto storage = FileStorage::create(path.c_str());
+    BOOST_CHECK_THROW(storage->remove("db_0000"), WrongValue);
+    BOOST_CHECK_THROW(storage->remove("db_0125"), WrongValue);
+
+    // A surviving overflow DB should still be accessible
+    auto db = storage->open("db_0126");
+    auto cursor = db.cursor();
+    cursor.find("k");
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.value(), Slice("v"));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_overflow_page_reuse_free_slot) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "overflow_reuse.lvs").string();
+
+  const int NUM_DBS = 126;
+
+  auto storage = FileStorage::create(path.c_str());
+  for (int i = 0; i < NUM_DBS; i++) {
+    char name[22];
+    snprintf(name, sizeof(name), "db_%04d", i);
+    auto db = storage->open(name);
+    auto cursor = db.cursor();
+    cursor.find("k");
+    cursor.value("v");
+    cursor.commit();
+  }
+
+  // Remove a first-page DB (frees slot), then create a new one in that slot
+  storage->remove("db_0050");
+  auto db_new = storage->open("db_reuse_slot");
+  auto c_new = db_new.cursor();
+  c_new.find("hello");
+  c_new.value("world");
+  c_new.commit();
+
+  // Remove an overflow-page DB and create a new one in that slot
+  storage->remove("db_0124");
+  auto db_new2 = storage->open("db_reuse_overflow");
+  auto c_new2 = db_new2.cursor();
+  c_new2.find("hello");
+  c_new2.value("world2");
+  c_new2.commit();
+
+  std::vector<std::string> names;
+  storage->list_dbs(names);
+  BOOST_CHECK_EQUAL(names.size(), NUM_DBS);  // same count (removed 2, added 2)
+}
+
+// ── TypeMismatch for _CacheStore (fstore path) ──────────────────────────
+BOOST_AUTO_TEST_CASE(test_fstore_type_mismatch) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "type_mm.lvs").string();
+
+  {
+    auto storage = FileStorage::create(path.c_str());
+    // Open as _DB
+    auto db = storage->open("test");
+    auto cursor = db.cursor();
+    cursor.find("k");
+    cursor.value("v");
+    cursor.commit();
+  }
+
+  {
+    // Reopen and try to open as _ReplicationDB — should throw TypeMismatch
+    auto storage = FileStorage::create(path.c_str());
+    BOOST_CHECK_THROW(storage->open<_ReplicationDB>("test"), TypeMismatch);
+  }
+}
+
+// ── Return areas via remove() — exercises _db.hpp return_areas() ────────
+BOOST_AUTO_TEST_CASE(test_fstore_remove_returns_areas) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "remove_areas.lvs").string();
+
+  auto storage = FileStorage::create(path.c_str());
+
+  {
+    auto db = storage->open("test");
+    auto cursor = db.cursor();
+
+    // Insert some data to allocate areas
+    for (int i = 0; i < 100; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "key_%04d", i);
+      cursor.find(key);
+      cursor.value(std::string(500, 'x'));
+    }
+    cursor.commit();
+  }  // cursor and db destroyed — no active transaction refs
+
+  // Remove the DB — this exercises return_areas() + return_single_areas
+  storage->remove("test");
+
+  // Verify it's gone
+  BOOST_CHECK_THROW(storage->remove("test"), WrongValue);
+
+  // Create a new DB — should succeed, reusing freed areas
+  auto db2 = storage->open("test2");
+  auto cursor2 = db2.cursor();
+  cursor2.find("k");
+  cursor2.value("v");
+  cursor2.commit();
+}
+
+// ── Remove with TransactionActive on _CacheStore path ───────────────────
+BOOST_AUTO_TEST_CASE(test_fstore_remove_active_transaction) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "rm_active.lvs").string();
+
+  auto storage = FileStorage::create(path.c_str());
+  auto db = storage->open("test");
+  auto cursor = db.cursor();
+  cursor.find("k");
+  cursor.value("v");
+  cursor.commit();
+
+  // Start a new transaction
+  cursor.find("k2");
+  cursor.value("v2");  // writes start a transaction
+
+  BOOST_CHECK_THROW(storage->remove("test"), TransactionActive);
+
+  cursor.commit();
+}
+
+// ── Remove type mismatch on _CacheStore cached and uncached paths ───────
+BOOST_AUTO_TEST_CASE(test_fstore_remove_type_mismatch) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "rm_type_mm.lvs").string();
+
+  auto storage = FileStorage::create(path.c_str());
+  auto db = storage->open("test");
+  auto cursor = db.cursor();
+  cursor.find("k");
+  cursor.value("v");
+  cursor.commit();
+
+  // Cached path: DB is open as _DB, try remove<_ReplicationDB>
+  BOOST_CHECK_THROW(storage->remove<_ReplicationDB>("test"), TypeMismatch);
+}
+
+BOOST_AUTO_TEST_CASE(test_second_overflow_page_creation) {
+  DirPreparation prep;
+  auto path = (prep.tempDir / "overflow2.lvs").string();
+
+  // Need > first_page_capacity + overflow_page_capacity to trigger second overflow page.
+  // first_page ≈ 123, overflow ≈ 127, total ≈ 250. Use 260 to be safe.
+  const int NUM_DBS = 260;
+
+  {
+    auto storage = FileStorage::create(path.c_str());
+
+    for (int i = 0; i < NUM_DBS; i++) {
+      char name[22];
+      snprintf(name, sizeof(name), "db_%04d", i);
+      auto db = storage->open(name);
+      auto cursor = db.cursor();
+      cursor.find("key");
+      cursor.value(std::string("val_") + name);
+      cursor.commit();
+    }
+
+    std::vector<std::string> names;
+    storage->list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+
+  // Reopen and verify DBs from all three pages
+  {
+    auto storage = FileStorage::create(path.c_str());
+
+    // First page
+    auto db0 = storage->open("db_0000");
+    auto c0 = db0.cursor();
+    c0.find("key");
+    BOOST_REQUIRE(c0.is_valid());
+    BOOST_CHECK_EQUAL(c0.value(), Slice("val_db_0000"));
+
+    // First overflow page (index > 123)
+    auto db_ov1 = storage->open("db_0125");
+    auto c_ov1 = db_ov1.cursor();
+    c_ov1.find("key");
+    BOOST_REQUIRE(c_ov1.is_valid());
+    BOOST_CHECK_EQUAL(c_ov1.value(), Slice("val_db_0125"));
+
+    // Second overflow page (index > 250)
+    auto db_ov2 = storage->open("db_0255");
+    auto c_ov2 = db_ov2.cursor();
+    c_ov2.find("key");
+    BOOST_REQUIRE(c_ov2.is_valid());
+    BOOST_CHECK_EQUAL(c_ov2.value(), Slice("val_db_0255"));
+
+    std::vector<std::string> names;
+    storage->list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
 }

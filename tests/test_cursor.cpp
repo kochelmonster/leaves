@@ -1019,3 +1019,118 @@ BOOST_AUTO_TEST_CASE(rollback_without_transaction) {
   BOOST_CHECK_NO_THROW(cursor.rollback());
 }
 
+BOOST_AUTO_TEST_CASE(test_cursor_rollback_refind) {
+  // Exercises _cursor.hpp L771-772 — cursor rollback with refind
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("test");
+
+  // Insert some initial data
+  {
+    auto c = db.cursor();
+    c.find("aaa");
+    c.value("val_aaa");
+    c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("bbb");
+    c.value("val_bbb");
+    c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("ccc");
+    c.value("val_ccc");
+    c.commit();
+  }
+
+  // Now start a transaction, find a key, modify, then rollback
+  auto cursor = db.cursor();
+  cursor.find("bbb");
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key().string(), "bbb");
+
+  cursor.start_transaction();
+  cursor.find("bbb");
+  cursor.value("modified");
+
+  // Rollback — should refind the position at "bbb"
+  cursor.rollback();
+
+  // After rollback, cursor should refind "bbb" with original value
+  BOOST_CHECK(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key().string(), "bbb");
+  BOOST_CHECK_EQUAL(cursor.value().string(), "val_bbb");
+}
+
+BOOST_AUTO_TEST_CASE(test_first_insert_big_key) {
+  // Exercises _inserter.hpp L75 — first_exec with key > 255 bytes
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("bigkey");
+
+  // Create key > 255 bytes
+  std::string big_key(300, 'x');
+
+  auto cursor = db.cursor();
+  cursor.find(big_key);
+  cursor.value("big_value");
+  cursor.commit();
+
+  // Read back
+  auto c2 = db.cursor();
+  c2.find(big_key);
+  BOOST_CHECK(c2.is_valid());
+  BOOST_CHECK_EQUAL(c2.value().string(), "big_value");
+}
+
+BOOST_AUTO_TEST_CASE(test_delete_big_compressed_key) {
+  // Exercises _deleter.hpp L141 — reduce_array when compressed > 255 bytes
+  // Need to create a trie structure where deleting a key causes a combine
+  // with a compressed key > 255 bytes.
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("bigdel");
+
+  // Create a long common prefix with two branches
+  std::string prefix(260, 'a');  // 260 bytes common prefix
+  std::string key1 = prefix + "x";
+  std::string key2 = prefix + "y";
+
+  {
+    auto c = db.cursor();
+    c.find(key1);
+    c.value("v1");
+    c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find(key2);
+    c.value("v2");
+    c.commit();
+  }
+
+  // Delete key2 — combine would create compressed > 255 bytes
+  // This triggers reduce_array at _deleter.hpp L141
+  {
+    auto c = db.cursor();
+    c.find(key2);
+    BOOST_CHECK(c.is_valid());
+    c.remove();
+    c.commit();
+  }
+
+  // key1 should still be valid
+  {
+    auto c = db.cursor();
+    c.find(key1);
+    BOOST_CHECK(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().string(), "v1");
+
+    // key2 should be gone
+    c.find(key2);
+    BOOST_CHECK(!c.is_valid());
+  }
+}
+

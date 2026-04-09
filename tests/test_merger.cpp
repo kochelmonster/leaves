@@ -2534,3 +2534,354 @@ BOOST_AUTO_TEST_CASE(test_merger_parallel_shared_branches_deep) {
 }
 
 #endif  // LEAVES_HAS_THREADS
+
+// Selective policy that rejects specific keys
+struct SelectivePolicy {
+  std::set<std::string> rejected_keys;
+  std::set<std::string> rejected_overwrites;
+
+  bool may_overwrite(const std::string& key, const Slice& dst,
+                     const Slice& src, bool dst_is_big, bool src_is_big) {
+    return rejected_overwrites.find(key) == rejected_overwrites.end();
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return rejected_keys.find(key) == rejected_keys.end();
+  }
+
+  bool may_add_trie(const std::string& key) {
+    return true;
+  }
+
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& dst_cursor) {}
+
+  mutable _BigValue _big_value_storage;
+
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& src_cursor, DstCursor& dst_cursor) {
+    return {Slice(), false};
+  }
+
+  template <typename TriePtr, typename DBType>
+  void after_trie_merged(TriePtr& trie, DBType* db) {}
+};
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_reject_overwrite) {
+  // Exercises _merger.hpp L262: may_overwrite returns false
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("hello");
+  src_cursor.value("src_value");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("hello");
+  dst_cursor.value("dst_value");
+  dst_cursor.commit();
+
+  SelectivePolicy handler;
+  handler.rejected_overwrites.insert("hello");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("hello");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_value"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_reject_add) {
+  // Exercises selective deep copy paths where may_add rejects leaves
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("abc1");
+  src_cursor.value("val1");
+  src_cursor.find("abc2");
+  src_cursor.value("val2");
+  src_cursor.find("abc3");
+  src_cursor.value("val3");
+  src_cursor.find("def1");
+  src_cursor.value("val4");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("ghi");
+  dst_cursor.value("dst_val");
+  dst_cursor.commit();
+
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("abc1");
+  handler.rejected_keys.insert("abc2");
+  handler.rejected_keys.insert("abc3");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("ghi");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_val"));
+  verify.find("def1");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("val4"));
+  verify.find("abc1");
+  BOOST_CHECK(!verify.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_with_shared_and_srconly) {
+  // Exercises merge_into_trie: shared branches merged + src-only deep-copied
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  for (char c = 'a'; c <= 'f'; c++) {
+    std::string key(1, c);
+    key += "suffix";
+    src_cursor.find(key);
+    src_cursor.value("src_" + key);
+  }
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("asuffix");
+  dst_cursor.value("dst_a");
+  dst_cursor.find("bsuffix");
+  dst_cursor.value("dst_b");
+  dst_cursor.find("xsuffix");
+  dst_cursor.value("dst_x");
+  dst_cursor.commit();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("asuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_asuffix"));
+  verify.find("csuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_csuffix"));
+  verify.find("xsuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_x"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_leaf_into_existing_trie) {
+  // Exercises merge_leaf_into_trie and expand_trie_with_branch
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("bsuffix");
+  src_cursor.value("src_b");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("asuffix");
+  dst_cursor.value("dst_a");
+  dst_cursor.find("csuffix");
+  dst_cursor.value("dst_c");
+  dst_cursor.commit();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("asuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_a"));
+  verify.find("bsuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_b"));
+  verify.find("csuffix");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dst_c"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_src_trie_no_shared_branch) {
+  // Tests where src trie does NOT have dst's branch key
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("prefix_x1");
+  src_cursor.value("sx1");
+  src_cursor.find("prefix_x2");
+  src_cursor.value("sx2");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  dst_cursor.find("prefix_y1");
+  dst_cursor.value("dy1");
+  dst_cursor.commit();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("prefix_x1");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("sx1"));
+  verify.find("prefix_x2");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("sx2"));
+  verify.find("prefix_y1");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("dy1"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_trie_into_trie) {
+  // Exercises selective deep copy during trie-to-trie merge.
+  // src and dst share a common prefix trie so merge_into_trie fires,
+  // and selective_deep_copy_subtree filters leaves.
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  // Create src trie with branch structure at root: 'a' and 'b'
+  src_cursor.find("ax");
+  src_cursor.value("vax");
+  src_cursor.find("ay");
+  src_cursor.value("vay");
+  src_cursor.find("bx");
+  src_cursor.value("vbx");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  auto dst_cursor = dst_db.cursor();
+  // Create dst trie with same root structure: branch 'a' exists
+  dst_cursor.find("az");
+  dst_cursor.value("vaz");
+  dst_cursor.commit();
+
+  // Reject "bx" — src-only branch 'b' should still be selectively copied
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("bx");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("ax");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vax"));
+  verify.find("ay");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vay"));
+  verify.find("bx");
+  BOOST_CHECK(!verify.is_valid());  // rejected by may_add_leaf
+  verify.find("az");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vaz"));  // dst unchanged
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_reject_all_src_trie_children) {
+  // Exercises _merger.hpp L380 — all children of source trie rejected by may_add
+  // When src has a trie branch that diverges from dst and ALL leaves are rejected,
+  // the "if (!surviving) return;" path is taken.
+  MergerPreparation p;
+
+  auto src_storage = Storage::create(TEST_FILE);
+  auto src_db = src_storage->open("test");
+  auto dest_storage = Storage::create(TEST_FILE "2");
+  auto dst_db = dest_storage->open("test");
+
+  // Src: trie with multiple branches under "x"
+  {
+    auto c = src_db.cursor();
+    c.find("xa"); c.value("v1"); c.commit();
+  }
+  {
+    auto c = src_db.cursor();
+    c.find("xb"); c.value("v2"); c.commit();
+  }
+
+  // Dst: leaf "y" (different first byte, so resolve_divergence is triggered)
+  {
+    auto c = dst_db.cursor();
+    c.find("y"); c.value("vy"); c.commit();
+  }
+
+  // Reject ALL src keys — nothing from src trie survives
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("xa");
+  handler.rejected_keys.insert("xb");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  // Only dst key should remain
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("y");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("vy"));
+  verify.find("xa");
+  BOOST_CHECK(!verify.is_valid());
+  verify.find("xb");
+  BOOST_CHECK(!verify.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_selective_merge_into_trie_all_rejected) {
+  // Exercises merge_into_trie with suffix_len > 0 where all src children rejected.
+  // This is the "if (!surviving) return;" inside merge_into_trie.
+  MergerPreparation p;
+
+  auto src_storage = Storage::create(TEST_FILE);
+  auto src_db = src_storage->open("test");
+  auto dest_storage = Storage::create(TEST_FILE "2");
+  auto dst_db = dest_storage->open("test");
+
+  // Dst: trie with prefix "ab" and branches "abc", "abd"
+  {
+    auto c = dst_db.cursor();
+    c.find("abc"); c.value("v_abc"); c.commit();
+  }
+  {
+    auto c = dst_db.cursor();
+    c.find("abd"); c.value("v_abd"); c.commit();
+  }
+
+  // Src: trie with prefix "ab" and branches "abx", "aby" (suffix differs)
+  {
+    auto c = src_db.cursor();
+    c.find("abx"); c.value("v_abx"); c.commit();
+  }
+  {
+    auto c = src_db.cursor();
+    c.find("aby"); c.value("v_aby"); c.commit();
+  }
+
+  // Reject all src keys
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("abx");
+  handler.rejected_keys.insert("aby");
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  // Dst should be unchanged
+  auto verify = dest_storage->open("test").cursor();
+  verify.find("abc");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("v_abc"));
+  verify.find("abd");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("v_abd"));
+  verify.find("abx");
+  BOOST_CHECK(!verify.is_valid());
+  verify.find("aby");
+  BOOST_CHECK(!verify.is_valid());
+}

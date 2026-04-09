@@ -205,7 +205,7 @@ struct _TransferTrie {
     if (required > _buffer.capacity()) {
       if (_grow_delta == 0) {
         return nullptr;  // Can't grow, bail out
-      }
+      } // LCOV_EXCL_STOP
       // Grow by grow_delta, ensuring we have enough space
       size_t new_capacity = _buffer.capacity();
       while (new_capacity < required) {

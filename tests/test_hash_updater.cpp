@@ -1140,6 +1140,440 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_structural_verification) {
 }
 
 // =============================================================================
+// Edge cases for uncovered code paths in _hash.hpp
+// =============================================================================
+
+BOOST_AUTO_TEST_CASE(hash_sync_delete_all_data) {
+  // Exercises _hash.hpp L208-209 — data empty, hash non-empty (free hash subtree)
+  // Also L690-696 — free_hash_subtree with trie nodes
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  // Insert several keys to create a trie structure
+  {
+    auto c = db.cursor();
+    c.find("aaa"); c.value("v1"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("bbb"); c.value("v2"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("ccc"); c.value("v3"); c.commit();
+  }
+
+  // Build hash trie
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+  BOOST_CHECK(hash_root.type() == TRIE);  // multi-key = trie
+
+  // Delete all keys
+  {
+    auto c = db.cursor();
+    c.find("aaa"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("bbb"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("ccc"); c.remove(); c.commit();
+  }
+
+  // Sync hash — data is now empty, hash has trie+leaf nodes to free
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+
+  // Hash root should now be empty
+  BOOST_CHECK(!hash_root);
+}
+
+BOOST_AUTO_TEST_CASE(hash_sync_leaf_to_trie_transition) {
+  // Exercises _hash.hpp L307-310 — hash is leaf, data became trie
+  // When data changes from single leaf to trie (by adding more keys under
+  // the same prefix), the hash sync must replace the old hash leaf entirely.
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  // Insert single key — root is a leaf
+  {
+    auto c = db.cursor();
+    c.find("hello"); c.value("world"); c.commit();
+  }
+
+  // Build hash trie — root is also a leaf now
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+  BOOST_CHECK_EQUAL(hash_root.type(), LEAF);
+
+  // Add more keys sharing prefix — changes data root from leaf to trie
+  {
+    auto c = db.cursor();
+    c.find("help"); c.value("me"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("hero"); c.value("zero"); c.commit();
+  }
+
+  // Now data root is a trie. Hash root is still a leaf.
+  // sync_data_trie will detect hash is leaf and replace entirely (L307-310)
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+
+  BOOST_REQUIRE(hash_root);
+  auto txn = internal_db->txn();
+  BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
+}
+
+BOOST_AUTO_TEST_CASE(hash_sync_prefix_divergence_no_matching_branch) {
+  // Exercises _hash.hpp L322-325 — hash prefix longer, data doesn't have 
+  // matching branch for hash's next prefix byte.
+  // Also covers L417-419 — data prefix longer, hash doesn't have matching branch.
+  //
+  // Create scenario: build hash for one key pattern, then drastically restructure
+  // the data so trie prefixes diverge.
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  // Phase 1: Insert keys with prefix "ab"
+  {
+    auto c = db.cursor();
+    c.find("abcd"); c.value("v1"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("abef"); c.value("v2"); c.commit();
+  }
+
+  // Build initial hash trie
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+
+  // Phase 2: Delete all existing keys and insert keys with prefix "ax" instead
+  {
+    auto c = db.cursor();
+    c.find("abcd"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("abef"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("axyz"); c.value("v3"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("axwv"); c.value("v4"); c.commit();
+  }
+
+  // Sync — hash has "ab" prefix structure, data has "ax" prefix structure
+  // This creates prefix divergence at position 1 ('b' vs 'x')
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+
+  BOOST_REQUIRE(hash_root);
+  auto txn = internal_db->txn();
+  BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
+}
+
+BOOST_AUTO_TEST_CASE(hash_sync_structural_reshape) {
+  // Exercises _hash.hpp L417-419 — data prefix longer than hash, 
+  // hash doesn't have matching branch.
+  // Create: hash built with short-prefix data, then data restructured
+  // to have longer prefixes in different branches.
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  // Phase 1: Two keys with divergence at byte 0 → root trie is "short prefix"
+  {
+    auto c = db.cursor();
+    c.find("a_key1"); c.value("v1"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("b_key1"); c.value("v2"); c.commit();
+  }
+
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+
+  // Phase 2: Delete all, insert keys that create different prefix structure
+  {
+    auto c = db.cursor();
+    c.find("a_key1"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("b_key1"); c.remove(); c.commit();
+  }
+  // Now only keys under "a_" prefix
+  {
+    auto c = db.cursor();
+    c.find("a_cat"); c.value("v3"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("a_dog"); c.value("v4"); c.commit();
+  }
+
+  // Hash had root trie with branches 'a' and 'b'. Data now has root 
+  // as trie with compressed prefix "a_" — data prefix is longer.
+  // Hash doesn't have a branch for data's prefix continuation.
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+
+  BOOST_REQUIRE(hash_root);
+  auto txn = internal_db->txn();
+  BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
+}
+
+BOOST_AUTO_TEST_CASE(hash_lookup_external_root_change) {
+  // Exercises _hash.hpp L778 — _HashLookup::find when cursor root != _root
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  // Insert keys and build hash trie
+  {
+    auto c = db.cursor();
+    c.find("apple"); c.value("v1"); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("banana"); c.value("v2"); c.commit();
+  }
+
+  offset_t hash_root1{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root1, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root1);
+
+  // Build a second hash trie with different data
+  {
+    auto c = db.cursor();
+    c.find("cherry"); c.value("v3"); c.commit();
+  }
+
+  offset_t hash_root2{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root2, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root2);
+
+  // Create HashLookup with hash_root1
+  _HashLookup<InternalDB> lookup(internal_db, &hash_root1);
+  lookup.find("", LEAF);  // initial find with root1
+
+  // Change _root externally (without calling set_root)
+  lookup._root = &hash_root2;
+  // Next find() detects _cursor._root != _root and calls set_root (L778)
+  lookup.find("", LEAF);
+  // No assertion on return value — hash trie paths differ from data keys.
+  // Coverage goal: the _cursor._root != _root branch is exercised.
+}
+
+BOOST_AUTO_TEST_CASE(hash_sync_stale_hash_branch_missing) {
+  // Exercises _hash.hpp L322-325 — hash prefix longer and data doesn't have
+  // diverge_byte branch. Hash is completely stale → free + deep copy.
+  // Old data: "xya","xyb" → trie(compressed="xy", branches 'a','b')
+  // New data: "xa","xb" → trie(compressed="x", branches 'a','b')
+  // Hash sync: hash prefix "xy" vs data prefix "x". diverge_byte='y',
+  // data doesn't have 'y' → stale hash replacement.
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  // Phase 1: create initial data and hash
+  {
+    auto c = db.cursor();
+    c.find("xya"); c.value("v1");
+    c.find("xyb"); c.value("v2");
+    c.commit();
+  }
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+
+  // Phase 2: restructure data — delete old keys, add new ones
+  {
+    auto c = db.cursor();
+    c.find("xya"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("xyb"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("xa"); c.value("v3");
+    c.find("xb"); c.value("v4");
+    c.commit();
+  }
+
+  // Phase 3: hash update encounters stale hash — L322-325
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_CHECK(hash_root);
+  {
+    auto txn = internal_db->txn();
+    BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(hash_sync_hash_consumed_false) {
+  // Exercises _hash.hpp L365 — hash prefix longer, data HAS diverge_byte branch,
+  // but hash_trie does NOT have diverge_byte as a branch → hash_consumed stays false.
+  // Old data: "abc1","abc2" → trie(compressed="abc", branches '1','2')
+  // New data: "abca","abda" → trie(compressed="ab", branches 'c','d')
+  // Hash sync: hash prefix "abc" (3) vs data prefix "ab" (2).
+  // diverge_byte='c', data->isset('c')=YES. But hash has branches '1','2',
+  // NOT 'c'. So hash_consumed stays false → L365: free old hash subtree.
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  {
+    auto c = db.cursor();
+    c.find("abc1"); c.value("v1");
+    c.find("abc2"); c.value("v2");
+    c.commit();
+  }
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+
+  // Restructure data
+  {
+    auto c = db.cursor();
+    c.find("abc1"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("abc2"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("abca"); c.value("v3");
+    c.find("abda"); c.value("v4");
+    c.commit();
+  }
+
+  // Hash update — L365 triggered
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_CHECK(hash_root);
+  {
+    auto txn = internal_db->txn();
+    BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(hash_sync_data_prefix_longer_no_hash_branch) {
+  // Exercises _hash.hpp L417-419 — data prefix longer, hash doesn't have
+  // matching branch → free hash and deep copy from data.
+  // Old data: "abc1","abc2" → trie(compressed="abc", branches '1','2')
+  // New data: "abcda","abcdb" → trie(compressed="abcd", branches 'a','b')
+  // Hash sync: hash prefix "abc" (3) vs data prefix "abcd" (4).
+  // next_byte='d', hash->isset('d')=NO → L417-419 triggered.
+  std::remove(TEST_FILE);
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  auto* internal_db = db._internal();
+
+  {
+    auto c = db.cursor();
+    c.find("abc1"); c.value("v1");
+    c.find("abc2"); c.value("v2");
+    c.commit();
+  }
+  offset_t hash_root{};
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_REQUIRE(hash_root);
+
+  // Restructure to longer prefix
+  {
+    auto c = db.cursor();
+    c.find("abc1"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("abc2"); c.remove(); c.commit();
+  }
+  {
+    auto c = db.cursor();
+    c.find("abcda"); c.value("v3");
+    c.find("abcdb"); c.value("v4");
+    c.commit();
+  }
+
+  // Hash update — L417-419 triggered
+  {
+    auto txn = internal_db->txn();
+    run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
+  }
+  BOOST_CHECK(hash_root);
+  {
+    auto txn = internal_db->txn();
+    BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
+  }
+}
+
+// =============================================================================
 // Parallel execution tests (Phase 4)
 // =============================================================================
 

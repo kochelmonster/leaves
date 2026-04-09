@@ -1,6 +1,6 @@
 type: trie
-id: 10144
-page: 10136
+id: 530336
+page: 530328
 freespace: 8
 txn: 3
 size: 32
@@ -9,28 +9,28 @@ compressed:
   key: "[a][b][c]"
 branches: "[][d]"
 children: 
-  - 10105
-  - 14281
+  - 530297
+  - 534473
 ---
 type: leaf
-id: 10105
-page: 10097
+id: 530297
+page: 530289
 freespace: 25
 size: 15
 txn: 3
 keysize: 0
 key: ""
 valuesize: 5000
-value: "chunk_offset=528424 chunk_size=8192 has_successor=true"
+value: "chunk_offset=1048616 chunk_size=8192 has_successor=true"
 ---
 type: leaf
-id: 14281
-page: 14273
+id: 534473
+page: 534465
 freespace: 22
 size: 18
 txn: 3
 keysize: 3
 key: "[d][e][f]"
 valuesize: 5000
-value: "chunk_offset=536616 chunk_size=8192 has_successor=true"
+value: "chunk_offset=1056808 chunk_size=8192 has_successor=true"
 ---

@@ -9,6 +9,7 @@
 
 #include "leaves/intern/db/_check.hpp"
 #include "leaves/intern/storage/_mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -485,8 +486,9 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     read_offset = db->_header->read_txn;
     
     // DON'T call commit() - simulate crash after prepare
-    // The transaction lock will be released when db goes out of scope
-    // but the prepared transaction should remain
+    // Must still unlock txn_lock to avoid corrupting glibc's per-thread
+    // robust mutex list (the mmap is about to be unmapped).
+    db->end_transaction();
   }
   
   // Phase 2: Reopen DB - should detect and recover prepared transaction
@@ -1097,5 +1099,261 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     auto p = db->alloc_page(100);
     BOOST_CHECK(p);
     BOOST_CHECK(db->commit(0));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_type_mismatch_cached) {
+  // Open as _DB, try remove<_ReplicationDB> — should throw TypeMismatch
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_rm_type.lvs";
+  DBMMap storage(dbFilePath.c_str());
+
+  storage.open("test");  // opens as _DB (cached)
+  BOOST_CHECK_THROW(storage.remove<_ReplicationDB>("test"), TypeMismatch);
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_type_mismatch_uncached) {
+  // Create as _DB, close storage, reopen, remove<_ReplicationDB> without
+  // opening first — hits the uncached fallback path
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_rm_uncached.lvs";
+
+  {
+    DBMMap storage(dbFilePath.c_str());
+    storage.open("test");  // creates as _DB
+  }
+
+  {
+    DBMMap storage(dbFilePath.c_str());
+    // DB not in cache — exercises the on-disk type_id check
+    BOOST_CHECK_THROW(storage.remove<_ReplicationDB>("test"), TypeMismatch);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_replication_db) {
+  // Open as _ReplicationDB, remove<_ReplicationDB> — should succeed
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_rm_repl.lvs";
+  DBMMap storage(dbFilePath.c_str());
+
+  auto db = storage.open<_ReplicationDB>("test");
+  BOOST_REQUIRE(db->start_transaction(0));
+  db->alloc_page(100);
+  BOOST_CHECK(db->commit(0));
+
+  storage.remove<_ReplicationDB>("test");
+
+  // Verify the slot is freed — re-opening should create a fresh DB
+  auto db2 = storage.open<_ReplicationDB>("test2");
+  BOOST_CHECK(db2);
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_active_transaction) {
+  // remove() should throw TransactionActive if a txn is in progress
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_rm_active.lvs";
+  DBMMap storage(dbFilePath.c_str());
+
+  auto db = storage.open("test");
+  BOOST_REQUIRE(db->start_transaction(0));
+
+  BOOST_CHECK_THROW(storage.remove("test"), TransactionActive);
+
+  db->rollback(0);
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_nonexistent) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_rm_noexist.lvs";
+  DBMMap storage(dbFilePath.c_str());
+
+  BOOST_CHECK_THROW(storage.remove("ghost"), WrongValue);
+}
+
+BOOST_AUTO_TEST_CASE(test_memory_checker_with_garbage) {
+  // Exercises _MemoryChecker::check() with garbage containers populated
+  // Covers db/_check.hpp L323,328 (mark_page in garbage container loop)
+  // Also covers memory/_memory.hpp Slot::iter and push_back paths
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_check_gc.lvs";
+  
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+  
+  // Transaction 1: allocate many pages
+  BOOST_REQUIRE(db->start_transaction(0));
+  std::vector<offset_t> offsets;
+  for (int i = 0; i < 300; i++) {
+    auto p = db->alloc_page(80);
+    offsets.push_back(db->resolve(p));
+  }
+  BOOST_CHECK(db->commit(0));
+  
+  // Transaction 2: free all pages into garbage collector
+  BOOST_REQUIRE(db->start_transaction(0));
+  for (auto off : offsets) {
+    page_ptr p = db->resolve<PageHeader>(&off);
+    db->free(p);
+  }
+  BOOST_CHECK(db->commit(0));
+  
+  // Run memory checker — should succeed and exercise garbage iteration paths
+  using DB = std::remove_pointer_t<decltype(db)>;
+  _MemoryChecker<DB> checker(*db);
+  BOOST_CHECK_NO_THROW(checker.check());
+  BOOST_CHECK_GT(checker.total_pages, 0u);
+}
+
+BOOST_AUTO_TEST_CASE(test_internal_method) {
+  // Exercises db/_db.hpp L268 (_internal())
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_internal.lvs";
+  
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+  
+  // _internal() returns the db pointer itself
+  auto internal = db->_internal();
+  BOOST_CHECK(internal == db);
+}
+
+BOOST_AUTO_TEST_CASE(test_storage_full_exception) {
+  // Exercises core/_exception.hpp L36 — StorageFull::what()
+  StorageFull ex;
+  BOOST_CHECK(ex.what() != nullptr);
+  BOOST_CHECK(std::string(ex.what()).find("storage full") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(test_type_mismatch_exception) {
+  // Exercises core/_exception.hpp L36 — TypeMismatch::what()
+  TypeMismatch ex;
+  BOOST_CHECK(ex.what() != nullptr);
+  BOOST_CHECK(std::string(ex.what()).find("mismatch") != std::string::npos);
+
+  TypeMismatch ex2("custom message");
+  BOOST_CHECK_EQUAL(std::string(ex2.what()), "custom message");
+}
+
+BOOST_AUTO_TEST_CASE(test_type_mismatch_cached_db) {
+  // Exercises _cachestore.hpp L336-337 — TypeMismatch when opening cached DB
+  // with wrong type. Open as _DB (type_id=0), then try _ReplicationDB (type_id=1).
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_typemismatch.lvs";
+
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");  // Opens as _DB (type_id=0)
+
+  // Now try to open the same name as _ReplicationDB (type_id=1)
+  BOOST_CHECK_THROW(
+      storage.template open<_ReplicationDB>("test"),
+      TypeMismatch);
+}
+
+BOOST_AUTO_TEST_CASE(test_prepare_commit_wrong_cursor) {
+  // Exercises _db.hpp L515 — prepare_commit with wrong cursor_id
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_prepare.lvs";
+
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Start transaction with cursor_id=42
+  BOOST_REQUIRE(db->start_transaction(42));
+
+  // Try prepare_commit with wrong cursor_id=99 — should return tid_t(0)
+  tid_t result = db->prepare_commit(99);
+  BOOST_CHECK_EQUAL(uint64_t(result), 0u);
+
+  // Clean up: commit with the correct cursor_id
+  db->prepare_commit(42);
+  db->commit(42);
+}
+
+BOOST_AUTO_TEST_CASE(test_return_areas_range_rollback) {
+  // Exercises _db.hpp L669 (single area return) and L684 (first multi area return)
+  // by allocating pages during a transaction and then rolling back.
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_area_rollback.lvs";
+
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Transaction 1: allocate many pages to force area expansion, then commit
+  BOOST_REQUIRE(db->start_transaction(0));
+  for (int i = 0; i < 500; i++) {
+    db->alloc_page(80);
+  }
+  BOOST_CHECK(db->commit(0));
+
+  // Transaction 2: allocate more, then ROLLBACK — exercises return_areas_range
+  BOOST_REQUIRE(db->start_transaction(0));
+  for (int i = 0; i < 500; i++) {
+    db->alloc_page(80);
+  }
+  BOOST_CHECK(db->rollback(0));
+
+  // Memory checker should still pass
+  using DB = std::remove_pointer_t<decltype(db)>;
+  _MemoryChecker<DB> checker(*db);
+  BOOST_CHECK_NO_THROW(checker.check());
+}
+
+BOOST_AUTO_TEST_CASE(test_sanitize_missing_next_txn_page) {
+  // Exercises _db.hpp L713 — sanitize when next_txn_page == 0
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_sanitize.lvs";
+
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.open("test");
+
+    // Write some data to have a valid read_txn
+    BOOST_REQUIRE(db->start_transaction(0));
+    db->alloc_page(80);
+    BOOST_CHECK(db->commit(0));
+
+    // Simulate crash: clear next_txn_page to 0
+    db->_header->next_txn_page = 0;
+    db->make_dirty(db->_header);
+    db->flush(true, true);
+  }
+
+  // Reopen and sanitize — should recreate next_txn_page from read_txn
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.open("test");
+    db->sanitize();
+
+    // next_txn_page should now be valid again
+    BOOST_CHECK(db->_header->next_txn_page != 0);
+
+    // Should be able to start a new transaction
+    BOOST_REQUIRE(db->start_transaction(0));
+    db->alloc_page(80);
+    BOOST_CHECK(db->commit(0));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_uncached_db) {
+  // Exercises _cachestore.hpp L597-602 — _return_areas_at for uncached DB
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_remove_uncached.lvs";
+
+  // Create storage file with a DB
+  {
+    DBMMap storage(dbFilePath.c_str());
+    auto db = storage.open("mydb");
+    // Write some data
+    BOOST_REQUIRE(db->start_transaction(0));
+    db->alloc_page(80);
+    BOOST_CHECK(db->commit(0));
+  }
+
+  // Reopen storage — DB exists in file but NOT in cache
+  {
+    DBMMap storage(dbFilePath.c_str());
+    // Don't call open("mydb") — so it's not cached
+    // Remove it — hits the uncached path in _return_areas_at
+    BOOST_CHECK_NO_THROW(storage.template remove<_DB>("mydb"));
   }
 }

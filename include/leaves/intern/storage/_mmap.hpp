@@ -202,7 +202,7 @@ struct _MemoryMapFile
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
       fhead.close();
-      uint64_t fsize = 4 * K;
+      uint64_t fsize = AREA_SIZE;  // reserve first area for header + overflow dir pages
       std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
@@ -278,7 +278,7 @@ struct _MemoryMapFile
     _recover_areas<_DBHeader<MemoryMapFile>, AREA_SIZE>(
         _memory->area_pool,
         [this](auto fn) { _for_each_db_entry([&](DBEntry& e) { if (e.offset) fn(e.offset); }); },
-        _memory->file_size, calc_header_size(),
+        _memory->file_size, padding(calc_header_size(), AREA_SIZE),
         [base](uint64_t pos, void* buf, size_t size) {
           memcpy(buf, base + pos, size);
         },
@@ -584,9 +584,11 @@ struct _MemoryMapFile
   }
 
   // Allocate a slot in an overflow page. Returns stable pointer (mmap).
+  // Overflow pages live within the reserved first AREA_SIZE block (after the
+  // 4K file header), so they never conflict with the area pool.
   DBEntry* _alloc_overflow_slot() {
-    uint64_t last_page_offset = 0;
     offset_t next = _memory->db_next_page;
+    uint64_t last_page_offset = 0;
     while (next) {
       auto* page = reinterpret_cast<_DBDirectoryPage*>(
           (char*)_memory + (uint64_t)next);

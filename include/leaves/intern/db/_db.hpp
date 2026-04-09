@@ -429,6 +429,7 @@ struct _DB {
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
   bool is_active() const {
+    if (_active_txn) return true;
     bool is_active_ = false;
     iter_transactions([&is_active_](txn_ptr txn) -> bool {
       if (txn->refs.load() > 0) is_active_ = true;

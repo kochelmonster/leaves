@@ -8,6 +8,7 @@
 #endif
 
 #include "leaves/intern/storage/_mmap.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 
 using namespace leaves;
 
@@ -40,7 +41,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
 
     // Check if the active head is not null after initialization
     BOOST_REQUIRE(db._memory != nullptr);
-    BOOST_REQUIRE_EQUAL(db._memory->file_size, 4 * K);
+    BOOST_REQUIRE_EQUAL(db._memory->file_size, DBMMap::AREA_SIZE);
     BOOST_REQUIRE_EQUAL(db._memory->db_version, 0);
     BOOST_REQUIRE_EQUAL(db._memory->signature, MMAP_SIGNATURE);
   }
@@ -137,5 +138,317 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
   db._memory->max_processes = db.MAX_PROCESSES;  // restore
 
   
+}
+
+// ── Overflow page tests for _MemoryMapFile coverage ─────────────────────
+// The first directory page holds ~109 DB entries; creating more forces
+// _alloc_overflow_slot, _for_each_db_entry overflow iteration, and
+// remove with overflow page traversal.
+
+BOOST_AUTO_TEST_CASE(test_mmap_overflow_page_creation) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "overflow.lvs";
+
+  const int NUM_DBS = 120;  // > 109 first-page capacity
+
+  {
+    DBMMap db(dbFilePath.c_str());
+
+    for (int i = 0; i < NUM_DBS; i++) {
+      char name[22];
+      snprintf(name, sizeof(name), "db_%04d", i);
+      auto* d = db.open(name);
+      auto cursor = d->create_cursor();
+      cursor->find("key");
+      cursor->value(std::string("val_") + name);
+      cursor->commit();
+    }
+
+    // Verify list_dbs returns all (exercises _for_each_db_entry overflow)
+    std::vector<std::string> names;
+    db.list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+
+  // Reopen from disk — exercises _alloc_overflow_slot scan of existing pages
+  {
+    DBMMap db(dbFilePath.c_str());
+
+    // Open a DB from the first page
+    auto* d0 = db.open("db_0000");
+    auto c0 = d0->create_cursor();
+    c0->find("key");
+    BOOST_REQUIRE(c0->is_valid());
+    BOOST_CHECK_EQUAL(c0->value(), Slice("val_db_0000"));
+
+    // Open a DB from the overflow page
+    auto* d_over = db.open("db_0115");
+    auto c_over = d_over->create_cursor();
+    c_over->find("key");
+    BOOST_REQUIRE(c_over->is_valid());
+    BOOST_CHECK_EQUAL(c_over->value(), Slice("val_db_0115"));
+
+    std::vector<std::string> names;
+    db.list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_overflow_page_remove) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "overflow_rm.lvs";
+
+  const int NUM_DBS = 115;
+
+  {
+    DBMMap db(dbFilePath.c_str());
+    for (int i = 0; i < NUM_DBS; i++) {
+      char name[22];
+      snprintf(name, sizeof(name), "db_%04d", i);
+      auto* d = db.open(name);
+      auto cursor = d->create_cursor();
+      cursor->find("k");
+      cursor->value("v");
+      cursor->commit();
+    }
+  }
+
+  {
+    DBMMap db(dbFilePath.c_str());
+
+    // Remove a DB from the overflow page
+    db.remove("db_0112");
+
+    std::vector<std::string> names;
+    db.list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS - 1);
+
+    // Remove a DB from the first page
+    db.remove("db_0000");
+    names.clear();
+    db.list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS - 2);
+  }
+
+  // Reopen and verify removals persisted
+  {
+    DBMMap db(dbFilePath.c_str());
+    BOOST_CHECK_THROW(db.remove("db_0000"), WrongValue);
+    BOOST_CHECK_THROW(db.remove("db_0112"), WrongValue);
+
+    // A surviving overflow DB should still be accessible
+    auto* d = db.open("db_0113");
+    auto cursor = d->create_cursor();
+    cursor->find("k");
+    BOOST_REQUIRE(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value(), Slice("v"));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_overflow_reuse_free_slot) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "overflow_reuse.lvs";
+
+  const int NUM_DBS = 115;
+
+  DBMMap db(dbFilePath.c_str());
+  for (int i = 0; i < NUM_DBS; i++) {
+    char name[22];
+    snprintf(name, sizeof(name), "db_%04d", i);
+    auto* d = db.open(name);
+    auto cursor = d->create_cursor();
+    cursor->find("k");
+    cursor->value("v");
+    cursor->commit();
+  }
+
+  // Remove a first-page DB (frees slot), then create a new DB reusing it
+  db.remove("db_0050");
+  {
+    auto* d = db.open("db_reuse_slot");
+    auto cursor = d->create_cursor();
+    cursor->find("hello");
+    cursor->value("world");
+    cursor->commit();
+  }
+
+  // Remove an overflow-page DB and create a new one in that slot
+  db.remove("db_0112");
+  {
+    auto* d = db.open("db_reuse_overflow");
+    auto cursor = d->create_cursor();
+    cursor->find("hello");
+    cursor->value("world2");
+    cursor->commit();
+  }
+
+  std::vector<std::string> names;
+  db.list_dbs(names);
+  BOOST_CHECK_EQUAL(names.size(), NUM_DBS);  // same count (removed 2, added 2)
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_remove_returns_areas) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "rm_areas.lvs";
+
+  DBMMap db(dbFilePath.c_str());
+
+  {
+    auto* d = db.open("test");
+    auto cursor = d->create_cursor();
+    for (int i = 0; i < 100; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "key_%04d", i);
+      cursor->find(key);
+      cursor->value(std::string(500, 'x'));
+    }
+    cursor->commit();
+  }
+
+  // Remove the DB — exercises return_areas() + return_single_areas
+  db.remove("test");
+  BOOST_CHECK_THROW(db.remove("test"), WrongValue);
+
+  // Create a new DB — should succeed, reusing freed areas
+  auto* d2 = db.open("test2");
+  auto cursor2 = d2->create_cursor();
+  cursor2->find("k");
+  cursor2->value("v");
+  cursor2->commit();
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_type_mismatch) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "type_mm.lvs";
+
+  {
+    DBMMap db(dbFilePath.c_str());
+    auto* d = db.open("test");
+    auto cursor = d->create_cursor();
+    cursor->find("k");
+    cursor->value("v");
+    cursor->commit();
+  }
+
+  {
+    DBMMap db(dbFilePath.c_str());
+    // Open as _ReplicationDB — should throw TypeMismatch
+    BOOST_CHECK_THROW(db.open<_ReplicationDB>("test"), TypeMismatch);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_remove_type_mismatch) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "rm_type_mm.lvs";
+
+  {
+    DBMMap db(dbFilePath.c_str());
+    auto* d = db.open("test");
+    auto cursor = d->create_cursor();
+    cursor->find("k");
+    cursor->value("v");
+    cursor->commit();
+  }
+
+  {
+    DBMMap db(dbFilePath.c_str());
+    // Remove with wrong type — should throw TypeMismatch
+    BOOST_CHECK_THROW(db.remove<_ReplicationDB>("test"), TypeMismatch);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_recover_areas) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "recover.lvs";
+
+  {
+    DBMMap db(dbFilePath.c_str());
+    auto* d = db.open("test");
+    auto cursor = d->create_cursor();
+    for (int i = 0; i < 50; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "key_%04d", i);
+      cursor->find(key);
+      cursor->value(std::string(200, 'y'));
+    }
+    cursor->commit();
+  }
+
+  // Reopen — sanitize() calls recover_areas() when it detects no live processes
+  // In single-process mode, sanitize_processes() always returns true,
+  // so recover_areas() is always called on reopen.
+  {
+    DBMMap db(dbFilePath.c_str());
+    auto* d = db.open("test");
+    auto cursor = d->create_cursor();
+    cursor->find("key_0000");
+    BOOST_REQUIRE(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value(), Slice(std::string(200, 'y')));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_second_overflow_page) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "overflow2.lvs";
+
+  // Need > first_page + first_overflow to trigger second overflow page.
+  // first_page ≈ 109, overflow ≈ 146. Use 280 to be safe.
+  const int NUM_DBS = 280;
+
+  {
+    DBMMap db(dbFilePath.c_str());
+
+    for (int i = 0; i < NUM_DBS; i++) {
+      char name[22];
+      snprintf(name, sizeof(name), "db_%04d", i);
+      auto* d = db.open(name);
+      auto cursor = d->create_cursor();
+      cursor->find("key");
+      cursor->value(std::string("val_") + name);
+      cursor->commit();
+    }
+
+    std::vector<std::string> names;
+    db.list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+
+  // Reopen and verify DBs from all three pages
+  {
+    DBMMap db(dbFilePath.c_str());
+
+    // First page
+    auto* d0 = db.open("db_0000");
+    auto c0 = d0->create_cursor();
+    c0->find("key");
+    BOOST_REQUIRE(c0->is_valid());
+    BOOST_CHECK_EQUAL(c0->value(), Slice("val_db_0000"));
+
+    // Second overflow page
+    auto* d_ov2 = db.open("db_0275");
+    auto c_ov2 = d_ov2->create_cursor();
+    c_ov2->find("key");
+    BOOST_REQUIRE(c_ov2->is_valid());
+    BOOST_CHECK_EQUAL(c_ov2->value(), Slice("val_db_0275"));
+
+    std::vector<std::string> names;
+    db.list_dbs(names);
+    BOOST_CHECK_EQUAL(names.size(), NUM_DBS);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_pool_threads_zero) {
+  // Exercises _mmap.hpp L177 — pool_threads=0 auto-detection
+  DirPreparation p;
+  std::filesystem::path dbFilePath = p.tempDir / "test_pool.lvs";
+
+  // Constructor with pool_threads=0: auto-detect thread count
+  DBMMap storage(dbFilePath.c_str(), 4 * G, 0);
+  auto db = storage.open("test");
+
+  // Basic operations should work
+  BOOST_REQUIRE(db->start_transaction(0));
+  db->alloc_page(80);
+  BOOST_CHECK(db->commit(0));
 }
 
