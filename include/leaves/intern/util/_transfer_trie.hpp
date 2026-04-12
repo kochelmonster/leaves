@@ -57,6 +57,7 @@ struct _TransferTrie {
     struct DB {
       using Traits = DBTraits;
       using offset_e = typename Traits::offset_e;
+      struct TxnContext {};  // stub — wire DB is read-only
 
       // Resolve offset to node pointer using relative addressing
       template <typename T>

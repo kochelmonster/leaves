@@ -239,3 +239,7 @@ cmake --build build -j
 - Subtrie Replication
 - Subtrie remove 
 
+- handling of double free pages is not implemented
+defrag: chunks müssen dem richtigen context zugeordnet werden
+
+- Why does _ContextMergePolicy needs a free_big? 

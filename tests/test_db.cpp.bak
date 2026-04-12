@@ -37,7 +37,7 @@ struct DirPreparation {
 
 template <typename DB>
 struct Transaction {
-  Transaction(DB db_) : db(db_), ctx(db_->start_transaction()) {}
+  Transaction(DB db_) : db(db_), ctx(db_->start_transaction(0)) {}
   ~Transaction() { db->commit(ctx); }
 
   DB db;
@@ -62,21 +62,21 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   {
     Transaction trans(db);
-    block1 = db->_alloc_page(311, trans.ctx);
+    block1 = db->alloc_page(311);
   }
 
   {
     Transaction trans(db);
-    db->_free(block1, trans.ctx);
-    block2 = db->_alloc_page(311, trans.ctx);
+    db->free(block1);
+    block2 = db->alloc_page(311);
     BOOST_CHECK(block1 != block2);
     BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
   }
 
   {
     Transaction trans(db);
-    db->_free(block2, trans.ctx);
-    block3 = db->_alloc_page(311, trans.ctx);
+    db->free(block2);
+    block3 = db->alloc_page(311);
     BOOST_CHECK(block1 != block3);
     BOOST_CHECK(block2 != block3);
     BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   {
     Transaction trans(db);
-    block4 = db->_alloc_page(311, trans.ctx);
+    block4 = db->alloc_page(311);
     BOOST_CHECK(block4 != block3);
     BOOST_CHECK_GT(db->_start_txn_id, txn->txn_id);
   }
@@ -114,7 +114,7 @@ BOOST_AUTO_TEST_CASE(test_extend) {
     // Allocate enough blocks to exceed initial capacity
     int count = (11 * AREA_SIZE) / MAX_PAYLOAD;  // Force growth beyond initial allocation
     for (int i = 0; i < count; i++) {
-      db->_alloc_page(MAX_PAYLOAD, trans.ctx);
+      db->alloc_page(MAX_PAYLOAD);
     }
   }
 
@@ -128,20 +128,20 @@ BOOST_AUTO_TEST_CASE(test_rollback) {
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.open("test");
 
-  auto ctx = db->start_transaction(true);
-  auto block1 = db->_alloc_page(1123, ctx);
-  db->prepare_commit(ctx);
-  db->rollback(ctx);
+  db->start_transaction(0, true);
+  auto block1 = db->alloc_page(1123);
+  db->prepare_commit(0);
+  db->rollback(0);
 
-  ctx = db->start_transaction();
-  auto block2 = db->_alloc_page(1123, ctx);
-  db->prepare_commit(ctx);
-  db->commit(ctx);
+  db->start_transaction(0);
+  auto block2 = db->alloc_page(1123);
+  db->prepare_commit(0);
+  db->commit(0);
 
-  ctx = db->start_transaction();
-  auto block3 = db->_alloc_page(1123, ctx);
-  db->prepare_commit(ctx);
-  db->commit(ctx);
+  db->start_transaction(0);
+  auto block3 = db->alloc_page(1123);
+  db->prepare_commit(0);
+  db->commit(0);
 
   BOOST_CHECK(block1 == block2);
   BOOST_CHECK(block1 != block3);
@@ -171,7 +171,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       Transaction trans(db);
 
       for (size_t i = 0; i < MAX_REF_COUNT - 1; i++) {
-        page_ptr block = db->_alloc_page(4 * K - sizeof(PageHeader), trans.ctx);
+        page_ptr block = db->alloc_page(4 * K - sizeof(PageHeader));
         block_offsets.push_back(db->resolve(block));
       }
       file_size = storage._memory->file_size;
@@ -196,7 +196,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
       for (offset_t bo : block_offsets) {
         page_ptr block = db->template resolve<PageHeader>(&bo);
         BOOST_REQUIRE(db->resolve(block) == bo);
-        db->_free(block, trans.ctx);
+        db->free(block);
       }
     }
 
@@ -222,7 +222,7 @@ BOOST_AUTO_TEST_CASE(test_alloc_and_free_block) {
     {
       Transaction trans(db);
       for (offset_t bo : block_offsets) {
-        page_ptr block = db->_alloc_page(4 * K - sizeof(PageHeader), trans.ctx);
+        page_ptr block = db->alloc_page(4 * K - sizeof(PageHeader));
         [[maybe_unused]] offset_t offset = db->resolve(block);
         BOOST_REQUIRE(db->resolve(block) == bo);
       }
@@ -243,7 +243,7 @@ BOOST_AUTO_TEST_CASE(test_recycle_db) {
 
   {
     Transaction t(db1);
-    db1->_alloc_page(3 * K, t.ctx);
+    db1->alloc_page(3 * K);
   }
 
   size_t initial_file_size = storage._memory->file_size;
@@ -268,14 +268,14 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
 
   std::vector<offset_t> offsets;
 
-  auto ctx = db1->start_transaction();
+  db1->start_transaction(0);
   // These last_area checks are no longer applicable in the new architecture
   // force the alloc of a new area
-  const uint64_t ALLOC_SIZE = db1->_resolve_active(ctx)->mem_manager.allocation_end + 16 * K -
-                              db1->_resolve_active(ctx)->mem_manager.allocation_start;
+  const uint64_t ALLOC_SIZE = db1->_active_txn->mem_manager.allocation_end + 16 * K -
+                              db1->_active_txn->mem_manager.allocation_start;
   uint64_t size = 0;
   while (size < ALLOC_SIZE) {
-    offsets.push_back(storage.resolve(db1->_alloc_page(MAX_PAYLOAD, ctx)));
+    offsets.push_back(storage.resolve(db1->alloc_page(MAX_PAYLOAD)));
     size += MAX_PAYLOAD + sizeof(DBMMap::Traits::PageHeader);
   }
 
@@ -285,16 +285,16 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   // create a new area for db2
   auto db2 = storage.open("test2");
 
-  db1->rollback(ctx);
+  db1->rollback(0);
   // the new area in db1 is "orphaned" and must be recycled the next time
 
-  ctx = db1->start_transaction();
+  db1->start_transaction(0);
   // Check that we can start a new transaction
 
   // alloc again - with recycling, we should get similar allocation patterns
   std::vector<offset_t> new_offsets;
   for (size_t i = 0; i < offsets.size(); i++) {
-    new_offsets.push_back(storage.resolve(db1->_alloc_page(MAX_PAYLOAD, ctx)));
+    new_offsets.push_back(storage.resolve(db1->alloc_page(MAX_PAYLOAD)));
   }
 
   // Check that we allocated the same number of blocks (recycling working)
@@ -312,7 +312,7 @@ BOOST_AUTO_TEST_CASE(test_orphaned_aera) {
   }
   BOOST_CHECK(some_reused);
 
-  db1->rollback(ctx);
+  db1->rollback(0);
 }
 
 template <typename DB>
@@ -321,7 +321,7 @@ void dump(DB db, const char* prefix, int index) {
   cstr << "errors/" << prefix << std::setw(2) << std::setfill('0') << index
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  // _Dumper(*db, db->_internal()->_active_txn->offset_root, false).dump(out);  // TODO: needs TxnContext
+  _Dumper(*db, db->_internal()->_active_txn->offset_root, false).dump(out);
 }
 
 struct TestTraits {
@@ -483,20 +483,20 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     auto db = storage.open("test");
     
     // Start transaction and allocate some data
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    BOOST_CHECK_EQUAL(db->_resolve_active(ctx)->txn_id, 2);  // First user txn is 2
+    BOOST_REQUIRE(db->start_transaction(0));
+    BOOST_CHECK_EQUAL(db->transaction_active(), 2);  // First user txn is 2
     
-    auto block1 = db->_alloc_page(512, ctx);
+    auto block1 = db->alloc_page(512);
     memcpy((char*)block1, "test_data", 10);
     
     // Prepare the commit (makes it durable)
-    prepared_tid = db->prepare_commit(ctx);
+    prepared_tid = db->prepare_commit(0);
     BOOST_CHECK_GT(prepared_tid, 0);
     BOOST_CHECK_EQUAL(prepared_tid, 2);
     
     // Verify prepared state
     BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
-    BOOST_CHECK_EQUAL(db->_resolve_active(ctx)->txn_id, prepared_tid);
+    BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
     
     // Save offsets for verification
     prepared_offset = db->context(0)->prepared_txn;
@@ -505,7 +505,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     // DON'T call commit() - simulate crash after prepare
     // Must still unlock txn_lock to avoid corrupting glibc's per-thread
     // robust mutex list (the mmap is about to be unmapped).
-    db->end_transaction(ctx);
+    db->end_transaction();
   }
   
   // Phase 2: Reopen DB - should detect and recover prepared transaction
@@ -518,22 +518,22 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, prepared_offset);
     BOOST_CHECK_EQUAL(db->_header->read_txn, read_offset);
     
-    // active_txn should be set to the prepared transaction
-    auto* ctx2 = db->context(0);
-    BOOST_REQUIRE(ctx2->active_txn);
-    auto active = db->_resolve_active(ctx2);
-    BOOST_CHECK_EQUAL(active->txn_id, prepared_tid);
+    // _active_txn should be set to the prepared transaction
+    BOOST_REQUIRE(db->_active_txn != nullptr);
+    BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
     
     // The transaction is already active (recovered), just need to claim context and commit
-    // We need to simulate that a cursor takes ownership
+    // We need to simulate that a cursor with ID 0 takes ownership
     uint8_t exp = 0;
     BOOST_CHECK(db->context(0)->_claimed.compare_exchange_strong(exp, 1));
+    db->context(0)->cursor_id.store(0);
     
     // Commit should finalize the prepared transaction
-    BOOST_CHECK(db->commit(ctx2));
+    BOOST_CHECK(db->commit(0));
     
     // After commit, prepared should equal read
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   }
   
   // Phase 3: Verify data persisted correctly
@@ -543,6 +543,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     
     // Everything should be committed now
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   }
 }
 
@@ -555,18 +556,18 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
     auto db = storage.open("test");
     
     // Normal two-phase commit: prepare then commit
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto block1 = db->_alloc_page(512, ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block1 = db->alloc_page(512);
     
     // Prepare should return transaction ID
-    tid_t tid = db->prepare_commit(ctx);
+    tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
     BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Commit should succeed and finalize
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
-    BOOST_CHECK(!ctx->active_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   }
   
   // Verify state persisted correctly
@@ -586,32 +587,32 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
     auto db = storage.open("test");
     
     // Start transaction
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto block1 = db->_alloc_page(512, ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block1 = db->alloc_page(512);
     offset_t block1_offset = db->resolve(block1);
     
     // Prepare the commit
-    tid_t tid = db->prepare_commit(ctx);
+    tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
     BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Now rollback even after prepare
-    BOOST_CHECK(db->rollback(ctx));
+    BOOST_CHECK(db->rollback(0));
     
     // After rollback, prepared should equal read again
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
-    BOOST_CHECK(!ctx->active_txn);
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
     
     // Pending areas should have been returned
     // Start new transaction and verify block can be reused
-    ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto block2 = db->_alloc_page(512, ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block2 = db->alloc_page(512);
     offset_t block2_offset = db->resolve(block2);
     
     // Should get the same block back since previous was rolled back
     BOOST_CHECK_EQUAL(block1_offset, block2_offset);
     
-    db->commit(ctx);
+    db->commit(0);
   }
 }
 
@@ -623,22 +624,22 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_idempotency) {
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.open("test");
     
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto block1 = db->_alloc_page(512, ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto block1 = db->alloc_page(512);
     
     // First prepare
-    tid_t tid1 = db->prepare_commit(ctx);
+    tid_t tid1 = db->prepare_commit(0);
     BOOST_CHECK_GT(tid1, 0);
     
     // Second prepare should return same txn_id (idempotent)
-    tid_t tid2 = db->prepare_commit(ctx);
+    tid_t tid2 = db->prepare_commit(0);
     BOOST_CHECK_EQUAL(tid1, tid2);
     
     // State should be consistent
     BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Commit should still work
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
   }
 }
@@ -652,7 +653,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     auto db = storage.open("test");
     
     // Allocate enough blocks to force new area allocation
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
     
     std::vector<page_ptr> blocks;
     // Allocate many large blocks to exhaust the initial area and force new area allocation
@@ -661,7 +662,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     const size_t num_blocks = (AREA_SIZE * 2) / page_size;  // Enough to need multiple areas
     
     for (size_t i = 0; i < num_blocks; i++) {
-      blocks.push_back(db->_alloc_page(page_size, ctx));
+      blocks.push_back(db->alloc_page(page_size));
     }
     
     // Before prepare, pending areas should have content (may not always be true if blocks fit in initial area)
@@ -669,7 +670,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     // BOOST_CHECK_GT((uint64_t)db->_header->pending_single_areas.get_head(), 0u);
     
     // Prepare the transaction
-    tid_t tid = db->prepare_commit(ctx);
+    tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
     
     using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
@@ -679,7 +680,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     auto prep_txn = db->template resolve<Transaction>(&db->context(0)->prepared_txn);
     
     // Commit switches read_txn pointer
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
     
     // After commit, read_txn should point to what was prepared_txn
     auto new_read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
@@ -696,11 +697,11 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     auto db = storage.open("test");
     
     // Start a transaction and allocate many areas
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
     
     // Get initial area tail offsets from the write transaction
-    offset_t initial_single_tail = db->_resolve_active(ctx)->area_list_tail_single;
-    offset_t initial_multi_tail = db->_resolve_active(ctx)->area_list_tail_multi;
+    offset_t initial_single_tail = db->_active_txn->area_list_tail_single;
+    offset_t initial_multi_tail = db->_active_txn->area_list_tail_multi;
     
     std::vector<page_ptr> blocks;
     // Allocate enough blocks to force multiple area allocations
@@ -709,12 +710,12 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     const size_t num_blocks = (AREA_SIZE * 3) / page_size;  // Force 3+ areas
     
     for (size_t i = 0; i < num_blocks; i++) {
-      blocks.push_back(db->_alloc_page(page_size, ctx));
+      blocks.push_back(db->alloc_page(page_size));
     }
     
     // Get the transaction state after allocations
-    offset_t final_single_tail = db->_resolve_active(ctx)->area_list_tail_single;
-    offset_t final_multi_tail = db->_resolve_active(ctx)->area_list_tail_multi;
+    offset_t final_single_tail = db->_active_txn->area_list_tail_single;
+    offset_t final_multi_tail = db->_active_txn->area_list_tail_multi;
     
     // Verify that single areas were allocated (tail should have moved)
     BOOST_CHECK_NE(final_single_tail, initial_single_tail);
@@ -726,12 +727,12 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     // For now, we only verify single-area allocation in this test
     
     // Prepare but don't commit - simulate a crash
-    tid_t tid = db->prepare_commit(ctx);
+    tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
     
     // Don't call commit - simulate crash after prepare
     // Just end the transaction without committing
-    db->end_transaction(ctx);
+    db->end_transaction();
   }
   
   // Reopen the database - this simulates crash recovery
@@ -745,8 +746,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     if (has_prepared_txn) {
       // Database should have recovered the prepared transaction
       auto read_txn = db->txn();  // Use txn() to get the read transaction pointer
-      auto* ctx2 = db->context(0);
-      auto prep_txn = db->_resolve_active(ctx2);  // After recovery, active_txn points to prepared txn
+      auto prep_txn = db->_active_txn;  // After recovery, _active_txn points to prepared txn
       
       // Verify that the prepared transaction has different area tails than read transaction
       // This means there are uncommitted areas that need to be cleaned up
@@ -764,14 +764,16 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
       auto txn_after = db->txn();
       BOOST_CHECK_EQUAL(txn_after->refs.load(), 0u);
       
-      // 2. Lock should be cleared
+      // 2. Lock and cursor ID should be cleared
+      BOOST_CHECK_EQUAL(db->context(0)->cursor_id.load(), 0u);
       
       // 3. prepared_txn should still be different (sanitize waits for rollback)
       BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
       
       // 4. Manually rollback by setting prepared_txn = read_txn
       db->context(0)->prepared_txn = db->_header->read_txn;
-      db->context(0)->active_txn = 0;
+      db->_active_txn.reset();
+      db->_active_txn = nullptr;
       db->flush();
       
       // 5. Now call sanitize again - should clean up areas
@@ -780,10 +782,10 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     
     // Database should be in a consistent state
     // Try to start a new transaction and allocate - should work
-    auto ctx = db->start_transaction(); BOOST_CHECK(ctx);
-    auto test_block = db->_alloc_page(1000, ctx);
+    BOOST_CHECK(db->start_transaction(0));
+    auto test_block = db->alloc_page(1000);
     BOOST_CHECK(test_block);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
   }
 }
 
@@ -796,7 +798,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     auto db = storage.open("test");
     
     // Start transaction and allocate enough to create a chain of areas
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
     
     std::vector<page_ptr> blocks;
     const size_t AREA_SIZE = DBMMap::Traits::AREA_SIZE;
@@ -805,17 +807,17 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     // Allocate much more to definitely create multiple linked areas
     // We need to exceed the initial area and force allocation of new areas
     for (size_t i = 0; i < 50; i++) {
-      blocks.push_back(db->_alloc_page(page_size, ctx));
+      blocks.push_back(db->alloc_page(page_size));
     }
     
-    offset_t tail_before_prepare = db->_resolve_active(ctx)->area_list_tail_single;
+    offset_t tail_before_prepare = db->_active_txn->area_list_tail_single;
     
     // Prepare the transaction
-    tid_t tid = db->prepare_commit(ctx);
+    tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
     
     // Simulate crash - don't commit
-    db->end_transaction(ctx);
+    db->end_transaction();
   }
   
   // Reopen and sanitize
@@ -862,7 +864,8 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     if (db->context(0)->prepared_txn != db->_header->read_txn) {
       // Manually rollback by setting prepared_txn = read_txn
       db->context(0)->prepared_txn = db->_header->read_txn;
-      db->context(0)->active_txn = 0;
+      db->_active_txn.reset();
+      db->_active_txn = nullptr;
       db->flush();
       
       // Call sanitize again to clean up areas
@@ -873,10 +876,10 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Database should be usable after sanitize
-    auto ctx = db->start_transaction(); BOOST_CHECK(ctx);
-    auto test_block = db->_alloc_page(1000, ctx);
+    BOOST_CHECK(db->start_transaction(0));
+    auto test_block = db->alloc_page(1000);
     BOOST_CHECK(test_block);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
   }
 }
 
@@ -890,10 +893,10 @@ BOOST_AUTO_TEST_CASE(test_defrag_empty_db) {
   db->defrag();
 
   // DB should still be usable after no-op defrag
-  auto ctx = db->start_transaction(); BOOST_CHECK(ctx);
-  auto block = db->_alloc_page(100, ctx);
+  BOOST_CHECK(db->start_transaction(0));
+  auto block = db->alloc_page(100);
   BOOST_CHECK(block);
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
 }
 
 BOOST_AUTO_TEST_CASE(test_nonblocking_transaction) {
@@ -903,20 +906,20 @@ BOOST_AUTO_TEST_CASE(test_nonblocking_transaction) {
   auto db = storage.open("test");
 
   // Start a blocking transaction (holds the lock)
-  auto ctx1 = db->start_transaction();
-  BOOST_CHECK(ctx1);
+  auto txn1 = db->start_transaction(1);
+  BOOST_CHECK(txn1);
 
   // Try nonblocking start — should fail because lock is held
-  auto ctx2 = db->start_transaction(true);
-  BOOST_CHECK(!ctx2);
+  auto txn2 = db->start_transaction(2, true);
+  BOOST_CHECK(!txn2);
 
   // Commit the first transaction
-  BOOST_CHECK(db->commit(ctx1));
+  BOOST_CHECK(db->commit(1));
 
   // Now nonblocking should succeed
-  auto ctx3 = db->start_transaction(true);
-  BOOST_CHECK(ctx3);
-  BOOST_CHECK(db->commit(ctx3));
+  auto txn3 = db->start_transaction(2, true);
+  BOOST_CHECK(txn3);
+  BOOST_CHECK(db->commit(2));
 }
 
 BOOST_AUTO_TEST_CASE(test_multi_area_rollback) {
@@ -930,7 +933,7 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback) {
   auto db = storage.open("test");
   
   // Start transaction and allocate multi-areas directly
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   
   // Record the read transaction's multi-area tail before allocation
   using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
@@ -938,27 +941,27 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback) {
   offset_t read_multi_tail = read_txn->area_list_tail_multi;
   
   // Allocate a multi-area (triggers alloc_multi_area path)
-  auto area1 = db->_alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2, ctx);
+  auto area1 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
   BOOST_CHECK(area1);
   
   // The write transaction should have a different multi-area tail now
-  BOOST_CHECK_NE(db->_resolve_active(ctx)->area_list_tail_multi, read_multi_tail);
+  BOOST_CHECK_NE(db->_active_txn->area_list_tail_multi, read_multi_tail);
   
   // Allocate another multi-area
-  auto area2 = db->_alloc_multi_area(DBMMap::Traits::AREA_SIZE * 3, ctx);
+  auto area2 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 3);
   BOOST_CHECK(area2);
   
   // Rollback should return multi-areas to pool
-  BOOST_CHECK(db->rollback(ctx));
+  BOOST_CHECK(db->rollback(0));
   
   // DB should be in clean state
-  BOOST_CHECK(!ctx->active_txn);
+  BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   
   // Start a new transaction to verify DB is still usable
-  ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-  auto block = db->_alloc_page(100, ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
+  auto block = db->alloc_page(100);
   BOOST_CHECK(block);
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
 }
 
 BOOST_AUTO_TEST_CASE(test_multi_area_rollback_with_prior_committed) {
@@ -971,33 +974,33 @@ BOOST_AUTO_TEST_CASE(test_multi_area_rollback_with_prior_committed) {
   auto db = storage.open("test");
   
   // First transaction: allocate and commit a multi-area
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-  auto area1 = db->_alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2, ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
+  auto area1 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
   BOOST_CHECK(area1);
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
   
   // Second transaction: allocate more multi-areas then rollback
-  ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   
   using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
   auto read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
   offset_t committed_multi_tail = read_txn->area_list_tail_multi;
   BOOST_CHECK_NE(committed_multi_tail, offset_t(0)); // Should have committed multi-area
   
-  auto area2 = db->_alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2, ctx);
+  auto area2 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
   BOOST_CHECK(area2);
   
   // Write txn's multi tail should have advanced beyond committed
-  BOOST_CHECK_NE(db->_resolve_active(ctx)->area_list_tail_multi, committed_multi_tail);
+  BOOST_CHECK_NE(db->_active_txn->area_list_tail_multi, committed_multi_tail);
   
   // Rollback should return only the new multi-areas, keeping committed ones
-  BOOST_CHECK(db->rollback(ctx));
+  BOOST_CHECK(db->rollback(0));
   
   // Verify DB still works
-  ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-  auto block = db->_alloc_page(100, ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
+  auto block = db->alloc_page(100);
   BOOST_CHECK(block);
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
 }
 
 BOOST_AUTO_TEST_CASE(test_return_areas_multi) {
@@ -1011,10 +1014,10 @@ BOOST_AUTO_TEST_CASE(test_return_areas_multi) {
     auto db = storage.open("test");
     
     // Allocate and commit multi-areas
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto area1 = db->_alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2, ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto area1 = db->alloc_multi_area(DBMMap::Traits::AREA_SIZE * 2);
     BOOST_CHECK(area1);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
     
     // Verify multi-area head is set
     BOOST_CHECK_NE(db->context(0)->area_list_head_multi, offset_t(0));
@@ -1039,22 +1042,22 @@ BOOST_AUTO_TEST_CASE(test_garbage_statistics_multi_container) {
   // old ones to be freed into the garbage collector via transaction recycling).
   
   // Transaction 1: allocate 300 pages
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   std::vector<offset_t> offsets;
   for (int i = 0; i < 300; i++) {
-    auto p = db->_alloc_page(80, ctx); // size 80 => slot 0 (size 100)
+    auto p = db->alloc_page(80); // size 80 => slot 0 (size 100)
     offsets.push_back(db->resolve(p));
   }
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
   
-  // Transaction 2: free all those pages by calling db->_free()
+  // Transaction 2: free all those pages by calling db->free()
   // This puts them in the garbage collector
-  ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   for (auto off : offsets) {
     page_ptr p = db->resolve<PageHeader>(&off);
-    db->_free(p, ctx);
+    db->free(p);
   }
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
   
   // Now call _garbage_statistics which exercises the while loop
   // when a garbage slot has >254 entries (multiple PageContainers)
@@ -1083,9 +1086,9 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     auto db = storage.open("test");
     
     // Do one commit so the DB is in a consistent state with data
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto p = db->_alloc_page(100, ctx);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto p = db->alloc_page(100);
+    BOOST_CHECK(db->commit(0));
     
     // Simulate the crash window: clear next_txn_page as start_transaction does
     db->context(0)->next_txn_page = 0;
@@ -1110,10 +1113,10 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     BOOST_CHECK_NE(db->context(0)->next_txn_page, offset_t(0));
     
     // DB should be fully operational
-    auto* ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    auto p = db->_alloc_page(100, ctx);
+    BOOST_REQUIRE(db->start_transaction(0));
+    auto p = db->alloc_page(100);
     BOOST_CHECK(p);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_CHECK(db->commit(0));
   }
 }
 
@@ -1152,9 +1155,9 @@ BOOST_AUTO_TEST_CASE(test_remove_replication_db) {
   DBMMap storage(dbFilePath.c_str());
 
   auto db = storage.open<_ReplicationDB>("test");
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-  db->_alloc_page(100, ctx);
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_REQUIRE(db->start_transaction(0));
+  db->alloc_page(100);
+  BOOST_CHECK(db->commit(0));
 
   storage.remove<_ReplicationDB>("test");
 
@@ -1170,11 +1173,11 @@ BOOST_AUTO_TEST_CASE(test_remove_active_transaction) {
   DBMMap storage(dbFilePath.c_str());
 
   auto db = storage.open("test");
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
 
   BOOST_CHECK_THROW(storage.remove("test"), TransactionActive);
 
-  db->rollback(ctx);
+  db->rollback(0);
 }
 
 BOOST_AUTO_TEST_CASE(test_remove_nonexistent) {
@@ -1196,21 +1199,21 @@ BOOST_AUTO_TEST_CASE(test_memory_checker_with_garbage) {
   auto db = storage.open("test");
   
   // Transaction 1: allocate many pages
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   std::vector<offset_t> offsets;
   for (int i = 0; i < 300; i++) {
-    auto p = db->_alloc_page(80, ctx);
+    auto p = db->alloc_page(80);
     offsets.push_back(db->resolve(p));
   }
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
   
   // Transaction 2: free all pages into garbage collector
-  ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   for (auto off : offsets) {
     page_ptr p = db->resolve<PageHeader>(&off);
-    db->_free(p, ctx);
+    db->free(p);
   }
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
   
   // Run memory checker — should succeed and exercise garbage iteration paths
   using DB = std::remove_pointer_t<decltype(db)>;
@@ -1265,21 +1268,23 @@ BOOST_AUTO_TEST_CASE(test_type_mismatch_cached_db) {
 }
 
 BOOST_AUTO_TEST_CASE(test_prepare_commit_wrong_cursor) {
-  // Exercises _db.hpp prepare_commit
+  // Exercises _db.hpp L515 — prepare_commit with wrong cursor_id
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test_prepare.lvs";
 
   DBMMap storage(dbFilePath.c_str());
   auto db = storage.open("test");
 
-  // Start transaction
-  auto ctx = db->start_transaction();
-  BOOST_REQUIRE(ctx);
+  // Start transaction with cursor_id=42
+  BOOST_REQUIRE(db->start_transaction(42));
 
-  // prepare_commit now takes TxnContext* directly
-  // Just prepare and commit normally
-  db->prepare_commit(ctx);
-  db->commit(ctx);
+  // Try prepare_commit with wrong cursor_id=99 — should return tid_t(0)
+  tid_t result = db->prepare_commit(99);
+  BOOST_CHECK_EQUAL(uint64_t(result), 0u);
+
+  // Clean up: commit with the correct cursor_id
+  db->prepare_commit(42);
+  db->commit(42);
 }
 
 BOOST_AUTO_TEST_CASE(test_return_areas_range_rollback) {
@@ -1292,18 +1297,18 @@ BOOST_AUTO_TEST_CASE(test_return_areas_range_rollback) {
   auto db = storage.open("test");
 
   // Transaction 1: allocate many pages to force area expansion, then commit
-  auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   for (int i = 0; i < 500; i++) {
-    db->_alloc_page(80, ctx);
+    db->alloc_page(80);
   }
-  BOOST_CHECK(db->commit(ctx));
+  BOOST_CHECK(db->commit(0));
 
   // Transaction 2: allocate more, then ROLLBACK — exercises return_areas_range
-  ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
+  BOOST_REQUIRE(db->start_transaction(0));
   for (int i = 0; i < 500; i++) {
-    db->_alloc_page(80, ctx);
+    db->alloc_page(80);
   }
-  BOOST_CHECK(db->rollback(ctx));
+  BOOST_CHECK(db->rollback(0));
 
   // Memory checker should still pass
   using DB = std::remove_pointer_t<decltype(db)>;
@@ -1321,9 +1326,9 @@ BOOST_AUTO_TEST_CASE(test_sanitize_missing_next_txn_page) {
     auto db = storage.open("test");
 
     // Write some data to have a valid read_txn
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    db->_alloc_page(80, ctx);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_REQUIRE(db->start_transaction(0));
+    db->alloc_page(80);
+    BOOST_CHECK(db->commit(0));
 
     // Simulate crash: clear next_txn_page to 0
     db->context(0)->next_txn_page = 0;
@@ -1341,9 +1346,9 @@ BOOST_AUTO_TEST_CASE(test_sanitize_missing_next_txn_page) {
     BOOST_CHECK(db->context(0)->next_txn_page != 0);
 
     // Should be able to start a new transaction
-    auto* ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    db->_alloc_page(80, ctx);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_REQUIRE(db->start_transaction(0));
+    db->alloc_page(80);
+    BOOST_CHECK(db->commit(0));
   }
 }
 
@@ -1357,9 +1362,9 @@ BOOST_AUTO_TEST_CASE(test_remove_uncached_db) {
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.open("mydb");
     // Write some data
-    auto ctx = db->start_transaction(); BOOST_REQUIRE(ctx);
-    db->_alloc_page(80, ctx);
-    BOOST_CHECK(db->commit(ctx));
+    BOOST_REQUIRE(db->start_transaction(0));
+    db->alloc_page(80);
+    BOOST_CHECK(db->commit(0));
   }
 
   // Reopen storage — DB exists in file but NOT in cache

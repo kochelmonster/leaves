@@ -60,9 +60,8 @@ struct _StoreTraits {
     uint16_e used;
     uint8_t slot_id;
 
-    template <typename DB>
-    bool needs_cow(const DB* db) const {
-      return txn_id != db->transaction_active();
+    bool needs_cow(tid_t active_tid) const {
+      return txn_id != active_tid;
     }
   };
 

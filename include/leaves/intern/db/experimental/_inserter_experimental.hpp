@@ -310,7 +310,7 @@ struct _LocalityInserter {
   */
   void clean_stack() {
     if (is_page_root) {
-      back->cursor->_db->free(old_page);
+      back->cursor->free(old_page);
       back->update_offset(builder.page_link(*this));
       back->node = resolve(back->offset);
       back->cursor->reset_key(back->keypos);
@@ -355,7 +355,7 @@ struct _LocalityInserter {
     builder.build(*this);
     builder.set_root_link(parent.link_idx, 2, *this);
 
-    back->cursor->_db->free(old_page);
+    back->cursor->free(old_page);
     parent.update_offset(builder.page_link(*this));
     parent.node = back->cursor->_db->template resolve<node_ptr>(parent.offset);
     parent.cursor->reset_key(parent.keypos);
@@ -599,7 +599,7 @@ struct _LocalityInserter {
     parent.node = back->cursor->_db->template resolve<_Node>(parent.offset);
     back->offset = parent.trie()->array() + parent.link_idx;
     back->node = back->cursor->_db->template resolve<_Node>(back->offset);
-    back->cursor->_db->free(old_page);
+    back->cursor->free(old_page);
   }
 
   void create_leaf(uint16_t slot_id) {

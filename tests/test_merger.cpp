@@ -26,8 +26,6 @@ void exec_merger(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
   auto src_root = &src_db.txn()->root;
   auto dst_root = &dst_db.txn()->root;
 
-  uint64_t cursor_id = dst_db.new_cursor_id();
-
   // Create cursors
   DstCursor dst_cursor(&dst_db, dst_root);
   SrcCursor src_cursor(&src_db, src_root);
@@ -41,7 +39,7 @@ void exec_merger(DBDst& dst_db, DBSrc& src_db, MergePolicy& handler,
   _Merger<DstCursor, SrcCursor, MergePolicy> merger(dst_cursor, src_cursor,
                                                     handler);
   merger.exec();
-  dst_cursor.commit(cursor_id);
+  dst_cursor.commit();
 
   if (!dump_filename.empty()) {
     std::ofstream out(dump_filename);

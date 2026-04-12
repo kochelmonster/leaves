@@ -90,7 +90,7 @@ struct _CacheStore : public Opers_,
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_committed;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_inflight;
   std::atomic<bool> _header_dirty{false};
-  std::atomic<int64_t> _last_cursor_id{0};
+
   std::atomic<bool> _flush_pending{false};
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 
@@ -112,9 +112,7 @@ struct _CacheStore : public Opers_,
     close();
   }
 
-  uint64_t new_cursor_id() {
-    return _last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
-  }
+
 
   void flush(bool sync = false, bool /*force*/ = false) {
     bool has_pending = false;

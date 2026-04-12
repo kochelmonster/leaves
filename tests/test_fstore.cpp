@@ -374,9 +374,9 @@ BOOST_AUTO_TEST_CASE(test_fstore_remove_uncached_db) {
   {
     DBFileStore storage(dbFilePath.c_str());
     auto* db = storage.open("mydb");
-    db->start_transaction(0);
-    db->alloc_page(80);
-    db->commit(0);
+    auto* ctx = db->start_transaction();
+    db->_alloc_page(80, ctx);
+    db->commit(ctx);
   }
 
   // Reopen — DB not in cache — then remove

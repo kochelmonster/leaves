@@ -45,10 +45,11 @@ void run_hash_update(DB* internal_db, typename DB::offset_e data_root,
 
   std::string key_path;
   key_path.reserve(255);
-  _HashUpdater<DB, DB> updater(internal_db, internal_db);
+  auto hdb = internal_db->hash_db();
+  _HashUpdater<DB, typename DB::HashDB> updater(internal_db, &hdb);
   updater.sync_nodes(key_path, data_root, hash_root_ptr);
 
-  cursor.commit(internal_db->new_cursor_id());
+  cursor.commit();
 }
 
 /**
@@ -1619,9 +1620,10 @@ void run_hash_update_parallel(DB* internal_db, Executor& exec,
   InternalCursor cursor(internal_db, hash_root_ptr);
   cursor.start_transaction();
 
-  update_hash_trie(exec, internal_db, internal_db, data_root, hash_root_ptr);
+  auto hdb = internal_db->hash_db();
+  update_hash_trie(exec, internal_db, &hdb, data_root, hash_root_ptr);
 
-  cursor.commit(internal_db->new_cursor_id());
+  cursor.commit();
 }
 
 BOOST_AUTO_TEST_CASE(parallel_matches_inline_wide_trie) {

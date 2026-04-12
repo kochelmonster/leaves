@@ -65,9 +65,8 @@ struct _MemoryMapTraits {
     uint16_e used;
     uint8_t slot_id;
 
-    template <typename DB>
-    bool needs_cow(const DB* db) const {
-      return txn_id != db->transaction_active();
+    bool needs_cow(tid_t active_tid) const {
+      return txn_id != active_tid;
     }
   };
 
@@ -136,7 +135,7 @@ struct _MemoryMapFile
     Mutex file_lock;
     AreaPool area_pool;  // pool for both single and multi areas
     pid_type processes[MAX_PROCESSES];
-    std::atomic<int64_t> last_cursor_id;
+
     uint32_t sanitize_generation;  // incremented when first process opens file
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
@@ -148,7 +147,7 @@ struct _MemoryMapFile
           file_size(0),
           file_lock(),
           processes{},
-          last_cursor_id(0),
+
           sanitize_generation(0),
           db_entry_count(0),
           db_next_page(0) {
@@ -267,9 +266,7 @@ struct _MemoryMapFile
     }
   }
 
-  uint64_t new_cursor_id() {
-    return _memory->last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;
-  }
+
 
   void flush(bool sync = false, bool force = false) {
     if (force) {
@@ -307,7 +304,7 @@ struct _MemoryMapFile
       new (&_memory->file_lock) Mutex();
       recover_areas();
       ++_memory->sanitize_generation;
-      _memory->last_cursor_id.store(0);
+
     }
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);

@@ -140,6 +140,7 @@ struct _ReplicationDB
                    _ReplicationDBHeader<Storage_>,
                    _ReplicationDB<Storage_>>;
   using Transaction = typename Base::Transaction;
+  using TxnContext = typename Base::TxnContext;
   using Aspect = typename Base::Aspect;
 
   // Override CursorTraits to point DB to _ReplicationDB (not _DB)
@@ -312,16 +313,16 @@ struct _ReplicationDB
   }
 
   // Override commit.
-  bool commit(uint64_t cursor_id, bool sync = false,
+  bool commit(TxnContext* ctx, bool sync = false,
               TransactionOrigin origin = TransactionOrigin::user) {
     // Prepare commit without computing hashes (base doesn't hash either)
-    if (!Base::prepare_commit(cursor_id, false, origin)) return false;
+    if (!Base::prepare_commit(ctx, false, origin)) return false;
 
     // Atomically switch to new transaction
-    this->_header->read_txn = this->context(this->_ctx_index)->prepared_txn;
+    this->_header->read_txn = ctx->prepared_txn;
     this->make_dirty(this->_header);
     this->flush(sync, true);
-    this->end_transaction();
+    this->end_transaction(ctx);
 
     return true;
   }
@@ -368,12 +369,12 @@ struct _ReplicationDB
 
   // Override: signal background purge to stop before acquiring txn_lock.
   // No waiting for hashes - they run independently.
-  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
+  TxnContext* start_transaction(bool nonblocking = false,
                             TransactionOrigin origin = TransactionOrigin::user) {
     if (_in_purge.load(std::memory_order_relaxed)) {
       _purge_interrupt.store(true, std::memory_order_release);
     }
-    return Base::start_transaction(cursor_id, nonblocking, origin);
+    return Base::start_transaction(nonblocking, origin);
   }
 
   // Called under txn_ref_lock just before a stale txn is freed.
@@ -635,6 +636,8 @@ struct _ReplicationCursor : public _TransactionalCursor<Traits_> {
       _deletion_cursor =
           std::make_unique<DeletionCursor>(this->_db, &txn->deletion_root);
     }
+    _deletion_cursor->_ctx = this->_ctx;
+    _deletion_cursor->_active_tid = this->_active_tid;
     return *_deletion_cursor;
   }
 

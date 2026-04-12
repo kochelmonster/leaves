@@ -1000,8 +1000,7 @@ BOOST_AUTO_TEST_CASE(remove_combine_first_child) {
 }
 
 // ── Cursor rollback without transaction (_cursor.hpp L768) ──────────────
-// rollback() returns false when the cursor doesn't own the current write
-// transaction (txn_cursor_id != _id).
+// rollback() returns false when the cursor doesn't have an active transaction.
 BOOST_AUTO_TEST_CASE(rollback_without_transaction) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
@@ -1014,7 +1013,7 @@ BOOST_AUTO_TEST_CASE(rollback_without_transaction) {
   cursor.commit();
 
   // Now try to rollback without having started a new transaction.
-  // The cursor's _id won't match txn_cursor_id, so rollback returns false.
+  // No active transaction, so rollback is a no-op.
   // TCursor::rollback() returns void, so just verify it doesn't crash.
   BOOST_CHECK_NO_THROW(cursor.rollback());
 }

@@ -37,7 +37,7 @@ struct _Inserter {
 
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
-    return back->cursor->_db->template alloc_node<NodePtr>(node_size);
+    return back->cursor->template alloc_node<NodePtr>(node_size);
   }
 
   // Free node by computing PageHeader pointer
@@ -51,7 +51,7 @@ struct _Inserter {
     free(page);
   }
 
-  void free(page_ptr page) { back->cursor->_db->free(page); }
+  void free(page_ptr page) { back->cursor->free(page); }
 
   void exec() {
     if (back->is_leaf()) return change_leaf();
@@ -188,7 +188,7 @@ struct _Inserter {
     uint16_t needed = otrie->increment_size(key);
     uint16_t slot_budget = Traits::PAGE_SIZES[page->slot_id] - sizeof(PageHeader);
 
-    if (!page->needs_cow(back->cursor->_db) && needed <= slot_budget) {
+    if (!page->needs_cow(back->cursor->_active_tid) && needed <= slot_budget) {
       // The node is owned by the current write transaction and the page has
       // enough room: mutate in-place — no alloc, no copy, no free.
       // Readers observe the previous committed root, so the intermediate

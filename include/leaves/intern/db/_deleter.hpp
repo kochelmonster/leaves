@@ -36,7 +36,7 @@ struct _Deleter {
 
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
-    return cursor._db->template alloc_node<NodePtr>(node_size);
+    return cursor.template alloc_node<NodePtr>(node_size);
   }
 
   // Free node by computing PageHeader pointer
@@ -47,10 +47,10 @@ struct _Deleter {
         !std::is_same_v<NodePtr, page_ptr>,
         "free_node must be called with node pointers, not page pointers");
     page_ptr page = node - sizeof(PageHeader);
-    cursor._db->free(page);
+    cursor.free(page);
   }
 
-  void free(page_ptr page) { cursor._db->free(page); }
+  void free(page_ptr page) { cursor.free(page); }
 
   void exec() {
     assert(back->success());

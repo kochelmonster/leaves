@@ -8,6 +8,7 @@
 
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
+#include "../util/_merger.hpp"
 #include "_aspect.hpp"
 #include "_cursor.hpp"
 
@@ -91,11 +92,12 @@ struct _Transaction : public _TransactionBase<Traits_> {
 template <typename Storage_>
 struct _TxnContext {
   std::atomic<uint8_t> _claimed{0};    // 0 = free, 1 = claimed (CAS to acquire)
-  std::atomic<uint64_t> cursor_id{0};  // cursor holding this context's txn
   offset_t prepared_txn{0};            // transaction being prepared for commit
   offset_t next_txn_page{0};           // pre-allocated next txn page
+  offset_t active_txn{0};              // offset of active transaction (set during txn)
   offset_t area_list_head_single{0};   // head of single-AREA_SIZE area chain
   offset_t area_list_head_multi{0};    // head of multi-AREA_SIZE area chain
+  tid_t _snapshot_txn_id{0};           // txn_id at start_transaction() time
 };
 
 // Default database header (defined outside _DB for reusability)
@@ -118,6 +120,68 @@ struct _DBHeader {
   // Types come from Storage_ so they match the storage backend.
   typename Storage_::CtxMutex ctx_wait_lock;
   typename Storage_::CtxCondVar ctx_wait_cv;
+
+  // Global merge lock — serializes merge-on-commit when parallel
+  // contexts conflict.  Cross-process safe (pure hardware atomics).
+  SpinLock merge_lock;
+};
+
+/**
+ * @brief Merge policy for same-storage move-merge during commit.
+ *
+ * Controls which src subtrees to descend into (writer-allocated only)
+ * and frees orphaned src nodes that are replaced during merge.
+ */
+template <typename DB_>
+struct _ContextMergePolicy : StandardMergePolicy {
+  using Traits = typename DB_::Traits;
+  using page_ptr = typename Traits::ptr;
+  using PageHeader = typename Traits::PageHeader;
+  using TxnContext = typename DB_::TxnContext;
+  using txn_ptr = typename DB_::txn_ptr;
+
+  DB_* _db;
+  TxnContext* _ctx;
+  tid_t _base_txn_id;
+
+  _ContextMergePolicy(DB_* db, TxnContext* ctx, tid_t base_txn_id)
+      : _db(db), _ctx(ctx), _base_txn_id(base_txn_id) {}
+
+  // Only descend into src nodes allocated by the writer (txn_id > snapshot).
+  // Snapshot nodes are already in committed — skip entirely.
+  template <typename PagePtr>
+  bool should_descend_src(PagePtr page) {
+    return page->txn_id > _base_txn_id;
+  }
+
+  // Free orphaned src node (writer-allocated, not adopted into dst).
+  template <typename NodePtr>
+  void free_src(NodePtr& node) {
+    page_ptr page = node - sizeof(PageHeader);
+    _db->_free(page, _ctx);
+  }
+
+  // Override free_big: use DB's active txn's free_bigmem_root directly.
+  // _Cursor doesn't have get_bigmemory(), so we access BigMemory through the DB.
+  template <typename LeafNode, typename DstCursor>
+  void free_big(LeafNode& leaf, DstCursor& /*dst_cursor*/) {
+    using RawCursor = _Cursor<typename DB_::CursorTraits>;
+    using BigMemory = _BigMemory<RawCursor>;
+    txn_ptr active = _db->_resolve_active(_ctx);
+    _BigValue* bvalue = (_BigValue*)leaf->vdata();
+    BigMemory big_mem(_db, &active->free_bigmem_root);
+    big_mem.set_ctx(_ctx, active->txn_id);
+    big_mem.free(bvalue);
+  }
+
+  // Override migrate_big_value: src and dst share storage, so the big value
+  // chunk is already in the right place — just copy the _BigValue descriptor.
+  template <typename LeafNode, typename SrcCursor, typename DstCursor>
+  MigratedValue migrate_big_value(LeafNode& leaf, SrcCursor& /*src_cursor*/,
+                                  DstCursor& /*dst_cursor*/) {
+    // Same storage — the chunk offset is already valid in dst.
+    return {Slice((uint8_t*)leaf.vdata(), sizeof(_BigValue)), true};
+  }
 };
 
 // Make _DB accept Transaction and Header as template parameters
@@ -175,11 +239,9 @@ struct _DB {
   using header_ptr = typename Traits::template Pointer<Header>;
 
   Storage& _storage;
-  txn_ptr _active_txn;
   header_ptr _header;
   std::string _name;
   uint8_t _num_contexts;
-  uint8_t _ctx_index{0};  // active context index during a transaction
 
   [[no_unique_address]] Aspect _aspect{};
 
@@ -202,6 +264,54 @@ struct _DB {
                    MIN_PAGE_SIZE);
   }
 
+  // Compute context index from pointer (inverse of context(i)).
+  uint8_t _ctx_index_of(TxnContext* ctx) const {
+    return static_cast<uint8_t>(ctx - context(0));
+  }
+
+  // Resolve active transaction from a TxnContext.
+  txn_ptr _resolve_active(TxnContext* ctx) const {
+    return resolve<Transaction>(&ctx->active_txn);
+  }
+
+  // Internal resolver for lifecycle code (start_transaction GC, clone,
+  // sanitize) where no cursor exists.  Implements the MemManager resolver
+  // duck-type by wrapping _DB& + txn_ptr.
+  struct _TxnResolver {
+    DB& _db;
+    txn_ptr _active_txn;
+    TxnContext* _ctx;
+
+    template <typename T>
+    typename Traits::template Pointer<T> resolve(const offset_e* offset_ptr,
+                                                 Access access = READ) const {
+      return _db._storage.resolve(offset_ptr, access);
+    }
+
+    template <typename Pointer>
+    typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
+    resolve(const Pointer& p) const {
+      return _db._storage.resolve(p);
+    }
+
+    template <typename T>
+    bool may_recycle(T& garbage_block) const {
+      return garbage_block.txn_id < _db._start_txn_id;
+    }
+
+    template <typename T>
+    void mark_for_recycle(T& garbage_block) const {
+      garbage_block.txn_id = _active_txn->txn_id;
+    }
+
+    template <typename PtrType>
+    void make_dirty(PtrType block) { _db._storage.make_dirty(block); }
+
+    area_ptr alloc_single_area() {
+      return _db._alloc_single_area(_active_txn);
+    }
+  };
+
   _DB(Storage& storage, offset_t header, std::string_view name,
       uint8_t num_contexts = 1)
       : _storage(storage),
@@ -210,11 +320,6 @@ struct _DB {
         _num_contexts(num_contexts) {
     if (_header->num_contexts != _num_contexts)
       throw TypeMismatch();
-    // Check for prepared but uncommitted transaction in context 0.
-    auto* ctx = context(0);
-    if (ctx->prepared_txn && ctx->prepared_txn != _header->read_txn) {
-      _active_txn = resolve<Transaction>(&ctx->prepared_txn);
-    }
   }
 
   _DB(Storage& storage, offset_t* header, std::string_view name,
@@ -236,6 +341,7 @@ struct _DB {
     new (&_header->txn_ref_lock) SpinLock();
     new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
     new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
+    new (&_header->merge_lock) SpinLock();
     auto* ctx = context(0);
     memset(ctx, 0, _num_contexts * sizeof(TxnContext));
     ctx->_claimed.store(0, std::memory_order_relaxed);
@@ -267,10 +373,9 @@ struct _DB {
 
     // Pre-allocate the next transaction page so start_transaction()
     // can skip the double-copy on the very first call.
-    _active_txn = txn;
-    auto next = txn->clone(*this);
+    _TxnResolver resolver{self(), txn, ctx};
+    auto next = txn->clone(resolver);
     ctx->next_txn_page = resolve(next);
-    _active_txn.reset();
 
     make_dirty(_header);
     flush();
@@ -312,7 +417,7 @@ struct _DB {
 
   const db_type* _internal() const { return this; }  // for _Dumper
 
-  uint64_t new_cursor_id() { return _storage.new_cursor_id(); }
+
 
   Slice name() const { return Slice(_name); }
 
@@ -333,12 +438,6 @@ struct _DB {
     return garbage_block.txn_id < _start_txn_id;
   }
 
-  template <typename T>
-  void mark_for_recycle(T& garbage_block) const {
-    assert(bool(_active_txn));
-    garbage_block.txn_id = _active_txn->txn_id;
-  }
-
   template <typename PtrType>
   void make_dirty(PtrType block) {
     _storage.make_dirty(block);
@@ -348,80 +447,74 @@ struct _DB {
     _storage.flush(sync, force);
   }
 
-  // Allocate a page for content of 'space' bytes (PageHeader added internally).
-  // Returns page_ptr pointing at the PageHeader.
-  page_ptr alloc_page(uint16_t space) {
-    using PageHeader = typename Traits::PageHeader;
-    assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
-    page_ptr result = alloc_slot(
-        MemManager::assign_slot(space + sizeof(PageHeader)));
-    result->used = space;
-    return result;
-  }
-
-  // Allocate a node of 'node_size' bytes, returning a pointer past PageHeader.
-  template <typename NodePtr>
-  NodePtr alloc_node(uint16_t node_size) {
-    using PageHeader = typename Traits::PageHeader;
-    page_ptr page = alloc_page(node_size);
-    return page + sizeof(PageHeader);
-  }
-
-  page_ptr alloc_slot(uint16_t slot) {
-    assert(transaction_active());
-    assert(bool(_active_txn));
-    return _active_txn->alloc_slot(slot, *this);
-  }
-
-  void free(page_ptr page) {
-    assert(transaction_active());
-    assert(bool(_active_txn));
-    _active_txn->mem_manager.free(page, *this);
-  }
-
   void prefetch(const offset_e* offset, Access access = READ) const {
     _storage.prefetch(offset, access);
   }
 
-  area_ptr alloc_single_area() {
-    assert(bool(_active_txn));
-    std::scoped_lock lock(_storage.file_lock());
+  // ── Context-parameterized allocation (used by _TxnResolver & lifecycle) ──
 
-    auto area_ptr = _storage.alloc_single_area();
-    area_ptr->next = 0;
-
-    // Append to transaction's area list tail
-    auto tail = resolve<Area>(&_active_txn->area_list_tail_single, WRITE);
-    tail->next = resolve(area_ptr);
-    make_dirty(tail);
-    _active_txn->area_list_tail_single = resolve(area_ptr);
-
-    make_dirty(area_ptr);
-    return area_ptr;
+  page_ptr _alloc_slot(uint16_t slot, TxnContext* ctx) {
+    txn_ptr active = _resolve_active(ctx);
+    _TxnResolver resolver{self(), active, ctx};
+    return active->alloc_slot(slot, resolver);
   }
 
-  area_ptr alloc_multi_area(uint64_t size) {
-    assert(bool(_active_txn));
+  page_ptr _alloc_page(uint16_t space, TxnContext* ctx) {
+    using PageHeader = typename Traits::PageHeader;
+    assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+    page_ptr result = _alloc_slot(
+        MemManager::assign_slot(space + sizeof(PageHeader)), ctx);
+    result->used = space;
+    return result;
+  }
+
+  template <typename NodePtr>
+  NodePtr _alloc_node(uint16_t node_size, TxnContext* ctx) {
+    using PageHeader = typename Traits::PageHeader;
+    page_ptr page = _alloc_page(node_size, ctx);
+    return page + sizeof(PageHeader);
+  }
+
+  void _free(page_ptr page, TxnContext* ctx) {
+    txn_ptr active = _resolve_active(ctx);
+    _TxnResolver resolver{self(), active, ctx};
+    active->mem_manager.free(page, resolver);
+  }
+
+  area_ptr _alloc_single_area(txn_ptr active) {
     std::scoped_lock lock(_storage.file_lock());
 
-    auto area_ptr = _storage.alloc_multi_area(size);
-    area_ptr->next = 0;
+    auto ap = _storage.alloc_single_area();
+    ap->next = 0;
 
-    // Append to transaction's area list tail
-    if (_active_txn->area_list_tail_multi) {
-      auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, WRITE);
-      tail->next = resolve(area_ptr);
+    auto tail = resolve<Area>(&active->area_list_tail_single, WRITE);
+    tail->next = resolve(ap);
+    make_dirty(tail);
+    active->area_list_tail_single = resolve(ap);
+
+    make_dirty(ap);
+    return ap;
+  }
+
+  area_ptr _alloc_multi_area(uint64_t size, TxnContext* ctx) {
+    txn_ptr active = _resolve_active(ctx);
+    std::scoped_lock lock(_storage.file_lock());
+
+    auto ap = _storage.alloc_multi_area(size);
+    ap->next = 0;
+
+    if (active->area_list_tail_multi) {
+      auto tail = resolve<Area>(&active->area_list_tail_multi, WRITE);
+      tail->next = resolve(ap);
       make_dirty(tail);
     } else {
-      // First area in this transaction - update head
-      auto* ctx = context(_ctx_index);
-      ctx->area_list_head_multi = resolve(area_ptr);
+      ctx->area_list_head_multi = resolve(ap);
       make_dirty(_header);
     }
-    _active_txn->area_list_tail_multi = resolve(area_ptr);
+    active->area_list_tail_multi = resolve(ap);
 
-    make_dirty(area_ptr);
-    return area_ptr;
+    make_dirty(ap);
+    return ap;
   }
 
   template <typename T>
@@ -468,15 +561,11 @@ struct _DB {
   // any cached references to the txn.  No virtual dispatch needed.
   void _on_txn_freed(txn_ptr) {}
 
-  tid_t transaction_active() const {
-    return _active_txn ? _active_txn->txn_id : tid_t(0);
-  }
-
-
-  uint64_t txn_cursor_id() const { return context(_ctx_index)->cursor_id.load(); }
-
   bool is_active() const {
-    if (_active_txn) return true;
+    // Check if any context has an active transaction.
+    for (uint8_t i = 0; i < _num_contexts; i++) {
+      if (context(i)->active_txn) return true;
+    }
     bool is_active_ = false;
     iter_transactions([&is_active_](txn_ptr txn) -> bool {
       if (txn->refs.load() > 0) is_active_ = true;
@@ -524,7 +613,7 @@ struct _DB {
   }
 
   // Lazily initialise a context that has never been used.
-  // Called under context lock, so no race.
+  // Allocates a fresh area with a bare Transaction page.
   void _init_context(uint8_t idx) {
     auto* ctx = context(idx);
     std::scoped_lock flock(_storage.file_lock());
@@ -551,44 +640,38 @@ struct _DB {
 
     ctx->area_list_head_single = _storage.resolve(ap);
     ctx->area_list_head_multi = 0;
+    ctx->next_txn_page = txn_offset;
 
-    // Pre-allocate next_txn_page via clone.
-    _active_txn = wtxn;
-    auto next = wtxn->clone(*this);
-    ctx->next_txn_page = resolve(next);
-    _active_txn.reset();
+    // Match the "unprepared" state so prepare_commit() doesn't early-return.
+    ctx->prepared_txn = _header->read_txn;
 
     make_dirty(wtxn);
     make_dirty(_header);
     flush();
   }
 
-  // Start a write transaction. If nonblocking is true, this will return false
+  // Start a write transaction. If nonblocking is true, this will return nullptr
   // immediately when no context can be acquired.
-  // May only be called by cursor
-  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
+  // Returns TxnContext* — caller resolves active txn from ctx->active_txn.
+  TxnContext* start_transaction(bool nonblocking = false,
                             TransactionOrigin origin = TransactionOrigin::user) {
     uint8_t idx = _claim_context(nonblocking);
-    if (idx == UINT8_MAX) return txn_ptr();
-    _ctx_index = idx;
+    if (idx == UINT8_MAX) return nullptr;
 
     auto* ctx = context(idx);
-    assert(!_active_txn);
-    assert(ctx->cursor_id.load() == 0);
-    ctx->cursor_id.store(cursor_id);
+    assert(!ctx->active_txn);
 
     // Lazy-init contexts that have never been used.
     if (!ctx->next_txn_page) _init_context(idx);
 
     txn_ptr last_txn = txn();
+    ctx->_snapshot_txn_id = last_txn->txn_id;
 
     // Pre-allocated page is always ready (from commit, rollback, or init)
     assert(ctx->next_txn_page);
-    _active_txn = resolve<Transaction>(&ctx->next_txn_page);
+    txn_ptr active = resolve<Transaction>(&ctx->next_txn_page);
+    ctx->active_txn = ctx->next_txn_page;
     ctx->next_txn_page = 0;
-
-    _active_txn->txn_id = last_txn->txn_id + tid_t(1);
-    _active_txn->next_txn = 0;
 
     // Pin last_txn so it isn't freed during the GC walk.
     last_txn->refs.fetch_add(1);
@@ -596,98 +679,161 @@ struct _DB {
     // Find the oldest used transaction and free unused old transactions.
     // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
     // a txn between the refs==0 check and free().
+    // Assign txn_id inside txn_ref_lock to prevent a concurrent reader
+    // from seeing a half-initialised txn_id.
     _start_txn_id = last_txn->txn_id;
     {
       std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
-      iter_transactions([this](txn_ptr txn) -> bool {
+      active->txn_id = last_txn->txn_id + tid_t(1);
+      active->next_txn = 0;
+      _TxnResolver resolver{self(), active, ctx};
+      iter_transactions([this, &resolver](txn_ptr txn) -> bool {
         if (txn->refs.load() > 0) {
-          _active_txn->start_txn = resolve(txn);
+          resolver._active_txn->start_txn = resolve(txn);
           _start_txn_id = txn->txn_id;
           return true;
         }
         static_cast<Self*>(this)->_on_txn_freed(txn);
-        free(txn);
+        resolver._active_txn->mem_manager.free(
+            static_cast<page_ptr>(txn), resolver);
         return false;
       });
     }
 
     last_txn->refs.fetch_sub(1);
-    return _active_txn;
+    return ctx;
   }
 
-  bool rollback(uint64_t cursor_id, TransactionOrigin origin = TransactionOrigin::user) {
-    auto* ctx = context(_ctx_index);
-    if (ctx->cursor_id.load() != cursor_id) return false;
+  bool rollback(TxnContext* ctx, TransactionOrigin origin = TransactionOrigin::user) {
+    txn_ptr active = _resolve_active(ctx);
 
     // Return areas allocated during write transaction
     txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-    return_areas_range(
-        read_txn->area_list_tail_single, _active_txn->area_list_tail_single,
-        read_txn->area_list_tail_multi, _active_txn->area_list_tail_multi);
+    return_areas_range(ctx,
+        read_txn->area_list_tail_single, active->area_list_tail_single,
+        read_txn->area_list_tail_multi, active->area_list_tail_multi);
 
     ctx->prepared_txn = _header->read_txn;
 
-    // Reuse _active_txn's page for next pre-allocated transaction.
-    // _active_txn was allocated from read_txn's committed space, so it
+    // Reuse active's page for next pre-allocated transaction.
+    // active was allocated from read_txn's committed space, so it
     // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy(&*_active_txn, &*read_txn, sizeof(Transaction));
-    _active_txn->mem_manager.reinit_locks();
-    new (&_active_txn->refs) std::atomic<uint32_t>(0);
-    ctx->next_txn_page = resolve(_active_txn);
+    memcpy(&*active, &*read_txn, sizeof(Transaction));
+    active->mem_manager.reinit_locks();
+    new (&active->refs) std::atomic<uint32_t>(0);
+    ctx->next_txn_page = resolve(active);
 
-    make_dirty(_active_txn);
+    make_dirty(active);
     make_dirty(_header);
     flush();
-    end_transaction();
+    end_transaction(ctx);
     return true;
   }
 
-  tid_t prepare_commit(uint64_t cursor_id, bool sync = false,
+  tid_t prepare_commit(TxnContext* ctx, bool sync = false,
                        TransactionOrigin origin = TransactionOrigin::user) {
-    auto* ctx = context(_ctx_index);
-    // Not my transaction or not started
-    if (ctx->cursor_id.load() != cursor_id) return tid_t(0);
+    txn_ptr active = _resolve_active(ctx);
 
     // already prepared
-    if (ctx->prepared_txn != _header->read_txn) return _active_txn->txn_id;
+    if (ctx->prepared_txn == ctx->active_txn) return active->txn_id;
 
     // Pre-allocate next transaction page before committing.
-    // The allocation modifies _active_txn->mem_manager, which gets persisted
+    // The allocation modifies active->mem_manager, which gets persisted
     // as part of this commit — no storage leak.
-    auto next = _active_txn->clone(*this);
+    _TxnResolver resolver{self(), active, ctx};
+    auto next = active->clone(resolver);
     ctx->next_txn_page = resolve(next);
 
-    ctx->prepared_txn = resolve(_active_txn);
+    ctx->prepared_txn = ctx->active_txn;
 
-    txn_ptr active = resolve<Transaction>(&_header->read_txn);
-    active->next_txn = ctx->prepared_txn;
+    txn_ptr current = resolve<Transaction>(&_header->read_txn);
+    current->next_txn = ctx->prepared_txn;
     make_dirty(_header);
+    make_dirty(current);
     make_dirty(active);
-    make_dirty(_active_txn);
 
     if (sync) flush(true, true);  // Only flush if explicitly requested
-    return _active_txn->txn_id;
+    return active->txn_id;
   }
 
-  bool commit(uint64_t cursor_id, bool sync = false,
+  bool commit(TxnContext* ctx, bool sync = false,
               TransactionOrigin origin = TransactionOrigin::user) {
-    if (!prepare_commit(cursor_id, false, origin)) return false;
+    if (!prepare_commit(ctx, false, origin)) return false;
 
-    // Atomically switch to new transaction (area tails are preserved in
-    // transaction)
-    auto* ctx = context(_ctx_index);
-    _header->read_txn = ctx->prepared_txn;
+    // Under merge_lock: detect conflict and merge if needed, then publish.
+    {
+      std::lock_guard<SpinLock> guard(_header->merge_lock);
+      txn_ptr current = txn();
+      if (current->txn_id != ctx->_snapshot_txn_id) {
+        // Another context committed since our snapshot — merge required.
+        _merge_into_committed(current, ctx);
+      }
+
+      current->next_txn = ctx->prepared_txn;
+      _header->read_txn = ctx->prepared_txn;
+    }
+
     make_dirty(_header);
     flush(sync, true);
-    end_transaction();
+    end_transaction(ctx);
     return true;
   }
 
-  void end_transaction() {
-    auto* ctx = context(_ctx_index);
-    ctx->cursor_id.store(0);
-    _active_txn.reset();
-    _release_context(_ctx_index);
+  // Merge writer's changes into the current committed state.
+  // Called under merge_lock when a conflict is detected (another context
+  // committed after our snapshot).
+  void _merge_into_committed(txn_ptr committed, TxnContext* ctx) {
+    using RawCursor = _Cursor<CursorTraits>;
+    using MergePolicy = _ContextMergePolicy<Self>;
+
+    txn_ptr active = _resolve_active(ctx);
+
+    // Save writer's root and replace with committed root (dst = committed)
+    offset_e writer_root = active->root;
+    active->root = committed->root;
+
+    // Pick up committed state for offset/bigmem roots
+    active->offset_root = committed->offset_root;
+    active->free_bigmem_root = committed->free_bigmem_root;
+
+    // Move-merge writer's changes into committed trie
+    if (writer_root != 0) {
+      RawCursor dst_cursor(&self(), &active->root);
+      dst_cursor._ctx = ctx;
+      dst_cursor._active_tid = active->txn_id;
+      RawCursor src_cursor(&self(), &writer_root);
+      src_cursor._ctx = ctx;
+      src_cursor._active_tid = active->txn_id;
+      src_cursor.clear();  // push root onto stack for merger
+      MergePolicy policy(&self(), ctx, ctx->_snapshot_txn_id);
+      _MoveMerger<RawCursor, RawCursor, MergePolicy> merger(
+          dst_cursor, src_cursor, policy);
+      merger.exec();
+    }
+
+    // Apply deletes: walk the delete_root trie and remove each key
+    if (active->delete_root != 0) {
+      RawCursor del_cursor(&self(), &active->delete_root);
+      del_cursor._ctx = ctx;
+      del_cursor._active_tid = active->txn_id;
+      RawCursor main_cursor(&self(), &active->root);
+      main_cursor._ctx = ctx;
+      main_cursor._active_tid = active->txn_id;
+      del_cursor.first();
+      while (del_cursor.is_valid()) {
+        main_cursor.find(del_cursor.key());
+        if (main_cursor.is_valid()) {
+          main_cursor.remove();
+        }
+        del_cursor.next();
+      }
+      active->delete_root = 0;
+    }
+  }
+
+  void end_transaction(TxnContext* ctx) {
+    ctx->active_txn = 0;
+    _release_context(_ctx_index_of(ctx));
   }
 
   typedef _MemStatistics<Traits> MemStatistics;
@@ -764,12 +910,12 @@ struct _DB {
   void defrag() {
     if (!_aspect.before_defrag(self())) return;
 
-    uint64_t defrag_cursor_id = new_cursor_id();
-    auto txn = start_transaction(defrag_cursor_id, false, TransactionOrigin::defrag);
-    assert(txn);
+    auto* ctx = start_transaction(false, TransactionOrigin::defrag);
+    assert(ctx);
 
-    if (!txn->free_bigmem_root) {
-      rollback(defrag_cursor_id, TransactionOrigin::defrag);
+    txn_ptr active = _resolve_active(ctx);
+    if (!active->free_bigmem_root) {
+      rollback(ctx, TransactionOrigin::defrag);
       return;  // No big memory allocated yet
     }
 
@@ -778,14 +924,16 @@ struct _DB {
     // would ignore &txn->free_bigmem_root and prevent defrag from working.
     using RawCursor = _Cursor<CursorTraits>;
     using BigMemory = _BigMemory<RawCursor>;
-    BigMemory big_mem(this, &txn->free_bigmem_root);
-    big_mem.defrag(txn);
+    BigMemory big_mem(this, &active->free_bigmem_root);
+    big_mem.set_ctx(ctx, active->txn_id);
+    big_mem.defrag(active);
     flush();
-    commit(defrag_cursor_id, false, TransactionOrigin::defrag);
+    commit(ctx, false, TransactionOrigin::defrag);
     _aspect.on_defrag(self());
   }
 
-  void return_areas_range(offset_t start_single, offset_t end_single,
+  void return_areas_range(TxnContext* ctx,
+                          offset_t start_single, offset_t end_single,
                           offset_t start_multi, offset_t end_multi) {
     // Return area range [start->next ... end] to storage
     // This is used during rollback to return areas allocated during write
@@ -800,7 +948,6 @@ struct _DB {
     }
 
     if (end_multi && start_multi != end_multi) {
-      auto* ctx = context(_ctx_index);
       if (start_multi == 0) {
         // First-ever multi-area allocation: no committed tail to walk from,
         // return the whole chain from head.
@@ -821,6 +968,7 @@ struct _DB {
     new (&_header->txn_ref_lock) SpinLock();
     new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
     new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
+    new (&_header->merge_lock) SpinLock();
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
       txn->mem_manager.reinit_locks();
@@ -832,7 +980,6 @@ struct _DB {
     for (uint8_t i = 0; i < _num_contexts; i++) {
       auto* ctx = context(i);
       ctx->_claimed.store(0, std::memory_order_relaxed);
-      ctx->cursor_id.store(0);
 
       // Reinit locks/refs on pre-allocated transaction page (stale after crash).
       // If next_txn_page is 0 (crash between start_transaction clearing it and
@@ -845,12 +992,18 @@ struct _DB {
       } else if (i == 0) {
         // Context 0 must always have a next_txn_page.
         txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-        _active_txn = read_txn;
-        auto next = read_txn->clone(*this);
+        _TxnResolver resolver{self(), read_txn, ctx};
+        auto next = read_txn->clone(resolver);
         ctx->next_txn_page = resolve(next);
-        _active_txn.reset();
       }
       // Contexts 1..N-1 with next_txn_page==0 are uninitialised — left as-is.
+
+      // Crash recovery: if prepared_txn differs from read_txn, a transaction
+      // was prepared but never committed.  Restore active_txn so commit() can
+      // finalize it.
+      if (ctx->prepared_txn != _header->read_txn) {
+        ctx->active_txn = ctx->prepared_txn;
+      }
     }
 
     make_dirty(_header);

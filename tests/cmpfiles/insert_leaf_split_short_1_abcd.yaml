@@ -1,6 +1,6 @@
 type: trie
-id: 530336
-page: 530328
+id: 530376
+page: 530368
 freespace: 16
 txn: 3
 size: 40
@@ -9,12 +9,12 @@ compressed:
   key: "[a][b][c][d]"
 branches: "[*][e]"
 children: 
-  - 534489
-  - 530297
+  - 534529
+  - 530337
 ---
 type: leaf
-id: 534489
-page: 534481
+id: 534529
+page: 534521
 freespace: 23
 size: 17
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 9
 value: "abcd*fghi"
 ---
 type: leaf
-id: 530297
-page: 530289
+id: 530337
+page: 530329
 freespace: 23
 size: 17
 txn: 3

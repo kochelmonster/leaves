@@ -321,7 +321,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
     cursor->start_transaction();
 
     // Allocate a fresh multi-area and place our chunks at its content start.
-    auto area = cursor->_db->alloc_multi_area(1 * BigMemory::AREA_SIZE);
+    auto area = cursor->_db->_alloc_multi_area(1 * BigMemory::AREA_SIZE, cursor->_ctx);
     base = area->content_offset();
     off1 = base + CHUNK0_SIZE;
 
@@ -339,6 +339,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
 
     // Insert both chunks into the free-bigmem trie, marking them recyclable.
     BigMemory bm(cursor->_db, &cursor->_txn->free_bigmem_root);
+    bm.set_ctx(cursor->_ctx, cursor->_active_tid);
     bm._add_chunk(base, CHUNK0_SIZE, true, true);
     bm._add_chunk(off1, CHUNK1_SIZE, false, true);
 

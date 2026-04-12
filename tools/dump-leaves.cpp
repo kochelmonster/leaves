@@ -51,7 +51,7 @@ void dump_mmap_storage(const std::string& input_path, const std::string& db_name
         auto storage = MapStorage::create(input_path.c_str());
         auto db = storage->open(db_name.c_str());
         
-        _Dumper dumper(db, &db._internal()->_active_txn->root, false);
+        _Dumper dumper(db, &db._internal()->txn()->root, false);
         dumper.dump(output);
     } catch (const std::exception& e) {
         throw std::runtime_error("Error dumping MapStorage: " + std::string(e.what()));
@@ -63,7 +63,7 @@ void dump_fstore_storage(const std::string& input_path, const std::string& db_na
         auto storage = FileStorage::create(input_path.c_str());
         auto db = storage->open(db_name.c_str());
 
-        _Dumper dumper(db, &db._internal()->_active_txn->root, false);
+        _Dumper dumper(db, &db._internal()->txn()->root, false);
         dumper.dump(output);
     } catch (const std::exception& e) {
         throw std::runtime_error("Error dumping FileStorage: " + std::string(e.what()));

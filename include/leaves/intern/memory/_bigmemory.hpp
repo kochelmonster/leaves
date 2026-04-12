@@ -56,6 +56,11 @@ struct _BigMemory {
   _BigMemory(DB* db, offset_e* free_bigmem_root)
       : _db(db), _free_cursor(db, free_bigmem_root) {}
 
+  void set_ctx(typename DB::TxnContext* ctx, tid_t active_tid) {
+    _free_cursor._ctx = ctx;
+    _free_cursor._active_tid = active_tid;
+  }
+
   template <typename LeafNode>
   static uint16_t modify_size(uint16_t key, uint64_t size,
                               size_t big_inline_size = sizeof(BigValue)) {
@@ -76,7 +81,7 @@ struct _BigMemory {
     assert(!_free_cursor.is_valid());
 
     ValueBlock vblock{};
-    if (freed) _db->mark_for_recycle(vblock);
+    if (freed) vblock.txn_id = _free_cursor._active_tid;
     Slice vblock_slice(&vblock, sizeof(vblock));
     _free_cursor.value(vblock_slice);
   }
@@ -117,7 +122,7 @@ struct _BigMemory {
       _free_cursor.remove();
     } else {
       uint64_t psize = padding(padded_size + sizeof(Area), AREA_SIZE);
-      auto area = _db->alloc_multi_area(psize);
+      auto area = _db->_alloc_multi_area(psize, _free_cursor._ctx);
       found_offset = area->content_offset();
       found_size = area->end() - found_offset;
       has_successor = false;
@@ -154,6 +159,10 @@ struct _BigMemory {
   void defrag(txn_ptr txn) {
     TCursor iter_cursor(_db, &txn->free_bigmem_root);
     TCursor lookup_cursor(_db, &txn->free_bigmem_root);
+    iter_cursor._ctx = _free_cursor._ctx;
+    iter_cursor._active_tid = _free_cursor._active_tid;
+    lookup_cursor._ctx = _free_cursor._ctx;
+    lookup_cursor._active_tid = _free_cursor._active_tid;
     
     iter_cursor.first();
     

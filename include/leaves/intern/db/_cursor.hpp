@@ -92,7 +92,7 @@ struct _Transition {
 
     // Compute PageHeader addresses from node pointers
     page_ptr page_header = node - sizeof(PageHeader);
-    if (!page_header->needs_cow(cursor->_db)) {
+    if (!page_header->needs_cow(cursor->_active_tid)) {
       cursor->_db->make_dirty(node);
       return link();
     }
@@ -104,7 +104,7 @@ struct _Transition {
     assert(is_trie());
     trie_ptr old_trie = trie();
 
-    page_ptr new_page = cursor->_db->alloc_slot(page_header->slot_id);
+    page_ptr new_page = cursor->alloc_slot(page_header->slot_id);
     new_page->used = page_header->used;
     assert(new_page->used <= Traits::PAGE_SIZES[new_page->slot_id]);
 
@@ -113,7 +113,7 @@ struct _Transition {
     memcpy((char*)trie(), (char*)old_trie, page_header->used);
 
     auto new_offset = cursor->_db->resolve(trie());
-    cursor->_db->free(page_header);
+    cursor->free(page_header);
     assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
 
     // Propagate COW upward: grandparent's needs_cow will compare its txn_id
@@ -380,12 +380,15 @@ struct _CursorBase {
   typedef _CursorBase<Traits_, Derived> CursorBase;
   typedef _Stack<Derived> Stack;
   typedef typename Traits::DB DB;
+  using TxnContext = typename DB::TxnContext;
   using offset_e = typename Traits::offset_e;
   using page_ptr = typename Traits::ptr;
   using Transition = typename Stack::Transition;
 
   DB* _db;
   offset_e* _root;
+  TxnContext* _ctx{nullptr};
+  tid_t _active_tid{0};
   Stack stack;
   Slice rest_key;
   std::string current_key;
@@ -423,8 +426,22 @@ struct _CursorBase {
     stack.size--;
   }
 
-  // Allocation methods delegated through cursor to DB
-  page_ptr alloc_page(uint16_t size) { return this->_db->alloc_page(size); }
+  // ── Resolver interface: cursor-level allocation/free delegating to _db ──
+
+  page_ptr alloc_slot(uint8_t slot_id) {
+    return _db->_alloc_slot(slot_id, _ctx);
+  }
+
+  page_ptr alloc_page(uint16_t size) {
+    return _db->_alloc_page(size, _ctx);
+  }
+
+  template <typename NodePtr>
+  NodePtr alloc_node(uint16_t node_size) {
+    return _db->template _alloc_node<NodePtr>(node_size, _ctx);
+  }
+
+  void free(page_ptr page) { _db->_free(page, _ctx); }
 };
 
 // Full cursor with find, transactions, and modification operations
@@ -575,6 +592,7 @@ template <typename Traits_>
 struct _Cursor : public _ICursor<Traits_, _Cursor<Traits_>> {
   typedef Traits_ Traits;
   typedef _ICursor<Traits_, _Cursor<Traits_>> Cursor;
+  typedef _BigMemory<_Cursor<Traits_>> BigMemory;
   using Cursor::Cursor;
 };
 
@@ -586,6 +604,7 @@ struct _TransactionalCursor
   typedef _ICursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
   typedef _BigMemory<_Cursor<Traits_>> BigMemory;
   using DB = typename Traits::DB;
+  using TxnContext = typename DB::TxnContext;
   using txn_ptr = typename DB::txn_ptr;
   using offset_e = typename Traits::offset_e;
   using Transition = typename Cursor::Transition;
@@ -596,12 +615,10 @@ struct _TransactionalCursor
 
   std::unique_ptr<BigMemory> _bigmemory;
   txn_ptr _txn;
-  uint64_t _id{0};
   std::string _refind_buffer;
   [[no_unique_address]] CursorContext _aspect_context;
 
   _TransactionalCursor(DB* db, offset_e* root) : Cursor(db, root) {
-    _id = this->_db->new_cursor_id();
     update();
   }
 
@@ -614,7 +631,7 @@ struct _TransactionalCursor
   tid_t txn_id() const { return _txn ? _txn->txn_id : tid_t(0); }
 
   bool is_transaction_active() const {
-    return this->_db->txn_cursor_id() == _id;
+    return this->_ctx != nullptr;
   }
 
   void push(offset_e* ptr) {
@@ -626,6 +643,7 @@ struct _TransactionalCursor
     if (!_bigmemory) {
       _bigmemory =
           std::make_unique<BigMemory>(this->_db, &this->_txn->free_bigmem_root);
+      _bigmemory->set_ctx(this->_ctx, this->_active_tid);
     }
     return *_bigmemory;
   }
@@ -714,6 +732,19 @@ struct _TransactionalCursor
         throw NoValidPosition();  // Aspect rejected the delete
       }
     }
+
+    // Record deleted key in delete_root trie for merge-on-commit.
+    // Only needed when multiple contexts exist — single-context DBs never
+    // merge so the delete trie would just waste space.
+    if (this->_db->_num_contexts > 1) {
+      _Cursor<Traits> del_cursor(this->_db, &this->_txn->delete_root);
+      del_cursor._ctx = this->_ctx;
+      del_cursor._active_tid = this->_active_tid;
+      del_cursor.find(this->key());
+      uint8_t marker = 1;
+      del_cursor.value(Slice(&marker, 1));
+    }
+
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();
@@ -724,39 +755,47 @@ struct _TransactionalCursor
 
   bool start_transaction(bool non_blocking = false,
                          TransactionOrigin origin = TransactionOrigin::user) {
-    if (this->_db->txn_cursor_id() != _id) {
+    if (!is_transaction_active()) {
       if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
         return false;
-      txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking, origin);
-      if (!new_txn) return false;
+      auto* ctx = this->_db->start_transaction(non_blocking, origin);
+      if (!ctx) return false;
+      this->_ctx = ctx;
+      txn_ptr new_txn = this->_db->_resolve_active(ctx);
+      this->_active_tid = new_txn->txn_id;
       assert(new_txn->refs.load() == 0);  // no one can reference it yet
       _set_txn(new_txn);
+      if (_bigmemory) _bigmemory->set_ctx(this->_ctx, this->_active_tid);
       _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
     }
     return true;
   }
 
   tid_t prepare_commit(bool sync = true) {
-    return this->_db->prepare_commit(_id, sync);
+    return this->_db->prepare_commit(this->_ctx, sync);
   }
 
   bool commit(bool sync = false,
               TransactionOrigin origin = TransactionOrigin::user) {
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
-    bool committed = this->_db->commit(_id, sync, origin);
+    bool committed = this->_db->commit(this->_ctx, sync, origin);
     if (committed) {
+      this->_ctx = nullptr;
+      this->_active_tid = tid_t(0);
       _aspect().on_commit(*this->_db, origin, _aspect_context);
     }
     return committed;
   }
 
   bool rollback(TransactionOrigin origin = TransactionOrigin::user) {
-    if (this->_db->txn_cursor_id() != _id) return false;
+    if (!is_transaction_active()) return false;
     if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context))
       return false;
-    if (this->_db->rollback(_id, origin)) {
+    if (this->_db->rollback(this->_ctx, origin)) {
       _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context);
+      this->_ctx = nullptr;
+      this->_active_tid = tid_t(0);
       // Switch back to the committed read transaction.
       // Don't decrement _txn->refs — rollback() already reset the recycled
       // page to refs=0 and repurposed it as next_txn_page.

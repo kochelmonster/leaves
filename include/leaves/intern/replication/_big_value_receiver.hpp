@@ -235,21 +235,23 @@ struct _BigValueReceiver {
 
   // Link the pre-allocated multi-area to the active transaction.
   // Must be called within a transaction before merging big values.
-  void link_area(DB* db, _ReplicationSlot<DB>& slot) {
+  void link_area(DB* db, _ReplicationSlot<DB>& slot,
+                 typename DB::TxnContext* ctx) {
     if (!_multi_area) return;
 
     _multi_area->next = 0;
     offset_t area_off = db->resolve(_multi_area);
-    if (db->_active_txn->area_list_tail_multi) {
+    auto active = db->_resolve_active(ctx);
+    if (active->area_list_tail_multi) {
       auto tail =
-          db->template resolve<Area>(&db->_active_txn->area_list_tail_multi);
+          db->template resolve<Area>(&active->area_list_tail_multi);
       tail->next = area_off;
       db->make_dirty(tail);
     } else {
-      db->context(db->_ctx_index)->area_list_head_multi = area_off;
+      ctx->area_list_head_multi = area_off;
       db->make_dirty(db->_header);
     }
-    db->_active_txn->area_list_tail_multi = area_off;
+    active->area_list_tail_multi = area_off;
     db->make_dirty(_multi_area);
 
     slot.clear_area();

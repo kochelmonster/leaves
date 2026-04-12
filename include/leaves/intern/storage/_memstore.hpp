@@ -29,8 +29,7 @@ struct _MemoryTraits {
     tid_t txn_id;
     uint16_e used;  // used bytes in page
     uint8_t slot_id;
-    template <typename DB>
-    bool needs_cow(const DB* db) const {
+    bool needs_cow(tid_t) const {
       return false;
     }
   };
@@ -65,6 +64,9 @@ struct _MemoryDB {
 
   typedef _MemoryDB<Storage> DB;
   typedef DB db_type;
+
+  // Dummy TxnContext for API compatibility with cursor resolver interface.
+  struct TxnContext {};
 
   // Value traits for non-transactional operations
   struct CursorTraits : public Storage::Traits {
@@ -127,8 +129,17 @@ struct _MemoryDB {
 
   void free(page_ptr p) { _mem_manager.free(p, *this); }
 
+  // Cursor resolver interface (TxnContext* ignored for non-transactional DB)
+  page_ptr _alloc_slot(uint16_t slot, TxnContext*) { return alloc_slot(slot); }
+  page_ptr _alloc_page(uint16_t space, TxnContext*) { return alloc_page(space); }
+  template <typename NodePtr>
+  NodePtr _alloc_node(uint16_t node_size, TxnContext*) {
+    return alloc_node<NodePtr>(node_size);
+  }
+  void _free(page_ptr p, TxnContext*) { free(p); }
+
   // Memory manager interface
-  page_ptr alloc_slot(uint8_t slot_id) {
+  page_ptr alloc_slot(uint16_t slot_id) {
     return _mem_manager.alloc(slot_id, *this);
   }
 

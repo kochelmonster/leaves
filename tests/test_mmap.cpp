@@ -447,8 +447,9 @@ BOOST_AUTO_TEST_CASE(test_pool_threads_zero) {
   auto db = storage.open("test");
 
   // Basic operations should work
-  BOOST_REQUIRE(db->start_transaction(0));
-  db->alloc_page(80);
-  BOOST_CHECK(db->commit(0));
+  auto* ctx = db->start_transaction();
+  BOOST_REQUIRE(ctx);
+  db->_alloc_page(80, ctx);
+  BOOST_CHECK(db->commit(ctx));
 }
 

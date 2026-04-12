@@ -1,6 +1,6 @@
 type: trie
-id: 553608
-page: 553600
+id: 553472
+page: 553464
 freespace: 16
 txn: 15
 size: 40
@@ -9,13 +9,13 @@ compressed:
   key: "[a]"
 branches: "[C][K][O]"
 children: 
+  - 538737
   - 538697
-  - 538657
-  - 543089
+  - 543129
 ---
 type: leaf
-id: 538697
-page: 538689
+id: 538737
+page: 538729
 freespace: 34
 size: 6
 txn: 2
@@ -25,8 +25,8 @@ valuesize: 2
 value: "aC"
 ---
 type: leaf
-id: 538657
-page: 538649
+id: 538697
+page: 538689
 freespace: 34
 size: 6
 txn: 2
@@ -36,8 +36,8 @@ valuesize: 2
 value: "aK"
 ---
 type: leaf
-id: 543089
-page: 543081
+id: 543129
+page: 543121
 freespace: 34
 size: 6
 txn: 2

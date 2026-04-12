@@ -1645,7 +1645,7 @@ struct ReplicationReceiverFSM {
     try {
       // Link pre-allocated big value multi-area to this transaction
       // (must happen before any merge phase that references big values)
-      _big_value.link_area(_db, _replication_slot);
+      _big_value.link_area(_db, _replication_slot, _cursor->_ctx);
 
       // Snapshot the local deletion trie root so may_add_leaf() can reject
       // re-delivery of locally deleted keys during main trie merge.
@@ -1675,8 +1675,11 @@ struct ReplicationReceiverFSM {
           auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
           using CursorTraits_ = typename DB::CursorTraits;
           _Cursor<CursorTraits_> main_cursor(_db, &txn->root);
+          main_cursor._ctx = _cursor->_ctx;
+          main_cursor._active_tid = _cursor->_active_tid;
           using BigMemoryType = _BigMemory<_Cursor<CursorTraits_>>;
           BigMemoryType bigmem(_db, &txn->free_bigmem_root);
+          bigmem.set_ctx(_cursor->_ctx, _cursor->_active_tid);
           _merge_policy.main_cursor = &main_cursor;
           _merge_policy.bigmemory = &bigmem;
 

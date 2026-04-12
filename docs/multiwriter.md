@@ -40,7 +40,6 @@ Fields:
 - `offset_t prepared_txn` — Writer's prepared/in-flight transaction offset.
 - `offset_t next_txn_page` — Pre-allocated transaction page (claimed via CAS at commit).
 - `Mutex txn_lock` — Per-writer transaction lock. No cross-writer contention during writes.
-- `std::atomic<uint64_t> txn_cursor_id` — ID of cursor holding active transaction.
 - `SpinLock txn_ref_lock` — Local copy, NOT used (redirected to parent).
 
 ## _WriterMergePolicy<DB>
@@ -150,10 +149,10 @@ t->refs.fetch_add(1);
 return t;
 ```
 
-### start_transaction(cursor_id, nonblocking, origin)
+### start_transaction(nonblocking, origin)
 
 1. Lock writer's `_header->txn_lock` (try_lock if nonblocking).
-2. Assert no active txn, store cursor_id.
+2. Assert no active txn.
 3. Acquire snapshot under `txn_ref_lock`: resolve `shared_read_txn`, `refs.fetch_add(1)`. Save as `_snapshot_txn`.
 4. Claim pre-allocated page: `_active_txn = resolve(&_header->next_txn_page); _header->next_txn_page = 0`.
 5. Assign unique txn_id: `next_txn_id.fetch_add(1)`, set `next_txn = 0`.
@@ -187,10 +186,9 @@ Shadow base methods to route through our `alloc_slot`:
 - `alloc_page(space)` → `alloc_slot(assign_slot(space + PageHeader))`, sets `used`.
 - `alloc_node<NodePtr>(node_size)` → `alloc_page(node_size) + sizeof(PageHeader)`.
 
-### commit(cursor_id, sync, origin)
+### commit(sync, origin)
 
-1. Verify cursor_id matches.
-2. Lock `_mw_header->commit_lock`.
+1. Lock `_mw_header->commit_lock`.
 3. Check merge: `current_read->txn_id != _snapshot_txn->txn_id` → needs merge.
 4. If merge needed → `_merge_writer_into_committed(current_read)`.
 5. Pre-allocate next_txn_page: `alloc_slot(Transaction::SLOT_ID)`, memcpy active_txn, reinit locks/refs.
@@ -201,7 +199,7 @@ Shadow base methods to route through our `alloc_slot`:
 10. Release snapshot: `_snapshot_txn->refs.fetch_sub(1); _snapshot_txn.reset()`.
 11. `end_transaction()`.
 
-### rollback(cursor_id, origin)
+### rollback(origin)
 
 1. Release snapshot: `_snapshot_txn->refs.fetch_sub(1); _snapshot_txn.reset()`.
 2. Delegate to `Base::rollback()`.
@@ -223,7 +221,7 @@ Creates `Cursor(this, &txn()->root)` with initialized aspect context.
 ### sanitize_writer()
 
 Called after crash recovery:
-1. Placement-new `txn_lock`, zero `txn_cursor_id`.
+1. Placement-new `txn_lock`.
 2. Walk `iter_transactions`: zero all refs, reinit mem_manager locks.
 3. If `next_txn_page` exists: zero refs, reinit locks. Else: re-create from committed root via clone.
 4. Dirty + flush.
