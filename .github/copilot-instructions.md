@@ -19,3 +19,6 @@ inside include/leaves/intern folder:
   - use structs not classes the struct names shall begin with an underscore _
   - private members begin with an underscore _ and public members shall not begin with an underscore
   - no public, private, proteced access modifiers, use naming conventions to indicate visibility
+
+# Finishing Signal
+if an agent finishes a task, it should call the bash command: spd-say "I've finished with leaves"
