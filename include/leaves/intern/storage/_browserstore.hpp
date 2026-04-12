@@ -123,6 +123,16 @@ struct _BrowserOperations : _CacheBase {
     void unlock() {}
   };
 
+  struct CtxMutex {
+    void lock() {}
+    void unlock() {}
+  };
+
+  struct CtxCondVar {
+    template <typename L> void wait(L&) {}
+    void notify_one() {}
+  };
+
   struct FileHeader {
     char signature[BROWSERSTORE_SIGNATURE_SIZE];
     uint16_t db_version;
@@ -397,7 +407,7 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _Bro
 
   void _recover_areas() {
     auto* self = this;
-    _recover_areas<_DBHeader<base_t>, _BrowserStoreTraits::AREA_SIZE>(
+    _recover_areas<_DBHeader<base_t>, _TxnContext<base_t>, _BrowserStoreTraits::AREA_SIZE>(
         _header->area_pool,
         [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
         _header->file_size,

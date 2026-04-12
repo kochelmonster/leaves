@@ -246,7 +246,7 @@ struct _BigValueReceiver {
       tail->next = area_off;
       db->make_dirty(tail);
     } else {
-      db->_header->area_list_head_multi = area_off;
+      db->context(db->_ctx_index)->area_list_head_multi = area_off;
       db->make_dirty(db->_header);
     }
     db->_active_txn->area_list_tail_multi = area_off;

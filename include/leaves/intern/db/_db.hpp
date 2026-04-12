@@ -39,6 +39,9 @@ struct _TransactionBase : public Traits_::PageHeader {
   // count of cursors accessing this transaction
   std::atomic<uint32_t> refs;
 
+  // trie root for tracking deleted keys (used during merge commit)
+  offset_e delete_root{0};
+
   // Area tracking: tail pointers for areas allocated during this transaction
   offset_e area_list_tail_single{0};
   offset_e area_list_tail_multi{0};
@@ -83,31 +86,38 @@ struct _Transaction : public _TransactionBase<Traits_> {
   }
 };
 
+// Per-context persistent state for parallel transactions.
+// Stored contiguously after the DB header in storage.
+template <typename Storage_>
+struct _TxnContext {
+  std::atomic<uint8_t> _claimed{0};    // 0 = free, 1 = claimed (CAS to acquire)
+  std::atomic<uint64_t> cursor_id{0};  // cursor holding this context's txn
+  offset_t prepared_txn{0};            // transaction being prepared for commit
+  offset_t next_txn_page{0};           // pre-allocated next txn page
+  offset_t area_list_head_single{0};   // head of single-AREA_SIZE area chain
+  offset_t area_list_head_multi{0};    // head of multi-AREA_SIZE area chain
+};
+
 // Default database header (defined outside _DB for reusability)
 template <typename Storage_>
 struct _DBHeader {
-  using Mutex = typename Storage_::Mutex;
-
   offset_t read_txn;      // the current read transaction
-  offset_t prepared_txn;  // the transaction being prepared for commit
-  offset_t next_txn_page; // Optimation: preprepared transaction
-  Mutex txn_lock;
-  std::atomic<uint64_t>
-      txn_cursor_id;  // the id of the cursor holding the transaction
   SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
-
-  // Atomic area management - no AreaList objects, just head pointers
-  // Areas are linked lists in storage, operations use atomic head/tail pattern
-  offset_t area_list_head_single;  // head of single AREA_SIZE areas linked list
-  offset_t area_list_head_multi;   // head of multi-AREA_SIZE areas linked list
 
   // Identifies the DB subtype for runtime type verification on open.
   // Written by init(), checked by open<>() to prevent type mismatches.
   uint16_t db_type_id;
 
+  uint8_t num_contexts;   // number of parallel transaction contexts
+
   // Tracks whether this DB has been sanitized for the current storage
   // generation.  Compared against the FileHeader counter at open() time.
   uint32_t sanitize_generation;
+
+  // Cross-process wait mechanism for blocking context claims.
+  // Types come from Storage_ so they match the storage backend.
+  typename Storage_::CtxMutex ctx_wait_lock;
+  typename Storage_::CtxCondVar ctx_wait_cv;
 };
 
 // Make _DB accept Transaction and Header as template parameters
@@ -122,7 +132,7 @@ struct _DB {
   typedef Transaction_ Transaction;
   typedef Header_ Header;
   using Traits = typename Storage::Traits;
-  using Mutex = typename Storage::Mutex;
+  using TxnContext = _TxnContext<Storage>;
   using area_ptr = typename Storage::area_ptr;
   using txn_ptr = typename Transaction::ptr;
   using page_ptr = typename Traits::ptr;
@@ -159,7 +169,7 @@ struct _DB {
       sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
       "Size of Transaction must be at least size of _TransactionBase");
 
-  static_assert(sizeof(Header) + sizeof(Transaction) < AREA_SIZE,
+  static_assert(sizeof(Header) + sizeof(TxnContext) + sizeof(Transaction) < AREA_SIZE,
                 "DB Header too big");
 
   using header_ptr = typename Traits::template Pointer<Header>;
@@ -168,23 +178,48 @@ struct _DB {
   txn_ptr _active_txn;
   header_ptr _header;
   std::string _name;
+  uint8_t _num_contexts;
+  uint8_t _ctx_index{0};  // active context index during a transaction
 
   [[no_unique_address]] Aspect _aspect{};
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id{0};
 
-  _DB(Storage& storage, offset_t header, std::string_view name)
+  // Access the i-th TxnContext stored after the header in storage.
+  TxnContext* context(uint8_t i) {
+    return reinterpret_cast<TxnContext*>(
+        reinterpret_cast<char*>(&*_header) + sizeof(Header)) + i;
+  }
+  const TxnContext* context(uint8_t i) const {
+    return reinterpret_cast<const TxnContext*>(
+        reinterpret_cast<const char*>(&*_header) + sizeof(Header)) + i;
+  }
+
+  // Total header size including all contexts (for computing txn offset).
+  uint16_t _header_total_size() const {
+    return padding(sizeof(Header) + _num_contexts * sizeof(TxnContext),
+                   MIN_PAGE_SIZE);
+  }
+
+  _DB(Storage& storage, offset_t header, std::string_view name,
+      uint8_t num_contexts = 1)
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
-        _name(name) {
-    if (_header->prepared_txn != _header->read_txn) {
-      _active_txn = resolve<Transaction>(&_header->prepared_txn);
+        _name(name),
+        _num_contexts(num_contexts) {
+    if (_header->num_contexts != _num_contexts)
+      throw TypeMismatch();
+    // Check for prepared but uncommitted transaction in context 0.
+    auto* ctx = context(0);
+    if (ctx->prepared_txn && ctx->prepared_txn != _header->read_txn) {
+      _active_txn = resolve<Transaction>(&ctx->prepared_txn);
     }
   }
 
-  _DB(Storage& storage, offset_t* header, std::string_view name)
-      : _storage(storage), _name(name) {
+  _DB(Storage& storage, offset_t* header, std::string_view name,
+      uint8_t num_contexts = 1)
+      : _storage(storage), _name(name), _num_contexts(num_contexts) {
     init(header);
   }
 
@@ -197,16 +232,23 @@ struct _DB {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
-    new (&_header->txn_lock) Mutex();
+    _header->num_contexts = _num_contexts;
     new (&_header->txn_ref_lock) SpinLock();
-
-    // Initialize area lists with the first allocated area (area_ptr)
+    new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
+    new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
+    auto* ctx = context(0);
+    memset(ctx, 0, _num_contexts * sizeof(TxnContext));
+    ctx->_claimed.store(0, std::memory_order_relaxed);
     offset_t first_area_offset = _storage.resolve(area_ptr);
-    _header->area_list_head_single = first_area_offset;
-    _header->area_list_head_multi = 0;
+    ctx->area_list_head_single = first_area_offset;
+    ctx->area_list_head_multi = 0;
 
-    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
-    _header->prepared_txn = _header->read_txn = *header + header_size;
+    // Initialize remaining contexts (all start as unclaimed).
+    for (uint8_t i = 1; i < _num_contexts; i++)
+      context(i)->_claimed.store(0, std::memory_order_relaxed);
+
+    uint16_t header_size = _header_total_size();
+    ctx->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
     txn->slot_id = Transaction::SLOT_ID;
@@ -219,6 +261,7 @@ struct _DB {
     txn->area_list_tail_single =
         first_area_offset;  // First area is also the tail
     txn->area_list_tail_multi = 0;
+    txn->delete_root = 0;
     txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
                           area_ptr->end());
 
@@ -226,23 +269,26 @@ struct _DB {
     // can skip the double-copy on the very first call.
     _active_txn = txn;
     auto next = txn->clone(*this);
-    _header->next_txn_page = resolve(next);
+    ctx->next_txn_page = resolve(next);
     _active_txn.reset();
 
     make_dirty(_header);
     flush();
   }
 
-  // Return all areas to storage pool
+  // Return all areas to storage pool (iterates all contexts)
   void return_areas() {
     auto read_txn = resolve<Transaction>(&_header->read_txn);
-    if (_header->area_list_head_single && read_txn->area_list_tail_single) {
-      _storage.return_single_areas(_header->area_list_head_single,
-                                   read_txn->area_list_tail_single);
-    }
-    if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
-      _storage.return_multi_areas(_header->area_list_head_multi,
-                                  read_txn->area_list_tail_multi);
+    for (uint8_t i = 0; i < _num_contexts; i++) {
+      auto* ctx = context(i);
+      if (ctx->area_list_head_single && read_txn->area_list_tail_single) {
+        _storage.return_single_areas(ctx->area_list_head_single,
+                                     read_txn->area_list_tail_single);
+      }
+      if (ctx->area_list_head_multi && read_txn->area_list_tail_multi) {
+        _storage.return_multi_areas(ctx->area_list_head_multi,
+                                    read_txn->area_list_tail_multi);
+      }
     }
   }
 
@@ -368,7 +414,8 @@ struct _DB {
       make_dirty(tail);
     } else {
       // First area in this transaction - update head
-      _header->area_list_head_multi = resolve(area_ptr);
+      auto* ctx = context(_ctx_index);
+      ctx->area_list_head_multi = resolve(area_ptr);
       make_dirty(_header);
     }
     _active_txn->area_list_tail_multi = resolve(area_ptr);
@@ -426,7 +473,7 @@ struct _DB {
   }
 
 
-  uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
+  uint64_t txn_cursor_id() const { return context(_ctx_index)->cursor_id.load(); }
 
   bool is_active() const {
     if (_active_txn) return true;
@@ -439,26 +486,106 @@ struct _DB {
     return is_active_;
   }
 
+  // Try to CAS-claim any free context. Returns index or UINT8_MAX.
+  uint8_t _try_claim_any() {
+    for (uint8_t i = 0; i < _num_contexts; i++) {
+      uint8_t expected = 0;
+      if (context(i)->_claimed.compare_exchange_weak(
+              expected, 1, std::memory_order_acquire, std::memory_order_relaxed))
+        return i;
+    }
+    return UINT8_MAX;
+  }
+
+  // Claim a free transaction context. Returns the context index.
+  // CAS fast-path; on contention, waits on shared-memory condvar.
+  uint8_t _claim_context(bool nonblocking) {
+    // Fast path: CAS scan.
+    uint8_t idx = _try_claim_any();
+    if (idx != UINT8_MAX) return idx;
+    if (nonblocking) return UINT8_MAX;
+
+    // Slow path: wait for a context to be released.
+    std::unique_lock lk(_header->ctx_wait_lock);
+    while (true) {
+      idx = _try_claim_any();
+      if (idx != UINT8_MAX) return idx;
+      _header->ctx_wait_cv.wait(lk);
+    }
+  }
+
+  void _release_context(uint8_t idx) {
+    context(idx)->_claimed.store(0, std::memory_order_release);
+    // Wake one blocked waiter (if any).  The lock/unlock pair is
+    // required to avoid a lost-wakeup race with _claim_context's
+    // wait() call.
+    { std::lock_guard lk(_header->ctx_wait_lock); }
+    _header->ctx_wait_cv.notify_one();
+  }
+
+  // Lazily initialise a context that has never been used.
+  // Called under context lock, so no race.
+  void _init_context(uint8_t idx) {
+    auto* ctx = context(idx);
+    std::scoped_lock flock(_storage.file_lock());
+    auto ap = _storage.alloc_single_area();
+    ap->next = 0;
+    make_dirty(ap);
+
+    offset_t txn_offset = ap->content_offset();
+    txn_ptr wtxn = resolve<Transaction>(&txn_offset);
+    memset(static_cast<void*>(&*wtxn), 0, sizeof(Transaction));
+    wtxn->slot_id = Transaction::SLOT_ID;
+    wtxn->used = sizeof(Transaction);
+    wtxn->txn_id = tid_t(0);
+    new (&wtxn->refs) std::atomic<uint32_t>(0);
+    wtxn->root = wtxn->offset_root = wtxn->free_bigmem_root = 0;
+    wtxn->delete_root = 0;
+    wtxn->start_txn = txn_offset;
+    wtxn->next_txn = 0;
+    wtxn->area_list_tail_single = _storage.resolve(ap);
+    wtxn->area_list_tail_multi = 0;
+    wtxn->mem_manager.init(
+        txn_offset + PAGE_SIZES[Transaction::SLOT_ID],
+        ap->offset() + ap->size());
+
+    ctx->area_list_head_single = _storage.resolve(ap);
+    ctx->area_list_head_multi = 0;
+
+    // Pre-allocate next_txn_page via clone.
+    _active_txn = wtxn;
+    auto next = wtxn->clone(*this);
+    ctx->next_txn_page = resolve(next);
+    _active_txn.reset();
+
+    make_dirty(wtxn);
+    make_dirty(_header);
+    flush();
+  }
+
   // Start a write transaction. If nonblocking is true, this will return false
-  // immediately when the txn_lock cannot be acquired.
+  // immediately when no context can be acquired.
   // May only be called by cursor
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
                             TransactionOrigin origin = TransactionOrigin::user) {
-    if (!nonblocking)
-      _header->txn_lock.lock();
-    else if (!_header->txn_lock.try_lock())
-      return txn_ptr();
+    uint8_t idx = _claim_context(nonblocking);
+    if (idx == UINT8_MAX) return txn_ptr();
+    _ctx_index = idx;
 
+    auto* ctx = context(idx);
     assert(!_active_txn);
-    assert(_header->txn_cursor_id.load() == 0);
-    _header->txn_cursor_id.store(cursor_id);
+    assert(ctx->cursor_id.load() == 0);
+    ctx->cursor_id.store(cursor_id);
+
+    // Lazy-init contexts that have never been used.
+    if (!ctx->next_txn_page) _init_context(idx);
 
     txn_ptr last_txn = txn();
 
     // Pre-allocated page is always ready (from commit, rollback, or init)
-    assert(_header->next_txn_page);
-    _active_txn = resolve<Transaction>(&_header->next_txn_page);
-    _header->next_txn_page = 0;
+    assert(ctx->next_txn_page);
+    _active_txn = resolve<Transaction>(&ctx->next_txn_page);
+    ctx->next_txn_page = 0;
 
     _active_txn->txn_id = last_txn->txn_id + tid_t(1);
     _active_txn->next_txn = 0;
@@ -489,7 +616,8 @@ struct _DB {
   }
 
   bool rollback(uint64_t cursor_id, TransactionOrigin origin = TransactionOrigin::user) {
-    if (_header->txn_cursor_id.load() != cursor_id) return false;
+    auto* ctx = context(_ctx_index);
+    if (ctx->cursor_id.load() != cursor_id) return false;
 
     // Return areas allocated during write transaction
     txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
@@ -497,7 +625,7 @@ struct _DB {
         read_txn->area_list_tail_single, _active_txn->area_list_tail_single,
         read_txn->area_list_tail_multi, _active_txn->area_list_tail_multi);
 
-    _header->prepared_txn = _header->read_txn;
+    ctx->prepared_txn = _header->read_txn;
 
     // Reuse _active_txn's page for next pre-allocated transaction.
     // _active_txn was allocated from read_txn's committed space, so it
@@ -505,7 +633,7 @@ struct _DB {
     memcpy(&*_active_txn, &*read_txn, sizeof(Transaction));
     _active_txn->mem_manager.reinit_locks();
     new (&_active_txn->refs) std::atomic<uint32_t>(0);
-    _header->next_txn_page = resolve(_active_txn);
+    ctx->next_txn_page = resolve(_active_txn);
 
     make_dirty(_active_txn);
     make_dirty(_header);
@@ -516,22 +644,23 @@ struct _DB {
 
   tid_t prepare_commit(uint64_t cursor_id, bool sync = false,
                        TransactionOrigin origin = TransactionOrigin::user) {
+    auto* ctx = context(_ctx_index);
     // Not my transaction or not started
-    if (_header->txn_cursor_id.load() != cursor_id) return tid_t(0);
+    if (ctx->cursor_id.load() != cursor_id) return tid_t(0);
 
     // already prepared
-    if (_header->prepared_txn != _header->read_txn) return _active_txn->txn_id;
+    if (ctx->prepared_txn != _header->read_txn) return _active_txn->txn_id;
 
     // Pre-allocate next transaction page before committing.
     // The allocation modifies _active_txn->mem_manager, which gets persisted
     // as part of this commit — no storage leak.
     auto next = _active_txn->clone(*this);
-    _header->next_txn_page = resolve(next);
+    ctx->next_txn_page = resolve(next);
 
-    _header->prepared_txn = resolve(_active_txn);
+    ctx->prepared_txn = resolve(_active_txn);
 
     txn_ptr active = resolve<Transaction>(&_header->read_txn);
-    active->next_txn = _header->prepared_txn;
+    active->next_txn = ctx->prepared_txn;
     make_dirty(_header);
     make_dirty(active);
     make_dirty(_active_txn);
@@ -546,7 +675,8 @@ struct _DB {
 
     // Atomically switch to new transaction (area tails are preserved in
     // transaction)
-    _header->read_txn = _header->prepared_txn;
+    auto* ctx = context(_ctx_index);
+    _header->read_txn = ctx->prepared_txn;
     make_dirty(_header);
     flush(sync, true);
     end_transaction();
@@ -554,9 +684,10 @@ struct _DB {
   }
 
   void end_transaction() {
-    _header->txn_cursor_id.store(0);
+    auto* ctx = context(_ctx_index);
+    ctx->cursor_id.store(0);
     _active_txn.reset();
-    _header->txn_lock.unlock();
+    _release_context(_ctx_index);
   }
 
   typedef _MemStatistics<Traits> MemStatistics;
@@ -669,12 +800,13 @@ struct _DB {
     }
 
     if (end_multi && start_multi != end_multi) {
+      auto* ctx = context(_ctx_index);
       if (start_multi == 0) {
         // First-ever multi-area allocation: no committed tail to walk from,
         // return the whole chain from head.
         _storage.return_multi_areas(
-            _header->area_list_head_multi, end_multi);
-        _header->area_list_head_multi = 0;
+            ctx->area_list_head_multi, end_multi);
+        ctx->area_list_head_multi = 0;
       } else {
         area_ptr start_area = resolve<Area>(&start_multi, WRITE);
         offset_t range_head = start_area->next;
@@ -686,9 +818,9 @@ struct _DB {
   }
 
   void sanitize() {
-    new (&_header->txn_lock) Mutex();
     new (&_header->txn_ref_lock) SpinLock();
-    _header->txn_cursor_id.store(0);
+    new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
+    new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
       txn->mem_manager.reinit_locks();
@@ -696,20 +828,29 @@ struct _DB {
       return false;
     });
 
-    // Reinit locks/refs on pre-allocated transaction page (stale after crash).
-    // If next_txn_page is 0 (crash between start_transaction clearing it and
-    // prepare_commit allocating a replacement), re-create it from read_txn.
-    if (_header->next_txn_page) {
-      auto next = resolve<Transaction>(&_header->next_txn_page);
-      next->refs.store(0);
-      next->mem_manager.reinit_locks();
-      make_dirty(next);
-    } else {
-      txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-      _active_txn = read_txn;
-      auto next = read_txn->clone(*this);
-      _header->next_txn_page = resolve(next);
-      _active_txn.reset();
+    // Sanitize each transaction context.
+    for (uint8_t i = 0; i < _num_contexts; i++) {
+      auto* ctx = context(i);
+      ctx->_claimed.store(0, std::memory_order_relaxed);
+      ctx->cursor_id.store(0);
+
+      // Reinit locks/refs on pre-allocated transaction page (stale after crash).
+      // If next_txn_page is 0 (crash between start_transaction clearing it and
+      // prepare_commit allocating a replacement), re-create it from read_txn.
+      if (ctx->next_txn_page) {
+        auto next = resolve<Transaction>(&ctx->next_txn_page);
+        next->refs.store(0);
+        next->mem_manager.reinit_locks();
+        make_dirty(next);
+      } else if (i == 0) {
+        // Context 0 must always have a next_txn_page.
+        txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
+        _active_txn = read_txn;
+        auto next = read_txn->clone(*this);
+        ctx->next_txn_page = resolve(next);
+        _active_txn.reset();
+      }
+      // Contexts 1..N-1 with next_txn_page==0 are uninitialised — left as-is.
     }
 
     make_dirty(_header);

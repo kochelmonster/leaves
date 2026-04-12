@@ -209,8 +209,8 @@ struct _ReplicationDB
     typename _ReplicationDB::area_ptr alloc_single_area() {
       std::scoped_lock lock(_parent->_storage.file_lock());
       auto area = _parent->_storage.alloc_single_area();
-      area->next = _parent->_header->area_list_head_single;
-      _parent->_header->area_list_head_single = _parent->_storage.resolve(area);
+      area->next = _parent->context(0)->area_list_head_single;
+      _parent->context(0)->area_list_head_single = _parent->_storage.resolve(area);
       _parent->make_dirty(area);
       _parent->make_dirty(_parent->_header);
       _parent->flush();
@@ -318,7 +318,7 @@ struct _ReplicationDB
     if (!Base::prepare_commit(cursor_id, false, origin)) return false;
 
     // Atomically switch to new transaction
-    this->_header->read_txn = this->_header->prepared_txn;
+    this->_header->read_txn = this->context(this->_ctx_index)->prepared_txn;
     this->make_dirty(this->_header);
     this->flush(sync, true);
     this->end_transaction();

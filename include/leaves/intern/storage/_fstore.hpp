@@ -96,6 +96,16 @@ struct _FileOperations : _CacheBase {
     void unlock() {}
   };
 
+  struct CtxMutex {
+    void lock() {}
+    void unlock() {}
+  };
+
+  struct CtxCondVar {
+    template <typename L> void wait(L&) {}
+    void notify_one() {}
+  };
+
   struct FileHeader {
     char signature[FSTORE_SIGNATURE_SIZE];
     uint16_t db_version;
@@ -371,7 +381,7 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
   // Rebuild the free area pool by scanning the file.
   void recover_areas() {
     auto* self = this;
-    _recover_areas<_DBHeader<base_t>, Traits_::AREA_SIZE>(
+    _recover_areas<_DBHeader<base_t>, _TxnContext<base_t>, Traits_::AREA_SIZE>(
         this->_header->area_pool,
         [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
         this->_header->file_size,

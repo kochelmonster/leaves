@@ -734,8 +734,8 @@ struct AreaPool {
 // browserstore). ReadFn:  void(uint64_t pos, void* buf, size_t size) WriteFn:
 // void(uint64_t pos, const void* buf, size_t size) ForEachDBFn:
 // void(Fn) where Fn is void(offset_t db_offset) — calls Fn for each active DB
-template <typename DBHeader, size_t AREA_SIZE, typename ReadFn,
-          typename WriteFn, typename ForEachDBFn>
+template <typename DBHeader, typename TxnContext, size_t AREA_SIZE,
+          typename ReadFn, typename WriteFn, typename ForEachDBFn>
 void _recover_areas(AreaPool& pool,
                     ForEachDBFn for_each_db, uint64_t file_size,
                     uint64_t first_area_pos, ReadFn read_bytes,
@@ -768,8 +768,13 @@ void _recover_areas(AreaPool& pool,
         head = area_hdr.next;
       }
     };
-    walk(db_header.area_list_head_single);
-    walk(db_header.area_list_head_multi);
+    for (uint8_t ci = 0; ci < db_header.num_contexts; ci++) {
+      TxnContext ctx;
+      uint64_t ctx_off = (uint64_t)db_off + sizeof(DBHeader) + ci * sizeof(TxnContext);
+      read_bytes(ctx_off, &ctx, sizeof(TxnContext));
+      walk(ctx.area_list_head_single);
+      walk(ctx.area_list_head_multi);
+    }
   });
 
   // Phase 2: Scan in AREA_SIZE steps, collect contiguous free runs.

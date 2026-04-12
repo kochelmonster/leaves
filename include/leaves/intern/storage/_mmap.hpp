@@ -8,6 +8,7 @@
 #include <boost/interprocess/mapped_region.hpp>
 #ifndef LEAVES_SINGLE_PROCESS
 #include <boost/interprocess/sync/file_lock.hpp>
+#include <boost/interprocess/sync/interprocess_condition.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/process/v2/pid.hpp>
 #endif
@@ -117,8 +118,12 @@ struct _MemoryMapFile
 
 #ifdef LEAVES_SINGLE_PROCESS
   using Mutex = SpinLock;
+  using CtxMutex = std::mutex;
+  using CtxCondVar = std::condition_variable;
 #else
   using Mutex = boost::interprocess::interprocess_mutex;
+  using CtxMutex = boost::interprocess::interprocess_mutex;
+  using CtxCondVar = boost::interprocess::interprocess_condition;
 #endif
 
   using DBEntry = _DBDirectoryEntry;
@@ -275,7 +280,7 @@ struct _MemoryMapFile
 
   void recover_areas() {
     char* base = (char*)_memory;
-    _recover_areas<_DBHeader<MemoryMapFile>, AREA_SIZE>(
+    _recover_areas<_DBHeader<MemoryMapFile>, _TxnContext<MemoryMapFile>, AREA_SIZE>(
         _memory->area_pool,
         [this](auto fn) { _for_each_db_entry([&](DBEntry& e) { if (e.offset) fn(e.offset); }); },
         _memory->file_size, padding(calc_header_size(), AREA_SIZE),

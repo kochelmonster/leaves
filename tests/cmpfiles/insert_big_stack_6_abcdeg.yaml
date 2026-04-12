@@ -1,6 +1,6 @@
 type: trie
-id: 535832
-page: 535824
+id: 535872
+page: 535864
 freespace: 8
 txn: 8
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 530257
-  - 535792
+  - 530297
+  - 535832
 ---
 type: leaf
-id: 530257
-page: 530249
+id: 530297
+page: 530289
 freespace: 36
 size: 4
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 535792
-page: 535784
+id: 535832
+page: 535824
 freespace: 8
 txn: 8
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 535033
-  - 535752
+  - 535073
+  - 535792
 ---
 type: leaf
-id: 535033
-page: 535025
+id: 535073
+page: 535065
 freespace: 35
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 535752
-page: 535744
+id: 535792
+page: 535784
 freespace: 8
 txn: 8
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 525561
-  - 535872
+  - 525601
+  - 535912
 ---
 type: leaf
-id: 525561
-page: 525553
+id: 525601
+page: 525593
 freespace: 34
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: trie
-id: 535872
-page: 535864
+id: 535912
+page: 535904
 freespace: 8
 txn: 8
 size: 32
@@ -84,12 +84,12 @@ compressed:
   key: "[d]"
 branches: "[][e]"
 children: 
-  - 534433
-  - 536232
+  - 534473
+  - 536272
 ---
 type: leaf
-id: 534433
-page: 534425
+id: 534473
+page: 534465
 freespace: 33
 size: 7
 txn: 6
@@ -99,8 +99,8 @@ valuesize: 4
 value: "abcd"
 ---
 type: trie
-id: 536232
-page: 536224
+id: 536272
+page: 536264
 freespace: 16
 txn: 8
 size: 40
@@ -109,13 +109,13 @@ compressed:
   key: "[e]"
 branches: "[][f][g]"
 children: 
-  - 535153
-  - 536193
-  - 536289
+  - 535193
+  - 536233
+  - 536329
 ---
 type: leaf
-id: 535153
-page: 535145
+id: 535193
+page: 535185
 freespace: 32
 size: 8
 txn: 7
@@ -125,8 +125,8 @@ valuesize: 5
 value: "abcde"
 ---
 type: leaf
-id: 536193
-page: 536185
+id: 536233
+page: 536225
 freespace: 30
 size: 10
 txn: 7
@@ -136,8 +136,8 @@ valuesize: 6
 value: "abcdef"
 ---
 type: leaf
-id: 536289
-page: 536281
+id: 536329
+page: 536321
 freespace: 30
 size: 10
 txn: 8

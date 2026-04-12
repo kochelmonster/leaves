@@ -50,8 +50,10 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
 
   page_ptr block1, block2, block3, block4;
 
-  db->_header->txn_lock.lock();
-  db->_header->txn_lock.unlock();
+  // Verify context claim/release works via the atomic flag.
+  uint8_t expected = 0;
+  BOOST_CHECK(db->context(0)->_claimed.compare_exchange_strong(expected, 1));
+  db->context(0)->_claimed.store(0);
 
   {
     Transaction trans(db);
@@ -367,6 +369,16 @@ struct TestStorage {
     void unlock() {}
   };
 
+  struct CtxMutex {
+    void lock() {}
+    void unlock() {}
+  };
+
+  struct CtxCondVar {
+    template <typename L> void wait(L&) {}
+    void notify_one() {}
+  };
+
   AreaList single_areas;
   AreaList multi_areas;
   std::vector<char> memory;
@@ -478,11 +490,11 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     BOOST_CHECK_EQUAL(prepared_tid, 2);
     
     // Verify prepared state
-    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
     
     // Save offsets for verification
-    prepared_offset = db->_header->prepared_txn;
+    prepared_offset = db->context(0)->prepared_txn;
     read_offset = db->_header->read_txn;
     
     // DON'T call commit() - simulate crash after prepare
@@ -497,24 +509,25 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     auto db = storage.open("test");
     
     // Check that prepared transaction was detected
-    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, prepared_offset);
+    BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, prepared_offset);
     BOOST_CHECK_EQUAL(db->_header->read_txn, read_offset);
     
     // _active_txn should be set to the prepared transaction
     BOOST_REQUIRE(db->_active_txn != nullptr);
     BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
     
-    // The transaction is already active (recovered), just need to acquire lock and commit
+    // The transaction is already active (recovered), just need to claim context and commit
     // We need to simulate that a cursor with ID 0 takes ownership
-    BOOST_CHECK(db->_header->txn_lock.try_lock());
-    db->_header->txn_cursor_id.store(0);
+    uint8_t exp = 0;
+    BOOST_CHECK(db->context(0)->_claimed.compare_exchange_strong(exp, 1));
+    db->context(0)->cursor_id.store(0);
     
     // Commit should finalize the prepared transaction
     BOOST_CHECK(db->commit(0));
     
     // After commit, prepared should equal read
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   }
   
@@ -524,7 +537,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     auto db = storage.open("test");
     
     // Everything should be committed now
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   }
 }
@@ -544,11 +557,11 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
     // Prepare should return transaction ID
     tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
-    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Commit should succeed and finalize
     BOOST_CHECK(db->commit(0));
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
   }
   
@@ -556,7 +569,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
   {
     DBMMap storage(dbFilePath.c_str());
     auto db = storage.open("test");
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
   }
 }
 
@@ -576,13 +589,13 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
     // Prepare the commit
     tid_t tid = db->prepare_commit(0);
     BOOST_CHECK_GT(tid, 0);
-    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Now rollback even after prepare
     BOOST_CHECK(db->rollback(0));
     
     // After rollback, prepared should equal read again
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
     BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(0));
     
     // Pending areas should have been returned
@@ -618,11 +631,11 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_idempotency) {
     BOOST_CHECK_EQUAL(tid1, tid2);
     
     // State should be consistent
-    BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Commit should still work
     BOOST_CHECK(db->commit(0));
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
   }
 }
 
@@ -659,14 +672,14 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
 
     // In new architecture, area tails are in transaction, not separate pending lists
     auto read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
-    auto prep_txn = db->template resolve<Transaction>(&db->_header->prepared_txn);
+    auto prep_txn = db->template resolve<Transaction>(&db->context(0)->prepared_txn);
     
     // Commit switches read_txn pointer
     BOOST_CHECK(db->commit(0));
     
     // After commit, read_txn should point to what was prepared_txn
     auto new_read_txn = db->template resolve<Transaction>(&db->_header->read_txn);
-    BOOST_CHECK_EQUAL(db->_header->read_txn, db->_header->prepared_txn);
+    BOOST_CHECK_EQUAL(db->_header->read_txn, db->context(0)->prepared_txn);
   }
 }
 
@@ -723,7 +736,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     auto db = storage.open("test");
     
     // Check if database recovered a prepared transaction
-    bool has_prepared_txn = (db->_header->prepared_txn != db->_header->read_txn);
+    bool has_prepared_txn = (db->context(0)->prepared_txn != db->_header->read_txn);
     
     if (has_prepared_txn) {
       // Database should have recovered the prepared transaction
@@ -747,13 +760,13 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
       BOOST_CHECK_EQUAL(txn_after->refs.load(), 0u);
       
       // 2. Lock and cursor ID should be cleared
-      BOOST_CHECK_EQUAL(db->_header->txn_cursor_id.load(), 0u);
+      BOOST_CHECK_EQUAL(db->context(0)->cursor_id.load(), 0u);
       
       // 3. prepared_txn should still be different (sanitize waits for rollback)
-      BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
+      BOOST_CHECK_NE(db->context(0)->prepared_txn, db->_header->read_txn);
       
       // 4. Manually rollback by setting prepared_txn = read_txn
-      db->_header->prepared_txn = db->_header->read_txn;
+      db->context(0)->prepared_txn = db->_header->read_txn;
       db->_active_txn.reset();
       db->_active_txn = nullptr;
       db->flush();
@@ -843,9 +856,9 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     db->sanitize();
     
     // Check if there was a prepared txn and handle it
-    if (db->_header->prepared_txn != db->_header->read_txn) {
+    if (db->context(0)->prepared_txn != db->_header->read_txn) {
       // Manually rollback by setting prepared_txn = read_txn
-      db->_header->prepared_txn = db->_header->read_txn;
+      db->context(0)->prepared_txn = db->_header->read_txn;
       db->_active_txn.reset();
       db->_active_txn = nullptr;
       db->flush();
@@ -855,7 +868,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     }
     
     // After sanitize with no prepared txn, area cleanup should have happened
-    BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+    BOOST_CHECK_EQUAL(db->context(0)->prepared_txn, db->_header->read_txn);
     
     // Database should be usable after sanitize
     BOOST_CHECK(db->start_transaction(0));
@@ -1002,7 +1015,7 @@ BOOST_AUTO_TEST_CASE(test_return_areas_multi) {
     BOOST_CHECK(db->commit(0));
     
     // Verify multi-area head is set
-    BOOST_CHECK_NE(db->_header->area_list_head_multi, offset_t(0));
+    BOOST_CHECK_NE(db->context(0)->area_list_head_multi, offset_t(0));
     
     // return_areas() should return the committed multi-areas to pool
     db->return_areas();
@@ -1073,7 +1086,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     BOOST_CHECK(db->commit(0));
     
     // Simulate the crash window: clear next_txn_page as start_transaction does
-    db->_header->next_txn_page = 0;
+    db->context(0)->next_txn_page = 0;
     
     // Write a fake stale PID so sanitize_processes() increments sanitize_generation
     // Use PID 99999999 which should not be running
@@ -1092,7 +1105,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_next_txn_page_zero) {
     auto db = storage.open("test");
     
     // Verify next_txn_page was recreated
-    BOOST_CHECK_NE(db->_header->next_txn_page, offset_t(0));
+    BOOST_CHECK_NE(db->context(0)->next_txn_page, offset_t(0));
     
     // DB should be fully operational
     BOOST_REQUIRE(db->start_transaction(0));
@@ -1313,7 +1326,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_missing_next_txn_page) {
     BOOST_CHECK(db->commit(0));
 
     // Simulate crash: clear next_txn_page to 0
-    db->_header->next_txn_page = 0;
+    db->context(0)->next_txn_page = 0;
     db->make_dirty(db->_header);
     db->flush(true, true);
   }
@@ -1325,7 +1338,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_missing_next_txn_page) {
     db->sanitize();
 
     // next_txn_page should now be valid again
-    BOOST_CHECK(db->_header->next_txn_page != 0);
+    BOOST_CHECK(db->context(0)->next_txn_page != 0);
 
     // Should be able to start a new transaction
     BOOST_REQUIRE(db->start_transaction(0));
