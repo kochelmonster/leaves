@@ -1,6 +1,7 @@
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -69,7 +70,22 @@ struct _Transaction : public _TransactionBase<Traits_> {
 
   template <typename Resolver>
   page_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
-    page_ptr result = mem_manager.alloc(slot, resolver);
+    page_ptr result;
+    for (;;) {
+      tid_t freed_tid;
+      result = mem_manager.alloc(slot, resolver, &freed_tid);
+      if (freed_tid == tid_t(0)) break;  // Bump-allocated, no guard needed
+      // Double-recycle guard: if page's txn_id > garbage entry's txn_id,
+      // the page was already recycled through another garbage entry — retry.
+      if (result->txn_id > freed_tid) continue;
+      // CAS the txn_id to claim the page — if another context grabbed it, retry.
+      auto expected = result->txn_id._value;
+      std::atomic_ref<uint32_t> atomic_tid(result->txn_id._value);
+      if (atomic_tid.compare_exchange_weak(expected, txn_id._value,
+                                           std::memory_order_acquire,
+                                           std::memory_order_relaxed))
+        break;
+    }
     result->txn_id = txn_id;
     resolver.make_dirty(result);
     return result;
@@ -91,13 +107,13 @@ struct _Transaction : public _TransactionBase<Traits_> {
 // Stored contiguously after the DB header in storage.
 template <typename Storage_>
 struct _TxnContext {
-  std::atomic<uint8_t> _claimed{0};    // 0 = free, 1 = claimed (CAS to acquire)
-  offset_t prepared_txn{0};            // transaction being prepared for commit
-  offset_t next_txn_page{0};           // pre-allocated next txn page
-  offset_t active_txn{0};              // offset of active transaction (set during txn)
-  offset_t area_list_head_single{0};   // head of single-AREA_SIZE area chain
-  offset_t area_list_head_multi{0};    // head of multi-AREA_SIZE area chain
-  tid_t _snapshot_txn_id{0};           // txn_id at start_transaction() time
+  std::atomic<uint8_t> _claimed{0};  // 0 = free, 1 = claimed (CAS to acquire)
+  offset_t prepared_txn{0};          // transaction being prepared for commit
+  offset_t next_txn_page{0};         // pre-allocated next txn page
+  offset_t active_txn{0};  // offset of active transaction (set during txn)
+  offset_t area_list_head_single{0};  // head of single-AREA_SIZE area chain
+  offset_t area_list_head_multi{0};   // head of multi-AREA_SIZE area chain
+  tid_t _snapshot_txn_id{0};          // txn_id at start_transaction() time
 };
 
 // Default database header (defined outside _DB for reusability)
@@ -110,7 +126,7 @@ struct _DBHeader {
   // Written by init(), checked by open<>() to prevent type mismatches.
   uint16_t db_type_id;
 
-  uint8_t num_contexts;   // number of parallel transaction contexts
+  uint8_t num_contexts;  // number of parallel transaction contexts
 
   // Tracks whether this DB has been sanitized for the current storage
   // generation.  Compared against the FileHeader counter at open() time.
@@ -162,7 +178,8 @@ struct _ContextMergePolicy : StandardMergePolicy {
   }
 
   // Override free_big: use DB's active txn's free_bigmem_root directly.
-  // _Cursor doesn't have get_bigmemory(), so we access BigMemory through the DB.
+  // _Cursor doesn't have get_bigmemory(), so we access BigMemory through the
+  // DB.
   template <typename LeafNode, typename DstCursor>
   void free_big(LeafNode& leaf, DstCursor& /*dst_cursor*/) {
     using RawCursor = _Cursor<typename DB_::CursorTraits>;
@@ -189,8 +206,7 @@ struct _ContextMergePolicy : StandardMergePolicy {
 // statically dispatch to overrides (e.g. _on_txn_freed) without virtual.
 template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
-          typename Header_ = _DBHeader<Storage_>,
-          typename Self_ = void>
+          typename Header_ = _DBHeader<Storage_>, typename Self_ = void>
 struct _DB {
   typedef Storage_ Storage;
   typedef Transaction_ Transaction;
@@ -203,8 +219,9 @@ struct _DB {
   using offset_e = typename Traits::offset_e;
 
   // CRTP self-type: derived class if provided, otherwise this class.
-  using Self = std::conditional_t<std::is_void_v<Self_>,
-      _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
+  using Self =
+      std::conditional_t<std::is_void_v<Self_>,
+                         _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
 
   typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
 
@@ -233,7 +250,8 @@ struct _DB {
       sizeof(Transaction) >= sizeof(_TransactionBase<Traits>),
       "Size of Transaction must be at least size of _TransactionBase");
 
-  static_assert(sizeof(Header) + sizeof(TxnContext) + sizeof(Transaction) < AREA_SIZE,
+  static_assert(sizeof(Header) + sizeof(TxnContext) + sizeof(Transaction) <
+                    AREA_SIZE,
                 "DB Header too big");
 
   using header_ptr = typename Traits::template Pointer<Header>;
@@ -250,12 +268,14 @@ struct _DB {
 
   // Access the i-th TxnContext stored after the header in storage.
   TxnContext* context(uint8_t i) {
-    return reinterpret_cast<TxnContext*>(
-        reinterpret_cast<char*>(&*_header) + sizeof(Header)) + i;
+    return reinterpret_cast<TxnContext*>(reinterpret_cast<char*>(&*_header) +
+                                         sizeof(Header)) +
+           i;
   }
   const TxnContext* context(uint8_t i) const {
     return reinterpret_cast<const TxnContext*>(
-        reinterpret_cast<const char*>(&*_header) + sizeof(Header)) + i;
+               reinterpret_cast<const char*>(&*_header) + sizeof(Header)) +
+           i;
   }
 
   // Total header size including all contexts (for computing txn offset).
@@ -305,11 +325,11 @@ struct _DB {
     }
 
     template <typename PtrType>
-    void make_dirty(PtrType block) { _db._storage.make_dirty(block); }
-
-    area_ptr alloc_single_area() {
-      return _db._alloc_single_area(_active_txn);
+    void make_dirty(PtrType block) {
+      _db._storage.make_dirty(block);
     }
+
+    area_ptr alloc_single_area() { return _db._alloc_single_area(_active_txn); }
   };
 
   _DB(Storage& storage, offset_t header, std::string_view name,
@@ -318,8 +338,7 @@ struct _DB {
         _header(storage.resolve(&header, READ)),
         _name(name),
         _num_contexts(num_contexts) {
-    if (_header->num_contexts != _num_contexts)
-      throw TypeMismatch();
+    if (_header->num_contexts != _num_contexts) throw TypeMismatch();
   }
 
   _DB(Storage& storage, offset_t* header, std::string_view name,
@@ -417,8 +436,6 @@ struct _DB {
 
   const db_type* _internal() const { return this; }  // for _Dumper
 
-
-
   Slice name() const { return Slice(_name); }
 
   template <typename T>
@@ -462,8 +479,8 @@ struct _DB {
   page_ptr _alloc_page(uint16_t space, TxnContext* ctx) {
     using PageHeader = typename Traits::PageHeader;
     assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
-    page_ptr result = _alloc_slot(
-        MemManager::assign_slot(space + sizeof(PageHeader)), ctx);
+    page_ptr result =
+        _alloc_slot(MemManager::assign_slot(space + sizeof(PageHeader)), ctx);
     result->used = space;
     return result;
   }
@@ -579,8 +596,9 @@ struct _DB {
   uint8_t _try_claim_any() {
     for (uint8_t i = 0; i < _num_contexts; i++) {
       uint8_t expected = 0;
-      if (context(i)->_claimed.compare_exchange_weak(
-              expected, 1, std::memory_order_acquire, std::memory_order_relaxed))
+      if (context(i)->_claimed.compare_exchange_weak(expected, 1,
+                                                     std::memory_order_acquire,
+                                                     std::memory_order_relaxed))
         return i;
     }
     return UINT8_MAX;
@@ -608,7 +626,9 @@ struct _DB {
     // Wake one blocked waiter (if any).  The lock/unlock pair is
     // required to avoid a lost-wakeup race with _claim_context's
     // wait() call.
-    { std::lock_guard lk(_header->ctx_wait_lock); }
+    {
+      std::lock_guard lk(_header->ctx_wait_lock);
+    }
     _header->ctx_wait_cv.notify_one();
   }
 
@@ -634,9 +654,8 @@ struct _DB {
     wtxn->next_txn = 0;
     wtxn->area_list_tail_single = _storage.resolve(ap);
     wtxn->area_list_tail_multi = 0;
-    wtxn->mem_manager.init(
-        txn_offset + PAGE_SIZES[Transaction::SLOT_ID],
-        ap->offset() + ap->size());
+    wtxn->mem_manager.init(txn_offset + PAGE_SIZES[Transaction::SLOT_ID],
+                           ap->offset() + ap->size());
 
     ctx->area_list_head_single = _storage.resolve(ap);
     ctx->area_list_head_multi = 0;
@@ -653,8 +672,9 @@ struct _DB {
   // Start a write transaction. If nonblocking is true, this will return nullptr
   // immediately when no context can be acquired.
   // Returns TxnContext* — caller resolves active txn from ctx->active_txn.
-  TxnContext* start_transaction(bool nonblocking = false,
-                            TransactionOrigin origin = TransactionOrigin::user) {
+  TxnContext* start_transaction(
+      bool nonblocking = false,
+      TransactionOrigin origin = TransactionOrigin::user) {
     uint8_t idx = _claim_context(nonblocking);
     if (idx == UINT8_MAX) return nullptr;
 
@@ -694,8 +714,8 @@ struct _DB {
           return true;
         }
         static_cast<Self*>(this)->_on_txn_freed(txn);
-        resolver._active_txn->mem_manager.free(
-            static_cast<page_ptr>(txn), resolver);
+        resolver._active_txn->mem_manager.free(static_cast<page_ptr>(txn),
+                                               resolver);
         return false;
       });
     }
@@ -704,13 +724,14 @@ struct _DB {
     return ctx;
   }
 
-  bool rollback(TxnContext* ctx, TransactionOrigin origin = TransactionOrigin::user) {
+  bool rollback(TxnContext* ctx,
+                TransactionOrigin origin = TransactionOrigin::user) {
     txn_ptr active = _resolve_active(ctx);
 
     // Return areas allocated during write transaction
     txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
-    return_areas_range(ctx,
-        read_txn->area_list_tail_single, active->area_list_tail_single,
+    return_areas_range(
+        ctx, read_txn->area_list_tail_single, active->area_list_tail_single,
         read_txn->area_list_tail_multi, active->area_list_tail_multi);
 
     ctx->prepared_txn = _header->read_txn;
@@ -806,8 +827,8 @@ struct _DB {
       src_cursor._active_tid = active->txn_id;
       src_cursor.clear();  // push root onto stack for merger
       MergePolicy policy(&self(), ctx, ctx->_snapshot_txn_id);
-      _MoveMerger<RawCursor, RawCursor, MergePolicy> merger(
-          dst_cursor, src_cursor, policy);
+      _MoveMerger<RawCursor, RawCursor, MergePolicy> merger(dst_cursor,
+                                                            src_cursor, policy);
       merger.exec();
     }
 
@@ -876,9 +897,11 @@ struct _DB {
 
     if (offset.type() == TRIE) {
       trie_ptr branch = resolve<TrieNode>(&offset);
-      auto* hdr = reinterpret_cast<PageHeader*>((char*)branch - sizeof(PageHeader));
-      stat.branch.add(hdr->slot_id, 1,
-                      PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - branch->size());
+      auto* hdr =
+          reinterpret_cast<PageHeader*>((char*)branch - sizeof(PageHeader));
+      stat.branch.add(
+          hdr->slot_id, 1,
+          PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - branch->size());
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {
@@ -888,9 +911,11 @@ struct _DB {
     }
     if (offset.type() == LEAF) {
       leaf_ptr leaf = resolve<LeafNode>(&offset);
-      auto* hdr = reinterpret_cast<PageHeader*>((char*)leaf - sizeof(PageHeader));
-      stat.leaf.add(hdr->slot_id, 1,
-                    PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - leaf->size());
+      auto* hdr =
+          reinterpret_cast<PageHeader*>((char*)leaf - sizeof(PageHeader));
+      stat.leaf.add(
+          hdr->slot_id, 1,
+          PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - leaf->size());
       return;
     }
   }
@@ -932,9 +957,9 @@ struct _DB {
     _aspect.on_defrag(self());
   }
 
-  void return_areas_range(TxnContext* ctx,
-                          offset_t start_single, offset_t end_single,
-                          offset_t start_multi, offset_t end_multi) {
+  void return_areas_range(TxnContext* ctx, offset_t start_single,
+                          offset_t end_single, offset_t start_multi,
+                          offset_t end_multi) {
     // Return area range [start->next ... end] to storage
     // This is used during rollback to return areas allocated during write
     // transaction
@@ -951,8 +976,7 @@ struct _DB {
       if (start_multi == 0) {
         // First-ever multi-area allocation: no committed tail to walk from,
         // return the whole chain from head.
-        _storage.return_multi_areas(
-            ctx->area_list_head_multi, end_multi);
+        _storage.return_multi_areas(ctx->area_list_head_multi, end_multi);
         ctx->area_list_head_multi = 0;
       } else {
         area_ptr start_area = resolve<Area>(&start_multi, WRITE);
@@ -981,9 +1005,10 @@ struct _DB {
       auto* ctx = context(i);
       ctx->_claimed.store(0, std::memory_order_relaxed);
 
-      // Reinit locks/refs on pre-allocated transaction page (stale after crash).
-      // If next_txn_page is 0 (crash between start_transaction clearing it and
-      // prepare_commit allocating a replacement), re-create it from read_txn.
+      // Reinit locks/refs on pre-allocated transaction page (stale after
+      // crash). If next_txn_page is 0 (crash between start_transaction clearing
+      // it and prepare_commit allocating a replacement), re-create it from
+      // read_txn.
       if (ctx->next_txn_page) {
         auto next = resolve<Transaction>(&ctx->next_txn_page);
         next->refs.store(0);

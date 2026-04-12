@@ -232,14 +232,16 @@ cmake --build build -j
 ./build/db_bench_leaves --use_file_storage=1
 ```
 
-    
+- Aspet for node locking policy von paralellen transaktionen
+    - Nur ein Process
+    - Bein einfügen oder verändern von Leaves wird der Key in eine map gechrieben und damit gelockt
+    - Dead lock detection
 - Convertsion tools value->binary sortable
 - TransferTries (Result und Joins)
 - Joiner
 - Subtrie Replication
 - Subtrie remove 
 
-- handling of double free pages is not implemented
-defrag: chunks müssen dem richtigen context zugeordnet werden
 
-- Why does _ContextMergePolicy needs a free_big? 
+
+- defrag: chunks müssen dem richtigen context zugeordnet werden

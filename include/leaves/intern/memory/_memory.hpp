@@ -114,9 +114,12 @@ struct _GarbageSlot {
   typedef _PageContainer<Traits> PageContainer;
   using cont_ptr = typename PageContainer::ptr;
 
-  // Pop from the garbage slot queue
+  // Pop from the garbage slot queue.
+  // If freed_tid is non-null, stores the garbage entry's txn_id (the stamp
+  // from when the page was freed) — used by alloc_slot for double-recycle guard.
   template <typename Resolver>
-  FORCE_INLINE ptr pop(Resolver& resolver, _MemManager<Traits>& mgr) {
+  FORCE_INLINE ptr pop(Resolver& resolver, _MemManager<Traits>& mgr,
+                       tid_t* freed_tid = nullptr) {
     if (count == 0) return nullptr;
 
     assert(ostart);
@@ -126,6 +129,8 @@ struct _GarbageSlot {
 
     cont_ptr front(resolver.template resolve<PageContainer>(&ostart, WRITE));
     if (!resolver.may_recycle(front->blocks[istart])) return nullptr;
+
+    if (freed_tid) *freed_tid = front->blocks[istart].txn_id;
 
     assert(front->blocks[istart].link != 0);
     ptr result = resolver.template resolve<PageHeader>(
@@ -264,18 +269,20 @@ struct _MemManager {
   }
 
   template <typename Resolver>
-  page_ptr alloc(uint8_t sidx, Resolver& resolver) {
+  page_ptr alloc(uint8_t sidx, Resolver& resolver, tid_t* freed_tid = nullptr) {
     assert(sidx < COUNT);
     uint16_t bsize = PAGE_SIZES[sidx];
 
     Slot& slot = slots[sidx];
-    page_ptr result = slot.pop(resolver, *this);
+    page_ptr result = slot.pop(resolver, *this, freed_tid);
     if (result) {
       // Because of some rollback situations slot_id of result could be wrong
       // but the classification of the slot is right
       result->slot_id = sidx;
       return result;
     }
+
+    if (freed_tid) *freed_tid = tid_t(0);  // Not from garbage — no guard needed
 
     if (left_over_start + bsize <= left_over_end) {
       result = resolver.template resolve<PageHeader>(&left_over_start, WRITE);

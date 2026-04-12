@@ -58,8 +58,8 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
     std::atomic<uint64_t>
         hashed_txn_offset;  // Raw offset of txn matching hash trie (0=stale)
     HashMemManager hash_mem_manager;  // Separate allocator for hash trie nodes
-    offset_e hash_root;           // Root of main hash trie
-    offset_e deletion_hash_root;  // Root of deletion hash trie
+    offset_e hash_root;               // Root of main hash trie
+    offset_e deletion_hash_root;      // Root of deletion hash trie
 
     // Reset synchronization state after file reopen or sanitize.
     // hashed_txn_offset is intentionally preserved: the hash trie on disk
@@ -134,11 +134,9 @@ struct _ReplicationCursor;  // forward declaration
 template <typename Storage_>
 struct _ReplicationDB
     : public _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
-                 _ReplicationDBHeader<Storage_>,
-                 _ReplicationDB<Storage_>> {
+                 _ReplicationDBHeader<Storage_>, _ReplicationDB<Storage_>> {
   using Base = _DB<Storage_, _ReplicationTransaction<typename Storage_::Traits>,
-                   _ReplicationDBHeader<Storage_>,
-                   _ReplicationDB<Storage_>>;
+                   _ReplicationDBHeader<Storage_>, _ReplicationDB<Storage_>>;
   using Transaction = typename Base::Transaction;
   using TxnContext = typename Base::TxnContext;
   using Aspect = typename Base::Aspect;
@@ -211,7 +209,8 @@ struct _ReplicationDB
       std::scoped_lock lock(_parent->_storage.file_lock());
       auto area = _parent->_storage.alloc_single_area();
       area->next = _parent->context(0)->area_list_head_single;
-      _parent->context(0)->area_list_head_single = _parent->_storage.resolve(area);
+      _parent->context(0)->area_list_head_single =
+          _parent->_storage.resolve(area);
       _parent->make_dirty(area);
       _parent->make_dirty(_parent->_header);
       _parent->flush();
@@ -234,7 +233,9 @@ struct _ReplicationDB
     // Hash trie nodes are freed explicitly by _HashUpdater when stale —
     // they are always safe to recycle immediately.
     template <typename T>
-    bool may_recycle(T&) const { return true; }
+    bool may_recycle(T&) const {
+      return true;
+    }
 
     // No transaction tracking needed for hash nodes.
     template <typename T>
@@ -369,8 +370,9 @@ struct _ReplicationDB
 
   // Override: signal background purge to stop before acquiring txn_lock.
   // No waiting for hashes - they run independently.
-  TxnContext* start_transaction(bool nonblocking = false,
-                            TransactionOrigin origin = TransactionOrigin::user) {
+  TxnContext* start_transaction(
+      bool nonblocking = false,
+      TransactionOrigin origin = TransactionOrigin::user) {
     if (_in_purge.load(std::memory_order_relaxed)) {
       _purge_interrupt.store(true, std::memory_order_release);
     }
@@ -423,7 +425,8 @@ struct _ReplicationDB
 #if LEAVES_HAS_THREADS
           hc.hash_mem_manager.set_single_thread(false);
           _PoolExecutor exec(this->_storage, _hash_threads);
-          update_hash_trie(exec, this, &hdb, first_fsm_txn->root, &hc.hash_root);
+          update_hash_trie(exec, this, &hdb, first_fsm_txn->root,
+                           &hc.hash_root);
           update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
           hc.hash_mem_manager.set_single_thread(true);
