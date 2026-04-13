@@ -731,7 +731,7 @@ struct _DB {
         ctx, read_txn->area_list_tail_single, active->area_list_tail_single,
         read_txn->area_list_tail_multi, active->area_list_tail_multi);
 
-    ctx->prepared_txn = _header->read_txn;
+    ctx->active_txn = ctx->prepared_txn = _header->read_txn;
 
     // Reuse active's page for next pre-allocated transaction.
     // active was allocated from read_txn's committed space, so it
@@ -784,7 +784,21 @@ struct _DB {
       txn_ptr current = txn();
       if (current->txn_id != ctx->_snapshot_txn_id) {
         // Another context committed since our snapshot — merge required.
+        // Switch active_txn to the pre-allocated workspace (next_txn_page)
+        // so all merge allocations go there, leaving prepared_txn untouched
+        // for crash recovery.
+        ctx->active_txn = ctx->next_txn_page;
         _merge_into_committed(current, ctx);
+
+        // Free old prepared page into the workspace's garbage collector,
+        // then clone the merged result as the new prepared page.
+        txn_ptr workspace = _resolve_active(ctx);
+        _TxnResolver resolver{self(), workspace, ctx};
+        offset_t old_prepared = ctx->prepared_txn;
+        auto old_page = resolve<Transaction>(&old_prepared);
+        workspace->mem_manager.free(static_cast<page_ptr>(old_page), resolver);
+        auto cloned = workspace->clone(resolver);
+        ctx->prepared_txn = resolve(cloned);
       }
 
       current->next_txn = ctx->prepared_txn;
@@ -985,11 +999,20 @@ struct _DB {
       auto* ctx = context(i);
       ctx->_claimed.store(0, std::memory_order_relaxed);
 
-      // Reinit locks/refs on pre-allocated transaction page (stale after
-      // crash). If next_txn_page is 0 (crash between start_transaction clearing
-      // it and prepare_commit allocating a replacement), re-create it from
-      // read_txn.
-      if (ctx->next_txn_page) {
+      // Crash during merge: active_txn was switched to workspace
+      // (next_txn_page) but merge/publish didn't complete.  Restore
+      // next_txn_page from the untouched prepared_txn page.
+      if (ctx->active_txn != 0 &&
+          ctx->active_txn == ctx->next_txn_page &&
+          ctx->prepared_txn != ctx->active_txn) {
+        auto prepared = resolve<Transaction>(&ctx->prepared_txn);
+        auto next = resolve<Transaction>(&ctx->next_txn_page, WRITE);
+        memcpy((void*)&*next, (void*)&*prepared, sizeof(Transaction));
+        next->mem_manager.reinit_locks();
+        new (&next->refs) std::atomic<uint32_t>(0);
+        make_dirty(next);
+      } else if (ctx->next_txn_page) {
+        // Normal reinit of locks/refs on pre-allocated page.
         auto next = resolve<Transaction>(&ctx->next_txn_page);
         next->refs.store(0);
         next->mem_manager.reinit_locks();
@@ -1003,10 +1026,12 @@ struct _DB {
       }
       // Contexts 1..N-1 with next_txn_page==0 are uninitialised — left as-is.
 
-      // Crash recovery: if prepared_txn differs from read_txn, a transaction
-      // was prepared but never committed.  Restore active_txn so commit() can
-      // finalize it.
-      if (ctx->prepared_txn != _header->read_txn) {
+      // Restore active_txn for consistency after any crash.
+      if (ctx->active_txn != 0) {
+        ctx->active_txn = ctx->prepared_txn;
+      } else if (ctx->prepared_txn != _header->read_txn) {
+        // Prepared but not committed — restore active_txn so the
+        // prepared transaction can be finalized on next open.
         ctx->active_txn = ctx->prepared_txn;
       }
     }
