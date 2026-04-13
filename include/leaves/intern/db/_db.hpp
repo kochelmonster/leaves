@@ -137,6 +137,10 @@ struct _DBHeader {
   // Global merge lock — serializes merge-on-commit when parallel
   // contexts conflict.  Cross-process safe (pure hardware atomics).
   SpinLock merge_lock;
+
+  // Monotonic counter for unique txn_id assignment.  Incremented under
+  // txn_ref_lock so parallel start_transaction() calls never collide.
+  tid_t _last_assigned_tid{0};
 };
 
 /**
@@ -376,6 +380,7 @@ struct _DB {
     txn->slot_id = Transaction::SLOT_ID;
     txn->used = sizeof(Transaction);
     txn->txn_id = tid_t(1);
+    _header->_last_assigned_tid = tid_t(1);
     txn->root = txn->free_bigmem_root = 0;
     txn->next_txn = 0;
     txn->refs.store(0);
@@ -701,7 +706,8 @@ struct _DB {
     _start_txn_id = last_txn->txn_id;
     {
       std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
-      active->txn_id = last_txn->txn_id + tid_t(1);
+      _header->_last_assigned_tid = _header->_last_assigned_tid + tid_t(1);
+      active->txn_id = _header->_last_assigned_tid;
       active->next_txn = 0;
       _TxnResolver resolver{self(), active, ctx};
       iter_transactions([this, &resolver](txn_ptr txn) -> bool {
@@ -987,6 +993,7 @@ struct _DB {
     new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
     new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
     new (&_header->merge_lock) SpinLock();
+    _header->_last_assigned_tid = txn()->txn_id;
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
       txn->mem_manager.reinit_locks();
