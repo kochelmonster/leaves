@@ -321,7 +321,7 @@ void dump(DB db, const char* prefix, int index) {
   cstr << "errors/" << prefix << std::setw(2) << std::setfill('0') << index
        << ".yaml";
   std::ofstream out(cstr.str().c_str());
-  // _Dumper(*db, db->_internal()->_active_txn->offset_root, false).dump(out);  // TODO: needs TxnContext
+  // TODO: needs TxnContext to dump
 }
 
 struct TestTraits {
@@ -1647,4 +1647,257 @@ BOOST_AUTO_TEST_CASE(test_sequential_commits_no_merge) {
   reader.find("second");
   BOOST_REQUIRE(reader.is_valid());
   BOOST_CHECK_EQUAL(std::string(reader.value().data(), reader.value().size()), "2");
+}
+
+BOOST_AUTO_TEST_CASE(test_double_free_and_recycle) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Use slot 4 (128-byte payload) which doesn't conflict with
+  // Transaction (slot 5) or PageContainer (slot 7) garbage queues.
+  const uint16_t ALLOC_SIZE = 128;
+  offset_t block1_off, block2_off, block3_off;
+
+  // Txn 1: allocate two pages
+  {
+    Transaction trans(db);
+    auto block1 = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    auto block2 = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    block1_off = db->resolve(block1);
+    block2_off = db->resolve(block2);
+    BOOST_REQUIRE(block1_off != block2_off);
+  }
+
+  // Txn 2: free both pages
+  {
+    Transaction trans(db);
+    auto b1 = db->template resolve<PageHeader>(&block1_off);
+    auto b2 = db->template resolve<PageHeader>(&block2_off);
+    db->_free(b1, trans.ctx);
+    db->_free(b2, trans.ctx);
+  }
+
+  // Txn 3: free block1 again (double-free — it's already in garbage queue)
+  {
+    Transaction trans(db);
+    auto b1 = db->template resolve<PageHeader>(&block1_off);
+    db->_free(b1, trans.ctx);
+  }
+
+  // Txn 4: advance past old txns so garbage becomes recyclable.
+  // No readers hold references to the old transactions.
+  { Transaction trans(db); }
+
+  // Txn 5: allocate pages — the freed_tid CAS guard must prevent
+  // block1 from being recycled twice even though it appears in the
+  // garbage queue twice.
+  {
+    Transaction trans(db);
+    auto r1 = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    auto r2 = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    auto r3 = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    offset_t r1_off = db->resolve(r1);
+    offset_t r2_off = db->resolve(r2);
+    offset_t r3_off = db->resolve(r3);
+
+    // All three allocations must return distinct pages
+    BOOST_CHECK(r1_off != r2_off);
+    BOOST_CHECK(r1_off != r3_off);
+    BOOST_CHECK(r2_off != r3_off);
+
+    // block1 and block2 should be recycled exactly once each
+    bool r1_is_b1 = (r1_off == block1_off);
+    bool r1_is_b2 = (r1_off == block2_off);
+    bool r2_is_b1 = (r2_off == block1_off);
+    bool r2_is_b2 = (r2_off == block2_off);
+    bool r3_is_b1 = (r3_off == block1_off);
+    bool r3_is_b2 = (r3_off == block2_off);
+
+    int b1_count = r1_is_b1 + r2_is_b1 + r3_is_b1;
+    int b2_count = r1_is_b2 + r2_is_b2 + r3_is_b2;
+
+    // block1 was double-freed but must only be recycled once
+    BOOST_CHECK_EQUAL(b1_count, 1);
+    // block2 was freed once and must be recycled once
+    BOOST_CHECK_EQUAL(b2_count, 1);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_recycle_not_premature) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Use slot 4 (128-byte payload) which doesn't conflict with
+  // Transaction (slot 5) or PageContainer (slot 7) garbage queues.
+  const uint16_t ALLOC_SIZE = 128;
+
+  // Hold a reader on txn 1 to prevent recycling
+  auto reader_txn = db->txn();
+  reader_txn->refs.fetch_add(1);
+
+  offset_t block_off;
+
+  // Txn 2: allocate a page
+  {
+    Transaction trans(db);
+    auto block = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    block_off = db->resolve(block);
+  }
+
+  // Txn 3: free the page
+  {
+    Transaction trans(db);
+    auto b = db->template resolve<PageHeader>(&block_off);
+    db->_free(b, trans.ctx);
+  }
+
+  // Txn 4: allocate — reader holds txn 1, so _start_txn_id stays at 1.
+  // The freed page (garbage txn_id=3) should NOT be recyclable because 3 < 1 is false.
+  {
+    Transaction trans(db);
+    auto r = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    offset_t r_off = db->resolve(r);
+    BOOST_CHECK(r_off != block_off);
+  }
+
+  // Release the reader
+  reader_txn->refs.fetch_sub(1);
+
+  // Txn 5: advance so _start_txn_id passes the garbage entry
+  { Transaction trans(db); }
+
+  // Txn 6: now the freed page should be recyclable (garbage txn_id=3 < _start_txn_id)
+  {
+    Transaction trans(db);
+    auto r = db->_alloc_page(ALLOC_SIZE, trans.ctx);
+    offset_t r_off = db->resolve(r);
+    BOOST_CHECK_EQUAL(r_off, block_off);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(test_defrag_multi_context) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  // 4 contexts so defrag() must claim all of them
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test", uint8_t(4));
+
+  const size_t K = 1024;
+  const size_t CHUNK_SIZE = 8 * K;  // exceeds MAX_PAGE_SIZE → BigMemory
+
+  // --- Context 0: allocate 6 chunks, delete first 3 to create free space ---
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    std::vector<char> data(CHUNK_SIZE);
+    for (int i = 0; i < 6; i++) {
+      std::string key = "ctx0_" + std::to_string(i);
+      std::fill(data.begin(), data.end(), 'A' + i);
+      cursor->find(key);
+      cursor->value(Slice(data.data(), CHUNK_SIZE));
+    }
+    cursor->commit();
+  }
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    for (int i = 0; i < 3; i++) {
+      std::string key = "ctx0_" + std::to_string(i);
+      cursor->find(key);
+      cursor->remove();
+    }
+    cursor->commit();
+  }
+
+  // --- Context 1: allocate 4 chunks, delete first 2 ---
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    std::vector<char> data(CHUNK_SIZE);
+    for (int i = 0; i < 4; i++) {
+      std::string key = "ctx1_" + std::to_string(i);
+      std::fill(data.begin(), data.end(), 'P' + i);
+      cursor->find(key);
+      cursor->value(Slice(data.data(), CHUNK_SIZE));
+    }
+    cursor->commit();
+  }
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    for (int i = 0; i < 2; i++) {
+      std::string key = "ctx1_" + std::to_string(i);
+      cursor->find(key);
+      cursor->remove();
+    }
+    cursor->commit();
+  }
+
+  // Barrier transaction to advance txn id for recycling
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find("barrier");
+    const char b = 'B';
+    cursor->value(Slice(&b, 1));
+    cursor->commit();
+  }
+
+  // Defrag should claim all 4 contexts, find free chunks in ctx 0 and ctx 1,
+  // merge adjacent ones, then commit all.
+  db->defrag();
+
+  // Verify surviving data from context 0 (chunks 3-5)
+  {
+    auto cursor = db->create_cursor();
+    for (int i = 3; i < 6; i++) {
+      std::string key = "ctx0_" + std::to_string(i);
+      cursor->find(key);
+      BOOST_CHECK_MESSAGE(cursor->is_valid(), "ctx0_" + std::to_string(i) + " missing");
+      Slice val = cursor->value();
+      BOOST_CHECK_EQUAL(val.size(), CHUNK_SIZE);
+      BOOST_CHECK_EQUAL(val.data()[0], 'A' + i);
+    }
+  }
+
+  // Verify surviving data from context 1 (chunks 2-3)
+  {
+    auto cursor = db->create_cursor();
+    for (int i = 2; i < 4; i++) {
+      std::string key = "ctx1_" + std::to_string(i);
+      cursor->find(key);
+      BOOST_CHECK_MESSAGE(cursor->is_valid(), "ctx1_" + std::to_string(i) + " missing");
+      Slice val = cursor->value();
+      BOOST_CHECK_EQUAL(val.size(), CHUNK_SIZE);
+      BOOST_CHECK_EQUAL(val.data()[0], 'P' + i);
+    }
+  }
+
+  // After defrag merged adjacent free chunks, a larger allocation should succeed
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    const size_t LARGE = 16 * K;
+    std::vector<char> large_data(LARGE, 'Z');
+    cursor->find("large_after_defrag");
+    cursor->value(Slice(large_data.data(), LARGE));
+    cursor->find("large_after_defrag");
+    BOOST_CHECK(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value().size(), LARGE);
+    cursor->commit();
+  }
+
+  // DB is still usable after defrag
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find("post_defrag");
+    const char p = 'Y';
+    cursor->value(Slice(&p, 1));
+    cursor->commit();
+  }
 }

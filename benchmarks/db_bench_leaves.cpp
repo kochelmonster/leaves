@@ -594,7 +594,7 @@ class Benchmark {
 
         FinishedSingleOp();
 #if 0
-        // Dump size_root and offset_root for debugging
+        // Dump free_bigmem_root for debugging
         auto db_internal = db._internal();
         auto txn = db_internal->_wtxn;
 

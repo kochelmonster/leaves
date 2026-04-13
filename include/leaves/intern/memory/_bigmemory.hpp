@@ -2,6 +2,7 @@
 #define _LEAVES_BIGMEMORY_HPP
 
 #include "../core/_port.hpp"
+#include "../db/_aspect.hpp"
 #include "../db/_check.hpp"
 #include "_memory.hpp"
 
@@ -155,83 +156,133 @@ struct _BigMemory {
     _add_chunk(offset_t(chunk_offset), chunk_size, has_successor, true);
   }
 
-  template <typename txn_ptr>
-  void defrag(txn_ptr txn) {
-    TCursor iter_cursor(_db, &txn->free_bigmem_root);
-    TCursor lookup_cursor(_db, &txn->free_bigmem_root);
-    iter_cursor._ctx = _free_cursor._ctx;
-    iter_cursor._active_tid = _free_cursor._active_tid;
-    lookup_cursor._ctx = _free_cursor._ctx;
-    lookup_cursor._active_tid = _free_cursor._active_tid;
-    
-    iter_cursor.first();
-    
-    while (iter_cursor.is_valid()) {
-      ValueBlock* vblock = (ValueBlock*)iter_cursor.value().data();
-      if (!_db->may_recycle(*vblock)) {
-        iter_cursor.next();
-        continue;
+  struct _defrag_root {
+    offset_e* root;
+    typename DB::TxnContext* ctx;
+    tid_t active_tid;
+  };
+
+  // Full defrag lifecycle: create cursors, start transactions on all
+  // contexts, merge adjacent free chunks, then commit everything.
+  void defrag() {
+    using cursor_ptr = typename DB::cursor_ptr;
+
+    cursor_ptr cursors[256];
+    for (uint8_t i = 0; i < _db->_num_contexts; i++) {
+      cursors[i] = _db->create_cursor();
+      cursors[i]->start_transaction(false, TransactionOrigin::defrag);
+    }
+
+    _defrag_root roots_buf[256];
+    size_t num_roots = 0;
+    for (uint8_t i = 0; i < _db->_num_contexts; i++) {
+      auto& c = cursors[i];
+      if (c->_txn->free_bigmem_root) {
+        roots_buf[num_roots++] = {
+            &c->_txn->free_bigmem_root, c->_ctx, c->_active_tid};
       }
+    }
 
-      ValueBlock current_vblock = *vblock;
+    if (num_roots == 0) {
+      for (uint8_t i = 0; i < _db->_num_contexts; i++)
+        cursors[i]->rollback(TransactionOrigin::defrag);
+      return;
+    }
 
-      FreeKey current_key = *(FreeKey*)iter_cursor.key().data();
-      uint64_t offset_with_flag = current_key.offset;
-      uint64_t current_offset = offset_with_flag & ~uint64_t(1);
-      uint64_t current_size = current_key.size;
-      bool has_successor = (offset_with_flag & 1) != 0;
+    reset(roots_buf[0].root);
+    set_ctx(roots_buf[0].ctx, roots_buf[0].active_tid);
+    defrag(roots_buf, num_roots);
+    _db->flush();
 
-      uint64_t total_size = current_size;
-      bool found_mergeable = false;
-      
-      while (has_successor) {
-        uint64_t next_offset = current_offset + total_size;
-        offset_t next_offset_t(next_offset);
-        auto next_header = _db->template resolve<FreeKey>(&next_offset_t, READ);
-        FreeKey next_key = *next_header;
-        
-        lookup_cursor.find(Slice((char*)next_header, sizeof(FreeKey)));
-        if (!lookup_cursor.is_valid()) {
-          break;
+    for (uint8_t i = 0; i < _db->_num_contexts; i++)
+      cursors[i]->commit(false, TransactionOrigin::defrag);
+  }
+
+  void defrag(const _defrag_root* roots, size_t num_roots) {
+    for (size_t ri = 0; ri < num_roots; ri++) {
+      auto& iter_root = roots[ri];
+      TCursor iter_cursor(_db, iter_root.root);
+      iter_cursor._ctx = iter_root.ctx;
+      iter_cursor._active_tid = iter_root.active_tid;
+
+      iter_cursor.first();
+
+      while (iter_cursor.is_valid()) {
+        ValueBlock* vblock = (ValueBlock*)iter_cursor.value().data();
+        if (!_db->may_recycle(*vblock)) {
+          iter_cursor.next();
+          continue;
         }
-        
-        ValueBlock* next_vblock = (ValueBlock*)lookup_cursor.value().data();
-        if (!_db->may_recycle(*next_vblock)) {
-          break;
-        }
-        
-        lookup_cursor.remove();
-        total_size += next_header->size;
-        has_successor = (next_header->offset & 1) != 0;
-        found_mergeable = true;
-      }
-      
-      if (found_mergeable) {
-        // Update the header of the merged chunk
-        offset_t current_offset_t(current_offset);
-        auto merged_header = _db->template resolve<FreeKey>(&current_offset_t, WRITE);
-        merged_header->size = total_size;
-        uint64_t offset_val = current_offset & ~uint64_t(1);
-        if (has_successor) {
-          offset_val |= 1;
-        }
-        merged_header->offset = offset_val;
-        
-        // Remove old entry and add merged entry using the lookup cursor.
-        // (Avoids relying on iter_cursor's internal stack after mutations.)
-        lookup_cursor.find(Slice(&current_key, sizeof(current_key)));
-        assert(lookup_cursor.is_valid());
-        lookup_cursor.remove();
 
-        FreeKey merged_key{total_size, offset_val};
-        lookup_cursor.find(Slice(&merged_key, sizeof(merged_key)));
-        assert(!lookup_cursor.is_valid());
-        Slice vblock_slice(&current_vblock, sizeof(current_vblock));
-        lookup_cursor.value(vblock_slice);
+        ValueBlock current_vblock = *vblock;
 
-        iter_cursor.first();
-      } else {
-        iter_cursor.next();
+        FreeKey current_key = *(FreeKey*)iter_cursor.key().data();
+        uint64_t offset_with_flag = current_key.offset;
+        uint64_t current_offset = offset_with_flag & ~uint64_t(1);
+        uint64_t current_size = current_key.size;
+        bool has_successor = (offset_with_flag & 1) != 0;
+
+        uint64_t total_size = current_size;
+        bool found_mergeable = false;
+
+        while (has_successor) {
+          uint64_t next_offset = current_offset + total_size;
+          offset_t next_offset_t(next_offset);
+          auto next_header = _db->template resolve<FreeKey>(&next_offset_t, READ);
+
+          bool found = false;
+          // Search all roots for the successor chunk
+          for (size_t si = 0; si < num_roots; si++) {
+            auto& search_root = roots[si];
+            TCursor lookup_cursor(_db, search_root.root);
+            lookup_cursor._ctx = search_root.ctx;
+            lookup_cursor._active_tid = search_root.active_tid;
+            lookup_cursor.find(Slice((char*)next_header, sizeof(FreeKey)));
+            if (lookup_cursor.is_valid()) {
+              ValueBlock* next_vblock = (ValueBlock*)lookup_cursor.value().data();
+              if (_db->may_recycle(*next_vblock)) {
+                lookup_cursor.remove();
+                total_size += next_header->size;
+                has_successor = (next_header->offset & 1) != 0;
+                found = true;
+                found_mergeable = true;
+                break;
+              }
+            }
+          }
+          if (!found) break;
+        }
+
+        if (found_mergeable) {
+          // Update the header of the merged chunk
+          offset_t current_offset_t(current_offset);
+          auto merged_header = _db->template resolve<FreeKey>(&current_offset_t, WRITE);
+          merged_header->size = total_size;
+          uint64_t offset_val = current_offset & ~uint64_t(1);
+          if (has_successor) {
+            offset_val |= 1;
+          }
+          merged_header->offset = offset_val;
+
+          // Remove old entry and add merged entry using a fresh lookup cursor.
+          // (Avoids relying on iter_cursor's internal stack after mutations.)
+          TCursor lookup_cursor(_db, iter_root.root);
+          lookup_cursor._ctx = iter_root.ctx;
+          lookup_cursor._active_tid = iter_root.active_tid;
+          lookup_cursor.find(Slice(&current_key, sizeof(current_key)));
+          assert(lookup_cursor.is_valid());
+          lookup_cursor.remove();
+
+          FreeKey merged_key{total_size, offset_val};
+          lookup_cursor.find(Slice(&merged_key, sizeof(merged_key)));
+          assert(!lookup_cursor.is_valid());
+          Slice vblock_slice(&current_vblock, sizeof(current_vblock));
+          lookup_cursor.value(vblock_slice);
+
+          iter_cursor.first();
+        } else {
+          iter_cursor.next();
+        }
       }
     }
   }

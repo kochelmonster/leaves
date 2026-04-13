@@ -232,7 +232,7 @@ cmake --build build -j
 ./build/db_bench_leaves --use_file_storage=1
 ```
 
-- Aspet for node locking policy von paralellen transaktionen
+- Aspect for node locking policy von paralellen transaktionen
     - Nur ein Process
     - Bein einfügen oder verändern von Leaves wird der Key in eine map gechrieben und damit gelockt
     - Dead lock detection
@@ -244,4 +244,10 @@ cmake --build build -j
 
 
 
-- defrag: chunks müssen dem richtigen context zugeordnet werden
+- merge_into: acid eigenschaften? was passiert bei einem crash während des merges
+idee: 
+ - copy into temp_txn 
+ - merge 
+ - temp_txn.free(active_txn)
+ - new_txn = temp_txn.clone() 
+ - atomic set active_txn = new_txn

@@ -26,9 +26,6 @@ struct _TransactionBase : public Traits_::PageHeader {
   // pointer to the active root of the trie
   offset_e root;
 
-  // pointer to the active offset memory manager root
-  offset_e offset_root;
-
   // pointer to the active bigmem freelist trie root
   offset_e free_bigmem_root;
 
@@ -379,7 +376,7 @@ struct _DB {
     txn->slot_id = Transaction::SLOT_ID;
     txn->used = sizeof(Transaction);
     txn->txn_id = tid_t(1);
-    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+    txn->root = txn->free_bigmem_root = 0;
     txn->next_txn = 0;
     txn->refs.store(0);
     txn->start_txn = _header->read_txn;
@@ -648,7 +645,7 @@ struct _DB {
     wtxn->used = sizeof(Transaction);
     wtxn->txn_id = tid_t(0);
     new (&wtxn->refs) std::atomic<uint32_t>(0);
-    wtxn->root = wtxn->offset_root = wtxn->free_bigmem_root = 0;
+    wtxn->root = wtxn->free_bigmem_root = 0;
     wtxn->delete_root = 0;
     wtxn->start_txn = txn_offset;
     wtxn->next_txn = 0;
@@ -813,10 +810,6 @@ struct _DB {
     offset_e writer_root = active->root;
     active->root = committed->root;
 
-    // Pick up committed state for offset/bigmem roots
-    active->offset_root = committed->offset_root;
-    active->free_bigmem_root = committed->free_bigmem_root;
-
     // Move-merge writer's changes into committed trie
     if (writer_root != 0) {
       RawCursor dst_cursor(&self(), &active->root);
@@ -931,29 +924,16 @@ struct _DB {
     });
   }
 
-  // Defragment big memory - merge adjacent free chunks
+  // Defragment big memory - merge adjacent free chunks across all contexts.
   void defrag() {
     if (!_aspect.before_defrag(self())) return;
 
-    auto* ctx = start_transaction(false, TransactionOrigin::defrag);
-    assert(ctx);
-
-    txn_ptr active = _resolve_active(ctx);
-    if (!active->free_bigmem_root) {
-      rollback(ctx, TransactionOrigin::defrag);
-      return;  // No big memory allocated yet
-    }
-
-    // Use the non-transactional cursor type for the free-bigmem trie.
-    // _TransactionalCursor rewires its root to txn->root in update(), which
-    // would ignore &txn->free_bigmem_root and prevent defrag from working.
     using RawCursor = _Cursor<CursorTraits>;
     using BigMemory = _BigMemory<RawCursor>;
-    BigMemory big_mem(this, &active->free_bigmem_root);
-    big_mem.set_ctx(ctx, active->txn_id);
-    big_mem.defrag(active);
-    flush();
-    commit(ctx, false, TransactionOrigin::defrag);
+
+    BigMemory big_mem(this, &txn()->free_bigmem_root);
+    big_mem.defrag();
+
     _aspect.on_defrag(self());
   }
 
