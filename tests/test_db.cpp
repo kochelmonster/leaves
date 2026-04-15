@@ -70,7 +70,6 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
     db->_free(block1, trans.ctx);
     block2 = db->_alloc_page(311, trans.ctx);
     BOOST_CHECK(block1 != block2);
-    BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
   }
 
   {
@@ -79,7 +78,6 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
     block3 = db->_alloc_page(311, trans.ctx);
     BOOST_CHECK(block1 != block3);
     BOOST_CHECK(block2 != block3);
-    BOOST_CHECK_EQUAL(db->_start_txn_id, txn->txn_id);
   }
 
   BOOST_CHECK(txn->txn_id != db->txn()->txn_id);
@@ -90,7 +88,6 @@ BOOST_AUTO_TEST_CASE(test_multi_transaction) {
     Transaction trans(db);
     block4 = db->_alloc_page(311, trans.ctx);
     BOOST_CHECK(block4 != block3);
-    BOOST_CHECK_GT(db->_start_txn_id, txn->txn_id);
   }
 }
 

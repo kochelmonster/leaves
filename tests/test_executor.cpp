@@ -279,9 +279,9 @@ struct TestResolver {
     return offset_t((const char*)p - &memory[0]);
   }
 
-  template <typename T>
-  bool may_recycle(const T& block) const {
-    return block.txn_id <= accept_tid;
+  template <typename T, typename PagePtr>
+  RecycleResult may_recycle(const T& block, PagePtr) const {
+    return block.txn_id <= accept_tid ? RecycleResult::RECYCLE : RecycleResult::STOP;
   }
 
   template <typename T>

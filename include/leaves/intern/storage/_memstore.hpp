@@ -147,9 +147,9 @@ struct _MemoryDB {
   template <typename BlockType>
   void mark_for_recycle(const BlockType& /*block*/) {}
 
-  template <typename BlockType>
-  bool may_recycle(const BlockType& /*block*/) const {
-    return true;
+  template <typename BlockType, typename PagePtr>
+  RecycleResult may_recycle(const BlockType& /*block*/, PagePtr) const {
+    return RecycleResult::RECYCLE;
   }
 
   // Direct pointer/offset resolution - no storage delegation needed

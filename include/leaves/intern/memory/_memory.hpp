@@ -47,6 +47,9 @@ Crash Recovery:
 
 namespace leaves {
 
+// Result of a garbage-slot recycle check.
+enum class RecycleResult : uint8_t { SKIP, RECYCLE, STOP };
+
 constexpr size_t K = 1024;
 constexpr size_t M = 1024 * K;
 constexpr size_t G = 1024 * M;
@@ -79,8 +82,9 @@ struct _PageContainer : public Traits::PageHeader {
   typedef typename Traits::template Pointer<_PageContainer> ptr;
 
   struct BlockItem {
-    offset_e link;  // link to the page
-    tid_t txn_id;   // the transaction that freed the page
+    offset_e link;     // link to the page
+    tid_t txn_id;      // the transaction that freed the page
+    tid_t org_txn_id;  // original txn_id of the page when freed
   };
 
   static constexpr size_t COUNT =
@@ -115,49 +119,54 @@ struct _GarbageSlot {
   using cont_ptr = typename PageContainer::ptr;
 
   // Pop from the garbage slot queue.
-  // If freed_tid is non-null, stores the garbage entry's txn_id (the stamp
-  // from when the page was freed) — used by alloc_slot for double-recycle guard.
+  // Uses may_recycle() to determine per-entry fate:
+  //   RECYCLE — page claimed, return it
+  //   SKIP    — page already recycled elsewhere, advance past it
+  //   STOP    — entry too new, stop trying this slot
   template <typename Resolver>
-  FORCE_INLINE ptr pop(Resolver& resolver, _MemManager<Traits>& mgr,
-                       tid_t* freed_tid = nullptr) {
-    if (count == 0) return nullptr;
+  FORCE_INLINE ptr pop(Resolver& resolver, _MemManager<Traits>& mgr) {
+    while (count > 0) {
+      assert(ostart);
+      assert(oend);
+      assert(!(ostart == oend && istart == iend));
+      assert(istart + count > PageContainer::COUNT || ostart == oend);
 
-    assert(ostart);
-    assert(oend);
-    assert(!(ostart == oend && istart == iend));
-    assert(istart + count > PageContainer::COUNT || ostart == oend);
+      cont_ptr front(resolver.template resolve<PageContainer>(&ostart, WRITE));
+      auto& block = front->blocks[istart];
 
-    cont_ptr front(resolver.template resolve<PageContainer>(&ostart, WRITE));
-    if (!resolver.may_recycle(front->blocks[istart])) return nullptr;
+      ptr page = resolver.template resolve<PageHeader>(&block.link, WRITE);
+      RecycleResult rc = resolver.may_recycle(block, page);
+      if (rc == RecycleResult::STOP) return nullptr;
 
-    if (freed_tid) *freed_tid = front->blocks[istart].txn_id;
+      // Consume this entry (RECYCLE or SKIP)
+      count--;
+      istart++;
+      if (istart >= PageContainer::COUNT) {
+        if (page->slot_id == PageContainer::SLOT_ID && !count) {
+          // avoid possible circle if the method is called by
+          // push(PageContainer::SLOT_ID)
+          count = 1;
+          istart--;
+          return nullptr;
+        }
 
-    assert(front->blocks[istart].link != 0);
-    ptr result = resolver.template resolve<PageHeader>(
-        &front->blocks[istart].link, WRITE);
-
-    count--;
-    istart++;
-    if (istart >= PageContainer::COUNT) {
-      if (result->slot_id == PageContainer::SLOT_ID && !count) {
-        // avoid possible circle if the method is called by
-        // push(PageContainer::SLOT_ID)
-        count = 1;
-        istart--;
-        return nullptr;
+        ostart = front->next;
+        if (!ostart) {
+          assert(iend == PageContainer::COUNT);
+          assert(count == 0);
+          oend = 0;
+          iend = 0;
+        }
+        istart = 0;
+        mgr.free(front, resolver);
       }
 
-      ostart = front->next;
-      if (!ostart) {
-        assert(iend == PageContainer::COUNT);
-        assert(count == 0);
-        oend = 0;
-        iend = 0;
+      if (rc == RecycleResult::RECYCLE) {
+        return page;
       }
-      istart = 0;
-      mgr.free(front, resolver);
+      // SKIP: continue to next entry
     }
-    return result;
+    return nullptr;
   }
 
   template <typename Resolver>
@@ -188,6 +197,7 @@ struct _GarbageSlot {
     }
     back->blocks[iend].link = resolver.resolve(block);
     assert(back->blocks[iend].link != 0);
+    back->blocks[iend].org_txn_id = block->txn_id;
     resolver.mark_for_recycle(back->blocks[iend]);
     resolver.make_dirty(back);
     resolver.make_dirty(block);
@@ -269,20 +279,18 @@ struct _MemManager {
   }
 
   template <typename Resolver>
-  page_ptr alloc(uint8_t sidx, Resolver& resolver, tid_t* freed_tid = nullptr) {
+  page_ptr alloc(uint8_t sidx, Resolver& resolver) {
     assert(sidx < COUNT);
     uint16_t bsize = PAGE_SIZES[sidx];
 
     Slot& slot = slots[sidx];
-    page_ptr result = slot.pop(resolver, *this, freed_tid);
+    page_ptr result = slot.pop(resolver, *this);
     if (result) {
       // Because of some rollback situations slot_id of result could be wrong
       // but the classification of the slot is right
       result->slot_id = sidx;
       return result;
     }
-
-    if (freed_tid) *freed_tid = tid_t(0);  // Not from garbage — no guard needed
 
     if (left_over_start + bsize <= left_over_end) {
       result = resolver.template resolve<PageHeader>(&left_over_start, WRITE);
@@ -743,8 +751,7 @@ struct AreaPool {
 // void(Fn) where Fn is void(offset_t db_offset) — calls Fn for each active DB
 template <typename DBHeader, typename TxnContext, size_t AREA_SIZE,
           typename ReadFn, typename WriteFn, typename ForEachDBFn>
-void _recover_areas(AreaPool& pool,
-                    ForEachDBFn for_each_db, uint64_t file_size,
+void _recover_areas(AreaPool& pool, ForEachDBFn for_each_db, uint64_t file_size,
                     uint64_t first_area_pos, ReadFn read_bytes,
                     WriteFn write_bytes) {
   pool.init();
@@ -777,7 +784,8 @@ void _recover_areas(AreaPool& pool,
     };
     for (uint8_t ci = 0; ci < db_header.num_contexts; ci++) {
       TxnContext ctx;
-      uint64_t ctx_off = (uint64_t)db_off + sizeof(DBHeader) + ci * sizeof(TxnContext);
+      uint64_t ctx_off =
+          (uint64_t)db_off + sizeof(DBHeader) + ci * sizeof(TxnContext);
       read_bytes(ctx_off, &ctx, sizeof(TxnContext));
       walk(ctx.area_list_head_single);
       walk(ctx.area_list_head_multi);

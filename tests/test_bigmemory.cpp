@@ -370,7 +370,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
     bm._free_cursor.find(Slice(&k0, sizeof(k0)));
     BOOST_REQUIRE(bm._free_cursor.is_valid());
     auto* vb0 = (typename BigMemory::ValueBlock*)bm._free_cursor.value().data();
-    BOOST_REQUIRE(pre->_db->may_recycle(*vb0));
+    BOOST_REQUIRE(vb0->txn_id < pre->_ctx->_start_txn_id);
 
     uint64_t current_offset = ((uint64_t)((FreeKey*)bm._free_cursor.key().data())->offset) & ~uint64_t(1);
     uint64_t current_size = (uint64_t)((FreeKey*)bm._free_cursor.key().data())->size;
@@ -382,7 +382,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
     bm._free_cursor.find(Slice(&next_key, sizeof(next_key)));
     BOOST_REQUIRE(bm._free_cursor.is_valid());
     auto* vb1 = (typename BigMemory::ValueBlock*)bm._free_cursor.value().data();
-    BOOST_REQUIRE(pre->_db->may_recycle(*vb1));
+    BOOST_REQUIRE(vb1->txn_id < pre->_ctx->_start_txn_id);
 
     // Also confirm the explicit successor chunk key exists.
     bm._free_cursor.find(Slice(&k1, sizeof(k1)));

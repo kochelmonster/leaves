@@ -506,3 +506,66 @@ BOOST_AUTO_TEST_CASE(DeadlockResistance) {
   
   std::cout << "✓ Deadlock resistance test passed\n";
 }
+
+// Regression test: concurrent multi-context merges.
+// Opens the DB with num_threads contexts so threads truly run in parallel.
+// Small per-thread batches force frequent commits that conflict, triggering
+// _merge_into_committed on nearly every commit. This crashes (segfault in
+// merge_node / free_big) without a fix to the concurrent merge path.
+BOOST_AUTO_TEST_CASE(ConcurrentMerge_MultiContext) {
+  std::cout << "\n=== Concurrent Merge (Multi-Context) Test ===\n";
+
+  DirPreparation prep;
+  std::filesystem::path dbFilePath =
+      prep.tempDir / "test_concurrent_merge.lvs";
+  auto storage = MapStorage::create(dbFilePath.c_str());
+
+  constexpr int num_threads = 4;
+  constexpr int ops_per_thread = 200;
+
+  // Open with num_threads contexts — this is the key difference from the
+  // other tests which use the default (1 context, serialised).
+  auto db = storage->open("test", (uint8_t)num_threads);
+
+  std::atomic<bool> go{false};
+  std::vector<std::thread> threads;
+
+  for (int t = 0; t < num_threads; t++) {
+    threads.emplace_back([&, t]() {
+      while (!go.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+      for (int i = 0; i < ops_per_thread; i++) {
+        auto cursor = db.cursor();
+        // Each thread writes to its own key space to avoid logical conflicts,
+        // but the commits still conflict on txn_id, forcing merges.
+        std::string key =
+            "t" + std::to_string(t) + "_" + std::to_string(i);
+        std::string value = "v" + std::to_string(i);
+        cursor.find(key);
+        cursor.value(value);
+        cursor.commit();
+      }
+    });
+  }
+
+  go.store(true, std::memory_order_release);
+
+  for (auto& th : threads)
+    th.join();
+
+  // Verify: every key written should be present.
+  auto cursor = db.cursor();
+  size_t count = 0;
+  cursor.first();
+  while (cursor.is_valid()) {
+    count++;
+    cursor.next();
+  }
+
+  size_t expected = num_threads * ops_per_thread;
+  std::cout << "Records in DB: " << count << " (expected " << expected << ")\n";
+  BOOST_CHECK_EQUAL(count, expected);
+
+  std::cout << "✓ Concurrent merge (multi-context) test passed\n";
+}

@@ -134,9 +134,9 @@ struct TestStorage {
     return result;
   }
 
-  template <typename T>
-  bool may_recycle(const T& free_block) {
-    return free_block.txn_id <= accept_tid;
+  template <typename T, typename PagePtr>
+  RecycleResult may_recycle(const T& free_block, PagePtr) {
+    return free_block.txn_id <= accept_tid ? RecycleResult::RECYCLE : RecycleResult::STOP;
   }
   template <typename T>
   void mark_for_recycle(T& free_block) {

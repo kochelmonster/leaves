@@ -45,6 +45,9 @@ struct _TransactionBase : public Traits_::PageHeader {
   offset_e area_list_tail_single{0};
   offset_e area_list_tail_multi{0};
 
+  // Index of the context that committed this transaction
+  uint8_t _context_id{0};
+
   MemManager mem_manager;
 };
 
@@ -67,22 +70,7 @@ struct _Transaction : public _TransactionBase<Traits_> {
 
   template <typename Resolver>
   page_ptr alloc_slot(uint16_t slot, Resolver& resolver) {
-    page_ptr result;
-    for (;;) {
-      tid_t freed_tid;
-      result = mem_manager.alloc(slot, resolver, &freed_tid);
-      if (freed_tid == tid_t(0)) break;  // Bump-allocated, no guard needed
-      // Double-recycle guard: if page's txn_id > garbage entry's txn_id,
-      // the page was already recycled through another garbage entry — retry.
-      if (result->txn_id > freed_tid) continue;
-      // CAS the txn_id to claim the page — if another context grabbed it, retry.
-      auto expected = result->txn_id._value;
-      std::atomic_ref<uint32_t> atomic_tid(result->txn_id._value);
-      if (atomic_tid.compare_exchange_weak(expected, txn_id._value,
-                                           std::memory_order_acquire,
-                                           std::memory_order_relaxed))
-        break;
-    }
+    page_ptr result = mem_manager.alloc(slot, resolver);
     result->txn_id = txn_id;
     resolver.make_dirty(result);
     return result;
@@ -111,6 +99,8 @@ struct _TxnContext {
   offset_t area_list_head_single{0};  // head of single-AREA_SIZE area chain
   offset_t area_list_head_multi{0};   // head of multi-AREA_SIZE area chain
   tid_t _snapshot_txn_id{0};          // txn_id at start_transaction() time
+  offset_t _snapshot_txn{0};  // snapshot txn offset (ref held for txn lifetime)
+  tid_t _start_txn_id{0};     // per-context recycle threshold
 };
 
 // Default database header (defined outside _DB for reusability)
@@ -159,16 +149,16 @@ struct _ContextMergePolicy : StandardMergePolicy {
 
   DB_* _db;
   TxnContext* _ctx;
-  tid_t _base_txn_id;
+  tid_t _writer_txn_id;
 
-  _ContextMergePolicy(DB_* db, TxnContext* ctx, tid_t base_txn_id)
-      : _db(db), _ctx(ctx), _base_txn_id(base_txn_id) {}
+  _ContextMergePolicy(DB_* db, TxnContext* ctx, tid_t writer_txn_id)
+      : _db(db), _ctx(ctx), _writer_txn_id(writer_txn_id) {}
 
-  // Only descend into src nodes allocated by the writer (txn_id > snapshot).
+  // Only descend into src nodes allocated by the writer (txn_id == writer).
   // Snapshot nodes are already in committed — skip entirely.
   template <typename PagePtr>
   bool should_descend_src(PagePtr page) {
-    return page->txn_id > _base_txn_id;
+    return page->txn_id == _writer_txn_id;
   }
 
   // Free orphaned src node (writer-allocated, not adopted into dst).
@@ -264,9 +254,6 @@ struct _DB {
 
   [[no_unique_address]] Aspect _aspect{};
 
-  // All Transactions with a tid >= _start_txn_id may not be recycled
-  tid_t _start_txn_id{0};
-
   // Access the i-th TxnContext stored after the header in storage.
   TxnContext* context(uint8_t i) {
     return reinterpret_cast<TxnContext*>(reinterpret_cast<char*>(&*_header) +
@@ -315,9 +302,21 @@ struct _DB {
       return _db._storage.resolve(p);
     }
 
-    template <typename T>
-    bool may_recycle(T& garbage_block) const {
-      return garbage_block.txn_id < _db._start_txn_id;
+    template <typename T, typename PagePtr>
+    RecycleResult may_recycle(T& garbage_block, PagePtr page) const {
+      // Page already recycled by another garbage entry — skip
+      if (page->txn_id != garbage_block.org_txn_id) return RecycleResult::SKIP;
+      // Entry too new — stop (queue is ordered within context)
+      if (!(garbage_block.txn_id < _ctx->_start_txn_id))
+        return RecycleResult::STOP;
+      // CAS-stamp the page to claim it
+      auto expected = garbage_block.org_txn_id._value;
+      std::atomic_ref<uint32_t> atomic_tid(page->txn_id._value);
+      if (!atomic_tid.compare_exchange_weak(
+              expected, _active_txn->txn_id._value, std::memory_order_acquire,
+              std::memory_order_relaxed))
+        return RecycleResult::SKIP;
+      return RecycleResult::RECYCLE;
     }
 
     template <typename T>
@@ -452,11 +451,6 @@ struct _DB {
     return _storage.resolve(p);
   }
 
-  template <typename T>
-  bool may_recycle(T& garbage_block) const {
-    return garbage_block.txn_id < _start_txn_id;
-  }
-
   template <typename PtrType>
   void make_dirty(PtrType block) {
     _storage.make_dirty(block);
@@ -538,14 +532,21 @@ struct _DB {
 
   template <typename T>
   void iter_transactions(T caller) const {
-    txn_ptr txn = _storage.resolve(&_header->read_txn);
-    tid_t end = txn->txn_id;
-    offset_t* link = &txn->start_txn;
-    do {
-      txn = resolve<Transaction>(link);
-      link = &txn->next_txn;  // read before callback (callback may free txn)
+    offset_t read_off = _header->read_txn;
+    txn_ptr read_txn = resolve<Transaction>(&read_off);
+    offset_t cur_off = read_txn->start_txn;
+
+    while (cur_off != 0) {
+      txn_ptr txn = resolve<Transaction>(&cur_off);
+      // Read next before callback because callback may free txn.
+      offset_t next_off = txn->next_txn;
       if (caller(txn)) break;
-    } while (txn->txn_id < end);
+
+      // Terminate by chain links, not txn_id ordering.
+      if (cur_off == read_off) break;
+      assert(next_off != 0 && next_off != cur_off);
+      cur_off = next_off;
+    }
   }
 
   txn_ptr txn() const { return resolve<Transaction>(&_header->read_txn); }
@@ -686,8 +687,7 @@ struct _DB {
     // Lazy-init contexts that have never been used.
     if (!ctx->next_txn_page) _init_context(idx);
 
-    txn_ptr last_txn = txn();
-    ctx->_snapshot_txn_id = last_txn->txn_id;
+    txn_ptr last_txn;
 
     // Pre-allocated page is always ready (from commit, rollback, or init)
     assert(ctx->next_txn_page);
@@ -695,35 +695,70 @@ struct _DB {
     ctx->active_txn = ctx->next_txn_page;
     ctx->next_txn_page = 0;
 
-    // Pin last_txn so it isn't freed during the GC walk.
-    last_txn->refs.fetch_add(1);
-
     // Find the oldest used transaction and free unused old transactions.
     // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
     // a txn between the refs==0 check and free().
     // Assign txn_id inside txn_ref_lock to prevent a concurrent reader
     // from seeing a half-initialised txn_id.
-    _start_txn_id = last_txn->txn_id;
+    //
+    // Pin last_txn (the snapshot) atomically under the same lock so
+    // a concurrent GC walk never sees refs==0 for our snapshot and
+    // frees it before we can pin it.
+    //
+    // Use a local variable during the walk and write _start_txn_id only
+    // once at the end.  Writing the optimistic high value (last_txn->txn_id)
+    // directly to the shared member first would create a window where
+    // another thread's may_recycle() sees a transiently-too-high threshold
+    // and recycles pages still live in the committed trie.
     {
       std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
-      _header->_last_assigned_tid = _header->_last_assigned_tid + tid_t(1);
-      active->txn_id = _header->_last_assigned_tid;
+
+      // Resolve and pin snapshot atomically under lock.
+      last_txn = txn();
+      last_txn->refs.fetch_add(1);
+      ctx->_snapshot_txn_id = last_txn->txn_id;
+      ctx->_snapshot_txn = _header->read_txn;  // last_txn offset
+
+      // Reset active root to the snapshot committed tree, atomically
+      // with the snapshot pin.  The pre-allocated page's root may be
+      // stale (from a previous merge's workspace) and reference
+      // committed nodes with txn_ids between the old snapshot and the
+      // current one.  Using the snapshot root ensures the writer only
+      // has nodes with txn_id <= snapshot once COW begins.
+      active->root = last_txn->root;
+      assert(active->delete_root == 0);
+
+      ctx->_start_txn_id = active->txn_id = ++_header->_last_assigned_tid;
       active->next_txn = 0;
+      uint8_t my_ctx_id = _ctx_index_of(ctx);
+      bool found_live = false;
       _TxnResolver resolver{self(), active, ctx};
-      iter_transactions([this, &resolver](txn_ptr txn) -> bool {
-        if (txn->refs.load() > 0) {
-          resolver._active_txn->start_txn = resolve(txn);
-          _start_txn_id = txn->txn_id;
+      iter_transactions([this, &resolver, ctx, my_ctx_id,
+                         &found_live, &last_txn](txn_ptr txn) -> bool {
+        if (!found_live) {
+          if (txn->refs.load() > 0) {
+            offset_t first_live = resolve(txn);
+            resolver._active_txn->start_txn = first_live;
+            // Advance read_txn's chain head so the next GC walker
+            // (under this same lock) skips already-freed pages.
+            last_txn->start_txn = first_live;
+            found_live = true;
+          }
+          else {
+            static_cast<Self*>(this)->_on_txn_freed(txn);
+            resolver._active_txn->mem_manager.free(static_cast<page_ptr>(txn),
+                                                   resolver);
+            return false;
+          }
+        } 
+        // found_live == true
+        if (txn->_context_id == my_ctx_id) {
+          ctx->_start_txn_id = txn->txn_id;
           return true;
         }
-        static_cast<Self*>(this)->_on_txn_freed(txn);
-        resolver._active_txn->mem_manager.free(static_cast<page_ptr>(txn),
-                                               resolver);
         return false;
       });
     }
-
-    last_txn->refs.fetch_sub(1);
     return ctx;
   }
 
@@ -770,6 +805,8 @@ struct _DB {
 
     ctx->prepared_txn = ctx->active_txn;
 
+    active->_context_id = _ctx_index_of(ctx);
+
     txn_ptr current = resolve<Transaction>(&_header->read_txn);
     current->next_txn = ctx->prepared_txn;
     make_dirty(_header);
@@ -805,10 +842,29 @@ struct _DB {
         workspace->mem_manager.free(static_cast<page_ptr>(old_page), resolver);
         auto cloned = workspace->clone(resolver);
         ctx->prepared_txn = resolve(cloned);
+      } else {
+        // No merge happened: the prepared txn may keep delete_root markers,
+        // but the next pre-allocated page must start clean.
+        txn_ptr next_page = resolve<Transaction>(&ctx->next_txn_page);
+        if (next_page->delete_root != 0) {
+          next_page->delete_root = 0;
+          make_dirty(next_page);
+        }
       }
 
       current->next_txn = ctx->prepared_txn;
-      _header->read_txn = ctx->prepared_txn;
+
+      // Inherit the current read_txn's chain head into the new read_txn.
+      // A concurrent GC walk (under txn_ref_lock) may have advanced
+      // current->start_txn past freed pages.  Take txn_ref_lock briefly
+      // to read the authoritative value — this never deadlocks because
+      // no code path holds txn_ref_lock then takes merge_lock.
+      {
+        std::lock_guard<SpinLock> ref_guard(_header->txn_ref_lock);
+        txn_ptr prepared = resolve<Transaction>(&ctx->prepared_txn);
+        prepared->start_txn = current->start_txn;
+        _header->read_txn = ctx->prepared_txn;
+      }
     }
 
     make_dirty(_header);
@@ -839,7 +895,7 @@ struct _DB {
       src_cursor._ctx = ctx;
       src_cursor._active_tid = active->txn_id;
       src_cursor.clear();  // push root onto stack for merger
-      MergePolicy policy(&self(), ctx, ctx->_snapshot_txn_id);
+      MergePolicy policy(&self(), ctx, active->txn_id);
       _MoveMerger<RawCursor, RawCursor, MergePolicy> merger(dst_cursor,
                                                             src_cursor, policy);
       merger.exec();
@@ -866,6 +922,12 @@ struct _DB {
   }
 
   void end_transaction(TxnContext* ctx) {
+    // Release the snapshot ref held since start_transaction().
+    if (ctx->_snapshot_txn) {
+      txn_ptr snap = resolve<Transaction>(&ctx->_snapshot_txn);
+      snap->refs.fetch_sub(1);
+      ctx->_snapshot_txn = 0;
+    }
     ctx->active_txn = 0;
     _release_context(_ctx_index_of(ctx));
   }
@@ -1009,8 +1071,7 @@ struct _DB {
       // Crash during merge: active_txn was switched to workspace
       // (next_txn_page) but merge/publish didn't complete.  Restore
       // next_txn_page from the untouched prepared_txn page.
-      if (ctx->active_txn != 0 &&
-          ctx->active_txn == ctx->next_txn_page &&
+      if (ctx->active_txn != 0 && ctx->active_txn == ctx->next_txn_page &&
           ctx->prepared_txn != ctx->active_txn) {
         auto prepared = resolve<Transaction>(&ctx->prepared_txn);
         auto next = resolve<Transaction>(&ctx->next_txn_page, WRITE);
@@ -1032,6 +1093,9 @@ struct _DB {
         ctx->next_txn_page = resolve(next);
       }
       // Contexts 1..N-1 with next_txn_page==0 are uninitialised — left as-is.
+
+      // Snapshot ref is void after crash (refs were zeroed above).
+      ctx->_snapshot_txn = 0;
 
       // Restore active_txn for consistency after any crash.
       if (ctx->active_txn != 0) {
