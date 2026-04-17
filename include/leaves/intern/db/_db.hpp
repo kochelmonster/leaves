@@ -807,10 +807,13 @@ struct _DB {
 
     active->_context_id = _ctx_index_of(ctx);
 
-    txn_ptr current = resolve<Transaction>(&_header->read_txn);
-    current->next_txn = ctx->prepared_txn;
+    // NOTE: Do NOT write current->next_txn here.  commit() sets the
+    // chain link under merge_lock.  Writing it here without a lock
+    // races with concurrent commits and can overwrite a correct
+    // next_txn with a stale value, corrupting the transaction chain.
+    // Crash recovery uses ctx->prepared_txn directly, so the chain
+    // link is not needed for recoverability.
     make_dirty(_header);
-    make_dirty(current);
     make_dirty(active);
 
     if (sync) flush(true, true);  // Only flush if explicitly requested
@@ -853,6 +856,7 @@ struct _DB {
       }
 
       current->next_txn = ctx->prepared_txn;
+      make_dirty(current);
 
       // Inherit the current read_txn's chain head into the new read_txn.
       // A concurrent GC walk (under txn_ref_lock) may have advanced

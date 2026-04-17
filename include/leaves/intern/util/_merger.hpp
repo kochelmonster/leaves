@@ -495,7 +495,7 @@ struct _Merger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         }
       });
 
-      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           this->template alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf, upper);
@@ -535,7 +535,7 @@ struct _Merger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         }
       });
 
-      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           this->template alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf, upper);
@@ -942,7 +942,12 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         return;
       }
       // Adopt src leaf directly (it's already in storage)
-      *dst.offset = src_cursor._db->resolve(src_leaf);
+      auto src_off = src_cursor._db->resolve(src_leaf);
+      if (src_off == *dst.offset) {
+        // Same leaf — nothing to do (snapshot branch unchanged by writer)
+        return;
+      }
+      *dst.offset = src_off;
       free_node(dst_leaf);
       return;
     }
@@ -1001,8 +1006,7 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         return;
       }
 
-      trie_ptr new_trie =
-          this->template alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
+      trie_ptr new_trie =          this->template alloc_node<trie_ptr>(TrieNode::size(src_split_pos, key1, key));
       auto idxs = new_trie->create(
           Slice(current_key.data() + dst.keypos, dst.prefix), key1, key);
       new_trie->array()[idxs.first] = child1;
@@ -1108,21 +1112,23 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         }
       });
 
-      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           this->template alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf, upper);
 
       dst.trie() = new_trie;
       dst.update_trie_offset();
-      // Free the src trie node — its children were adopted or recursed
-      free_src_node(src_trie);
 
       if (*src_trie->offset(key1) != 0) {
         src_cursor.current_key.resize(current_key.size());
         src_cursor.push(src_trie->offset(key1));
+        // Free src trie AFTER reading its offset (avoid use-after-free)
+        free_src_node(src_trie);
         dst_cursor.stack.clear();
         merge_node(current_key);
+      } else {
+        free_src_node(src_trie);
       }
 
       handler.after_trie_merged(new_trie, dst_cursor._db);
@@ -1146,7 +1152,7 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         }
       });
 
-      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           this->template alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf, upper);
@@ -1237,9 +1243,19 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
     src_trie->for_each_branch([&](int k, auto* src_off) {
       if (dst_trie->isset(k)) {
         if (*src_off != 0) {
-          shared[shared_count++] = {
-              k, const_cast<src_offset_e*>(src_off),
-              *dst_trie->offset(k)};
+          // Only merge shared branches where the writer actually modified the subtree
+          bool need_merge = true;
+          if constexpr (_has_should_descend_src) {
+            using PageHeader = typename SrcTraits::PageHeader;
+            auto page = src_cursor._db->template resolve<PageHeader>(src_off)
+                        - sizeof(PageHeader);
+            need_merge = handler.should_descend_src(page);
+          }
+          if (need_merge) {
+            shared[shared_count++] = {
+                k, const_cast<src_offset_e*>(src_off),
+                *dst_trie->offset(k)};
+          }
         }
       } else {
         offset_e child_offset;
@@ -1258,8 +1274,6 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
 
     dst.trie() = new_trie;
     dst.update_trie_offset();
-    // Free src trie node — children adopted or queued for recursive merge
-    free_src_node(src_trie);
 
     for (int si = 0; si < shared_count; si++) {
       int k = shared[si].key;
@@ -1270,6 +1284,9 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
       dst_cursor.stack.clear();
       merge_node(current_key);
     }
+
+    // Free src trie AFTER shared-branch loop — shared[].src_off points into it
+    free_src_node(src_trie);
 
     handler.after_trie_merged(new_trie, dst_cursor._db);
     free_node(dst_trie);
@@ -1333,8 +1350,10 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
 
     if constexpr (_has_should_descend_src) {
       // Resolve page header to check txn_id
+      // Node offsets point past the PageHeader, so back up to get the header
       using PageHeader = typename SrcTraits::PageHeader;
-      auto page = src_cursor._db->template resolve<PageHeader>(src_offset);
+      auto page = src_cursor._db->template resolve<PageHeader>(src_offset)
+                  - sizeof(PageHeader);
       if (!handler.should_descend_src(page)) {
         // Snapshot node — skip entirely (already in committed)
         *parent_link = offset_e();

@@ -232,10 +232,8 @@ struct _ReplicationDB
 
     // Hash trie nodes are freed explicitly by _HashUpdater when stale —
     // they are always safe to recycle immediately.
-    template <typename T>
-    bool may_recycle(T&) const {
-      return true;
-    }
+    template <typename T, typename PagePtr>
+    RecycleResult may_recycle(T&, PagePtr) const { return RecycleResult::RECYCLE; }
 
     // No transaction tracking needed for hash nodes.
     template <typename T>
@@ -319,7 +317,7 @@ struct _ReplicationDB
     // Prepare commit without computing hashes (base doesn't hash either)
     if (!Base::prepare_commit(ctx, false, origin)) return false;
 
-    // Atomically switch to new transaction
+    // Publish new transaction
     this->_header->read_txn = ctx->prepared_txn;
     this->make_dirty(this->_header);
     this->flush(sync, true);
