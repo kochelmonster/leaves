@@ -4,12 +4,16 @@
 
 #include <sys/stat.h>
 
+#include <atomic>
 #include <boost/endian/conversion.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
+#include <thread>
+#include <vector>
 
 #include "leaves/fstore.hpp"
 #include "leaves/intern/replication/_replication_db.hpp"
@@ -61,6 +65,9 @@ static const char* FLAGS_benchmarks1 =
     "overwrite,"
     "readrandom,"
     "readseq,";
+
+// Number of concurrent writer threads. Default 1 (single-threaded)
+static int FLAGS_threads = 1;
 
 // Batch size for write operations. Default 1000
 static int FLAGS_batch_size = 1000;
@@ -215,6 +222,7 @@ class Benchmark {
         FLAGS_value_size,
         static_cast<int>(FLAGS_value_size * FLAGS_compression_ratio + 0.5));
     std::fprintf(stdout, "Entries:     %d\n", num_);
+    std::fprintf(stdout, "Threads:     %d\n", FLAGS_threads);
     std::fprintf(stdout, "RawSize:     %.1f MB (estimated)\n",
                  ((static_cast<int64_t>(kKeySize + FLAGS_value_size) * num_) /
                   1048576.0));
@@ -661,6 +669,75 @@ class Benchmark {
 #endif
   }
 
+  // Multi-threaded write: each thread gets its own cursor, RNG, and key range
+  template <typename StorageType, template<typename> class DBClass = leaves::_DB>
+  void WriteMultiThreadImpl(StorageType& storage, bool sync, Order order,
+                            int num_entries, int value_size,
+                            int entries_per_batch, int num_threads) {
+    std::vector<std::thread> threads;
+    std::atomic<int64_t> shared_bytes{0};
+    std::atomic<int> shared_done{0};
+    std::mutex progress_mutex;
+
+    auto db = storage.template open<DBClass>("benchmark");
+
+    auto thread_fn = [&](int thread_id, int thread_start, int thread_count) {
+      RandomGenerator gen;
+      Random rnd(301 + thread_id);
+      char key[100];
+      leaves::Slice mkey, mval;
+
+      auto cursor = db.cursor();
+
+      for (int i = 0; i < thread_count; i += entries_per_batch) {
+        int batch = std::min(entries_per_batch, thread_count - i);
+        for (int j = 0; j < batch; j++) {
+          int k;
+          if (order == SEQUENTIAL) {
+            k = thread_start + i + j;
+          } else {
+            k = rnd.Next() % num_entries;
+          }
+
+          if (FLAGS_binary_key) {
+            uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+            __builtin_memcpy(key, &bk, sizeof(bk));
+            mkey = leaves::Slice(key, sizeof(uint64_t));
+          } else {
+            snprintf(key, sizeof(key), "%016d", k);
+            mkey = leaves::Slice(key);
+          }
+
+          mval = gen.Generate(value_size);
+          cursor.find(mkey);
+          cursor.value(mval);
+
+          shared_bytes.fetch_add(value_size + mkey.size(),
+                                std::memory_order_relaxed);
+          shared_done.fetch_add(1, std::memory_order_relaxed);
+        }
+        cursor.commit(sync);
+      }
+    };
+
+    // Divide entries among threads
+    int per_thread = num_entries / num_threads;
+    int remainder = num_entries % num_threads;
+
+    for (int t = 0; t < num_threads; ++t) {
+      int thread_count = per_thread + (t < remainder ? 1 : 0);
+      int thread_start = t * per_thread + std::min(t, remainder);
+      threads.emplace_back(thread_fn, t, thread_start, thread_count);
+    }
+
+    for (auto& th : threads) {
+      th.join();
+    }
+
+    bytes_ += shared_bytes.load();
+    done_ += shared_done.load();
+  }
+
   void Write(bool sync, Order order, DBState state, int num_entries,
              int value_size, int entries_per_batch) {
     // Create new database if state == FRESH
@@ -691,8 +768,32 @@ class Benchmark {
       message_ = msg;
     }
 
+    if (FLAGS_threads > 1) {
+      char msg[100];
+      std::snprintf(msg, sizeof(msg), "(%d threads)", FLAGS_threads);
+      if (!message_.empty()) message_ += " ";
+      message_ += msg;
+    }
+
     // Call the appropriate template implementation based on storage type
-    if (using_replicating_) {
+    if (FLAGS_threads > 1) {
+      // Multi-threaded path (only MapStorage supported)
+      if (using_file_storage_) {
+        std::fprintf(stderr, "Multi-threaded writes not supported with FileStorage\n");
+        return;
+      }
+      if (!map_storage_) {
+        throw std::runtime_error("Map storage pointer is null");
+      }
+      if (using_replicating_) {
+        WriteMultiThreadImpl<leaves::MapStorage, leaves::_ReplicationDB>(
+            *map_storage_, sync, order, num_entries, value_size,
+            entries_per_batch, FLAGS_threads);
+      } else {
+        WriteMultiThreadImpl(*map_storage_, sync, order, num_entries,
+                             value_size, entries_per_batch, FLAGS_threads);
+      }
+    } else if (using_replicating_) {
       if (!map_storage_) {
         throw std::runtime_error("Map storage pointer is null");
       }
@@ -815,6 +916,8 @@ int main(int argc, char** argv) {
       FLAGS_value_size = n;
     } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
       FLAGS_batch_size = n;
+    } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
+      FLAGS_threads = n;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {
