@@ -1144,7 +1144,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
   }
 
   // Advance transaction multiple times to allow may_recycle to work
-  // may_recycle requires txn_id < _start_txn_id, so we need to advance past
+  // may_recycle requires txn_id < _recycle_txn_id, so we need to advance past
   // the transaction where the big values were freed
   for (int i = 0; i < 3; ++i) {
     auto cursor = receiver_db.cursor();

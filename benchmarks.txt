@@ -57,3 +57,26 @@ File size: 145 MB
 ./db_bench_leaves --benchmarks=fillrandom
 fillrandom   :       0.415 micros/op;  266.4 MB/s     
 File size: 97 MB
+
+
+
+develop
+Date:           Fri Apr 17 17:58:42 2026
+CPU:            16 * AMD Ryzen 7 8745H w/ Radeon 780M Graphics
+CPUCache:       1024 KB
+Storage:     MapStorage
+Keys:        16 bytes each (decimal string)
+Values:      100 bytes each (50 bytes after compression)
+Entries:     1000000
+RawSize:     110.6 MB (estimated)
+FileSize:    62.9 MB (estimated)
+------------------------------------------------
+fillseq      :       0.194 micros/op;  569.7 MB/s     
+fillrandom   :       0.505 micros/op;  219.0 MB/s     
+overwrite    :       0.560 micros/op;  197.4 MB/s     
+readrandom   :       0.379 micros/op;  252.1 MB/s     
+readseq      :       0.058 micros/op; 1919.7 MB/s    
+fillrand100K :      51.498 micros/op; 1852.2 MB/s (1000 ops)
+fillseq100K  :      76.978 micros/op; 1239.1 MB/s (1000 ops)
+readseq100K  :       0.065 micros/op; 1465435.9 MB/s
+readrand100K :       0.101 micros/op; 943547.2 MB/s

@@ -130,6 +130,7 @@ struct _BrowserOperations : _CacheBase {
   struct CtxCondVar {
     template <typename L> void wait(L&) {}
     void notify_one() {}
+    void notify_all() {}
   };
 
   struct FileHeader {

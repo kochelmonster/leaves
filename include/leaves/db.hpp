@@ -46,6 +46,12 @@ class TDB {
   // Replication configuration (only available on replicating storages)
   void set_retention(uint64_t seconds) { _db->set_retention(seconds); }
 
+  // Deferred commit: workers accumulate this many batches before merging to main.
+  // 0 = always flush immediately (backward-compatible default).
+  void set_deferred_flush_threshold(uint32_t n) {
+    _db->_deferred_flush_threshold = n;
+  }
+
  private:
   storage_ptr _storage;
   DBImpl *_db;

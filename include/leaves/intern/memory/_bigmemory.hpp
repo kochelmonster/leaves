@@ -107,7 +107,7 @@ struct _BigMemory {
     FreeKey* found = nullptr;
     for (int i = 0; i < 10 && _free_cursor.is_valid(); i++) {
       ValueBlock* vblock = (ValueBlock*)_free_cursor.value().data();
-      if (vblock->txn_id < _free_cursor._ctx->_start_txn_id) {
+      if (vblock->txn_id < _free_cursor._ctx->_recycle_txn_id) {
         found = (FreeKey*)_free_cursor.key().data();
         assert(found->size >= padded_size);
         break;
@@ -209,7 +209,7 @@ struct _BigMemory {
 
       while (iter_cursor.is_valid()) {
         ValueBlock* vblock = (ValueBlock*)iter_cursor.value().data();
-        if (!(vblock->txn_id < iter_root.ctx->_start_txn_id)) {
+        if (!(vblock->txn_id < iter_root.ctx->_recycle_txn_id)) {
           iter_cursor.next();
           continue;
         }
@@ -240,7 +240,7 @@ struct _BigMemory {
             lookup_cursor.find(Slice((char*)next_header, sizeof(FreeKey)));
             if (lookup_cursor.is_valid()) {
               ValueBlock* next_vblock = (ValueBlock*)lookup_cursor.value().data();
-              if (next_vblock->txn_id < search_root.ctx->_start_txn_id) {
+              if (next_vblock->txn_id < search_root.ctx->_recycle_txn_id) {
                 lookup_cursor.remove();
                 total_size += next_header->size;
                 has_successor = (next_header->offset & 1) != 0;

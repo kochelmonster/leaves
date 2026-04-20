@@ -71,6 +71,9 @@ static int FLAGS_threads = 1;
 
 // Batch size for write operations. Default 1000
 static int FLAGS_batch_size = 1000;
+// Deferred flush interval for multithread writes.
+// Workers accumulate this many batches before merging to main (0 = disabled).
+static int FLAGS_flush_interval = 0;
 
 // Use writable MMAP
 static bool FLAGS_writemap = false;
@@ -680,6 +683,8 @@ class Benchmark {
     std::mutex progress_mutex;
 
     auto db = storage.template open<DBClass>("benchmark");
+    if (FLAGS_flush_interval > 0)
+      db.set_deferred_flush_threshold(static_cast<uint32_t>(FLAGS_flush_interval));
 
     auto thread_fn = [&](int thread_id, int thread_start, int thread_count) {
       RandomGenerator gen;
@@ -718,6 +723,7 @@ class Benchmark {
         }
         cursor.commit(sync);
       }
+      cursor.flush();  // flush any pending deferred commits before thread exits
     };
 
     // Divide entries among threads
@@ -917,6 +923,8 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
       FLAGS_batch_size = n;
     } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
+    } else if (sscanf(argv[i], "--flush_interval=%d%c", &n, &junk) == 1) {
+      FLAGS_flush_interval = n;
       FLAGS_threads = n;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;

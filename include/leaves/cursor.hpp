@@ -72,6 +72,8 @@ class TCursor {
   void commit(bool sync = false) { _cursor->commit(sync); }
 
   void rollback() { _cursor->rollback(); }
+  void flush() { _cursor->flush(); }
+
 
   auto& aspect_context() { return _cursor->_aspect_context; }
   const auto& aspect_context() const { return _cursor->_aspect_context; }

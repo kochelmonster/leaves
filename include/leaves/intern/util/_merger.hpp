@@ -65,6 +65,13 @@ struct StandardMergePolicy {
   template <typename PagePtr>
   bool should_descend_src(PagePtr) { return true; }
 
+  // Whether to free a dst node being replaced during merge.
+  // Returns true by default (free everything).
+  // _ContextMergePolicy overrides to skip freeing snapshot nodes
+  // that are still referenced by the worker's tree.
+  template <typename PagePtr>
+  bool should_free_dst(PagePtr) { return true; }
+
   // Called when a src node is orphaned during move-merge (not adopted as-is).
   // Default: no-op. _ContextMergePolicy overrides to free writer-allocated nodes.
   template <typename NodePtr>
@@ -96,6 +103,30 @@ struct StandardMergePolicy {
   }
 };
 
+// Detection helpers for optional policy methods (should_descend_src, should_free_dst).
+// Policies that don't define these methods at all → false.
+// Policies that inherit them unchanged from StandardMergePolicy → false.
+// Policies that override them → true.
+namespace _merger_detail {
+  template <typename P, typename PP, typename = void>
+  struct _detect_should_descend_src : std::false_type {};
+  template <typename P, typename PP>
+  struct _detect_should_descend_src<P, PP,
+      std::void_t<decltype(&P::template should_descend_src<PP>)>>
+      : std::bool_constant<!std::is_same_v<
+          decltype(&P::template should_descend_src<PP>),
+          decltype(&StandardMergePolicy::template should_descend_src<PP>)>> {};
+
+  template <typename P, typename PP, typename = void>
+  struct _detect_should_free_dst : std::false_type {};
+  template <typename P, typename PP>
+  struct _detect_should_free_dst<P, PP,
+      std::void_t<decltype(&P::template should_free_dst<PP>)>>
+      : std::bool_constant<!std::is_same_v<
+          decltype(&P::template should_free_dst<PP>),
+          decltype(&StandardMergePolicy::template should_free_dst<PP>)>> {};
+}
+
 /**
  * @brief Common base for _Merger and _MoveMerger
  *
@@ -121,7 +152,8 @@ struct _MergerBase {
 
   static constexpr bool _has_may_add_leaf = !std::is_same_v<decltype(&MergePolicy::may_add_leaf), decltype(&StandardMergePolicy::may_add_leaf)>;
   static constexpr bool _has_may_add_trie = !std::is_same_v<decltype(&MergePolicy::may_add_trie), decltype(&StandardMergePolicy::may_add_trie)>;
-  static constexpr bool _has_should_descend_src = !std::is_same_v<decltype(&MergePolicy::template should_descend_src<page_ptr>), decltype(&StandardMergePolicy::template should_descend_src<page_ptr>)>;
+  static constexpr bool _has_should_descend_src = _merger_detail::_detect_should_descend_src<MergePolicy, page_ptr>::value;
+  static constexpr bool _has_should_free_dst = _merger_detail::_detect_should_free_dst<MergePolicy, page_ptr>::value;
 
   CursorDst& dst_cursor;
   CursorSrc& src_cursor;
@@ -143,13 +175,20 @@ struct _MergerBase {
         !std::is_same_v<NodePtr, page_ptr>,
         "free_node must be called with node pointers, not page pointers");
 
+    page_ptr page = node - sizeof(PageHeader);
+
+    // For context merges: skip freeing snapshot nodes that are shared
+    // with the worker's tree.  Only free nodes allocated in this merge.
+    if constexpr (_has_should_free_dst) {
+      if (!handler.should_free_dst(page)) return;
+    }
+
     if constexpr (NodePtr::type == LEAF) {
       if (node->is_big()) {
         handler.free_big(node, dst_cursor);
       }
     }
 
-    page_ptr page = node - sizeof(PageHeader);
     dst_cursor.free(page);
   }
 
@@ -253,12 +292,21 @@ struct _Merger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
       : Base(dest, src, handler) {}
 
   void exec() {
-    // Pre-init BigMemory to avoid lazy-init race
-    dst_cursor.get_bigmemory();
+    // Pre-init BigMemory to avoid lazy-init race (only when cursor supports it)
+    _init_bigmemory(dst_cursor);
     std::string current_key = src_cursor.current_key;
     current_key.reserve(255);
     merge_node(current_key);
   }
+
+private:
+  template <typename C>
+  static auto _init_bigmemory(C& c) -> decltype(c.get_bigmemory(), void()) {
+    c.get_bigmemory();
+  }
+  static void _init_bigmemory(...) {}
+
+public:
 
   void merge_node(std::string& current_key) {
     if (!src_cursor.stack.size) return;
@@ -635,9 +683,20 @@ struct _Merger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
       if (dst_trie->isset(k)) {
         // Shared branch — merge recursively later (skip incomplete src)
         if (*src_off != 0) {
-          shared[shared_count++] = {
-              k, const_cast<src_offset_e*>(src_off),
-              *dst_trie->offset(k)};
+          // For context merges: skip shared branches where the writer
+          // didn't modify the subtree (snapshot node → O(1) skip).
+          bool need_merge = true;
+          if constexpr (_has_should_descend_src) {
+            using SrcPageHeader = typename SrcTraits::PageHeader;
+            auto src_node = src_cursor._db->template resolve<_Node>(src_off);
+            typename SrcTraits::ptr src_page = src_node - sizeof(SrcPageHeader);
+            need_merge = handler.should_descend_src(src_page);
+          }
+          if (need_merge) {
+            shared[shared_count++] = {
+                k, const_cast<src_offset_e*>(src_off),
+                *dst_trie->offset(k)};
+          }
         }
       } else {
         // Src-only — selectively deep copy
@@ -723,6 +782,18 @@ struct _Merger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
     if (*src_offset == 0) {
       *parent_link = offset_e();
       return false;
+    }
+
+    // For context merges: skip snapshot subtrees (already in committed
+    // storage).  Keep the original offset — the node is stable.
+    if constexpr (_has_should_descend_src) {
+      using SrcPageHeader = typename SrcTraits::PageHeader;
+      auto src_node = src_cursor._db->template resolve<_Node>(src_offset);
+      typename SrcTraits::ptr src_page = src_node - sizeof(SrcPageHeader);
+      if (!handler.should_descend_src(src_page)) {
+        *parent_link = *src_offset;
+        return true;
+      }
     }
 
     if (src_offset->type() == LEAF) {
@@ -1246,10 +1317,10 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
           // Only merge shared branches where the writer actually modified the subtree
           bool need_merge = true;
           if constexpr (_has_should_descend_src) {
-            using PageHeader = typename SrcTraits::PageHeader;
-            auto page = src_cursor._db->template resolve<PageHeader>(src_off)
-                        - sizeof(PageHeader);
-            need_merge = handler.should_descend_src(page);
+            using SrcPageHeader = typename SrcTraits::PageHeader;
+            auto src_node = src_cursor._db->template resolve<_Node>(src_off);
+            typename SrcTraits::ptr src_page = src_node - sizeof(SrcPageHeader);
+            need_merge = handler.should_descend_src(src_page);
           }
           if (need_merge) {
             shared[shared_count++] = {
@@ -1351,10 +1422,10 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
     if constexpr (_has_should_descend_src) {
       // Resolve page header to check txn_id
       // Node offsets point past the PageHeader, so back up to get the header
-      using PageHeader = typename SrcTraits::PageHeader;
-      auto page = src_cursor._db->template resolve<PageHeader>(src_offset)
-                  - sizeof(PageHeader);
-      if (!handler.should_descend_src(page)) {
+      using SrcPageHeader = typename SrcTraits::PageHeader;
+      auto src_node = src_cursor._db->template resolve<_Node>(src_offset);
+      typename SrcTraits::ptr src_page = src_node - sizeof(SrcPageHeader);
+      if (!handler.should_descend_src(src_page)) {
         // Snapshot node — skip entirely (already in committed)
         *parent_link = offset_e();
         return false;

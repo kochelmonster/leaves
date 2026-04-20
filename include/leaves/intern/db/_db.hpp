@@ -1,6 +1,7 @@
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -29,26 +30,23 @@ struct _TransactionBase : public Traits_::PageHeader {
   // pointer to the active bigmem freelist trie root
   offset_e free_bigmem_root;
 
+  // trie root for tracking deleted keys (used during merge commit)
+  offset_e delete_root{0};
+
   // pointer to the oldest transaction
   offset_e start_txn;
 
   // pointer to the next higher transaction
   offset_e next_txn;
 
-  // count of cursors accessing this transaction
-  std::atomic<uint32_t> refs;
-
-  // trie root for tracking deleted keys (used during merge commit)
-  offset_e delete_root{0};
-
   // Area tracking: tail pointers for areas allocated during this transaction
   offset_e area_list_tail_single{0};
   offset_e area_list_tail_multi{0};
 
-  // Index of the context that committed this transaction
-  uint8_t _context_id{0};
-
   MemManager mem_manager;
+
+  // count of cursors accessing this transaction
+  std::atomic<uint32_t> refs;
 };
 
 template <typename Traits_>
@@ -92,45 +90,55 @@ struct _Transaction : public _TransactionBase<Traits_> {
 // Stored contiguously after the DB header in storage.
 template <typename Storage_>
 struct _TxnContext {
+  using offset_e = typename Storage_::Traits::offset_e;
+
+  offset_e prepared_txn{0};   // transaction being prepared for commit
+  offset_e next_txn_page{0};  // pre-allocated next txn page
+  offset_e active_txn{0};     // offset of active transaction (set during txn)
+  offset_e last_txn{0};       // offset of last transaction (for rollback)
+  offset_e area_list_head_single{0};  // head of single-AREA_SIZE area chain
+  offset_e area_list_head_multi{0};   // head of multi-AREA_SIZE area chain
+  offset_e _snapshot_txn{0};  // snapshot txn offset (ref held for txn lifetime)
+  tid_t _recycle_txn_id{0};   // per-context recycle threshold
   std::atomic<uint8_t> _claimed{0};  // 0 = free, 1 = claimed (CAS to acquire)
-  offset_t prepared_txn{0};          // transaction being prepared for commit
-  offset_t next_txn_page{0};         // pre-allocated next txn page
-  offset_t active_txn{0};  // offset of active transaction (set during txn)
-  offset_t area_list_head_single{0};  // head of single-AREA_SIZE area chain
-  offset_t area_list_head_multi{0};   // head of multi-AREA_SIZE area chain
-  tid_t _snapshot_txn_id{0};          // txn_id at start_transaction() time
-  offset_t _snapshot_txn{0};  // snapshot txn offset (ref held for txn lifetime)
-  tid_t _start_txn_id{0};     // per-context recycle threshold
+  uint8_t _needs_arena_reset{0};  // 1 = worker needs arena reset on next txn
+  std::atomic<uint8_t> _merge_done{0};  // 1 = leader merged this context's delta
 };
 
 // Default database header (defined outside _DB for reusability)
 template <typename Storage_>
 struct _DBHeader {
-  offset_t read_txn;      // the current read transaction
-  SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
-
-  // Identifies the DB subtype for runtime type verification on open.
-  // Written by init(), checked by open<>() to prevent type mismatches.
-  uint16_t db_type_id;
-
-  uint8_t num_contexts;  // number of parallel transaction contexts
-
-  // Tracks whether this DB has been sanitized for the current storage
-  // generation.  Compared against the FileHeader counter at open() time.
-  uint32_t sanitize_generation;
+  using offset_e = typename Storage_::Traits::offset_e;
 
   // Cross-process wait mechanism for blocking context claims.
   // Types come from Storage_ so they match the storage backend.
   typename Storage_::CtxMutex ctx_wait_lock;
   typename Storage_::CtxCondVar ctx_wait_cv;
 
+  offset_e read_txn;      // the current read transaction
+  SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
+
   // Global merge lock — serializes merge-on-commit when parallel
   // contexts conflict.  Cross-process safe (pure hardware atomics).
   SpinLock merge_lock;
 
+  // Group commit: bitmap of contexts waiting for leader to merge their delta.
+  // Bit i set = context i has called prepare_commit and is waiting.
+  std::atomic<uint32_t> _pending_merge_bitmap{0};
+
+  // Tracks whether this DB has been sanitized for the current storage
+  // generation.  Compared against the FileHeader counter at open() time.
+  uint32_t sanitize_generation;
+
   // Monotonic counter for unique txn_id assignment.  Incremented under
   // txn_ref_lock so parallel start_transaction() calls never collide.
   tid_t _last_assigned_tid{0};
+
+  // Identifies the DB subtype for runtime type verification on open.
+  // Written by init(), checked by open<>() to prevent type mismatches.
+  uint16_t db_type_id;
+
+  uint8_t num_contexts;  // number of parallel transaction contexts
 };
 
 /**
@@ -150,22 +158,38 @@ struct _ContextMergePolicy : StandardMergePolicy {
   DB_* _db;
   TxnContext* _ctx;
   tid_t _writer_txn_id;
+  tid_t _main_txn_id;
+  // When non-zero, used by deferred commits to descend ALL worker-written nodes
+  // (all batches since divergence, not just the current batch's txn_id).
+  tid_t _diverge_txn_id;
 
-  _ContextMergePolicy(DB_* db, TxnContext* ctx, tid_t writer_txn_id)
-      : _db(db), _ctx(ctx), _writer_txn_id(writer_txn_id) {}
+  _ContextMergePolicy(DB_* db, TxnContext* ctx, tid_t writer_txn_id,
+                      tid_t main_txn_id, tid_t diverge_txn_id = tid_t(0))
+      : _db(db), _ctx(ctx), _writer_txn_id(writer_txn_id),
+        _main_txn_id(main_txn_id), _diverge_txn_id(diverge_txn_id) {}
 
-  // Only descend into src nodes allocated by the writer (txn_id == writer).
-  // Snapshot nodes are already in committed — skip entirely.
+  // Descend into src nodes allocated by the writer.
+  // Deferred mode (diverge_txn_id set): descend all batches since divergence.
+  // Normal mode: descend only the current batch (txn_id == writer).
   template <typename PagePtr>
   bool should_descend_src(PagePtr page) {
+    if (_diverge_txn_id != tid_t(0))
+      return page->txn_id > _diverge_txn_id;
     return page->txn_id == _writer_txn_id;
   }
 
-  // Free orphaned src node (writer-allocated, not adopted into dst).
+  // No-op: worker context areas are reset wholesale after commit.
+  // Individual node freeing is not needed.
   template <typename NodePtr>
-  void free_src(NodePtr& node) {
-    page_ptr page = node - sizeof(PageHeader);
-    _db->_free(page, _ctx);
+  void free_src(NodePtr& node) {}
+
+  // Only free dst nodes allocated in this merge transaction.
+  // Snapshot nodes (from the committed chain) are shared with the worker
+  // tree — freeing them could cause the worker's src_cursor to read garbage
+  // if the freed page gets reallocated during the same merge.
+  template <typename PagePtr>
+  bool should_free_dst(PagePtr page) {
+    return page->txn_id == _main_txn_id;
   }
 
   // Override free_big: use DB's active txn's free_bigmem_root directly.
@@ -247,12 +271,35 @@ struct _DB {
 
   using header_ptr = typename Traits::template Pointer<Header>;
 
+  struct _DeferredCtxState {
+    offset_e accumulated_txn{0};      // last deferred prepared_txn offset
+    uint32_t pending_commit_count{0}; // deferred batches since last flush
+    tid_t diverge_txn_id{0};          // snapshot txn_id at divergence
+    uint8_t in_deferred_sequence{0};  // 1 = context holds deferred state
+  };
+
   Storage& _storage;
   header_ptr _header;
   std::string _name;
   uint8_t _num_contexts;
+  // When > 0, workers defer merging to main until this many batches accumulate.
+  // 0 = always flush immediately (default, backward-compatible behavior).
+  uint32_t _deferred_flush_threshold{0};
+  // Runtime-only deferred state per context. Kept out of TxnContext to avoid
+  // changing persisted layout used by graph-identity tests.
+  std::array<_DeferredCtxState, 64> _deferred_ctx{};
 
   [[no_unique_address]] Aspect _aspect{};
+
+  // Stored context count in header memory.
+  // Single-thread mode stores only main context (0).
+  // Multi-thread mode stores main context (0) plus worker contexts (1..N).
+  uint8_t _context_count() const {
+    if (_num_contexts <= 1) return 1;
+    return static_cast<uint8_t>(_num_contexts + 1);
+  }
+
+  bool _is_multithread_mode() const { return _num_contexts > 1; }
 
   // Access the i-th TxnContext stored after the header in storage.
   TxnContext* context(uint8_t i) {
@@ -268,7 +315,7 @@ struct _DB {
 
   // Total header size including all contexts (for computing txn offset).
   uint16_t _header_total_size() const {
-    return padding(sizeof(Header) + _num_contexts * sizeof(TxnContext),
+    return padding(sizeof(Header) + _context_count() * sizeof(TxnContext),
                    MIN_PAGE_SIZE);
   }
 
@@ -280,6 +327,27 @@ struct _DB {
   // Resolve active transaction from a TxnContext.
   txn_ptr _resolve_active(TxnContext* ctx) const {
     return resolve<Transaction>(&ctx->active_txn);
+  }
+
+  _DeferredCtxState& _deferred(TxnContext* ctx) {
+    uint8_t idx = _ctx_index_of(ctx);
+    assert(idx < _deferred_ctx.size());
+    return _deferred_ctx[idx];
+  }
+  const _DeferredCtxState& _deferred(const TxnContext* ctx) const {
+    uint8_t idx = static_cast<uint8_t>(ctx - context(0));
+    assert(idx < _deferred_ctx.size());
+    return _deferred_ctx[idx];
+  }
+  bool _ctx_in_deferred_sequence(const TxnContext* ctx) const {
+    return _deferred(ctx).in_deferred_sequence != 0;
+  }
+  void _clear_deferred(TxnContext* ctx) {
+    auto& d = _deferred(ctx);
+    d.accumulated_txn = 0;
+    d.pending_commit_count = 0;
+    d.diverge_txn_id = tid_t(0);
+    d.in_deferred_sequence = 0;
   }
 
   // Internal resolver for lifecycle code (start_transaction GC, clone,
@@ -297,7 +365,7 @@ struct _DB {
     }
 
     template <typename Pointer>
-    typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
+    typename std::enable_if<!std::is_pointer<Pointer>::value, offset_e>::type
     resolve(const Pointer& p) const {
       return _db._storage.resolve(p);
     }
@@ -307,7 +375,7 @@ struct _DB {
       // Page already recycled by another garbage entry — skip
       if (page->txn_id != garbage_block.org_txn_id) return RecycleResult::SKIP;
       // Entry too new — stop (queue is ordered within context)
-      if (!(garbage_block.txn_id < _ctx->_start_txn_id))
+      if (!(garbage_block.txn_id < _ctx->_recycle_txn_id))
         return RecycleResult::STOP;
       // CAS-stamp the page to claim it
       auto expected = garbage_block.org_txn_id._value;
@@ -332,16 +400,16 @@ struct _DB {
     area_ptr alloc_single_area() { return _db._alloc_single_area(_active_txn); }
   };
 
-  _DB(Storage& storage, offset_t header, std::string_view name,
+  _DB(Storage& storage, offset_e header, std::string_view name,
       uint8_t num_contexts = 1)
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _name(name),
         _num_contexts(num_contexts) {
-    if (_header->num_contexts != _num_contexts) throw TypeMismatch();
+    if (_header->num_contexts != _context_count()) throw TypeMismatch();
   }
 
-  _DB(Storage& storage, offset_t* header, std::string_view name,
+  _DB(Storage& storage, offset_e* header, std::string_view name,
       uint8_t num_contexts = 1)
       : _storage(storage), _name(name), _num_contexts(num_contexts) {
     init(header);
@@ -349,27 +417,28 @@ struct _DB {
 
   Self& self() { return *static_cast<Self*>(this); }
 
-  void init(offset_t* header) {
+  void init(offset_e* header) {
     auto area_ptr = _storage.alloc_single_area();
 
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
-    _header->num_contexts = _num_contexts;
+    _header->num_contexts = _context_count();
     new (&_header->txn_ref_lock) SpinLock();
     new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
     new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
     new (&_header->merge_lock) SpinLock();
+    new (&_header->_pending_merge_bitmap) std::atomic<uint32_t>(0);
     auto* ctx = context(0);
-    memset(ctx, 0, _num_contexts * sizeof(TxnContext));
+    memset(ctx, 0, _context_count() * sizeof(TxnContext));
     ctx->_claimed.store(0, std::memory_order_relaxed);
-    offset_t first_area_offset = _storage.resolve(area_ptr);
+    offset_e first_area_offset = _storage.resolve(area_ptr);
     ctx->area_list_head_single = first_area_offset;
     ctx->area_list_head_multi = 0;
 
     // Initialize remaining contexts (all start as unclaimed).
-    for (uint8_t i = 1; i < _num_contexts; i++)
+    for (uint8_t i = 1; i < _context_count(); i++)
       context(i)->_claimed.store(0, std::memory_order_relaxed);
 
     uint16_t header_size = _header_total_size();
@@ -404,7 +473,7 @@ struct _DB {
   // Return all areas to storage pool (iterates all contexts)
   void return_areas() {
     auto read_txn = resolve<Transaction>(&_header->read_txn);
-    for (uint8_t i = 0; i < _num_contexts; i++) {
+    for (uint8_t i = 0; i < _context_count(); i++) {
       auto* ctx = context(i);
       if (ctx->area_list_head_single && read_txn->area_list_tail_single) {
         _storage.return_single_areas(ctx->area_list_head_single,
@@ -418,7 +487,7 @@ struct _DB {
   }
 
   // Reset the DB by returning all areas to storage and reinitializing
-  void reset(offset_t* header) {
+  void reset(offset_e* header) {
     if (is_active()) throw TransactionActive();
     if (!_aspect.before_reset(self())) return;
     return_areas();
@@ -446,7 +515,7 @@ struct _DB {
   }
 
   template <typename Pointer>
-  typename std::enable_if<!std::is_pointer<Pointer>::value, offset_t>::type
+  typename std::enable_if<!std::is_pointer<Pointer>::value, offset_e>::type
   resolve(const Pointer& p) const {
     return _storage.resolve(p);
   }
@@ -495,12 +564,22 @@ struct _DB {
   }
 
   area_ptr _alloc_single_area(txn_ptr active) {
+    auto tail = resolve<Area>(&active->area_list_tail_single, WRITE);
+
+    // Reuse existing next area in the chain (hot pages from previous txn).
+    if (tail->next != 0) {
+      active->area_list_tail_single = tail->next;
+      auto reused = resolve<Area>(&active->area_list_tail_single, WRITE);
+      make_dirty(reused);
+      return reused;
+    }
+
+    // No reusable areas — allocate from global pool.
     std::scoped_lock lock(_storage.file_lock());
 
     auto ap = _storage.alloc_single_area();
     ap->next = 0;
 
-    auto tail = resolve<Area>(&active->area_list_tail_single, WRITE);
     tail->next = resolve(ap);
     make_dirty(tail);
     active->area_list_tail_single = resolve(ap);
@@ -531,20 +610,19 @@ struct _DB {
   }
 
   template <typename T>
-  void iter_transactions(T caller) const {
-    offset_t read_off = _header->read_txn;
-    txn_ptr read_txn = resolve<Transaction>(&read_off);
-    offset_t cur_off = read_txn->start_txn;
+  void iter_transactions(offset_e traversal_head, T caller) const {
+    txn_ptr read_txn = resolve<Transaction>(&traversal_head);
+    offset_e cur_off = read_txn->start_txn;
 
     while (cur_off != 0) {
       txn_ptr txn = resolve<Transaction>(&cur_off);
       // Read next before callback because callback may free txn.
-      offset_t next_off = txn->next_txn;
+      offset_e next_off = txn->next_txn;
       if (caller(txn)) break;
 
       // Terminate by chain links, not txn_id ordering.
-      if (cur_off == read_off) break;
-      assert(next_off != 0 && next_off != cur_off);
+      if (cur_off == traversal_head) break;
+      if (next_off == 0 || next_off == cur_off) break;
       cur_off = next_off;
     }
   }
@@ -553,7 +631,7 @@ struct _DB {
 
   // Return the raw offset of the current read transaction.
   // This is a plain aligned 64-bit load — no lock required.
-  offset_t read_txn_offset() const { return _header->read_txn; }
+  offset_e txn_offset() const { return _header->read_txn; }
 
   // Atomically resolve current read txn and increment its refcount.
   // Uses SpinLock to prevent a concurrent start_transaction() from
@@ -568,7 +646,7 @@ struct _DB {
   // Atomically pin a txn by raw storage offset and increment its refcount.
   // Returns null if offset is 0 — txn was cleaned between the caller's read
   // of the offset and acquiring txn_ref_lock. Caller must treat null as stale.
-  txn_ptr txn_ref_at(offset_t offset) {
+  txn_ptr txn_ref_at(offset_e offset) {
     std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
     if (!offset) return txn_ptr();
     txn_ptr t = resolve<Transaction>(&offset);
@@ -583,11 +661,11 @@ struct _DB {
 
   bool is_active() const {
     // Check if any context has an active transaction.
-    for (uint8_t i = 0; i < _num_contexts; i++) {
+    for (uint8_t i = 0; i < _context_count(); i++) {
       if (context(i)->active_txn) return true;
     }
     bool is_active_ = false;
-    iter_transactions([&is_active_](txn_ptr txn) -> bool {
+    iter_transactions(txn_offset(), [&is_active_](txn_ptr txn) -> bool {
       if (txn->refs.load() > 0) is_active_ = true;
       return is_active_;
     });
@@ -597,7 +675,9 @@ struct _DB {
 
   // Try to CAS-claim any free context. Returns index or UINT8_MAX.
   uint8_t _try_claim_any() {
-    for (uint8_t i = 0; i < _num_contexts; i++) {
+    uint8_t begin = _is_multithread_mode() ? 1 : 0;
+    uint8_t end = _is_multithread_mode() ? _context_count() : 1;
+    for (uint8_t i = begin; i < end; i++) {
       uint8_t expected = 0;
       if (context(i)->_claimed.compare_exchange_weak(expected, 1,
                                                      std::memory_order_acquire,
@@ -605,6 +685,25 @@ struct _DB {
         return i;
     }
     return UINT8_MAX;
+  }
+
+  // Claim main context (index 0). In commit path this blocks until available.
+  TxnContext* _claim_main_context() {
+    uint8_t expected = 0;
+    if (context(0)->_claimed.compare_exchange_weak(expected, 1,
+                                                   std::memory_order_acquire,
+                                                   std::memory_order_relaxed))
+      return context(0);
+
+    std::unique_lock lk(_header->ctx_wait_lock);
+    while (true) {
+      expected = 0;
+      if (context(0)->_claimed.compare_exchange_weak(
+              expected, 1, std::memory_order_acquire,
+              std::memory_order_relaxed))
+        return context(0);
+      _header->ctx_wait_cv.wait(lk);
+    }
   }
 
   // Claim a free transaction context. Returns the context index.
@@ -644,7 +743,7 @@ struct _DB {
     ap->next = 0;
     make_dirty(ap);
 
-    offset_t txn_offset = ap->content_offset();
+    offset_e txn_offset = ap->content_offset();
     txn_ptr wtxn = resolve<Transaction>(&txn_offset);
     memset(static_cast<void*>(&*wtxn), 0, sizeof(Transaction));
     wtxn->slot_id = Transaction::SLOT_ID;
@@ -663,8 +762,8 @@ struct _DB {
     ctx->area_list_head_single = _storage.resolve(ap);
     ctx->area_list_head_multi = 0;
     ctx->next_txn_page = txn_offset;
-
-    // Match the "unprepared" state so prepare_commit() doesn't early-return.
+    // Set prepared_txn != next_txn_page so prepare_commit() always clones
+    // and keeps next_txn_page valid for the following transaction.
     ctx->prepared_txn = _header->read_txn;
 
     make_dirty(wtxn);
@@ -683,110 +782,155 @@ struct _DB {
 
     auto* ctx = context(idx);
     assert(!ctx->active_txn);
+    start_ctx_transaction(ctx);
+    return ctx;
+  }
+
+  void start_ctx_transaction(TxnContext* ctx) {
+    auto& deferred = _deferred(ctx);
+    // Deferred continuation: arena is preserved, next_txn_page is a clone of the
+    // accumulated state (root + delete_root already set by previous prepare_commit).
+    if (deferred.in_deferred_sequence) {
+      assert(ctx->next_txn_page);
+      txn_ptr active = resolve<Transaction>(&ctx->next_txn_page);
+      ctx->active_txn = ctx->next_txn_page;
+      ctx->next_txn_page = 0;
+      ctx->last_txn = ctx->prepared_txn;
+      ctx->prepared_txn = 0;
+      // active->root and active->delete_root already reflect accumulated state.
+      // Keep ctx->_snapshot_txn (ref held from first batch in this sequence).
+      // Keep deferred.diverge_txn_id (same divergence point throughout sequence).
+      {
+        std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
+        _header->_last_assigned_tid =
+            tid_t(static_cast<uint64_t>(_header->_last_assigned_tid) + 1);
+        active->txn_id = _header->_last_assigned_tid;
+      }
+      ctx->_recycle_txn_id = active->txn_id;
+      active->next_txn = 0;
+      return;
+    }
+
+    // Normal path: lazy reset for worker contexts in multithread mode.
+    // Must run BEFORE the next_txn_page check because _reset_worker_context
+    // sets next_txn_page, preventing a redundant _init_context allocation.
+    if (ctx->_needs_arena_reset) {
+      _reset_worker_context(ctx);
+      ctx->_needs_arena_reset = 0;
+    }
 
     // Lazy-init contexts that have never been used.
-    if (!ctx->next_txn_page) _init_context(idx);
-
-    txn_ptr last_txn;
+    if (!ctx->next_txn_page) {
+      uint8_t idx = _ctx_index_of(ctx);
+      _init_context(idx);
+    }
 
     // Pre-allocated page is always ready (from commit, rollback, or init)
     assert(ctx->next_txn_page);
     txn_ptr active = resolve<Transaction>(&ctx->next_txn_page);
     ctx->active_txn = ctx->next_txn_page;
     ctx->next_txn_page = 0;
+    ctx->last_txn = ctx->prepared_txn;
+    // Ensure prepared_txn != active_txn so prepare_commit() always clones
+    // a fresh next_txn_page (the clone will have refs=0).
+    ctx->prepared_txn = 0;
 
-    // Find the oldest used transaction and free unused old transactions.
-    // Hold txn_ref_lock to prevent a concurrent txn_ref() from resolving
-    // a txn between the refs==0 check and free().
-    // Assign txn_id inside txn_ref_lock to prevent a concurrent reader
-    // from seeing a half-initialised txn_id.
-    //
-    // Pin last_txn (the snapshot) atomically under the same lock so
-    // a concurrent GC walk never sees refs==0 for our snapshot and
-    // frees it before we can pin it.
-    //
-    // Use a local variable during the walk and write _start_txn_id only
-    // once at the end.  Writing the optimistic high value (last_txn->txn_id)
-    // directly to the shared member first would create a window where
-    // another thread's may_recycle() sees a transiently-too-high threshold
-    // and recycles pages still live in the committed trie.
+    txn_ptr snapshot_txn = txn_ref();
+    ctx->_snapshot_txn = txn_offset();
+    active->root = snapshot_txn->root;
     {
       std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
-
-      // Resolve and pin snapshot atomically under lock.
-      last_txn = txn();
-      last_txn->refs.fetch_add(1);
-      ctx->_snapshot_txn_id = last_txn->txn_id;
-      ctx->_snapshot_txn = _header->read_txn;  // last_txn offset
-
-      // Reset active root to the snapshot committed tree, atomically
-      // with the snapshot pin.  The pre-allocated page's root may be
-      // stale (from a previous merge's workspace) and reference
-      // committed nodes with txn_ids between the old snapshot and the
-      // current one.  Using the snapshot root ensures the writer only
-      // has nodes with txn_id <= snapshot once COW begins.
-      active->root = last_txn->root;
-      assert(active->delete_root == 0);
-
-      ctx->_start_txn_id = active->txn_id = ++_header->_last_assigned_tid;
-      active->next_txn = 0;
-      uint8_t my_ctx_id = _ctx_index_of(ctx);
-      bool found_live = false;
-      _TxnResolver resolver{self(), active, ctx};
-      iter_transactions([this, &resolver, ctx, my_ctx_id,
-                         &found_live, &last_txn](txn_ptr txn) -> bool {
-        if (!found_live) {
-          if (txn->refs.load() > 0) {
-            offset_t first_live = resolve(txn);
-            resolver._active_txn->start_txn = first_live;
-            // Advance read_txn's chain head so the next GC walker
-            // (under this same lock) skips already-freed pages.
-            last_txn->start_txn = first_live;
-            found_live = true;
-          }
-          else {
-            static_cast<Self*>(this)->_on_txn_freed(txn);
-            resolver._active_txn->mem_manager.free(static_cast<page_ptr>(txn),
-                                                   resolver);
-            return false;
-          }
-        } 
-        // found_live == true
-        if (txn->_context_id == my_ctx_id) {
-          ctx->_start_txn_id = txn->txn_id;
-          return true;
-        }
-        return false;
-      });
+      _header->_last_assigned_tid =
+          tid_t(static_cast<uint64_t>(_header->_last_assigned_tid) + 1);
+      active->txn_id = _header->_last_assigned_tid;
     }
-    return ctx;
+    assert(active->delete_root == 0);
+    // Record divergence point so deferred-commit merges can identify all
+    // worker-written nodes (txn_id > diverge_txn_id) across multiple batches.
+    deferred.diverge_txn_id = snapshot_txn->txn_id;
+
+    ctx->_recycle_txn_id = active->txn_id;
+    active->next_txn = 0;
+
+    _TxnResolver resolver{self(), active, ctx};
+    iter_transactions(txn_offset(), [this, &resolver](txn_ptr txn) -> bool {
+      if (txn->refs.load() > 0) {
+        resolver._active_txn->start_txn = resolve(txn);
+        resolver._ctx->_recycle_txn_id = txn->txn_id;
+        return true;
+      }
+
+      static_cast<Self*>(this)->_on_txn_freed(txn);
+      resolver._active_txn->mem_manager.free(txn, resolver);
+      return false;
+    });
   }
 
-  bool rollback(TxnContext* ctx,
-                TransactionOrigin origin = TransactionOrigin::user) {
+  void reset_context(TxnContext* ctx) {
     txn_ptr active = _resolve_active(ctx);
-
-    // Return areas allocated during write transaction
-    txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
+    txn_ptr last = resolve<Transaction>(&ctx->last_txn);
     return_areas_range(
-        ctx, read_txn->area_list_tail_single, active->area_list_tail_single,
-        read_txn->area_list_tail_multi, active->area_list_tail_multi);
+        ctx, last->area_list_tail_single, active->area_list_tail_single,
+        last->area_list_tail_multi, active->area_list_tail_multi);
 
-    ctx->active_txn = ctx->prepared_txn = _header->read_txn;
+    ctx->active_txn = ctx->prepared_txn = ctx->last_txn;
 
-    // Reuse active's page for next pre-allocated transaction.
-    // active was allocated from read_txn's committed space, so it
-    // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy(&*active, &*read_txn, sizeof(Transaction));
+    memcpy(&*active, &*last, sizeof(Transaction));
     active->mem_manager.reinit_locks();
     new (&active->refs) std::atomic<uint32_t>(0);
     ctx->next_txn_page = resolve(active);
 
     make_dirty(active);
     make_dirty(_header);
+  }
+
+  bool rollback(TxnContext* ctx,
+                TransactionOrigin origin = TransactionOrigin::user) {
+    if (_is_multithread_mode()) {
+      // Mark for lazy arena reset on next start_ctx_transaction.
+      ctx->_needs_arena_reset = 1;
+      // NOTE: Do NOT call end_transaction(ctx) here — same race as commit.
+      // Caller must switch _txn first, then call end_transaction(ctx).
+    } else {
+      reset_context(ctx);
+      end_transaction(ctx);
+    }
     flush();
-    end_transaction(ctx);
     return true;
+  }
+
+  // Reset a worker context's transaction to its initial state.
+  // All arenas stay attached (hot pages), but the transaction is reset
+  // so the worker can start a fresh transaction reusing its arenas.
+  void _reset_worker_context(TxnContext* ctx) {
+    // Resolve first area in the worker's single-area chain.
+    area_ptr first_area = resolve<Area>(&ctx->area_list_head_single, WRITE);
+    offset_e txn_offset = first_area->content_offset();
+
+    txn_ptr wtxn = resolve<Transaction>(&txn_offset);
+    memset(static_cast<void*>(&*wtxn), 0, sizeof(Transaction));
+    wtxn->slot_id = Transaction::SLOT_ID;
+    wtxn->used = sizeof(Transaction);
+    wtxn->txn_id = tid_t(0);
+    new (&wtxn->refs) std::atomic<uint32_t>(0);
+    wtxn->root = wtxn->free_bigmem_root = 0;
+    wtxn->delete_root = 0;
+    wtxn->start_txn = txn_offset;
+    wtxn->next_txn = 0;
+    wtxn->area_list_tail_single = ctx->area_list_head_single;
+    wtxn->area_list_tail_multi = 0;
+    wtxn->mem_manager.init(txn_offset + PAGE_SIZES[Transaction::SLOT_ID],
+                           first_area->offset() + first_area->size());
+
+    ctx->next_txn_page = txn_offset;
+    // Set prepared_txn != next_txn_page so prepare_commit() always clones.
+    ctx->prepared_txn = 0;
+    ctx->active_txn = 0;
+
+    _clear_deferred(ctx);
+
+    make_dirty(wtxn);
+    make_dirty(_header);
   }
 
   tid_t prepare_commit(TxnContext* ctx, bool sync = false,
@@ -796,23 +940,14 @@ struct _DB {
     // already prepared
     if (ctx->prepared_txn == ctx->active_txn) return active->txn_id;
 
-    // Pre-allocate next transaction page before committing.
+    // Performance hack: Pre-allocate next transaction page before committing.
     // The allocation modifies active->mem_manager, which gets persisted
     // as part of this commit — no storage leak.
     _TxnResolver resolver{self(), active, ctx};
     auto next = active->clone(resolver);
     ctx->next_txn_page = resolve(next);
-
     ctx->prepared_txn = ctx->active_txn;
 
-    active->_context_id = _ctx_index_of(ctx);
-
-    // NOTE: Do NOT write current->next_txn here.  commit() sets the
-    // chain link under merge_lock.  Writing it here without a lock
-    // races with concurrent commits and can overwrite a correct
-    // next_txn with a stale value, corrupting the transaction chain.
-    // Crash recovery uses ctx->prepared_txn directly, so the chain
-    // link is not needed for recoverability.
     make_dirty(_header);
     make_dirty(active);
 
@@ -824,104 +959,216 @@ struct _DB {
               TransactionOrigin origin = TransactionOrigin::user) {
     if (!prepare_commit(ctx, false, origin)) return false;
 
-    // Under merge_lock: detect conflict and merge if needed, then publish.
-    {
-      std::lock_guard<SpinLock> guard(_header->merge_lock);
-      txn_ptr current = txn();
-      if (current->txn_id != ctx->_snapshot_txn_id) {
-        // Another context committed since our snapshot — merge required.
-        // Switch active_txn to the pre-allocated workspace (next_txn_page)
-        // so all merge allocations go there, leaving prepared_txn untouched
-        // for crash recovery.
-        ctx->active_txn = ctx->next_txn_page;
-        _merge_into_committed(current, ctx);
+    txn_ptr current = txn();
 
-        // Free old prepared page into the workspace's garbage collector,
-        // then clone the merged result as the new prepared page.
-        txn_ptr workspace = _resolve_active(ctx);
-        _TxnResolver resolver{self(), workspace, ctx};
-        offset_t old_prepared = ctx->prepared_txn;
-        auto old_page = resolve<Transaction>(&old_prepared);
-        workspace->mem_manager.free(static_cast<page_ptr>(old_page), resolver);
-        auto cloned = workspace->clone(resolver);
-        ctx->prepared_txn = resolve(cloned);
-      } else {
-        // No merge happened: the prepared txn may keep delete_root markers,
-        // but the next pre-allocated page must start clean.
-        txn_ptr next_page = resolve<Transaction>(&ctx->next_txn_page);
-        if (next_page->delete_root != 0) {
-          next_page->delete_root = 0;
-          make_dirty(next_page);
-        }
-      }
-
+    if (!_is_multithread_mode()) {
+      // hot path
       current->next_txn = ctx->prepared_txn;
       make_dirty(current);
+      make_dirty(resolve<Transaction>(&ctx->prepared_txn));
+      _header->read_txn = ctx->prepared_txn;
+    } else {
+      // Deferred commit: accumulate locally, flush to main only at threshold.
+      // Workers build an accumulated snapshot — each next batch continues from
+      // the previous prepared_txn root so read-your-own-writes is preserved.
+      auto& deferred = _deferred(ctx);
+      if (_deferred_flush_threshold > 0 && !sync &&
+          deferred.pending_commit_count + 1 < _deferred_flush_threshold) {
+        deferred.accumulated_txn = ctx->prepared_txn;
+        deferred.pending_commit_count++;
+        deferred.in_deferred_sequence = 1;
+        return true;
+      }
 
-      // Inherit the current read_txn's chain head into the new read_txn.
-      // A concurrent GC walk (under txn_ref_lock) may have advanced
-      // current->start_txn past freed pages.  Take txn_ref_lock briefly
-      // to read the authoritative value — this never deadlocks because
-      // no code path holds txn_ref_lock then takes merge_lock.
-      {
-        std::lock_guard<SpinLock> ref_guard(_header->txn_ref_lock);
-        txn_ptr prepared = resolve<Transaction>(&ctx->prepared_txn);
-        prepared->start_txn = current->start_txn;
-        _header->read_txn = ctx->prepared_txn;
+      // At threshold (or sync=true, or threshold disabled): flush accumulated state.
+      // Clear deferred flags BEFORE group merge so cursor takes the flush path.
+      deferred.accumulated_txn = ctx->prepared_txn;
+      deferred.pending_commit_count = 0;
+      deferred.in_deferred_sequence = 0;
+
+      // Group commit: try to become leader, or enqueue for a leader to merge us.
+      uint8_t idx = _ctx_index_of(ctx);
+      bool i_am_leader = false;
+
+      // Fast path: try to claim main context immediately
+      uint8_t exp = 0;
+      if (context(0)->_claimed.compare_exchange_strong(
+              exp, 1, std::memory_order_acquire, std::memory_order_relaxed)) {
+        i_am_leader = true;
+      } else {
+        // Slow path: enqueue our context in the pending bitmap and wait
+        ctx->_merge_done.store(0, std::memory_order_relaxed);
+        _header->_pending_merge_bitmap.fetch_or(1u << idx,
+                                                std::memory_order_release);
+
+        std::unique_lock lk(_header->ctx_wait_lock);
+        while (true) {
+          // Check if a leader already merged us
+          if (ctx->_merge_done.load(std::memory_order_acquire)) break;
+          // Try to become leader ourselves (main may have been released)
+          exp = 0;
+          if (context(0)->_claimed.compare_exchange_weak(
+                  exp, 1, std::memory_order_acquire,
+                  std::memory_order_relaxed)) {
+            // Remove our pending bit — we'll merge ourselves as leader
+            _header->_pending_merge_bitmap.fetch_and(~(1u << idx),
+                                                     std::memory_order_relaxed);
+            i_am_leader = true;
+            break;
+          }
+          _header->ctx_wait_cv.wait(lk);
+        }
+        lk.unlock();
+      }
+
+      if (i_am_leader) {
+        _do_leader_merge(ctx, sync, origin);
       }
     }
 
-    make_dirty(_header);
-    flush(sync, true);
-    end_transaction(ctx);
+    if (!_is_multithread_mode()) {
+      make_dirty(_header);
+      flush(sync, true);
+      end_transaction(ctx);
+    } else {
+      // Mark worker context for lazy arena reset on next start_ctx_transaction.
+      ctx->_needs_arena_reset = 1;
+      // NOTE: Do NOT call end_transaction(ctx) here.  The cursor still
+      // holds _txn pointing into the worker arena.  Releasing the context
+      // would allow another thread to claim it and memset the arena,
+      // corrupting the cursor's _txn.  Caller must switch _txn first,
+      // then call end_transaction(ctx).
+    }
     return true;
   }
 
   // Merge writer's changes into the current committed state.
-  // Called under merge_lock when a conflict is detected (another context
-  // committed after our snapshot).
-  void _merge_into_committed(txn_ptr committed, TxnContext* ctx) {
+  // Uses _Merger with _ContextMergePolicy for O(delta) merge:
+  //  - should_descend_src skips snapshot subtrees in O(1)
+  //  - should_free_dst prevents freeing shared snapshot nodes
+  //  - selective_deep_copy copies writer nodes into main arena
+  void _merge_to_main(TxnContext* dst, TxnContext* src) {
     using RawCursor = _Cursor<CursorTraits>;
     using MergePolicy = _ContextMergePolicy<Self>;
+    using Merger = _Merger<RawCursor, RawCursor, MergePolicy>;
 
-    txn_ptr active = _resolve_active(ctx);
+    txn_ptr dst_txn = _resolve_active(dst);
+    txn_ptr src_txn = _resolve_active(src);
 
-    // Save writer's root and replace with committed root (dst = committed)
-    offset_e writer_root = active->root;
-    active->root = committed->root;
+    // dst cursor: main context, writable (COW via active_tid)
+    RawCursor dst_cursor(&self(), &dst_txn->root);
+    dst_cursor._ctx = dst;
+    dst_cursor._active_tid = dst_txn->txn_id;
 
-    // Move-merge writer's changes into committed trie
-    if (writer_root != 0) {
-      RawCursor dst_cursor(&self(), &active->root);
-      dst_cursor._ctx = ctx;
-      dst_cursor._active_tid = active->txn_id;
-      RawCursor src_cursor(&self(), &writer_root);
-      src_cursor._ctx = ctx;
-      src_cursor._active_tid = active->txn_id;
-      src_cursor.clear();  // push root onto stack for merger
-      MergePolicy policy(&self(), ctx, active->txn_id);
-      _MoveMerger<RawCursor, RawCursor, MergePolicy> merger(dst_cursor,
-                                                            src_cursor, policy);
-      merger.exec();
+    // src cursor: worker context, read-only navigation
+    RawCursor src_cursor(&self(), &src_txn->root);
+    src_cursor._ctx = src;
+    src_cursor._active_tid = tid_t(0);
+
+    // Push src root so the merger can start from it
+    if (src_txn->root != 0) {
+      src_cursor.push(&src_txn->root);
     }
 
+    MergePolicy policy(&self(), dst, src_txn->txn_id, dst_txn->txn_id,
+                       _deferred(src).diverge_txn_id);
+    Merger merger(dst_cursor, src_cursor, policy);
+    merger.exec();
+
     // Apply deletes: walk the delete_root trie and remove each key
-    if (active->delete_root != 0) {
-      RawCursor del_cursor(&self(), &active->delete_root);
-      del_cursor._ctx = ctx;
-      del_cursor._active_tid = active->txn_id;
-      RawCursor main_cursor(&self(), &active->root);
-      main_cursor._ctx = ctx;
-      main_cursor._active_tid = active->txn_id;
+    if (src_txn->delete_root != 0) {
+      RawCursor del_cursor(&self(), &src_txn->delete_root);
+      del_cursor._ctx = src;
+      del_cursor._active_tid = tid_t(0);
       del_cursor.first();
       while (del_cursor.is_valid()) {
-        main_cursor.find(del_cursor.key());
-        if (main_cursor.is_valid()) {
-          main_cursor.remove();
+        dst_cursor.find(del_cursor.key());
+        if (dst_cursor.is_valid()) {
+          dst_cursor.remove();
         }
         del_cursor.next();
       }
-      active->delete_root = 0;
+      src_txn->delete_root = 0;
+    }
+  }
+
+  // Group commit: leader merges its own delta plus all pending worker deltas
+  // in a single main-context round, avoiding N sequential claim/release cycles.
+  void _do_leader_merge(TxnContext* my_ctx, bool sync,
+                        TransactionOrigin origin) {
+    txn_ptr current = txn();
+    TxnContext* main = context(0);  // already claimed by caller
+
+    start_ctx_transaction(main);
+    _merge_to_main(main, my_ctx);
+
+    // Drain pending merges — loop because new ones may arrive while we drain
+    while (true) {
+      uint32_t bitmap = _header->_pending_merge_bitmap.exchange(
+          0, std::memory_order_acq_rel);
+      if (!bitmap) break;
+      while (bitmap) {
+        // Portable lowest-bit extraction
+        uint32_t lowest = bitmap & (~bitmap + 1);
+        int i = 0;
+        uint32_t tmp = lowest;
+        while (tmp >>= 1) ++i;
+        bitmap &= bitmap - 1;  // clear lowest set bit
+
+        _merge_to_main(main, context(i));
+        context(i)->_needs_arena_reset = 1;
+        context(i)->_merge_done.store(1, std::memory_order_release);
+      }
+    }
+
+    prepare_commit(main, false, origin);
+    current->next_txn = main->prepared_txn;
+    make_dirty(current);
+    make_dirty(resolve<Transaction>(&main->prepared_txn));
+    _header->read_txn = main->prepared_txn;
+    end_transaction(main);
+
+    make_dirty(_header);
+    flush(sync, true);
+
+    // Wake all waiting threads (both group-merged and those waiting to claim)
+    {
+      std::lock_guard lk(_header->ctx_wait_lock);
+    }
+    _header->ctx_wait_cv.notify_all();
+  }
+
+  // Recursively walk trie nodes modified by the writer (txn_id match).
+  // Snapshot subtrees (different txn_id) are skipped entirely — O(1) per skip.
+  // Only calls cb for modified leaf nodes with the reconstructed full key.
+  template <typename TrieNode, typename LeafNode, typename Callback>
+  void _walk_modified_leaves(offset_e off, tid_t writer_tid,
+                             std::string& key, Callback&& cb) {
+    using PageHeader = typename Traits::PageHeader;
+    if (off == 0) return;
+
+    if (off.type() == LEAF) {
+      auto leaf = resolve<LeafNode>(&off);
+      auto page = reinterpret_cast<const PageHeader*>(
+          reinterpret_cast<const char*>(&*leaf) - sizeof(PageHeader));
+      if (page->txn_id != writer_tid) return;
+      size_t saved = key.size();
+      key.append((const char*)leaf->data, leaf->key_size);
+      cb(Slice(key), leaf->value(), leaf->is_big());
+      key.resize(saved);
+    } else {
+      auto trie = resolve<TrieNode>(&off);
+      auto page = reinterpret_cast<const PageHeader*>(
+          reinterpret_cast<const char*>(&*trie) - sizeof(PageHeader));
+      if (page->txn_id != writer_tid) return;
+      size_t saved = key.size();
+      key.append((const char*)trie->compressed(), trie->len());
+      trie->for_each_branch([&](int k, auto* child_off) {
+        if (k != TrieNode::NONE) key.push_back(k);
+        _walk_modified_leaves<TrieNode, LeafNode>(*child_off, writer_tid, key, cb);
+        if (k != TrieNode::NONE) key.pop_back();
+      });
+      key.resize(saved);
     }
   }
 
@@ -950,7 +1197,7 @@ struct _DB {
     for (int i = 0; i < MemManager::COUNT; i++) {
       auto slot = txn_->mem_manager.slots[i];
       // collect blocks
-      offset_t o = slot.ostart;
+      offset_e o = slot.ostart;
       if (!o) {
         assert(slot.count == 0 && "empty garbage slot with non-zero count");
         continue;
@@ -967,7 +1214,7 @@ struct _DB {
     }
   }
 
-  void _node_statistics(Statistics& stat, offset_t offset) {
+  void _node_statistics(Statistics& stat, offset_e offset) {
     typedef _TrieNode<Traits> TrieNode;
     typedef _LeafNode<Traits> LeafNode;
     using PageHeader = typename Traits::PageHeader;
@@ -1003,7 +1250,7 @@ struct _DB {
     _garbage_statistics(stat.garbage);
     _node_statistics(stat, txn()->root);
 
-    iter_transactions([this, &stat](txn_ptr txn) -> bool {
+    iter_transactions(txn_offset(), [this, &stat](txn_ptr txn) -> bool {
       uint16_t bsize = PAGE_SIZES[txn->slot_id];
       stat.transaction.add(txn->slot_id, 1, bsize - sizeof(Transaction));
       return false;
@@ -1023,16 +1270,16 @@ struct _DB {
     _aspect.on_defrag(self());
   }
 
-  void return_areas_range(TxnContext* ctx, offset_t start_single,
-                          offset_t end_single, offset_t start_multi,
-                          offset_t end_multi) {
+  void return_areas_range(TxnContext* ctx, offset_e start_single,
+                          offset_e end_single, offset_e start_multi,
+                          offset_e end_multi) {
     // Return area range [start->next ... end] to storage
     // This is used during rollback to return areas allocated during write
     // transaction
 
     if (start_single && end_single && start_single != end_single) {
       area_ptr start_area = resolve<Area>(&start_single, WRITE);
-      offset_t range_head = start_area->next;
+      offset_e range_head = start_area->next;
       _storage.return_single_areas(range_head, end_single);
       start_area->next = 0;
       make_dirty(start_area);
@@ -1046,7 +1293,7 @@ struct _DB {
         ctx->area_list_head_multi = 0;
       } else {
         area_ptr start_area = resolve<Area>(&start_multi, WRITE);
-        offset_t range_head = start_area->next;
+        offset_e range_head = start_area->next;
         _storage.return_multi_areas(range_head, end_multi);
         start_area->next = 0;
         make_dirty(start_area);
@@ -1059,8 +1306,9 @@ struct _DB {
     new (&_header->ctx_wait_lock) typename Storage::CtxMutex();
     new (&_header->ctx_wait_cv) typename Storage::CtxCondVar();
     new (&_header->merge_lock) SpinLock();
+    new (&_header->_pending_merge_bitmap) std::atomic<uint32_t>(0);
     _header->_last_assigned_tid = txn()->txn_id;
-    iter_transactions([this](txn_ptr txn) -> bool {
+    iter_transactions(txn_offset(), [this](txn_ptr txn) -> bool {
       txn->refs.store(0);
       txn->mem_manager.reinit_locks();
       make_dirty(txn);
@@ -1068,9 +1316,10 @@ struct _DB {
     });
 
     // Sanitize each transaction context.
-    for (uint8_t i = 0; i < _num_contexts; i++) {
+    for (uint8_t i = 0; i < _context_count(); i++) {
       auto* ctx = context(i);
       ctx->_claimed.store(0, std::memory_order_relaxed);
+      ctx->_merge_done.store(0, std::memory_order_relaxed);
 
       // Crash during merge: active_txn was switched to workspace
       // (next_txn_page) but merge/publish didn't complete.  Restore
@@ -1102,6 +1351,9 @@ struct _DB {
       ctx->_snapshot_txn = 0;
 
       // Restore active_txn for consistency after any crash.
+      // Clear deferred commit state — not valid across restarts.
+      _clear_deferred(ctx);
+
       if (ctx->active_txn != 0) {
         ctx->active_txn = ctx->prepared_txn;
       } else if (ctx->prepared_txn != _header->read_txn) {

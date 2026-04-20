@@ -379,6 +379,7 @@ struct TestStorage {
   struct CtxCondVar {
     template <typename L> void wait(L&) {}
     void notify_one() {}
+    void notify_all() {}
   };
 
   AreaList single_areas;
@@ -1752,7 +1753,7 @@ BOOST_AUTO_TEST_CASE(test_recycle_not_premature) {
     db->_free(b, trans.ctx);
   }
 
-  // Txn 4: allocate — reader holds txn 1, so _start_txn_id stays at 1.
+  // Txn 4: allocate — reader holds txn 1, so _recycle_txn_id stays at 1.
   // The freed page (garbage txn_id=3) should NOT be recyclable because 3 < 1 is false.
   {
     Transaction trans(db);
@@ -1764,10 +1765,10 @@ BOOST_AUTO_TEST_CASE(test_recycle_not_premature) {
   // Release the reader
   reader_txn->refs.fetch_sub(1);
 
-  // Txn 5: advance so _start_txn_id passes the garbage entry
+  // Txn 5: advance so _recycle_txn_id passes the garbage entry
   { Transaction trans(db); }
 
-  // Txn 6: now the freed page should be recyclable (garbage txn_id=3 < _start_txn_id)
+  // Txn 6: now the freed page should be recyclable (garbage txn_id=3 < _recycle_txn_id)
   {
     Transaction trans(db);
     auto r = db->_alloc_page(ALLOC_SIZE, trans.ctx);

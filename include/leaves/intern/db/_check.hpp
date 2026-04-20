@@ -341,7 +341,7 @@ struct _MemoryChecker {
     }
 
     // 4. Mark transaction pages
-    db.iter_transactions([this](txn_ptr txn) -> bool {
+    db.iter_transactions(db.txn_offset(), [this](txn_ptr txn) -> bool {
       mark_page(db.resolve(txn));
       return false;
     });

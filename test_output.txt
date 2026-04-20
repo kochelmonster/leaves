@@ -1,0 +1,8 @@
+Running 1 test case...
+
+=== Concurrent Merge (Multi-Context) Test ===
+unknown location(0): [4;31;49mfatal error: in "ConcurrentMerge_MultiContext": memory access violation at address: 0x38: no mapping at fault address[0;39;49m
+/home/michael/src/leaves/tests/test_multithread.cpp(515): [1;36;49mlast checkpoint: "ConcurrentMerge_MultiContext" test entry[0;39;49m
+
+[1;31;49m*** 1 failure is detected in the test module "MultiThreadTest"
+[0;39;49m

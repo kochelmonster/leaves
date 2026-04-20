@@ -1,0 +1,154 @@
+
+Main-Chain Merge and Single-Thread Fast Path Plan
+
+Intent
+- Make the committed transaction chain the only long-lived destination for committed data.
+- Stop adopting writer-context nodes into committed state.
+- Reuse writer-context areas by resetting the context transaction after commit or rollback.
+- Revert recycling logic to the simpler develop-branch threshold model.
+- Focus only on small values for now.
+
+Non-Goals
+- No big-value redesign yet.
+- No replication changes.
+- No separate persistent "main transaction" object beyond the already existing committed chain.
+
+Current Model Summary
+- The existing committed chain is already the main chain: `read_txn` points to the head, and `next_txn` links older committed transactions.
+- Each writer context has its own transaction page and area chain.
+- On conflict, current code uses `_MoveMerger` and adopts writer-owned nodes into the committed result.
+- GC currently uses extra bookkeeping: `org_txn_id`, `RecycleResult`, and CAS-like double-allocation protection.
+
+Target Model Summary
+- The committed chain remains the only durable owner of committed nodes.
+- `_Merger` performs copy-style integration into the committed destination.
+- Writer contexts do not donate ownership of their nodes; they are reset and their areas are reused for the next transaction.
+- Recycling goes back to the develop-branch rule: a page is recyclable when the garbage entry's `txn_id` is older than `_start_txn_id`.
+- In single-thread mode, `start_transaction` and `commit` use direct main-chain semantics instead of the parallel conflict machinery.
+
+Why This Should Help
+- Reusing the same writer-context areas keeps the same pages hot across transactions.
+- Copying into the committed chain avoids making committed-state lifetime depend on writer-context allocation history.
+- The simpler GC path removes extra checks and queue churn from the hot path.
+- Single-thread mode avoids paying for conflict infrastructure that cannot trigger with one context.
+
+Implementation Plan
+
+Step 1: Single-thread fast path in `include/leaves/intern/db/_db.hpp`
+- Add a clear branch in `start_transaction` for `_num_contexts == 1`.
+- In that branch:
+  - Resolve and pin the current `read_txn` under `txn_ref_lock`.
+  - Use the current committed chain head as the transaction base.
+  - Initialize the active context transaction directly from the committed main chain state.
+  - Compute `_start_txn_id` from the main chain state without per-context parallel assumptions.
+- Add the matching single-thread branch in `commit`.
+- In the single-thread branch:
+  - Skip conflict detection machinery that exists only for multiple contexts.
+  - Publish directly onto the main committed chain.
+
+Reasoning
+- With one context there is no inter-context conflict, so merge-lock conflict resolution is wasted overhead.
+- Single-thread mode should still preserve snapshot pinning and chain maintenance, but without workspace semantics designed for parallelism.
+
+Step 2: Switch DB merge logic from `_MoveMerger` to `_Merger`
+- File: `include/leaves/intern/util/_merger.hpp`
+- Extend `_Merger` so it can act as the committed-chain merge engine.
+- Add `should_descend_src` handling in `selective_deep_copy_subtree`.
+  - If the policy says not to descend, keep the existing source offset and return success for that subtree.
+- Add fast paths where source and destination offsets are identical.
+  - In `merge_into_trie` shared-branch handling, skip recursion if `src_off == dst_off`.
+  - Add the same kind of skip in divergence/overlap handling where it can occur.
+- File: `include/leaves/intern/db/_db.hpp`
+- Replace `_MoveMerger` usage in `_merge_into_committed` with `_Merger`.
+- After the replacement is complete and verified, remove `_MoveMerger` entirely.
+
+Reasoning
+- `_Merger` gives copy semantics, which is the required ownership model.
+- The extra `should_descend_src` and same-offset checks keep the copy merge from degenerating into needless deep copies of snapshot-identical subtrees.
+
+Step 3: Change commit ownership semantics
+- File: `include/leaves/intern/db/_db.hpp`
+- Keep the existing committed chain as the destination chain.
+- In both conflict and non-conflict cases, commit should produce the next committed transaction on that chain.
+- Writer context state should not become the long-lived owner of committed nodes through adoption.
+- Preserve monotonic `txn_id` behavior on the committed chain.
+
+Reasoning
+- This is the core ownership change: committed state belongs to the committed chain, not to whatever context produced the write set.
+
+Step 4: Simplify recycling to the develop-branch model
+- File: `include/leaves/intern/db/_db.hpp`
+- Change `_TxnResolver::may_recycle` from the current `RecycleResult` + `org_txn_id` model to the simple threshold rule.
+- Target rule:
+  - recyclable when `garbage_block.txn_id < _start_txn_id`
+- File: `include/leaves/intern/memory/_memory.hpp`
+- Remove `org_txn_id` from `BlockItem`.
+- Remove `org_txn_id` assignment in `_GarbageSlot::push`.
+- Simplify `_GarbageSlot::pop` to match threshold-only recycling.
+- Keep `mark_for_recycle` as a simple stamp of the freeing transaction id.
+
+Reasoning
+- This is the explicit request to roll back the double-alloc guard and simplify GC the way it is done on develop.
+- The simpler queue semantics also make the hot path easier to reason about.
+
+Step 5: Reset writer context transactions after commit and rollback
+- File: `include/leaves/intern/db/_db.hpp`
+- After commit:
+  - Reset the context-internal transaction to its initial state.
+  - Reinitialize the transaction page at the head of the context area chain.
+  - Reset root, delete_root, area tails, and mem_manager state so the context allocates from the same areas again.
+- After rollback:
+  - Perform the same reset instead of preserving stale workspace state.
+- Update `_alloc_single_area` if necessary so it can walk an already attached area chain before allocating new storage.
+
+Reasoning
+- This is what keeps context memory hot across transactions.
+- The context owns its reusable areas, while committed data ownership lives in the main chain.
+
+Step 6: Keep sanitization and recovery coherent
+- File: `include/leaves/intern/db/_db.hpp`
+- Revisit `sanitize()` after the transaction-flow changes.
+- Make sure crash recovery still restores valid preallocated pages and consistent context state.
+- Any logic that assumes workspace/adoption semantics must be updated to the reset-and-reuse model.
+
+Reasoning
+- Transaction-flow changes are not complete until recovery and reopen paths still make sense.
+
+Step 7: Validate correctness first, then scaling
+- Build:
+  - `cmake --build build -j`
+- Tests:
+  - `ctest` in `build`
+  - `build/test_merger`
+  - `build/test_multithread`
+  - relevant DB tests if failures appear
+- Benchmarks:
+  - `db_bench_leaves --benchmarks=fillrandom --threads=1`
+  - `db_bench_leaves --benchmarks=fillrandom --threads=4`
+  - `db_bench_leaves --benchmarks=fillrandom --threads=8`
+- Profiling:
+  - compare `perf report --sort=dso` before and after
+  - specifically check whether kernel share drops and whether user time shifts from page-fault behavior to trie work
+
+Implementation Order
+1. Single-thread fast path in `start_transaction` and `commit`.
+2. `_Merger` enhancements and `_MoveMerger` replacement.
+3. Recycling simplification (`may_recycle`, `BlockItem`, garbage slot pop/push).
+4. Context reset after commit and rollback.
+5. Sanitization adjustments.
+6. Build, test, benchmark, profile.
+
+Why This Order
+- The single-thread fast path is the smallest path to a measurable improvement and clarifies the ownership model.
+- `_Merger` replacement is the core semantic change.
+- GC simplification should follow once ownership semantics are correct.
+- Context reset depends on the new ownership model being in place.
+
+Expected Result
+- Better small-value scaling from hotter context memory reuse.
+- Less overhead from GC bookkeeping.
+- Cleaner separation between writer-context lifetime and committed-state lifetime.
+- Simpler single-thread behavior with fewer unnecessary parallel-path costs.
+
+
+

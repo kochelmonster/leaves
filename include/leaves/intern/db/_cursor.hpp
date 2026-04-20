@@ -1,6 +1,7 @@
 #ifndef _LEAVES_ICURSOR_HPP
 #define _LEAVES_ICURSOR_HPP
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -625,6 +626,12 @@ struct _TransactionalCursor
   Aspect& _aspect() { return this->_db->aspect(); }
 
   ~_TransactionalCursor() {
+    // Release any deferred context that was never explicitly flushed.
+    if (this->_ctx && this->_db->_ctx_in_deferred_sequence(this->_ctx)) {
+      this->_db->_clear_deferred(this->_ctx);
+      this->_ctx->_needs_arena_reset = 1;
+      this->_db->end_transaction(this->_ctx);
+    }
     if (this->_txn) this->_txn->refs.fetch_sub(1);
   }
 
@@ -756,18 +763,28 @@ struct _TransactionalCursor
   bool start_transaction(bool non_blocking = false,
                          TransactionOrigin origin = TransactionOrigin::user) {
     if (!is_transaction_active()) {
+      // No context: claim one and start a fresh transaction.
       if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
         return false;
       auto* ctx = this->_db->start_transaction(non_blocking, origin);
       if (!ctx) return false;
       this->_ctx = ctx;
-      txn_ptr new_txn = this->_db->_resolve_active(ctx);
-      this->_active_tid = new_txn->txn_id;
-      assert(new_txn->refs.load() == 0);  // no one can reference it yet
-      _set_txn(new_txn);
-      if (_bigmemory) _bigmemory->set_ctx(this->_ctx, this->_active_tid);
-      _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
+    } else if (this->_active_tid == tid_t(0) &&
+               this->_db->_ctx_in_deferred_sequence(this->_ctx)) {
+      // Deferred continuation: context already claimed, start next write batch
+      // directly without re-claiming. Uses accumulated state as the snapshot root.
+      if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
+        return false;
+      this->_db->start_ctx_transaction(this->_ctx);
+    } else {
+      return true;  // already in an active write transaction
     }
+    txn_ptr new_txn = this->_db->_resolve_active(this->_ctx);
+    this->_active_tid = new_txn->txn_id;
+    assert(new_txn->refs.load() == 0);  // no one can reference it yet
+    _set_txn(new_txn);
+    if (_bigmemory) _bigmemory->set_ctx(this->_ctx, this->_active_tid);
+    _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
     return true;
   }
 
@@ -779,30 +796,80 @@ struct _TransactionalCursor
               TransactionOrigin origin = TransactionOrigin::user) {
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
-    bool committed = this->_db->commit(this->_ctx, sync, origin);
+    auto* ctx = this->_ctx;  // save; cleared below
+    bool committed = this->_db->commit(ctx, sync, origin);
     if (committed) {
       this->_ctx = nullptr;
       this->_active_tid = tid_t(0);
+      if (this->_db->_is_multithread_mode()) {
+        if (this->_db->_ctx_in_deferred_sequence(ctx)) {
+          // Deferred commit: keep context claimed. The cursor's _txn already
+          // points at the committed (accumulated) transaction — reads see all
+          // own writes. next start_transaction() will resume the sequence.
+          this->_ctx = ctx;
+        } else {
+          // Normal flush commit: switch _txn to the published read state,
+          // then release the worker context.
+          auto read_txn = this->_db->txn_ref();
+          if (this->_txn != read_txn) {
+            _set_txn(read_txn);
+          }
+          read_txn->refs.fetch_sub(1);  // revert txn_ref() increment
+          this->_db->end_transaction(ctx);
+        }
+      }
       _aspect().on_commit(*this->_db, origin, _aspect_context);
     }
     return committed;
+  }
+
+  // Force-flush any pending deferred commits to main, making them visible
+  // to all readers. No-op if not in a deferred sequence.
+  bool flush(TransactionOrigin origin = TransactionOrigin::user) {
+    if (!is_transaction_active() ||
+        !this->_db->_ctx_in_deferred_sequence(this->_ctx))
+      return true;
+    // Ensure we have an active write transaction (deferred continuation).
+    if (this->_active_tid == tid_t(0)) {
+      if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
+        return false;
+      this->_db->start_ctx_transaction(this->_ctx);
+      txn_ptr new_txn = this->_db->_resolve_active(this->_ctx);
+      this->_active_tid = new_txn->txn_id;
+      if (new_txn != this->_txn) _set_txn(new_txn);
+      if (_bigmemory) _bigmemory->set_ctx(this->_ctx, this->_active_tid);
+    }
+    // Force flush by setting count to threshold so commit() triggers group merge.
+    this->_db->_deferred(this->_ctx).pending_commit_count =
+        this->_db->_deferred_flush_threshold;
+    return commit(false, origin);
   }
 
   bool rollback(TransactionOrigin origin = TransactionOrigin::user) {
     if (!is_transaction_active()) return false;
     if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context))
       return false;
-    if (this->_db->rollback(this->_ctx, origin)) {
+    auto* ctx = this->_ctx;  // save; cleared below
+    if (this->_db->rollback(ctx, origin)) {
       _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context);
       this->_ctx = nullptr;
       this->_active_tid = tid_t(0);
-      // Switch back to the committed read transaction.
-      // Don't decrement _txn->refs — rollback() already reset the recycled
-      // page to refs=0 and repurposed it as next_txn_page.
-      auto read_txn = this->_db->txn_ref();
-      this->_txn = read_txn;
-      this->_root = &this->_txn->root;
-      if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
+      if (this->_db->_is_multithread_mode()) {
+        // Switch _txn to committed read txn before releasing context.
+        auto read_txn = this->_db->txn_ref();
+        if (this->_txn != read_txn) {
+          _set_txn(read_txn);
+        }
+        read_txn->refs.fetch_sub(1);
+        this->_db->end_transaction(ctx);
+      } else {
+        // Single-thread: page was reset in-place by rollback().
+        // Don't decrement _txn->refs — reset_context zeroed refs.
+        auto read_txn = this->_db->txn_ref();
+        this->_txn = read_txn;
+        this->_root = &this->_txn->root;
+        if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
+      }
       this->stack.clear();
       _refind_buffer = this->current_key;
       this->find(_refind_buffer);
@@ -831,10 +898,10 @@ struct _TransactionalCursor
 
   void update() {
     // Hot path: check if the committed transaction has changed before
-    // acquiring the SpinLock inside txn_ref(). read_txn_offset() is a
+    // acquiring the SpinLock inside txn_ref(). txn_offset() is a
     // plain aligned 64-bit load — no lock needed.
     if (this->_txn &&
-        this->_db->read_txn_offset() == this->_db->resolve(this->_txn))
+        this->_db->txn_offset() == this->_db->resolve(this->_txn))
       return;
 
     // txn_ref() atomically resolves and increments refs under SpinLock,
