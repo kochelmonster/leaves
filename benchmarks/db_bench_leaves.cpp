@@ -30,6 +30,10 @@ using boost::endian::native_to_big;
 // Use binary (big-endian uint64) keys instead of decimal string keys
 static bool FLAGS_binary_key = false;
 
+// Partitioned key mode: each thread writes to its own disjoint key range.
+// 0 = shared random keyspace (all threads pick from [0, num)); 1 = partitioned.
+static bool FLAGS_partitioned = false;
+
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
 //
@@ -220,6 +224,9 @@ class Benchmark {
     std::fprintf(stdout, "Storage:     %s\n", storage_name());
     std::fprintf(stdout, "Keys:        %d bytes each (%s)\n", kKeySize,
                  FLAGS_binary_key ? "binary uint64 big-endian" : "decimal string");
+    if (FLAGS_threads > 1)
+      std::fprintf(stdout, "KeyMode:     %s\n",
+                   FLAGS_partitioned ? "partitioned (per-thread range)" : "shared-random (all threads)");
     std::fprintf(
         stdout, "Values:      %d bytes each (%d bytes after compression)\n",
         FLAGS_value_size,
@@ -445,6 +452,15 @@ class Benchmark {
         ReadSequential();
       } else if (name == Slice("readrandom")) {
         ReadRandom();
+      } else if (name == Slice("readrandommt")) {
+        if (using_replicating_) {
+          ReadRandomMultiThreadImpl<leaves::MapStorage, leaves::_ReplicationDB>(
+              *map_storage_, FLAGS_threads);
+        } else if (using_file_storage_) {
+          ReadRandomMultiThreadImpl(*file_storage_, FLAGS_threads);
+        } else {
+          ReadRandomMultiThreadImpl(*map_storage_, FLAGS_threads);
+        }
       } else if (name == Slice("readrand100K")) {
         int n = reads_;
         reads_ /= 1000;
@@ -547,13 +563,12 @@ class Benchmark {
   void Open(bool sync) {
     assert(file_storage_ == nullptr && map_storage_ == nullptr);
 
-    // Initialize db_
-    char file_name[100], cmd[200];
+    // Use FLAGS_db (from --db=) as the storage directory so that the rm -rf
+    // in Write() and the actual storage location are consistent.
+    char file_name[512], cmd[600];
     db_num_++;
-    std::string test_dir;
-    leveldb::Env::Default()->GetTestDirectory(&test_dir);
     std::snprintf(file_name, sizeof(file_name), "%s/dbbench_mdb-%d",
-                  test_dir.c_str(), db_num_);
+                  FLAGS_db, db_num_);
 
     sprintf(cmd, "mkdir -p %s", file_name);
     int r = system(cmd);
@@ -682,7 +697,7 @@ class Benchmark {
     std::atomic<int> shared_done{0};
     std::mutex progress_mutex;
 
-    auto db = storage.template open<DBClass>("benchmark");
+    auto db = storage.template open<DBClass>("benchmark", (uint8_t)num_threads);
     if (FLAGS_flush_interval > 0)
       db.set_deferred_flush_threshold(static_cast<uint32_t>(FLAGS_flush_interval));
 
@@ -700,6 +715,8 @@ class Benchmark {
           int k;
           if (order == SEQUENTIAL) {
             k = thread_start + i + j;
+          } else if (FLAGS_partitioned) {
+            k = thread_start + rnd.Next() % thread_count;
           } else {
             k = rnd.Next() % num_entries;
           }
@@ -742,6 +759,19 @@ class Benchmark {
 
     bytes_ += shared_bytes.load();
     done_ += shared_done.load();
+
+    {
+      auto stats = db._internal()->merge_stats();
+      std::fprintf(stderr, "\n--- Merge/Publish Counters ---\n");
+      std::fprintf(stderr, "  deferred_commits : %llu\n", (unsigned long long)stats.deferred_commits);
+      std::fprintf(stderr, "  flush_commits    : %llu\n", (unsigned long long)stats.flush_commits);
+      std::fprintf(stderr, "  merge_cycles     : %llu\n", (unsigned long long)stats.merge_cycles);
+      std::fprintf(stderr, "  contexts_merged  : %llu\n", (unsigned long long)stats.workers_merged);
+      if (stats.merge_cycles > 0)
+        std::fprintf(stderr, "  avg_ctxs/cycle   : %.2f\n",
+                     (double)stats.workers_merged / (double)stats.merge_cycles);
+      std::fprintf(stderr, "------------------------------\n");
+    }
   }
 
   void Write(bool sync, Order order, DBState state, int num_entries,
@@ -878,8 +908,64 @@ class Benchmark {
     }
   }
 
+  template <typename StorageType, template<typename> class DBClass = leaves::_DB>
+  void ReadRandomMultiThreadImpl(StorageType& storage, int num_threads) {
+    auto db = storage.template open<DBClass>("benchmark", (uint8_t)num_threads);
+
+    std::vector<std::thread> threads;
+    std::atomic<int64_t> shared_bytes{0};
+    std::atomic<int> shared_done{0};
+
+    int per_thread = reads_ / num_threads;
+    int remainder  = reads_ % num_threads;
+
+    auto thread_fn = [&](int thread_id, int thread_reads) {
+      Random rnd(301 + thread_id);
+      char ckey[100];
+      int64_t local_bytes = 0;
+
+      auto cursor = db.cursor();
+      for (int i = 0; i < thread_reads; i++) {
+        const int k = rnd.Next() % reads_;
+        if (FLAGS_binary_key) {
+          uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+          __builtin_memcpy(ckey, &bk, sizeof(bk));
+          cursor.find(leaves::Slice(ckey, sizeof(uint64_t)));
+        } else {
+          snprintf(ckey, sizeof(ckey), "%016d", k);
+          cursor.find(ckey);
+        }
+        if (cursor.is_valid()) {
+          local_bytes += cursor.key().size() + cursor.value().size();
+        }
+      }
+      shared_bytes.fetch_add(local_bytes, std::memory_order_relaxed);
+      shared_done.fetch_add(thread_reads, std::memory_order_relaxed);
+    };
+
+    for (int t = 0; t < num_threads; ++t) {
+      int thread_reads = per_thread + (t < remainder ? 1 : 0);
+      threads.emplace_back(thread_fn, t, thread_reads);
+    }
+    for (auto& th : threads) th.join();
+
+    bytes_ += shared_bytes.load();
+    done_  += shared_done.load();
+  }
+
   void ReadRandom() {
     // Call the appropriate template implementation based on storage type
+    if (FLAGS_threads > 1) {
+      if (using_replicating_) {
+        ReadRandomMultiThreadImpl<leaves::MapStorage, leaves::_ReplicationDB>(
+            *map_storage_, FLAGS_threads);
+      } else if (using_file_storage_) {
+        ReadRandomMultiThreadImpl(*file_storage_, FLAGS_threads);
+      } else {
+        ReadRandomMultiThreadImpl(*map_storage_, FLAGS_threads);
+      }
+      return;
+    }
     if (using_replicating_) {
       if (!map_storage_) {
         throw std::runtime_error("Map storage pointer is null");
@@ -923,9 +1009,9 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
       FLAGS_batch_size = n;
     } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
+      FLAGS_threads = n;
     } else if (sscanf(argv[i], "--flush_interval=%d%c", &n, &junk) == 1) {
       FLAGS_flush_interval = n;
-      FLAGS_threads = n;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {
@@ -950,6 +1036,9 @@ int main(int argc, char** argv) {
       if (FLAGS_binary_key) {
         std::fprintf(stderr, "Using binary keys (big-endian uint64, 8 bytes)\n");
       }
+    } else if (sscanf(argv[i], "--partitioned=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_partitioned = (n == 1);
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else {
