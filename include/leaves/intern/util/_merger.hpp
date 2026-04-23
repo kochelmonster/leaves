@@ -555,7 +555,15 @@ public:
       if (*src_trie->offset(key1) != 0) {
         src_cursor.current_key.resize(current_key.size());
         src_cursor.push(src_trie->offset(key1));
-        dst_cursor.stack.clear();
+        // Trim to new_trie's parent so _find() re-traverses from there.
+        // stack.clear() would work too but traverses from root; trimming to
+        // the parent avoids the O(depth) ancestor walk while still correctly
+        // handling NONE branches (0-byte suffixes) that keep_stack() would
+        // otherwise shortcut past.
+        size_t _stack_before = dst_cursor.stack.size - 1;
+        size_t _keypos = dst.keypos;
+        dst_cursor.stack.clear(_stack_before);
+        dst_cursor.current_key.resize(_keypos);
         merge_node(current_key);
       }
 
@@ -718,6 +726,11 @@ public:
     dst.trie() = new_trie;
     dst.update_trie_offset();
 
+    // Capture new_trie's parent stack depth and keypos once before the loop.
+    // Each merge_node() call may deepen the stack; trim back before the next.
+    size_t _stack_before_new_trie = dst_cursor.stack.size - 1;
+    size_t _new_trie_keypos = dst.keypos;
+
     // Recursively merge shared branches.
     for (int si = 0; si < shared_count; si++) {
       int k = shared[si].key;
@@ -725,7 +738,8 @@ public:
 
       src_cursor.current_key.resize(current_key.size());
       src_cursor.push(shared[si].src_off);
-      dst_cursor.stack.clear();
+      dst_cursor.stack.clear(_stack_before_new_trie);
+      dst_cursor.current_key.resize(_new_trie_keypos);
       merge_node(current_key);
     }
 
@@ -1196,7 +1210,10 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
         src_cursor.push(src_trie->offset(key1));
         // Free src trie AFTER reading its offset (avoid use-after-free)
         free_src_node(src_trie);
-        dst_cursor.stack.clear();
+        size_t _stack_before = dst_cursor.stack.size - 1;
+        size_t _keypos = dst.keypos;
+        dst_cursor.stack.clear(_stack_before);
+        dst_cursor.current_key.resize(_keypos);
         merge_node(current_key);
       } else {
         free_src_node(src_trie);
@@ -1346,13 +1363,17 @@ struct _MoveMerger : _MergerBase<CursorDst, CursorSrc, MergePolicy> {
     dst.trie() = new_trie;
     dst.update_trie_offset();
 
+    size_t _stack_before_new_trie = dst_cursor.stack.size - 1;
+    size_t _new_trie_keypos = dst.keypos;
+
     for (int si = 0; si < shared_count; si++) {
       int k = shared[si].key;
       *new_trie->offset(k) = shared[si].dst_off;
 
       src_cursor.current_key.resize(current_key.size());
       src_cursor.push(shared[si].src_off);
-      dst_cursor.stack.clear();
+      dst_cursor.stack.clear(_stack_before_new_trie);
+      dst_cursor.current_key.resize(_new_trie_keypos);
       merge_node(current_key);
     }
 

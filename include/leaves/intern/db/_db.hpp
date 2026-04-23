@@ -3,10 +3,12 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
@@ -101,8 +103,9 @@ struct _TxnContext {
   offset_e _snapshot_txn{0};  // snapshot txn offset (ref held for txn lifetime)
   tid_t _recycle_txn_id{0};   // per-context recycle threshold
   std::atomic<uint8_t> _claimed{0};  // 0 = free, 1 = claimed (CAS to acquire)
-  uint8_t _needs_arena_reset{0};  // 1 = worker needs arena reset on next txn
-  std::atomic<uint8_t> _merge_done{0};  // 1 = leader merged this context's delta
+  uint8_t _needs_arena_reset{0};     // 1 = worker needs arena reset on next txn
+  std::atomic<uint8_t> _merge_done{
+      0};  // 1 = leader merged this context's delta
 };
 
 // Default database header (defined outside _DB for reusability)
@@ -165,16 +168,18 @@ struct _ContextMergePolicy : StandardMergePolicy {
 
   _ContextMergePolicy(DB_* db, TxnContext* ctx, tid_t writer_txn_id,
                       tid_t main_txn_id, tid_t diverge_txn_id = tid_t(0))
-      : _db(db), _ctx(ctx), _writer_txn_id(writer_txn_id),
-        _main_txn_id(main_txn_id), _diverge_txn_id(diverge_txn_id) {}
+      : _db(db),
+        _ctx(ctx),
+        _writer_txn_id(writer_txn_id),
+        _main_txn_id(main_txn_id),
+        _diverge_txn_id(diverge_txn_id) {}
 
   // Descend into src nodes allocated by the writer.
   // Deferred mode (diverge_txn_id set): descend all batches since divergence.
   // Normal mode: descend only the current batch (txn_id == writer).
   template <typename PagePtr>
   bool should_descend_src(PagePtr page) {
-    if (_diverge_txn_id != tid_t(0))
-      return page->txn_id > _diverge_txn_id;
+    if (_diverge_txn_id != tid_t(0)) return page->txn_id > _diverge_txn_id;
     return page->txn_id == _writer_txn_id;
   }
 
@@ -272,10 +277,10 @@ struct _DB {
   using header_ptr = typename Traits::template Pointer<Header>;
 
   struct _DeferredCtxState {
-    offset_e accumulated_txn{0};      // last deferred prepared_txn offset
-    uint32_t pending_commit_count{0}; // deferred batches since last flush
-    tid_t diverge_txn_id{0};          // snapshot txn_id at divergence
-    uint8_t in_deferred_sequence{0};  // 1 = context holds deferred state
+    offset_e accumulated_txn{0};       // last deferred prepared_txn offset
+    uint32_t pending_commit_count{0};  // deferred batches since last flush
+    tid_t diverge_txn_id{0};           // snapshot txn_id at divergence
+    uint8_t in_deferred_sequence{0};   // 1 = context holds deferred state
   };
 
   Storage& _storage;
@@ -289,14 +294,44 @@ struct _DB {
   // changing persisted layout used by graph-identity tests.
   std::array<_DeferredCtxState, 64> _deferred_ctx{};
 
+  struct MergeStats {
+    uint64_t deferred_commits{
+        0};                     // batches that deferred (did not flush to main)
+    uint64_t flush_commits{0};  // batches that triggered a flush to main
+    uint64_t merge_cycles{
+        0};  // times the merge thread published a new snapshot
+    uint64_t workers_merged{0};  // total context merges across all merge cycles
+  };
+  mutable std::atomic<uint64_t> _stat_deferred_commits{0};
+  mutable std::atomic<uint64_t> _stat_flush_commits{0};
+  mutable std::atomic<uint64_t> _stat_merge_cycles{0};
+  mutable std::atomic<uint64_t> _stat_workers_merged{0};
+
+  MergeStats merge_stats() const {
+    return {
+        _stat_deferred_commits.load(std::memory_order_relaxed),
+        _stat_flush_commits.load(std::memory_order_relaxed),
+        _stat_merge_cycles.load(std::memory_order_relaxed),
+        _stat_workers_merged.load(std::memory_order_relaxed),
+    };
+  }
+
   [[no_unique_address]] Aspect _aspect{};
+
+  // Dedicated background merge thread (runtime-only, not persisted in storage).
+  std::thread _merge_thread;
+  std::mutex _merge_wake_mutex;
+  std::condition_variable _merge_wake_cv;
+  std::atomic<bool> _merge_thread_stop{false};
 
   // Stored context count in header memory.
   // Single-thread mode stores only main context (0).
   // Multi-thread mode stores main context (0) plus worker contexts (1..N).
   uint8_t _context_count() const {
     if (_num_contexts <= 1) return 1;
-    return static_cast<uint8_t>(_num_contexts + 1);
+    // Double the worker slots so a worker can hold a pending-merge context
+    // (state 2) and immediately claim a fresh context for the next batch.
+    return static_cast<uint8_t>(2 * _num_contexts + 1);
   }
 
   bool _is_multithread_mode() const { return _num_contexts > 1; }
@@ -334,14 +369,17 @@ struct _DB {
     assert(idx < _deferred_ctx.size());
     return _deferred_ctx[idx];
   }
+  
   const _DeferredCtxState& _deferred(const TxnContext* ctx) const {
     uint8_t idx = static_cast<uint8_t>(ctx - context(0));
     assert(idx < _deferred_ctx.size());
     return _deferred_ctx[idx];
   }
+
   bool _ctx_in_deferred_sequence(const TxnContext* ctx) const {
     return _deferred(ctx).in_deferred_sequence != 0;
   }
+
   void _clear_deferred(TxnContext* ctx) {
     auto& d = _deferred(ctx);
     d.accumulated_txn = 0;
@@ -407,12 +445,24 @@ struct _DB {
         _name(name),
         _num_contexts(num_contexts) {
     if (_header->num_contexts != _context_count()) throw TypeMismatch();
+    if (_is_multithread_mode())
+      _merge_thread = std::thread([this] { _merge_thread_loop(); });
   }
 
   _DB(Storage& storage, offset_e* header, std::string_view name,
       uint8_t num_contexts = 1)
       : _storage(storage), _name(name), _num_contexts(num_contexts) {
     init(header);
+    if (_is_multithread_mode())
+      _merge_thread = std::thread([this] { _merge_thread_loop(); });
+  }
+
+  ~_DB() {
+    if (_merge_thread.joinable()) {
+      _merge_thread_stop.store(true, std::memory_order_relaxed);
+      _merge_wake_cv.notify_one();
+      _merge_thread.join();
+    }
   }
 
   Self& self() { return *static_cast<Self*>(this); }
@@ -622,7 +672,8 @@ struct _DB {
 
       // Terminate by chain links, not txn_id ordering.
       if (cur_off == traversal_head) break;
-      if (next_off == 0 || next_off == cur_off) break;
+      assert(next_off != 0);
+      assert(next_off != cur_off);
       cur_off = next_off;
     }
   }
@@ -676,7 +727,7 @@ struct _DB {
   // Try to CAS-claim any free context. Returns index or UINT8_MAX.
   uint8_t _try_claim_any() {
     uint8_t begin = _is_multithread_mode() ? 1 : 0;
-    uint8_t end = _is_multithread_mode() ? _context_count() : 1;
+    uint8_t end = _context_count();
     for (uint8_t i = begin; i < end; i++) {
       uint8_t expected = 0;
       if (context(i)->_claimed.compare_exchange_weak(expected, 1,
@@ -690,17 +741,16 @@ struct _DB {
   // Claim main context (index 0). In commit path this blocks until available.
   TxnContext* _claim_main_context() {
     uint8_t expected = 0;
-    if (context(0)->_claimed.compare_exchange_weak(expected, 1,
-                                                   std::memory_order_acquire,
-                                                   std::memory_order_relaxed))
+    if (context(0)->_claimed.compare_exchange_weak(
+            expected, 1, std::memory_order_acquire, std::memory_order_relaxed))
       return context(0);
 
     std::unique_lock lk(_header->ctx_wait_lock);
     while (true) {
       expected = 0;
-      if (context(0)->_claimed.compare_exchange_weak(
-              expected, 1, std::memory_order_acquire,
-              std::memory_order_relaxed))
+      if (context(0)->_claimed.compare_exchange_weak(expected, 1,
+                                                     std::memory_order_acquire,
+                                                     std::memory_order_relaxed))
         return context(0);
       _header->ctx_wait_cv.wait(lk);
     }
@@ -788,8 +838,9 @@ struct _DB {
 
   void start_ctx_transaction(TxnContext* ctx) {
     auto& deferred = _deferred(ctx);
-    // Deferred continuation: arena is preserved, next_txn_page is a clone of the
-    // accumulated state (root + delete_root already set by previous prepare_commit).
+    // Deferred continuation: arena is preserved, next_txn_page is a clone of
+    // the accumulated state (root + delete_root already set by previous
+    // prepare_commit).
     if (deferred.in_deferred_sequence) {
       assert(ctx->next_txn_page);
       txn_ptr active = resolve<Transaction>(&ctx->next_txn_page);
@@ -799,7 +850,8 @@ struct _DB {
       ctx->prepared_txn = 0;
       // active->root and active->delete_root already reflect accumulated state.
       // Keep ctx->_snapshot_txn (ref held from first batch in this sequence).
-      // Keep deferred.diverge_txn_id (same divergence point throughout sequence).
+      // Keep deferred.diverge_txn_id (same divergence point throughout
+      // sequence).
       {
         std::lock_guard<SpinLock> guard(_header->txn_ref_lock);
         _header->_last_assigned_tid =
@@ -835,6 +887,16 @@ struct _DB {
     // a fresh next_txn_page (the clone will have refs=0).
     ctx->prepared_txn = 0;
 
+    // Release old snapshot ref before acquiring the new one.
+    // Worker contexts never call end_transaction between batches, so without
+    // this release every batch leaks a ref.  After K batches K transactions are
+    // pinned, GC can free nothing, the chain grows to K entries, and
+    // iter_transactions pays O(K) per commit — total O(K²) behaviour.
+    if (ctx->_snapshot_txn) {
+      txn_ptr old_snap = resolve<Transaction>(&ctx->_snapshot_txn);
+      old_snap->refs.fetch_sub(1, std::memory_order_release);
+      ctx->_snapshot_txn = 0;
+    }
     txn_ptr snapshot_txn = txn_ref();
     ctx->_snapshot_txn = txn_offset();
     active->root = snapshot_txn->root;
@@ -977,67 +1039,40 @@ struct _DB {
         deferred.accumulated_txn = ctx->prepared_txn;
         deferred.pending_commit_count++;
         deferred.in_deferred_sequence = 1;
+        _stat_deferred_commits.fetch_add(1, std::memory_order_relaxed);
         return true;
       }
 
-      // At threshold (or sync=true, or threshold disabled): flush accumulated state.
-      // Clear deferred flags BEFORE group merge so cursor takes the flush path.
+      // At threshold (or sync=true, or threshold disabled): flush accumulated
+      // state. Clear deferred flags BEFORE group merge so cursor takes the
+      // flush path.
       deferred.accumulated_txn = ctx->prepared_txn;
       deferred.pending_commit_count = 0;
       deferred.in_deferred_sequence = 0;
+      _stat_flush_commits.fetch_add(1, std::memory_order_relaxed);
 
-      // Group commit: try to become leader, or enqueue for a leader to merge us.
+      // Async enqueue: mark this context as pending-merge, signal the dedicated
+      // merge thread, and return immediately.  The cursor switches _txn and
+      // calls end_transaction(), which uses a two-phase CAS handoff with the
+      // merge thread so the context slot is released exactly once.
       uint8_t idx = _ctx_index_of(ctx);
-      bool i_am_leader = false;
-
-      // Fast path: try to claim main context immediately
-      uint8_t exp = 0;
-      if (context(0)->_claimed.compare_exchange_strong(
-              exp, 1, std::memory_order_acquire, std::memory_order_relaxed)) {
-        i_am_leader = true;
-      } else {
-        // Slow path: enqueue our context in the pending bitmap and wait
-        ctx->_merge_done.store(0, std::memory_order_relaxed);
-        _header->_pending_merge_bitmap.fetch_or(1u << idx,
-                                                std::memory_order_release);
-
-        std::unique_lock lk(_header->ctx_wait_lock);
-        while (true) {
-          // Check if a leader already merged us
-          if (ctx->_merge_done.load(std::memory_order_acquire)) break;
-          // Try to become leader ourselves (main may have been released)
-          exp = 0;
-          if (context(0)->_claimed.compare_exchange_weak(
-                  exp, 1, std::memory_order_acquire,
-                  std::memory_order_relaxed)) {
-            // Remove our pending bit — we'll merge ourselves as leader
-            _header->_pending_merge_bitmap.fetch_and(~(1u << idx),
-                                                     std::memory_order_relaxed);
-            i_am_leader = true;
-            break;
-          }
-          _header->ctx_wait_cv.wait(lk);
-        }
-        lk.unlock();
+      ctx->_merge_done.store(0, std::memory_order_relaxed);
+      ctx->_needs_arena_reset = 1;
+      // Set _claimed=2 (pending-merge) before enqueuing in the bitmap so that
+      // end_transaction() always sees state 2 when commit() has returned.
+      ctx->_claimed.store(2, std::memory_order_release);
+      _header->_pending_merge_bitmap.fetch_or(1u << idx,
+                                              std::memory_order_release);
+      {
+        std::lock_guard<std::mutex> lk(_merge_wake_mutex);
       }
-
-      if (i_am_leader) {
-        _do_leader_merge(ctx, sync, origin);
-      }
+      _merge_wake_cv.notify_one();
     }
 
     if (!_is_multithread_mode()) {
       make_dirty(_header);
       flush(sync, true);
       end_transaction(ctx);
-    } else {
-      // Mark worker context for lazy arena reset on next start_ctx_transaction.
-      ctx->_needs_arena_reset = 1;
-      // NOTE: Do NOT call end_transaction(ctx) here.  The cursor still
-      // holds _txn pointing into the worker arena.  Releasing the context
-      // would allow another thread to claim it and memset the arena,
-      // corrupting the cursor's _txn.  Caller must switch _txn first,
-      // then call end_transaction(ctx).
     }
     return true;
   }
@@ -1092,58 +1127,90 @@ struct _DB {
     }
   }
 
-  // Group commit: leader merges its own delta plus all pending worker deltas
-  // in a single main-context round, avoiding N sequential claim/release cycles.
-  void _do_leader_merge(TxnContext* my_ctx, bool sync,
-                        TransactionOrigin origin) {
+  // Background merge cycle: drains all pending worker deltas in one
+  // main-context transaction and publishes the resulting snapshot.
+  // Called exclusively by _merge_thread_loop() — no contention on context(0).
+  void _do_merge_cycle() {
+    // Claim context(0). Only the merge thread ever claims it.
+    {
+      uint8_t expected = 0;
+      while (!context(0)->_claimed.compare_exchange_weak(
+          expected, 1, std::memory_order_acquire, std::memory_order_relaxed))
+        expected = 0;
+    }
+
     txn_ptr current = txn();
-    TxnContext* main = context(0);  // already claimed by caller
-
+    TxnContext* main = context(0);
     start_ctx_transaction(main);
-    _merge_to_main(main, my_ctx);
 
-    // Drain pending merges — loop because new ones may arrive while we drain
+    // Drain loop: re-check after each sweep in case new entries arrived.
     while (true) {
-      uint32_t bitmap = _header->_pending_merge_bitmap.exchange(
-          0, std::memory_order_acq_rel);
+      uint32_t bitmap =
+          _header->_pending_merge_bitmap.exchange(0, std::memory_order_acq_rel);
       if (!bitmap) break;
       while (bitmap) {
-        // Portable lowest-bit extraction
+        // Portable lowest-set-bit extraction
         uint32_t lowest = bitmap & (~bitmap + 1);
         int i = 0;
-        uint32_t tmp = lowest;
-        while (tmp >>= 1) ++i;
-        bitmap &= bitmap - 1;  // clear lowest set bit
+        for (uint32_t tmp = lowest; tmp >>= 1;) ++i;
+        bitmap &= bitmap - 1;
 
         _merge_to_main(main, context(i));
         context(i)->_needs_arena_reset = 1;
-        context(i)->_merge_done.store(1, std::memory_order_release);
+        _stat_workers_merged.fetch_add(1, std::memory_order_relaxed);
+
+        // Two-phase handoff with end_transaction():
+        //   CAS(0→1) wins: end_transaction not yet called; cursor releases.
+        //   CAS fails (value==2): end_transaction already called; we release.
+        uint8_t expected_md = 0;
+        if (!context(i)->_merge_done.compare_exchange_strong(
+                expected_md, 1, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+          // end_transaction already ran (expected_md == 2)
+          context(i)->active_txn = 0;
+          _release_context(i);
+        }
       }
     }
 
-    prepare_commit(main, false, origin);
+    prepare_commit(main, false, TransactionOrigin::user);
     current->next_txn = main->prepared_txn;
     make_dirty(current);
     make_dirty(resolve<Transaction>(&main->prepared_txn));
     _header->read_txn = main->prepared_txn;
     end_transaction(main);
 
+    _stat_merge_cycles.fetch_add(1, std::memory_order_relaxed);
     make_dirty(_header);
-    flush(sync, true);
+    flush(false, true);
 
-    // Wake all waiting threads (both group-merged and those waiting to claim)
+    // Wake workers waiting for a free context slot.
     {
       std::lock_guard lk(_header->ctx_wait_lock);
     }
     _header->ctx_wait_cv.notify_all();
   }
 
+  void _merge_thread_loop() {
+    while (true) {
+      std::unique_lock<std::mutex> lk(_merge_wake_mutex);
+      _merge_wake_cv.wait(lk, [this] {
+        return _merge_thread_stop.load(std::memory_order_relaxed) ||
+               _header->_pending_merge_bitmap.load(std::memory_order_relaxed) !=
+                   0;
+      });
+      if (_merge_thread_stop.load(std::memory_order_relaxed)) break;
+      lk.unlock();
+      _do_merge_cycle();
+    }
+  }
+
   // Recursively walk trie nodes modified by the writer (txn_id match).
   // Snapshot subtrees (different txn_id) are skipped entirely — O(1) per skip.
   // Only calls cb for modified leaf nodes with the reconstructed full key.
   template <typename TrieNode, typename LeafNode, typename Callback>
-  void _walk_modified_leaves(offset_e off, tid_t writer_tid,
-                             std::string& key, Callback&& cb) {
+  void _walk_modified_leaves(offset_e off, tid_t writer_tid, std::string& key,
+                             Callback&& cb) {
     using PageHeader = typename Traits::PageHeader;
     if (off == 0) return;
 
@@ -1165,7 +1232,8 @@ struct _DB {
       key.append((const char*)trie->compressed(), trie->len());
       trie->for_each_branch([&](int k, auto* child_off) {
         if (k != TrieNode::NONE) key.push_back(k);
-        _walk_modified_leaves<TrieNode, LeafNode>(*child_off, writer_tid, key, cb);
+        _walk_modified_leaves<TrieNode, LeafNode>(*child_off, writer_tid, key,
+                                                  cb);
         if (k != TrieNode::NONE) key.pop_back();
       });
       key.resize(saved);
@@ -1179,6 +1247,30 @@ struct _DB {
       snap->refs.fetch_sub(1);
       ctx->_snapshot_txn = 0;
     }
+
+    // Async-commit path: context is in pending-merge state (_claimed == 2).
+    // Use _merge_done for a two-phase handoff so the context slot is released
+    // exactly once (whichever of end_transaction / merge thread completes
+    // last):
+    //   CAS(0→2) wins: merge not done yet; do NOT zero active_txn (merge thread
+    //                  still needs it via _resolve_active). Merge thread
+    //                  releases.
+    //   CAS fails (value==1): merge already done; safe to zero and release now.
+    if (_is_multithread_mode() &&
+        ctx->_claimed.load(std::memory_order_acquire) == 2) {
+      uint8_t expected_md = 0;
+      if (ctx->_merge_done.compare_exchange_strong(expected_md, 2,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire)) {
+        // Won the race: merge thread will zero active_txn and release.
+        return;
+      }
+      // Merge already done (expected_md == 1): we release.
+      ctx->active_txn = 0;
+      _release_context(_ctx_index_of(ctx));
+      return;
+    }
+
     ctx->active_txn = 0;
     _release_context(_ctx_index_of(ctx));
   }

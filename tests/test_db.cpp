@@ -343,6 +343,7 @@ struct TestTraits {
     tid_t txn_id;
     uint16_e used;
     uint8_t slot_id;
+    bool needs_cow(tid_t) const { return false; }
   };
 
   using ptr = SimplePointer<PageHeader, TRIE>;
@@ -463,8 +464,8 @@ struct TestStorage {
   }
 
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
-  void prefetch(offset_t /* offset */, Access /* access */ = READ) const {}
-  void prefetch(void* /* mem */, Access /* access */ = READ) const {}
+  void prefetch(const offset_t* /* offset */, Access /* access */ = READ) const {}
+  void prefetch(const void* /* mem */, Access /* access */ = READ) const {}
 };
 
 BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {

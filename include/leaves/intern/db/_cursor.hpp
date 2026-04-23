@@ -137,8 +137,9 @@ struct _Transition {
   void resize_key(size_t size) { cursor->current_key.resize(size); }
 
   Transition& push() {
-    cursor->push(link());
-    return cursor->stack.back();
+    auto* c = cursor;  // cache before push() may reallocate the vector and free this
+    c->push(link());
+    return c->stack.back();
   }
 
   void pop() { cursor->pop(); }
