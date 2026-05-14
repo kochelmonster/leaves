@@ -112,6 +112,8 @@ class MemoryBenchmark {
   Histogram hist_;
   RandomGenerator gen_;
   Random rand_;
+  std::vector<char> bench_keys_buf_;
+  int bench_key_size_{0};
 
   // State kept for progress messages
   int done_;
@@ -266,6 +268,29 @@ class MemoryBenchmark {
   enum Order { SEQUENTIAL, RANDOM };
   enum DBState { FRESH, EXISTING };
 
+  void prepare_keys(Order order, int n) {
+#ifdef BINARY_KEY
+    bench_key_size_ = 8;
+#else
+    bench_key_size_ = 16;
+#endif
+    bench_keys_buf_.resize(n * bench_key_size_);
+    char* buf = bench_keys_buf_.data();
+    for (int i = 0; i < n; i++) {
+      const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+#ifdef BINARY_KEY
+      uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+      memcpy(buf + i * bench_key_size_, &bk, sizeof(uint64_t));
+#else
+      snprintf(buf + i * bench_key_size_, bench_key_size_ + 1, "%016d", k);
+#endif
+    }
+  }
+
+  leaves::Slice bench_key(int i) const {
+    return leaves::Slice(bench_keys_buf_.data() + i * bench_key_size_, bench_key_size_);
+  }
+
   MemoryBenchmark()
       : num_(FLAGS_num),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
@@ -290,6 +315,12 @@ class MemoryBenchmark {
       } else {
         name = Slice(benchmarks, sep - benchmarks);
         benchmarks = sep + 1;
+      }
+
+      if (name == Slice("overwrite")) {
+        prepare_keys(RANDOM, num_);
+      } else if (name == Slice("readrandom")) {
+        prepare_keys(RANDOM, reads_);
       }
 
       Start();
@@ -336,6 +367,7 @@ class MemoryBenchmark {
     if (state == FRESH) {
       storage_ = std::make_unique<leaves::_MemoryStorage>();
       db_ = &storage_->db();
+      prepare_keys(order, num_entries);
       Start();  // Do not count time taken to recreate storage
     }
 
@@ -346,30 +378,14 @@ class MemoryBenchmark {
     }
 
     leaves::Slice mkey, mval;
-    char key[100];
     
     auto cursor = db_->create_cursor();
     
     // Write to database - memory storage doesn't need transactions
     for (int i = 0; i < num_entries; i++) {
-      const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % num_entries);
-
-#ifdef BINARY_KEY
-      *(uint64_t*)key = native_to_big(k);
-      mkey = leaves::Slice(key, sizeof(uint64_t));
-#else
-      snprintf(key, sizeof(key), "%016d", k);
-      mkey = leaves::Slice(key);
-#endif
-      
+      mkey = bench_key(i);
       bytes_ += value_size + mkey.size();
       mval = gen_.Generate(value_size);
-
-      if (k == 11) {
-        // Debugging
-        std::cout << "Debugging" << std::endl;
-      }
-
       cursor->find(mkey);
       cursor->value(mval);
       FinishedSingleOp();
@@ -389,15 +405,9 @@ class MemoryBenchmark {
   }
 
   void ReadRandom() {
-    leaves::Slice key;
-    char ckey[100];
-    
     auto cursor = db_->create_cursor();
     for (int i = 0; i < reads_; i++) {
-      const int k = rand_.Next() % reads_;
-      snprintf(ckey, sizeof(ckey), "%016d", k);
-
-      cursor->find(ckey);
+      cursor->find(bench_key(i));
       if (cursor->is_valid()) {
         bytes_ += cursor->key().size() + cursor->value().size();
       }

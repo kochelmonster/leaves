@@ -108,6 +108,10 @@ struct _DBHeader {
   // Tracks whether this DB has been sanitized for the current storage
   // generation.  Compared against the FileHeader counter at open() time.
   uint32_t sanitize_generation;
+
+  // Extra offset for storing additional user-defined data beyond the header.
+  // Defaults to 0 (no extra data).
+  offset_t extra_offset{0};
 };
 
 // Make _DB accept Transaction and Header as template parameters
