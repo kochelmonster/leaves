@@ -61,10 +61,9 @@ BOOST_AUTO_TEST_CASE(test_tributary_basic_write_read) {
 
   // Read back without merging
   auto cursor = cdb->create_confluence_cursor();
-  Slice val;
-  bool found = cursor->find(Slice("hello"), val);
-  BOOST_CHECK(found);
-  BOOST_CHECK_EQUAL(val, Slice("world"));
+  cursor->find(Slice("hello"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("world"));
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_two_producers) {
@@ -78,11 +77,12 @@ BOOST_AUTO_TEST_CASE(test_tributary_two_producers) {
   write_kv(*cdb, "key_b", "value_b");
 
   auto cursor = cdb->create_confluence_cursor();
-  Slice va, vb;
-  BOOST_CHECK(cursor->find(Slice("key_a"), va));
-  BOOST_CHECK_EQUAL(va, Slice("value_a"));
-  BOOST_CHECK(cursor->find(Slice("key_b"), vb));
-  BOOST_CHECK_EQUAL(vb, Slice("value_b"));
+  cursor->find(Slice("key_a"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("value_a"));
+  cursor->find(Slice("key_b"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("value_b"));
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_overwrite_latest_wins) {
@@ -96,9 +96,9 @@ BOOST_AUTO_TEST_CASE(test_tributary_overwrite_latest_wins) {
   write_kv(*cdb, "key", "new");
 
   auto cursor = cdb->create_confluence_cursor();
-  Slice v;
-  BOOST_CHECK(cursor->find(Slice("key"), v));
-  BOOST_CHECK_EQUAL(v, Slice("new"));
+  cursor->find(Slice("key"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("new"));
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_delete_propagates) {
@@ -119,8 +119,8 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_propagates) {
   }
 
   auto cursor = cdb->create_confluence_cursor();
-  Slice v;
-  BOOST_CHECK(!cursor->find(Slice("key"), v));
+  cursor->find(Slice("key"));
+  BOOST_CHECK(!cursor->is_valid());
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_merge_into_main) {
@@ -137,11 +137,12 @@ BOOST_AUTO_TEST_CASE(test_tributary_merge_into_main) {
 
   // After merge the data should be in the main DB
   auto cursor = cdb->create_confluence_cursor();
-  Slice va, vb;
-  BOOST_CHECK(cursor->find(Slice("alpha"), va));
-  BOOST_CHECK_EQUAL(va, Slice("1"));
-  BOOST_CHECK(cursor->find(Slice("beta"), vb));
-  BOOST_CHECK_EQUAL(vb, Slice("2"));
+  cursor->find(Slice("alpha"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("1"));
+  cursor->find(Slice("beta"));
+  BOOST_CHECK(cursor->is_valid());
+  BOOST_CHECK_EQUAL(cursor->value(), Slice("2"));
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_delete_then_merge) {
@@ -166,8 +167,8 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_then_merge) {
   cdb->merge_eligible_tributaries();
 
   auto cursor = cdb->create_confluence_cursor();
-  Slice v;
-  BOOST_CHECK(!cursor->find(Slice("k"), v));
+  cursor->find(Slice("k"));
+  BOOST_CHECK(!cursor->is_valid());
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_iteration_forward) {
@@ -180,7 +181,8 @@ BOOST_AUTO_TEST_CASE(test_tributary_iteration_forward) {
   write_kv(*cdb, "c", "3");
 
   auto cursor = cdb->create_confluence_cursor();
-  BOOST_REQUIRE(cursor->first());
+  cursor->first();
+  BOOST_REQUIRE(cursor->is_valid());
 
   std::vector<std::string> keys;
   while (cursor->is_valid()) {
@@ -209,6 +211,6 @@ BOOST_AUTO_TEST_CASE(test_tributary_rollback) {
   }
 
   auto cursor = cdb->create_confluence_cursor();
-  Slice v;
-  BOOST_CHECK(!cursor->find(Slice("x"), v));
+  cursor->find(Slice("x"));
+  BOOST_CHECK(!cursor->is_valid());
 }

@@ -59,16 +59,21 @@ class ConfluenceCursor {
 
   // Returns true and fills value_out if key exists (not deleted).
   bool find(const Slice& key, Slice& value_out) {
-    return _cursor->find(key, value_out);
+    _cursor->find(key);
+    if (_cursor->is_valid()) { value_out = _cursor->value(); return true; }
+    return false;
   }
-  bool contains(const Slice& key) { return _cursor->contains(key); }
+  bool contains(const Slice& key) {
+    _cursor->find(key);
+    return _cursor->is_valid();
+  }
 
   // --- Ordered iteration ---
 
-  bool  first()    { return _cursor->first(); }
-  bool  next()     { return _cursor->next();  }
-  bool  last()     { return _cursor->last();  }
-  bool  prev()     { return _cursor->prev();  }
+  bool  first()    { _cursor->first(); return _cursor->is_valid(); }
+  bool  next()     { _cursor->next();  return _cursor->is_valid(); }
+  bool  last()     { _cursor->last();  return _cursor->is_valid(); }
+  bool  prev()     { _cursor->prev();  return _cursor->is_valid(); }
 
   bool  is_valid() const { return _cursor->is_valid(); }
   Slice key()      const { return _cursor->key();      }

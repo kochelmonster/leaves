@@ -487,6 +487,35 @@
             ]
         },
         {
+            "name": "(gdb) db_bench_leaves confluence4",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/db_bench_leaves",
+            "args": [
+                "--use_confluence=4",
+                "--benchmarks=fillseq",
+                "--num=1000000"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": true,
+            "MIMode": "gdb",
+            "preLaunchTask": "Build leaves (CMake)",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
             "name": "(gdb) parallel_long_key_prefix",
             "type": "cppdbg",
             "request": "launch",

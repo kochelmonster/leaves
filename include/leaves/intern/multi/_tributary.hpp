@@ -2,6 +2,7 @@
 #define _LEAVES_TRIBUTARY_HPP
 
 #include <atomic>
+#include <bit>
 #include <chrono>
 
 #include "../db/_cursor.hpp"
@@ -68,15 +69,71 @@ struct _TributarySlot {
   static constexpr uint8_t CLAIMED = 1;
   static constexpr uint8_t MERGING = 2;
 
-  std::atomic<uint8_t>  in_use{FREE};
-  uint8_t               _pad[3]{};
-  std::atomic<uint32_t> reader_refs{0};   // pinned reader count
-  uint64_t              last_used_time{0}; // epoch seconds, set on commit
-  uint32_t              write_count{0};    // committed writes since creation
-  uint32_t              _pad2{0};
   offset_t              self_area{0};      // offset of this slot's area (for freeing)
   offset_t              db_header{0};      // offset of tributary's _DBHeader
   offset_t              next{0};           // next slot in list (0 = end)
+  uint64_t              last_used_time{0}; // epoch seconds, set on commit
+  std::atomic<uint32_t> reader_refs{0};   // pinned reader count
+  uint32_t              write_count{0};    // committed writes since creation
+  std::atomic<uint8_t>  in_use{FREE};
+
+  // Bloom filter sized to match the merge write threshold.
+  // k=5 probes via double-hashing; 10 bits/key gives FPR ≈ 0.13% at capacity.
+  // When write_count exceeds BLOOM_MAX_KEYS (e.g. if the merge monitor lags
+  // behind fast writers), the filter becomes overfull and FPR rises, but it
+  // still produces correct results — no false negatives, just more false
+  // positives.  The zero-count fast-path remains the primary win (empty slots).
+  static constexpr uint32_t BLOOM_MAX_KEYS     = 1000;
+  static constexpr uint32_t BLOOM_BITS_PER_KEY = 10;
+  static constexpr uint32_t BLOOM_K            = 5;
+  // Round up to next power of 2 for cheap bit-index arithmetic.
+  static constexpr uint32_t BLOOM_BITS  = std::bit_ceil(BLOOM_MAX_KEYS * BLOOM_BITS_PER_KEY);
+  static constexpr uint32_t BLOOM_BYTES = BLOOM_BITS / 8;
+
+  uint32_t              bloom_count{0};        // approximate key count
+  uint32_t              _bloom_pad{0};
+  uint8_t               bloom[BLOOM_BYTES]{};  // bit array
+
+  // FNV-1a 64-bit hash (two seeds via h >> 32 for double-hashing)
+  static uint64_t _bloom_hash(const char* data, size_t len) noexcept {
+    uint64_t h = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < len; ++i)
+      h = (h ^ static_cast<uint8_t>(data[i])) * UINT64_C(1099511628211);
+    return h;
+  }
+
+  void bloom_add(const std::string& key) noexcept {
+    uint64_t h = _bloom_hash(key.data(), key.size());
+    uint32_t h1 = static_cast<uint32_t>(h);
+    uint32_t h2 = static_cast<uint32_t>(h >> 32) | 1u;  // odd to be coprime with BLOOM_BITS
+    for (uint32_t i = 0; i < BLOOM_K; ++i) {
+      uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
+      bloom[bit >> 3] |= static_cast<uint8_t>(1u << (bit & 7));
+    }
+    ++bloom_count;
+  }
+
+  bool bloom_test(const std::string& key) const noexcept {
+    if (bloom_count == 0) return false;
+    // Note: no saturation guard. Even when the filter is overfull the bit-probe
+    // still gives valid results — it just has a higher FPR.  Returning true
+    // unconditionally (the old saturation guard) was worse: it forced a trie
+    // search on every key, defeating the purpose of the filter entirely.
+    uint64_t h = _bloom_hash(key.data(), key.size());
+    uint32_t h1 = static_cast<uint32_t>(h);
+    uint32_t h2 = static_cast<uint32_t>(h >> 32) | 1u;
+    for (uint32_t i = 0; i < BLOOM_K; ++i) {
+      uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
+      if (!(bloom[bit >> 3] & static_cast<uint8_t>(1u << (bit & 7))))
+        return false;
+    }
+    return true;
+  }
+
+  void bloom_reset() noexcept {
+    bloom_count = 0;
+    memset(bloom, 0, BLOOM_BYTES);
+  }
 };
 
 // =============================================================================
