@@ -1,6 +1,7 @@
 #ifndef _LEAVES_MERGER_HPP
 #define _LEAVES_MERGER_HPP
 
+#include <cstdio>
 #include "../core/_bits.hpp"
 #include "../core/_node.hpp"
 #include "../db/_cursor.hpp"
@@ -123,6 +124,7 @@ struct _Merger {
   _Merger(CursorDst& dest, CursorSrc& src, MergePolicy& handler)
       : dst_cursor(dest), src_cursor(src), handler(handler) {}
 
+
   template <typename NodePtr>
   NodePtr alloc_node(uint16_t node_size) {
     return dst_cursor._db->template alloc_node<NodePtr>(node_size);
@@ -216,6 +218,7 @@ struct _Merger {
       current_key.resize(size);
       selective_deep_copy_subtree(src_cursor.stack.front().offset,
                                   dst_cursor._root, current_key);
+      src_cursor.pop();
       return;
     }
 
@@ -232,8 +235,9 @@ struct _Merger {
         // trie
         dst_cursor.pop();
         merge_trie_node(dst_cursor.stack.back(), src, current_key);
-      } else
+      } else {
         merge_leaf_node(dst, src, current_key);
+      }
     }
     current_key.resize(size);
     src_cursor.pop();
@@ -254,8 +258,12 @@ struct _Merger {
                                  src_leaf->is_big())) {
         return;  // Keep dst unchanged
       }
-      // Overwrite: create new leaf with src key/value, replace dst
-      leaf_ptr new_leaf = fill_leaf(src_leaf->key(), *src_leaf);
+      // Overwrite: create new leaf with src's value, keeping dst's stored
+      // key suffix. src may be positioned at a different trie depth than dst,
+      // so src_leaf->key() may include bytes that already belong to dst's
+      // parent path. The dst leaf already sits in the correct slot with the
+      // correct suffix length.
+      leaf_ptr new_leaf = fill_leaf(dst_leaf->key(), *src_leaf);
       *dst.offset = resolve_offset(new_leaf);
       free_node(dst_leaf);
       return;
@@ -428,7 +436,7 @@ struct _Merger {
         }
       });
 
-      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf, upper);
@@ -476,7 +484,7 @@ struct _Merger {
         }
       });
 
-      Slice prefix((const char*)src_trie->compressed(), src_trie->len());
+      Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
       new_trie->create(prefix, offsets_buf, upper);
@@ -556,7 +564,7 @@ struct _Merger {
 
     struct SharedBranch {
       int key;
-      src_offset_e* src_off;  // non-const: push() takes mutable pointer
+      src_offset_e src_off_val;  // value copy — immune to src_trie mutation
       offset_e dst_off;
     };
     SharedBranch shared[257];
@@ -577,7 +585,7 @@ struct _Merger {
         // Shared branch — merge recursively later (skip incomplete src)
         if (*src_off != 0) {
           shared[shared_count++] = {
-              k, const_cast<src_offset_e*>(src_off),
+              k, *src_off,
               *dst_trie->offset(k)};
         }
       } else {
@@ -611,7 +619,7 @@ struct _Merger {
       *new_trie->offset(k) = shared[si].dst_off;
 
       src_cursor.current_key.resize(current_key.size());
-      src_cursor.push(shared[si].src_off);
+      src_cursor.push(&shared[si].src_off_val);
       dst_cursor.stack.clear(_stack_before_new_trie);
       dst_cursor.current_key.resize(_new_trie_keypos);
       merge_node(current_key);

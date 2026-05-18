@@ -196,7 +196,6 @@ struct _DB {
 
   void init(offset_t* header) {
     auto area_ptr = _storage.alloc_single_area();
-
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
@@ -240,6 +239,7 @@ struct _DB {
   // Return all areas to storage pool
   void return_areas() {
     auto read_txn = resolve<Transaction>(&_header->read_txn);
+
     if (_header->area_list_head_single && read_txn->area_list_tail_single) {
       _storage.return_single_areas(_header->area_list_head_single,
                                    read_txn->area_list_tail_single);
@@ -254,6 +254,7 @@ struct _DB {
   void reset(offset_t* header) {
     if (is_active()) throw TransactionActive();
     if (!_aspect.before_reset(self())) return;
+    std::scoped_lock lock(_storage.file_lock());
     return_areas();
     init(header);
     _aspect.on_reset(self());
@@ -346,8 +347,6 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_single_area();
-    area_ptr->next = 0;
-
     // Append to transaction's area list tail
     auto tail = resolve<Area>(&_active_txn->area_list_tail_single, WRITE);
     tail->next = resolve(area_ptr);
@@ -363,8 +362,6 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_multi_area(size);
-    area_ptr->next = 0;
-
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
       auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, WRITE);
@@ -660,6 +657,7 @@ struct _DB {
 
   void return_areas_range(offset_t start_single, offset_t end_single,
                           offset_t start_multi, offset_t end_multi) {
+    std::scoped_lock lock(_storage.file_lock());
     // Return area range [start->next ... end] to storage
     // This is used during rollback to return areas allocated during write
     // transaction

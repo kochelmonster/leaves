@@ -131,8 +131,10 @@ struct _FileOperations : _CacheBase {
   int _fd = -1;
 #endif
   FileHeader* _header;
-  // Real lock for area allocation serialization (returned by file_lock())
-  mutable std::mutex _file_mutex;
+  // Real lock for area allocation serialization (returned by file_lock()).
+  // Must be recursive: open() holds it while calling sanitize(), and sanitize()
+  // may call _DB::alloc_single_area() which re-acquires it on the same thread.
+  mutable std::recursive_mutex _file_mutex;
 
   size_t file_size() const { return _header->file_size; }
 
@@ -314,7 +316,7 @@ struct _FileOperations : _CacheBase {
 
   const char* filename() const { return _filepath.c_str(); }
 
-  std::mutex& file_lock() { return _file_mutex; }
+  std::recursive_mutex& file_lock() { return _file_mutex; }
 };
 
 template <typename Traits_ = _StoreTraits>

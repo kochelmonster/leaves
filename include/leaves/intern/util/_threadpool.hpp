@@ -238,8 +238,11 @@ struct _ThreadPoolMixin {
           if (_pool_shutdown.load()) return;
 
           if (!_sched_queue.empty()) {
-            // Sleep until the next scheduled job or a new event
-            _queue_cv.wait_until(lock, _sched_queue.top().when);
+            // Copy the deadline before releasing the lock in wait_until.
+            // Another thread may push to _sched_queue while we sleep, which
+            // can reallocate the underlying vector, invalidating a reference.
+            auto next_when = _sched_queue.top().when;
+            _queue_cv.wait_until(lock, next_when);
           } else {
             // Nothing scheduled — sleep until a task arrives
             _queue_cv.wait(lock, [this]() {

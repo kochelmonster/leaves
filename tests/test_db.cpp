@@ -1357,3 +1357,40 @@ BOOST_AUTO_TEST_CASE(test_remove_uncached_db) {
     BOOST_CHECK_NO_THROW(storage.template remove<_DB>("mydb"));
   }
 }
+
+// Regression: _DB::init() must zero the popped first area's ->next field.
+// AreaList::pop() leaves the returned area's ->next pointing at whatever
+// the pool's head was at pop time.  If init() does not clear it, the new
+// DB's chain (head=first_area) silently extends into the pool's free list,
+// causing dual ownership: a subsequent pop() hands out an area that is
+// already on this DB's chain.  In the wild this surfaced as a "DUPLICATE
+// AREA" crash deep inside a ConfluenceDB merge.  Pre-fix this test would
+// observe head->next != 0; post-fix it must be 0.
+BOOST_AUTO_TEST_CASE(test_db_init_zeros_first_area_next) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_init_next.lvs";
+  DBMMap storage(dbFilePath.c_str());
+
+  // Pollute the pool: allocate three single areas, then return each one
+  // as its own single-element chain.  After this the pool's free list
+  // looks like A3 -> A2 -> A1 -> 0 (LIFO), so the next pop() returns A3
+  // with A3->next still pointing at A2.
+  std::vector<offset_t> seeded;
+  for (int i = 0; i < 3; ++i) {
+    auto a = storage.alloc_single_area();
+    seeded.push_back(storage.resolve(a));
+  }
+  for (offset_t off : seeded) {
+    storage.return_single_areas(off, off);
+  }
+
+  // Create a fresh DB; init() pops from the polluted pool.
+  auto db = storage.open("victim");
+
+  offset_t head_offset = db->_header->area_list_head_single;
+  BOOST_REQUIRE_NE(head_offset, offset_t(0));
+  auto head_area = DBMMap::area_ptr(
+      storage.resolve(&db->_header->area_list_head_single, READ));
+  // The invariant: the new DB's first area must terminate the chain.
+  BOOST_CHECK_EQUAL(head_area->next, offset_t(0));
+}
