@@ -83,6 +83,11 @@ static bool FLAGS_use_replicating = false;
 // Use ConfluenceDB with N concurrent writer threads (0 = disabled)
 static int FLAGS_use_confluence = 0;
 
+// When non-empty, append the exact key & value sequence used by each write
+// phase to this file (binary format). Used by test_merger to replay the
+// crashing benchmark workload deterministically in a single thread.
+static const char* FLAGS_dump_workload = nullptr;
+
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
 
@@ -370,7 +375,7 @@ class Benchmark {
 
   void prepare_keys(Order order, int n) {
     bench_key_size_ = FLAGS_binary_key ? 8 : 16;
-    bench_keys_buf_.resize(n * bench_key_size_);
+    bench_keys_buf_.resize(n * bench_key_size_ + 1);  // +1 for snprintf null terminator
     char* buf = bench_keys_buf_.data();
     if (FLAGS_binary_key) {
       for (int i = 0; i < n; i++) {
@@ -382,6 +387,26 @@ class Benchmark {
       for (int i = 0; i < n; i++) {
         const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
         snprintf(buf + i * bench_key_size_, bench_key_size_ + 1, "%016d", k);
+      }
+    }
+
+    // Optional: dump the just-generated key block so test_merger can replay
+    // the EXACT workload that crashes the benchmark.  Format (binary, LE):
+    //   uint32_t tag = 'K' << 0 | 'E' << 8 | 'Y' << 16 | 'S' << 24
+    //   uint32_t key_size
+    //   uint32_t num_keys
+    //   <key bytes>...
+    if (FLAGS_dump_workload != nullptr) {
+      FILE* f = std::fopen(FLAGS_dump_workload, "ab");
+      if (f) {
+        uint32_t tag = 0x5359454BU;  // 'K','E','Y','S' little-endian
+        uint32_t ks  = (uint32_t)bench_key_size_;
+        uint32_t nn  = (uint32_t)n;
+        std::fwrite(&tag, 4, 1, f);
+        std::fwrite(&ks,  4, 1, f);
+        std::fwrite(&nn,  4, 1, f);
+        std::fwrite(buf, bench_key_size_, n, f);
+        std::fclose(f);
       }
     }
   }
@@ -946,6 +971,8 @@ int main(int argc, char** argv) {
       }
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
+    } else if (strncmp(argv[i], "--dump_workload=", 16) == 0) {
+      FLAGS_dump_workload = argv[i] + 16;
     } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);

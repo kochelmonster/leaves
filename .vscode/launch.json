@@ -487,19 +487,25 @@
             ]
         },
         {
-            "name": "(gdb) db_bench_leaves confluence4",
+            "name": "(gdb) db_bench_leaves confluence",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/db_bench_leaves",
             "args": [
-                "--use_confluence=4",
-                "--benchmarks=fillseq",
-                "--num=1000000"
+                "--use_confluence=1",
+                "--benchmarks=fillrandom,overwrite",
+                "--num=100000",
+                "--batch_size=1000"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
-            "externalConsole": true,
+            "environment": [
+                {
+                    "name": "LEAVES_FREEZE_TRIB",
+                    "value": "1"
+                }
+            ],
+            "externalConsole": false,
             "MIMode": "gdb",
             "preLaunchTask": "Build leaves (CMake)",
             "setupCommands": [

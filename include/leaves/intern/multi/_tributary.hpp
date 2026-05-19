@@ -52,30 +52,38 @@ struct _TributaryTransaction : public _Transaction<Traits_> {
 };
 
 // =============================================================================
-// _TributarySlot: Persistent metadata for one per-producer tributary
+// _TributaryHeader: Persistent header for one per-producer tributary
 // =============================================================================
-// Lives at the content_offset() of a dedicated single area allocated by
-// _ConfluenceDB.  Slots are linked via `next` forming a singly-linked list
-// rooted at _DBHeader::extra_offset.
+// Extends _DBHeader<Storage_> to embed slot lifecycle metadata directly.
+// Lives at the content_offset() of the tributary's first (header) area, which
+// is also the root of the tributary's own area list.  Slots are linked via
+// `next`, forming a singly-linked list rooted at _DBHeader::extra_offset.
 //
-// Lifetime safety: readers increment reader_refs BEFORE checking in_use.
-// Merger CASes in_use 0->2 then spin-waits for reader_refs==0 before
-// freeing the slot area.
+// Lifetime safety:
+//   All users (writers, readers, merger) hold a pin via `refs`.
+//   A slot transitions through:
+//     FREE → WRITING (writer claims)
+//     WRITING → FREE (writer releases, below threshold)
+//     WRITING → MERGING (writer releases, at/above threshold)
+//     FREE → MERGING (idle timeout, monitor-triggered)
+//     MERGING → MERGED (merge finished — terminal state)
+//   Readers may pin FREE, WRITING, or MERGING slots.
+//   A reader that pins and then sees MERGED must immediately unpin.
+//   _free_slot() is called by whoever decrements refs to 0 with state==MERGED.
 
-template <typename Traits_>
-struct _TributarySlot {
-  // in_use states
+template <typename Storage_>
+struct _TributaryHeader : public _DBHeader<Storage_> {
+  // state values
   static constexpr uint8_t FREE    = 0;
-  static constexpr uint8_t CLAIMED = 1;
-  static constexpr uint8_t MERGING = 2;
+  static constexpr uint8_t WRITING = 1;  // claimed by a writer
+  static constexpr uint8_t MERGING = 2;  // merge in progress
+  static constexpr uint8_t MERGED  = 3;  // merge done; awaiting _free_slot
 
-  offset_t              self_area{0};      // offset of this slot's area (for freeing)
-  offset_t              db_header{0};      // offset of tributary's _DBHeader
   offset_t              next{0};           // next slot in list (0 = end)
   uint64_t              last_used_time{0}; // epoch seconds, set on commit
-  std::atomic<uint32_t> reader_refs{0};   // pinned reader count
+  std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   uint32_t              write_count{0};    // committed writes since creation
-  std::atomic<uint8_t>  in_use{FREE};
+  std::atomic<uint8_t>  state{FREE};
 
   // Bloom filter sized to match the merge write threshold.
   // k=5 probes via double-hashing; 10 bits/key gives FPR ≈ 0.13% at capacity.
@@ -108,23 +116,35 @@ struct _TributarySlot {
     uint32_t h2 = static_cast<uint32_t>(h >> 32) | 1u;  // odd to be coprime with BLOOM_BITS
     for (uint32_t i = 0; i < BLOOM_K; ++i) {
       uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
-      bloom[bit >> 3] |= static_cast<uint8_t>(1u << (bit & 7));
+      // Atomic OR: a concurrent reader (other process / read cursor on this
+      // same WRITING slot) may load this byte; without an atomic RMW the
+      // store would be a data race per the C++ memory model and could
+      // race-lose a set bit, causing a false-negative bloom_test \u2192 reader
+      // would miss a recently-written key.
+      std::atomic_ref<uint8_t> b(bloom[bit >> 3]);
+      b.fetch_or(static_cast<uint8_t>(1u << (bit & 7)),
+                 std::memory_order_release);
     }
     ++bloom_count;
   }
 
   bool bloom_test(const std::string& key) const noexcept {
     if (bloom_count == 0) return false;
-    // Note: no saturation guard. Even when the filter is overfull the bit-probe
-    // still gives valid results — it just has a higher FPR.  Returning true
-    // unconditionally (the old saturation guard) was worse: it forced a trie
-    // search on every key, defeating the purpose of the filter entirely.
     uint64_t h = _bloom_hash(key.data(), key.size());
-    uint32_t h1 = static_cast<uint32_t>(h);
-    uint32_t h2 = static_cast<uint32_t>(h >> 32) | 1u;
+    return bloom_test(static_cast<uint32_t>(h),
+                      static_cast<uint32_t>(h >> 32) | 1u);
+  }
+
+  // Test with precomputed hash halves — skips the FNV computation.
+  // h1 = low 32 bits of FNV hash, h2 = (high 32 bits | 1) for double-hashing.
+  // Call _bloom_hash() once and reuse for all tributaries in a single find().
+  bool bloom_test(uint32_t h1, uint32_t h2) const noexcept {
+    if (bloom_count == 0) return false;
     for (uint32_t i = 0; i < BLOOM_K; ++i) {
       uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
-      if (!(bloom[bit >> 3] & static_cast<uint8_t>(1u << (bit & 7))))
+      std::atomic_ref<uint8_t> b(const_cast<uint8_t&>(bloom[bit >> 3]));
+      if (!(b.load(std::memory_order_acquire) &
+            static_cast<uint8_t>(1u << (bit & 7))))
         return false;
     }
     return true;
@@ -153,12 +173,12 @@ template <typename Storage_>
 struct _TributaryDB
     : public _DB<Storage_,
                  _TributaryTransaction<typename Storage_::Traits>,
-                 _DBHeader<Storage_>,
+                 _TributaryHeader<Storage_>,
                  _TributaryDB<Storage_>> {
   using Traits = typename Storage_::Traits;
   using Base = _DB<Storage_,
                    _TributaryTransaction<Traits>,
-                   _DBHeader<Storage_>,
+                   _TributaryHeader<Storage_>,
                    _TributaryDB<Storage_>>;
   using Transaction = typename Base::Transaction;
 
