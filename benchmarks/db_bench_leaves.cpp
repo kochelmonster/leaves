@@ -660,7 +660,7 @@ class Benchmark {
           int batch_end = std::min(i + entries_per_batch, end);
           for (int j = i; j < batch_end; j++) {
             leaves::Slice key = bench_key(j);
-            cursor.write_find(key);
+            cursor.find(key);
             cursor.value(local_gen.Generate(value_size));
             my_bytes += value_size + key.size();
           }

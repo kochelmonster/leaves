@@ -260,6 +260,76 @@ struct _DB {
     _aspect.on_reset(self());
   }
 
+  // Reset the DB in place: keep the existing header and the first single
+  // area (which contains the header), return all other single areas plus
+  // the entire multi chain to the storage pool, then re-initialize the
+  // in-place transaction. After this call the DB is in the same logical
+  // state as a freshly init()'d DB sharing the same header offset.
+  // Precondition: no active transaction.
+  // Derived-class header fields outside _DBHeader are preserved (no full
+  // memset).
+  void reset_in_place() {
+    if (is_active()) throw TransactionActive();
+    std::scoped_lock lock(_storage.file_lock());
+
+    auto read_txn = resolve<Transaction>(&_header->read_txn);
+
+    // Return all single areas after the first (the first holds the header).
+    if (_header->area_list_head_single) {
+      area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
+      offset_t second = first->next;
+      if (second && read_txn->area_list_tail_single &&
+          second != _header->area_list_head_single) {
+        _storage.return_single_areas(second, read_txn->area_list_tail_single);
+        first->next = 0;
+        make_dirty(first);
+      }
+    }
+
+    // Return the entire multi-area chain.
+    if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
+      _storage.return_multi_areas(_header->area_list_head_multi,
+                                  read_txn->area_list_tail_multi);
+      _header->area_list_head_multi = 0;
+    }
+
+    // Re-initialise the in-place transaction at header + header_size.
+    offset_t header_off = (uint64_t)_storage.resolve(_header);
+    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    _header->prepared_txn = _header->read_txn = header_off + header_size;
+    _header->next_txn_page = 0;
+    _header->txn_cursor_id.store(0);
+
+    area_ptr first_area =
+        resolve<Area>(&_header->area_list_head_single, WRITE);
+    offset_t first_area_offset = _header->area_list_head_single;
+
+    txn_ptr txn = resolve<Transaction>(&_header->read_txn);
+    memset((char*)txn, 0, sizeof(Transaction));
+    txn->slot_id = Transaction::SLOT_ID;
+    txn->used = sizeof(Transaction);
+    txn->txn_id = tid_t(1);
+    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+    txn->next_txn = 0;
+    txn->refs.store(0);
+    txn->start_txn = _header->read_txn;
+    txn->area_list_tail_single = first_area_offset;
+    txn->area_list_tail_multi = 0;
+    txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
+                          first_area->end());
+
+    // Pre-allocate the next transaction page (mirrors init()).
+    _active_txn = txn;
+    auto next = txn->clone(*this);
+    _header->next_txn_page = resolve(next);
+    _active_txn.reset();
+
+    make_dirty(first_area);
+    make_dirty(txn);
+    make_dirty(_header);
+    flush();
+  }
+
   Aspect& aspect() { return _aspect; }
   const Aspect& aspect() const { return _aspect; }
 

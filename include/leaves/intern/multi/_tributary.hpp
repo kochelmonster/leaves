@@ -206,6 +206,27 @@ struct _TributaryDB
     this->_aspect.init_cursor_context(cursor->_aspect_context);
     return cursor;
   }
+
+  // Reset the tributary in place after a merge: returns all areas except
+  // the first (which holds the header), re-initializes the in-place
+  // transaction, and clears tributary-specific header metadata while
+  // preserving the chain link (`next`). After this call the tributary is
+  // in the same logical state as a freshly created one and may be
+  // re-claimed via _try_claim_free_slot.
+  void reset_in_place() {
+    Base::reset_in_place();
+    auto* hdr = &*this->_header;
+    hdr->last_used_time.store(0, std::memory_order_relaxed);
+    hdr->write_count.store(0, std::memory_order_relaxed);
+    hdr->bloom_count.store(0, std::memory_order_relaxed);
+    memset(hdr->bloom, 0, _TributaryHeader<Storage_>::BLOOM_BYTES);
+    hdr->refs.store(0, std::memory_order_relaxed);
+    hdr->state.store(_TributaryHeader<Storage_>::FREE,
+                     std::memory_order_release);
+    // `next` (chain link) intentionally preserved.
+    this->make_dirty(this->_header);
+    this->flush();
+  }
 };
 
 // =============================================================================
@@ -225,6 +246,9 @@ struct _TributaryCursor : public _TransactionalCursor<CursorTraits_> {
   using Transaction = typename DB::Transaction;  // = _TributaryTransaction<Traits>
 
   using Base::Base;
+  // Expose base read-overload `value()` which would otherwise be hidden by
+  // the `value(const Slice&)` write-override below.
+  using Base::value;
 
   // Convenience: cast _txn to the concrete _TributaryTransaction type
   Transaction* _trib_txn() {

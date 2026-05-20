@@ -3236,7 +3236,7 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_confluence_single_thread) {
       snprintf(keybuf, 17, "%016d", (int)(rng() % N));
       uint32_t r = (uint32_t)rng();
       memcpy(value_buf.data(), &r, sizeof(r));
-      cur.write_find(Slice(keybuf, 16));
+      cur.find(Slice(keybuf, 16));
       cur.value(Slice(value_buf.data(), value_buf.size()));
     }
     cur.commit();
@@ -3327,7 +3327,7 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_replay) {
       cur.start_transaction();
       for (uint32_t i = off; i < end; i++) {
         Slice key(c.keys.data() + (size_t)i * ks, ks);
-        cur.write_find(key);
+        cur.find(key);
         // Deterministic value content; size matches bench (100 bytes).
         memcpy(value_buf.data(), &value_seq, sizeof(value_seq));
         value_seq++;

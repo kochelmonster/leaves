@@ -14,7 +14,7 @@ namespace leaves {
 //
 // Write path:
 //   cursor.start_transaction();
-//   cursor.write_find(key);
+//   cursor.find(key);      // position cursor before insert/update/delete
 //   cursor.value(v);       // insert/update
 //   cursor.remove();       // delete
 //   cursor.commit();
@@ -51,13 +51,23 @@ class ConfluenceCursor {
   bool rollback()                { return _cursor->rollback(); }
   bool is_transaction_active() const { return _cursor->is_transaction_active(); }
 
-  // Position the write cursor on key before calling value() or remove().
-  void write_find(const Slice& key)   { _cursor->write_find(key); }
-  bool write_is_valid() const         { return _cursor->write_is_valid(); }
+  // Position the cursor on key before calling value() or remove().
+  // The same find()/is_valid() are used for reads and to position writes —
+  // during a write transaction, find() searches the snapshot taken at
+  // start_transaction() including the writer's own uncommitted state.
   void value(const Slice& v)          { _cursor->value(v); }
   void remove()                       { _cursor->remove(); }
 
   // --- Point reads ---
+
+  // Position the cursor on key. Returns true if the key resolves to a live
+  // value (i.e., the merge of all snapshot sources yields a non-tombstone).
+  // During a write txn, `find` is also used to position before
+  // `value()`/`remove()`.
+  bool find(const Slice& key) {
+    _cursor->find(key);
+    return _cursor->is_valid();
+  }
 
   // Returns true and fills value_out if key exists (not deleted).
   bool find(const Slice& key, Slice& value_out) {
@@ -97,7 +107,7 @@ class ConfluenceCursor {
 //
 //   auto cursor = db.cursor();
 //   cursor.start_transaction();
-//   cursor.write_find(Slice("key"));
+//   cursor.find(Slice("key"));
 //   cursor.value(Slice("value"));
 //   cursor.commit();
 

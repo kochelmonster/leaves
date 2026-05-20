@@ -46,7 +46,7 @@ static void write_kv(CDB& cdb, const std::string& key,
                      const std::string& value) {
   auto cursor = cdb.create_cursor();
   BOOST_REQUIRE(cursor->start_transaction());
-  cursor->write_find(Slice(key));
+  cursor->find(Slice(key));
   cursor->value(Slice(value));
   BOOST_REQUIRE(cursor->commit());
 }
@@ -115,8 +115,8 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_propagates) {
   {
     auto cursor = cdb->create_cursor();
     BOOST_REQUIRE(cursor->start_transaction());
-    cursor->write_find(Slice("key"));
-    BOOST_REQUIRE(cursor->write_is_valid());
+    cursor->find(Slice("key"));
+    BOOST_REQUIRE(cursor->is_valid());
     cursor->remove();
     BOOST_REQUIRE(cursor->commit());
   }
@@ -159,8 +159,8 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_then_merge) {
   {
     auto cursor = cdb->create_cursor();
     BOOST_REQUIRE(cursor->start_transaction());
-    cursor->write_find(Slice("k"));
-    BOOST_REQUIRE(cursor->write_is_valid());
+    cursor->find(Slice("k"));
+    BOOST_REQUIRE(cursor->is_valid());
     cursor->remove();
     BOOST_REQUIRE(cursor->commit());
   }
@@ -208,7 +208,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_rollback) {
   {
     auto cursor = cdb->create_cursor();
     BOOST_REQUIRE(cursor->start_transaction());
-    cursor->write_find(Slice("x"));
+    cursor->find(Slice("x"));
     cursor->value(Slice("y"));
     cursor->rollback();
   }
