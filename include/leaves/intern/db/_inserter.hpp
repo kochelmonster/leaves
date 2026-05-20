@@ -259,6 +259,12 @@ struct _Inserter {
   }
 
   // copy the leaf node but reduce the key size by split_pos
+  //
+  // If the source leaf is_big(), the BigValue (chunk_offset+size) inside vdata
+  // is bit-copied to the copy. The big chunk's ownership is transferred to the
+  // copy and the big flag on the original is cleared so that a subsequent
+  // free_node(oleaf) frees only the page, not the big chunk that the copy now
+  // references.
   leaf_ptr copy_reduced_leaf(uint8_t split_pos, leaf_ptr& oleaf) {
     leaf_ptr copy = alloc_node<leaf_ptr>(
         LeafNode::size(oleaf->key_size - split_pos, oleaf->vsize()));
@@ -266,6 +272,11 @@ struct _Inserter {
     copy->key_size = oleaf->key_size - split_pos;
     copy->value_size = oleaf->value_size;
     memcpy(copy->data, oleaf->data + split_pos, copy->key_size + copy->vsize());
+
+    if (oleaf->is_big()) {
+      // Big-value chunk ownership transfers to copy.
+      oleaf->clear_big();
+    }
 
     return copy;
   }
