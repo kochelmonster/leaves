@@ -4,76 +4,87 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstring>
-#include <functional>
+#include <exception>
 #include <mutex>
 #include <new>
 #include <queue>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #ifdef _MSC_VER
 #  include <intrin.h>
 #endif
 
+#include "../core/_port.hpp"
+
 namespace leaves {
 
 // ============================================================================
-// _InplaceTask — heap-free callable wrapper for trivially-copyable functors.
+// _Task<N> — heap-free move-only callable wrapper.
 //
-// Stores up to N bytes of functor data inline; avoids the heap allocation that
-// std::function incurs when the capture list exceeds its small-buffer limit
-// (~16–24 bytes depending on the implementation).  Requires the functor to be
-// trivially copyable — satisfied by any lambda that captures only pointers,
-// references, or plain-old-data values.  Move transfers ownership via memcpy
-// (safe because trivially-copyable types are trivially relocatable).
+// Stores up to N bytes of functor data inline; avoids heap allocation.
+// Move-only — copy is deleted.  Supports any move-constructible functor,
+// including lambdas that capture non-trivially-copyable types (smart
+// pointers, std::string, etc.).
 // ============================================================================
-template <size_t N = 64>
-struct _InplaceTask {
-  alignas(alignof(std::max_align_t)) char _buf[N]{};
-  void (*_invoke)(void*){nullptr};
-  void (*_destroy)(void*){nullptr};
+template <size_t N = 96>
+struct _Task {
+  using _invoke_fn  = void (*)(void*);
+  using _destroy_fn = void (*)(void*);
+  using _move_fn    = void (*)(void*, void*);  // move-construct dst from src, destroy src
 
-  _InplaceTask() = default;
+  alignas(alignof(std::max_align_t)) char _buf[N]{};
+  _invoke_fn  _invoke{nullptr};
+  _destroy_fn _destroy{nullptr};
+  _move_fn    _move_op{nullptr};
+
+  _Task() = default;
 
   template <typename F,
-            typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, _InplaceTask>>>
-  _InplaceTask(F&& f) {
+            typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, _Task>>>
+  _Task(F&& f) noexcept(std::is_nothrow_move_constructible_v<std::decay_t<F>>) {
     using DecF = std::decay_t<F>;
     static_assert(sizeof(DecF) <= N,
-        "_InplaceTask: functor too large; increase N or use std::function");
-    static_assert(std::is_trivially_copyable_v<DecF>,
-        "_InplaceTask: functor must be trivially copyable "
-        "(captures must be pointers, references, or POD values)");
+        "_Task: functor too large; increase N");
+    static_assert(alignof(DecF) <= alignof(std::max_align_t),
+        "_Task: functor alignment exceeds buffer alignment");
     ::new (static_cast<void*>(_buf)) DecF(std::forward<F>(f));
     _invoke  = [](void* p) { (*static_cast<DecF*>(p))(); };
-    _destroy = [](void* p) {  static_cast<DecF*>(p)->~DecF(); };
+    _destroy = [](void* p) { static_cast<DecF*>(p)->~DecF(); };
+    _move_op = [](void* dst, void* src) {
+      ::new (dst) DecF(std::move(*static_cast<DecF*>(src)));
+      static_cast<DecF*>(src)->~DecF();
+    };
   }
 
-  ~_InplaceTask() { if (_destroy) _destroy(_buf); }
+  ~_Task() { if (_destroy) _destroy(_buf); }
 
-  _InplaceTask(const _InplaceTask&) = delete;
-  _InplaceTask& operator=(const _InplaceTask&) = delete;
+  _Task(const _Task&) = delete;
+  _Task& operator=(const _Task&) = delete;
 
-  _InplaceTask(_InplaceTask&& o) noexcept
-      : _invoke(o._invoke), _destroy(o._destroy) {
-    if (_invoke) {
-      std::memcpy(_buf, o._buf, N);
+  _Task(_Task&& o) noexcept
+      : _invoke(o._invoke), _destroy(o._destroy), _move_op(o._move_op) {
+    if (_move_op) {
+      _move_op(_buf, o._buf);
       o._invoke  = nullptr;
       o._destroy = nullptr;
+      o._move_op = nullptr;
     }
   }
 
-  _InplaceTask& operator=(_InplaceTask&& o) noexcept {
+  _Task& operator=(_Task&& o) noexcept {
     if (this != &o) {
       if (_destroy) _destroy(_buf);
       _invoke  = o._invoke;
       _destroy = o._destroy;
-      if (_invoke) {
-        std::memcpy(_buf, o._buf, N);
+      _move_op = o._move_op;
+      if (_move_op) {
+        _move_op(_buf, o._buf);
         o._invoke  = nullptr;
         o._destroy = nullptr;
+        o._move_op = nullptr;
       }
     }
     return *this;
@@ -125,38 +136,37 @@ static constexpr _lazy_pool_t _lazy_pool{};
 
 template <typename Derived>
 struct _ThreadPoolMixin {
-  using Task    = std::function<void()>;  // used by schedule_after / ScheduledJob
-  using ImmTask = _InplaceTask<64>;       // used by submit_task (no heap allocation)
+  using PoolTask = _Task<64>;
 
   // --- Scheduled job (min-heap by time) ---
   struct _ScheduledJob {
     uint64_t id;
     std::chrono::steady_clock::time_point when;
-    Task task;
+    PoolTask task;
     bool operator>(const _ScheduledJob& o) const { return when > o.when; }
   };
 
   // Number of spin iterations before falling back to condvar sleep.
   // At ~5 ns per pause instruction (x86) this covers ~1 µs — enough to
   // catch tasks submitted during a concurrent main-thread operation.
-  static constexpr int _IMM_SPIN_ITERS = 30000;  // ~150 µs spin window
+  static constexpr int _SPIN_ITERS = 30000;  // ~150 µs spin window
 
   // Everything protected by _queue_mutex
   std::vector<std::thread> _workers;
-  std::queue<Task>    _task_queue;   // general tasks (std::function — scheduled jobs land here)
-  std::queue<ImmTask> _imm_queue;    // immediate tasks (ImmTask — no heap allocation)
+  std::queue<PoolTask> _task_queue;    // all pending tasks (immediate and promoted scheduled)
   std::priority_queue<_ScheduledJob, std::vector<_ScheduledJob>,
                       std::greater<_ScheduledJob>> _sched_queue;
   std::mutex _queue_mutex;
-  std::condition_variable _queue_cv;
+  std::condition_variable _queue_cv;   // workers waiting for tasks / scheduled jobs
+  std::condition_variable _idle_cv;    // wait_idle() waiting for pool to go idle
   std::atomic<bool>     _pool_shutdown{false};
   std::atomic<uint32_t> _active_tasks{0};
   std::atomic<uint64_t> _next_job_id{1};
-  // Mirrors _imm_queue.size(); readable without the mutex so workers can
+  // Mirrors _task_queue.size(); readable without the mutex so workers can
   // spin cheaply before falling back to condvar sleep.
-  std::atomic<uint32_t> _imm_count{0};
+  std::atomic<uint32_t> _task_count{0};
   // Number of workers currently blocked in condvar.wait().
-  // submit_imm checks this to skip the futex notify_one() when all
+  // submit_task checks this to skip the futex notify_one() when all
   // workers are already spinning (avoiding unnecessary syscall overhead).
   std::atomic<uint32_t> _sleeping_count{0};
 
@@ -217,34 +227,15 @@ struct _ThreadPoolMixin {
   }
 
   /**
-   * @brief Submit a task to the thread pool for immediate execution (legacy path).
-   *
-   * Accepts any callable including std::function.  Prefer submit_imm() for
-   * hot paths where the functor is a small trivially-copyable lambda.
-   */
-  void submit_task(Task task) {
-    if (_workers.empty()) {
-      task();  // execute inline when no thread pool
-      return;
-    }
-    {
-      std::lock_guard<std::mutex> lock(_queue_mutex);
-      if (_pool_shutdown.load()) return;
-      _task_queue.push(std::move(task));
-    }
-    _queue_cv.notify_one();
-  }
-
-  /**
-   * @brief Submit an immediate task with no heap allocation.
+   * @brief Submit a task for immediate execution with no heap allocation.
    *
    * The functor must be trivially copyable and fit in 64 bytes
    * (captures limited to pointers, references, and small POD values).
-   * Workers spin on _imm_count before sleeping, so tasks are picked up
+   * Workers spin on _task_count before sleeping, so tasks are picked up
    * in ~5–50 ns when workers are active rather than ~1–10 µs condvar wake-up.
    */
   template <typename F>
-  void submit_imm(F&& f) {
+  void submit_task(F&& f) {
     if (_workers.empty()) {
       f();  // execute inline when no thread pool
       return;
@@ -252,25 +243,29 @@ struct _ThreadPoolMixin {
     {
       std::lock_guard<std::mutex> lock(_queue_mutex);
       if (_pool_shutdown.load()) return;
-      _imm_queue.emplace(std::forward<F>(f));
+      _task_queue.emplace(std::forward<F>(f));
     }
-    _imm_count.fetch_add(1, std::memory_order_release);
+    _task_count.fetch_add(1, std::memory_order_release);
     // Only pay the futex syscall if there are actually sleeping workers.
-    // Spinning workers discover the task via _imm_count without any syscall.
+    // Spinning workers discover the task via _task_count without any syscall.
     if (_sleeping_count.load(std::memory_order_relaxed) > 0)
       _queue_cv.notify_one();
   }
 
   bool has_workers() const { return !_workers.empty(); }
+  static constexpr bool is_single_threaded() noexcept { return false; }
+  size_t concurrency() const noexcept { return _workers.size(); }
 
   /**
    * @brief Schedule a task to execute after a delay
    *
    * The task is picked up by a worker thread once the delay elapses.
    * Returns a job ID that can be passed to cancel_job().
+   * The functor must be trivially copyable and fit in 64 bytes (same
+   * constraint as submit_task()).
    */
-  template <typename Rep, typename Period>
-  uint64_t schedule_after(std::chrono::duration<Rep, Period> delay, Task task) {
+  template <typename Rep, typename Period, typename F>
+  uint64_t schedule_after(std::chrono::duration<Rep, Period> delay, F&& task) {
     uint64_t id = _next_job_id.fetch_add(1, std::memory_order_relaxed);
     auto when = std::chrono::steady_clock::now() + delay;
     {
@@ -281,7 +276,7 @@ struct _ThreadPoolMixin {
         _workers.reserve(1);
         _workers.emplace_back([this]() { _worker_loop(); });
       }
-      _sched_queue.push({id, when, std::move(task)});
+      _sched_queue.push({id, when, PoolTask(std::forward<F>(task))});
     }
     _queue_cv.notify_one();  // wake a worker to recalculate its deadline
     return id;
@@ -319,7 +314,7 @@ struct _ThreadPoolMixin {
   size_t pending_tasks() const {
     std::lock_guard<std::mutex> lock(
         const_cast<std::mutex&>(_queue_mutex));
-    return _task_queue.size() + _imm_queue.size();
+    return _task_queue.size();
   }
 
   /**
@@ -334,15 +329,15 @@ struct _ThreadPoolMixin {
    * executing.  Scheduled (delayed) jobs are NOT waited on — use
    * cancel_job() to cancel them first if needed.
    */
-  void wait_all() {
+  void wait_idle() {
     std::unique_lock<std::mutex> lock(_queue_mutex);
-    _queue_cv.wait(lock, [this]() {
+    _idle_cv.wait(lock, [this]() {
       _promote_scheduled_jobs();
-      return _task_queue.empty() && _imm_queue.empty() && _active_tasks.load() == 0;
+      return _task_queue.empty() && _active_tasks.load() == 0;
     });
   }
 
-  // Move due scheduled jobs into the immediate task queue.
+  // Move due scheduled jobs into the task queue.
   // Must be called with _queue_mutex held.
   void _promote_scheduled_jobs() {
     auto now = std::chrono::steady_clock::now();
@@ -350,6 +345,7 @@ struct _ThreadPoolMixin {
     while (!_sched_queue.empty() && _sched_queue.top().when <= now) {
       auto& top = const_cast<_ScheduledJob&>(_sched_queue.top());
       _task_queue.push(std::move(top.task));
+      _task_count.fetch_add(1, std::memory_order_release);
       _sched_queue.pop();
       promoted = true;
     }
@@ -358,40 +354,50 @@ struct _ThreadPoolMixin {
     }
   }
 
+  // Dequeue the front task and mark it active.
+  // Must be called with _queue_mutex held. Returns false if queue is empty.
+  bool _try_dequeue(PoolTask& out) {
+    if (_task_queue.empty()) return false;
+    out = std::move(_task_queue.front());
+    _task_queue.pop();
+    _task_count.fetch_sub(1, std::memory_order_relaxed);
+    _active_tasks.fetch_add(1);
+    return true;
+  }
+
+  // Mark a task as completed and notify waiters.
+  // Must be called with _queue_mutex held.
+  void _complete_task() {
+    _active_tasks.fetch_sub(1);
+    if (!_task_queue.empty())
+      _queue_cv.notify_one();
+    else if (_active_tasks.load() == 0)
+      _idle_cv.notify_all();
+  }
+
   void _worker_loop() {
     while (true) {
       bool got = false;
 
-      // --- Fast path: spin on _imm_count for low-latency immediate tasks. ---
+      // --- Fast path: spin on _task_count for low-latency immediate tasks. ---
       // Workers that spun recently will pick up the next task in ~5–50 ns
       // instead of the ~1–10 µs it takes to wake from pthread_cond_wait.
       // The atomic check is cheap (~1 ns); the mutex is only acquired when
-      // _imm_count > 0, so idle workers burn no CPU in the spin phase.
-      for (int s = 0; s < _IMM_SPIN_ITERS && !got; ++s) {
-        if (_imm_count.load(std::memory_order_acquire) > 0) {
-          ImmTask imm;
+      // _task_count > 0, so idle workers burn no CPU in the spin phase.
+      for (int s = 0; s < _SPIN_ITERS; ++s) {
+        if (_task_count.load(std::memory_order_acquire) > 0) {
+          PoolTask task;
           // try_lock: only ONE spinning worker acquires the mutex at a time;
           // others back off and retry, eliminating thundering-herd contention.
           if (_queue_mutex.try_lock()) {
-            if (!_imm_queue.empty()) {
-              imm = std::move(_imm_queue.front());
-              _imm_queue.pop();
-              _imm_count.fetch_sub(1, std::memory_order_relaxed);
-              _active_tasks.fetch_add(1);
-              got = true;
-            }
+            got = _try_dequeue(task);
             _queue_mutex.unlock();
           }
           if (got) {
-            imm();
+            task();
             {
               std::lock_guard<std::mutex> lock(_queue_mutex);
-              _active_tasks.fetch_sub(1);
-              if (!_task_queue.empty() || !_imm_queue.empty()) {
-                _queue_cv.notify_one();
-              } else if (_active_tasks.load() == 0) {
-                _queue_cv.notify_all();  // unblock wait_all()
-              }
+              _complete_task();
             }
             break;  // restart outer loop (spin again for next task)
           }
@@ -401,36 +407,18 @@ struct _ThreadPoolMixin {
       }
       if (got) continue;
 
-      // --- Slow path: condvar sleep for general tasks and scheduled jobs. ---
-      Task task;
+      // --- Slow path: condvar sleep for scheduled jobs. ---
       {
         std::unique_lock<std::mutex> lock(_queue_mutex);
         while (true) {
           _promote_scheduled_jobs();
 
-          // Check imm_queue first (may have arrived while we were falling back)
-          if (!_imm_queue.empty()) {
-            ImmTask imm = std::move(_imm_queue.front());
-            _imm_queue.pop();
-            _imm_count.fetch_sub(1, std::memory_order_relaxed);
-            _active_tasks.fetch_add(1);
+          PoolTask task;
+          if (_try_dequeue(task)) {
             lock.unlock();
-            imm();
+            task();
             lock.lock();
-            _active_tasks.fetch_sub(1);
-            if (!_task_queue.empty() || !_imm_queue.empty()) {
-              _queue_cv.notify_one();
-            } else if (_active_tasks.load() == 0) {
-              _queue_cv.notify_all();
-            }
-            break;
-          }
-
-          if (!_task_queue.empty()) {
-            task = std::move(_task_queue.front());
-            _task_queue.pop();
-            _active_tasks.fetch_add(1);
-            got = true;
+            _complete_task();
             break;
           }
 
@@ -445,30 +433,215 @@ struct _ThreadPoolMixin {
             _sleeping_count.fetch_add(1, std::memory_order_relaxed);
             _queue_cv.wait(lock, [this]() {
               return _pool_shutdown.load() || !_task_queue.empty() ||
-                     !_sched_queue.empty() || !_imm_queue.empty();
+                     !_sched_queue.empty();
             });
             _sleeping_count.fetch_sub(1, std::memory_order_relaxed);
           }
 
-          if (_pool_shutdown.load() && _task_queue.empty() && _imm_queue.empty()) return;
-        }
-      }
-
-      if (got) {
-        task();
-        {
-          std::lock_guard<std::mutex> lock(_queue_mutex);
-          _active_tasks.fetch_sub(1);
-          if (!_task_queue.empty() || !_imm_queue.empty()) {
-            _queue_cv.notify_one();
-          } else if (_active_tasks.load() == 0) {
-            _queue_cv.notify_all();  // Pool idle — unblock wait_all()
-          }
+          if (_pool_shutdown.load() && _task_queue.empty()) return;
         }
       }
     }
   }
 };
+
+// ============================================================================
+// _InlineExecutor — runs all work synchronously on the calling thread
+// ============================================================================
+
+struct _InlineExecutor {
+  static constexpr size_t concurrency() noexcept { return 1; }
+  static constexpr bool is_single_threaded() noexcept { return true; }
+  template <typename Fn>
+  void post(Fn&& fn) { std::forward<Fn>(fn)(); }
+};
+
+// ============================================================================
+// _TaskGroup<Executor> — structured concurrency: spawn tasks + wait
+//
+// Two specialisations keyed on Executor::is_single_threaded():
+//
+//   true  → spawn() runs the callable inline; wait() just re-throws.
+//   false → BFS work-stealing: spawn() collects callables into _current.
+//           wait() expands batches inline until count >= concurrency(),
+//           then dispatches to the pool and blocks.
+//
+// Usage (inline):
+//   _InlineExecutor exec;
+//   _TaskGroup<_InlineExecutor> tg(exec);
+//   tg.spawn([&]{ do_work(); });
+//   tg.wait();
+//
+// Usage (pool — pass storage or any _ThreadPoolMixin-derived type):
+//   _TaskGroup<MyStorage> tg(storage, max_threads);
+//   tg.spawn([&]{ process_branch(); });
+//   tg.wait();
+// ============================================================================
+
+#if LEAVES_HAS_THREADS
+inline thread_local bool _in_worker = false;
+#endif
+
+template <typename Executor, bool = Executor::is_single_threaded()>
+struct _TaskGroup;
+
+// ── Specialisation: single-threaded executor ─────────────────────────────────
+
+template <typename Executor>
+struct _TaskGroup<Executor, true> {
+  Executor& _executor;
+  std::exception_ptr _exception;
+
+  explicit _TaskGroup(Executor& exec, size_t /*cap*/ = 0) : _executor(exec) {}
+
+  _TaskGroup(const _TaskGroup&) = delete;
+  _TaskGroup& operator=(const _TaskGroup&) = delete;
+
+  template <typename Fn>
+  void spawn(Fn&& fn) {
+    if (_exception) return;
+    try {
+      std::forward<Fn>(fn)();
+    } catch (...) {
+      _exception = std::current_exception();
+    }
+  }
+
+  void wait() { _rethrow(); }
+
+  template <typename Dispatcher>
+  void wait(Dispatcher&&) { _rethrow(); }
+
+  static constexpr size_t concurrency() noexcept { return 1; }
+
+  void _rethrow() {
+    if (_exception) {
+      auto ex = _exception;
+      _exception = nullptr;
+      std::rethrow_exception(ex);
+    }
+  }
+};
+
+// ── Specialisation: pool executor (reentrant work-stealing BFS) ──────────────
+
+#if LEAVES_HAS_THREADS
+
+template <typename Executor>
+struct _TaskGroup<Executor, false> {
+  using Task = _Task<96>;
+
+  Executor& _executor;
+  std::vector<Task> _current;   // tasks collected by spawn()
+  std::vector<Task> _batch;     // current level being expanded
+  size_t _batch_idx{0};         // next unprocessed task in _batch
+  size_t _concurrency{0};       // dispatch threshold
+  std::atomic<int> _outstanding{0};
+  std::mutex _mutex;
+  std::condition_variable _cv;
+  std::exception_ptr _exception;
+
+  explicit _TaskGroup(Executor& exec, size_t cap = 0)
+      : _executor(exec),
+        _concurrency(cap > 0
+                         ? std::min(exec.pool_size(), cap)
+                         : exec.pool_size()) {}
+
+  _TaskGroup(const _TaskGroup&) = delete;
+  _TaskGroup& operator=(const _TaskGroup&) = delete;
+
+  ~_TaskGroup() {
+    try { wait(); } catch (...) {}
+  }
+
+  template <typename Fn>
+  void spawn(Fn&& fn) {
+    if (_in_worker) {
+      std::forward<Fn>(fn)();
+    } else {
+      _current.emplace_back(std::forward<Fn>(fn));
+    }
+  }
+
+  void wait() {
+    if (_in_worker) return;
+    _wait_impl();
+  }
+
+  template <typename Dispatcher>
+  void wait(Dispatcher&&) {
+    if (_in_worker) return;
+    _wait_impl();
+  }
+
+  size_t concurrency() const noexcept { return _concurrency; }
+
+  void _wait_impl() {
+    if (!_batch.empty()) {
+      _steal_loop();
+    }
+
+    for (;;) {
+      if (_current.empty()) break;
+
+      if (_current.size() >= concurrency()) {
+        _dispatch();
+        break;
+      }
+
+      // Expand: move _current → _batch, steal and run inline.
+      _batch = std::move(_current);
+      _current.clear();
+      _batch_idx = 0;
+      _steal_loop();
+      _batch.clear();
+    }
+
+    if (_exception) {
+      auto ex = _exception;
+      _exception = nullptr;
+      std::rethrow_exception(ex);
+    }
+  }
+
+  void _steal_loop() {
+    while (_batch_idx < _batch.size()) {
+      auto task = std::move(_batch[_batch_idx++]);
+      try {
+        task();
+      } catch (...) {
+        if (!_exception) _exception = std::current_exception();
+      }
+    }
+  }
+
+  void _dispatch() {
+    _outstanding.store(static_cast<int>(_current.size()),
+                       std::memory_order_release);
+    for (size_t i = 0; i < _current.size(); ++i) {
+      _executor.submit_task([this, i]() {
+        _in_worker = true;
+        try {
+          _current[i]();
+        } catch (...) {
+          std::lock_guard<std::mutex> lock(_mutex);
+          if (!_exception) _exception = std::current_exception();
+        }
+        _in_worker = false;
+        if (_outstanding.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+          _cv.notify_all();
+        }
+      });
+    }
+    std::unique_lock<std::mutex> lock(_mutex);
+    _cv.wait(lock, [this]() {
+      return _outstanding.load(std::memory_order_acquire) == 0;
+    });
+    _current.clear();
+  }
+};
+
+#endif  // LEAVES_HAS_THREADS
 
 }  // namespace leaves
 

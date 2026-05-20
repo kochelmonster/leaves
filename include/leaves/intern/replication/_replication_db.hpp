@@ -333,7 +333,7 @@ struct _ReplicationDB
   }
 
   // Start the self-rescheduling purge.  Requires that _storage has
-  // schedule_after() / cancel_job() / wait_all() (i.e. _ThreadPoolMixin).
+  // schedule_after() / cancel_job() / wait_idle() (i.e. _ThreadPoolMixin).
   void start_purge() {
     _purge_cancelled.store(false, std::memory_order_release);
     uint64_t expected = 0;
@@ -352,7 +352,7 @@ struct _ReplicationDB
     uint64_t job_id = _purge_job_id.exchange(0, std::memory_order_acq_rel);
     if (job_id && job_id != UINT64_MAX) this->_storage.cancel_job(job_id);
     if (!this->_storage._pool_shutdown.load(std::memory_order_acquire))
-      this->_storage.wait_all();
+      this->_storage.wait_idle();
   }
 
   // Override sanitize() to also recover orphaned replication anchors.
@@ -421,10 +421,9 @@ struct _ReplicationDB
           auto* rtxn = static_cast<Transaction*>(&*first_fsm_txn);
 #if LEAVES_HAS_THREADS
           hc.hash_mem_manager.set_single_thread(false);
-          _PoolExecutor exec(this->_storage, _hash_threads);
-          update_hash_trie(exec, this, &hdb, first_fsm_txn->root, &hc.hash_root);
-          update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
-                           &hc.deletion_hash_root);
+          update_hash_trie(this->_storage, this, &hdb, first_fsm_txn->root, &hc.hash_root, _hash_threads);
+          update_hash_trie(this->_storage, this, &hdb, rtxn->deletion_root,
+                           &hc.deletion_hash_root, _hash_threads);
           hc.hash_mem_manager.set_single_thread(true);
 #else
           update_hash_trie(this, &hdb, first_fsm_txn->root, &hc.hash_root);

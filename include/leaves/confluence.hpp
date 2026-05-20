@@ -33,7 +33,9 @@ class ConfluenceCursor {
  public:
   using storage_ptr = typename Storage_::storage_ptr;
   using StorageImpl = typename Storage_::StorageImpl;
-  using CursorImpl  = _ConfluenceCursor<StorageImpl, ConflictPolicy_>;
+  using MainDBImpl  = _DB<StorageImpl>;
+  using DBImpl      = _ConfluenceDB<MainDBImpl, ConflictPolicy_>;
+  using CursorImpl  = _ConfluenceCursor<DBImpl>;
   using cursor_ptr  = std::shared_ptr<CursorImpl>;
 
   ConfluenceCursor() = default;
@@ -104,51 +106,54 @@ class ConfluenceDB {
  public:
   using storage_ptr = typename Storage_::storage_ptr;
   using StorageImpl = typename Storage_::StorageImpl;
-  using DBImpl      = _ConfluenceDB<StorageImpl, ConflictPolicy_>;
+  using MainDBImpl  = _DB<StorageImpl>;
+  using MainTDB     = TDB<Storage_>;          // TDB<Storage_, _DB>
+  using DBImpl      = _ConfluenceDB<MainDBImpl, ConflictPolicy_>;
   using Cursor      = ConfluenceCursor<Storage_, ConflictPolicy_>;
+
+  ConfluenceDB(const ConfluenceDB&) = delete;
+  ConfluenceDB& operator=(const ConfluenceDB&) = delete;
 
   // Opens (or creates) the named confluence database on the given storage.
   // auto_monitor: start the background merge thread immediately (default true).
   ConfluenceDB(storage_ptr storage, const char* name, bool auto_monitor = true)
-      : _storage(storage), _tdb(storage, name, auto_monitor) {}
+      : _storage(storage),
+        _main_tdb(storage, name),
+        _impl(new DBImpl(*_main_tdb._internal(), auto_monitor)) {}
+
+  ~ConfluenceDB() { delete _impl; }
 
   // Create a cursor for reading and writing.
   Cursor cursor() {
-    return Cursor(_storage, _tdb._internal()->create_confluence_cursor());
+    return Cursor(_storage, _impl->create_cursor());
   }
 
   // --- Configuration (can be called at any time) ---
 
   // Merge a tributary into the main DB once this many writes have accumulated.
-  void set_merge_write_threshold(uint32_t n) {
-    _tdb._internal()->set_merge_write_threshold(n);
-  }
+  void set_merge_write_threshold(uint32_t n) { _impl->set_merge_write_threshold(n); }
   // Merge a tributary after it has been idle for this many seconds.
-  void set_idle_timeout_seconds(uint64_t s) {
-    _tdb._internal()->set_idle_timeout_seconds(s);
-  }
+  void set_idle_timeout_seconds(uint64_t s)  { _impl->set_idle_timeout_seconds(s); }
 
   // --- Lifecycle ---
 
   // Crash recovery: merge all unclaimed tributaries left by a previous crash.
-  void sanitize()                   { _tdb._internal()->sanitize(); }
-  void start_monitor()              { _tdb._internal()->start_monitor(); }
-  void cancel_monitor()             { _tdb._internal()->cancel_monitor(); }
-  void merge_eligible_tributaries() { _tdb._internal()->merge_eligible_tributaries(); }
+  void sanitize()                   { _impl->sanitize(); }
+  void start_monitor()              { _impl->start_monitor(); }
+  void cancel_monitor()             { _impl->cancel_monitor(); }
+  void merge_eligible_tributaries() { _impl->merge_eligible_tributaries(); }
   // Merge all threshold/idle-eligible tributaries synchronously.
-  void merge_now()                  { _tdb._internal()->merge_now(); }
+  void merge_now()                  { _impl->merge_now(); }
   // Merge ALL free tributaries regardless of threshold/idle — use after a
   // write phase completes so reads see a clean single-source state.
-  void merge_all_now()              { _tdb._internal()->merge_all_now(); }
+  void merge_all_now()              { _impl->merge_all_now(); }
   // Access the underlying implementation (for advanced / test use).
-  DBImpl* _internal() const { return _tdb._internal(); }
+  DBImpl* _internal() const { return _impl; }
 
  private:
-  template <typename S>
-  using _Impl = _ConfluenceDB<S, ConflictPolicy_>;
-
-  storage_ptr          _storage;
-  TDB<Storage_, _Impl> _tdb;
+  storage_ptr  _storage;
+  MainTDB      _main_tdb;  // keeps _DB<StorageImpl>* alive via storage cache
+  DBImpl*      _impl;      // owned by this ConfluenceDB
 };
 
 // Convenience aliases for the common mmap case with the default conflict policy.

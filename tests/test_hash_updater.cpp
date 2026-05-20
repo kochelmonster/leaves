@@ -1838,10 +1838,9 @@ BOOST_AUTO_TEST_CASE(parallel_long_key_prefix) {
 
   // Parallel hash update
   TestPool pool(4);
-  _PoolExecutor exec(pool);
   offset_t hash_root_parallel{};
-  update_hash_trie(exec, rdb, &hdb, txn->root, &hash_root_parallel);
-  pool.wait_all();
+  update_hash_trie(pool, rdb, &hdb, txn->root, &hash_root_parallel);
+  pool.wait_idle();
 
   std::map<std::string, std::vector<uint8_t>> parallel_hashes;
   collect_leaf_hashes(rdb, hash_root_parallel, "", parallel_hashes);

@@ -80,9 +80,9 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   static constexpr uint8_t MERGED  = 3;  // merge done; awaiting _free_slot
 
   offset_t              next{0};           // next slot in list (0 = end)
-  uint64_t              last_used_time{0}; // epoch seconds, set on commit
+  std::atomic<uint64_t> last_used_time{0}; // epoch seconds, set on commit
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
-  uint32_t              write_count{0};    // committed writes since creation
+  std::atomic<uint32_t> write_count{0};    // committed writes since creation
   std::atomic<uint8_t>  state{FREE};
 
   // Bloom filter sized to match the merge write threshold.
@@ -98,7 +98,7 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   static constexpr uint32_t BLOOM_BITS  = std::bit_ceil(BLOOM_MAX_KEYS * BLOOM_BITS_PER_KEY);
   static constexpr uint32_t BLOOM_BYTES = BLOOM_BITS / 8;
 
-  uint32_t              bloom_count{0};        // approximate key count
+  std::atomic<uint32_t> bloom_count{0};        // approximate key count
   uint32_t              _bloom_pad{0};
   uint8_t               bloom[BLOOM_BYTES]{};  // bit array
 
@@ -125,11 +125,11 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
       b.fetch_or(static_cast<uint8_t>(1u << (bit & 7)),
                  std::memory_order_release);
     }
-    ++bloom_count;
+    bloom_count.fetch_add(1, std::memory_order_relaxed);
   }
 
   bool bloom_test(const std::string& key) const noexcept {
-    if (bloom_count == 0) return false;
+    if (bloom_count.load(std::memory_order_acquire) == 0) return false;
     uint64_t h = _bloom_hash(key.data(), key.size());
     return bloom_test(static_cast<uint32_t>(h),
                       static_cast<uint32_t>(h >> 32) | 1u);
@@ -139,7 +139,7 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   // h1 = low 32 bits of FNV hash, h2 = (high 32 bits | 1) for double-hashing.
   // Call _bloom_hash() once and reuse for all tributaries in a single find().
   bool bloom_test(uint32_t h1, uint32_t h2) const noexcept {
-    if (bloom_count == 0) return false;
+    if (bloom_count.load(std::memory_order_acquire) == 0) return false;
     for (uint32_t i = 0; i < BLOOM_K; ++i) {
       uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
       std::atomic_ref<uint8_t> b(const_cast<uint8_t&>(bloom[bit >> 3]));
@@ -151,7 +151,7 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   }
 
   void bloom_reset() noexcept {
-    bloom_count = 0;
+    bloom_count.store(0, std::memory_order_relaxed);
     memset(bloom, 0, BLOOM_BYTES);
   }
 };

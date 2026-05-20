@@ -13,7 +13,7 @@
 
 #include "../core/_node.hpp"
 #include "../core/_util.hpp"
-#include "../util/_task_group.hpp"
+#include "../util/_threadpool.hpp"
 
 namespace leaves {
 
@@ -721,11 +721,12 @@ void update_hash_trie(DataDB* data_db, HashDB* hash_db,
 template <typename Executor, typename DataDB, typename HashDB>
 void update_hash_trie(Executor& executor, DataDB* data_db, HashDB* hash_db,
                       typename DataDB::offset_e data_root,
-                      typename HashDB::offset_e* hash_root_ptr) {
+                      typename HashDB::offset_e* hash_root_ptr,
+                      size_t concurrency_cap = 0) {
   std::string key_path;
   key_path.reserve(255);
   _HashUpdater<DataDB, HashDB, Executor> updater(data_db, hash_db);
-  _TaskGroup<Executor> tg(executor);
+  _TaskGroup<Executor> tg(executor, concurrency_cap);
   updater._tg = &tg;
   updater.sync_nodes(key_path, data_root, hash_root_ptr);
 }

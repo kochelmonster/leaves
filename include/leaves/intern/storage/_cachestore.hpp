@@ -104,7 +104,7 @@ struct _CacheStore : public Opers_,
   // must be called in the subclasses' destructor
   void destroy() {
     // Wait for any pending flush tasks to complete
-    this->wait_all();
+    this->wait_idle();
 
     // Final flush of any remaining dirty blocks
     write_dirty_blocks();
