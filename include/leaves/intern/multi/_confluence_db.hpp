@@ -187,8 +187,11 @@ struct _ConfluenceDB {
   meta_ptr _meta;
   std::vector<std::unique_ptr<TributaryDB>> _tributaries;
   std::mutex _tributaries_mutex;
-  uint64_t _tributaries_chain_epoch{
-      UINT64_MAX};                     // guarded by _tributaries_mutex
+  // Cached chain_epoch corresponding to the current state of _tributaries.
+  // Writes happen under _tributaries_mutex (also under chain_lock at the same
+  // time). Reads can be lock-free: a stale value only causes a false-negative
+  // fast-path skip, never a correctness issue.
+  std::atomic<uint64_t> _tributaries_chain_epoch{UINT64_MAX};
   std::vector<slot_ptr> _merge_slots;  // reused across merge calls, avoids heap
 
   // -------------------------------------------------------------------------
@@ -340,7 +343,9 @@ struct _ConfluenceDB {
   // Must be called under _meta->chain_lock AND _tributaries_mutex.
   void _update_tributaries() {
     uint64_t chain_epoch = _meta->chain_epoch.load(std::memory_order_acquire);
-    if (chain_epoch == _tributaries_chain_epoch) return;
+    if (chain_epoch ==
+        _tributaries_chain_epoch.load(std::memory_order_relaxed))
+      return;
     offset_t cur = _meta->chain_head;
     while (cur) {
       offset_t slot_off = cur;
@@ -355,18 +360,23 @@ struct _ConfluenceDB {
             _main_db._storage, slot_off, "_tributary"));
       cur = next_off;
     }
-    _tributaries_chain_epoch = chain_epoch;
+    _tributaries_chain_epoch.store(chain_epoch, std::memory_order_release);
   }
 
   // Sync _tributaries, then CAS the first FREE+under-threshold slot to WRITING.
   // Returns a borrowed TributaryDB*, or nullptr if none.
   // Must be called under _meta->chain_lock.
   TributaryDB* _try_claim_free_slot() {
-    uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
     std::scoped_lock tlock(_tributaries_mutex);
     _update_tributaries();
+    return _try_claim_locked();
+  }
 
-    // Claim the first eligible slot.
+  // CAS-claim the first FREE+under-threshold slot from the in-process
+  // _tributaries vector. Requires _tributaries_mutex held; does NOT touch
+  // the mmap chain (no chain_lock needed). Returns nullptr if none.
+  TributaryDB* _try_claim_locked() {
+    uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
     for (auto& t : _tributaries) {
       slot_ptr slot = t->_header;
       uint8_t expected = Slot::FREE;
@@ -383,6 +393,15 @@ struct _ConfluenceDB {
   // Walk the chain, claim a free slot or allocate a new one.
   // Returns a borrowed TributaryDB* (state = WRITING, refs = 1).
   TributaryDB* claim_tributary() {
+    // Fast path: if the local _tributaries view is in sync with the mmap
+    // chain (chain_epoch unchanged), claim using only the in-process
+    // _tributaries_mutex + a per-slot atomic CAS. No chain_lock needed.
+    if (_meta->chain_epoch.load(std::memory_order_acquire) ==
+        _tributaries_chain_epoch.load(std::memory_order_acquire)) {
+      std::scoped_lock tlock(_tributaries_mutex);
+      if (auto* t = _try_claim_locked()) return t;
+    }
+    // Slow path: chain advanced or no free slot — reconcile under chain_lock.
     std::scoped_lock lock(_meta->chain_lock);
     if (auto* trib = _try_claim_free_slot()) return trib;
     return _alloc_new_slot();
@@ -921,18 +940,7 @@ struct _ConfluenceCursor {
     for (size_t i = 0; i < _sources_n; ++i) _sources[i].park();
     _sources_n = 0;
 
-    // Under both locks: sync _tributaries with the mmap chain, pre-pin each
-    // non-MERGED slot, and reinit _sources directly.
-    // reinit() only performs cursor construction + atomic field assignments
-    // — it does not acquire any lock — so holding _tributaries_mutex here
-    // is safe.
-    {
-      std::unique_lock<typename ConfluenceDB_::Storage::Mutex> chain_l(
-          _cdb->_meta->chain_lock);
-      std::unique_lock<std::mutex> trib_l(_cdb->_tributaries_mutex);
-
-      _cdb->_update_tributaries();
-
+    auto fill_sources_locked = [&] {
       size_t fill = 0;
       for (auto& t : _cdb->_tributaries) {
         slot_ptr slot = t->_header;
@@ -946,6 +954,22 @@ struct _ConfluenceCursor {
         ++fill;
       }
       _sources_n = fill;
+    };
+
+    // Fast path: if the local _tributaries cache is already in sync with
+    // the mmap chain, just take _tributaries_mutex and iterate. No
+    // chain_lock acquisition (cross-process Mutex) needed.
+    if (_cdb->_tributaries_chain_epoch.load(std::memory_order_acquire) ==
+        cur_chain_epoch) {
+      std::scoped_lock trib_l(_cdb->_tributaries_mutex);
+      fill_sources_locked();
+    } else {
+      // Slow path: chain advanced — walk it under chain_lock + trib_mutex.
+      std::unique_lock<typename ConfluenceDB_::Storage::Mutex> chain_l(
+          _cdb->_meta->chain_lock);
+      std::unique_lock<std::mutex> trib_l(_cdb->_tributaries_mutex);
+      _cdb->_update_tributaries();
+      fill_sources_locked();
     }
 
     _sources_merge_epoch =
@@ -986,7 +1010,13 @@ struct _ConfluenceCursor {
 
     for (size_t _si = 0; _si < _sources_n; ++_si) {
       auto& src = _sources[_si];
-      if (!src._slot->bloom_test(bh1, bh2)) continue;
+      // The writer (last source during a write txn) bypasses the bloom
+      // gate: its cursor MUST be positioned at `key` so a subsequent
+      // value(v) / remove() on the confluence cursor operates at the right
+      // location. A bloom miss on the writer's still-empty slot would
+      // otherwise skip find() and leave the cursor stale.
+      bool is_writer = _in_transaction && _si == _sources_n - 1;
+      if (!is_writer && !src._slot->bloom_test(bh1, bh2)) continue;
       src._trib_cursor->find(Slice(key));
       bool found =
           src._trib_cursor->is_valid() && src._trib_cursor->current_key == key;
@@ -1020,16 +1050,6 @@ struct _ConfluenceCursor {
 
   void find(const Slice& key) {
     _search_key.assign(key.data(), key.size());
-    // While a write txn is active, unconditionally position the writer's
-    // cursor (last source) at `key`. _resolve_key() uses per-source bloom
-    // filtering and would skip find() on a miss, leaving the cursor at a
-    // stale position and breaking subsequent value(v) / remove() on the
-    // writer.
-    if (_in_transaction) {
-      _ensure_sources();
-      if (_sources_n)
-        _sources[_sources_n - 1]._trib_cursor->find(key);
-    }
     Slice found_val;
     if (_resolve_key(_search_key, found_val)) {
       current_key = _search_key;

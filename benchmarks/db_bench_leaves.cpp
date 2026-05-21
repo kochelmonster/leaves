@@ -83,6 +83,10 @@ static bool FLAGS_use_replicating = false;
 // Use ConfluenceDB with N concurrent writer threads (0 = disabled)
 static int FLAGS_use_confluence = 0;
 
+// Override merge_write_threshold (0 = leave default). Set huge to suppress
+// auto-merge during the benchmark and isolate writer-path overhead.
+static uint32_t FLAGS_merge_threshold = 0;
+
 // When non-empty, append the exact key & value sequence used by each write
 // phase to this file (binary format). Used by test_merger to replay the
 // crashing benchmark workload deterministically in a single thread.
@@ -634,6 +638,8 @@ class Benchmark {
 
     if (using_confluence_) {
       confluence_db_ = std::make_unique<leaves::MapConfluenceDB>(map_storage_, "benchmark");
+      if (FLAGS_merge_threshold)
+        confluence_db_->set_merge_write_threshold(FLAGS_merge_threshold);
     }
   }
 
@@ -960,6 +966,9 @@ int main(int argc, char** argv) {
       if (n > 0) {
         std::fprintf(stderr, "Using ConfluenceDB with %d threads\n", n);
       }
+    } else if (sscanf(argv[i], "--merge_threshold=%d%c", &n, &junk) == 1 &&
+               n >= 0) {
+      FLAGS_merge_threshold = static_cast<uint32_t>(n);
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;
