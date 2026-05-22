@@ -1,7 +1,9 @@
 #ifndef _LEAVES_CONFLUENCE_DB_HPP
 #define _LEAVES_CONFLUENCE_DB_HPP
 
+#include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <memory>
@@ -13,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../core/_util.hpp"
 #include "../db/_check.hpp"
 #include "_tributary.hpp"
 
@@ -61,7 +64,7 @@ struct _DefaultConflictPolicy {
   };
 
   // Returns index of winner, or -1 if the winning candidate is a tombstone.
-  int resolve(const std::string& /*key*/,
+  int resolve(const Slice& /*key*/,
               const std::vector<_Candidate>& candidates) const {
     int winner = -1;
     tid_t best{0};
@@ -122,7 +125,7 @@ struct _TributaryMergePolicy : public StandardMergePolicy {
 //   * Every WRITE to chain_head OR to any reachable slot->next MUST be
 //     performed under chain_lock.
 //   * Every READ that walks chain_head / slot->next MUST hold chain_lock.
-//   * Per-slot state/refs/bloom are atomic / per-slot owned and may be
+//   * Per-slot state/refs are atomic / per-slot owned and may be
 //     accessed without chain_lock once a slot pointer has been obtained.
 template <typename Storage_>
 struct _ConfluenceMeta {
@@ -169,7 +172,7 @@ struct _ConfluenceDB {
   // -------------------------------------------------------------------------
   // In-process configuration
   // -------------------------------------------------------------------------
-  std::atomic<uint32_t> _merge_write_threshold{Slot::BLOOM_MAX_KEYS};
+  std::atomic<uint32_t> _merge_write_threshold{20000};
   std::atomic<uint64_t> _idle_timeout_seconds{300};
 
   // -------------------------------------------------------------------------
@@ -183,16 +186,27 @@ struct _ConfluenceDB {
   // -------------------------------------------------------------------------
   // Core members
   // -------------------------------------------------------------------------
+  // Maximum number of live tributaries (per process). The in-process
+  // mirror of the mmap chain is a fixed-capacity array so readers can
+  // iterate it lock-free via _tributaries_count.
+  static constexpr size_t MAX_TRIBUTARIES = 128;
+
   MainDB_& _main_db;
   meta_ptr _meta;
-  std::vector<std::unique_ptr<TributaryDB>> _tributaries;
-  std::mutex _tributaries_mutex;
-  // Cached chain_epoch corresponding to the current state of _tributaries.
-  // Writes happen under _tributaries_mutex (also under chain_lock at the same
-  // time). Reads can be lock-free: a stale value only causes a false-negative
-  // fast-path skip, never a correctness issue.
+  // _tributaries[0 .. _tributaries_count) are the published live entries.
+  // Writers (constructor / _alloc_new_slot / _update_tributaries) are all
+  // serialized by _meta->chain_lock (cross-process). Readers do
+  //   n = _tributaries_count.load(acquire);
+  //   for (i = 0; i < n; ++i) use _tributaries[i];
+  // The release-store of the count after the slot is assigned publishes
+  // the unique_ptr to readers.
+  std::array<std::unique_ptr<TributaryDB>, MAX_TRIBUTARIES> _tributaries{};
+  std::atomic<size_t> _tributaries_count{0};
+  // Cached chain_epoch reflecting the chain state mirrored by _tributaries.
+  // A stale value only triggers a slow-path reconcile via chain_lock; never
+  // a correctness issue.
   std::atomic<uint64_t> _tributaries_chain_epoch{UINT64_MAX};
-  std::vector<slot_ptr> _merge_slots;  // reused across merge calls, avoids heap
+  std::vector<TributaryDB*> _merge_slots;  // reused across merge calls, avoids heap
 
   // -------------------------------------------------------------------------
   // Constructors / Destructor
@@ -227,14 +241,22 @@ struct _ConfluenceDB {
     _meta = _main_db.template resolve<_ConfluenceMeta<Storage>>(
         &_main_db._header->extra_offset, READ);
     {
+      // Single-threaded ctor: build the in-process mirror, then publish.
       offset_t cur = _meta->chain_head;
+      size_t n = 0;
       while (cur) {
         auto slot = _main_db.template resolve<Slot>(&cur);
         offset_t next_off = slot->next;
-        _tributaries.push_back(std::make_unique<TributaryDB>(
-            _main_db._storage, cur, "_tributary"));
+        assert(n < MAX_TRIBUTARIES &&
+               "On-disk chain exceeds MAX_TRIBUTARIES");
+        _tributaries[n++] = std::make_unique<TributaryDB>(
+            _main_db._storage, cur, "_tributary");
         cur = next_off;
       }
+      _tributaries_count.store(n, std::memory_order_release);
+      _tributaries_chain_epoch.store(
+          _meta->chain_epoch.load(std::memory_order_relaxed),
+          std::memory_order_release);
     }
     if (auto_sanitize) sanitize();
     _ensure_read_workers();
@@ -272,16 +294,14 @@ struct _ConfluenceDB {
     _merge_slots.clear();
     {
       std::scoped_lock lock(_meta->chain_lock);
-      offset_t cur = _meta->chain_head;
-      while (cur) {
-        auto slot = _main_db.template resolve<Slot>(&cur);
-        offset_t next_off = slot->next;
-        if (slot->state.load(std::memory_order_relaxed) == Slot::FREE)
-          _merge_slots.push_back(slot);
-        cur = next_off;
+      size_t n = _tributaries_count.load(std::memory_order_acquire);
+      for (size_t i = 0; i < n; ++i) {
+        TributaryDB* trib = _tributaries[i].get();
+        if (trib->_header->state.load(std::memory_order_relaxed) == Slot::FREE)
+          _merge_slots.push_back(trib);
       }
     }
-    for (auto& slot : _merge_slots) merge_tributary(slot);
+    for (auto* trib : _merge_slots) merge_tributary(trib);
     _main_db.flush();
   }
 
@@ -314,9 +334,6 @@ struct _ConfluenceDB {
     new_slot->next = 0;
     new (&new_slot->last_used_time) std::atomic<uint64_t>(0);
     new (&new_slot->write_count) std::atomic<uint32_t>(0);
-    new (&new_slot->bloom_count) std::atomic<uint32_t>(0);
-    new_slot->_bloom_pad = 0;
-    memset(new_slot->bloom, 0, Slot::BLOOM_BYTES);
     new (&new_slot->state) std::atomic<uint8_t>(Slot::WRITING);
     new (&new_slot->refs) std::atomic<uint32_t>(1);
 
@@ -332,15 +349,21 @@ struct _ConfluenceDB {
     auto trib_uptr = std::make_unique<TributaryDB>(_main_db._storage, trib_off,
                                                    "_tributary");
     TributaryDB* result = trib_uptr.get();
-    {
-      std::scoped_lock tlock(_tributaries_mutex);
-      _tributaries.push_back(std::move(trib_uptr));
-    }
+    // Caller holds _meta->chain_lock — writers are serialized, so we can
+    // publish lock-free via a release-store of the count.
+    size_t idx = _tributaries_count.load(std::memory_order_relaxed);
+    assert(idx < MAX_TRIBUTARIES &&
+           "MAX_TRIBUTARIES exceeded in _alloc_new_slot");
+    _tributaries[idx] = std::move(trib_uptr);
+    _tributaries_count.store(idx + 1, std::memory_order_release);
+    _tributaries_chain_epoch.store(
+        _meta->chain_epoch.load(std::memory_order_relaxed),
+        std::memory_order_release);
     return result;
   }
 
   // Sync _tributaries with the mmap chain, adding any cross-process slots.
-  // Must be called under _meta->chain_lock AND _tributaries_mutex.
+  // Must be called under _meta->chain_lock (writers serialized).
   void _update_tributaries() {
     uint64_t chain_epoch = _meta->chain_epoch.load(std::memory_order_acquire);
     if (chain_epoch ==
@@ -351,33 +374,59 @@ struct _ConfluenceDB {
       offset_t slot_off = cur;
       auto slot = _main_db.template resolve<Slot>(&cur);
       offset_t next_off = slot->next;
-      bool found = std::any_of(
-          _tributaries.begin(), _tributaries.end(), [&](const auto& t) {
-            return (uint64_t)_main_db._storage.resolve(t->_header) == slot_off;
-          });
-      if (!found)
-        _tributaries.push_back(std::make_unique<TributaryDB>(
-            _main_db._storage, slot_off, "_tributary"));
+      size_t n = _tributaries_count.load(std::memory_order_relaxed);
+      bool found = false;
+      for (size_t i = 0; i < n; ++i) {
+        if ((uint64_t)_main_db._storage.resolve(_tributaries[i]->_header) ==
+            slot_off) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        assert(n < MAX_TRIBUTARIES &&
+               "MAX_TRIBUTARIES exceeded in _update_tributaries");
+        _tributaries[n] = std::make_unique<TributaryDB>(
+            _main_db._storage, slot_off, "_tributary");
+        _tributaries_count.store(n + 1, std::memory_order_release);
+      }
       cur = next_off;
     }
     _tributaries_chain_epoch.store(chain_epoch, std::memory_order_release);
   }
 
-  // Sync _tributaries, then CAS the first FREE+under-threshold slot to WRITING.
-  // Returns a borrowed TributaryDB*, or nullptr if none.
+  // Sync _tributaries from the mmap chain then try a lock-free claim.
   // Must be called under _meta->chain_lock.
   TributaryDB* _try_claim_free_slot() {
-    std::scoped_lock tlock(_tributaries_mutex);
     _update_tributaries();
-    return _try_claim_locked();
+    return _try_claim();
   }
 
-  // CAS-claim the first FREE+under-threshold slot from the in-process
-  // _tributaries vector. Requires _tributaries_mutex held; does NOT touch
-  // the mmap chain (no chain_lock needed). Returns nullptr if none.
-  TributaryDB* _try_claim_locked() {
+  // Non-blocking single-attempt claim: try fast path then under chain_lock,
+  // allocating a new slot if count < MAX_TRIBUTARIES.  Returns nullptr when
+  // all slots are in use with no FREE slot available.
+  //
+  // Callers that hold source refs on existing slots MUST release those refs
+  // before spinning on this function; MERGED slots cannot be recycled while
+  // any cursor holds a reference, causing a deadlock at MAX_TRIBUTARIES cap.
+  TributaryDB* _try_claim_or_alloc() {
+    if (auto* t = _try_claim()) return t;
+    std::scoped_lock lock(_meta->chain_lock);
+    if (auto* trib = _try_claim_free_slot()) return trib;
+    if (_tributaries_count.load(std::memory_order_acquire) < MAX_TRIBUTARIES)
+      return _alloc_new_slot();
+    return nullptr;
+  }
+
+  // CAS-claim the first FREE+under-threshold slot from the published
+  // prefix of _tributaries. Lock-free: reads count with acquire ordering
+  // (pairs with writer's release-store), then a per-slot CAS arbitrates
+  // between concurrent claimers. Returns nullptr if none available.
+  TributaryDB* _try_claim() {
     uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
-    for (auto& t : _tributaries) {
+    size_t n = _tributaries_count.load(std::memory_order_acquire);
+    for (size_t i = 0; i < n; ++i) {
+      auto& t = _tributaries[i];
       slot_ptr slot = t->_header;
       uint8_t expected = Slot::FREE;
       if (slot->write_count.load(std::memory_order_relaxed) < threshold &&
@@ -392,19 +441,47 @@ struct _ConfluenceDB {
 
   // Walk the chain, claim a free slot or allocate a new one.
   // Returns a borrowed TributaryDB* (state = WRITING, refs = 1).
+  //
+  // With MAX_TRIBUTARIES capped, if all slots are in use AND no FREE slot
+  // is available, this back-offs (pause/yield/sleep) and retries until a
+  // slot becomes claimable. Forward progress is provided by the background
+  // merge monitor and by release_tributary()'s scheduled merge job, both
+  // running on the storage thread pool.
   TributaryDB* claim_tributary() {
-    // Fast path: if the local _tributaries view is in sync with the mmap
-    // chain (chain_epoch unchanged), claim using only the in-process
-    // _tributaries_mutex + a per-slot atomic CAS. No chain_lock needed.
-    if (_meta->chain_epoch.load(std::memory_order_acquire) ==
-        _tributaries_chain_epoch.load(std::memory_order_acquire)) {
-      std::scoped_lock tlock(_tributaries_mutex);
-      if (auto* t = _try_claim_locked()) return t;
+    unsigned spin = 0;
+    for (;;) {
+      // Fast path: lock-free CAS over published slots.
+      if (auto* t = _try_claim()) return t;
+
+      // Reconcile / allocate under chain_lock.
+      {
+        std::scoped_lock lock(_meta->chain_lock);
+        if (auto* trib = _try_claim_free_slot()) return trib;
+        if (_tributaries_count.load(std::memory_order_acquire) <
+            MAX_TRIBUTARIES)
+          return _alloc_new_slot();
+      }
+
+      // Cap reached and no FREE slot — back off and retry.
+      if (spin < 16) {
+#if defined(LEAVES_X86_64)
+        _mm_pause();
+#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
+        __yield();
+#elif defined(LEAVES_ARM64)
+        __asm__ __volatile__("yield");
+#else
+        std::this_thread::yield();
+#endif
+      } else if (spin < 64) {
+        std::this_thread::yield();
+      } else {
+        unsigned shift = std::min<unsigned>(spin - 64, 10);
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(1u << shift));
+      }
+      ++spin;
     }
-    // Slow path: chain advanced or no free slot — reconcile under chain_lock.
-    std::scoped_lock lock(_meta->chain_lock);
-    if (auto* trib = _try_claim_free_slot()) return trib;
-    return _alloc_new_slot();
   }
 
   void release_tributary(TributaryDB* trib) {
@@ -418,7 +495,7 @@ struct _ConfluenceDB {
       slot->refs.fetch_sub(1, std::memory_order_acq_rel);
       _main_db._storage.schedule_after(
           std::chrono::seconds(0),
-          [this, slot]() mutable { merge_tributary(slot); });
+          [this, trib]() mutable { merge_tributary(trib); });
     } else {
       slot->refs.fetch_sub(1, std::memory_order_acq_rel);
       slot->state.store(Slot::FREE, std::memory_order_release);
@@ -429,7 +506,8 @@ struct _ConfluenceDB {
   // The slot stays linked in the chain and stays in `_tributaries`; after
   // the final unpin, `_recycle_slot` resets it back to FREE state for
   // future writers to reclaim via `_try_claim_free_slot`.
-  bool merge_tributary(slot_ptr slot) {
+  bool merge_tributary(TributaryDB* trib) {
+    slot_ptr slot = trib->_header;
     uint8_t expected = Slot::FREE;
     bool transitioned = slot->state.compare_exchange_strong(
         expected, Slot::MERGING, std::memory_order_acq_rel);
@@ -440,14 +518,15 @@ struct _ConfluenceDB {
     _do_merge(slot);
     _meta->merge_epoch.fetch_add(1, std::memory_order_release);
     slot->state.store(Slot::MERGED, std::memory_order_release);
-    _unpin_slot(slot);
+    _unpin_slot(trib);
     return true;
   }
 
-  void _unpin_slot(slot_ptr slot) {
+  void _unpin_slot(TributaryDB* trib) {
+    slot_ptr slot = trib->_header;
     if (slot->refs.fetch_sub(1, std::memory_order_acq_rel) == 1 &&
         slot->state.load(std::memory_order_acquire) == Slot::MERGED) {
-      _recycle_slot(slot);
+      _recycle_slot(trib);
     }
   }
 
@@ -457,22 +536,9 @@ struct _ConfluenceDB {
   // state from MERGED back to FREE.  Bumps merge_epoch a second time so
   // readers re-pin against the reset slot rather than the just-merged
   // (now-empty) one.
-  void _recycle_slot(slot_ptr slot) {
-    offset_t hdr_off = (uint64_t)_main_db._storage.resolve(slot);
-    TributaryDB* trib = nullptr;
-    {
-      std::scoped_lock tlock(_tributaries_mutex);
-      for (auto& t : _tributaries) {
-        offset_t t_off = (uint64_t)_main_db._storage.resolve(t->_header);
-        if (t_off == hdr_off) {
-          trib = t.get();
-          break;
-        }
-      }
-    }
-    if (trib) {
-      trib->reset_in_place();
-    }
+  void _recycle_slot(TributaryDB* trib) {
+    trib->reset_in_place();
+    slot_ptr slot = trib->_header;
     slot->state.store(Slot::FREE, std::memory_order_release);
     _meta->merge_epoch.fetch_add(1, std::memory_order_release);
     _main_db.make_dirty(_meta);
@@ -487,22 +553,20 @@ struct _ConfluenceDB {
     _merge_slots.clear();
     {
       std::scoped_lock lock(_meta->chain_lock);
-      offset_t cur = _meta->chain_head;
-      while (cur) {
-        auto slot = _main_db.template resolve<Slot>(&cur);
-        offset_t next_off = slot->next;
-        if (slot->state.load(std::memory_order_relaxed) == Slot::FREE) {
-          bool should_merge = false;
-          if (slot->write_count.load(std::memory_order_relaxed) >= threshold)
-            should_merge = true;
-          auto lut = slot->last_used_time.load(std::memory_order_acquire);
-          if (lut > 0 && (now - lut) >= idle_timeout) should_merge = true;
-          if (should_merge) _merge_slots.push_back(slot);
-        }
-        cur = next_off;
+      size_t n = _tributaries_count.load(std::memory_order_acquire);
+      for (size_t i = 0; i < n; ++i) {
+        TributaryDB* trib = _tributaries[i].get();
+        slot_ptr slot = trib->_header;
+        if (slot->state.load(std::memory_order_relaxed) != Slot::FREE) continue;
+        bool should_merge = false;
+        if (slot->write_count.load(std::memory_order_relaxed) >= threshold)
+          should_merge = true;
+        auto lut = slot->last_used_time.load(std::memory_order_acquire);
+        if (lut > 0 && (now - lut) >= idle_timeout) should_merge = true;
+        if (should_merge) _merge_slots.push_back(trib);
       }
     }
-    for (auto& slot : _merge_slots) merge_tributary(slot);
+    for (auto* trib : _merge_slots) merge_tributary(trib);
   }
 
   // =========================================================================
@@ -622,8 +686,10 @@ struct _ConfluenceDB {
   void _merge_unclaimed_tributaries() {
     std::vector<TributaryDB*> to_recover;
     {
-      std::scoped_lock tlock(_tributaries_mutex);
-      for (auto& t : _tributaries) {
+      // Pool is idle when called from sanitize(); safe lock-free scan.
+      size_t n = _tributaries_count.load(std::memory_order_acquire);
+      for (size_t i = 0; i < n; ++i) {
+        auto& t = _tributaries[i];
         slot_ptr slot = t->_header;
         uint8_t state = slot->state.load(std::memory_order_relaxed);
         if (state == Slot::FREE || state == Slot::MERGED) {
@@ -633,7 +699,7 @@ struct _ConfluenceDB {
         }
       }
     }
-    for (TributaryDB* t : to_recover) merge_tributary(t->_header);
+    for (TributaryDB* t : to_recover) merge_tributary(t);
   }
 };
 
@@ -684,7 +750,7 @@ struct _PinnedSource {
 
   _PinnedSource& operator=(_PinnedSource&& o) noexcept {
     if (this == &o) return *this;
-    if (_slot) _cdb->_unpin_slot(_slot);
+    if (_slot) _cdb->_unpin_slot(_trib_db);
     _cdb = o._cdb;
     _slot = o._slot;
     _slot_off = o._slot_off;
@@ -696,7 +762,7 @@ struct _PinnedSource {
   }
 
   ~_PinnedSource() {
-    if (_slot) _cdb->_unpin_slot(_slot);
+    if (_slot) _cdb->_unpin_slot(_trib_db);
   }
 
   // Release the slot pin and destroy cursors (cursor dtor releases its own
@@ -706,7 +772,7 @@ struct _PinnedSource {
     _trib_cursor.reset();
     _del_cursor.reset();
     if (_slot) {
-      _cdb->_unpin_slot(_slot);
+      _cdb->_unpin_slot(_trib_db);
       _slot.reset();
     }
     _trib_db = nullptr;
@@ -786,7 +852,6 @@ struct _ConfluenceCursor {
   uint64_t _sources_chain_epoch{UINT64_MAX};
 
   // Reused hot-path buffers (avoid per-call allocation)
-  std::string _search_key;
   std::string _iter_key;
   std::vector<Candidate> _candidates;
 
@@ -816,14 +881,45 @@ struct _ConfluenceCursor {
 
   bool start_transaction(bool non_blocking = false) {
     if (_in_transaction) return true;
-    // Materialize the read snapshot of all currently-committed tributaries
-    // BEFORE appending the writer. ensure_sources() is unaware of writes.
-    _release_sources();
-    _ensure_sources();
 
-    // Claim a tributary and append it as the LAST source. Its cursor is
-    // both the read cursor for the writer's tributary and the write cursor.
-    TributaryDB* trib = _cdb->claim_tributary();
+    // Claim a tributary slot without holding source refs.  When all
+    // MAX_TRIBUTARIES slots are occupied, _try_claim_or_alloc returns nullptr
+    // and we must yield _before_ re-pinning sources.  Holding source refs
+    // while spinning would prevent MERGED slots from being recycled (each
+    // cursor ref keeps state != FREE), creating a livelock.
+    TributaryDB* trib = nullptr;
+    unsigned spin = 0;
+    for (;;) {
+      // Pin the current tributary snapshot for reads.
+      _release_sources();
+      _ensure_sources();
+
+      trib = _cdb->_try_claim_or_alloc();
+      if (trib) break;
+
+      // Cap reached: release source refs so the pool can recycle MERGED
+      // slots, then back off before retrying.
+      _release_sources();
+      if (spin < 16) {
+#if defined(LEAVES_X86_64)
+        _mm_pause();
+#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
+        __yield();
+#elif defined(LEAVES_ARM64)
+        __asm__ __volatile__("yield");
+#else
+        std::this_thread::yield();
+#endif
+      } else if (spin < 64) {
+        std::this_thread::yield();
+      } else {
+        unsigned shift = std::min<unsigned>(spin - 64, 10);
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(1u << shift));
+      }
+      ++spin;
+    }
+
     slot_ptr slot = trib->_header;
     slot->refs.fetch_add(1, std::memory_order_acq_rel);
     offset_t slot_off =
@@ -892,7 +988,6 @@ struct _ConfluenceCursor {
     assert(_in_transaction);
     auto& w = _sources[_sources_n - 1];
     w._trib_cursor->value(v);
-    w._slot->bloom_add(w._trib_cursor->current_key);
     ++_pending_write_keys;
   }
 
@@ -900,7 +995,6 @@ struct _ConfluenceCursor {
     assert(_in_transaction);
     auto& w = _sources[_sources_n - 1];
     if (w._trib_cursor->is_valid()) {
-      w._slot->bloom_add(w._trib_cursor->current_key);
       ++_pending_write_keys;
     }
     w._trib_cursor->remove();
@@ -934,15 +1028,18 @@ struct _ConfluenceCursor {
     if (_main_txn) _main_txn->refs.fetch_sub(1, std::memory_order_acq_rel);
     _main_txn = std::move(new_txn);
 
-    // Park all old active sources before acquiring any lock.
-    // park() → _unpin_slot() → _free_slot() acquires _tributaries_mutex;
-    // doing this outside the lock prevents deadlock.
+    // Park all old active sources before acquiring chain_lock.
+    // park() → _unpin_slot() may trigger _recycle_slot which scans the
+    // published _tributaries — keep that work outside chain_lock.
     for (size_t i = 0; i < _sources_n; ++i) _sources[i].park();
     _sources_n = 0;
 
-    auto fill_sources_locked = [&] {
+    auto fill_sources_lockfree = [&] {
       size_t fill = 0;
-      for (auto& t : _cdb->_tributaries) {
+      size_t n =
+          _cdb->_tributaries_count.load(std::memory_order_acquire);
+      for (size_t i = 0; i < n; ++i) {
+        auto& t = _cdb->_tributaries[i];
         slot_ptr slot = t->_header;
         if (slot->state.load(std::memory_order_acquire) == Slot::MERGED)
           continue;
@@ -957,19 +1054,18 @@ struct _ConfluenceCursor {
     };
 
     // Fast path: if the local _tributaries cache is already in sync with
-    // the mmap chain, just take _tributaries_mutex and iterate. No
-    // chain_lock acquisition (cross-process Mutex) needed.
+    // the mmap chain, iterate lock-free.
     if (_cdb->_tributaries_chain_epoch.load(std::memory_order_acquire) ==
         cur_chain_epoch) {
-      std::scoped_lock trib_l(_cdb->_tributaries_mutex);
-      fill_sources_locked();
+      fill_sources_lockfree();
     } else {
-      // Slow path: chain advanced — walk it under chain_lock + trib_mutex.
-      std::unique_lock<typename ConfluenceDB_::Storage::Mutex> chain_l(
-          _cdb->_meta->chain_lock);
-      std::unique_lock<std::mutex> trib_l(_cdb->_tributaries_mutex);
-      _cdb->_update_tributaries();
-      fill_sources_locked();
+      // Slow path: chain advanced — reconcile under chain_lock, then
+      // iterate lock-free.
+      {
+        std::scoped_lock chain_l(_cdb->_meta->chain_lock);
+        _cdb->_update_tributaries();
+      }
+      fill_sources_lockfree();
     }
 
     _sources_merge_epoch =
@@ -986,45 +1082,42 @@ struct _ConfluenceCursor {
     _sources_valid = false;
   }
 
-  bool _resolve_key(const std::string& key, Slice& value_out) {
+  bool _resolve_key(const Slice& key, Slice& value_out) {
     _ensure_sources();
 
     if (!_sources_n) {
-      _main_cursor->find(Slice(key));
-      if (_main_cursor->is_valid() && _main_cursor->current_key == key) {
+      _main_cursor->find(key);
+      if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
         value_out = _main_cursor->value();
         return true;
       }
       return false;
     }
 
-    const uint64_t bh = Slot::_bloom_hash(key.data(), key.size());
-    const uint32_t bh1 = static_cast<uint32_t>(bh);
-    const uint32_t bh2 = static_cast<uint32_t>(bh >> 32) | 1u;
-
     _candidates.clear();
 
-    _main_cursor->find(Slice(key));
-    if (_main_cursor->is_valid() && _main_cursor->current_key == key)
+    // Serial find on all sources + main cursor on the calling thread.
+    // Parallel fan-out (shared pool / per-cursor spin dispatcher) was
+    // measured to regress readrandom: dispatch overhead (~2 µs shared
+    // pool, ~5-10 µs spin dispatcher) dwarfs the actual find (~120 ns).
+    for (size_t i = 0; i < _sources_n; ++i) {
+      auto& src = _sources[i];
+      src._trib_cursor->find(key);
+      if (src._del_cursor) src._del_cursor->find(key);
+    }
+    _main_cursor->find(key);
+
+    if (_main_cursor->is_valid() && key == _main_cursor->current_key)
       _candidates.push_back({_main_txn->txn_id, _main_cursor->value(), false});
 
     for (size_t _si = 0; _si < _sources_n; ++_si) {
       auto& src = _sources[_si];
-      // The writer (last source during a write txn) bypasses the bloom
-      // gate: its cursor MUST be positioned at `key` so a subsequent
-      // value(v) / remove() on the confluence cursor operates at the right
-      // location. A bloom miss on the writer's still-empty slot would
-      // otherwise skip find() and leave the cursor stale.
-      bool is_writer = _in_transaction && _si == _sources_n - 1;
-      if (!is_writer && !src._slot->bloom_test(bh1, bh2)) continue;
-      src._trib_cursor->find(Slice(key));
       bool found =
-          src._trib_cursor->is_valid() && src._trib_cursor->current_key == key;
+          src._trib_cursor->is_valid() && key == src._trib_cursor->current_key;
       bool deleted = false;
       if (src._del_cursor) {
-        src._del_cursor->find(Slice(key));
         deleted =
-            src._del_cursor->is_valid() && src._del_cursor->current_key == key;
+            src._del_cursor->is_valid() && key == src._del_cursor->current_key;
       }
       if (found || deleted) {
         _candidates.push_back(
@@ -1049,10 +1142,20 @@ struct _ConfluenceCursor {
   Slice value() const { return _value_storage; }
 
   void find(const Slice& key) {
-    _search_key.assign(key.data(), key.size());
+    // Write-transaction fast path: only the writer's cursor (last source)
+    // is consulted. No _ensure_sources, no _resolve_key, no delete check.
+    if (_in_transaction) {
+      auto& w = _sources[_sources_n - 1];
+      w._trib_cursor->find(key);
+      current_key.assign(key.data(), key.size());
+      _valid = w._trib_cursor->is_valid() &&
+               w._trib_cursor->current_key == current_key;
+      return;
+    }
+
     Slice found_val;
-    if (_resolve_key(_search_key, found_val)) {
-      current_key = _search_key;
+    if (_resolve_key(key, found_val)) {
+      current_key.assign(key.data(), key.size());
       _value_storage = found_val;
       _valid = true;
     } else {
@@ -1153,7 +1256,7 @@ struct _ConfluenceCursor {
           src._trib_cursor->next();
       }
 
-      int winner = _policy.resolve(_iter_key, _candidates);
+      int winner = _policy.resolve(Slice(_iter_key), _candidates);
       if (winner >= 0) {
         current_key = _iter_key;
         _value_storage = _candidates[winner].value;
@@ -1210,7 +1313,7 @@ struct _ConfluenceCursor {
           src._trib_cursor->prev();
       }
 
-      int winner = _policy.resolve(_iter_key, _candidates);
+      int winner = _policy.resolve(Slice(_iter_key), _candidates);
       if (winner >= 0) {
         current_key = _iter_key;
         _value_storage = _candidates[winner].value;

@@ -208,7 +208,7 @@ struct _DB {
     _header->area_list_head_single = first_area_offset;
     _header->area_list_head_multi = 0;
 
-    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
@@ -295,7 +295,7 @@ struct _DB {
 
     // Re-initialise the in-place transaction at header + header_size.
     offset_t header_off = (uint64_t)_storage.resolve(_header);
-    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
     _header->prepared_txn = _header->read_txn = header_off + header_size;
     _header->next_txn_page = 0;
     _header->txn_cursor_id.store(0);

@@ -678,6 +678,11 @@ class Benchmark {
 
     for (auto& th : threads) th.join();
 
+    std::cerr << "[confluence] tributaries allocated (high-water): "
+              << confluence_db_->_internal()->_tributaries_count.load(
+                     std::memory_order_acquire)
+              << " (n_threads=" << n_threads << ")\n";
+
     bytes_ += total_bytes.load();
     done_ += num_entries;
   }

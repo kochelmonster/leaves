@@ -2,7 +2,6 @@
 #define _LEAVES_TRIBUTARY_HPP
 
 #include <atomic>
-#include <bit>
 #include <chrono>
 
 #include "../db/_cursor.hpp"
@@ -84,76 +83,6 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   std::atomic<uint32_t> write_count{0};    // committed writes since creation
   std::atomic<uint8_t>  state{FREE};
-
-  // Bloom filter sized to match the merge write threshold.
-  // k=5 probes via double-hashing; 10 bits/key gives FPR ≈ 0.13% at capacity.
-  // When write_count exceeds BLOOM_MAX_KEYS (e.g. if the merge monitor lags
-  // behind fast writers), the filter becomes overfull and FPR rises, but it
-  // still produces correct results — no false negatives, just more false
-  // positives.  The zero-count fast-path remains the primary win (empty slots).
-  static constexpr uint32_t BLOOM_MAX_KEYS     = 1000;
-  static constexpr uint32_t BLOOM_BITS_PER_KEY = 10;
-  static constexpr uint32_t BLOOM_K            = 5;
-  // Round up to next power of 2 for cheap bit-index arithmetic.
-  static constexpr uint32_t BLOOM_BITS  = std::bit_ceil(BLOOM_MAX_KEYS * BLOOM_BITS_PER_KEY);
-  static constexpr uint32_t BLOOM_BYTES = BLOOM_BITS / 8;
-
-  std::atomic<uint32_t> bloom_count{0};        // approximate key count
-  uint32_t              _bloom_pad{0};
-  uint8_t               bloom[BLOOM_BYTES]{};  // bit array
-
-  // FNV-1a 64-bit hash (two seeds via h >> 32 for double-hashing)
-  static uint64_t _bloom_hash(const char* data, size_t len) noexcept {
-    uint64_t h = UINT64_C(14695981039346656037);
-    for (size_t i = 0; i < len; ++i)
-      h = (h ^ static_cast<uint8_t>(data[i])) * UINT64_C(1099511628211);
-    return h;
-  }
-
-  void bloom_add(const std::string& key) noexcept {
-    uint64_t h = _bloom_hash(key.data(), key.size());
-    uint32_t h1 = static_cast<uint32_t>(h);
-    uint32_t h2 = static_cast<uint32_t>(h >> 32) | 1u;  // odd to be coprime with BLOOM_BITS
-    for (uint32_t i = 0; i < BLOOM_K; ++i) {
-      uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
-      // Atomic OR: a concurrent reader (other process / read cursor on this
-      // same WRITING slot) may load this byte; without an atomic RMW the
-      // store would be a data race per the C++ memory model and could
-      // race-lose a set bit, causing a false-negative bloom_test \u2192 reader
-      // would miss a recently-written key.
-      std::atomic_ref<uint8_t> b(bloom[bit >> 3]);
-      b.fetch_or(static_cast<uint8_t>(1u << (bit & 7)),
-                 std::memory_order_release);
-    }
-    bloom_count.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  bool bloom_test(const std::string& key) const noexcept {
-    if (bloom_count.load(std::memory_order_acquire) == 0) return false;
-    uint64_t h = _bloom_hash(key.data(), key.size());
-    return bloom_test(static_cast<uint32_t>(h),
-                      static_cast<uint32_t>(h >> 32) | 1u);
-  }
-
-  // Test with precomputed hash halves — skips the FNV computation.
-  // h1 = low 32 bits of FNV hash, h2 = (high 32 bits | 1) for double-hashing.
-  // Call _bloom_hash() once and reuse for all tributaries in a single find().
-  bool bloom_test(uint32_t h1, uint32_t h2) const noexcept {
-    if (bloom_count.load(std::memory_order_acquire) == 0) return false;
-    for (uint32_t i = 0; i < BLOOM_K; ++i) {
-      uint32_t bit = (h1 + i * h2) & (BLOOM_BITS - 1);
-      std::atomic_ref<uint8_t> b(const_cast<uint8_t&>(bloom[bit >> 3]));
-      if (!(b.load(std::memory_order_acquire) &
-            static_cast<uint8_t>(1u << (bit & 7))))
-        return false;
-    }
-    return true;
-  }
-
-  void bloom_reset() noexcept {
-    bloom_count.store(0, std::memory_order_relaxed);
-    memset(bloom, 0, BLOOM_BYTES);
-  }
 };
 
 // =============================================================================
@@ -218,8 +147,6 @@ struct _TributaryDB
     auto* hdr = &*this->_header;
     hdr->last_used_time.store(0, std::memory_order_relaxed);
     hdr->write_count.store(0, std::memory_order_relaxed);
-    hdr->bloom_count.store(0, std::memory_order_relaxed);
-    memset(hdr->bloom, 0, _TributaryHeader<Storage_>::BLOOM_BYTES);
     hdr->refs.store(0, std::memory_order_relaxed);
     hdr->state.store(_TributaryHeader<Storage_>::FREE,
                      std::memory_order_release);
