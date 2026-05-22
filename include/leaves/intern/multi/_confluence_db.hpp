@@ -859,9 +859,7 @@ struct _ConfluenceCursor {
   // valid while _sources are held — nulled by _release_sources())
   Slice _value_storage;
   bool _valid{false};
-
-  // Public current key (returned by key())
-  std::string current_key;
+  Slice _search_key;  // non-owning view into _iter_key; set on every find/iteration
 
   explicit _ConfluenceCursor(ConfluenceDB_* cdb) : _cdb(cdb) {
     _main_txn = _cdb->txn_ref();
@@ -1138,7 +1136,7 @@ struct _ConfluenceCursor {
   // -------------------------------------------------------------------------
 
   bool is_valid() const { return _valid; }
-  Slice key() const { return Slice(current_key); }
+  Slice key() const { return _search_key; }
   Slice value() const { return _value_storage; }
 
   void find(const Slice& key) {
@@ -1147,15 +1145,17 @@ struct _ConfluenceCursor {
     if (_in_transaction) {
       auto& w = _sources[_sources_n - 1];
       w._trib_cursor->find(key);
-      current_key.assign(key.data(), key.size());
+      _iter_key.assign(key.data(), key.size());
+      _search_key = Slice(_iter_key);
       _valid = w._trib_cursor->is_valid() &&
-               w._trib_cursor->current_key == current_key;
+               _search_key == w._trib_cursor->current_key;
       return;
     }
 
     Slice found_val;
     if (_resolve_key(key, found_val)) {
-      current_key.assign(key.data(), key.size());
+      _iter_key.assign(key.data(), key.size());
+      _search_key = Slice(_iter_key);
       _value_storage = found_val;
       _valid = true;
     } else {
@@ -1177,12 +1177,12 @@ struct _ConfluenceCursor {
 
   void next() {
     if (!_valid) return;
-    if (_main_cursor->is_valid() && _main_cursor->current_key == current_key)
+    if (_main_cursor->is_valid() && _search_key == _main_cursor->current_key)
       _main_cursor->next();
     for (size_t i = 0; i < _sources_n; ++i) {
       auto& src = _sources[i];
       if (src._trib_cursor->is_valid() &&
-          src._trib_cursor->current_key == current_key)
+          _search_key == src._trib_cursor->current_key)
         src._trib_cursor->next();
     }
     _advance_to_next_valid();
@@ -1198,12 +1198,12 @@ struct _ConfluenceCursor {
 
   void prev() {
     if (!_valid) return;
-    if (_main_cursor->is_valid() && _main_cursor->current_key == current_key)
+    if (_main_cursor->is_valid() && _search_key == _main_cursor->current_key)
       _main_cursor->prev();
     for (size_t i = 0; i < _sources_n; ++i) {
       auto& src = _sources[i];
       if (src._trib_cursor->is_valid() &&
-          src._trib_cursor->current_key == current_key)
+          _search_key == src._trib_cursor->current_key)
         src._trib_cursor->prev();
     }
     _advance_to_prev_valid();
@@ -1258,7 +1258,7 @@ struct _ConfluenceCursor {
 
       int winner = _policy.resolve(Slice(_iter_key), _candidates);
       if (winner >= 0) {
-        current_key = _iter_key;
+        _search_key = Slice(_iter_key);
         _value_storage = _candidates[winner].value;
         _valid = true;
         return;
@@ -1315,7 +1315,7 @@ struct _ConfluenceCursor {
 
       int winner = _policy.resolve(Slice(_iter_key), _candidates);
       if (winner >= 0) {
-        current_key = _iter_key;
+        _search_key = Slice(_iter_key);
         _value_storage = _candidates[winner].value;
         _valid = true;
         return;
