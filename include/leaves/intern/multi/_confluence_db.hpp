@@ -187,27 +187,70 @@ struct _ConfluenceDB {
   // -------------------------------------------------------------------------
   // Core members
   // -------------------------------------------------------------------------
-  // Maximum number of live tributaries (per process). The in-process
-  // mirror of the mmap chain is a fixed-capacity array so readers can
-  // iterate it lock-free via _tributaries_count.
+  // Soft per-process cap on tributary slots.  When the local mirror already
+  // contains this many slots, claim_tributary() / _alloc_new_slot() back off
+  // and reuse FREE slots instead of allocating new ones.  Cross-process
+  // chains may grow beyond this cap; the chunked table below handles that
+  // case without UB.
   static constexpr size_t MAX_TRIBUTARIES = 128;
+
+  // Chunked two-level slot table.
+  //   _trib_blocks[bi] -> TribBlock { items[0..TRIB_BLOCK_SIZE) }
+  //
+  // Outer array has stable storage (std::array, fixed addresses).  Blocks
+  // are heap-allocated lazily under _meta->chain_lock and published with
+  // release-store; readers acquire-load.  Element addresses (the contained
+  // unique_ptr storage) are STABLE for the lifetime of a block — no
+  // reallocation ever moves them, so the lock-free reader pattern
+  //   n = _tributaries_count.load(acquire);
+  //   for (i = 0; i < n; ++i) use _trib_at(i);
+  // is safe even while a writer (under chain_lock) is publishing slot n.
+  // Hard ceiling: TRIB_BLOCK_SIZE * TRIB_MAX_BLOCKS = 32768 slots
+  // (vastly beyond any practical workload); _trib_slot() throws if exceeded
+  // so we never silently corrupt memory.
+  static constexpr size_t TRIB_BLOCK_SIZE = 64;
+  static constexpr size_t TRIB_MAX_BLOCKS = 512;
+
+  struct TribBlock {
+    std::array<std::unique_ptr<TributaryDB>, TRIB_BLOCK_SIZE> items{};
+  };
 
   MainDB_& _main_db;
   meta_ptr _meta;
-  // _tributaries[0 .. _tributaries_count) are the published live entries.
-  // Writers (constructor / _alloc_new_slot / _update_tributaries) are all
-  // serialized by _meta->chain_lock (cross-process). Readers do
-  //   n = _tributaries_count.load(acquire);
-  //   for (i = 0; i < n; ++i) use _tributaries[i];
-  // The release-store of the count after the slot is assigned publishes
-  // the unique_ptr to readers.
-  std::array<std::unique_ptr<TributaryDB>, MAX_TRIBUTARIES> _tributaries{};
+  // See TribBlock comment above for the publish/observe protocol.
+  std::array<std::atomic<TribBlock*>, TRIB_MAX_BLOCKS> _trib_blocks{};
   std::atomic<size_t> _tributaries_count{0};
-  // Cached chain_epoch reflecting the chain state mirrored by _tributaries.
+  // Cached chain_epoch reflecting the chain state mirrored by _trib_blocks.
   // A stale value only triggers a slow-path reconcile via chain_lock; never
   // a correctness issue.
   std::atomic<uint64_t> _tributaries_chain_epoch{UINT64_MAX};
   std::vector<TributaryDB*> _merge_slots;  // reused across merge calls, avoids heap
+
+  // Reader: returns nullptr if the slot is past the published count.
+  // Caller is responsible for bounding i < _tributaries_count.load(acquire).
+  TributaryDB* _trib_at(size_t i) const {
+    size_t bi = i / TRIB_BLOCK_SIZE;
+    size_t bj = i % TRIB_BLOCK_SIZE;
+    TribBlock* b = _trib_blocks[bi].load(std::memory_order_acquire);
+    return b ? b->items[bj].get() : nullptr;
+  }
+  // Writer: returns the unique_ptr slot at index i, allocating the block
+  // lazily.  MUST be called under _meta->chain_lock (writers serialized).
+  std::unique_ptr<TributaryDB>& _trib_slot(size_t i) {
+    size_t bi = i / TRIB_BLOCK_SIZE;
+    size_t bj = i % TRIB_BLOCK_SIZE;
+    if (bi >= TRIB_MAX_BLOCKS) {
+      throw std::runtime_error(
+          "leaves: tributary slot table exceeded TRIB_BLOCK_SIZE*"
+          "TRIB_MAX_BLOCKS (cross-process chain too large)");
+    }
+    TribBlock* b = _trib_blocks[bi].load(std::memory_order_relaxed);
+    if (!b) {
+      b = new TribBlock();
+      _trib_blocks[bi].store(b, std::memory_order_release);
+    }
+    return b->items[bj];
+  }
 
   // -------------------------------------------------------------------------
   // Constructors / Destructor
@@ -248,9 +291,7 @@ struct _ConfluenceDB {
       while (cur) {
         auto slot = _main_db.template resolve<Slot>(&cur);
         offset_t next_off = slot->next;
-        assert(n < MAX_TRIBUTARIES &&
-               "On-disk chain exceeds MAX_TRIBUTARIES");
-        _tributaries[n++] = std::make_unique<TributaryDB>(
+        _trib_slot(n++) = std::make_unique<TributaryDB>(
             _main_db._storage, cur, "_tributary");
         cur = next_off;
       }
@@ -267,6 +308,9 @@ struct _ConfluenceDB {
   ~_ConfluenceDB() {
     cancel_monitor();
     merge_all_now();
+    for (auto& b : _trib_blocks) {
+      delete b.load(std::memory_order_relaxed);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -297,7 +341,7 @@ struct _ConfluenceDB {
       std::scoped_lock lock(_meta->chain_lock);
       size_t n = _tributaries_count.load(std::memory_order_acquire);
       for (size_t i = 0; i < n; ++i) {
-        TributaryDB* trib = _tributaries[i].get();
+        TributaryDB* trib = _trib_at(i);
         if (trib->_header->state.load(std::memory_order_relaxed) == Slot::FREE)
           _merge_slots.push_back(trib);
       }
@@ -353,9 +397,7 @@ struct _ConfluenceDB {
     // Caller holds _meta->chain_lock — writers are serialized, so we can
     // publish lock-free via a release-store of the count.
     size_t idx = _tributaries_count.load(std::memory_order_relaxed);
-    assert(idx < MAX_TRIBUTARIES &&
-           "MAX_TRIBUTARIES exceeded in _alloc_new_slot");
-    _tributaries[idx] = std::move(trib_uptr);
+    _trib_slot(idx) = std::move(trib_uptr);
     _tributaries_count.store(idx + 1, std::memory_order_release);
     _tributaries_chain_epoch.store(
         _meta->chain_epoch.load(std::memory_order_relaxed),
@@ -363,7 +405,7 @@ struct _ConfluenceDB {
     return result;
   }
 
-  // Sync _tributaries with the mmap chain, adding any cross-process slots.
+  // Sync _trib_blocks with the mmap chain, adding any cross-process slots.
   // Must be called under _meta->chain_lock (writers serialized).
   void _update_tributaries() {
     uint64_t chain_epoch = _meta->chain_epoch.load(std::memory_order_acquire);
@@ -378,16 +420,17 @@ struct _ConfluenceDB {
       size_t n = _tributaries_count.load(std::memory_order_relaxed);
       bool found = false;
       for (size_t i = 0; i < n; ++i) {
-        if ((uint64_t)_main_db._storage.resolve(_tributaries[i]->_header) ==
+        if ((uint64_t)_main_db._storage.resolve(_trib_at(i)->_header) ==
             slot_off) {
           found = true;
           break;
         }
       }
       if (!found) {
-        assert(n < MAX_TRIBUTARIES &&
-               "MAX_TRIBUTARIES exceeded in _update_tributaries");
-        _tributaries[n] = std::make_unique<TributaryDB>(
+        // Cross-process growth: append, regardless of MAX_TRIBUTARIES (the
+        // chunked _trib_blocks table grows safely; MAX_TRIBUTARIES only
+        // gates _this_ process's allocations).
+        _trib_slot(n) = std::make_unique<TributaryDB>(
             _main_db._storage, slot_off, "_tributary");
         _tributaries_count.store(n + 1, std::memory_order_release);
       }
@@ -427,14 +470,14 @@ struct _ConfluenceDB {
     uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
     size_t n = _tributaries_count.load(std::memory_order_acquire);
     for (size_t i = 0; i < n; ++i) {
-      auto& t = _tributaries[i];
+      TributaryDB* t = _trib_at(i);
       slot_ptr slot = t->_header;
       uint8_t expected = Slot::FREE;
       if (slot->write_count.load(std::memory_order_relaxed) < threshold &&
           slot->state.compare_exchange_strong(expected, Slot::WRITING,
                                               std::memory_order_acq_rel)) {
         slot->refs.fetch_add(1, std::memory_order_acq_rel);
-        return t.get();
+        return t;
       }
     }
     return nullptr;
@@ -556,7 +599,7 @@ struct _ConfluenceDB {
       std::scoped_lock lock(_meta->chain_lock);
       size_t n = _tributaries_count.load(std::memory_order_acquire);
       for (size_t i = 0; i < n; ++i) {
-        TributaryDB* trib = _tributaries[i].get();
+        TributaryDB* trib = _trib_at(i);
         slot_ptr slot = trib->_header;
         if (slot->state.load(std::memory_order_relaxed) != Slot::FREE) continue;
         bool should_merge = false;
@@ -690,13 +733,13 @@ struct _ConfluenceDB {
       // Pool is idle when called from sanitize(); safe lock-free scan.
       size_t n = _tributaries_count.load(std::memory_order_acquire);
       for (size_t i = 0; i < n; ++i) {
-        auto& t = _tributaries[i];
+        TributaryDB* t = _trib_at(i);
         slot_ptr slot = t->_header;
         uint8_t state = slot->state.load(std::memory_order_relaxed);
         if (state == Slot::FREE || state == Slot::MERGED) {
           new (&slot->state) std::atomic<uint8_t>(Slot::FREE);
           new (&slot->refs) std::atomic<uint32_t>(0);
-          to_recover.push_back(t.get());
+          to_recover.push_back(t);
         }
       }
     }
@@ -1044,7 +1087,7 @@ struct _ConfluenceCursor {
       size_t n =
           _cdb->_tributaries_count.load(std::memory_order_acquire);
       for (size_t i = 0; i < n; ++i) {
-        auto& t = _cdb->_tributaries[i];
+        TributaryDB* t = _cdb->_trib_at(i);
         slot_ptr slot = t->_header;
         if (slot->state.load(std::memory_order_acquire) == Slot::MERGED)
           continue;
@@ -1052,16 +1095,22 @@ struct _ConfluenceCursor {
         offset_t slot_off =
             (uint64_t)_cdb->_main_db._storage.resolve(t->_header);
         if (fill >= _sources.size()) _sources.emplace_back();
-        _sources[fill].reinit(_cdb, t.get(), slot, slot_off);
+        _sources[fill].reinit(_cdb, t, slot, slot_off);
         ++fill;
       }
       _sources_n = fill;
       // Sort by txn_id descending so _resolve_key_early_exit() can check
       // the most-recent source first and early-exit on the first verdict.
-      std::sort(_sources.begin(), _sources.begin() + _sources_n,
-          [](const PinnedSource& a, const PinnedSource& b) {
-            return a._trib_cursor->_txn->txn_id > b._trib_cursor->_txn->txn_id;
-          });
+      // Only meaningful for _DefaultConflictPolicy (highest-txn_id-wins);
+      // custom policies always scan every candidate so sorting buys nothing.
+      if constexpr (std::is_same_v<ConflictPolicy,
+                                   _DefaultConflictPolicy>) {
+        std::sort(_sources.begin(), _sources.begin() + _sources_n,
+            [](const PinnedSource& a, const PinnedSource& b) {
+              return a._trib_cursor->_txn->txn_id >
+                     b._trib_cursor->_txn->txn_id;
+            });
+      }
     };
 
     // Fast path: if the local _tributaries cache is already in sync with
@@ -1212,26 +1261,30 @@ struct _ConfluenceCursor {
     return true;
   }
 
-  // Resolve a lazy find().  Non-txn path uses early-exit (fast, sources
-  // already sorted by txn_id desc); txn path uses full fan-out because the
-  // writer is appended after the sorted read-sources and must not be skipped.
+  // Resolve a lazy find().  Non-txn path with _DefaultConflictPolicy uses
+  // early-exit (fast, sources already sorted by txn_id desc); txn path and
+  // custom policies use full fan-out (txn appends the writer unsorted after
+  // the sorted read-sources; custom policies are not guaranteed to be
+  // monotone in txn_id and so cannot early-exit safely).
   void _materialize_full() {
     if (!_pending_find) return;
     _pending_find = false;
     Slice found_val;
-    if (_in_transaction) {
-      // Writer at _sources[_sources_n-1] is unsorted; full fan-out required.
-      _positioned = true;
-      if (_resolve_key(Slice(_iter_key), found_val)) {
+    bool use_early_exit = false;
+    if constexpr (std::is_same_v<ConflictPolicy, _DefaultConflictPolicy>) {
+      use_early_exit = !_in_transaction;
+    }
+    if (use_early_exit) {
+      _positioned = false;
+      if (_resolve_key_early_exit(Slice(_iter_key), found_val)) {
         _value_storage = found_val;
         _valid = true;
       } else {
         _valid = false;
       }
     } else {
-      // Early-exit: correct for _DefaultConflictPolicy (highest txn_id wins).
-      _positioned = false;
-      if (_resolve_key_early_exit(Slice(_iter_key), found_val)) {
+      _positioned = true;
+      if (_resolve_key(Slice(_iter_key), found_val)) {
         _value_storage = found_val;
         _valid = true;
       } else {
