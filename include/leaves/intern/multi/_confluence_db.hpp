@@ -1,6 +1,7 @@
 #ifndef _LEAVES_CONFLUENCE_DB_HPP
 #define _LEAVES_CONFLUENCE_DB_HPP
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -859,7 +860,11 @@ struct _ConfluenceCursor {
   // valid while _sources are held — nulled by _release_sources())
   Slice _value_storage;
   bool _valid{false};
-  Slice _search_key;  // non-owning view into _iter_key; set on every find/iteration
+  bool _pending_find{false};  // find() is lazy; materialized on first is_valid/value/next/prev
+  Slice _search_key;          // non-owning view into _iter_key; set eagerly by find()
+  // true once all cursors are positioned at _iter_key; set false by find(),
+  // restored by _ensure_all_positioned() (called lazily from next()/prev()).
+  bool _positioned{true};
 
   explicit _ConfluenceCursor(ConfluenceDB_* cdb) : _cdb(cdb) {
     _main_txn = _cdb->txn_ref();
@@ -984,6 +989,7 @@ struct _ConfluenceCursor {
 
   void value(const Slice& v) {
     assert(_in_transaction);
+    _materialize_write();
     auto& w = _sources[_sources_n - 1];
     w._trib_cursor->value(v);
     ++_pending_write_keys;
@@ -991,6 +997,7 @@ struct _ConfluenceCursor {
 
   void remove() {
     assert(_in_transaction);
+    _materialize_write();
     auto& w = _sources[_sources_n - 1];
     if (w._trib_cursor->is_valid()) {
       ++_pending_write_keys;
@@ -1049,6 +1056,12 @@ struct _ConfluenceCursor {
         ++fill;
       }
       _sources_n = fill;
+      // Sort by txn_id descending so _resolve_key_early_exit() can check
+      // the most-recent source first and early-exit on the first verdict.
+      std::sort(_sources.begin(), _sources.begin() + _sources_n,
+          [](const PinnedSource& a, const PinnedSource& b) {
+            return a._trib_cursor->_txn->txn_id > b._trib_cursor->_txn->txn_id;
+          });
     };
 
     // Fast path: if the local _tributaries cache is already in sync with
@@ -1078,6 +1091,74 @@ struct _ConfluenceCursor {
     _sources_n = 0;
     _value_storage = Slice();  // null to prevent dangling
     _sources_valid = false;
+    _positioned = false;
+  }
+
+  // Fast point-lookup: checks sources in descending txn_id order (sources are
+  // sorted once in fill_sources_lockfree inside _ensure_sources) and
+  // early-exits on the first definitive verdict.  Assumes
+  // _DefaultConflictPolicy semantics: highest txn_id wins; tombstone at the
+  // highest remaining source means the key is deleted.
+  // Leaves non-visited cursors unpositioned; call _ensure_all_positioned()
+  // before invoking next()/prev() or _advance_to_next_valid().
+  bool _resolve_key_early_exit(const Slice& key, Slice& value_out) {
+    _ensure_sources();
+    if (!_sources_n) {
+      _main_cursor->find(key);
+      if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
+        value_out = _main_cursor->value();
+        return true;
+      }
+      return false;
+    }
+    // Sources are sorted descending by txn_id. Interleave main cursor at its
+    // txn_id position so the overall traversal is still highest-first.
+    const tid_t main_tid = _main_txn->txn_id;
+    bool checked_main = false;
+    for (size_t i = 0; i < _sources_n; ++i) {
+      auto& src = _sources[i];
+      if (!checked_main && main_tid > src._trib_cursor->_txn->txn_id) {
+        checked_main = true;
+        _main_cursor->find(key);
+        if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
+          value_out = _main_cursor->value();
+          return true;
+        }
+      }
+      if (src._del_cursor) {
+        src._del_cursor->find(key);
+        if (src._del_cursor->is_valid() && key == src._del_cursor->current_key)
+          return false;  // tombstone at highest remaining txn_id → deleted
+      }
+      src._trib_cursor->find(key);
+      if (src._trib_cursor->is_valid() && key == src._trib_cursor->current_key) {
+        value_out = src._trib_cursor->value();
+        return true;
+      }
+    }
+    if (!checked_main) {
+      _main_cursor->find(key);
+      if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
+        value_out = _main_cursor->value();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Positions ALL trib+del cursors and main cursor at _iter_key.
+  // Called by next()/prev() after _resolve_key_early_exit() left some cursors
+  // unpositioned, ensuring the merge advance loop sees a consistent state.
+  void _ensure_all_positioned() {
+    if (_positioned) return;
+    _ensure_sources();
+    for (size_t i = 0; i < _sources_n; ++i) {
+      auto& src = _sources[i];
+      src._trib_cursor->find(Slice(_iter_key));
+      if (src._del_cursor) src._del_cursor->find(Slice(_iter_key));
+    }
+    _main_cursor->find(Slice(_iter_key));
+    _positioned = true;
   }
 
   bool _resolve_key(const Slice& key, Slice& value_out) {
@@ -1131,36 +1212,66 @@ struct _ConfluenceCursor {
     return true;
   }
 
+  // Resolve a lazy find().  Non-txn path uses early-exit (fast, sources
+  // already sorted by txn_id desc); txn path uses full fan-out because the
+  // writer is appended after the sorted read-sources and must not be skipped.
+  void _materialize_full() {
+    if (!_pending_find) return;
+    _pending_find = false;
+    Slice found_val;
+    if (_in_transaction) {
+      // Writer at _sources[_sources_n-1] is unsorted; full fan-out required.
+      _positioned = true;
+      if (_resolve_key(Slice(_iter_key), found_val)) {
+        _value_storage = found_val;
+        _valid = true;
+      } else {
+        _valid = false;
+      }
+    } else {
+      // Early-exit: correct for _DefaultConflictPolicy (highest txn_id wins).
+      _positioned = false;
+      if (_resolve_key_early_exit(Slice(_iter_key), found_val)) {
+        _value_storage = found_val;
+        _valid = true;
+      } else {
+        _valid = false;
+      }
+    }
+  }
+
+  // Write-cursor-only materialization: positions only the write cursor.
+  // Triggered by value(Slice) set and remove().
+  void _materialize_write() {
+    if (!_pending_find) return;
+    _pending_find = false;
+    auto& w = _sources[_sources_n - 1];
+    w._trib_cursor->find(Slice(_iter_key));
+    _valid = w._trib_cursor->is_valid() &&
+             _search_key == w._trib_cursor->current_key;
+  }
+
   // -------------------------------------------------------------------------
   // Public read API
   // -------------------------------------------------------------------------
 
-  bool is_valid() const { return _valid; }
+  bool is_valid() {
+    if (_in_transaction) _materialize_write();
+    else _materialize_full();
+    return _valid;
+  }
   Slice key() const { return _search_key; }
-  Slice value() const { return _value_storage; }
+  Slice value() {
+    _materialize_full();
+    return _value_storage;
+  }
 
   void find(const Slice& key) {
-    // Write-transaction fast path: only the writer's cursor (last source)
-    // is consulted. No _ensure_sources, no _resolve_key, no delete check.
-    if (_in_transaction) {
-      auto& w = _sources[_sources_n - 1];
-      w._trib_cursor->find(key);
-      _iter_key.assign(key.data(), key.size());
-      _search_key = Slice(_iter_key);
-      _valid = w._trib_cursor->is_valid() &&
-               _search_key == w._trib_cursor->current_key;
-      return;
-    }
-
-    Slice found_val;
-    if (_resolve_key(key, found_val)) {
-      _iter_key.assign(key.data(), key.size());
-      _search_key = Slice(_iter_key);
-      _value_storage = found_val;
-      _valid = true;
-    } else {
-      _valid = false;
-    }
+    _iter_key.assign(key.data(), key.size());
+    _search_key = Slice(_iter_key);
+    _pending_find = true;
+    _valid = false;
+    _positioned = false;
   }
 
   // -------------------------------------------------------------------------
@@ -1168,15 +1279,19 @@ struct _ConfluenceCursor {
   // -------------------------------------------------------------------------
 
   void first() {
+    _pending_find = false;
     _ensure_sources();
     _main_cursor->first();
     for (size_t i = 0; i < _sources_n; ++i)
       _sources[i]._trib_cursor->first();
+    _positioned = true;
     _advance_to_next_valid();
   }
 
   void next() {
+    _materialize_full();
     if (!_valid) return;
+    _ensure_all_positioned();
     if (_main_cursor->is_valid() && _search_key == _main_cursor->current_key)
       _main_cursor->next();
     for (size_t i = 0; i < _sources_n; ++i) {
@@ -1189,15 +1304,19 @@ struct _ConfluenceCursor {
   }
 
   void last() {
+    _pending_find = false;
     _ensure_sources();
     _main_cursor->last();
     for (size_t i = 0; i < _sources_n; ++i)
       _sources[i]._trib_cursor->last();
+    _positioned = true;
     _advance_to_prev_valid();
   }
 
   void prev() {
+    _materialize_full();
     if (!_valid) return;
+    _ensure_all_positioned();
     if (_main_cursor->is_valid() && _search_key == _main_cursor->current_key)
       _main_cursor->prev();
     for (size_t i = 0; i < _sources_n; ++i) {
