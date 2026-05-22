@@ -12,6 +12,7 @@
 #include <boost/process/v2/pid.hpp>
 #endif
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -343,8 +344,15 @@ struct _MemoryMapFile
       p = offset_ptr->resolve<char>();
     } else {
       // Absolute: offset from _memory base
+      assert((uint64_t)*offset_ptr < _memory->file_size &&
+             "absolute offset out of storage bounds");
       p = (char*)_memory + (uint64_t)*offset_ptr;
     }
+
+    // Resolved address must lie within the mapped storage region.
+    assert(p >= (char*)_memory &&
+           p < (char*)_memory + _memory->file_size &&
+           "resolved pointer outside storage file");
 
     prefetch(p, access);
     return page_ptr(p);

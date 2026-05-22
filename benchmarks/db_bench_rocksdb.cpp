@@ -194,6 +194,8 @@ class Benchmark {
   Histogram hist_;
   RandomGenerator gen_;
   Random rand_;
+  std::vector<char> bench_keys_buf_;
+  int bench_key_size_{0};
 
   // State kept for progress messages
   int done_;
@@ -337,6 +339,28 @@ class Benchmark {
  public:
   enum Order { SEQUENTIAL, RANDOM };
   enum DBState { FRESH, EXISTING };
+
+  void prepare_keys(Order order, int n) {
+    bench_key_size_ = FLAGS_binary_key ? 8 : 16;
+    bench_keys_buf_.resize(n * bench_key_size_);
+    char* buf = bench_keys_buf_.data();
+    if (FLAGS_binary_key) {
+      for (int i = 0; i < n; i++) {
+        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        memcpy(buf + i * bench_key_size_, &bk, sizeof(uint64_t));
+      }
+    } else {
+      for (int i = 0; i < n; i++) {
+        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+        snprintf(buf + i * bench_key_size_, bench_key_size_ + 1, "%016d", k);
+      }
+    }
+  }
+
+  rocksdb::Slice bench_key(int i) const {
+    return rocksdb::Slice(bench_keys_buf_.data() + i * bench_key_size_, bench_key_size_);
+  }
 
   Benchmark()
       : cache_(rocksdb::NewLRUCache(FLAGS_cache_size)),
@@ -488,6 +512,18 @@ class Benchmark {
         }
       }
 
+      if (name == Slice("fillseq") || name == Slice("fillseq100K") ||
+          name == Slice("fillseqsync") || name == Slice("deleteseq")) {
+        prepare_keys(SEQUENTIAL, num_);
+      } else if (name == Slice("fillrandom") || name == Slice("fillrandsync") ||
+                 name == Slice("overwrite") || name == Slice("fillrand100K") ||
+                 name == Slice("deleterandom")) {
+        prepare_keys(RANDOM, num_);
+      } else if (name == Slice("readrandom") || name == Slice("readrand100K") ||
+                 name == Slice("seekrandom") || name == Slice("readrandomsmall")) {
+        prepare_keys(RANDOM, reads_);
+      }
+
       if (method != nullptr) {
         RunBenchmark(name, method);
       }
@@ -621,17 +657,7 @@ class Benchmark {
     Start();
 
     for (int i = 0; i < num_; i++) {
-      const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % FLAGS_num);
-      char key[100];
-      rocksdb::Slice mkey;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(key, &bk, sizeof(bk));
-        mkey = rocksdb::Slice(key, sizeof(uint64_t));
-      } else {
-        std::snprintf(key, sizeof(key), "%016d", k);
-        mkey = rocksdb::Slice(key);
-      }
+      rocksdb::Slice mkey = bench_key(i);
       rocksdb::Status s = db_->Put(write_options, mkey, gen_.Generate(FLAGS_value_size));
       if (!s.ok()) {
         std::fprintf(stderr, "put error: %s\n", s.ToString().c_str());
@@ -680,17 +706,7 @@ class Benchmark {
     int found = 0;
     Start();
     for (int i = 0; i < reads_; i++) {
-      char key[100];
-      const int k = rand_.Next() % FLAGS_num;
-      rocksdb::Slice mkey;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(key, &bk, sizeof(bk));
-        mkey = rocksdb::Slice(key, sizeof(uint64_t));
-      } else {
-        std::snprintf(key, sizeof(key), "%016d", k);
-        mkey = rocksdb::Slice(key);
-      }
+      rocksdb::Slice mkey = bench_key(i);
       if (db_->Get(options, mkey, &value).ok()) {
         found++;
       }
@@ -730,17 +746,7 @@ class Benchmark {
     Start();
     for (int i = 0; i < reads_; i++) {
       rocksdb::Iterator* iter = db_->NewIterator(options);
-      char key[100];
-      const int k = rand_.Next() % FLAGS_num;
-      rocksdb::Slice mkey;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(key, &bk, sizeof(bk));
-        mkey = rocksdb::Slice(key, sizeof(uint64_t));
-      } else {
-        std::snprintf(key, sizeof(key), "%016d", k);
-        mkey = rocksdb::Slice(key);
-      }
+      rocksdb::Slice mkey = bench_key(i);
       iter->Seek(mkey);
       if (iter->Valid() && iter->key() == mkey) found++;
       delete iter;
@@ -779,17 +785,7 @@ class Benchmark {
     rocksdb::WriteOptions write_options;
     Start();
     for (int i = 0; i < num_; i++) {
-      char key[100];
-      rocksdb::Slice mkey;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)i);
-        __builtin_memcpy(key, &bk, sizeof(bk));
-        mkey = rocksdb::Slice(key, sizeof(uint64_t));
-      } else {
-        std::snprintf(key, sizeof(key), "%016d", i);
-        mkey = rocksdb::Slice(key);
-      }
-      db_->Delete(write_options, mkey);
+      db_->Delete(write_options, bench_key(i));
       FinishedSingleOp();
     }
     Stop(name);
@@ -799,18 +795,7 @@ class Benchmark {
     rocksdb::WriteOptions write_options;
     Start();
     for (int i = 0; i < num_; i++) {
-      char key[100];
-      const int k = rand_.Next() % FLAGS_num;
-      rocksdb::Slice mkey;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(key, &bk, sizeof(bk));
-        mkey = rocksdb::Slice(key, sizeof(uint64_t));
-      } else {
-        std::snprintf(key, sizeof(key), "%016d", k);
-        mkey = rocksdb::Slice(key);
-      }
-      db_->Delete(write_options, mkey);
+      db_->Delete(write_options, bench_key(i));
       FinishedSingleOp();
     }
     Stop(name);

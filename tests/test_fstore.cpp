@@ -311,7 +311,7 @@ BOOST_AUTO_TEST_CASE(test_schedule_after_fires) {
   });
 
   // Wait for the pool to pick it up
-  db.wait_all();
+  db.wait_idle();
   BOOST_CHECK_EQUAL(counter.load(), 1);
 }
 

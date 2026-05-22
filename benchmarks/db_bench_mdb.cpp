@@ -150,6 +150,8 @@ class Benchmark {
   Histogram hist_;
   RandomGenerator gen_;
   Random rand_;
+  std::vector<char> bench_keys_buf_;
+  int bench_key_size_{0};
 
   // State kept for progress messages
   int done_;
@@ -300,6 +302,28 @@ class Benchmark {
   enum Order { SEQUENTIAL, RANDOM };
   enum DBState { FRESH, EXISTING };
 
+  void prepare_keys(Order order, int n) {
+    bench_key_size_ = FLAGS_binary_key ? 8 : 16;
+    bench_keys_buf_.resize(n * bench_key_size_);
+    char* buf = bench_keys_buf_.data();
+    if (FLAGS_binary_key) {
+      for (int i = 0; i < n; i++) {
+        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        memcpy(buf + i * bench_key_size_, &bk, sizeof(uint64_t));
+      }
+    } else {
+      for (int i = 0; i < n; i++) {
+        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+        snprintf(buf + i * bench_key_size_, bench_key_size_ + 1, "%016d", k);
+      }
+    }
+  }
+
+  const char* bench_key_data(int i) const {
+    return bench_keys_buf_.data() + i * bench_key_size_;
+  }
+
   Benchmark()
       : db_(nullptr),
         num_(FLAGS_num),
@@ -340,6 +364,14 @@ class Benchmark {
       } else {
         name = Slice(benchmarks, sep - benchmarks);
         benchmarks = sep + 1;
+      }
+
+      if (name == Slice("overwrite")) {
+        prepare_keys(RANDOM, num_);
+      } else if (name == Slice("readrandom")) {
+        prepare_keys(RANDOM, reads_);
+      } else if (name == Slice("readrand100K")) {
+        prepare_keys(RANDOM, reads_ / 1000);
       }
 
       Start();
@@ -443,6 +475,7 @@ class Benchmark {
         db_ = NULL;
       }
       Open(sync);
+      prepare_keys(order, num_entries);
       Start();  // Do not count time taken to destroy/open
     }
 
@@ -452,12 +485,9 @@ class Benchmark {
       message_ = msg;
     }
 
-    char key[100];
     MDB_val mkey, mval;
     MDB_txn *txn;
     int flag = 0, rc;
-
-    mkey.mv_data = key;
 
     if (order == SEQUENTIAL)
       flag = MDB_APPEND;
@@ -469,15 +499,8 @@ class Benchmark {
       mdb_cursor_open(txn, dbi_, &mc);
 
       for (int j=0; j < entries_per_batch; j++) {
-        const int k = (order == SEQUENTIAL) ? i+j : (rand_.Next() % num_entries);
-        
-        if (FLAGS_binary_key) {
-          uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-          __builtin_memcpy(key, &bk, sizeof(bk));
-          mkey.mv_size = sizeof(uint64_t);
-        } else {
-          mkey.mv_size = snprintf(key, sizeof(key), "%016d", k);
-        }
+        mkey.mv_data = const_cast<char*>(bench_key_data(i + j));
+        mkey.mv_size = bench_key_size_;
         bytes_ += value_size + mkey.mv_size;
         mval.mv_data = (void *)gen_.Generate(value_size).data();
         mval.mv_size = value_size;
@@ -512,19 +535,11 @@ class Benchmark {
     MDB_txn *txn;
     MDB_cursor *cursor;
     MDB_val key, data;
-    char ckey[100];
-    key.mv_data = ckey;
     mdb_txn_begin(db_, NULL, MDB_RDONLY, &txn);
     mdb_cursor_open(txn, dbi_, &cursor);
     for (int i = 0; i < reads_; i++) {
-      const int k = rand_.Next() % reads_;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(ckey, &bk, sizeof(bk));
-        key.mv_size = sizeof(uint64_t);
-      } else {
-        key.mv_size = snprintf(ckey, sizeof(ckey), "%016d", k);
-      }
+      key.mv_data = const_cast<char*>(bench_key_data(i));
+      key.mv_size = bench_key_size_;
       mdb_cursor_get(cursor, &key, &data, MDB_SET);
       FinishedSingleOp();
     }

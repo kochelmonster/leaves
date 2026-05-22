@@ -676,6 +676,7 @@ struct _LeafNode {
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
   void set_big() { value_size |= BIG_VALUE_FLAG; }
+  void clear_big() { value_size &= ~BIG_VALUE_FLAG; }
 
   void set(const Slice& key, size_t value_size_) {
     assert(key.size() < 256);

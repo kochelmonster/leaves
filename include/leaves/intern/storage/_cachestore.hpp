@@ -104,7 +104,7 @@ struct _CacheStore : public Opers_,
   // must be called in the subclasses' destructor
   void destroy() {
     // Wait for any pending flush tasks to complete
-    this->wait_all();
+    this->wait_idle();
 
     // Final flush of any remaining dirty blocks
     write_dirty_blocks();
@@ -330,6 +330,8 @@ struct _CacheStore : public Opers_,
     using DB = DBClass<CacheStore>;
     if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) throw KeyTooBig();
 
+    std::scoped_lock flock_guard(this->_self().file_lock());
+
     // 1. Check in-memory cache
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
@@ -392,6 +394,7 @@ struct _CacheStore : public Opers_,
   template <template <typename> class DBClass = _DB>
   void remove(const char* name) {
     using DB = DBClass<CacheStore>;
+    std::scoped_lock flock_guard(this->_self().file_lock());
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
       if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
@@ -590,6 +593,7 @@ struct _CacheStore : public Opers_,
     // If DB is cached, use it directly
     auto it = _dbs.find(name);
     if (it != _dbs.end() && it->second.db) {
+      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
       static_cast<DB*>(it->second.db)->return_areas();
       return;
     }

@@ -1,2 +1,0 @@
-- Make Storage Independent from DB
-- Replication is a _DB Behaviour not an extra DB

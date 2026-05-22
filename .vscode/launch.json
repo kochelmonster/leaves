@@ -34,7 +34,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -46,6 +46,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -61,7 +66,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -73,6 +78,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -88,7 +98,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -100,6 +110,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -115,7 +130,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -127,6 +142,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -142,7 +162,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -154,6 +174,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -169,7 +194,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -181,6 +206,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -196,6 +226,11 @@
                 {
                     "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -217,6 +252,11 @@
                     "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
                     "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
+                    "ignoreFailures": true
                 }
             ]
         },
@@ -231,9 +271,10 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
+            "logging": { "engineLogging": true },
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -243,6 +284,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -258,7 +304,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -270,6 +316,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -285,7 +336,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -297,6 +348,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -312,7 +368,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "preLaunchTask": "Copy YCSB backup for debug",
@@ -326,6 +382,11 @@
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
                     "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
+                    "ignoreFailures": true
                 }
             ]
         },
@@ -337,7 +398,7 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -349,6 +410,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -368,7 +434,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -380,6 +446,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -392,7 +463,7 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -404,6 +475,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -418,7 +494,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -430,6 +506,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -444,7 +525,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -456,6 +537,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -470,7 +556,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -482,6 +568,51 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) db_bench_leaves confluence",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/db_bench_leaves",
+            "args": [
+                "--use_confluence=1",
+                //"--benchmarks=fillrandom,overwrite",
+                //"--num=100000",
+                //"--batch_size=1000"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [
+                {
+                    "name": "LEAVES_FREEZE_TRIB",
+                    "value": "1"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "preLaunchTask": "Build leaves (CMake)",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]
@@ -496,7 +627,7 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [],
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -508,6 +639,11 @@
                 {
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
                     "ignoreFailures": true
                 }
             ]

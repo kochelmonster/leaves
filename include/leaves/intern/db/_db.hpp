@@ -108,6 +108,10 @@ struct _DBHeader {
   // Tracks whether this DB has been sanitized for the current storage
   // generation.  Compared against the FileHeader counter at open() time.
   uint32_t sanitize_generation;
+
+  // Extra offset for storing additional user-defined data beyond the header.
+  // Defaults to 0 (no extra data).
+  offset_t extra_offset{0};
 };
 
 // Make _DB accept Transaction and Header as template parameters
@@ -192,7 +196,6 @@ struct _DB {
 
   void init(offset_t* header) {
     auto area_ptr = _storage.alloc_single_area();
-
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
@@ -205,7 +208,7 @@ struct _DB {
     _header->area_list_head_single = first_area_offset;
     _header->area_list_head_multi = 0;
 
-    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
@@ -236,6 +239,7 @@ struct _DB {
   // Return all areas to storage pool
   void return_areas() {
     auto read_txn = resolve<Transaction>(&_header->read_txn);
+
     if (_header->area_list_head_single && read_txn->area_list_tail_single) {
       _storage.return_single_areas(_header->area_list_head_single,
                                    read_txn->area_list_tail_single);
@@ -250,9 +254,80 @@ struct _DB {
   void reset(offset_t* header) {
     if (is_active()) throw TransactionActive();
     if (!_aspect.before_reset(self())) return;
+    std::scoped_lock lock(_storage.file_lock());
     return_areas();
     init(header);
     _aspect.on_reset(self());
+  }
+
+  // Reset the DB in place: keep the existing header and the first single
+  // area (which contains the header), return all other single areas plus
+  // the entire multi chain to the storage pool, then re-initialize the
+  // in-place transaction. After this call the DB is in the same logical
+  // state as a freshly init()'d DB sharing the same header offset.
+  // Precondition: no active transaction.
+  // Derived-class header fields outside _DBHeader are preserved (no full
+  // memset).
+  void reset_in_place() {
+    if (is_active()) throw TransactionActive();
+    std::scoped_lock lock(_storage.file_lock());
+
+    auto read_txn = resolve<Transaction>(&_header->read_txn);
+
+    // Return all single areas after the first (the first holds the header).
+    if (_header->area_list_head_single) {
+      area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
+      offset_t second = first->next;
+      if (second && read_txn->area_list_tail_single &&
+          second != _header->area_list_head_single) {
+        _storage.return_single_areas(second, read_txn->area_list_tail_single);
+        first->next = 0;
+        make_dirty(first);
+      }
+    }
+
+    // Return the entire multi-area chain.
+    if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
+      _storage.return_multi_areas(_header->area_list_head_multi,
+                                  read_txn->area_list_tail_multi);
+      _header->area_list_head_multi = 0;
+    }
+
+    // Re-initialise the in-place transaction at header + header_size.
+    offset_t header_off = (uint64_t)_storage.resolve(_header);
+    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    _header->prepared_txn = _header->read_txn = header_off + header_size;
+    _header->next_txn_page = 0;
+    _header->txn_cursor_id.store(0);
+
+    area_ptr first_area =
+        resolve<Area>(&_header->area_list_head_single, WRITE);
+    offset_t first_area_offset = _header->area_list_head_single;
+
+    txn_ptr txn = resolve<Transaction>(&_header->read_txn);
+    memset((char*)txn, 0, sizeof(Transaction));
+    txn->slot_id = Transaction::SLOT_ID;
+    txn->used = sizeof(Transaction);
+    txn->txn_id = tid_t(1);
+    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+    txn->next_txn = 0;
+    txn->refs.store(0);
+    txn->start_txn = _header->read_txn;
+    txn->area_list_tail_single = first_area_offset;
+    txn->area_list_tail_multi = 0;
+    txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
+                          first_area->end());
+
+    // Pre-allocate the next transaction page (mirrors init()).
+    _active_txn = txn;
+    auto next = txn->clone(*this);
+    _header->next_txn_page = resolve(next);
+    _active_txn.reset();
+
+    make_dirty(first_area);
+    make_dirty(txn);
+    make_dirty(_header);
+    flush();
   }
 
   Aspect& aspect() { return _aspect; }
@@ -342,8 +417,6 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_single_area();
-    area_ptr->next = 0;
-
     // Append to transaction's area list tail
     auto tail = resolve<Area>(&_active_txn->area_list_tail_single, WRITE);
     tail->next = resolve(area_ptr);
@@ -359,8 +432,6 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_multi_area(size);
-    area_ptr->next = 0;
-
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
       auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, WRITE);
@@ -656,6 +727,7 @@ struct _DB {
 
   void return_areas_range(offset_t start_single, offset_t end_single,
                           offset_t start_multi, offset_t end_multi) {
+    std::scoped_lock lock(_storage.file_lock());
     // Return area range [start->next ... end] to storage
     // This is used during rollback to return areas allocated during write
     // transaction

@@ -4,6 +4,9 @@
 
 #include <sys/stat.h>
 
+#include <atomic>
+#include <thread>
+
 #include <boost/endian/conversion.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -76,6 +79,18 @@ static bool FLAGS_use_file_storage = false;
 
 // Use ReplicatingMapStorage (includes merkle hashing)
 static bool FLAGS_use_replicating = false;
+
+// Use ConfluenceDB with N concurrent writer threads (0 = disabled)
+static int FLAGS_use_confluence = 0;
+
+// Override merge_write_threshold (0 = leave default). Set huge to suppress
+// auto-merge during the benchmark and isolate writer-path overhead.
+static uint32_t FLAGS_merge_threshold = 0;
+
+// When non-empty, append the exact key & value sequence used by each write
+// phase to this file (binary format). Used by test_merger to replay the
+// crashing benchmark workload deterministically in a single thread.
+static const char* FLAGS_dump_workload = nullptr;
 
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
@@ -181,8 +196,10 @@ class Benchmark {
   // Storage pointers - only one will be non-null based on configuration
   std::shared_ptr<leaves::FileStorage> file_storage_;
   std::shared_ptr<leaves::MapStorage> map_storage_;
+  std::unique_ptr<leaves::MapConfluenceDB> confluence_db_;
   bool using_file_storage_;
   bool using_replicating_;
+  bool using_confluence_;
   int db_num_;
   int num_;
   int reads_;
@@ -193,12 +210,15 @@ class Benchmark {
   Histogram hist_;
   RandomGenerator gen_;
   Random rand_;
+  std::vector<char> bench_keys_buf_;
+  int bench_key_size_{0};
 
   // State kept for progress messages
   int done_;
   int next_report_;  // When to report next
 
   const char* storage_name() const {
+    if (using_confluence_) return "MapStorage (ConfluenceDB)";
     if (using_replicating_) return "MapStorage (replicating)";
     if (using_file_storage_) return "FileStorage";
     return "MapStorage";
@@ -357,11 +377,54 @@ class Benchmark {
   enum Order { SEQUENTIAL, RANDOM };
   enum DBState { FRESH, EXISTING };
 
+  void prepare_keys(Order order, int n) {
+    bench_key_size_ = FLAGS_binary_key ? 8 : 16;
+    bench_keys_buf_.resize(n * bench_key_size_ + 1);  // +1 for snprintf null terminator
+    char* buf = bench_keys_buf_.data();
+    if (FLAGS_binary_key) {
+      for (int i = 0; i < n; i++) {
+        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+        memcpy(buf + i * bench_key_size_, &bk, sizeof(uint64_t));
+      }
+    } else {
+      for (int i = 0; i < n; i++) {
+        const int k = (order == SEQUENTIAL) ? i : (rand_.Next() % n);
+        snprintf(buf + i * bench_key_size_, bench_key_size_ + 1, "%016d", k);
+      }
+    }
+
+    // Optional: dump the just-generated key block so test_merger can replay
+    // the EXACT workload that crashes the benchmark.  Format (binary, LE):
+    //   uint32_t tag = 'K' << 0 | 'E' << 8 | 'Y' << 16 | 'S' << 24
+    //   uint32_t key_size
+    //   uint32_t num_keys
+    //   <key bytes>...
+    if (FLAGS_dump_workload != nullptr) {
+      FILE* f = std::fopen(FLAGS_dump_workload, "ab");
+      if (f) {
+        uint32_t tag = 0x5359454BU;  // 'K','E','Y','S' little-endian
+        uint32_t ks  = (uint32_t)bench_key_size_;
+        uint32_t nn  = (uint32_t)n;
+        std::fwrite(&tag, 4, 1, f);
+        std::fwrite(&ks,  4, 1, f);
+        std::fwrite(&nn,  4, 1, f);
+        std::fwrite(buf, bench_key_size_, n, f);
+        std::fclose(f);
+      }
+    }
+  }
+
+  leaves::Slice bench_key(int i) const {
+    return leaves::Slice(bench_keys_buf_.data() + i * bench_key_size_, bench_key_size_);
+  }
+
   Benchmark()
       : file_storage_(nullptr),
         map_storage_(nullptr),
         using_file_storage_(FLAGS_use_file_storage),
         using_replicating_(FLAGS_use_replicating),
+        using_confluence_(FLAGS_use_confluence > 0),
         num_(FLAGS_num),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
         bytes_(0),
@@ -371,6 +434,10 @@ class Benchmark {
     leveldb::Env::Default()->GetTestDirectory(&test_dir);
     leveldb::Env::Default()->GetChildren(test_dir.c_str(), &files);
     if (!FLAGS_use_existing_db) {
+      // Remove db directories from previous runs (they are directories, use rm -rf)
+      char cmd[200];
+      sprintf(cmd, "rm -rf %s/dbbench_mdb-*", test_dir.c_str());
+      system(cmd);
       for (int i = 0; i < files.size(); i++) {
         if (leveldb::Slice(files[i]).starts_with("dbbench_leaves")) {
           std::string file_name(test_dir);
@@ -383,7 +450,8 @@ class Benchmark {
   }
 
   ~Benchmark() {
-    // shared_ptr will automatically clean up
+    // Destroy confluence_db before map_storage so its monitor thread stops first
+    confluence_db_.reset();
     file_storage_.reset();
     map_storage_.reset();
   }
@@ -402,6 +470,16 @@ class Benchmark {
       } else {
         name = Slice(benchmarks, sep - benchmarks);
         benchmarks = sep + 1;
+      }
+
+      // Pre-generate keys before timing starts for EXISTING writes and random reads.
+      // (FRESH writes re-generate in Write() after Open(), before their own Start().)
+      if (name == Slice("overwrite")) {
+        prepare_keys(RANDOM, num_);
+      } else if (name == Slice("readrandom")) {
+        prepare_keys(RANDOM, reads_);
+      } else if (name == Slice("readrand100K")) {
+        prepare_keys(RANDOM, reads_ / 1000);
       }
 
       Start();
@@ -557,6 +635,56 @@ class Benchmark {
     } else {
       map_storage_ = leaves::MapStorage::create(test_fname.c_str(), 64 * leaves::G);
     }
+
+    if (using_confluence_) {
+      confluence_db_ = std::make_unique<leaves::MapConfluenceDB>(map_storage_, "benchmark");
+      if (FLAGS_merge_threshold)
+        confluence_db_->set_merge_write_threshold(FLAGS_merge_threshold);
+    }
+  }
+
+  void WriteImplConfluence(bool sync, int num_entries, int value_size,
+                           int entries_per_batch) {
+    int n_threads = FLAGS_use_confluence;
+    int per_thread = (num_entries + n_threads - 1) / n_threads;
+
+    std::vector<std::thread> threads;
+    std::atomic<int64_t> total_bytes{0};
+
+    for (int t = 0; t < n_threads; t++) {
+      int start = t * per_thread;
+      if (start >= num_entries) break;
+      int end = std::min(start + per_thread, num_entries);
+
+      threads.emplace_back([this, &total_bytes, start, end, value_size,
+                            entries_per_batch, sync]() {
+        auto cursor = confluence_db_->cursor();
+        RandomGenerator local_gen;
+        int64_t my_bytes = 0;
+        for (int i = start; i < end; i += entries_per_batch) {
+          cursor.start_transaction();
+          int batch_end = std::min(i + entries_per_batch, end);
+          for (int j = i; j < batch_end; j++) {
+            leaves::Slice key = bench_key(j);
+            cursor.find(key);
+            cursor.value(local_gen.Generate(value_size));
+            my_bytes += value_size + key.size();
+          }
+          cursor.commit(sync);
+        }
+        total_bytes.fetch_add(my_bytes, std::memory_order_relaxed);
+      });
+    }
+
+    for (auto& th : threads) th.join();
+
+    std::cerr << "[confluence] tributaries allocated (high-water): "
+              << confluence_db_->_internal()->_tributaries_count.load(
+                     std::memory_order_acquire)
+              << " (n_threads=" << n_threads << ")\n";
+
+    bytes_ += total_bytes.load();
+    done_ += num_entries;
   }
 
   // Template method for writing operations
@@ -564,7 +692,6 @@ class Benchmark {
   void WriteImpl(StorageType& storage, bool sync, Order order, int num_entries,
                  int value_size, int entries_per_batch) {
     leaves::Slice mkey, mval;
-    char key[100];
 
     auto cursor = storage.template open<DBClass>("benchmark").cursor();
     auto db = storage.template open<DBClass>("benchmark");
@@ -572,17 +699,7 @@ class Benchmark {
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
       for (int j = 0; j < entries_per_batch; j++) {
-        const int k =
-            (order == SEQUENTIAL) ? i + j : (rand_.Next() % num_entries);
-
-        if (FLAGS_binary_key) {
-          uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-          __builtin_memcpy(key, &bk, sizeof(bk));
-          mkey = leaves::Slice(key, sizeof(uint64_t));
-        } else {
-          snprintf(key, sizeof(key), "%016d", k);
-          mkey = leaves::Slice(key);
-        }
+        mkey = bench_key(i + j);
         int iter = i + j;
 
         bytes_ += value_size + mkey.size();
@@ -675,6 +792,7 @@ class Benchmark {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
 
+        confluence_db_.reset();  // cancel monitor before releasing storage
         file_storage_.reset();
         map_storage_.reset();
 
@@ -682,6 +800,7 @@ class Benchmark {
       }
 
       Open(sync);
+      prepare_keys(order, num_entries);
       Start();  // Do not count time taken to destroy/open
     }
 
@@ -692,7 +811,9 @@ class Benchmark {
     }
 
     // Call the appropriate template implementation based on storage type
-    if (using_replicating_) {
+    if (using_confluence_) {
+      WriteImplConfluence(sync, num_entries, value_size, entries_per_batch);
+    } else if (using_replicating_) {
       if (!map_storage_) {
         throw std::runtime_error("Map storage pointer is null");
       }
@@ -713,6 +834,14 @@ class Benchmark {
     }
   }
 
+  void ReadSequentialImplConfluence() {
+    auto cursor = confluence_db_->cursor();
+    for (cursor.first(); cursor.is_valid(); cursor.next()) {
+      bytes_ += cursor.key().size() + cursor.value().size();
+      FinishedSingleOp();
+    }
+  }
+
   // Template method for sequential reading
   template <typename StorageType, template<typename> class DBClass = leaves::_DB>
   void ReadSequentialImpl(StorageType& storage) {
@@ -729,7 +858,10 @@ class Benchmark {
 
   void ReadSequential() {
     // Call the appropriate template implementation based on storage type
-    if (using_replicating_) {
+    if (using_confluence_) {
+      if (!map_storage_) throw std::runtime_error("Map storage pointer is null");
+      ReadSequentialImplConfluence();
+    } else if (using_replicating_) {
       if (!map_storage_) {
         throw std::runtime_error("Map storage pointer is null");
       }
@@ -747,23 +879,23 @@ class Benchmark {
     }
   }
 
+  void ReadRandomImplConfluence() {
+    auto cursor = confluence_db_->cursor();
+    for (int i = 0; i < reads_; i++) {
+      leaves::Slice value_out;
+      if (cursor.find(bench_key(i), value_out)) {
+        bytes_ += bench_key_size_ + value_out.size();
+      }
+      FinishedSingleOp();
+    }
+  }
+
   // Template method for random reading
   template <typename StorageType, template<typename> class DBClass = leaves::_DB>
   void ReadRandomImpl(StorageType& storage) {
-    leaves::Slice key;
-    char ckey[100];
-
     auto cursor = storage.template open<DBClass>("benchmark").cursor();
     for (int i = 0; i < reads_; i++) {
-      const int k = rand_.Next() % reads_;
-      if (FLAGS_binary_key) {
-        uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(ckey, &bk, sizeof(bk));
-        cursor.find(leaves::Slice(ckey, sizeof(uint64_t)));
-      } else {
-        snprintf(ckey, sizeof(ckey), "%016d", k);
-        cursor.find(ckey);
-      }
+      cursor.find(bench_key(i));
       if (cursor.is_valid()) {
         bytes_ += cursor.key().size() + cursor.value().size();
       }
@@ -773,7 +905,10 @@ class Benchmark {
 
   void ReadRandom() {
     // Call the appropriate template implementation based on storage type
-    if (using_replicating_) {
+    if (using_confluence_) {
+      if (!map_storage_) throw std::runtime_error("Map storage pointer is null");
+      ReadRandomImplConfluence();
+    } else if (using_replicating_) {
       if (!map_storage_) {
         throw std::runtime_error("Map storage pointer is null");
       }
@@ -830,6 +965,15 @@ int main(int argc, char** argv) {
       if (FLAGS_use_replicating) {
         std::fprintf(stderr, "Using MapStorage with _ReplicationDB for storage\n");
       }
+    } else if (sscanf(argv[i], "--use_confluence=%d%c", &n, &junk) == 1 &&
+               n >= 0) {
+      FLAGS_use_confluence = n;
+      if (n > 0) {
+        std::fprintf(stderr, "Using ConfluenceDB with %d threads\n", n);
+      }
+    } else if (sscanf(argv[i], "--merge_threshold=%d%c", &n, &junk) == 1 &&
+               n >= 0) {
+      FLAGS_merge_threshold = static_cast<uint32_t>(n);
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;
@@ -841,6 +985,8 @@ int main(int argc, char** argv) {
       }
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
+    } else if (strncmp(argv[i], "--dump_workload=", 16) == 0) {
+      FLAGS_dump_workload = argv[i] + 16;
     } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
