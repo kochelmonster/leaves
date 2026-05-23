@@ -127,6 +127,12 @@ static int FLAGS_max_background_compactions = 8;
 // Number of background threads for flushing
 static int FLAGS_max_background_flushes = 2;
 
+// Number of writes per WriteBatch (1 = no batching)
+static int FLAGS_batch_size = 1000;
+
+// Disable auto-compactions during write benchmarks
+static bool FLAGS_disable_autocompact = false;
+
 namespace leveldb {
 
 // Helper for quickly generating random data.
@@ -342,7 +348,7 @@ class Benchmark {
 
   void prepare_keys(Order order, int n) {
     bench_key_size_ = FLAGS_binary_key ? 8 : 16;
-    bench_keys_buf_.resize(n * bench_key_size_);
+    bench_keys_buf_.resize(n * bench_key_size_ + 1);  // +1 for snprintf null terminator
     char* buf = bench_keys_buf_.data();
     if (FLAGS_binary_key) {
       for (int i = 0; i < n; i++) {
@@ -584,9 +590,11 @@ class Benchmark {
     options.db_write_buffer_size = FLAGS_write_buffer_size * FLAGS_max_write_buffer_number;
     options.arena_block_size = 32 * 1024 * 1024; // 32MB arena blocks
     
-    // Optimize for point lookups
-    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(8));
-    
+    // Prefix extractor only valid for binary 8-byte keys
+    if (FLAGS_binary_key) {
+      options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(8));
+    }
+
     // Bloom filter configuration
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_cache = cache_;
@@ -597,12 +605,7 @@ class Benchmark {
       table_options.optimize_filters_for_memory = true;
     }
     
-    // Use hash index for faster lookups in smaller blocks
-    if (FLAGS_block_size <= 16 * 1024) {
-      table_options.index_type = rocksdb::BlockBasedTableOptions::kHashSearch;
-    } else {
-      table_options.index_type = rocksdb::BlockBasedTableOptions::kBinarySearch;
-    }
+    table_options.index_type = rocksdb::BlockBasedTableOptions::kBinarySearch;
     
     // Cache optimizations
     table_options.cache_index_and_filter_blocks = true;
@@ -616,10 +619,7 @@ class Benchmark {
     
     options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
-    // Disable WAL for maximum write performance (if specified)
-    if (FLAGS_disable_wal) {
-      options.disable_auto_compactions = true;
-    }
+    options.disable_auto_compactions = FLAGS_disable_autocompact;
 
     char file_name[100];
     db_num_++;
@@ -656,15 +656,27 @@ class Benchmark {
 
     Start();
 
+    rocksdb::WriteBatch batch;
     for (int i = 0; i < num_; i++) {
       rocksdb::Slice mkey = bench_key(i);
-      rocksdb::Status s = db_->Put(write_options, mkey, gen_.Generate(FLAGS_value_size));
+      batch.Put(mkey, gen_.Generate(FLAGS_value_size));
+      bytes_ += FLAGS_value_size + mkey.size();
+      if ((i + 1) % FLAGS_batch_size == 0) {
+        rocksdb::Status s = db_->Write(write_options, &batch);
+        if (!s.ok()) {
+          std::fprintf(stderr, "write error: %s\n", s.ToString().c_str());
+          exit(1);
+        }
+        batch.Clear();
+      }
+      FinishedSingleOp();
+    }
+    if (batch.Count() > 0) {
+      rocksdb::Status s = db_->Write(write_options, &batch);
       if (!s.ok()) {
-        std::fprintf(stderr, "put error: %s\n", s.ToString().c_str());
+        std::fprintf(stderr, "write error: %s\n", s.ToString().c_str());
         exit(1);
       }
-      bytes_ += FLAGS_value_size + mkey.size();
-      FinishedSingleOp();
     }
 
     Stop(name);
@@ -742,16 +754,16 @@ class Benchmark {
 
   void SeekRandom(Slice name) {
     rocksdb::ReadOptions options;
+    rocksdb::Iterator* iter = db_->NewIterator(options);
     int found = 0;
     Start();
     for (int i = 0; i < reads_; i++) {
-      rocksdb::Iterator* iter = db_->NewIterator(options);
       rocksdb::Slice mkey = bench_key(i);
       iter->Seek(mkey);
       if (iter->Valid() && iter->key() == mkey) found++;
-      delete iter;
       FinishedSingleOp();
     }
+    delete iter;
     char msg[100];
     std::snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
     message_ = msg;
@@ -783,21 +795,35 @@ class Benchmark {
 
   void DeleteSeq(Slice name) {
     rocksdb::WriteOptions write_options;
+    write_options.disableWAL = FLAGS_disable_wal;
+    rocksdb::WriteBatch batch;
     Start();
     for (int i = 0; i < num_; i++) {
-      db_->Delete(write_options, bench_key(i));
+      batch.Delete(bench_key(i));
+      if ((i + 1) % FLAGS_batch_size == 0) {
+        db_->Write(write_options, &batch);
+        batch.Clear();
+      }
       FinishedSingleOp();
     }
+    if (batch.Count() > 0) db_->Write(write_options, &batch);
     Stop(name);
   }
 
   void DeleteRandom(Slice name) {
     rocksdb::WriteOptions write_options;
+    write_options.disableWAL = FLAGS_disable_wal;
+    rocksdb::WriteBatch batch;
     Start();
     for (int i = 0; i < num_; i++) {
-      db_->Delete(write_options, bench_key(i));
+      batch.Delete(bench_key(i));
+      if ((i + 1) % FLAGS_batch_size == 0) {
+        db_->Write(write_options, &batch);
+        batch.Clear();
+      }
       FinishedSingleOp();
     }
+    if (batch.Count() > 0) db_->Write(write_options, &batch);
     Stop(name);
   }
 
@@ -925,6 +951,11 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--disable_wal=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_disable_wal = n;
+    } else if (sscanf(argv[i], "--disable_autocompact=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_disable_autocompact = n;
+    } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
+      FLAGS_batch_size = n;
     } else if (sscanf(argv[i], "--binary_key=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_binary_key = (n == 1);
