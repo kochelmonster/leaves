@@ -725,10 +725,19 @@ struct _ConfluenceDB {
     main_cursor_ptr->commit();
   }
 
-  // Merge all tributaries not currently claimed by a live writer.
-  // Called from sanitize() before start_monitor(); pool must be idle.
+  // Crash recovery for every tributary on reopen. The pool is idle when
+  // called from sanitize(), so we can safely:
+  //   * call _DB::sanitize() to fix txn_lock / txn_ref_lock /
+  //     txn_cursor_id / per-txn refs / mem_manager locks / next_txn_page
+  //     in each tributary's _DBHeader (none of which the slot-level
+  //     fields in _TributaryHeader cover).
+  //   * reset the slot-level state/refs in the _TributaryHeader.
+  //   * for non-MERGED slots: drain them via merge_tributary().
+  //   * for MERGED slots: a previous recycle was interrupted — finish it
+  //     directly via _recycle_slot().
   void _merge_unclaimed_tributaries() {
-    std::vector<TributaryDB*> to_recover;
+    std::vector<TributaryDB*> to_merge;
+    std::vector<TributaryDB*> to_recycle;
     {
       // Pool is idle when called from sanitize(); safe lock-free scan.
       size_t n = _tributaries_count.load(std::memory_order_acquire);
@@ -736,14 +745,25 @@ struct _ConfluenceDB {
         TributaryDB* t = _trib_at(i);
         slot_ptr slot = t->_header;
         uint8_t state = slot->state.load(std::memory_order_relaxed);
-        if (state == Slot::FREE || state == Slot::MERGED) {
+
+        // Sanitize the embedded _DBHeader of this tributary (clears any
+        // stuck txn_ref_lock left by a crashed writer, etc.).
+        t->sanitize();
+
+        // Reset slot-level fields (live in _TributaryHeader, not _DBHeader).
+        new (&slot->refs) std::atomic<uint32_t>(0);
+        if (state == Slot::MERGED) {
+          // Recycle path was interrupted; finish it.
+          to_recycle.push_back(t);
+        } else {
+          // FREE / WRITING / MERGING: drain via merge.
           new (&slot->state) std::atomic<uint8_t>(Slot::FREE);
-          new (&slot->refs) std::atomic<uint32_t>(0);
-          to_recover.push_back(t);
+          to_merge.push_back(t);
         }
       }
     }
-    for (TributaryDB* t : to_recover) merge_tributary(t);
+    for (TributaryDB* t : to_recycle) _recycle_slot(t);
+    for (TributaryDB* t : to_merge) merge_tributary(t);
   }
 };
 

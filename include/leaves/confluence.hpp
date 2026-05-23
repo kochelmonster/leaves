@@ -5,6 +5,7 @@
 
 #include "mmap.hpp"
 #include "intern/multi/_confluence_db.hpp"
+#include "intern/replication/_replication_db.hpp"
 
 namespace leaves {
 
@@ -28,12 +29,14 @@ namespace leaves {
 //     use cursor.key(), cursor.value();
 //   }
 
-template <typename Storage_, typename ConflictPolicy_ = _DefaultConflictPolicy>
+template <typename Storage_,
+          typename ConflictPolicy_ = _DefaultConflictPolicy,
+          template <typename> class DBClass_ = _DB>
 class ConfluenceCursor {
  public:
   using storage_ptr = typename Storage_::storage_ptr;
   using StorageImpl = typename Storage_::StorageImpl;
-  using MainDBImpl  = _DB<StorageImpl>;
+  using MainDBImpl  = DBClass_<StorageImpl>;
   using DBImpl      = _ConfluenceDB<MainDBImpl, ConflictPolicy_>;
   using CursorImpl  = _ConfluenceCursor<DBImpl>;
   using cursor_ptr  = std::shared_ptr<CursorImpl>;
@@ -111,15 +114,17 @@ class ConfluenceCursor {
 //   cursor.value(Slice("value"));
 //   cursor.commit();
 
-template <typename Storage_, typename ConflictPolicy_ = _DefaultConflictPolicy>
+template <typename Storage_,
+          typename ConflictPolicy_ = _DefaultConflictPolicy,
+          template <typename> class DBClass_ = _DB>
 class ConfluenceDB {
  public:
   using storage_ptr = typename Storage_::storage_ptr;
   using StorageImpl = typename Storage_::StorageImpl;
-  using MainDBImpl  = _DB<StorageImpl>;
-  using MainTDB     = TDB<Storage_>;          // TDB<Storage_, _DB>
+  using MainDBImpl  = DBClass_<StorageImpl>;
+  using MainTDB     = TDB<Storage_, DBClass_>;
   using DBImpl      = _ConfluenceDB<MainDBImpl, ConflictPolicy_>;
-  using Cursor      = ConfluenceCursor<Storage_, ConflictPolicy_>;
+  using Cursor      = ConfluenceCursor<Storage_, ConflictPolicy_, DBClass_>;
 
   ConfluenceDB(const ConfluenceDB&) = delete;
   ConfluenceDB& operator=(const ConfluenceDB&) = delete;
@@ -169,6 +174,12 @@ class ConfluenceDB {
 // Convenience aliases for the common mmap case with the default conflict policy.
 using MapConfluenceDB     = ConfluenceDB<MapStorage>;
 using MapConfluenceCursor = ConfluenceCursor<MapStorage>;
+
+// Convenience aliases for the mmap + replication combination.
+using MapReplicationConfluenceDB =
+    ConfluenceDB<MapStorage, _DefaultConflictPolicy, _ReplicationDB>;
+using MapReplicationConfluenceCursor =
+    ConfluenceCursor<MapStorage, _DefaultConflictPolicy, _ReplicationDB>;
 
 }  // namespace leaves
 
