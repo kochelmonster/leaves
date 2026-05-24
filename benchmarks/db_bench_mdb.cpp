@@ -436,7 +436,12 @@ class Benchmark {
                   test_dir.c_str(), db_num_);
 
     sprintf(cmd, "mkdir -p %s", file_name);
-    system(cmd);
+    int mkdir_status = std::system(cmd);
+    if (mkdir_status != 0) {
+      std::fprintf(stderr,
+                   "warning: failed to create LMDB benchmark directory: %s (status=%d)\n",
+                   cmd, mkdir_status);
+    }
 
     int env_opt = 0;
     if (!sync)
@@ -471,7 +476,12 @@ class Benchmark {
         char cmd[200];
         sprintf(cmd, "rm -rf %s*", FLAGS_db);
         mdb_env_close(db_);
-        system(cmd);
+        int cleanup_status = std::system(cmd);
+        if (cleanup_status != 0) {
+          std::fprintf(stderr,
+                       "warning: failed to remove LMDB benchmark directory: %s (status=%d)\n",
+                       cmd, cleanup_status);
+        }
         db_ = NULL;
       }
       Open(sync);

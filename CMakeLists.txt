@@ -138,6 +138,8 @@ option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded
 
 include(CheckCXXCompilerFlag)
 include(CheckCXXSourceRuns)
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
 include(CTest)
 
 # Helper: check that the compiler supports a flag AND the CPU can execute the instructions.
@@ -199,32 +201,52 @@ endif()
 
 add_subdirectory("BLAKE3/c")
 
-add_library(core INTERFACE)
-target_sources(core INTERFACE 
-    # include/leaves.hpp
-    include/leaves/intern/core/_util.hpp
-    include/leaves/intern/core/_exception.hpp
-    include/leaves/intern/core/_bits.hpp
-    include/leaves/intern/memory/_memory.hpp
-    include/leaves/intern/storage/_mmap.hpp
-    include/leaves/intern/db/_cursor.hpp
-    include/leaves/intern/core/_node.hpp
-    include/leaves/intern/db/_inserter.hpp
-    include/leaves/intern/storage/_fstore.hpp
-    include/leaves/intern/memory/_twoquecache.hpp
+add_library(leaves INTERFACE)
+add_library(leaves::leaves ALIAS leaves)
+add_library(core ALIAS leaves)
+add_library(leaves_replication INTERFACE)
+add_library(leaves::replication ALIAS leaves_replication)
+set_target_properties(leaves_replication PROPERTIES EXPORT_NAME replication)
+
+target_sources(leaves INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/leaves.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/mmap.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/fstore.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/db.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/cursor.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/confluence.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_util.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_exception.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_bits.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/memory/_memory.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/storage/_mmap.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/db/_cursor.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_node.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/db/_inserter.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/storage/_fstore.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/memory/_twoquecache.hpp>
 )
 
-if (LEAVES_SINGLE_PROCESS)
-    target_compile_definitions(core INTERFACE LEAVES_SINGLE_PROCESS)
-elseif (HAVE_BOOST_PROCESS)
-    target_link_libraries(core INTERFACE Boost::process)
+if (TARGET Boost::headers)
+    target_link_libraries(leaves INTERFACE Boost::headers)
+elseif (TARGET Boost::boost)
+    target_link_libraries(leaves INTERFACE Boost::boost)
+else()
+    target_include_directories(leaves INTERFACE ${Boost_INCLUDE_DIRS})
 endif()
 
-target_include_directories(core INTERFACE ${Boost_INCLUDE_DIRS})
-target_include_directories(core
-                           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
-                           )
-target_include_directories(core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c)
+if (LEAVES_SINGLE_PROCESS)
+    target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
+endif()
+
+target_include_directories(leaves
+                           INTERFACE
+                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+target_sources(leaves_replication INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/replication.hpp>)
+target_link_libraries(leaves_replication INTERFACE leaves BLAKE3::blake3)
 
 if (LEAVES_BUILD_TESTS)
 
@@ -463,6 +485,8 @@ set(LEAVES_GTEST_INCLUDE_DIRS
 
 if (LEAVES_BUILD_BENCHMARKS) 
 set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Build LevelDB's unit tests" FORCE)
+set(LEVELDB_INSTALL OFF CACHE BOOL "Install LevelDB's header and library" FORCE)
+set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Enable installation of benchmark." FORCE)
 include_directories(SYSTEM ${LEAVES_GTEST_INCLUDE_DIRS})
 add_subdirectory("leveldb")
 
@@ -541,3 +565,38 @@ endif()
 
 
 endif (LEAVES_BUILD_BENCHMARKS) 
+
+install(TARGETS leaves EXPORT leavesTargets
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(TARGETS leaves_replication EXPORT leavesReplicationTargets
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/leaves"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/leaves-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config-version.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(EXPORT leavesTargets
+    FILE leaves-targets.cmake
+    NAMESPACE leaves::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+install(EXPORT leavesReplicationTargets
+    FILE leaves-replication-targets.cmake
+    NAMESPACE leaves::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config-version.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+
+set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Header-only trie-based embedded key-value store")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_GENERATOR "TGZ")
+include(CPack)

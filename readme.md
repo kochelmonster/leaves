@@ -117,6 +117,40 @@ target_include_directories(mytarget PRIVATE /path/to/leaves/include)
 
 If you use replication, also compile the bundled BLAKE3 sources from `BLAKE3/c/` and add that directory to your include path.
 
+### Install and package
+
+The native build now exports an installable CMake package for downstream consumers.
+
+```bash
+cmake --preset default
+cmake --build --preset default -j
+cmake --install build --prefix "$PWD/install"
+```
+
+That install tree always contains the exported `leaves::leaves` target. Replication users can additionally consume `leaves::replication`, which brings in the bundled `blake3` package. Vendored LevelDB and Google Benchmark artifacts are not installed as part of the Leaves package.
+
+To create a redistributable archive from the current build tree:
+
+```bash
+cmake --build build --target package
+```
+
+### Consuming the installed package
+
+```cmake
+find_package(leaves CONFIG REQUIRED)
+target_link_libraries(mytarget PRIVATE leaves::leaves)
+```
+
+If you use replication, request the optional replication component and link the replication target instead:
+
+```cmake
+find_package(leaves CONFIG REQUIRED COMPONENTS replication)
+target_link_libraries(mytarget PRIVATE leaves::replication)
+```
+
+The core `leaves::leaves` target carries the public include paths and the required Boost header dependency. `leaves::replication` is the optional target that adds the BLAKE3 dependency needed by `leaves/replication.hpp`.
+
 ## API Overview
 
 ### Named databases
