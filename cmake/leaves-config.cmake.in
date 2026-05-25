@@ -1,0 +1,30 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+set(_leaves_boost_components headers)
+set(leaves_replication_FOUND FALSE)
+
+find_dependency(Boost 1.80 REQUIRED COMPONENTS ${_leaves_boost_components})
+
+include("${CMAKE_CURRENT_LIST_DIR}/leaves-targets.cmake")
+
+set(_leaves_needs_replication FALSE)
+if("replication" IN_LIST leaves_FIND_COMPONENTS)
+	set(_leaves_needs_replication TRUE)
+endif()
+
+if(_leaves_needs_replication)
+	if(NOT TARGET BLAKE3::blake3)
+		find_dependency(blake3 CONFIG REQUIRED)
+	endif()
+elseif(NOT TARGET BLAKE3::blake3)
+	find_package(blake3 CONFIG QUIET)
+endif()
+
+if(TARGET BLAKE3::blake3)
+	include("${CMAKE_CURRENT_LIST_DIR}/leaves-replication-targets.cmake")
+	set(leaves_replication_FOUND TRUE)
+endif()
+
+check_required_components(leaves)

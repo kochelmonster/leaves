@@ -81,7 +81,7 @@ struct _MemoryMapTraits {
 #endif
   static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 3;
 
-  static constexpr uint16_t PAGE_SIZES[] = {                         // Page sizes (header + node)
+  static constexpr uint16_t PAGE_SIZES[] = {                 // Page sizes (header + node)
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 2),    // 2 branches
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 3),    // 3 branches
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 4),    // 4 branches

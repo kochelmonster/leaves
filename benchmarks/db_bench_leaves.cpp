@@ -437,7 +437,12 @@ class Benchmark {
       // Remove db directories from previous runs (they are directories, use rm -rf)
       char cmd[200];
       sprintf(cmd, "rm -rf %s/dbbench_mdb-*", test_dir.c_str());
-      system(cmd);
+      int cleanup_status = std::system(cmd);
+      if (cleanup_status != 0) {
+        std::fprintf(stderr,
+                     "warning: failed to remove previous benchmark directories: %s (status=%d)\n",
+                     cmd, cleanup_status);
+      }
       for (int i = 0; i < files.size(); i++) {
         if (leveldb::Slice(files[i]).starts_with("dbbench_leaves")) {
           std::string file_name(test_dir);
