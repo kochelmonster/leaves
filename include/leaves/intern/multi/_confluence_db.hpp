@@ -583,6 +583,8 @@ struct _ConfluenceDB {
   void _recycle_slot(TributaryDB* trib) {
     trib->reset_in_place();
     slot_ptr slot = trib->_header;
+    slot->write_count.store(0, std::memory_order_relaxed);
+    slot->last_used_time.store(0, std::memory_order_relaxed);
     slot->state.store(Slot::FREE, std::memory_order_release);
     _meta->merge_epoch.fetch_add(1, std::memory_order_release);
     _main_db.make_dirty(_meta);
