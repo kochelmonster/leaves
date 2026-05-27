@@ -20,9 +20,7 @@
 
 namespace leaves {
 
-// =============================================================================
 // Receive Buffer for Zero-Copy Message Reception
-// =============================================================================
 
 // Buffer that tracks partial message reception
 // The FSM allocates this buffer and provides it to the transport layer
@@ -104,9 +102,7 @@ struct ReceiveBuffer {
   bool is_valid() const { return _data != nullptr && _capacity > 0; }
 };
 
-// =============================================================================
 // Transport Interface
-// =============================================================================
 
 // Abstract transport - the FSM tells it what to send
 struct ReplicationTransport {
@@ -118,9 +114,7 @@ struct ReplicationTransport {
   }
 };
 
-// =============================================================================
 // Event Callbacks
-// =============================================================================
 
 // Events the FSM emits to the application
 struct ReplicationEvents {
@@ -132,9 +126,7 @@ struct ReplicationEvents {
   virtual ~ReplicationEvents() = default;
 };
 
-// =============================================================================
 // Message Builder Helper
-// =============================================================================
 
 struct ReplicationMsgBuilder {
   std::vector<uint8_t> _buffer;
@@ -168,9 +160,7 @@ struct ReplicationMsgBuilder {
   size_t size() const { return _buffer.size(); }
 };
 
-// =============================================================================
 // Message Parser Helper
-// =============================================================================
 
 inline const ReplicationMsgHeader* parse_replication_msg(const uint8_t* data,
                                                          size_t size,
@@ -198,9 +188,7 @@ inline const ReplicationMsgHeader* parse_replication_msg(const uint8_t* data,
   return hdr;
 }
 
-// =============================================================================
 // Sender FSM
-// =============================================================================
 
 template <typename DB>
 struct ReplicationSenderFSM {
@@ -639,9 +627,7 @@ struct ReplicationSenderFSM {
   }
 };
 
-// =============================================================================
 // Receiver FSM
-// =============================================================================
 
 // Default overwrite handler for replication - always accepts source (wire) data
 // Inherits free_big from StandardMergePolicy; overrides migrate_big_value for
@@ -842,7 +828,6 @@ struct ReplicationReceiverFSM {
   std::chrono::steady_clock::time_point _last_activity;
 
   // Receive buffer management (Temp DB)
-  // ====================================
   // Each received message buffer becomes part of the temp DB and cannot be
   // reused. Design constraints:
   // 1. _temp_buffers owns all received message memory (the "temp DB")
@@ -875,7 +860,6 @@ struct ReplicationReceiverFSM {
   BigValueRx _big_value;
 
   // Deferred merge state (single-transaction mode)
-  // ====================================
   // When the DB supports a deletion trie, the main trie data is deferred
   // (kept in memory without merging) until COMPLETE arrives.  Then both
   // tries are merged in one short atomic transaction.
@@ -1011,9 +995,7 @@ struct ReplicationReceiverFSM {
     _replication_slot.claim();
   }
 
-  // ==========================================================================
   // Zero-Copy Receive Interface
-  // ==========================================================================
   // The transport layer uses these methods to write directly into FSM's buffer:
   // 1. Call receive_buffer() to get the buffer
   // 2. Write data to buffer.write_ptr(), up to buffer.available() bytes

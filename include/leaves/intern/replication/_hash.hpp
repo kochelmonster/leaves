@@ -76,9 +76,7 @@ void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher,
 
 }  // namespace detail
 
-// =============================================================================
 // Hash Trie Traits
-// =============================================================================
 
 /**
  * @brief Traits for hash trie nodes.
@@ -101,9 +99,7 @@ struct HashTrieTraits : BaseTraits {
       sizeof(_LeafNode<HashTrieTraits>);  // NONE-branch minimum
 };
 
-// =============================================================================
 // Hash Updater — parallel data/hash trie sync
-// =============================================================================
 
 /**
  * @brief Updates a separate hash trie to mirror a data trie.
@@ -731,9 +727,7 @@ void update_hash_trie(Executor& executor, DataDB* data_db, HashDB* hash_db,
   updater.sync_nodes(key_path, data_root, hash_root_ptr);
 }
 
-// =============================================================================
 // Hash Lookup — cursor-based hash trie navigation
-// =============================================================================
 
 /**
  * @brief Encapsulates cursor-based hash trie lookup.

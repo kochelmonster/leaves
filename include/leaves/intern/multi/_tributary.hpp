@@ -10,9 +10,7 @@
 
 namespace leaves {
 
-// =============================================================================
 // _TributaryTransaction: Extends _Transaction with a delete_root
-// =============================================================================
 // delete_root is a trie of keys deleted from this tributary's data trie.
 // During merge into the main DB the delete_root is used to remove those keys
 // from the main DB before copying tributary data in.
@@ -50,13 +48,11 @@ struct _TributaryTransaction : public _Transaction<Traits_> {
   }
 };
 
-// =============================================================================
 // _TributaryHeader: Persistent header for one per-producer tributary
-// =============================================================================
 // Extends _DBHeader<Storage_> to embed slot lifecycle metadata directly.
 // Lives at the content_offset() of the tributary's first (header) area, which
-// is also the root of the tributary's own area list.  Slots are linked via
-// `next`, forming a singly-linked list rooted at _DBHeader::extra_offset.
+// is also the root of the tributary's own area list.  Slot offsets are stored
+// in the fixed-size `_ConfluenceMeta::slots[MAX_TRIBUTARIES]` array.
 //
 // Lifetime safety:
 //   All users (writers, readers, merger) hold a pin via `refs`.
@@ -78,22 +74,17 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   static constexpr uint8_t MERGING = 2;  // merge in progress
   static constexpr uint8_t MERGED  = 3;  // merge done; awaiting _free_slot
 
-  offset_t              next{0};           // next slot in list (0 = end)
   std::atomic<uint64_t> last_used_time{0}; // epoch seconds, set on commit
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   std::atomic<uint32_t> write_count{0};    // committed writes since creation
   std::atomic<uint8_t>  state{FREE};
 };
 
-// =============================================================================
 // Forward declarations
-// =============================================================================
 template <typename CursorTraits_>
 struct _TributaryCursor;
 
-// =============================================================================
 // _TributaryDB: A per-producer write-buffer DB
-// =============================================================================
 // Uses _TributaryTransaction (extends _Transaction with delete_root).
 // Reuses _DBHeader (no custom header needed).
 // Overrides cursor factory to return _TributaryCursor.
@@ -138,27 +129,24 @@ struct _TributaryDB
 
   // Reset the tributary in place after a merge: returns all areas except
   // the first (which holds the header), re-initializes the in-place
-  // transaction, and clears tributary-specific header metadata while
-  // preserving the chain link (`next`). After this call the tributary is
-  // in the same logical state as a freshly created one and may be
-  // re-claimed via _try_claim_free_slot.
+  // transaction, and clears tributary-specific header metadata.  After this
+  // call the tributary is in the same logical state as a freshly created
+  // one and may be re-claimed via _try_claim_free_slot.
   void reset_in_place() {
     Base::reset_in_place();
     auto* hdr = &*this->_header;
     hdr->last_used_time.store(0, std::memory_order_relaxed);
     hdr->write_count.store(0, std::memory_order_relaxed);
-    hdr->refs.store(0, std::memory_order_relaxed);
-    hdr->state.store(_TributaryHeader<Storage_>::FREE,
-                     std::memory_order_release);
-    // `next` (chain link) intentionally preserved.
+    // NOTE: refs and state are intentionally NOT reset here.
+    // _recycle_slot() (the sole caller) owns the final FREE transition.
+    // Setting state=FREE here would open a race window where another thread
+    // claims the slot before _recycle_slot() returns, causing double-ownership.
     this->make_dirty(this->_header);
     this->flush();
   }
 };
 
-// =============================================================================
 // _TributaryCursor: Extends _TransactionalCursor with deletion tracking
-// =============================================================================
 // remove() inserts the key into delete_root in addition to deleting from main.
 // value() (write) removes the key from delete_root if it was previously marked
 // deleted.
