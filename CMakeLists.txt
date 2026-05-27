@@ -396,6 +396,9 @@ target_link_libraries(test_executor PUBLIC core leaves_test_support pthread)
 add_executable(test_aspect tests/test_aspect.cpp)
 target_link_libraries(test_aspect PUBLIC core leaves_test_support blake3)
 
+add_executable(test_metrics_aspects tests/test_metrics_aspects.cpp)
+target_link_libraries(test_metrics_aspects PUBLIC core leaves_test_support)
+
 foreach(target IN ITEMS
     test_mmap
     test_fstore
@@ -414,7 +417,8 @@ foreach(target IN ITEMS
     test_hash_lookup
     test_serial
     test_twoquecache
-    test_aspect)
+    test_aspect
+    test_metrics_aspects)
     leaves_add_test(${target} LABELS "native;unit")
 endforeach()
 
