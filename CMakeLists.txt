@@ -33,6 +33,8 @@ if(EMSCRIPTEN)
         include/leaves/intern/replication/_replication_db.hpp
         include/leaves/intern/replication/_replication_fsm.hpp
         include/leaves/intern/replication/_transfer.hpp
+        include/leaves/intern/util/_executor.hpp
+        include/leaves/intern/util/_task_group.hpp
         include/leaves/intern/util/_threadpool.hpp
         include/leaves/intern/util/_transfer_trie.hpp
         include/leaves/browserstore.hpp
@@ -62,29 +64,6 @@ if(EMSCRIPTEN)
     add_executable(db_bench_browser benchmarks/db_bench_browser.cpp)
     target_link_libraries(db_bench_browser PRIVATE wasm_core blake3)
     target_link_options(db_bench_browser PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
-
-    # Page-size histogram bench for the browser backend (node + fake-indexeddb).
-    # Uses classic Asyncify (sASYNCIFY=1) instead of JSPI so it runs on
-    # node 18 (no WebAssembly.Suspending support). Does NOT link wasm_core
-    # because that INTERFACE library forces -sJSPI.
-    add_executable(bench_page_sizes_browser benchmarks/bench_page_sizes_browser.cpp)
-    target_link_libraries(bench_page_sizes_browser PRIVATE blake3)
-    target_include_directories(bench_page_sizes_browser PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c)
-    target_compile_definitions(bench_page_sizes_browser PRIVATE
-        LEAVES_PAGE_HIST LEAVES_SINGLE_PROCESS)
-    target_compile_options(bench_page_sizes_browser PRIVATE -fexceptions)
-    target_link_options(bench_page_sizes_browser PRIVATE
-        -fexceptions
-        -sASYNCIFY=1
-        "-sASYNCIFY_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
-        -sALLOW_MEMORY_GROWTH=1
-        -sINITIAL_MEMORY=256MB
-        -sMAXIMUM_MEMORY=2GB
-        -sSTACK_SIZE=4MB
-        -sENVIRONMENT=node
-    )
 
     # Copy WASM artifacts to benchmarks/ for browser serving
     add_custom_command(TARGET db_bench_browser POST_BUILD
@@ -545,7 +524,6 @@ target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
 
 add_executable(bench_page_sizes benchmarks/bench_page_sizes.cpp)
 target_link_libraries(bench_page_sizes PUBLIC core pthread)
-target_compile_definitions(bench_page_sizes PRIVATE LEAVES_PAGE_HIST)
 
 if (DEBUG_BENCHMARKS)
     target_compile_options(db_bench_leaves PRIVATE -g -O0)
