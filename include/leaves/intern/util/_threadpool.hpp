@@ -198,19 +198,6 @@ struct _ThreadPoolMixin {
     }
   }
 
-  // Ensure the pool has at least `n` workers; starts additional threads if needed.
-  void ensure_pool(size_t n) {
-    std::lock_guard<std::mutex> lock(_queue_mutex);
-    if (_workers.size() < n) {
-      _pool_shutdown.store(false);
-      size_t to_add = n - _workers.size();
-      _workers.reserve(n);
-      for (size_t i = 0; i < to_add; ++i) {
-        _workers.emplace_back([this]() { _worker_loop(); });
-      }
-    }
-  }
-
   void stop_pool() {
     {
       std::lock_guard<std::mutex> lock(_queue_mutex);

@@ -251,7 +251,6 @@ struct _ConfluenceDB {
           std::memory_order_release);
     }
     if (auto_sanitize) sanitize();
-    _ensure_read_workers();
     if (auto_monitor) start_monitor();
   }
 
@@ -573,14 +572,6 @@ struct _ConfluenceDB {
       }
     }
     for (auto* trib : _merge_slots) merge_tributary(trib);
-  }
-
-  void _ensure_read_workers() {
-#ifndef __EMSCRIPTEN__
-    size_t n = std::max<size_t>(2, std::thread::hardware_concurrency() / 2);
-    n = std::min<size_t>(n, 16u);
-    _main_db._storage.ensure_pool(n);
-#endif
   }
 
   void start_monitor() {
