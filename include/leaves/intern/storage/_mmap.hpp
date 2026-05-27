@@ -134,6 +134,7 @@ struct _MemoryMapFile
     pid_type processes[MAX_PROCESSES];
     std::atomic<int64_t> last_cursor_id;
     uint32_t sanitize_generation;  // incremented when first process opens file
+    uint32_t clean_close;     // 1 = last close was clean, 0 = dirty (open or crashed)
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
     DBEntry dbs[];            // flexible array fills to 4K boundary
@@ -146,6 +147,7 @@ struct _MemoryMapFile
           processes{},
           last_cursor_id(0),
           sanitize_generation(0),
+          clean_close(0),
           db_entry_count(0),
           db_next_page(0) {
       // Set signature and initialize pools/arrays
@@ -185,6 +187,8 @@ struct _MemoryMapFile
     this->stop_pool();     // stop worker threads before unmapping
     if constexpr (MAX_PROCESSES > 1)
       remove_pid();
+    // Mark a clean shutdown so the next open skips recover_areas.
+    if (_memory) _memory->clean_close = 1;
     _region.flush();
   }
 
@@ -301,7 +305,13 @@ struct _MemoryMapFile
 
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
-      recover_areas();
+      // Only rebuild the free-area pool if the previous close was NOT clean
+      // (i.e., crash recovery). On a clean reopen the persisted pool state
+      // is authoritative and rebuilding would lose ownership of any areas
+      // not registered in the storage DB directory (e.g. confluence tributary
+      // slots).
+      if (!_memory->clean_close) recover_areas();
+      _memory->clean_close = 0;  // now dirty until next clean close
       ++_memory->sanitize_generation;
       _memory->last_cursor_id.store(0);
     }
@@ -349,7 +359,6 @@ struct _MemoryMapFile
       p = (char*)_memory + (uint64_t)*offset_ptr;
     }
 
-    // Resolved address must lie within the mapped storage region.
     assert(p >= (char*)_memory &&
            p < (char*)_memory + _memory->file_size &&
            "resolved pointer outside storage file");

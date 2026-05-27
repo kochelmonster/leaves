@@ -5,14 +5,10 @@
 
 namespace leaves {
 
-// =============================================================================
 // TransactionOrigin: Identifies the source of a transaction
-// =============================================================================
 enum class TransactionOrigin { user, merge, defrag };
 
-// =============================================================================
 // DefaultAspect: No-op aspect with zero overhead
-// =============================================================================
 // The Aspect provides cross-cutting join points for cursor, transaction,
 // maintenance, and merge operations.  Users define a custom Aspect struct
 // in their Traits to intercept these events.

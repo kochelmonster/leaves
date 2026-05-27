@@ -76,9 +76,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   offset_t replication_slots[MAX_REPLICATION_SLOTS];
 };
 
-// =============================================================================
 // _ReplicationTransaction: Extends _Transaction with a deletion_root
-// =============================================================================
 // The deletion trie tracks keys removed from the main trie, enabling
 // replication of deletes. Both root and deletion_root are persisted in
 // each transaction and independently Merkle-hashed.
@@ -120,9 +118,7 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
   }
 };
 
-// =============================================================================
 // _ReplicationDB: Extends _DB with deletion trie support and background purge
-// =============================================================================
 // Uses _ReplicationTransaction which includes deletion_root.
 // Overrides Cursor to be _ReplicationCursor which tracks deletes.
 // Owns the purge lifecycle: start_purge() kicks off a self-rescheduling
@@ -152,9 +148,7 @@ struct _ReplicationDB
   typedef _ReplicationCursor<CursorTraits> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
-  // =========================================================================
   // HashDB: Minimal DB adapter for _HashUpdater
-  // =========================================================================
   // Provides the interface needed by _HashUpdater to manage the hash trie.
   // Uses hash_mem_manager for allocation (independent of data transactions).
   // Uses the parent _ReplicationDB's storage for offset resolution.
@@ -600,9 +594,7 @@ struct _ReplicationDB
   }
 };
 
-// =============================================================================
 // _ReplicationCursor: Extends _TransactionalCursor with deletion tracking
-// =============================================================================
 // On remove(), inserts the deleted key into the deletion trie before
 // deleting from the main trie. The deletion trie stores keys with a
 // timestamp value recording when the deletion occurred.

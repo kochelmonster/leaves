@@ -8,6 +8,7 @@
 
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
+#include "../util/_page_hist.hpp"
 #include "_aspect.hpp"
 #include "_cursor.hpp"
 
@@ -382,6 +383,9 @@ struct _DB {
   page_ptr alloc_page(uint16_t space) {
     using PageHeader = typename Traits::PageHeader;
     assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+    // Record the raw requested size (incl. PageHeader) for PAGE_SIZES tuning.
+    // No-op unless LEAVES_PAGE_HIST is defined at compile time.
+    _page_hist_record((uint32_t)space + (uint32_t)sizeof(PageHeader));
     page_ptr result = alloc_slot(
         MemManager::assign_slot(space + sizeof(PageHeader)));
     result->used = space;

@@ -14,9 +14,7 @@
 
 namespace leaves {
 
-// =============================================================================
 // Big Value Receiver — receives and stores big values during replication
-// =============================================================================
 //
 // Manages the receiver-side state for big value streaming:
 //   1. Allocates persistent storage on BIG_VALUE_START

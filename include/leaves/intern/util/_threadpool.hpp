@@ -21,14 +21,12 @@
 
 namespace leaves {
 
-// ============================================================================
 // _Task<N> — heap-free move-only callable wrapper.
 //
 // Stores up to N bytes of functor data inline; avoids heap allocation.
 // Move-only — copy is deleted.  Supports any move-constructible functor,
 // including lambdas that capture non-trivially-copyable types (smart
 // pointers, std::string, etc.).
-// ============================================================================
 template <size_t N = 96>
 struct _Task {
   using _invoke_fn  = void (*)(void*);
@@ -445,9 +443,7 @@ struct _ThreadPoolMixin {
   }
 };
 
-// ============================================================================
 // _InlineExecutor — runs all work synchronously on the calling thread
-// ============================================================================
 
 struct _InlineExecutor {
   static constexpr size_t concurrency() noexcept { return 1; }
@@ -456,7 +452,6 @@ struct _InlineExecutor {
   void post(Fn&& fn) { std::forward<Fn>(fn)(); }
 };
 
-// ============================================================================
 // _TaskGroup<Executor> — structured concurrency: spawn tasks + wait
 //
 // Two specialisations keyed on Executor::is_single_threaded():
@@ -476,7 +471,6 @@ struct _InlineExecutor {
 //   _TaskGroup<MyStorage> tg(storage, max_threads);
 //   tg.spawn([&]{ process_branch(); });
 //   tg.wait();
-// ============================================================================
 
 #if LEAVES_HAS_THREADS
 inline thread_local bool _in_worker = false;

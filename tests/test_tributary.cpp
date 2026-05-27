@@ -3,6 +3,14 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <random>
+#include <string>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "../include/leaves/intern/multi/_confluence_db.hpp"
@@ -27,21 +35,20 @@ struct TributaryPreparation {
 
 // Helper: create a ConfluenceDB (no background monitor in tests)
 using TestHandle = std::tuple<std::unique_ptr<StorageImpl>,
-                              std::unique_ptr<MainDB>, CDB*>;
+                              MainDB*, CDB*>;
 static TestHandle make_cdb(const char* path) {
   auto storage = std::make_unique<StorageImpl>(path);
-  offset_t header{0};
-  auto main_db = std::make_unique<MainDB>(*storage, &header, "main");
+  auto* main_db = storage->template open<_DB>("main");
   auto* cdb = new CDB(*main_db, false, false);
-  return {std::move(storage), std::move(main_db), cdb};
+  return {std::move(storage), main_db, cdb};
 }
 
 // Helper: open an existing ConfluenceDB
-static TestHandle open_cdb(const char* path, offset_t header) {
+static TestHandle open_cdb(const char* path, offset_t /*header*/) {
   auto storage = std::make_unique<StorageImpl>(path);
-  auto main_db = std::make_unique<MainDB>(*storage, header, "main");
+  auto* main_db = storage->template open<_DB>("main");
   auto* cdb = new CDB(*main_db, false);
-  return {std::move(storage), std::move(main_db), cdb};
+  return {std::move(storage), main_db, cdb};
 }
 
 // Helper: write a key/value pair via a ConfluenceCursor
@@ -332,5 +339,224 @@ BOOST_AUTO_TEST_CASE(test_tributary_header_area_not_freed) {
     }
     cdb->merge_eligible_tributaries();
     check_pool_integrity(cycle);
+  }
+}
+
+// Bug 2 (concurrent reproducer): the single-threaded
+// test_tributary_header_area_not_freed passes, but the YCSB benchmark
+// deadlocks at ~op 393 with 8 concurrent writers.  The crucial difference
+// from the single-threaded test is that YCSB performs a LOAD phase, then
+// CLOSES the DB, then REOPENS it and runs the RUN phase.  This test
+// mirrors that pattern: bulk-load with concurrent writers, close, reopen
+// (exercising the sanitize() path), then run a mixed concurrent workload.
+// A watchdog converts a hang into a test failure so we do not block the
+// CI.
+//
+// Expected behaviour with current code: HANG -> watchdog fails the test.
+// Expected behaviour with fix: completes within the budget.
+BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
+  TributaryPreparation p;
+
+  constexpr int kThreads          = 8;
+  constexpr int kLoadOpsPerThread = 5000;          // ~40K rows = LOAD phase
+  constexpr int kRunOpsPerThread  = 5000;          // RUN phase ops
+  constexpr int kValueSize        = 1024;          // 1 KB — YCSB record size
+  constexpr int kKeyspace         = 40000;
+  constexpr int kStaleSeconds     = 20;            // hang detection window
+  constexpr bool kEnableMerger    = false;         // diag: skip merger to isolate
+
+  auto run_phase = [&](CDB& cdb, int ops_per_thread, bool inserts_only,
+                       const char* phase_name) -> bool {
+    std::atomic<bool> stop{false};
+    std::atomic<bool> deadlock_detected{false};
+    std::vector<std::atomic<uint64_t>> progress(kThreads);
+    for (auto& p : progress) p.store(0, std::memory_order_relaxed);
+
+    // Diagnostic: capture the SpinLock address up-front.
+    char* mem_base = (char*)cdb._main_db._storage._memory;
+    char* hdr_addr = (char*)&*cdb._main_db._header;
+    void* lock_addr = (void*)&cdb._main_db._header->txn_ref_lock;
+    std::fprintf(stderr,
+        "[%s] mem_base=%p hdr_addr=%p hdr_off=0x%lx lock_addr=%p "
+        "lock_off=0x%lx file_size=0x%lx\n",
+        phase_name, (void*)mem_base, (void*)hdr_addr,
+        (uint64_t)(hdr_addr - mem_base), lock_addr,
+        (uint64_t)((char*)lock_addr - mem_base),
+        (uint64_t)cdb._main_db._storage._memory->file_size);
+    {
+      uint8_t* lp = (uint8_t*)lock_addr;
+      std::fprintf(stderr, "[%s] PRE-RUN bytes at hdr:\n", phase_name);
+      uint8_t* b = (uint8_t*)hdr_addr;
+      for (int row = 0; row < 8; ++row) {
+        std::fprintf(stderr, "  %p:", (void*)(b + row * 16));
+        for (int col = 0; col < 16; ++col)
+          std::fprintf(stderr, " %02x", b[row * 16 + col]);
+        std::fprintf(stderr, "\n");
+      }
+      (void)lp;
+    }
+    std::fflush(stderr);
+
+    auto worker = [&](int tid) {
+      std::mt19937 rng(static_cast<uint32_t>(tid * 2654435761u + 0x9e3779b9));
+      std::uniform_int_distribution<int> key_dist(0, kKeyspace - 1);
+      std::uniform_int_distribution<int> op_dist(0, 99);
+      std::string val(kValueSize, 'A' + (tid % 26));
+      for (int i = 0;
+           i < ops_per_thread && !stop.load(std::memory_order_relaxed); ++i) {
+        int k = key_dist(rng);
+        std::string key = "user" + std::to_string(k);
+        int op = inserts_only ? 0 : op_dist(rng);
+        try {
+          if (op < 50 || inserts_only) {
+            auto cursor = cdb.create_cursor();
+            if (!cursor->start_transaction()) continue;
+            cursor->find(Slice(key));
+            cursor->value(Slice(val));
+            cursor->commit();
+          } else if (op < 95) {
+            auto cursor = cdb.create_cursor();
+            cursor->find(Slice(key));
+            (void)cursor->is_valid();
+          } else {
+            auto cursor = cdb.create_cursor();
+            if (!cursor->start_transaction()) continue;
+            cursor->find(Slice(key));
+            if (cursor->is_valid()) cursor->remove();
+            cursor->commit();
+          }
+        } catch (...) {
+        }
+        progress[tid].fetch_add(1, std::memory_order_relaxed);
+      }
+    };
+
+    auto merger = [&]() {
+      if (!kEnableMerger) return;
+      while (!stop.load(std::memory_order_relaxed)) {
+        try {
+          cdb.merge_eligible_tributaries();
+        } catch (...) {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) workers.emplace_back(worker, i);
+    std::thread merge_thread(merger);
+
+    std::thread watchdog([&]() {
+      std::vector<uint64_t> last(kThreads, 0);
+      auto last_progress_time = std::chrono::steady_clock::now();
+      while (!stop.load(std::memory_order_relaxed)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        auto now = std::chrono::steady_clock::now();
+        bool any_progress = false;
+        for (int i = 0; i < kThreads; ++i) {
+          uint64_t cur = progress[i].load(std::memory_order_relaxed);
+          if (cur != last[i]) {
+            last[i] = cur;
+            any_progress = true;
+          }
+        }
+        if (any_progress) last_progress_time = now;
+        if (now - last_progress_time > std::chrono::seconds(kStaleSeconds)) {
+          deadlock_detected.store(true, std::memory_order_relaxed);
+          stop.store(true, std::memory_order_relaxed);
+          break;
+        }
+        bool all_done = true;
+        for (int i = 0; i < kThreads; ++i) {
+          if (progress[i].load(std::memory_order_relaxed) <
+              (uint64_t)ops_per_thread) {
+            all_done = false;
+            break;
+          }
+        }
+        if (all_done) {
+          stop.store(true, std::memory_order_relaxed);
+          break;
+        }
+      }
+    });
+
+    watchdog.join();
+
+    if (deadlock_detected.load(std::memory_order_relaxed)) {
+      std::string detail;
+      for (int i = 0; i < kThreads; ++i) {
+        detail += " t" + std::to_string(i) + "=" +
+                  std::to_string(progress[i].load(std::memory_order_relaxed));
+      }
+      BOOST_TEST_MESSAGE("Deadlock in phase '" << phase_name << "':" << detail);
+      // Dump the SpinLock value and surrounding bytes to detect overwrite.
+      {
+        uint8_t* lp = (uint8_t*)&cdb._main_db._header->txn_ref_lock;
+        uint8_t* base = (uint8_t*)hdr_addr;
+        std::fprintf(stderr, "[%s] POST bytes around hdr:\n", phase_name);
+        for (int row = 0; row < 8; ++row) {
+          std::fprintf(stderr, "  %p:", (void*)(base + row * 16));
+          for (int col = 0; col < 16; ++col)
+            std::fprintf(stderr, " %02x", base[row * 16 + col]);
+          std::fprintf(stderr, "\n");
+        }
+        (void)lp;
+        std::fflush(stderr);
+      }
+      const char* dump = std::getenv("LEAVES_DEADLOCK_GDB");
+      if (dump && *dump && *dump != '0') {
+        char cmd[1024];
+        std::snprintf(cmd, sizeof(cmd),
+            "gdb -batch -p %d "
+            "-ex 'set pagination off' "
+            "-ex 'thread apply all bt 25' "
+            "-ex 'thread 2' "
+            "-ex 'frame 3' "
+            "-ex 'print/x *_lock' "
+            "-ex 'print _lock' "
+            "-ex detach 2>&1 | tee /tmp/leaves_deadlock_stacks.txt",
+            (int)getpid());
+        std::system(cmd);
+      }
+      const char* abrt = std::getenv("LEAVES_DEADLOCK_ABORT");
+      if (abrt && *abrt && *abrt != '0') std::abort();
+      for (auto& w : workers) w.detach();
+      merge_thread.detach();
+      return false;
+    }
+
+    for (auto& w : workers) w.join();
+    merge_thread.join();
+    return true;
+  };
+
+  offset_t saved_header{0};
+  // ---- LOAD phase: concurrent inserts only, mimics YCSB load.
+  {
+    auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
+    std::unique_ptr<CDB> cdb(cdb_ptr);
+    cdb->set_idle_timeout_seconds(0);
+
+    bool ok = run_phase(*cdb, kLoadOpsPerThread, /*inserts_only=*/true, "LOAD");
+    BOOST_REQUIRE_MESSAGE(ok, "Deadlock during LOAD phase");
+
+    // Capture the file offset of the main DB header before tearing down.
+    uint64_t hdr_va  = (uint64_t)main_db->_header;
+    uint64_t base_va = (uint64_t)storage->_memory;
+    saved_header     = offset_t(hdr_va - base_va);
+    // Destructors fire here, closing the DB / file.
+  }
+
+  // ---- Reopen and run a mixed concurrent workload (RUN phase).
+  {
+    auto [storage, main_db, cdb_ptr] = open_cdb(TEST_FILE, saved_header);
+    std::unique_ptr<CDB> cdb(cdb_ptr);
+    cdb->set_idle_timeout_seconds(0);
+
+    bool ok = run_phase(*cdb, kRunOpsPerThread, /*inserts_only=*/false, "RUN");
+    BOOST_CHECK_MESSAGE(ok,
+        "Deadlock during RUN phase after reopen — Bug 2 reproduced");
   }
 }

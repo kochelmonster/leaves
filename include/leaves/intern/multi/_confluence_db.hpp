@@ -50,9 +50,7 @@ struct _TxnPinGuard {
   }
 };
 
-// =============================================================================
 // _DefaultConflictPolicy: highest txn_id wins
-// =============================================================================
 // resolve() is given a list of candidates for the same key gathered from
 // the main DB and all active tributaries.  Returns the index of the winner
 // (or -1 if the winner is a deletion tombstone → key not found).
@@ -80,15 +78,11 @@ struct _DefaultConflictPolicy {
   }
 };
 
-// =============================================================================
 // Forward declarations
-// =============================================================================
 template <typename ConfluenceDB_>
 struct _ConfluenceCursor;
 
-// =============================================================================
 // _TributaryMergePolicy: bridges _Merger's may_overwrite() with ConflictPolicy
-// =============================================================================
 // Used in _ConfluenceDB::_do_merge to apply the conflict policy when a key
 // exists in both the tributary (src) and the main DB (dst).
 
@@ -115,31 +109,32 @@ struct _TributaryMergePolicy : public StandardMergePolicy {
   }
 };
 
-// =============================================================================
 // _ConfluenceMeta: cross-process metadata stored in the extra_offset area
-// =============================================================================
-// The head of the tributary slot linked list and the cross-process lock that
-// guards list traversal/mutation.  Lives in a dedicated mmap area pointed to
-// by _DBHeader::extra_offset.
+// Holds a fixed-size array of tributary slot offsets.  Lives in a dedicated
+// mmap area pointed to by _DBHeader::extra_offset.
 //
-// Locking invariant for the tributary slot list rooted at chain_head:
-//   * Every WRITE to chain_head OR to any reachable slot->next MUST be
-//     performed under chain_lock.
-//   * Every READ that walks chain_head / slot->next MUST hold chain_lock.
-//   * Per-slot state/refs are atomic / per-slot owned and may be
-//     accessed without chain_lock once a slot pointer has been obtained.
+// Concurrency model:
+//   * slots[i] is an atomic<uint64_t> holding an absolute mmap offset (or 0
+//     if never allocated).  Allocators claim a slot via CAS(0 -> off).
+//   * slots_count is a monotonic non-decreasing high-water-mark hint.
+//     Updated via fetch_max-style CAS after the slot offset is published.
+//   * Per-slot state/refs (in _TributaryHeader) remain atomic and may be
+//     read without any external lock once the slot offset is observed.
+//   * chain_lock no longer guards slot allocation (per-slot CAS suffices);
+//     it is retained to serialize in-process publish into _tribs[] and to
+//     coordinate other multi-step bookkeeping (e.g. merge planning).
 template <typename Storage_>
 struct _ConfluenceMeta {
   using Mutex = typename Storage_::Mutex;
-  offset_t chain_head{0};  // head of tributary slot linked list
-  Mutex chain_lock;        // guards chain_head + slot->next per invariant
-  std::atomic<uint64_t> merge_epoch{0};  // incremented on each tributary merge
-  std::atomic<uint64_t> chain_epoch{0};  // incremented when a slot is added
+  static constexpr size_t MAX_TRIBUTARIES = 128;
+  Mutex chain_lock;                       // in-process publish serialization
+  std::atomic<uint64_t> merge_epoch{0};   // incremented on each tributary merge
+  std::atomic<uint64_t> chain_epoch{0};   // incremented when a slot is added
+  std::atomic<uint32_t> slots_count{0};   // monotonic high-water-mark hint
+  std::atomic<uint64_t> slots[MAX_TRIBUTARIES]{};  // claimed via CAS(0->off)
 };
 
-// =============================================================================
 // _ConfluenceDB: Multiproducer LSM meta-database wrapper
-// =============================================================================
 // Wraps a MainDB_ (typically _DB<StorageImpl>) and manages tributary slots.
 // - Allocates a _ConfluenceMeta in the main DB's extra_offset area on first
 //   creation; reopens it on subsequent opens.
@@ -170,91 +165,40 @@ struct _ConfluenceDB {
   typedef _ConfluenceCursor<_ConfluenceDB<MainDB_, ConflictPolicy_>> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
-  // -------------------------------------------------------------------------
-  // In-process configuration
-  // -------------------------------------------------------------------------
-  std::atomic<uint32_t> _merge_write_threshold{20000};
+  std::atomic<uint32_t> _merge_write_threshold{1000000};
   std::atomic<uint64_t> _idle_timeout_seconds{300};
 
-  // -------------------------------------------------------------------------
-  // Background merge monitor state
-  // -------------------------------------------------------------------------
   std::atomic<bool> _monitor_cancelled{false};
   std::atomic<bool> _monitor_interrupt{false};
   std::atomic<uint64_t> _monitor_job_id{0};
   ConflictPolicy_ _conflict_policy;
 
-  // -------------------------------------------------------------------------
-  // Core members
-  // -------------------------------------------------------------------------
-  // Soft per-process cap on tributary slots.  When the local mirror already
-  // contains this many slots, claim_tributary() / _alloc_new_slot() back off
-  // and reuse FREE slots instead of allocating new ones.  Cross-process
-  // chains may grow beyond this cap; the chunked table below handles that
-  // case without UB.
-  static constexpr size_t MAX_TRIBUTARIES = 128;
-
-  // Chunked two-level slot table.
-  //   _trib_blocks[bi] -> TribBlock { items[0..TRIB_BLOCK_SIZE) }
-  //
-  // Outer array has stable storage (std::array, fixed addresses).  Blocks
-  // are heap-allocated lazily under _meta->chain_lock and published with
-  // release-store; readers acquire-load.  Element addresses (the contained
-  // unique_ptr storage) are STABLE for the lifetime of a block — no
-  // reallocation ever moves them, so the lock-free reader pattern
-  //   n = _tributaries_count.load(acquire);
-  //   for (i = 0; i < n; ++i) use _trib_at(i);
-  // is safe even while a writer (under chain_lock) is publishing slot n.
-  // Hard ceiling: TRIB_BLOCK_SIZE * TRIB_MAX_BLOCKS = 32768 slots
-  // (vastly beyond any practical workload); _trib_slot() throws if exceeded
-  // so we never silently corrupt memory.
-  static constexpr size_t TRIB_BLOCK_SIZE = 64;
-  static constexpr size_t TRIB_MAX_BLOCKS = 512;
-
-  struct TribBlock {
-    std::array<std::unique_ptr<TributaryDB>, TRIB_BLOCK_SIZE> items{};
-  };
+  // Hard cap on tributary slots, both per-process and cross-process.  The
+  // persistent slot table in _ConfluenceMeta has this exact size; the
+  // allocator scans the array for the first un-claimed entry via CAS.
+  static constexpr size_t MAX_TRIBUTARIES = _ConfluenceMeta<Storage>::MAX_TRIBUTARIES;
 
   MainDB_& _main_db;
   meta_ptr _meta;
-  // See TribBlock comment above for the publish/observe protocol.
-  std::array<std::atomic<TribBlock*>, TRIB_MAX_BLOCKS> _trib_blocks{};
+  // Fixed in-process mirror of the persistent slots array.  Index i in
+  // _tribs corresponds 1:1 with _meta->slots[i].  unique_ptr storage in
+  // std::array is stable for the lifetime of the _ConfluenceDB, so the
+  // lock-free reader pattern
+  //   n = _tributaries_count.load(acquire);
+  //   for (i = 0; i < n; ++i) if (_tribs[i]) ...
+  // is safe even while a writer concurrently publishes slot n.
+  std::array<std::unique_ptr<TributaryDB>, MAX_TRIBUTARIES> _tribs{};
   std::atomic<size_t> _tributaries_count{0};
-  // Cached chain_epoch reflecting the chain state mirrored by _trib_blocks.
+  // Cached chain_epoch reflecting the chain state mirrored by _tribs.
   // A stale value only triggers a slow-path reconcile via chain_lock; never
   // a correctness issue.
   std::atomic<uint64_t> _tributaries_chain_epoch{UINT64_MAX};
   std::vector<TributaryDB*> _merge_slots;  // reused across merge calls, avoids heap
 
-  // Reader: returns nullptr if the slot is past the published count.
-  // Caller is responsible for bounding i < _tributaries_count.load(acquire).
-  TributaryDB* _trib_at(size_t i) const {
-    size_t bi = i / TRIB_BLOCK_SIZE;
-    size_t bj = i % TRIB_BLOCK_SIZE;
-    TribBlock* b = _trib_blocks[bi].load(std::memory_order_acquire);
-    return b ? b->items[bj].get() : nullptr;
-  }
-  // Writer: returns the unique_ptr slot at index i, allocating the block
-  // lazily.  MUST be called under _meta->chain_lock (writers serialized).
-  std::unique_ptr<TributaryDB>& _trib_slot(size_t i) {
-    size_t bi = i / TRIB_BLOCK_SIZE;
-    size_t bj = i % TRIB_BLOCK_SIZE;
-    if (bi >= TRIB_MAX_BLOCKS) {
-      throw std::runtime_error(
-          "leaves: tributary slot table exceeded TRIB_BLOCK_SIZE*"
-          "TRIB_MAX_BLOCKS (cross-process chain too large)");
-    }
-    TribBlock* b = _trib_blocks[bi].load(std::memory_order_relaxed);
-    if (!b) {
-      b = new TribBlock();
-      _trib_blocks[bi].store(b, std::memory_order_release);
-    }
-    return b->items[bj];
-  }
+  // Reader: returns the in-process TributaryDB at index i, or nullptr if
+  // not yet materialised.  Caller bounds i < _tributaries_count.load(acquire).
+  TributaryDB* _trib_at(size_t i) const { return _tribs[i].get(); }
 
-  // -------------------------------------------------------------------------
-  // Constructors / Destructor
-  // -------------------------------------------------------------------------
   // auto_monitor: start the background merge thread immediately.
   // auto_sanitize: on reopen, merge unclaimed tributaries (crash recovery).
   _ConfluenceDB(MainDB_& main_db, bool auto_monitor = true,
@@ -274,6 +218,9 @@ struct _ConfluenceDB {
         new (&meta->chain_lock) typename Storage::Mutex();
         new (&meta->merge_epoch) std::atomic<uint64_t>(0);
         new (&meta->chain_epoch) std::atomic<uint64_t>(0);
+        new (&meta->slots_count) std::atomic<uint32_t>(0);
+        for (size_t i = 0; i < _ConfluenceMeta<Storage>::MAX_TRIBUTARIES; ++i)
+          new (&meta->slots[i]) std::atomic<uint64_t>(0);
         _main_db.make_dirty(meta);
         init_cursor->commit(true);
       } else {
@@ -285,17 +232,20 @@ struct _ConfluenceDB {
     _meta = _main_db.template resolve<_ConfluenceMeta<Storage>>(
         &_main_db._header->extra_offset, READ);
     {
-      // Single-threaded ctor: build the in-process mirror, then publish.
-      offset_t cur = _meta->chain_head;
-      size_t n = 0;
-      while (cur) {
-        auto slot = _main_db.template resolve<Slot>(&cur);
-        offset_t next_off = slot->next;
-        _trib_slot(n++) = std::make_unique<TributaryDB>(
-            _main_db._storage, cur, "_tributary");
-        cur = next_off;
+      // Single-threaded ctor: build the in-process mirror from the
+      // persistent slots array, then publish.
+      uint32_t hwm = _meta->slots_count.load(std::memory_order_acquire);
+      size_t published = 0;
+      for (size_t i = 0; i < hwm; ++i) {
+        uint64_t raw = _meta->slots[i].load(std::memory_order_acquire);
+        if (!raw) continue;  // never-allocated gap (should not occur)
+        offset_t slot_off;
+        slot_off = raw;
+        _tribs[i] = std::make_unique<TributaryDB>(
+            _main_db._storage, slot_off, "_tributary");
+        published = i + 1;
       }
-      _tributaries_count.store(n, std::memory_order_release);
+      _tributaries_count.store(published, std::memory_order_release);
       _tributaries_chain_epoch.store(
           _meta->chain_epoch.load(std::memory_order_relaxed),
           std::memory_order_release);
@@ -308,22 +258,13 @@ struct _ConfluenceDB {
   ~_ConfluenceDB() {
     cancel_monitor();
     merge_all_now();
-    for (auto& b : _trib_blocks) {
-      delete b.load(std::memory_order_relaxed);
-    }
   }
 
-  // -------------------------------------------------------------------------
-  // Delegate transaction / cursor factories to main DB
-  // -------------------------------------------------------------------------
   txn_ptr txn() { return _main_db.txn(); }
   txn_ptr txn_ref() { return _main_db.txn_ref(); }
 
   cursor_ptr create_cursor() { return std::make_shared<Cursor>(this); }
 
-  // -------------------------------------------------------------------------
-  // Configuration
-  // -------------------------------------------------------------------------
   void set_merge_write_threshold(uint32_t n) {
     _merge_write_threshold.store(n, std::memory_order_relaxed);
   }
@@ -350,9 +291,6 @@ struct _ConfluenceDB {
     _main_db.flush();
   }
 
-  // -------------------------------------------------------------------------
-  // Sanitize: crash recovery
-  // -------------------------------------------------------------------------
   void sanitize() {
     // Reinitialise the cross-process mutex in case the previous owner crashed.
     new (&_meta->chain_lock) typename Storage::Mutex();
@@ -361,13 +299,18 @@ struct _ConfluenceDB {
     _main_db.flush();
   }
 
-  // =========================================================================
-  // Tributary slot management
-  // =========================================================================
-
-  // Allocate a new TributaryDB.  Called under _meta->chain_lock.
-  // Returns a borrowed pointer into _tributaries; state = WRITING, refs = 1.
+  // Allocate a new TributaryDB.  Called under _meta->chain_lock for
+  // in-process publish serialization; cross-process arbitration uses
+  // per-slot CAS on _meta->slots[].  Returns a borrowed pointer; state =
+  // WRITING, refs = 1.  Returns nullptr if all MAX_TRIBUTARIES slots are
+  // already claimed (cross-process cap reached).
   TributaryDB* _alloc_new_slot() {
+    // Cheap cap pre-check: slots_count is monotonic, so once it reaches
+    // MAX_TRIBUTARIES all per-slot CAS attempts will fail.  Avoid the
+    // expensive header allocation in that case.
+    if (_meta->slots_count.load(std::memory_order_acquire) >= MAX_TRIBUTARIES)
+      return nullptr;
+
     offset_t trib_off{0};
     {
       std::scoped_lock flock(_main_db._storage.file_lock());
@@ -376,66 +319,87 @@ struct _ConfluenceDB {
     }
 
     auto new_slot = _main_db.template resolve<Slot>(&trib_off, WRITE);
-    new_slot->next = 0;
     new (&new_slot->last_used_time) std::atomic<uint64_t>(0);
     new (&new_slot->write_count) std::atomic<uint32_t>(0);
     new (&new_slot->state) std::atomic<uint8_t>(Slot::WRITING);
     new (&new_slot->refs) std::atomic<uint32_t>(1);
-
-    // Prepend to chain
-    new_slot->next = _meta->chain_head;
-    _meta->chain_head = trib_off;
-
     _main_db.make_dirty(new_slot);
+
+    // Per-slot CAS claim: scan _meta->slots[] for the first unclaimed entry
+    // and atomically install our offset.  Allocators in concurrent processes
+    // race on the CAS; only one wins each index.
+    uint64_t my_off = trib_off.raw();
+    size_t claimed_idx = MAX_TRIBUTARIES;
+    for (size_t i = 0; i < MAX_TRIBUTARIES; ++i) {
+      uint64_t expected = 0;
+      if (_meta->slots[i].compare_exchange_strong(
+              expected, my_off,
+              std::memory_order_acq_rel,
+              std::memory_order_relaxed)) {
+        claimed_idx = i;
+        break;
+      }
+    }
+    if (claimed_idx == MAX_TRIBUTARIES) {
+      // Cap reached: leak the just-allocated tributary header (rare).
+      // The slot is unreachable, no chain corruption.
+      return nullptr;
+    }
+
+    // Bump slots_count to at least claimed_idx + 1 (monotonic high-water mark).
+    uint32_t target = static_cast<uint32_t>(claimed_idx + 1);
+    uint32_t cur = _meta->slots_count.load(std::memory_order_relaxed);
+    while (cur < target &&
+           !_meta->slots_count.compare_exchange_weak(
+               cur, target, std::memory_order_release,
+               std::memory_order_relaxed)) {
+      // cur reloaded by CAS on failure
+    }
+
     _main_db.make_dirty(_meta);
     _main_db.flush();
     _meta->chain_epoch.fetch_add(1, std::memory_order_release);
 
-    auto trib_uptr = std::make_unique<TributaryDB>(_main_db._storage, trib_off,
-                                                   "_tributary");
-    TributaryDB* result = trib_uptr.get();
-    // Caller holds _meta->chain_lock — writers are serialized, so we can
-    // publish lock-free via a release-store of the count.
-    size_t idx = _tributaries_count.load(std::memory_order_relaxed);
-    _trib_slot(idx) = std::move(trib_uptr);
-    _tributaries_count.store(idx + 1, std::memory_order_release);
+    // Publish into in-process mirror.  Caller holds _meta->chain_lock so
+    // writers within this process are serialized; cross-process writers
+    // touch different _tribs[] arrays (one per process).
+    _tribs[claimed_idx] = std::make_unique<TributaryDB>(
+        _main_db._storage, trib_off, "_tributary");
+    TributaryDB* result = _tribs[claimed_idx].get();
+    size_t pub = _tributaries_count.load(std::memory_order_relaxed);
+    while (pub < claimed_idx + 1 &&
+           !_tributaries_count.compare_exchange_weak(
+               pub, claimed_idx + 1, std::memory_order_release,
+               std::memory_order_relaxed)) {
+      // pub reloaded on failure
+    }
     _tributaries_chain_epoch.store(
         _meta->chain_epoch.load(std::memory_order_relaxed),
         std::memory_order_release);
     return result;
   }
 
-  // Sync _trib_blocks with the mmap chain, adding any cross-process slots.
-  // Must be called under _meta->chain_lock (writers serialized).
+  // Sync _tribs with the persistent slots array, materializing any
+  // cross-process slots not yet seen in this process.
+  // Must be called under _meta->chain_lock (in-process writers serialized).
   void _update_tributaries() {
     uint64_t chain_epoch = _meta->chain_epoch.load(std::memory_order_acquire);
     if (chain_epoch ==
         _tributaries_chain_epoch.load(std::memory_order_relaxed))
       return;
-    offset_t cur = _meta->chain_head;
-    while (cur) {
-      offset_t slot_off = cur;
-      auto slot = _main_db.template resolve<Slot>(&cur);
-      offset_t next_off = slot->next;
-      size_t n = _tributaries_count.load(std::memory_order_relaxed);
-      bool found = false;
-      for (size_t i = 0; i < n; ++i) {
-        if ((uint64_t)_main_db._storage.resolve(_trib_at(i)->_header) ==
-            slot_off) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        // Cross-process growth: append, regardless of MAX_TRIBUTARIES (the
-        // chunked _trib_blocks table grows safely; MAX_TRIBUTARIES only
-        // gates _this_ process's allocations).
-        _trib_slot(n) = std::make_unique<TributaryDB>(
-            _main_db._storage, slot_off, "_tributary");
-        _tributaries_count.store(n + 1, std::memory_order_release);
-      }
-      cur = next_off;
+    uint32_t hwm = _meta->slots_count.load(std::memory_order_acquire);
+    size_t max_seen = _tributaries_count.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < hwm; ++i) {
+      if (_tribs[i]) continue;
+      uint64_t raw = _meta->slots[i].load(std::memory_order_acquire);
+      if (!raw) continue;  // writer mid-CAS or gap; pick up next pass
+      offset_t slot_off;
+      slot_off = raw;
+      _tribs[i] = std::make_unique<TributaryDB>(
+          _main_db._storage, slot_off, "_tributary");
+      if (i + 1 > max_seen) max_seen = i + 1;
     }
+    _tributaries_count.store(max_seen, std::memory_order_release);
     _tributaries_chain_epoch.store(chain_epoch, std::memory_order_release);
   }
 
@@ -457,9 +421,7 @@ struct _ConfluenceDB {
     if (auto* t = _try_claim()) return t;
     std::scoped_lock lock(_meta->chain_lock);
     if (auto* trib = _try_claim_free_slot()) return trib;
-    if (_tributaries_count.load(std::memory_order_acquire) < MAX_TRIBUTARIES)
-      return _alloc_new_slot();
-    return nullptr;
+    return _alloc_new_slot();  // nullptr if cap reached
   }
 
   // CAS-claim the first FREE+under-threshold slot from the published
@@ -501,9 +463,7 @@ struct _ConfluenceDB {
       {
         std::scoped_lock lock(_meta->chain_lock);
         if (auto* trib = _try_claim_free_slot()) return trib;
-        if (_tributaries_count.load(std::memory_order_acquire) <
-            MAX_TRIBUTARIES)
-          return _alloc_new_slot();
+        if (auto* trib = _alloc_new_slot()) return trib;
       }
 
       // Cap reached and no FREE slot — back off and retry.
@@ -583,6 +543,8 @@ struct _ConfluenceDB {
   void _recycle_slot(TributaryDB* trib) {
     trib->reset_in_place();
     slot_ptr slot = trib->_header;
+    slot->write_count.store(0, std::memory_order_relaxed);
+    slot->last_used_time.store(0, std::memory_order_relaxed);
     slot->state.store(Slot::FREE, std::memory_order_release);
     _meta->merge_epoch.fetch_add(1, std::memory_order_release);
     _main_db.make_dirty(_meta);
@@ -612,10 +574,6 @@ struct _ConfluenceDB {
     }
     for (auto* trib : _merge_slots) merge_tributary(trib);
   }
-
-  // =========================================================================
-  // Background monitor
-  // =========================================================================
 
   void _ensure_read_workers() {
 #ifndef __EMSCRIPTEN__
@@ -650,10 +608,6 @@ struct _ConfluenceDB {
       _main_db._storage.wait_idle();
   }
 
-  // =========================================================================
-  // Internal helpers
-  // =========================================================================
-
   static uint64_t _current_time() {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -661,9 +615,51 @@ struct _ConfluenceDB {
             .count());
   }
 
+  // Recycle MERGED slots whose last reference was orphaned (e.g. the holding
+  // thread died between fill_sources and _release_sources).  A 2-second grace
+  // period ensures any live cursor that pinned the slot while it was MERGING
+  // has already called _release_sources before we touch refs.  Called once
+  // per monitor period so contention is negligible.
+  void _recover_merged_slots() {
+    uint64_t now = _current_time();
+    size_t n = _tributaries_count.load(std::memory_order_acquire);
+    for (size_t i = 0; i < n; ++i) {
+      TributaryDB* t = _trib_at(i);
+      slot_ptr slot = t->_header;
+      if (slot->state.load(std::memory_order_acquire) != Slot::MERGED)
+        continue;
+      // Only act on slots that have been MERGED for at least 2 seconds.
+      uint64_t lut = slot->last_used_time.load(std::memory_order_acquire);
+      if (lut == 0 || now - lut < 2)
+        continue;
+      // CAS refs 1 → 0: act as the final unpinner that was never called.
+      // If a live cursor concurrently calls _unpin_slot and wins the CAS,
+      // it will trigger recycle instead — either way exactly one recycle runs.
+      uint32_t expected = 1;
+      if (slot->refs.compare_exchange_strong(expected, 0,
+                                             std::memory_order_acq_rel)) {
+        // Force-clear stale transaction refs that may have been left by a
+        // crashed process.  State=MERGED and we own the last slot ref, so
+        // no live cursor should hold a txn ref on this trib; any remaining
+        // refs are orphaned and must be zeroed before reset_in_place()
+        // checks is_active().
+        t->iter_transactions([](auto txn) -> bool {
+          txn->refs.store(0, std::memory_order_relaxed);
+          return false;
+        });
+        _recycle_slot(t);
+      }
+    }
+  }
+
   void _run_monitor() {
-    if (!_monitor_cancelled.load(std::memory_order_acquire))
-      merge_eligible_tributaries();
+    if (!_monitor_cancelled.load(std::memory_order_acquire)) {
+      try {
+        merge_eligible_tributaries();
+        _recover_merged_slots();
+      } catch (...) {
+      }
+    }
     if (!_monitor_cancelled.load(std::memory_order_acquire)) {
       _monitor_job_id.store(
           _main_db._storage.schedule_after(std::chrono::seconds(1),
@@ -767,9 +763,7 @@ struct _ConfluenceDB {
   }
 };
 
-// =============================================================================
 // _PinnedSource: one tributary read source held by _ConfluenceCursor
-// =============================================================================
 // Borrows a TributaryDB* from _ConfluenceDB::_tributaries (not owned).
 // The slot ref-count is incremented on construction and decremented via
 // _unpin_slot() in the destructor, keeping areas alive while the cursor reads.
@@ -868,9 +862,7 @@ struct _PinnedSource {
   }
 };
 
-// =============================================================================
 // _ConfluenceCursor
-// =============================================================================
 // - start_transaction(): borrows a tributary from _ConfluenceDB::_tributaries.
 // - commit()/rollback(): finish write, update slot metadata.
 // - find()/first()/next()/prev()/last(): N-way merge read.
@@ -906,7 +898,6 @@ struct _ConfluenceCursor {
   MainTxnPtr _main_txn;
   std::unique_ptr<_Cursor<MainCursorTraits>> _main_cursor;
 
-  // Tributary read sources.
   // _sources[0.._sources_n) are active (pinned).
   // _sources[_sources_n..size) are parked (slot/txn released, cursors kept).
   std::vector<PinnedSource> _sources;
@@ -941,10 +932,6 @@ struct _ConfluenceCursor {
     if (_main_txn) _main_txn->refs.fetch_sub(1, std::memory_order_acq_rel);
   }
 
-  // -------------------------------------------------------------------------
-  // Write path
-  // -------------------------------------------------------------------------
-
   bool start_transaction(bool non_blocking = false) {
     if (_in_transaction) return true;
 
@@ -959,12 +946,11 @@ struct _ConfluenceCursor {
       // Pin the current tributary snapshot for reads.
       _release_sources();
       _ensure_sources();
-
       trib = _cdb->_try_claim_or_alloc();
       if (trib) break;
 
-      // Cap reached: release source refs so the pool can recycle MERGED
-      // slots, then back off before retrying.
+      // Cap reached: release any held source refs so the pool can recycle
+      // MERGED slots, then back off before retrying.
       _release_sources();
       if (spin < 16) {
 #if defined(LEAVES_X86_64)
@@ -994,10 +980,16 @@ struct _ConfluenceCursor {
     if (_sources_n >= _sources.size()) _sources.emplace_back();
     auto& w = _sources[_sources_n];
     w.reinit(_cdb, trib, slot, slot_off);
-    if (!w._trib_cursor->start_transaction(non_blocking)) {
+    try {
+      if (!w._trib_cursor->start_transaction(non_blocking)) {
+        w.park();
+        _cdb->release_tributary(trib);
+        return false;
+      }
+    } catch (...) {
       w.park();
       _cdb->release_tributary(trib);
-      return false;
+      throw;
     }
     // The cursor's _txn changed from read_txn to the new active txn —
     // re-point _del_cursor at active_txn->delete_root so reads of the
@@ -1068,17 +1060,7 @@ struct _ConfluenceCursor {
     w._trib_cursor->remove();
   }
 
-  // -------------------------------------------------------------------------
-  // Read path — source management
-  // -------------------------------------------------------------------------
-
   void _ensure_sources() {
-    // Snapshot is frozen for the duration of a write transaction:
-    // start_transaction() materialized it once; mid-txn refresh would let
-    // the cursor observe other tributaries that committed after the
-    // writer began, breaking snapshot isolation.
-    if (_sources_valid && _in_transaction) return;
-
     uint64_t cur_merge_epoch =
         _cdb->_meta->merge_epoch.load(std::memory_order_acquire);
     uint64_t cur_chain_epoch =
@@ -1096,7 +1078,7 @@ struct _ConfluenceCursor {
     if (_main_txn) _main_txn->refs.fetch_sub(1, std::memory_order_acq_rel);
     _main_txn = std::move(new_txn);
 
-    // Park all old active sources before acquiring chain_lock.
+    // Park old sources before rebuilding.
     // park() → _unpin_slot() may trigger _recycle_slot which scans the
     // published _tributaries — keep that work outside chain_lock.
     for (size_t i = 0; i < _sources_n; ++i) _sources[i].park();
@@ -1324,10 +1306,6 @@ struct _ConfluenceCursor {
              _search_key == w._trib_cursor->current_key;
   }
 
-  // -------------------------------------------------------------------------
-  // Public read API
-  // -------------------------------------------------------------------------
-
   bool is_valid() {
     if (_in_transaction) _materialize_write();
     else _materialize_full();
@@ -1346,10 +1324,6 @@ struct _ConfluenceCursor {
     _valid = false;
     _positioned = false;
   }
-
-  // -------------------------------------------------------------------------
-  // Ordered iteration — N-way merge
-  // -------------------------------------------------------------------------
 
   void first() {
     _pending_find = false;

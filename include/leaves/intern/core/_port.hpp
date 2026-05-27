@@ -56,10 +56,8 @@ FORCE_INLINE void prefetch(const void* ptr, Access access = READ) {
 #endif
 }
 
-// ---------------------------------------------------------------------------
 // Endian types — boost on native, lightweight wrappers on Emscripten (WASM).
 // WASM is always little-endian, so little-endian types are identity wrappers.
-// ---------------------------------------------------------------------------
 #ifdef __EMSCRIPTEN__
 
 struct _big_uint64_t {

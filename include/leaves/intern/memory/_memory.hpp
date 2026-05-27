@@ -309,9 +309,7 @@ struct _MemManager {
   }
 };
 
-// =========================================================================
 // _MemManagerPool — drop-in replacement for _MemManager with N managers
-// =========================================================================
 //
 // Provides the same interface as _MemManager.  Internally holds POOL_SIZE
 // managers with per-manager try-lock spinlocks.

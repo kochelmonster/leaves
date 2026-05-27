@@ -7,9 +7,7 @@
 
 namespace leaves {
 
-// =============================================================================
 // Replication Protocol — shared wire-format types
-// =============================================================================
 
 // Message types for replication protocol
 enum class ReplicationMsgType : uint8_t {
