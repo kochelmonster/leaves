@@ -128,7 +128,9 @@ struct _ConfluenceMeta {
   using Mutex = typename Storage_::Mutex;
   static constexpr size_t MAX_TRIBUTARIES = 128;
   Mutex chain_lock;                       // in-process publish serialization
-  std::atomic<uint64_t> merge_epoch{0};   // incremented on each tributary merge
+  std::atomic<uint64_t> state_epoch{0};   // incremented when a tributary's readable status changes:
+                                          //   FIRST_WRITING→ATTACHED (first commit; new readable slot)
+                                          //   MERGING→MERGED         (slot leaves readable set)
   std::atomic<uint64_t> chain_epoch{0};   // incremented when a slot is added
   std::atomic<uint32_t> slots_count{0};   // monotonic high-water-mark hint
   std::atomic<uint64_t> slots[MAX_TRIBUTARIES]{};  // claimed via CAS(0->off)
@@ -165,7 +167,7 @@ struct _ConfluenceDB {
   typedef _ConfluenceCursor<_ConfluenceDB<MainDB_, ConflictPolicy_>> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
-  std::atomic<uint32_t> _merge_write_threshold{1000000};
+  std::atomic<uint32_t> _merge_write_threshold{50000};
   std::atomic<uint64_t> _idle_timeout_seconds{300};
 
   std::atomic<bool> _monitor_cancelled{false};
@@ -195,14 +197,19 @@ struct _ConfluenceDB {
   std::atomic<uint64_t> _tributaries_chain_epoch{UINT64_MAX};
   std::vector<TributaryDB*> _merge_slots;  // reused across merge calls, avoids heap
 
+  // Async merge error propagation: merge_tributary()'s catch block stores the
+  // exception here; _ensure_sources() / start_transaction() rethrow it on the
+  // next cursor access (one-shot: cleared on rethrow; first-error-wins).
+  std::atomic<bool> _has_merge_error{false};
+  std::mutex _merge_error_mutex;
+  std::exception_ptr _pending_merge_error;
+
   // Reader: returns the in-process TributaryDB at index i, or nullptr if
   // not yet materialised.  Caller bounds i < _tributaries_count.load(acquire).
   TributaryDB* _trib_at(size_t i) const { return _tribs[i].get(); }
 
   // auto_monitor: start the background merge thread immediately.
-  // auto_sanitize: on reopen, merge unclaimed tributaries (crash recovery).
-  _ConfluenceDB(MainDB_& main_db, bool auto_monitor = true,
-                bool auto_sanitize = true)
+  _ConfluenceDB(MainDB_& main_db, bool auto_monitor = true)
       : _main_db(main_db) {
     if (_main_db._header->extra_offset == 0) {
       // Optimistic first-creation path: acquire the write lock then re-check.
@@ -214,9 +221,9 @@ struct _ConfluenceDB {
             sizeof(_ConfluenceMeta<Storage>));
         _main_db._header->extra_offset = _main_db.resolve(meta);
         _main_db.make_dirty(_main_db._header);
-        memset(&*meta, 0, sizeof(_ConfluenceMeta<Storage>));
+        memset(reinterpret_cast<char*>(&*meta), 0, sizeof(_ConfluenceMeta<Storage>));
         new (&meta->chain_lock) typename Storage::Mutex();
-        new (&meta->merge_epoch) std::atomic<uint64_t>(0);
+        new (&meta->state_epoch) std::atomic<uint64_t>(0);
         new (&meta->chain_epoch) std::atomic<uint64_t>(0);
         new (&meta->slots_count) std::atomic<uint32_t>(0);
         for (size_t i = 0; i < _ConfluenceMeta<Storage>::MAX_TRIBUTARIES; ++i)
@@ -250,7 +257,7 @@ struct _ConfluenceDB {
           _meta->chain_epoch.load(std::memory_order_relaxed),
           std::memory_order_release);
     }
-    if (auto_sanitize) sanitize();
+    sanitize();
     if (auto_monitor) start_monitor();
   }
 
@@ -282,7 +289,8 @@ struct _ConfluenceDB {
       size_t n = _tributaries_count.load(std::memory_order_acquire);
       for (size_t i = 0; i < n; ++i) {
         TributaryDB* trib = _trib_at(i);
-        if (trib->_header->state.load(std::memory_order_relaxed) == Slot::FREE)
+        uint8_t s = trib->_header->state.load(std::memory_order_relaxed);
+        if (s == Slot::ATTACHED || s == Slot::MERGING)
           _merge_slots.push_back(trib);
       }
     }
@@ -320,7 +328,7 @@ struct _ConfluenceDB {
     auto new_slot = _main_db.template resolve<Slot>(&trib_off, WRITE);
     new (&new_slot->last_used_time) std::atomic<uint64_t>(0);
     new (&new_slot->write_count) std::atomic<uint32_t>(0);
-    new (&new_slot->state) std::atomic<uint8_t>(Slot::WRITING);
+    new (&new_slot->state) std::atomic<uint8_t>(Slot::FIRST_WRITING);
     new (&new_slot->refs) std::atomic<uint32_t>(1);
     _main_db.make_dirty(new_slot);
 
@@ -358,6 +366,8 @@ struct _ConfluenceDB {
     _main_db.make_dirty(_meta);
     _main_db.flush();
     _meta->chain_epoch.fetch_add(1, std::memory_order_release);
+    // No state_epoch bump here: FIRST_WRITING has no readable snapshot yet.
+    // The epoch is bumped in commit() when the first FIRST_WRITING→ATTACHED transition occurs.
 
     // Publish into in-process mirror.  Caller holds _meta->chain_lock so
     // writers within this process are serialized; cross-process writers
@@ -411,7 +421,7 @@ struct _ConfluenceDB {
 
   // Non-blocking single-attempt claim: try fast path then under chain_lock,
   // allocating a new slot if count < MAX_TRIBUTARIES.  Returns nullptr when
-  // all slots are in use with no FREE slot available.
+  // all slots are in use and no EMPTY slot is available.
   //
   // Callers that hold source refs on existing slots MUST release those refs
   // before spinning on this function; MERGED slots cannot be recycled while
@@ -423,19 +433,26 @@ struct _ConfluenceDB {
     return _alloc_new_slot();  // nullptr if cap reached
   }
 
-  // CAS-claim the first FREE+under-threshold slot from the published
-  // prefix of _tributaries. Lock-free: reads count with acquire ordering
-  // (pairs with writer's release-store), then a per-slot CAS arbitrates
-  // between concurrent claimers. Returns nullptr if none available.
+  // CAS-claim the first FREE or EMPTY slot from the published prefix of
+  // _tributaries. Lock-free: reads count with acquire ordering (pairs with
+  // writer's release-store), then a per-slot CAS arbitrates between concurrent
+  // claimers. Returns nullptr if none available.
+  //
+  // Claim path:
+  //   EMPTY → FIRST_WRITING (slot was recycled via _recycle_slot(); trie is
+  //                          already reset, write_count already zeroed)
+  // ATTACHED slots are exclusively owned by a cursor and cannot be claimed.
   TributaryDB* _try_claim() {
-    uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
     size_t n = _tributaries_count.load(std::memory_order_acquire);
     for (size_t i = 0; i < n; ++i) {
       TributaryDB* t = _trib_at(i);
       slot_ptr slot = t->_header;
-      uint8_t expected = Slot::FREE;
-      if (slot->write_count.load(std::memory_order_relaxed) < threshold &&
-          slot->state.compare_exchange_strong(expected, Slot::WRITING,
+
+      // EMPTY → FIRST_WRITING (recycled slot; trie already reset by
+      // _recycle_slot() before state was stored as EMPTY with release ordering,
+      // so the acquire on the CAS success observes the completed reset).
+      uint8_t expected = Slot::EMPTY;
+      if (slot->state.compare_exchange_strong(expected, Slot::FIRST_WRITING,
                                               std::memory_order_acq_rel)) {
         slot->refs.fetch_add(1, std::memory_order_acq_rel);
         return t;
@@ -447,11 +464,10 @@ struct _ConfluenceDB {
   // Walk the chain, claim a free slot or allocate a new one.
   // Returns a borrowed TributaryDB* (state = WRITING, refs = 1).
   //
-  // With MAX_TRIBUTARIES capped, if all slots are in use AND no FREE slot
-  // is available, this back-offs (pause/yield/sleep) and retries until a
+  // With MAX_TRIBUTARIES capped, if all slots are in use and no EMPTY slot
+  // is available, this backs off (pause/yield/sleep) and retries until a
   // slot becomes claimable. Forward progress is provided by the background
-  // merge monitor and by release_tributary()'s scheduled merge job, both
-  // running on the storage thread pool.
+  // merge monitor running on the storage thread pool.
   TributaryDB* claim_tributary() {
     unsigned spin = 0;
     for (;;) {
@@ -487,40 +503,37 @@ struct _ConfluenceDB {
     }
   }
 
-  void release_tributary(TributaryDB* trib) {
-    slot_ptr slot = trib->_header;
-    uint32_t wc = slot->write_count.load(std::memory_order_relaxed);
-    uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
-    bool should_merge = (wc >= threshold) &&
-                        !_monitor_cancelled.load(std::memory_order_relaxed);
-    if (should_merge) {
-      slot->state.store(Slot::MERGING, std::memory_order_release);
-      slot->refs.fetch_sub(1, std::memory_order_acq_rel);
-      _main_db._storage.schedule_after(
-          std::chrono::seconds(0),
-          [this, trib]() mutable { merge_tributary(trib); });
-    } else {
-      slot->refs.fetch_sub(1, std::memory_order_acq_rel);
-      slot->state.store(Slot::FREE, std::memory_order_release);
-    }
-  }
-
   // Merge one tributary into the main DB and recycle its slot.
   // The slot stays linked in the chain and stays in `_tributaries`; after
-  // the final unpin, `_recycle_slot` resets it back to FREE state for
-  // future writers to reclaim via `_try_claim_free_slot`.
+  // the final unpin, `_recycle_slot` resets it back to EMPTY state for
+  // future writers to reclaim via `_alloc_new_slot`.
   bool merge_tributary(TributaryDB* trib) {
     slot_ptr slot = trib->_header;
-    uint8_t expected = Slot::FREE;
+    // Accept ATTACHED as starting state (in addition to already-MERGING).
+    uint8_t expected = Slot::ATTACHED;
     bool transitioned = slot->state.compare_exchange_strong(
         expected, Slot::MERGING, std::memory_order_acq_rel);
     if (!transitioned) {
       if (expected != Slot::MERGING) return false;
     }
     slot->refs.fetch_add(1, std::memory_order_acq_rel);
-    _do_merge(slot);
-    _meta->merge_epoch.fetch_add(1, std::memory_order_release);
+    try {
+      _do_merge(trib);
+    } catch (...) {
+      // Merge failed (e.g. StorageFull). Slot stays in MERGING state.
+      // Recovery happens on next process start via _merge_unclaimed_tributaries()
+      // once the storage region has been enlarged.
+      slot->refs.fetch_sub(1, std::memory_order_acq_rel);
+      // Surface the exception to the next cursor access.
+      {
+        std::lock_guard<std::mutex> lk(_merge_error_mutex);
+        if (!_pending_merge_error) _pending_merge_error = std::current_exception();
+        _has_merge_error.store(true, std::memory_order_release);
+      }
+      return false;
+    }
     slot->state.store(Slot::MERGED, std::memory_order_release);
+    _meta->state_epoch.fetch_add(1, std::memory_order_release);
     _unpin_slot(trib);
     return true;
   }
@@ -536,23 +549,21 @@ struct _ConfluenceDB {
   // Reset the merged tributary in place so it can be re-claimed as a
   // fresh DB.  Keeps the slot's header + first single area + chain link,
   // returns the remaining areas to the storage pool, then transitions
-  // state from MERGED back to FREE.  Bumps merge_epoch a second time so
-  // readers re-pin against the reset slot rather than the just-merged
-  // (now-empty) one.
+  // state MERGED→EMPTY.  The next _try_claim_or_alloc() will use
+  // _alloc_new_slot() to transition EMPTY→FIRST_WRITING for a new writer.
   void _recycle_slot(TributaryDB* trib) {
     trib->reset_in_place();
     slot_ptr slot = trib->_header;
     slot->write_count.store(0, std::memory_order_relaxed);
     slot->last_used_time.store(0, std::memory_order_relaxed);
-    slot->state.store(Slot::FREE, std::memory_order_release);
-    _meta->merge_epoch.fetch_add(1, std::memory_order_release);
+    slot->state.store(Slot::EMPTY, std::memory_order_release);
+    // No state_epoch bump: EMPTY has no readable snapshot.
     _main_db.make_dirty(_meta);
     _main_db.flush();
   }
 
   void merge_eligible_tributaries() {
     uint64_t now = _current_time();
-    uint32_t threshold = _merge_write_threshold.load(std::memory_order_relaxed);
     uint64_t idle_timeout =
         _idle_timeout_seconds.load(std::memory_order_relaxed);
     _merge_slots.clear();
@@ -562,12 +573,21 @@ struct _ConfluenceDB {
       for (size_t i = 0; i < n; ++i) {
         TributaryDB* trib = _trib_at(i);
         slot_ptr slot = trib->_header;
-        if (slot->state.load(std::memory_order_relaxed) != Slot::FREE) continue;
+        uint8_t state = slot->state.load(std::memory_order_relaxed);
+        // Already marked for merge by a writer — pick it up directly.
+        if (state == Slot::MERGING) {
+          _merge_slots.push_back(trib);
+          continue;
+        }
         bool should_merge = false;
-        if (slot->write_count.load(std::memory_order_relaxed) >= threshold)
-          should_merge = true;
-        auto lut = slot->last_used_time.load(std::memory_order_acquire);
-        if (lut > 0 && (now - lut) >= idle_timeout) should_merge = true;
+        if (state == Slot::ATTACHED) {
+          // ATTACHED: cursor owns this slot exclusively. Only the idle timeout
+          // can trigger a merge. The CAS in merge_tributary() races with the
+          // cursor's ATTACHED→WRITING CAS in start_transaction(); exactly one
+          // winner proceeds.
+          auto lut = slot->last_used_time.load(std::memory_order_acquire);
+          if (lut > 0 && (now - lut) >= idle_timeout) should_merge = true;
+        }
         if (should_merge) _merge_slots.push_back(trib);
       }
     }
@@ -661,55 +681,47 @@ struct _ConfluenceDB {
     }
   }
 
-  // Two-pass merge: delete pass + copy pass, single commit on main DB.
-  void _do_merge(slot_ptr slot) {
+  void _do_merge(TributaryDB* trib) {
     using TxnType = typename TributaryDB::Transaction;
     using TribCursorTraits = typename TributaryDB::CursorTraits;
-    using MainCursor = typename MainDB_::Cursor;
-
-    offset_t trib_off = (uint64_t)_main_db._storage.resolve(slot);
-    TributaryDB trib(_main_db._storage, trib_off, "_tributary_merge");
-
-    _TxnPinGuard<typename TributaryDB::txn_ptr> trib_pin(trib.txn_ref());
 
     tid_t main_txn_id = _main_db.txn()->txn_id;
-    tid_t trib_txn_id = trib.txn()->txn_id;
+    auto main_cursor = _main_db.create_cursor();
+    main_cursor->start_transaction();
 
-    auto main_cursor_ptr = _main_db.create_cursor();
-    main_cursor_ptr->start_transaction();
+    _TxnPinGuard<typename TributaryDB::txn_ptr> trib_pin(trib->txn_ref());
+    tid_t trib_txn_id = trib->txn()->txn_id;
 
-    // Pass 1: apply deletions
-    {
-      auto trib_txn = trib.txn();
+    try {
+      // Pass 1: apply deletions
+      auto trib_txn = trib->txn();
       auto* ttxn = static_cast<TxnType*>(&*trib_txn);
       if (ttxn->delete_root) {
-        _Cursor<TribCursorTraits> del_cursor(&trib, &ttxn->delete_root);
+        _Cursor<TribCursorTraits> del_cursor(trib, &ttxn->delete_root);
         del_cursor.first();
         while (del_cursor.is_valid()) {
-          main_cursor_ptr->find(Slice(del_cursor.current_key));
-          if (main_cursor_ptr->is_valid() &&
-              main_cursor_ptr->current_key == del_cursor.current_key) {
-            main_cursor_ptr->template remove<false>();
-          }
+          main_cursor->find(Slice(del_cursor.current_key));
+          if (main_cursor->is_valid() &&
+              main_cursor->current_key == del_cursor.current_key)
+            main_cursor->template remove<false>();
           del_cursor.next();
         }
       }
-    }
 
-    // Pass 2: merge tributary data trie into main DB
-    {
-      _Cursor<TribCursorTraits> src(&trib, &trib.txn()->root);
+      // Pass 2: merge tributary data trie into main DB
+      _Cursor<TribCursorTraits> src(trib, &trib->txn()->root);
       src.clear();
-
       _TributaryMergePolicy<ConflictPolicy_> policy(_conflict_policy,
                                                     main_txn_id, trib_txn_id);
-      _Merger<MainCursor, _Cursor<TribCursorTraits>,
-              _TributaryMergePolicy<ConflictPolicy_>>
-          merger(*main_cursor_ptr, src, policy);
-      merger.exec();
-    }
+      _Merger<typename MainDB_::Cursor, _Cursor<TribCursorTraits>,
+              _TributaryMergePolicy<ConflictPolicy_>>(*main_cursor, src, policy)
+          .exec();
 
-    main_cursor_ptr->commit();
+      main_cursor->commit();
+    } catch (...) {
+      try { main_cursor->rollback(); } catch (...) {}
+      throw;
+    }
   }
 
   // Crash recovery for every tributary on reopen. The pool is idle when
@@ -739,12 +751,15 @@ struct _ConfluenceDB {
 
         // Reset slot-level fields (live in _TributaryHeader, not _DBHeader).
         new (&slot->refs) std::atomic<uint32_t>(0);
-        if (state == Slot::MERGED) {
+        if (state == Slot::EMPTY) {
+          // No data; nothing to do.
+        } else if (state == Slot::MERGED) {
           // Recycle path was interrupted; finish it.
           to_recycle.push_back(t);
         } else {
-          // FREE / WRITING / MERGING: drain via merge.
-          new (&slot->state) std::atomic<uint8_t>(Slot::FREE);
+          // FIRST_WRITING / WRITING / ATTACHED / MERGING: may have committed
+          // data; reset to MERGING and drain via merge (no-op if empty).
+          new (&slot->state) std::atomic<uint8_t>(Slot::MERGING);
           to_merge.push_back(t);
         }
       }
@@ -848,8 +863,12 @@ struct _PinnedSource {
   // rollback() since those change the cursor's _txn.
   void _refresh_del_cursor() {
     auto* ttxn = static_cast<TxnType*>(&*_trib_cursor->_txn);
-    _del_cursor = std::make_unique<_Cursor<TribCursorTraits>>(
-        _trib_db, &ttxn->delete_root);
+    if (_del_cursor) {
+      _del_cursor->set_root(&ttxn->delete_root);
+    } else {
+      _del_cursor = std::make_unique<_Cursor<TribCursorTraits>>(
+          _trib_db, &ttxn->delete_root);
+    }
   }
 };
 
@@ -877,11 +896,10 @@ struct _ConfluenceCursor {
   ConfluenceDB_* _cdb;
   ConflictPolicy _policy;
 
-  // Write state.
-  // No separate write cursor: when _in_transaction is true, the LAST entry
-  // of _sources is the writer. Its _trib_cursor is in an active write txn
-  // and is used for both reading (via the N-way merge alongside the other
-  // sources) and writing (value() / remove() / commit() / rollback()).
+  // Sticky write slot: held across transactions until threshold/idle/destroy.
+  // When _in_transaction is true, _write_source._trib_cursor is in an active
+  // write txn. Between transactions, state is ATTACHED (cursor owns it).
+  PinnedSource _write_source;
   bool _in_transaction{false};
   uint32_t _pending_write_keys{0};
 
@@ -889,13 +907,12 @@ struct _ConfluenceCursor {
   MainTxnPtr _main_txn;
   std::unique_ptr<_Cursor<MainCursorTraits>> _main_cursor;
 
-  // _sources[0.._sources_n) are active (pinned).
+  // _sources[0.._sources_n) are active (pinned) read sources.
   // _sources[_sources_n..size) are parked (slot/txn released, cursors kept).
+  // The write slot (_write_source) is NOT in this list.
   std::vector<PinnedSource> _sources;
   size_t _sources_n{0};
-  bool _sources_valid{false};
-  uint64_t _sources_merge_epoch{UINT64_MAX};
-  uint64_t _sources_chain_epoch{UINT64_MAX};
+  uint64_t _sources_state_epoch{UINT64_MAX};
 
   // Reused hot-path buffers (avoid per-call allocation)
   std::string _iter_key;
@@ -907,10 +924,6 @@ struct _ConfluenceCursor {
   bool _valid{false};
   bool _pending_find{false};  // find() is lazy; materialized on first is_valid/value/next/prev
   Slice _search_key;          // non-owning view into _iter_key; set eagerly by find()
-  // true once all cursors are positioned at _iter_key; set false by find(),
-  // restored by _ensure_all_positioned() (called lazily from next()/prev()).
-  bool _positioned{true};
-
   explicit _ConfluenceCursor(ConfluenceDB_* cdb) : _cdb(cdb) {
     _main_txn = _cdb->txn_ref();
     _main_cursor = std::make_unique<_Cursor<MainCursorTraits>>(
@@ -920,73 +933,89 @@ struct _ConfluenceCursor {
   ~_ConfluenceCursor() {
     if (_in_transaction) rollback();
     _release_sources();
+    _release_write_source();
     if (_main_txn) _main_txn->refs.fetch_sub(1, std::memory_order_acq_rel);
   }
 
   bool start_transaction(bool non_blocking = false) {
     if (_in_transaction) return true;
+    // Propagate any async merge error before entering a new transaction.
+    if (_cdb->_has_merge_error.load(std::memory_order_acquire)) {
+      std::lock_guard<std::mutex> lk(_cdb->_merge_error_mutex);
+      auto e = std::exchange(_cdb->_pending_merge_error, nullptr);
+      _cdb->_has_merge_error.store(false, std::memory_order_release);
+      if (e) std::rethrow_exception(e);
+    }
 
-    // Claim a tributary slot without holding source refs.  When all
-    // MAX_TRIBUTARIES slots are occupied, _try_claim_or_alloc returns nullptr
-    // and we must yield _before_ re-pinning sources.  Holding source refs
-    // while spinning would prevent MERGED slots from being recycled (each
-    // cursor ref keeps state != FREE), creating a livelock.
+    // Fast path: reuse sticky write slot if still ATTACHED and not idle.
+    if (_write_source._slot) {
+      uint8_t expected = Slot::ATTACHED;
+      if (_write_source._slot->state.compare_exchange_strong(
+              expected, Slot::WRITING, std::memory_order_acq_rel)) {
+        // We won the CAS — slot is ours again.
+        if (!_write_source._trib_cursor->start_transaction(non_blocking)) {
+            // Roll back state: WRITING → ATTACHED
+            _write_source._slot->state.store(Slot::ATTACHED,
+                                             std::memory_order_release);
+            return false;
+          }
+          _write_source._refresh_del_cursor();
+        _in_transaction = true;
+        _pending_write_keys = 0;
+        return true;
+      }
+      // CAS failed: monitor stole the slot (ATTACHED→MERGING) — release
+      // our single claim ref and fall through to acquire a fresh slot.
+      _write_source.park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
+    }
+
+    // Slow path: acquire a fresh write slot.
+    // _ensure_sources() deferred to first read (lazy) — pure write paths
+    // never need it here.
     TributaryDB* trib = nullptr;
     unsigned spin = 0;
-    for (;;) {
-      // Pin the current tributary snapshot for reads.
-      _release_sources();
-      _ensure_sources();
-      trib = _cdb->_try_claim_or_alloc();
-      if (trib) break;
-
-      // Cap reached: release any held source refs so the pool can recycle
-      // MERGED slots, then back off before retrying.
-      _release_sources();
-      if (spin < 16) {
+    trib = _cdb->_try_claim_or_alloc();
+    if (!trib) {
+      // All slots occupied — release read source refs and spin.
+      for (;;) {
+        _release_sources();
+        if (spin < 16) {
 #if defined(LEAVES_X86_64)
-        _mm_pause();
+          _mm_pause();
 #elif defined(LEAVES_ARM64) && defined(_MSC_VER)
-        __yield();
+          __yield();
 #elif defined(LEAVES_ARM64)
-        __asm__ __volatile__("yield");
+          __asm__ __volatile__("yield");
 #else
-        std::this_thread::yield();
+          std::this_thread::yield();
 #endif
-      } else if (spin < 64) {
-        std::this_thread::yield();
-      } else {
-        unsigned shift = std::min<unsigned>(spin - 64, 10);
-        std::this_thread::sleep_for(
-            std::chrono::microseconds(1u << shift));
+        } else if (spin < 64) {
+          std::this_thread::yield();
+        } else {
+          unsigned shift = std::min<unsigned>(spin - 64, 10);
+          std::this_thread::sleep_for(
+              std::chrono::microseconds(1u << shift));
+        }
+        ++spin;
+        trib = _cdb->_try_claim_or_alloc();
+        if (trib) break;
       }
-      ++spin;
     }
 
     slot_ptr slot = trib->_header;
-    slot->refs.fetch_add(1, std::memory_order_acq_rel);
-    offset_t slot_off =
-        (uint64_t)_cdb->_main_db._storage.resolve(slot);
-
-    if (_sources_n >= _sources.size()) _sources.emplace_back();
-    auto& w = _sources[_sources_n];
-    w.reinit(_cdb, trib, slot, slot_off);
-    try {
-      if (!w._trib_cursor->start_transaction(non_blocking)) {
-        w.park();
-        _cdb->release_tributary(trib);
-        return false;
-      }
-    } catch (...) {
-      w.park();
-      _cdb->release_tributary(trib);
-      throw;
+    // _try_claim/_alloc_new_slot already set refs=1 (our single claim pin).
+    // Do NOT do an extra refs.fetch_add here — park() via _unpin_slot will
+    // release that one pin.
+    offset_t slot_off = (uint64_t)_cdb->_main_db._storage.resolve(slot);
+    _write_source.park();  // drop any stale cursor objects (slot is null → no-op on refs)
+    _write_source.reinit(_cdb, trib, slot, slot_off);
+    if (!_write_source._trib_cursor->start_transaction(non_blocking)) {
+      // Failed — transition to MERGING so monitor will clean up, then release pin.
+      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+      _write_source.park();  // refs-- (1→0)
+      return false;
     }
-    // The cursor's _txn changed from read_txn to the new active txn —
-    // re-point _del_cursor at active_txn->delete_root so reads of the
-    // writer's source observe its pending deletes.
-    w._refresh_del_cursor();
-    ++_sources_n;
+    _write_source._refresh_del_cursor();
     _in_transaction = true;
     _pending_write_keys = 0;
     return true;
@@ -994,40 +1023,55 @@ struct _ConfluenceCursor {
 
   bool commit(bool sync = false) {
     if (!_in_transaction) return false;
-    auto& w = _sources[_sources_n - 1];
-    bool ok = w._trib_cursor->commit(sync);
+    bool ok = _write_source._trib_cursor->commit(sync);
     if (!ok) {
-      w._trib_cursor->rollback();
+      _write_source._trib_cursor->rollback();
     } else {
-      w._slot->write_count.fetch_add(_pending_write_keys,
-                                     std::memory_order_relaxed);
-      w._slot->last_used_time.store(_current_time(),
-                                    std::memory_order_release);
+      uint32_t new_wc = _write_source._slot->write_count.fetch_add(
+                            _pending_write_keys, std::memory_order_relaxed) +
+                        _pending_write_keys;
+      _write_source._slot->last_used_time.store(_current_time(),
+                                                std::memory_order_release);
+      uint8_t old_state = _write_source._slot->state.load(
+          std::memory_order_relaxed);
+      uint32_t threshold =
+          _cdb->_merge_write_threshold.load(std::memory_order_relaxed);
+      if (new_wc >= threshold) {
+        // Threshold reached: transition to MERGING and release our claim pin.
+        _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+        _write_source.park();  // _unpin_slot → refs-- (1→0)
+      } else {
+        // Stay attached: WRITING/FIRST_WRITING → ATTACHED
+        bool first_commit = (old_state == Slot::FIRST_WRITING);
+        _write_source._slot->state.store(Slot::ATTACHED,
+                                         std::memory_order_release);
+        if (first_commit) {
+          // Slot now has a readable snapshot for the first time.
+          _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
+        }
+      }
     }
-    TributaryDB* trib = w._trib_db;
-    w.park();
-    --_sources_n;
-    _cdb->release_tributary(trib);
     _in_transaction = false;
     _pending_write_keys = 0;
-    // Other sources are stale (no longer reflect the writer's commit, and
-    // the next find should pick up a fresh snapshot including the merged
-    // state). Release them so _ensure_sources() rebuilds on next access.
-    _release_sources();
+    _value_storage = Slice();
     return ok;
   }
 
   bool rollback() {
     if (!_in_transaction) return false;
-    auto& w = _sources[_sources_n - 1];
-    w._trib_cursor->rollback();
-    TributaryDB* trib = w._trib_db;
-    w.park();
-    --_sources_n;
-    _cdb->release_tributary(trib);
+    _write_source._trib_cursor->rollback();
+    uint8_t s = _write_source._slot->state.load(std::memory_order_relaxed);
+    if (s == Slot::WRITING) {
+      // Slot had a prior committed snapshot: revert to ATTACHED, keep pin.
+      _write_source._slot->state.store(Slot::ATTACHED, std::memory_order_release);
+    } else {
+      // FIRST_WRITING: no prior snapshot — release the slot (no-op merge).
+      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+      _write_source.park();  // _unpin_slot → refs-- (1→0)
+    }
     _in_transaction = false;
     _pending_write_keys = 0;
-    _release_sources();
+    _value_storage = Slice();
     return true;
   }
 
@@ -1036,30 +1080,33 @@ struct _ConfluenceCursor {
   void value(const Slice& v) {
     assert(_in_transaction);
     _materialize_write();
-    auto& w = _sources[_sources_n - 1];
-    w._trib_cursor->value(v);
+    _write_source._trib_cursor->value(v);
     ++_pending_write_keys;
   }
 
   void remove() {
     assert(_in_transaction);
     _materialize_write();
-    auto& w = _sources[_sources_n - 1];
-    if (w._trib_cursor->is_valid()) {
+    if (_write_source._trib_cursor->is_valid()) {
       ++_pending_write_keys;
     }
-    w._trib_cursor->remove();
+    _write_source._trib_cursor->remove();
   }
 
   void _ensure_sources() {
-    uint64_t cur_merge_epoch =
-        _cdb->_meta->merge_epoch.load(std::memory_order_acquire);
+    // Propagate any async merge error to the calling cursor op.
+    if (_cdb->_has_merge_error.load(std::memory_order_acquire)) {
+      std::lock_guard<std::mutex> lk(_cdb->_merge_error_mutex);
+      auto e = std::exchange(_cdb->_pending_merge_error, nullptr);
+      _cdb->_has_merge_error.store(false, std::memory_order_release);
+      if (e) std::rethrow_exception(e);
+    }
+    uint64_t cur_state_epoch =
+        _cdb->_meta->state_epoch.load(std::memory_order_acquire);
+    if (_sources_state_epoch == cur_state_epoch)
+      return;
     uint64_t cur_chain_epoch =
         _cdb->_meta->chain_epoch.load(std::memory_order_acquire);
-    if (_sources_valid && _sources_merge_epoch == cur_merge_epoch &&
-        _sources_chain_epoch == cur_chain_epoch)
-      return;
-    _sources_valid = false;
 
     // Refresh main DB snapshot.
     // Pin the new txn first so the old _root pointer stays valid through
@@ -1082,8 +1129,14 @@ struct _ConfluenceCursor {
       for (size_t i = 0; i < n; ++i) {
         TributaryDB* t = _cdb->_trib_at(i);
         slot_ptr slot = t->_header;
-        if (slot->state.load(std::memory_order_acquire) == Slot::MERGED)
+        uint8_t s = slot->state.load(std::memory_order_acquire);
+        // Only include slots with a readable committed snapshot.
+        // EMPTY and FIRST_WRITING have no snapshot yet; MERGED data is
+        // already reflected in the main DB.
+        if (s == Slot::EMPTY || s == Slot::FIRST_WRITING || s == Slot::MERGED)
           continue;
+        // Exclude our own sticky write slot — it is handled separately.
+        if (t == _write_source._trib_db) continue;
         slot->refs.fetch_add(1, std::memory_order_acq_rel);
         offset_t slot_off =
             (uint64_t)_cdb->_main_db._storage.resolve(t->_header);
@@ -1092,18 +1145,6 @@ struct _ConfluenceCursor {
         ++fill;
       }
       _sources_n = fill;
-      // Sort by txn_id descending so _resolve_key_early_exit() can check
-      // the most-recent source first and early-exit on the first verdict.
-      // Only meaningful for _DefaultConflictPolicy (highest-txn_id-wins);
-      // custom policies always scan every candidate so sorting buys nothing.
-      if constexpr (std::is_same_v<ConflictPolicy,
-                                   _DefaultConflictPolicy>) {
-        std::sort(_sources.begin(), _sources.begin() + _sources_n,
-            [](const PinnedSource& a, const PinnedSource& b) {
-              return a._trib_cursor->_txn->txn_id >
-                     b._trib_cursor->_txn->txn_id;
-            });
-      }
     };
 
     // Fast path: if the local _tributaries cache is already in sync with
@@ -1121,110 +1162,46 @@ struct _ConfluenceCursor {
       fill_sources_lockfree();
     }
 
-    _sources_merge_epoch =
-        _cdb->_meta->merge_epoch.load(std::memory_order_relaxed);
-    _sources_chain_epoch =
-        _cdb->_meta->chain_epoch.load(std::memory_order_relaxed);
-    _sources_valid = true;
+    _sources_state_epoch =
+        _cdb->_meta->state_epoch.load(std::memory_order_relaxed);
   }
 
   void _release_sources() {
     for (size_t i = 0; i < _sources_n; ++i) _sources[i].park();
     _sources_n = 0;
     _value_storage = Slice();  // null to prevent dangling
-    _sources_valid = false;
-    _positioned = false;
+    _sources_state_epoch = UINT64_MAX;  // force rebuild on next _ensure_sources
   }
 
-  // Fast point-lookup: checks sources in descending txn_id order (sources are
-  // sorted once in fill_sources_lockfree inside _ensure_sources) and
-  // early-exits on the first definitive verdict.  Assumes
-  // _DefaultConflictPolicy semantics: highest txn_id wins; tombstone at the
-  // highest remaining source means the key is deleted.
-  // Leaves non-visited cursors unpositioned; call _ensure_all_positioned()
-  // before invoking next()/prev() or _advance_to_next_valid().
-  bool _resolve_key_early_exit(const Slice& key, Slice& value_out) {
-    _ensure_sources();
-    if (!_sources_n) {
-      _main_cursor->find(key);
-      if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
-        value_out = _main_cursor->value();
-        return true;
-      }
-      return false;
+  // Detach the sticky write slot.  Safe to call when _slot is null (no-op).
+  // Detach the sticky write slot.  Safe to call when _slot is null (no-op).
+  // ATTACHED → MERGING so the monitor picks it up on the next cycle.
+  // For other states (e.g. MERGING after monitor steal) the state is already
+  // correct — just release our claim pin via park().
+  void _release_write_source() {
+    if (!_write_source._slot) return;
+    uint8_t s = _write_source._slot->state.load(std::memory_order_relaxed);
+    if (s == Slot::ATTACHED) {
+      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
     }
-    // Sources are sorted descending by txn_id. Interleave main cursor at its
-    // txn_id position so the overall traversal is still highest-first.
-    const tid_t main_tid = _main_txn->txn_id;
-    bool checked_main = false;
-    for (size_t i = 0; i < _sources_n; ++i) {
-      auto& src = _sources[i];
-      if (!checked_main && main_tid > src._trib_cursor->_txn->txn_id) {
-        checked_main = true;
-        _main_cursor->find(key);
-        if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
-          value_out = _main_cursor->value();
-          return true;
-        }
-      }
-      if (src._del_cursor) {
-        src._del_cursor->find(key);
-        if (src._del_cursor->is_valid() && key == src._del_cursor->current_key)
-          return false;  // tombstone at highest remaining txn_id → deleted
-      }
-      src._trib_cursor->find(key);
-      if (src._trib_cursor->is_valid() && key == src._trib_cursor->current_key) {
-        value_out = src._trib_cursor->value();
-        return true;
-      }
-    }
-    if (!checked_main) {
-      _main_cursor->find(key);
-      if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
-        value_out = _main_cursor->value();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Positions ALL trib+del cursors and main cursor at _iter_key.
-  // Called by next()/prev() after _resolve_key_early_exit() left some cursors
-  // unpositioned, ensuring the merge advance loop sees a consistent state.
-  void _ensure_all_positioned() {
-    if (_positioned) return;
-    _ensure_sources();
-    for (size_t i = 0; i < _sources_n; ++i) {
-      auto& src = _sources[i];
-      src._trib_cursor->find(Slice(_iter_key));
-      if (src._del_cursor) src._del_cursor->find(Slice(_iter_key));
-    }
-    _main_cursor->find(Slice(_iter_key));
-    _positioned = true;
+    _write_source.park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
   }
 
   bool _resolve_key(const Slice& key, Slice& value_out) {
     _ensure_sources();
 
-    if (!_sources_n) {
-      _main_cursor->find(key);
-      if (_main_cursor->is_valid() && key == _main_cursor->current_key) {
-        value_out = _main_cursor->value();
-        return true;
-      }
-      return false;
-    }
-
     _candidates.clear();
 
-    // Serial find on all sources + main cursor on the calling thread.
-    // Parallel fan-out (shared pool / per-cursor spin dispatcher) was
-    // measured to regress readrandom: dispatch overhead (~2 µs shared
-    // pool, ~5-10 µs spin dispatcher) dwarfs the actual find (~120 ns).
+    // Serial find on all read sources + write source (if in transaction) +
+    // main cursor on the calling thread.
     for (size_t i = 0; i < _sources_n; ++i) {
       auto& src = _sources[i];
       src._trib_cursor->find(key);
       if (src._del_cursor) src._del_cursor->find(key);
+    }
+    if (_in_transaction) {
+      _write_source._trib_cursor->find(key);
+      if (_write_source._del_cursor) _write_source._del_cursor->find(key);
     }
     _main_cursor->find(key);
 
@@ -1246,6 +1223,20 @@ struct _ConfluenceCursor {
              found ? src._trib_cursor->value() : Slice(), deleted});
       }
     }
+    if (_in_transaction) {
+      bool found = _write_source._trib_cursor->is_valid() &&
+                   key == _write_source._trib_cursor->current_key;
+      bool deleted = false;
+      if (_write_source._del_cursor) {
+        deleted = _write_source._del_cursor->is_valid() &&
+                  key == _write_source._del_cursor->current_key;
+      }
+      if (found || deleted) {
+        _candidates.push_back(
+            {_write_source._trib_cursor->_txn->txn_id,
+             found ? _write_source._trib_cursor->value() : Slice(), deleted});
+      }
+    }
 
     if (_candidates.empty()) return false;
     int winner = _policy.resolve(key, _candidates);
@@ -1254,52 +1245,36 @@ struct _ConfluenceCursor {
     return true;
   }
 
-  // Resolve a lazy find().  Non-txn path with _DefaultConflictPolicy uses
-  // early-exit (fast, sources already sorted by txn_id desc); txn path and
-  // custom policies use full fan-out (txn appends the writer unsorted after
-  // the sorted read-sources; custom policies are not guaranteed to be
-  // monotone in txn_id and so cannot early-exit safely).
   void _materialize_full() {
     if (!_pending_find) return;
     _pending_find = false;
     Slice found_val;
-    bool use_early_exit = false;
-    if constexpr (std::is_same_v<ConflictPolicy, _DefaultConflictPolicy>) {
-      use_early_exit = !_in_transaction;
-    }
-    if (use_early_exit) {
-      _positioned = false;
-      if (_resolve_key_early_exit(Slice(_iter_key), found_val)) {
-        _value_storage = found_val;
-        _valid = true;
-      } else {
-        _valid = false;
-      }
+    if (_resolve_key(Slice(_iter_key), found_val)) {
+      _value_storage = found_val;
+      _valid = true;
     } else {
-      _positioned = true;
-      if (_resolve_key(Slice(_iter_key), found_val)) {
-        _value_storage = found_val;
-        _valid = true;
-      } else {
-        _valid = false;
-      }
+      _valid = false;
     }
   }
 
   // Write-cursor-only materialization: positions only the write cursor.
-  // Triggered by value(Slice) set and remove().
+  // Called by value(Slice) set and remove() to position the write cursor.
+  // NOTE: does NOT set _valid — use is_valid() / value() for reads.
   void _materialize_write() {
     if (!_pending_find) return;
     _pending_find = false;
-    auto& w = _sources[_sources_n - 1];
-    w._trib_cursor->find(Slice(_iter_key));
-    _valid = w._trib_cursor->is_valid() &&
-             _search_key == w._trib_cursor->current_key;
+    _write_source._trib_cursor->find(Slice(_iter_key));
+    _valid = _write_source._trib_cursor->is_valid() &&
+             _search_key == _write_source._trib_cursor->current_key;
   }
 
   bool is_valid() {
-    if (_in_transaction) _materialize_write();
-    else _materialize_full();
+    // Always use the full materialization so that is_valid() reflects the
+    // merged view of all sources (main DB + all tributaries), not just the
+    // write cursor.  _materialize_full() also calls find() on the write
+    // cursor via _resolve_key(), which positions it for subsequent
+    // value(Slice) writes even when _pending_find has been consumed.
+    _materialize_full();
     return _valid;
   }
   Slice key() const { return _search_key; }
@@ -1313,7 +1288,6 @@ struct _ConfluenceCursor {
     _search_key = Slice(_iter_key);
     _pending_find = true;
     _valid = false;
-    _positioned = false;
   }
 
   void first() {
@@ -1322,14 +1296,13 @@ struct _ConfluenceCursor {
     _main_cursor->first();
     for (size_t i = 0; i < _sources_n; ++i)
       _sources[i]._trib_cursor->first();
-    _positioned = true;
+    if (_in_transaction) _write_source._trib_cursor->first();
     _advance_to_next_valid();
   }
 
   void next() {
     _materialize_full();
     if (!_valid) return;
-    _ensure_all_positioned();
     if (_main_cursor->is_valid() && _search_key == _main_cursor->current_key)
       _main_cursor->next();
     for (size_t i = 0; i < _sources_n; ++i) {
@@ -1338,6 +1311,9 @@ struct _ConfluenceCursor {
           _search_key == src._trib_cursor->current_key)
         src._trib_cursor->next();
     }
+    if (_in_transaction && _write_source._trib_cursor->is_valid() &&
+        _search_key == _write_source._trib_cursor->current_key)
+      _write_source._trib_cursor->next();
     _advance_to_next_valid();
   }
 
@@ -1347,14 +1323,13 @@ struct _ConfluenceCursor {
     _main_cursor->last();
     for (size_t i = 0; i < _sources_n; ++i)
       _sources[i]._trib_cursor->last();
-    _positioned = true;
+    if (_in_transaction) _write_source._trib_cursor->last();
     _advance_to_prev_valid();
   }
 
   void prev() {
     _materialize_full();
     if (!_valid) return;
-    _ensure_all_positioned();
     if (_main_cursor->is_valid() && _search_key == _main_cursor->current_key)
       _main_cursor->prev();
     for (size_t i = 0; i < _sources_n; ++i) {
@@ -1363,6 +1338,9 @@ struct _ConfluenceCursor {
           _search_key == src._trib_cursor->current_key)
         src._trib_cursor->prev();
     }
+    if (_in_transaction && _write_source._trib_cursor->is_valid() &&
+        _search_key == _write_source._trib_cursor->current_key)
+      _write_source._trib_cursor->prev();
     _advance_to_prev_valid();
   }
 
@@ -1377,6 +1355,10 @@ struct _ConfluenceCursor {
           if (!min_key || src._trib_cursor->current_key < *min_key)
             min_key = &src._trib_cursor->current_key;
         }
+      }
+      if (_in_transaction && _write_source._trib_cursor->is_valid()) {
+        if (!min_key || _write_source._trib_cursor->current_key < *min_key)
+          min_key = &_write_source._trib_cursor->current_key;
       }
       if (!min_key) {
         _valid = false;
@@ -1403,6 +1385,17 @@ struct _ConfluenceCursor {
         _candidates.push_back(
             {src._trib_cursor->_txn->txn_id, src._trib_cursor->value(), deleted});
       }
+      if (_in_transaction && _write_source._trib_cursor->is_valid() &&
+          _write_source._trib_cursor->current_key == _iter_key) {
+        bool deleted = false;
+        if (_write_source._del_cursor) {
+          _write_source._del_cursor->find(Slice(_iter_key));
+          deleted = _write_source._del_cursor->is_valid() &&
+                    _write_source._del_cursor->current_key == _iter_key;
+        }
+        _candidates.push_back({_write_source._trib_cursor->_txn->txn_id,
+                                _write_source._trib_cursor->value(), deleted});
+      }
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
         _main_cursor->next();
@@ -1412,6 +1405,9 @@ struct _ConfluenceCursor {
             src._trib_cursor->current_key == _iter_key)
           src._trib_cursor->next();
       }
+      if (_in_transaction && _write_source._trib_cursor->is_valid() &&
+          _write_source._trib_cursor->current_key == _iter_key)
+        _write_source._trib_cursor->next();
 
       int winner = _policy.resolve(Slice(_iter_key), _candidates);
       if (winner >= 0) {
@@ -1434,6 +1430,10 @@ struct _ConfluenceCursor {
           if (!max_key || src._trib_cursor->current_key > *max_key)
             max_key = &src._trib_cursor->current_key;
         }
+      }
+      if (_in_transaction && _write_source._trib_cursor->is_valid()) {
+        if (!max_key || _write_source._trib_cursor->current_key > *max_key)
+          max_key = &_write_source._trib_cursor->current_key;
       }
       if (!max_key) {
         _valid = false;
@@ -1460,6 +1460,17 @@ struct _ConfluenceCursor {
         _candidates.push_back(
             {src._trib_cursor->_txn->txn_id, src._trib_cursor->value(), deleted});
       }
+      if (_in_transaction && _write_source._trib_cursor->is_valid() &&
+          _write_source._trib_cursor->current_key == _iter_key) {
+        bool deleted = false;
+        if (_write_source._del_cursor) {
+          _write_source._del_cursor->find(Slice(_iter_key));
+          deleted = _write_source._del_cursor->is_valid() &&
+                    _write_source._del_cursor->current_key == _iter_key;
+        }
+        _candidates.push_back({_write_source._trib_cursor->_txn->txn_id,
+                                _write_source._trib_cursor->value(), deleted});
+      }
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
         _main_cursor->prev();
@@ -1469,6 +1480,9 @@ struct _ConfluenceCursor {
             src._trib_cursor->current_key == _iter_key)
           src._trib_cursor->prev();
       }
+      if (_in_transaction && _write_source._trib_cursor->is_valid() &&
+          _write_source._trib_cursor->current_key == _iter_key)
+        _write_source._trib_cursor->prev();
 
       int winner = _policy.resolve(Slice(_iter_key), _candidates);
       if (winner >= 0) {

@@ -212,6 +212,9 @@ class Benchmark {
   Random rand_;
   std::vector<char> bench_keys_buf_;
   int bench_key_size_{0};
+  // Pre-built generators for WriteImplConfluence threads (constructed before
+  // Start() so their 1 MB init cost isn't counted in benchmark time).
+  std::vector<RandomGenerator> conf_thread_gens_;
 
   // State kept for progress messages
   int done_;
@@ -662,9 +665,9 @@ class Benchmark {
       int end = std::min(start + per_thread, num_entries);
 
       threads.emplace_back([this, &total_bytes, start, end, value_size,
-                            entries_per_batch, sync]() {
+                            entries_per_batch, sync, t]() {
         auto cursor = confluence_db_->cursor();
-        RandomGenerator local_gen;
+        RandomGenerator& local_gen = conf_thread_gens_[t];
         int64_t my_bytes = 0;
         for (int i = start; i < end; i += entries_per_batch) {
           cursor.start_transaction();
@@ -806,6 +809,10 @@ class Benchmark {
 
       Open(sync);
       prepare_keys(order, num_entries);
+      if (using_confluence_) {
+        conf_thread_gens_.clear();
+        conf_thread_gens_.resize(FLAGS_use_confluence);
+      }
       Start();  // Do not count time taken to destroy/open
     }
 
@@ -888,7 +895,9 @@ class Benchmark {
     auto cursor = confluence_db_->cursor();
     for (int i = 0; i < reads_; i++) {
       leaves::Slice value_out;
-      if (cursor.find(bench_key(i), value_out)) {
+      cursor.find(bench_key(i));
+      if (cursor.is_valid()) {
+        value_out = cursor.value();
         bytes_ += bench_key_size_ + value_out.size();
       }
       FinishedSingleOp();

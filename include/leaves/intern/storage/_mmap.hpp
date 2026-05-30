@@ -187,9 +187,10 @@ struct _MemoryMapFile
     this->stop_pool();     // stop worker threads before unmapping
     if constexpr (MAX_PROCESSES > 1)
       remove_pid();
-    // Mark a clean shutdown so the next open skips recover_areas.
-    if (_memory) _memory->clean_close = 1;
-    _region.flush();
+    if (_memory) {
+      _memory->clean_close = 1;
+      _region.flush(0, _memory->file_size, false);
+    }
   }
 
   const char* filename() const { return _file.get_name(); }
@@ -408,8 +409,9 @@ struct _MemoryMapFile
     uint64_t total_growth = std::max({size, MIN_GROWTH, geometric_growth});
     total_growth = padding(total_growth, AREA_SIZE);
 
-    if (_memory->file_size + total_growth > _region.get_size())
+    if (_memory->file_size + total_growth > _region.get_size()) {
       throw StorageFull();
+    }
 
     offset_t new_offset = _memory->file_size;
     _memory->file_size = _memory->file_size + total_growth;
@@ -434,7 +436,7 @@ struct _MemoryMapFile
   area_ptr alloc_single_area() {
     auto result = _memory->area_pool.alloc_single_area(*this);
     if (!result) return resize_file(AREA_SIZE);
-    return result;  // Return Area* directly
+    return result;
   }
 
   area_ptr alloc_multi_area(uint64_t size) {

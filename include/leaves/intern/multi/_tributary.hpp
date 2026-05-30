@@ -39,7 +39,7 @@ struct _TributaryTransaction : public _Transaction<Traits_> {
       Resolver& resolver) {
     auto page = Base::alloc_slot(SLOT_ID, resolver);
     page->used = sizeof(_TributaryTransaction);
-    memcpy(&*page, this, sizeof(_TributaryTransaction));
+    memcpy(reinterpret_cast<char*>(&*page), reinterpret_cast<const char*>(this), sizeof(_TributaryTransaction));
     auto new_txn = reinterpret_cast<_TributaryTransaction*>(&*page);
     new_txn->mem_manager.reinit_locks();
     new (&new_txn->refs) std::atomic<uint32_t>(0);
@@ -57,27 +57,32 @@ struct _TributaryTransaction : public _Transaction<Traits_> {
 // Lifetime safety:
 //   All users (writers, readers, merger) hold a pin via `refs`.
 //   A slot transitions through:
-//     FREE → WRITING (writer claims)
-//     WRITING → FREE (writer releases, below threshold)
-//     WRITING → MERGING (writer releases, at/above threshold)
-//     FREE → MERGING (idle timeout, monitor-triggered)
+//     FIRST_WRITING → ATTACHED (first commit; cursor sticks to slot)
+//     WRITING → ATTACHED (writer commits below threshold; cursor sticks to slot)
+//     ATTACHED → WRITING (cursor starts next transaction, CAS; fast path)
+//     ATTACHED → MERGING (idle timeout CAS by monitor, or cursor destroyed)
+//     WRITING → MERGING (writer commits at/above threshold)
 //     MERGING → MERGED (merge finished — terminal state)
-//   Readers may pin FREE, WRITING, or MERGING slots.
+//   Readers may pin WRITING, ATTACHED, or MERGING slots.
 //   A reader that pins and then sees MERGED must immediately unpin.
 //   _free_slot() is called by whoever decrements refs to 0 with state==MERGED.
 
 template <typename Storage_>
 struct _TributaryHeader : public _DBHeader<Storage_> {
-  // state values
-  static constexpr uint8_t FREE    = 0;
-  static constexpr uint8_t WRITING = 1;  // claimed by a writer
-  static constexpr uint8_t MERGING = 2;  // merge in progress
-  static constexpr uint8_t MERGED  = 3;  // merge done; awaiting _free_slot
+  // Slot lifecycle state values.
+  // Readable by cursors (have a committed snapshot): FREE, WRITING, ATTACHED, MERGING.
+  // Not readable (no snapshot, or data already in main DB): EMPTY, FIRST_WRITING, MERGED.
+  static constexpr uint8_t EMPTY         = 0;  // no data; slot reset or never used
+  static constexpr uint8_t FIRST_WRITING = 1;  // first writer active; no readable snapshot yet
+  static constexpr uint8_t WRITING       = 3;  // claimed by writer; readable snapshot exists
+  static constexpr uint8_t MERGING       = 4;  // merge in progress
+  static constexpr uint8_t MERGED        = 5;  // merged into main DB; awaiting recycle to EMPTY
+  static constexpr uint8_t ATTACHED      = 6;  // sticky: cursor holds exclusive claim between txns
 
   std::atomic<uint64_t> last_used_time{0}; // epoch seconds, set on commit
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   std::atomic<uint32_t> write_count{0};    // committed writes since creation
-  std::atomic<uint8_t>  state{FREE};
+  std::atomic<uint8_t>  state{EMPTY};
 };
 
 // Forward declarations

@@ -489,9 +489,12 @@ set(LEAVES_GTEST_INCLUDE_DIRS
 
 if (LEAVES_BUILD_BENCHMARKS) 
 set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Build LevelDB's unit tests" FORCE)
+set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "Build LevelDB's benchmarks" FORCE)
 set(LEVELDB_INSTALL OFF CACHE BOOL "Install LevelDB's header and library" FORCE)
 set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Enable installation of benchmark." FORCE)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Enable testing of the benchmark library." FORCE)
 include_directories(SYSTEM ${LEAVES_GTEST_INCLUDE_DIRS})
+add_subdirectory("leveldb/third_party/benchmark")
 add_subdirectory("leveldb")
 
 set(DEBUG_BENCHMARKS OFF CACHE BOOL "Build benchmarks with debug info")
@@ -506,18 +509,15 @@ target_sources(lbench INTERFACE
     "leveldb/util/testutil.h")
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
-target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
-    benchmark leveldb pthread core blake3)
+target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb pthread blake3)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
-target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
-    benchmark leveldb lmdb pthread)
+target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb pthread)
 target_compile_options(db_bench_mdb PRIVATE -O3 -march=native -funroll-loops -flto=auto)
 target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
-target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
-    benchmark leveldb pthread)
+target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb pthread)
 
 add_executable(bench_hash_updater benchmarks/bench_hash_updater.cpp)
 target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
@@ -534,7 +534,7 @@ if (DEBUG_BENCHMARKS)
     target_compile_definitions(bench_hash_updater PRIVATE DEBUG)
 else()
     target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
-    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
     target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
     target_compile_options(bench_hash_updater PRIVATE -O3 -march=native -funroll-loops -flto=auto)

@@ -403,7 +403,7 @@ struct _DB {
   page_ptr alloc_slot(uint16_t slot) {
     assert(transaction_active());
     assert(bool(_active_txn));
-    return _active_txn->alloc_slot(slot, *this);
+    return _active_txn->alloc_slot(slot, self());
   }
 
   void free(page_ptr page) {
@@ -518,7 +518,7 @@ struct _DB {
   // immediately when the txn_lock cannot be acquired.
   // May only be called by cursor
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
-                            TransactionOrigin origin = TransactionOrigin::user) {
+                            TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     if (!nonblocking)
       _header->txn_lock.lock();
     else if (!_header->txn_lock.try_lock())
@@ -563,7 +563,7 @@ struct _DB {
     return _active_txn;
   }
 
-  bool rollback(uint64_t cursor_id, TransactionOrigin origin = TransactionOrigin::user) {
+  bool rollback(uint64_t cursor_id, TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     if (_header->txn_cursor_id.load() != cursor_id) return false;
 
     // Return areas allocated during write transaction
@@ -577,7 +577,7 @@ struct _DB {
     // Reuse _active_txn's page for next pre-allocated transaction.
     // _active_txn was allocated from read_txn's committed space, so it
     // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy(&*_active_txn, &*read_txn, sizeof(Transaction));
+    memcpy(reinterpret_cast<char*>(&*_active_txn), reinterpret_cast<const char*>(&*read_txn), sizeof(Transaction));
     _active_txn->mem_manager.reinit_locks();
     new (&_active_txn->refs) std::atomic<uint32_t>(0);
     _header->next_txn_page = resolve(_active_txn);
@@ -590,7 +590,7 @@ struct _DB {
   }
 
   tid_t prepare_commit(uint64_t cursor_id, bool sync = false,
-                       TransactionOrigin origin = TransactionOrigin::user) {
+                       TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     // Not my transaction or not started
     if (_header->txn_cursor_id.load() != cursor_id) return tid_t(0);
 

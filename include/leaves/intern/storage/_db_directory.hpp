@@ -77,7 +77,7 @@ struct _DBDirectoryPage {
     count = 0;
     next = 0;
     uint16_t cap = capacity_for(available_bytes);
-    std::memset(entries, 0, sizeof(_DBDirectoryEntry) * cap);
+    std::memset(reinterpret_cast<char*>(entries), 0, sizeof(_DBDirectoryEntry) * cap);
   }
 };
 

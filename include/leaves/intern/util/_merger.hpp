@@ -31,20 +31,20 @@ struct MigratedValue {
 struct StandardMergePolicy {
   // Always overwrite destination with source.
   // Thread safety: may be called concurrently during parallel merge.
-  bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
-                     bool dst_is_big, bool src_is_big) {
+  bool may_overwrite(const std::string& /*key*/, const Slice& /*dst*/, const Slice& /*src*/,
+                     bool /*dst_is_big*/, bool /*src_is_big*/) {
     return true;
   }
 
   // Always add new leaves from source.
   // Thread safety: may be called concurrently during parallel merge.
-  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+  bool may_add_leaf(const std::string& /*key*/, const Slice& /*src*/, bool /*is_big*/) {
     return true;
   }
 
   // Always recurse into source tries.
   // Thread safety: may be called concurrently during parallel merge.
-  bool may_add_trie(const std::string& key) { return true; }
+  bool may_add_trie(const std::string& /*key*/) { return true; }
 
   // Called after a trie node is created/merged during the merge process.
   // Override to compute the trie's hash based on its children's hashes.

@@ -63,25 +63,9 @@ class ConfluenceCursor {
 
   // --- Point reads ---
 
-  // Position the cursor on key. Returns true if the key resolves to a live
-  // value (i.e., the merge of all snapshot sources yields a non-tombstone).
-  // During a write txn, `find` is also used to position before
-  // `value()`/`remove()`.
-  bool find(const Slice& key) {
-    _cursor->find(key);
-    return _cursor->is_valid();
-  }
-
-  // Returns true and fills value_out if key exists (not deleted).
-  bool find(const Slice& key, Slice& value_out) {
-    _cursor->find(key);
-    if (_cursor->is_valid()) { value_out = _cursor->value(); return true; }
-    return false;
-  }
-  bool contains(const Slice& key) {
-    _cursor->find(key);
-    return _cursor->is_valid();
-  }
+  // Position the cursor on key. Use is_valid() / value() after this call.
+  // During a write txn, also positions the write cursor for value()/remove().
+  void find(const Slice& key) { _cursor->find(key); }
 
   // --- Ordered iteration ---
 
