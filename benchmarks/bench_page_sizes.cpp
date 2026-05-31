@@ -18,11 +18,22 @@
 #include <vector>
 
 #include "leaves/mmap.hpp"
+#include "leaves/fstore.hpp"
+#include "leaves/intern/storage/_memstore.hpp"
+#include "leaves/intern/util/_page_hist.hpp"
 
 using namespace leaves;
 
 static int FLAGS_num = 100000;
 static int FLAGS_vsize = 100;
+// Comma-separated list of value sizes to sweep (default: 8,100,1000).
+static const char* FLAGS_vsize_sweep = "";
+// If non-empty, raw allocator-size histograms are dumped here as
+// "<scenario>|v<vsize>,size,count" rows. Use tools/page_sizes_solver.py to
+// turn this into an optimized PAGE_SIZES array.
+static const char* FLAGS_hist_csv = "";
+// Storage backend: "mmap" (default), "file" or "mem".
+static const char* FLAGS_backend = "mmap";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -226,13 +237,17 @@ struct ScenarioResult {
   std::vector<SlotInfo> slots;
 };
 
+template <typename Storage>
 static ScenarioResult run_scenario(const char* name,
                                    const std::vector<std::string>& keys,
                                    int vsize) {
   TempDir tmp("bench_page_sizes");
   auto fpath = tmp.path((std::string(name) + ".lvs").c_str());
 
-  auto storage = MapStorage::create(fpath.c_str());
+  // Reset raw-size histogram so it only captures this scenario's allocations.
+  _page_hist_reset();
+
+  auto storage = Storage::create(fpath.c_str());
   auto db = storage->open("bench");
   auto cursor = db.cursor();
 
@@ -301,6 +316,41 @@ static ScenarioResult run_scenario(const char* name,
   return result;
 }
 
+// In-process memstore has a different API (no path-based create()/open(), no
+// statistics()). We still run the same workload so the histogram captures
+// real allocation sizes; the per-slot table will simply be empty.
+static ScenarioResult run_scenario_mem(const char* name,
+                                       const std::vector<std::string>& keys,
+                                       int vsize) {
+  _page_hist_reset();
+
+  _MemoryStorage storage;
+  auto cursor = storage.create_cursor();
+
+  std::string val(vsize, 'x');
+
+  double t0 = now_seconds();
+  for (int i = 0; i < (int)keys.size(); i++) {
+    cursor->find(Slice(keys[i]));
+    cursor->value(Slice(val));
+  }
+  double t1 = now_seconds();
+
+  double t2 = now_seconds();
+  for (int i = 0; i < (int)keys.size(); i++) {
+    cursor->find(Slice(keys[i]));
+    assert(cursor->is_valid());
+  }
+  double t3 = now_seconds();
+
+  ScenarioResult result{};
+  result.name = name;
+  result.insert_time_ms = (t1 - t0) * 1000.0;
+  result.lookup_time_ms = (t3 - t2) * 1000.0;
+  // slots[] left empty -- mem backend has no per-slot statistics API.
+  return result;
+}
+
 static void print_result(const ScenarioResult& r) {
   printf("\n");
   printf(
@@ -348,20 +398,19 @@ static void print_result(const ScenarioResult& r) {
   }
 }
 
+template <typename Storage>
 static void print_summary(const std::vector<ScenarioResult>& results) {
   printf("\n\n");
   printf(
-      "==============================================================="
-      "====\n");
+      "=============================================================="
+      "=====\n");
   printf("  CROSS-SCENARIO SUMMARY\n");
   printf(
-      "==============================================================="
-      "====\n\n");
+      "=============================================================="
+      "=====\n\n");
 
   // Print current page sizes
-  auto* db_internal_dummy =
-      static_cast<_DB<MapStorage::StorageImpl>*>(nullptr);
-  using DB_type = _DB<MapStorage::StorageImpl>;
+  using DB_type = _DB<typename Storage::StorageImpl>;
 
   printf("  Current PAGE_SIZES:\n");
   for (int i = 0; i < DB_type::MemStatistics::COUNT; i++) {
@@ -380,7 +429,7 @@ static void print_summary(const std::vector<ScenarioResult>& results) {
     }
     printf("  ; %s\n", label);
   }
-  (void)db_internal_dummy;
+
 
   // Per-slot usage across scenarios
   printf("\n  Per-slot usage across all scenarios:\n\n");
@@ -445,18 +494,77 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     if (sscanf(argv[i], "--num=%d", &FLAGS_num) == 1) continue;
     if (sscanf(argv[i], "--vsize=%d", &FLAGS_vsize) == 1) continue;
-    fprintf(stderr, "Usage: %s [--num=N] [--vsize=N]\n", argv[0]);
+    if (strncmp(argv[i], "--vsize_sweep=", 14) == 0) {
+      FLAGS_vsize_sweep = argv[i] + 14;
+      continue;
+    }
+    if (strncmp(argv[i], "--hist_csv=", 11) == 0) {
+      FLAGS_hist_csv = argv[i] + 11;
+      continue;
+    }
+    if (strncmp(argv[i], "--backend=", 10) == 0) {
+      FLAGS_backend = argv[i] + 10;
+      continue;
+    }
+    fprintf(stderr,
+            "Usage: %s [--num=N] [--vsize=N] "
+            "[--vsize_sweep=8,100,1000] [--hist_csv=PATH] "
+            "[--backend=mmap|file|mem]\n",
+            argv[0]);
     return 1;
   }
 
-  using DB_type = _DB<MapStorage::StorageImpl>;
+  const bool backend_mmap = strcmp(FLAGS_backend, "mmap") == 0;
+  const bool backend_file = strcmp(FLAGS_backend, "file") == 0;
+  const bool backend_mem  = strcmp(FLAGS_backend, "mem")  == 0;
+  if (!backend_mmap && !backend_file && !backend_mem) {
+    fprintf(stderr, "Unknown --backend=%s (use mmap|file|mem)\n",
+            FLAGS_backend);
+    return 1;
+  }
+
+  // Parse value-size sweep list.
+  std::vector<int> vsizes;
+  if (FLAGS_vsize_sweep[0]) {
+    const char* p = FLAGS_vsize_sweep;
+    while (*p) {
+      char* end = nullptr;
+      long v = strtol(p, &end, 10);
+      if (end == p) break;
+      if (v > 0) vsizes.push_back((int)v);
+      p = end;
+      while (*p == ',' || *p == ' ') p++;
+    }
+  }
+  if (vsizes.empty()) vsizes.push_back(FLAGS_vsize);
+
+  // Truncate the CSV up front so repeat runs don't accumulate.
+  if (FLAGS_hist_csv[0]) {
+    FILE* f = fopen(FLAGS_hist_csv, "wb");
+    if (f) {
+      fprintf(f, "# tag,size,count  (raw allocator request size in bytes)\n");
+      fclose(f);
+    }
+  }
+
+  using DB_type_mmap = _DB<MapStorage::StorageImpl>;
+  using DB_type_file = _DB<FileStorage::StorageImpl>;
 
   printf("Page Size Benchmark\n");
+  printf("  Backend:    %s\n", FLAGS_backend);
   printf("  Keys:       %d\n", FLAGS_num);
   printf("  Value size: %d bytes\n", FLAGS_vsize);
   printf("  PAGE_SIZES:");
-  for (int i = 0; i < DB_type::MemStatistics::COUNT; i++)
-    printf(" [%d]=%u", i, DB_type::Traits::PAGE_SIZES[i]);
+  if (backend_mmap) {
+    for (int i = 0; i < DB_type_mmap::MemStatistics::COUNT; i++)
+      printf(" [%d]=%u", i, DB_type_mmap::Traits::PAGE_SIZES[i]);
+  } else if (backend_file) {
+    for (int i = 0; i < DB_type_file::MemStatistics::COUNT; i++)
+      printf(" [%d]=%u", i, DB_type_file::Traits::PAGE_SIZES[i]);
+  } else {
+    for (int i = 0; i < _MemoryTraits::PAGE_SIZES_COUNT; i++)
+      printf(" [%d]=%u", i, _MemoryTraits::PAGE_SIZES[i]);
+  }
   printf("\n");
 
   struct Scenario {
@@ -497,11 +605,43 @@ int main(int argc, char** argv) {
       printf("] (%zu bytes)\n", sample.size());
     }
 
-    auto result = run_scenario(sc.name, keys, FLAGS_vsize);
-    print_result(result);
-    results.push_back(std::move(result));
+    for (int vsize : vsizes) {
+      std::string scenario_id =
+          std::string(sc.name) + "_v" + std::to_string(vsize);
+      printf("    [vsize=%d]\n", vsize);
+      ScenarioResult result;
+      if (backend_mmap) {
+        result = run_scenario<MapStorage>(scenario_id.c_str(), keys, vsize);
+      } else if (backend_file) {
+        result = run_scenario<FileStorage>(scenario_id.c_str(), keys, vsize);
+      } else {
+        result = run_scenario_mem(scenario_id.c_str(), keys, vsize);
+      }
+      print_result(result);
+      if (FLAGS_hist_csv[0]) {
+        std::string tag = std::string(sc.name) + "|v" + std::to_string(vsize);
+        _page_hist_dump(FLAGS_hist_csv, tag.c_str(), /*append=*/true);
+      }
+      results.push_back(std::move(result));
+    }
   }
 
-  print_summary(results);
+  if (backend_mmap) {
+    print_summary<MapStorage>(results);
+  } else if (backend_file) {
+    print_summary<FileStorage>(results);
+  } else {
+    printf("\n  (Per-slot summary not available for mem backend; "
+           "histogram CSV is still produced.)\n");
+  }
+
+  if (FLAGS_hist_csv[0]) {
+    printf("\nRaw allocator-size histogram written to: %s\n", FLAGS_hist_csv);
+    printf("Run:  python3 tools/page_sizes_solver.py %s\n", FLAGS_hist_csv);
+  } else {
+    printf("\nTip: pass --hist_csv=PATH to dump raw allocator-size histograms\n"
+           "     and feed them into tools/page_sizes_solver.py for an\n"
+           "     optimized PAGE_SIZES suggestion.\n");
+  }
   return 0;
 }

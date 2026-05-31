@@ -6,9 +6,7 @@
 
 namespace leaves {
 
-// =============================================================================
 // Replication Slot — crash-safe tracking of pre-merge multi-areas
-// =============================================================================
 //
 // The FSM claims one slot in _header->replication_slots[].  The slot
 // holds the offset of the multi-area currently being filled for big

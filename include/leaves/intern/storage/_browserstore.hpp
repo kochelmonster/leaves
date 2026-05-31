@@ -90,15 +90,29 @@ struct _BrowserStoreTraits {
   static constexpr size_t MAX_KEY_SIZE = 512 * K;
   static constexpr size_t AREA_SIZE = 64 * K;  // Smaller blocks for IDB
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
+  // PAGE_SIZES values include sizeof(PageHeader); they are matched against
+  // (space + sizeof(PageHeader)) by _DB::alloc_page / _MemManager::assign_slot.
+  //
+  // These 10 buckets are the optimized layout derived from
+  // benchmarks/bench_page_sizes_browser + tools/page_sizes_solver.py,
+  // running against fake-indexeddb on emscripten. The allocation
+  // histogram is captured directly from _DB::alloc_page hooks under
+  // BrowserStorage (LEAVES_PAGE_HIST), so the buckets reflect actual
+  // browser-backend workloads rather than mmap-backend inference.
+  // Aggregate waste vs. the prior file-backend buckets drops ~3 pp on
+  // most scenarios and ~10 pp on hex_strings/v1000.
   static constexpr uint16_t PAGE_SIZES[] = {
-      _TrieNode<_BrowserStoreTraits>::size(1, 2),    // 2 branches
-      _TrieNode<_BrowserStoreTraits>::size(1, 3),    // 3 branches
-      _TrieNode<_BrowserStoreTraits>::size(1, 4),    // 4 branches
-      _TrieNode<_BrowserStoreTraits>::size(1, 10),   // 5-10 branches
-      _TrieNode<_BrowserStoreTraits>::size(1, 16),   // hex 0-9A-F
-      _TrieNode<_BrowserStoreTraits>::size(1, 64),   // base64
-      _TrieNode<_BrowserStoreTraits>::size(1, 256),  // binary
-      4 * K};
+       40,   // smallest TrieNode + PageHeader
+       56,   // 3 branches
+       64,   // 4 branches (8B-aligned)
+       80,   // 5-6 branches
+      120,   // 7-8 branches
+      152,   // hex 0-9A-F peak
+      192,   // mid-fanout (10-12 branches)
+     1024,   // mid-fanout peak
+     1056,   // mid-fanout peak (adjacent, different vsize regime)
+     4096,   // PAGE_CONTAINER_SIZE cap (binary / overflow)
+  };
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
   using ptr = SmartPointer<PageHeader, TRIE>;

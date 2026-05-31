@@ -309,9 +309,7 @@ struct _MemManager {
   }
 };
 
-// =========================================================================
 // _MemManagerPool — drop-in replacement for _MemManager with N managers
-// =========================================================================
 //
 // Provides the same interface as _MemManager.  Internally holds POOL_SIZE
 // managers with per-manager try-lock spinlocks.
@@ -701,21 +699,24 @@ struct AreaPool {
       Resolver& resolver) {
     // First try to get from single_areas
     auto area = single_areas.pop(resolver);
-    if (area) {
-      return area;
+    if (!area) {
+      // If no single area available, try to get from multi_areas
+      // Look for an area that's exactly AREA_SIZE or can be split
+      constexpr auto AREA_SIZE = Resolver::Traits::AREA_SIZE;
+      area = multi_areas.find_and_remove(AREA_SIZE, resolver);
     }
-
-    // If no single area available, try to get from multi_areas
-    // Look for an area that's exactly AREA_SIZE or can be split
-    constexpr auto AREA_SIZE = Resolver::Traits::AREA_SIZE;
-    area = multi_areas.find_and_remove(AREA_SIZE, resolver);
+    // pop/find_and_remove leave ->next pointing at the former pool successor;
+    // zero it so callers receive a clean, unlinked area.
+    if (area) area->next = 0;
     return area;
   }
 
   template <typename Resolver>
   typename Resolver::Traits::template Pointer<Area> alloc_multi_area(
       size_t size, Resolver& resolver) {
-    return multi_areas.find_and_remove(size, resolver);
+    auto area = multi_areas.find_and_remove(size, resolver);
+    if (area) area->next = 0;
+    return area;
   }
 
   template <typename Resolver>

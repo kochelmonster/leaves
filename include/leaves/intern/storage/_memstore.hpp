@@ -111,6 +111,7 @@ struct _MemoryDB {
   // Returns page_ptr pointing at the PageHeader.
   page_ptr alloc_page(uint16_t space) {
     using PageHeader = typename Traits::PageHeader;
+    _page_hist_record((uint32_t)space + (uint32_t)sizeof(PageHeader));
     uint8_t slot = _mem_manager.assign_slot(space + sizeof(PageHeader));
     page_ptr result = alloc_slot(slot);
     result->used = space;

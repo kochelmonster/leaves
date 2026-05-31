@@ -8,6 +8,7 @@
 
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
+#include "../util/_page_hist.hpp"
 #include "_aspect.hpp"
 #include "_cursor.hpp"
 
@@ -108,6 +109,10 @@ struct _DBHeader {
   // Tracks whether this DB has been sanitized for the current storage
   // generation.  Compared against the FileHeader counter at open() time.
   uint32_t sanitize_generation;
+
+  // Extra offset for storing additional user-defined data beyond the header.
+  // Defaults to 0 (no extra data).
+  offset_t extra_offset{0};
 };
 
 // Make _DB accept Transaction and Header as template parameters
@@ -192,7 +197,6 @@ struct _DB {
 
   void init(offset_t* header) {
     auto area_ptr = _storage.alloc_single_area();
-
     *header = area_ptr->content_offset();  // Use content_offset, not get_offset
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
@@ -205,7 +209,7 @@ struct _DB {
     _header->area_list_head_single = first_area_offset;
     _header->area_list_head_multi = 0;
 
-    uint16_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
     _header->prepared_txn = _header->read_txn = *header + header_size;
     txn_ptr txn = resolve<Transaction>(&_header->read_txn);
     memset((char*)txn, 0, sizeof(Transaction));
@@ -236,6 +240,7 @@ struct _DB {
   // Return all areas to storage pool
   void return_areas() {
     auto read_txn = resolve<Transaction>(&_header->read_txn);
+
     if (_header->area_list_head_single && read_txn->area_list_tail_single) {
       _storage.return_single_areas(_header->area_list_head_single,
                                    read_txn->area_list_tail_single);
@@ -250,9 +255,80 @@ struct _DB {
   void reset(offset_t* header) {
     if (is_active()) throw TransactionActive();
     if (!_aspect.before_reset(self())) return;
+    std::scoped_lock lock(_storage.file_lock());
     return_areas();
     init(header);
     _aspect.on_reset(self());
+  }
+
+  // Reset the DB in place: keep the existing header and the first single
+  // area (which contains the header), return all other single areas plus
+  // the entire multi chain to the storage pool, then re-initialize the
+  // in-place transaction. After this call the DB is in the same logical
+  // state as a freshly init()'d DB sharing the same header offset.
+  // Precondition: no active transaction.
+  // Derived-class header fields outside _DBHeader are preserved (no full
+  // memset).
+  void reset_in_place() {
+    if (is_active()) throw TransactionActive();
+    std::scoped_lock lock(_storage.file_lock());
+
+    auto read_txn = resolve<Transaction>(&_header->read_txn);
+
+    // Return all single areas after the first (the first holds the header).
+    if (_header->area_list_head_single) {
+      area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
+      offset_t second = first->next;
+      if (second && read_txn->area_list_tail_single &&
+          second != _header->area_list_head_single) {
+        _storage.return_single_areas(second, read_txn->area_list_tail_single);
+        first->next = 0;
+        make_dirty(first);
+      }
+    }
+
+    // Return the entire multi-area chain.
+    if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
+      _storage.return_multi_areas(_header->area_list_head_multi,
+                                  read_txn->area_list_tail_multi);
+      _header->area_list_head_multi = 0;
+    }
+
+    // Re-initialise the in-place transaction at header + header_size.
+    offset_t header_off = (uint64_t)_storage.resolve(_header);
+    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+    _header->prepared_txn = _header->read_txn = header_off + header_size;
+    _header->next_txn_page = 0;
+    _header->txn_cursor_id.store(0);
+
+    area_ptr first_area =
+        resolve<Area>(&_header->area_list_head_single, WRITE);
+    offset_t first_area_offset = _header->area_list_head_single;
+
+    txn_ptr txn = resolve<Transaction>(&_header->read_txn);
+    memset((char*)txn, 0, sizeof(Transaction));
+    txn->slot_id = Transaction::SLOT_ID;
+    txn->used = sizeof(Transaction);
+    txn->txn_id = tid_t(1);
+    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+    txn->next_txn = 0;
+    txn->refs.store(0);
+    txn->start_txn = _header->read_txn;
+    txn->area_list_tail_single = first_area_offset;
+    txn->area_list_tail_multi = 0;
+    txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
+                          first_area->end());
+
+    // Pre-allocate the next transaction page (mirrors init()).
+    _active_txn = txn;
+    auto next = txn->clone(*this);
+    _header->next_txn_page = resolve(next);
+    _active_txn.reset();
+
+    make_dirty(first_area);
+    make_dirty(txn);
+    make_dirty(_header);
+    flush();
   }
 
   Aspect& aspect() { return _aspect; }
@@ -307,6 +383,9 @@ struct _DB {
   page_ptr alloc_page(uint16_t space) {
     using PageHeader = typename Traits::PageHeader;
     assert(space + sizeof(PageHeader) <= PAGE_SIZES[PAGE_SIZES_COUNT - 1]);
+    // Record the raw requested size (incl. PageHeader) for PAGE_SIZES tuning.
+    // No-op unless LEAVES_PAGE_HIST is defined at compile time.
+    _page_hist_record((uint32_t)space + (uint32_t)sizeof(PageHeader));
     page_ptr result = alloc_slot(
         MemManager::assign_slot(space + sizeof(PageHeader)));
     result->used = space;
@@ -324,7 +403,7 @@ struct _DB {
   page_ptr alloc_slot(uint16_t slot) {
     assert(transaction_active());
     assert(bool(_active_txn));
-    return _active_txn->alloc_slot(slot, *this);
+    return _active_txn->alloc_slot(slot, self());
   }
 
   void free(page_ptr page) {
@@ -342,8 +421,6 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_single_area();
-    area_ptr->next = 0;
-
     // Append to transaction's area list tail
     auto tail = resolve<Area>(&_active_txn->area_list_tail_single, WRITE);
     tail->next = resolve(area_ptr);
@@ -359,8 +436,6 @@ struct _DB {
     std::scoped_lock lock(_storage.file_lock());
 
     auto area_ptr = _storage.alloc_multi_area(size);
-    area_ptr->next = 0;
-
     // Append to transaction's area list tail
     if (_active_txn->area_list_tail_multi) {
       auto tail = resolve<Area>(&_active_txn->area_list_tail_multi, WRITE);
@@ -443,7 +518,7 @@ struct _DB {
   // immediately when the txn_lock cannot be acquired.
   // May only be called by cursor
   txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
-                            TransactionOrigin origin = TransactionOrigin::user) {
+                            TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     if (!nonblocking)
       _header->txn_lock.lock();
     else if (!_header->txn_lock.try_lock())
@@ -488,7 +563,7 @@ struct _DB {
     return _active_txn;
   }
 
-  bool rollback(uint64_t cursor_id, TransactionOrigin origin = TransactionOrigin::user) {
+  bool rollback(uint64_t cursor_id, TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     if (_header->txn_cursor_id.load() != cursor_id) return false;
 
     // Return areas allocated during write transaction
@@ -502,7 +577,7 @@ struct _DB {
     // Reuse _active_txn's page for next pre-allocated transaction.
     // _active_txn was allocated from read_txn's committed space, so it
     // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy(&*_active_txn, &*read_txn, sizeof(Transaction));
+    memcpy(reinterpret_cast<char*>(&*_active_txn), reinterpret_cast<const char*>(&*read_txn), sizeof(Transaction));
     _active_txn->mem_manager.reinit_locks();
     new (&_active_txn->refs) std::atomic<uint32_t>(0);
     _header->next_txn_page = resolve(_active_txn);
@@ -515,7 +590,7 @@ struct _DB {
   }
 
   tid_t prepare_commit(uint64_t cursor_id, bool sync = false,
-                       TransactionOrigin origin = TransactionOrigin::user) {
+                       TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     // Not my transaction or not started
     if (_header->txn_cursor_id.load() != cursor_id) return tid_t(0);
 
@@ -656,6 +731,7 @@ struct _DB {
 
   void return_areas_range(offset_t start_single, offset_t end_single,
                           offset_t start_multi, offset_t end_multi) {
+    std::scoped_lock lock(_storage.file_lock());
     // Return area range [start->next ... end] to storage
     // This is used during rollback to return areas allocated during write
     // transaction

@@ -6,8 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include "leaves/intern/util/_executor.hpp"
-#include "leaves/intern/util/_task_group.hpp"
+#include "leaves/intern/util/_threadpool.hpp"
 #include "leaves/intern/util/_threadpool.hpp"
 #include "leaves/intern/memory/_memory.hpp"
 #include "leaves/intern/core/_traits.hpp"
@@ -46,18 +45,16 @@ BOOST_AUTO_TEST_SUITE(pool_executor)
 
 BOOST_AUTO_TEST_CASE(wraps_thread_pool_mixin) {
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  BOOST_TEST(exec.concurrency() == pool.pool_size());
-  BOOST_TEST(!exec.is_single_threaded());
+  BOOST_TEST(pool.pool_size() == 4u);
+  BOOST_TEST(!pool.is_single_threaded());
 }
 
 BOOST_AUTO_TEST_CASE(post_executes_on_worker) {
   TestPool pool(2);
-  _PoolExecutor exec(pool);
 
   std::atomic<int> value{0};
-  exec.post([&] { value.store(42, std::memory_order_release); });
-  pool.wait_all();
+  pool.submit_task([&] { value.store(42, std::memory_order_release); });
+  pool.wait_idle();
   BOOST_TEST(value.load(std::memory_order_acquire) == 42);
 }
 
@@ -107,45 +104,39 @@ BOOST_AUTO_TEST_SUITE(task_group_pool)
 
 BOOST_AUTO_TEST_CASE(collect_expand_dispatch) {
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  _TaskGroup<_PoolExecutor> tg(exec);
+  _TaskGroup<TestPool> tg(pool);
 
   std::atomic<int> sum{0};
   // Spawn 8 tasks that each add 1
   for (int i = 0; i < 8; i++) {
     tg.spawn([&] { sum.fetch_add(1, std::memory_order_relaxed); });
   }
-  // Dispatch to pool
-  tg.wait([&](auto&& task) { exec.post(std::move(task)); });
+  tg.wait();
   BOOST_TEST(sum.load() == 8);
 }
 
 BOOST_AUTO_TEST_CASE(wait_without_dispatcher_runs_inline) {
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  _TaskGroup<_PoolExecutor> tg(exec);
+  _TaskGroup<TestPool> tg(pool);
 
   auto caller_id = std::this_thread::get_id();
   std::thread::id worker_id;
 
   tg.spawn([&] { worker_id = std::this_thread::get_id(); });
-  tg.wait();  // no dispatcher → runs inline
+  tg.wait();  // 1 task < concurrency → runs inline
   BOOST_TEST(worker_id == caller_id);
 }
 
 BOOST_AUTO_TEST_CASE(exception_from_dispatched_task) {
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  _TaskGroup<_PoolExecutor> tg(exec);
+  _TaskGroup<TestPool> tg(pool);
 
   for (int i = 0; i < 4; i++) {
     tg.spawn([i] {
       if (i == 2) throw std::runtime_error("dispatch_error");
     });
   }
-  BOOST_CHECK_THROW(
-      tg.wait([&](auto&& task) { exec.post(std::move(task)); }),
-      std::runtime_error);
+  BOOST_CHECK_THROW(tg.wait(), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_CASE(nested_spawn_expansion) {
@@ -153,8 +144,7 @@ BOOST_AUTO_TEST_CASE(nested_spawn_expansion) {
   // With concurrency=4 the BFS expansion should run the first level inline,
   // which spawns 4 tasks, then those 4 get dispatched.
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  _TaskGroup<_PoolExecutor> tg(exec);
+  _TaskGroup<TestPool> tg(pool);
 
   std::atomic<int> leaf_count{0};
 
@@ -169,39 +159,32 @@ BOOST_AUTO_TEST_CASE(nested_spawn_expansion) {
     tg.spawn([&] { leaf_count.fetch_add(1); });
   });
 
-  tg.wait([&](auto&& task) { exec.post(std::move(task)); });
+  tg.wait();
   BOOST_TEST(leaf_count.load() == 4);
 }
 
-// Covers _task_group.hpp L136: spawn() called from a pool worker (_in_worker
-// == true) runs the task immediately rather than queuing it.
 BOOST_AUTO_TEST_CASE(spawn_from_worker_runs_inline) {
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  _TaskGroup<_PoolExecutor> tg(exec);
+  _TaskGroup<TestPool> tg(pool);
 
   std::atomic<int> inner{0};
   // Dispatch 4 tasks (== concurrency) so they run on pool workers.
   // Each dispatched task calls tg.spawn() from the worker thread,
-  // triggering the _in_worker == true branch at L136.
+  // triggering the _in_worker == true branch.
   for (int i = 0; i < 4; i++) {
     tg.spawn([&] {
       tg.spawn([&] { inner.fetch_add(1, std::memory_order_relaxed); });
     });
   }
-  tg.wait([&](auto&& task) { exec.post(std::move(task)); });
+  tg.wait();
   BOOST_TEST(inner.load() == 4);
 }
 
-// Covers _task_group.hpp L198-200: exception thrown during _steal_loop()
-// (inline BFS expansion, not dispatched to pool workers).
 BOOST_AUTO_TEST_CASE(exception_in_steal_loop) {
   TestPool pool(4);
-  _PoolExecutor exec(pool);
-  _TaskGroup<_PoolExecutor> tg(exec);
+  _TaskGroup<TestPool> tg(pool);
 
   // 1 task < concurrency(4) → BFS expansion path → _steal_loop().
-  // The throw is caught at L198-200 and rethrown by wait() at L185-188.
   tg.spawn([] { throw std::runtime_error("steal_error"); });
   BOOST_CHECK_THROW(tg.wait(), std::runtime_error);
 }

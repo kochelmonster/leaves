@@ -76,9 +76,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   offset_t replication_slots[MAX_REPLICATION_SLOTS];
 };
 
-// =============================================================================
 // _ReplicationTransaction: Extends _Transaction with a deletion_root
-// =============================================================================
 // The deletion trie tracks keys removed from the main trie, enabling
 // replication of deletes. Both root and deletion_root are persisted in
 // each transaction and independently Merkle-hashed.
@@ -120,9 +118,7 @@ struct _ReplicationTransaction : public _Transaction<Traits_> {
   }
 };
 
-// =============================================================================
 // _ReplicationDB: Extends _DB with deletion trie support and background purge
-// =============================================================================
 // Uses _ReplicationTransaction which includes deletion_root.
 // Overrides Cursor to be _ReplicationCursor which tracks deletes.
 // Owns the purge lifecycle: start_purge() kicks off a self-rescheduling
@@ -152,9 +148,7 @@ struct _ReplicationDB
   typedef _ReplicationCursor<CursorTraits> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
-  // =========================================================================
   // HashDB: Minimal DB adapter for _HashUpdater
-  // =========================================================================
   // Provides the interface needed by _HashUpdater to manage the hash trie.
   // Uses hash_mem_manager for allocation (independent of data transactions).
   // Uses the parent _ReplicationDB's storage for offset resolution.
@@ -333,7 +327,7 @@ struct _ReplicationDB
   }
 
   // Start the self-rescheduling purge.  Requires that _storage has
-  // schedule_after() / cancel_job() / wait_all() (i.e. _ThreadPoolMixin).
+  // schedule_after() / cancel_job() / wait_idle() (i.e. _ThreadPoolMixin).
   void start_purge() {
     _purge_cancelled.store(false, std::memory_order_release);
     uint64_t expected = 0;
@@ -352,7 +346,7 @@ struct _ReplicationDB
     uint64_t job_id = _purge_job_id.exchange(0, std::memory_order_acq_rel);
     if (job_id && job_id != UINT64_MAX) this->_storage.cancel_job(job_id);
     if (!this->_storage._pool_shutdown.load(std::memory_order_acquire))
-      this->_storage.wait_all();
+      this->_storage.wait_idle();
   }
 
   // Override sanitize() to also recover orphaned replication anchors.
@@ -421,10 +415,9 @@ struct _ReplicationDB
           auto* rtxn = static_cast<Transaction*>(&*first_fsm_txn);
 #if LEAVES_HAS_THREADS
           hc.hash_mem_manager.set_single_thread(false);
-          _PoolExecutor exec(this->_storage, _hash_threads);
-          update_hash_trie(exec, this, &hdb, first_fsm_txn->root, &hc.hash_root);
-          update_hash_trie(exec, this, &hdb, rtxn->deletion_root,
-                           &hc.deletion_hash_root);
+          update_hash_trie(this->_storage, this, &hdb, first_fsm_txn->root, &hc.hash_root, _hash_threads);
+          update_hash_trie(this->_storage, this, &hdb, rtxn->deletion_root,
+                           &hc.deletion_hash_root, _hash_threads);
           hc.hash_mem_manager.set_single_thread(true);
 #else
           update_hash_trie(this, &hdb, first_fsm_txn->root, &hc.hash_root);
@@ -601,9 +594,7 @@ struct _ReplicationDB
   }
 };
 
-// =============================================================================
 // _ReplicationCursor: Extends _TransactionalCursor with deletion tracking
-// =============================================================================
 // On remove(), inserts the deleted key into the deletion trie before
 // deleting from the main trie. The deletion trie stores keys with a
 // timestamp value recording when the deletion occurred.

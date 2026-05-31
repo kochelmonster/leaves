@@ -32,12 +32,16 @@ struct _Transition {
   Cursor* cursor;
   node_ptr node;
 
+  static_assert(sizeof(node_ptr) == sizeof(trie_ptr) && sizeof(node_ptr) == sizeof(leaf_ptr),
+                "pointer sizes must match for type-punning");
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
   trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
 
   leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
-  const leaf_ptr& leaf() const {
-    return *reinterpret_cast<const leaf_ptr*>(&node);
-  }
+  const leaf_ptr& leaf() const { return *reinterpret_cast<const leaf_ptr*>(&node); }
+#pragma GCC diagnostic pop
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key

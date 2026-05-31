@@ -91,12 +91,11 @@ static double bench_pooled(RDB* rdb, offset_e data_root,
                            offset_e* hash_root, int threads) {
   auto hdb = rdb->hash_db();
   BenchPool pool(threads);
-  _PoolExecutor exec(pool);
 
   double start = now_seconds();
-  update_hash_trie(exec, rdb, &hdb, data_root, hash_root);
+  update_hash_trie(pool, rdb, &hdb, data_root, hash_root);
   double elapsed = now_seconds() - start;
-  pool.wait_all();
+  pool.wait_idle();
   return elapsed;
 }
 

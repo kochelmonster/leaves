@@ -71,7 +71,7 @@ struct _Deleter {
     // Save the node pointer before pop invalidates trans
     auto node = trans->node;
     uint16_t prefix = trans->prefix;
-    uint8_t branch_key = trans->branch_key;  
+    // branch_key is not saved; reduction logic reads parent.branch_key instead
     parent.pop();  // remove trans from stack
     assert(parent.is_trie());
     switch (parent.trie()->count()) {
@@ -129,9 +129,6 @@ struct _Deleter {
       memcpy(buffer + len, child->compressed(), child->len());
       len += child->len();
 
-      uint16_t p0 = Traits::PAGE_SIZES[0];
-      uint16_t p1 = Traits::PAGE_SIZES[1];
-      uint16_t p2 = Traits::PAGE_SIZES[2];
       uint16_t trie_size = child->changed_len(len);
       parent.trie() = alloc_node<trie_ptr>(trie_size);
       parent.trie()->create(*child, Slice(buffer, len));

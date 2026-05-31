@@ -1,7 +1,8 @@
 # The Fastest Key-Value Store? A Fair Fight Against LMDB
 
 "The fastest key-value store" is a common claim in the database world.
-We put nine popular key-value engines through a rigorous benchmark suite and compared them against the dominant embedded reference: the Lightning Memory-Mapped Database (LMDB).
+
+We put nine key-value engines that once claimed to be the fastest, through a rigorous benchmark suite and compared them against the dominant embedded reference: the Lightning Memory-Mapped Database (LMDB).
 There is only one that consistently outperforms LMDB across a wide range of practical workloads, while still providing ACID transactions and ordered scans.
 
 ## The contenders

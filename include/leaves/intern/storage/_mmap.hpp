@@ -12,6 +12,7 @@
 #include <boost/process/v2/pid.hpp>
 #endif
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -80,7 +81,7 @@ struct _MemoryMapTraits {
 #endif
   static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 3;
 
-  static constexpr uint16_t PAGE_SIZES[] = {                         // Page sizes (header + node)
+  static constexpr uint16_t PAGE_SIZES[] = {                 // Page sizes (header + node)
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 2),    // 2 branches
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 3),    // 3 branches
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 4),    // 4 branches
@@ -133,6 +134,7 @@ struct _MemoryMapFile
     pid_type processes[MAX_PROCESSES];
     std::atomic<int64_t> last_cursor_id;
     uint32_t sanitize_generation;  // incremented when first process opens file
+    uint32_t clean_close;     // 1 = last close was clean, 0 = dirty (open or crashed)
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
     DBEntry dbs[];            // flexible array fills to 4K boundary
@@ -145,6 +147,7 @@ struct _MemoryMapFile
           processes{},
           last_cursor_id(0),
           sanitize_generation(0),
+          clean_close(0),
           db_entry_count(0),
           db_next_page(0) {
       // Set signature and initialize pools/arrays
@@ -184,7 +187,10 @@ struct _MemoryMapFile
     this->stop_pool();     // stop worker threads before unmapping
     if constexpr (MAX_PROCESSES > 1)
       remove_pid();
-    _region.flush();
+    if (_memory) {
+      _memory->clean_close = 1;
+      _region.flush(0, _memory->file_size, false);
+    }
   }
 
   const char* filename() const { return _file.get_name(); }
@@ -300,7 +306,13 @@ struct _MemoryMapFile
 
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
-      recover_areas();
+      // Only rebuild the free-area pool if the previous close was NOT clean
+      // (i.e., crash recovery). On a clean reopen the persisted pool state
+      // is authoritative and rebuilding would lose ownership of any areas
+      // not registered in the storage DB directory (e.g. confluence tributary
+      // slots).
+      if (!_memory->clean_close) recover_areas();
+      _memory->clean_close = 0;  // now dirty until next clean close
       ++_memory->sanitize_generation;
       _memory->last_cursor_id.store(0);
     }
@@ -343,8 +355,14 @@ struct _MemoryMapFile
       p = offset_ptr->resolve<char>();
     } else {
       // Absolute: offset from _memory base
+      assert((uint64_t)*offset_ptr < _memory->file_size &&
+             "absolute offset out of storage bounds");
       p = (char*)_memory + (uint64_t)*offset_ptr;
     }
+
+    assert(p >= (char*)_memory &&
+           p < (char*)_memory + _memory->file_size &&
+           "resolved pointer outside storage file");
 
     prefetch(p, access);
     return page_ptr(p);
@@ -391,8 +409,9 @@ struct _MemoryMapFile
     uint64_t total_growth = std::max({size, MIN_GROWTH, geometric_growth});
     total_growth = padding(total_growth, AREA_SIZE);
 
-    if (_memory->file_size + total_growth > _region.get_size())
+    if (_memory->file_size + total_growth > _region.get_size()) {
       throw StorageFull();
+    }
 
     offset_t new_offset = _memory->file_size;
     _memory->file_size = _memory->file_size + total_growth;
@@ -417,7 +436,7 @@ struct _MemoryMapFile
   area_ptr alloc_single_area() {
     auto result = _memory->area_pool.alloc_single_area(*this);
     if (!result) return resize_file(AREA_SIZE);
-    return result;  // Return Area* directly
+    return result;
   }
 
   area_ptr alloc_multi_area(uint64_t size) {

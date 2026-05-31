@@ -3,8 +3,16 @@
 // #define GENERATE
 #include <boost/test/included/unit_test.hpp>
 
+#include <random>
+#include <dirent.h>
+#include <unistd.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+
 #include "../include/leaves/intern/db/_cursor.hpp"
 #include "../include/leaves/intern/util/_merger.hpp"
+#include "../include/leaves/confluence.hpp"
 #include "test.hpp"
 
 using namespace leaves;
@@ -2884,4 +2892,573 @@ BOOST_AUTO_TEST_CASE(test_merger_selective_merge_into_trie_all_rejected) {
   BOOST_CHECK(!verify.is_valid());
   verify.find("aby");
   BOOST_CHECK(!verify.is_valid());
+}
+
+// Recursive trie integrity checker: verifies that for every (X, child) pair
+// in a trie, X equals the actual first byte of the child's path. Returns true
+// if OK, false on first violation (and prints details to stderr).
+template <typename DB>
+bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
+                           const std::string& path) {
+  using Traits = typename DB::Traits;
+  using TrieNode = _TrieNode<Traits>;
+  using LeafNode = _LeafNode<Traits>;
+  using offset_e = typename Traits::offset_e;
+  if (!link || !*link) return true;
+  if (link->type() != TRIE) {
+    return true;  // root being leaf — nothing to check here
+  }
+  auto trie = db.template resolve<TrieNode>(link);
+  bool ok = true;
+  trie->for_each_branch([&](int k, offset_e* off) {
+    if (!ok) return;
+    if (!*off) {
+      std::cerr << "INTEGRITY: empty branch path=" << path
+                << " branch_key=" << k << std::endl;
+      ok = false;
+      return;
+    }
+    std::string child_path = path;
+    child_path.append((const char*)trie->compressed(), trie->len());
+    if (k != TrieNode::NONE) child_path.push_back((char)k);
+
+    if (off->type() == LEAF) {
+      auto leaf = db.template resolve<LeafNode>(off);
+      uint8_t first = leaf->key_size ? leaf->data[0] : 0;
+      if (k == TrieNode::NONE) {
+        if (leaf->key_size != 0) {
+          std::cerr << "INTEGRITY: NONE branch leaf has key_size="
+                    << (int)leaf->key_size << " at path='" << path
+                    << "' parent_prefix_len=" << (int)trie->len() << std::endl;
+          ok = false;
+        }
+      } else {
+        if (leaf->key_size == 0 || first != (uint8_t)k) {
+          std::cerr << "INTEGRITY: leaf first byte=" << (int)first
+                    << " != branch_key=" << k << " at path='" << path
+                    << "' parent_compressed_len=" << (int)trie->len()
+                    << " parent_count=" << trie->count()
+                    << " leaf->key_size=" << (int)leaf->key_size
+                    << " leaf->vsize=" << leaf->vsize()
+                    << " leaf_off=0x" << std::hex << (uint64_t)*off << std::dec
+                    << std::endl;
+          std::cerr << "  parent_compressed=\"";
+          for (int i = 0; i < trie->len(); i++)
+            std::cerr << "[" << (int)(uint8_t)trie->compressed()[i] << "]";
+          std::cerr << "\"" << std::endl;
+          std::cerr << "  leaf_key=\"";
+          for (int i = 0; i < leaf->key_size; i++)
+            std::cerr << "[" << (int)(uint8_t)leaf->data[i] << "]";
+          std::cerr << "\"" << std::endl;
+          ok = false;
+        }
+      }
+    } else {
+      // child is trie
+      auto child_trie = db.template resolve<TrieNode>(off);
+      if (k != TrieNode::NONE) {
+        if (child_trie->len() == 0) {
+          std::cerr << "INTEGRITY: child trie has empty compressed at path='"
+                    << path << "' branch_key=" << k << std::endl;
+          ok = false;
+        } else if (child_trie->compressed()[0] != (uint8_t)k) {
+          std::cerr << "INTEGRITY: child trie compressed[0]="
+                    << (int)child_trie->compressed()[0]
+                    << " != branch_key=" << k << " at path='" << path
+                    << "' child compressed_len=" << (int)child_trie->len()
+                    << " child count=" << child_trie->count() << std::endl;
+          ok = false;
+        }
+      }
+      if (!_check_trie_integrity(db, off, child_path)) ok = false;
+    }
+  });
+  return ok;
+}
+
+
+//   ./db_bench_leaves --use_confluence=1 \
+//       --benchmarks=fillrandom,overwrite --num=100000 --batch_size=1000
+//
+// Crash:
+//   - ASAN: global-buffer-overflow in _MemManager::alloc() at _memory.hpp:269
+//     (PAGE_SIZES[sidx] OOB, sidx=8). Garbage value_size in src_leaf in
+//     merge_leaf_into_trie/fill_leaf -> LeafNode::size(key, 21550) -> sidx=8.
+//   - Without ASAN: assert `trie_.count() < trie_.MAX_BRANCH_COUNT` in
+//     _Transition::find() (cursor.hpp:189) — garbage TrieNode._array_len.
+//
+// This test mimics the bench workload but routes everything through _Merger
+// directly (no _ConfluenceDB, no tributary, no threads). It does many
+// sequential merges of 1000-key random batches into a growing destination,
+// using a 16-byte zero-padded decimal keyspace of size N (random keys -> heavy
+// collisions = lots of overwrite/split paths in the merger).
+// =============================================================================
+BOOST_AUTO_TEST_CASE(test_merger_repro_bench_overwrite_batches) {
+  MergerPreparation p;
+  auto dst_storage = Storage::create(TEST_FILE);
+  auto dst_db = dst_storage->open("test");
+
+  const int N = 100000;        // keyspace size (matches --num=100000)
+  const int BATCH = 1000;      // matches --batch_size=1000
+  // Minimal repro: 2 consecutive merges of 1000 random keys into the same
+  // dst storage is enough to trigger the assertion in _Transition::next() /
+  // _Transition::find() during the second merge. The original bench uses
+  // 100+ batches (fillrandom + overwrite phases) but the bug is hit far
+  // earlier.
+  const int NUM_BATCHES = 2;
+
+  std::mt19937 rng(42);  // deterministic
+  std::string value_buf(100, 'x');
+
+  for (int b = 0; b < NUM_BATCHES; b++) {
+    // Each batch: build a fresh src DB with BATCH random 16-byte decimal keys
+    // and 100-byte values, then merge into dst.
+    const std::string src_file = std::string(TEST_FILE) + ".src";
+    std::remove(src_file.c_str());
+    auto src_storage = Storage::create(src_file.c_str());
+    auto src_db = src_storage->open("test");
+    {
+      auto src_cursor_pub = src_db.cursor();
+      for (int i = 0; i < BATCH; i++) {
+        char keybuf[17];
+        snprintf(keybuf, 17, "%016d", (int)(rng() % N));
+        // Make value bytes vary a bit so leaf sizes/contents differ.
+        uint32_t r = (uint32_t)rng();
+        memcpy(value_buf.data(), &r, sizeof(r));
+        src_cursor_pub.find(Slice(keybuf, 16));
+        src_cursor_pub.value(Slice(value_buf.data(), value_buf.size()));
+      }
+      src_cursor_pub.commit();
+    }
+
+    auto src_internal = src_db._internal();
+    auto dst_internal = dst_db._internal();
+
+    OverwritePolicy handler;
+    {
+      std::ofstream out("/tmp/dst_before_merge_" + std::to_string(b) + ".yaml");
+      _Dumper(*dst_internal, &dst_internal->txn()->root, false).dump(out);
+    }
+    {
+      std::ofstream out("/tmp/src_merge_" + std::to_string(b) + ".yaml");
+      _Dumper(*src_internal, &src_internal->txn()->root, false).dump(out);
+    }
+    exec_merger(*dst_internal, *src_internal, handler,
+                "/tmp/dst_after_merge_" + std::to_string(b) + ".yaml");
+
+    // Structural integrity check
+    bool ok = _check_trie_integrity(*dst_internal,
+                                    &dst_internal->txn()->root, std::string());
+    std::cerr << "[after merge " << b << "] integrity=" << ok << std::endl;
+    BOOST_REQUIRE(ok);
+
+    // Walk dst after this merge to detect corruption early.
+    {
+      auto walk = dst_db.cursor();
+      walk.first();
+      int cnt = 0;
+      while (walk.is_valid()) {
+        cnt++;
+        walk.next();
+      }
+      std::cerr << "[after merge " << b << "] dst keys=" << cnt << std::endl;
+    }
+  }
+
+  // If we made it here without aborting, the bug is not reproduced.
+  // Sanity check: dst should have somewhere between 1 and N keys.
+  auto verify = dst_storage->open("test").cursor();
+  int count = 0;
+  verify.first();
+  while (verify.is_valid() && count <= N) {
+    count++;
+    verify.next();
+  }
+  BOOST_CHECK_GT(count, 0);
+  BOOST_CHECK_LE(count, N);
+  std::cout << "test_merger_repro_bench_overwrite_batches: "
+            << count << " keys after " << NUM_BATCHES << " merges" << std::endl;
+}
+
+// =============================================================================
+// Reconstructs the *bench* crash in a SINGLE-threaded environment.
+//
+// Background:
+//   The db_bench_leaves "fillrandom + overwrite" benchmark with
+//   --use_confluence=1 crashes non-deterministically in the background merger
+//   (_ConfluenceDB::_do_merge → _Merger::exec). The pre-existing
+//   test_merger_repro_bench_overwrite_batches above (which uses two separate
+//   storages) does NOT reproduce the bench bug — so the issue must depend on
+//   something the bench exercises that the two-storage test does not.
+//
+// Architectural difference between the two paths:
+//   • bench (Confluence): the tributary (src) and the main DB (dst) live in
+//     the SAME storage / SAME mmap file. After each merge the tributary's
+//     pages are returned to the storage's free list (_free_slot →
+//     return_areas) and can then be re-allocated as main-DB pages by
+//     subsequent merges.
+//   • original repro: src and dst use separate storage files; no page
+//     aliasing or recycling between them is possible.
+//
+// This test re-creates the bench shape in one thread:
+//   - one MapStorage
+//   - one persistent "dst" DB
+//   - per-batch: open "src" DB in the SAME storage, write BATCH random keys,
+//     merge into "dst", then remove the src DB so its pages flow back into
+//     the storage's free pool (mirroring _free_slot).
+//
+// If the bug is page-aliasing / lifetime related (use-after-free across the
+// src↔dst boundary, or a wrong storage being used to resolve an offset),
+// this should expose it deterministically.
+// =============================================================================
+BOOST_AUTO_TEST_CASE(test_merger_repro_bench_shared_storage) {
+  MergerPreparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto dst_db = storage->open("dst");
+
+  const int N = 100000;        // keyspace size (matches --num=100000)
+  const int BATCH = 1000;      // matches --batch_size=1000
+  // Match the bench: fillrandom (100 batches) + overwrite (100 batches).
+  const int NUM_BATCHES = 200;
+
+  std::mt19937 rng(42);  // deterministic
+  std::string value_buf(100, 'x');
+
+  for (int b = 0; b < NUM_BATCHES; b++) {
+    // Build a fresh src DB IN THE SAME STORAGE as dst. Its pages will share
+    // the storage's allocator with dst, just like a tributary in Confluence.
+    auto src_db = storage->open("src");
+    {
+      auto src_cursor_pub = src_db.cursor();
+      for (int i = 0; i < BATCH; i++) {
+        char keybuf[17];
+        snprintf(keybuf, 17, "%016d", (int)(rng() % N));
+        uint32_t r = (uint32_t)rng();
+        memcpy(value_buf.data(), &r, sizeof(r));
+        src_cursor_pub.find(Slice(keybuf, 16));
+        src_cursor_pub.value(Slice(value_buf.data(), value_buf.size()));
+      }
+      src_cursor_pub.commit();
+    }
+
+    auto src_internal = src_db._internal();
+    auto dst_internal = dst_db._internal();
+
+    OverwritePolicy handler;
+    exec_merger(*dst_internal, *src_internal, handler);
+
+    // Structural integrity check on dst.
+    bool ok = _check_trie_integrity(*dst_internal,
+                                    &dst_internal->txn()->root, std::string());
+    if (!ok) {
+      std::cerr << "[shared_storage] integrity broken after merge " << b
+                << std::endl;
+    }
+    BOOST_REQUIRE(ok);
+
+    // Walk dst end-to-end to surface corruption that integrity_check misses.
+    {
+      auto walk = dst_db.cursor();
+      walk.first();
+      int cnt = 0;
+      while (walk.is_valid()) {
+        cnt++;
+        walk.next();
+      }
+      if ((b % 20) == 19) {
+        std::cerr << "[shared_storage] after merge " << b
+                  << " dst keys=" << cnt << std::endl;
+      }
+    }
+
+    // Release the src DB and return its pages to the storage's free pool —
+    // this is the analogue of _ConfluenceDB::_free_slot. The next batch's
+    // allocations may recycle these pages.
+    storage->remove("src");
+  }
+
+  auto verify = storage->open("dst").cursor();
+  int count = 0;
+  verify.first();
+  while (verify.is_valid() && count <= N) {
+    count++;
+    verify.next();
+  }
+  BOOST_CHECK_GT(count, 0);
+  BOOST_CHECK_LE(count, N);
+  std::cout << "test_merger_repro_bench_shared_storage: " << count
+            << " keys after " << NUM_BATCHES << " merges" << std::endl;
+}
+
+// =============================================================================
+// Reconstruct the bench crash through the real ConfluenceDB pipeline,
+// but with the background merger disabled so the entire write+merge loop
+// runs on the test thread.
+//
+// Strategy:
+//   - Open a MapConfluenceDB with auto_monitor=false (no background workers).
+//   - Set merge_write_threshold to UINT32_MAX so the writer's
+//     release_tributary path never calls schedule_after() — finished
+//     tributaries are left in state==FREE.
+//   - Run fillrandom-style batches via the confluence cursor.
+//   - Between batches call merge_all_now(), which executes
+//     merge_tributary -> _do_merge -> _Merger::exec INLINE on the caller's
+//     thread.
+//   - Then overwrite-style batches (same keyspace, different values) to
+//     reproduce the bench's "fillrandom + overwrite" workload.
+//
+// This exercises exactly the merge code path that crashes in the bench
+// (_do_merge → _Merger over a _TributaryDB sharing the same storage as the
+// main DB), but completely free of races.
+// =============================================================================
+BOOST_AUTO_TEST_CASE(test_merger_repro_bench_confluence_single_thread) {
+  MergerPreparation p;
+  auto storage = MapStorage::create(TEST_FILE);
+  // auto_monitor=false → no background monitor thread.
+  MapConfluenceDB cdb(storage, "benchmark", /*auto_monitor=*/false);
+  // Push the threshold so high that release_tributary will always take the
+  // FREE branch (no schedule_after) — merges happen only via merge_all_now().
+  cdb.set_merge_write_threshold(UINT32_MAX);
+
+  const int N = 100000;
+  const int BATCH = 1000;
+  const int FILL_BATCHES = 100;       // matches --num=100000 / --batch_size=1000
+  const int OVERWRITE_BATCHES = 100;  // matches the overwrite phase
+
+  std::mt19937 rng(42);
+  std::string value_buf(100, 'x');
+
+  auto run_batch = [&](int /*batch_idx*/) {
+    auto cur = cdb.cursor();
+    cur.start_transaction();
+    for (int i = 0; i < BATCH; i++) {
+      char keybuf[17];
+      snprintf(keybuf, 17, "%016d", (int)(rng() % N));
+      uint32_t r = (uint32_t)rng();
+      memcpy(value_buf.data(), &r, sizeof(r));
+      cur.find(Slice(keybuf, 16));
+      cur.value(Slice(value_buf.data(), value_buf.size()));
+    }
+    cur.commit();
+    // Force the merge to happen inline NOW, on this thread.
+    cdb.merge_all_now();
+  };
+
+  // fillrandom phase
+  for (int b = 0; b < FILL_BATCHES; b++) run_batch(b);
+  // overwrite phase (same key distribution → heavy overwrite/collision)
+  for (int b = 0; b < OVERWRITE_BATCHES; b++) run_batch(FILL_BATCHES + b);
+
+  // Count keys to ensure the DB is still walkable.
+  auto cur = cdb.cursor();
+  cur.first();
+  int count = 0;
+  while (cur.is_valid() && count <= N + 1) {
+    ++count;
+    cur.next();
+  }
+  BOOST_CHECK_GT(count, 0);
+  BOOST_CHECK_LE(count, N);
+  std::cout << "test_merger_repro_bench_confluence_single_thread: " << count
+            << " keys after " << (FILL_BATCHES + OVERWRITE_BATCHES)
+            << " merges" << std::endl;
+}
+
+// =============================================================================
+// REPLAY the EXACT workload captured by db_bench_leaves --dump_workload=...
+// Format on disk (binary, repeated):
+//   uint32_t tag = 0x5359454B ('K','E','Y','S')
+//   uint32_t key_size
+//   uint32_t num_keys
+//   <num_keys * key_size> bytes of raw keys
+// The dump file path is taken from env LEAVES_BENCH_WORKLOAD (default
+// /tmp/bench_workload.bin). Test is skipped if the file is missing.
+// =============================================================================
+BOOST_AUTO_TEST_CASE(test_merger_repro_bench_replay) {
+  const char* path = std::getenv("LEAVES_BENCH_WORKLOAD");
+  if (!path) path = "/tmp/bench_workload.bin";
+  FILE* f = std::fopen(path, "rb");
+  if (!f) {
+    std::cout << "test_merger_repro_bench_replay: SKIP (no " << path << ")\n";
+    return;
+  }
+
+  struct Chunk {
+    uint32_t key_size;
+    std::vector<char> keys;  // num_keys * key_size
+    uint32_t num_keys() const { return (uint32_t)(keys.size() / key_size); }
+  };
+  std::vector<Chunk> chunks;
+  for (;;) {
+    uint32_t tag = 0, ks = 0, nn = 0;
+    if (std::fread(&tag, 4, 1, f) != 1) break;
+    BOOST_REQUIRE_EQUAL(tag, 0x5359454BU);
+    BOOST_REQUIRE_EQUAL(std::fread(&ks, 4, 1, f), 1u);
+    BOOST_REQUIRE_EQUAL(std::fread(&nn, 4, 1, f), 1u);
+    Chunk c;
+    c.key_size = ks;
+    c.keys.resize((size_t)ks * nn);
+    BOOST_REQUIRE_EQUAL(std::fread(c.keys.data(), ks, nn, f), nn);
+    chunks.push_back(std::move(c));
+  }
+  std::fclose(f);
+  std::cout << "test_merger_repro_bench_replay: loaded " << chunks.size()
+            << " phases from " << path << "\n";
+  for (size_t i = 0; i < chunks.size(); i++) {
+    std::cout << "  phase " << i << ": " << chunks[i].num_keys()
+              << " keys, key_size=" << chunks[i].key_size << "\n";
+  }
+
+  MergerPreparation p;
+  auto storage = MapStorage::create(TEST_FILE);
+  MapConfluenceDB cdb(storage, "benchmark", /*auto_monitor=*/false);
+  cdb.set_merge_write_threshold(UINT32_MAX);
+
+  const int BATCH = 1000;  // bench --batch_size=1000
+  std::string value_buf(100, 'x');
+  uint32_t value_seq = 0;
+
+  auto run_phase = [&](const Chunk& c) {
+    auto cur = cdb.cursor();
+    uint32_t total = c.num_keys();
+    uint32_t ks = c.key_size;
+    for (uint32_t off = 0; off < total; off += BATCH) {
+      uint32_t end = std::min<uint32_t>(off + BATCH, total);
+      cur.start_transaction();
+      for (uint32_t i = off; i < end; i++) {
+        Slice key(c.keys.data() + (size_t)i * ks, ks);
+        cur.find(key);
+        // Deterministic value content; size matches bench (100 bytes).
+        memcpy(value_buf.data(), &value_seq, sizeof(value_seq));
+        value_seq++;
+        cur.value(Slice(value_buf.data(), value_buf.size()));
+      }
+      cur.commit();
+      cdb.merge_all_now();
+    }
+  };
+
+  for (size_t i = 0; i < chunks.size(); i++) {
+    std::cout << "  running phase " << i << " ..." << std::flush;
+    run_phase(chunks[i]);
+    std::cout << " done\n";
+  }
+
+  auto cur = cdb.cursor();
+  cur.first();
+  int count = 0;
+  while (cur.is_valid()) {
+    ++count;
+    cur.next();
+  }
+  std::cout << "test_merger_repro_bench_replay: " << count
+            << " keys after replay" << std::endl;
+  BOOST_CHECK_GT(count, 0);
+}
+
+// =============================================================================
+// REPLAY-LAST-MERGE test
+//
+// db_bench_leaves, when run with env LEAVES_SRC_DUMP_DIR=<dir>, writes the
+// dst (main DB) and src (tributary) KV contents to <dir>/last_dst.bin and
+// <dir>/last_src.bin BEFORE each merger.exec() call (overwriting on every
+// merge).  After a crash, the files capture the dst + src state at the
+// failing merge exactly.
+//
+// This test:
+//   - Reads last_dst.bin and last_src.bin from $LEAVES_SRC_DUMP_DIR
+//     (default /tmp/srcdump).
+//   - Reconstructs both DBs from the captured KVs.
+//   - Runs a single _Merger from src into dst.
+//   - Verifies no crash and reports the result.
+// =============================================================================
+namespace {
+static std::vector<std::pair<std::string, std::string>> _load_kv_dump(
+    const std::string& path) {
+  std::vector<std::pair<std::string, std::string>> kvs;
+  FILE* f = std::fopen(path.c_str(), "rb");
+  BOOST_REQUIRE(f != nullptr);
+  uint64_t magic = 0, tid = 0, nent = 0;
+  BOOST_REQUIRE_EQUAL(std::fread(&magic, 8, 1, f), 1u);
+  BOOST_REQUIRE_EQUAL(magic, 0x4C56535344554D50ULL);
+  BOOST_REQUIRE_EQUAL(std::fread(&tid, 8, 1, f), 1u);
+  BOOST_REQUIRE_EQUAL(std::fread(&nent, 8, 1, f), 1u);
+  kvs.reserve((size_t)nent);
+  for (uint64_t i = 0; i < nent; ++i) {
+    uint16_t ks = 0;
+    uint32_t vs = 0;
+    BOOST_REQUIRE_EQUAL(std::fread(&ks, 2, 1, f), 1u);
+    BOOST_REQUIRE_EQUAL(std::fread(&vs, 4, 1, f), 1u);
+    std::string k(ks, '\0');
+    std::string v(vs, '\0');
+    if (ks) BOOST_REQUIRE_EQUAL(std::fread(k.data(), 1, ks, f), ks);
+    if (vs) BOOST_REQUIRE_EQUAL(std::fread(v.data(), 1, vs, f), vs);
+    kvs.emplace_back(std::move(k), std::move(v));
+  }
+  std::fclose(f);
+  return kvs;
+}
+}  // namespace
+
+BOOST_AUTO_TEST_CASE(test_merger_repro_bench_last_merge) {
+  const char* dir = std::getenv("LEAVES_SRC_DUMP_DIR");
+  if (!dir) dir = "/tmp/srcdump";
+
+  std::string dst_path = std::string(dir) + "/last_dst.bin";
+  std::string src_path = std::string(dir) + "/last_src.bin";
+  if (::access(dst_path.c_str(), R_OK) != 0 ||
+      ::access(src_path.c_str(), R_OK) != 0) {
+    std::cout << "test_merger_repro_bench_last_merge: SKIP (no dumps in "
+              << dir << ")\n";
+    return;
+  }
+
+  auto dst_kvs = _load_kv_dump(dst_path);
+  auto src_kvs = _load_kv_dump(src_path);
+  std::cout << "test_merger_repro_bench_last_merge: dst=" << dst_kvs.size()
+            << " keys, src=" << src_kvs.size() << " keys\n";
+
+  // Build dst DB.
+  std::remove(TEST_FILE "2");
+  auto dst_storage = Storage::create(TEST_FILE "2");
+  auto dst_db_pub = dst_storage->open("test");
+  {
+    auto cur = dst_db_pub.cursor();
+    for (auto& kv : dst_kvs) {
+      cur.find(Slice(kv.first.data(), kv.first.size()));
+      cur.value(Slice(kv.second.data(), kv.second.size()));
+    }
+    cur.commit();
+  }
+  auto dst_internal = dst_db_pub._internal();
+
+  // Build src DB.
+  std::remove(TEST_FILE);
+  auto src_storage = Storage::create(TEST_FILE);
+  auto src_db_pub = src_storage->open("test");
+  {
+    auto cur = src_db_pub.cursor();
+    for (auto& kv : src_kvs) {
+      cur.find(Slice(kv.first.data(), kv.first.size()));
+      cur.value(Slice(kv.second.data(), kv.second.size()));
+    }
+    cur.commit();
+  }
+  auto src_internal = src_db_pub._internal();
+
+  OverwritePolicy handler;
+  std::cout << "  running merger ..." << std::flush;
+  exec_merger(*dst_internal, *src_internal, handler);
+  std::cout << " ok\n";
+
+  auto cur = dst_db_pub.cursor();
+  cur.first();
+  int count = 0;
+  while (cur.is_valid()) {
+    ++count;
+    cur.next();
+  }
+  std::cout << "test_merger_repro_bench_last_merge: " << count
+            << " keys in dst after merge\n";
+  BOOST_CHECK_GT(count, 0);
 }

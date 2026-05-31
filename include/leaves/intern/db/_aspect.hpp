@@ -5,14 +5,10 @@
 
 namespace leaves {
 
-// =============================================================================
 // TransactionOrigin: Identifies the source of a transaction
-// =============================================================================
 enum class TransactionOrigin { user, merge, defrag };
 
-// =============================================================================
 // DefaultAspect: No-op aspect with zero overhead
-// =============================================================================
 // The Aspect provides cross-cutting join points for cursor, transaction,
 // maintenance, and merge operations.  Users define a custom Aspect struct
 // in their Traits to intercept these events.
@@ -60,15 +56,15 @@ struct DefaultAspect {
   /// Called before writing a value.  May transform the value by writing
   /// into the CursorContext's scratch buffer and returning a Slice
   /// pointing into it.  Return the input unchanged for pass-through.
-  Slice on_write(const Slice& key, const Slice& value, CursorContext&) {
+  Slice on_write(const Slice& /*key*/, const Slice& value, CursorContext&) {
     return value;
   }
 
   /// Called after reading a raw value from storage.
   /// |big_meta| is non-empty only when the leaf is big-valued and
   ///  big_meta_size > 0; it contains the inline metadata bytes.
-  Slice on_read(const Slice& key, const Slice& data,
-                const Slice& big_meta, CursorContext&) {
+  Slice on_read(const Slice& /*key*/, const Slice& data,
+                const Slice& /*big_meta*/, CursorContext&) {
     return data;
   }
 
@@ -76,13 +72,13 @@ struct DefaultAspect {
   /// reject.  The Aspect may also throw an exception to reject with a
   /// specific error.
   /// |value| is the current value at the cursor position.
-  bool may_delete(const Slice& key, const Slice& value, CursorContext&) {
+  bool may_delete(const Slice& /*key*/, const Slice& /*value*/, CursorContext&) {
     return true;
   }
 
   /// Called when a big value is allocated.  Write metadata into |meta_ptr|
   /// (exactly big_meta_size bytes).
-  void init_big_meta(const Slice& key, char* meta_ptr, CursorContext&) {}
+  void init_big_meta(const Slice& /*key*/, char* /*meta_ptr*/, CursorContext&) {}
 
   // --- Cursor-level transaction join points --------------------------------
   // Fired from _cursor.hpp.  Receive CursorContext for per-cursor state.
@@ -110,16 +106,16 @@ struct DefaultAspect {
   // --- Cursor navigation join points --------------------------------------
 
   template <typename Ctx>
-  constexpr bool before_find(const Slice& key, Ctx&) { return true; }
+  constexpr bool before_find(const Slice& /*key*/, Ctx&) { return true; }
 
   template <typename Ctx>
-  constexpr void on_find(const Slice& key, bool found, Ctx&) {}
+  constexpr void on_find(const Slice& /*key*/, bool /*found*/, Ctx&) {}
 
   template <typename Ctx>
-  constexpr void on_next(bool has_next, Ctx&) {}
+  constexpr void on_next(bool /*has_next*/, Ctx&) {}
 
   template <typename Ctx>
-  constexpr void on_prev(bool has_prev, Ctx&) {}
+  constexpr void on_prev(bool /*has_prev*/, Ctx&) {}
 
   // --- Maintenance join points --------------------------------------------
   // Fired from _db.hpp for recovery and defragmentation.
@@ -144,21 +140,21 @@ struct DefaultAspect {
   // to the merge policy (not a user cursor).
 
   /// Called before overwriting an existing leaf during merge.
-  bool may_merge_overwrite(const Slice& key, const Slice& dst, bool dst_is_big,
-                           const Slice& src, bool src_is_big,
+  bool may_merge_overwrite(const Slice& /*key*/, const Slice& /*dst*/, bool /*dst_is_big*/,
+                           const Slice& /*src*/, bool /*src_is_big*/,
                            CursorContext&) {
     return true;
   }
 
   /// Called before adding a new leaf during merge.
-  bool may_merge_add(const Slice& key, const Slice& value, bool is_big,
+  bool may_merge_add(const Slice& /*key*/, const Slice& /*value*/, bool /*is_big*/,
                      CursorContext&) {
     return true;
   }
 
   /// Called before deleting a key during deletion-trie merge.
   /// |meta| contains the metadata stored alongside the deletion timestamp.
-  bool may_merge_delete(const Slice& key, const Slice& meta,
+  bool may_merge_delete(const Slice& /*key*/, const Slice& /*meta*/,
                         CursorContext&) {
     return true;
   }

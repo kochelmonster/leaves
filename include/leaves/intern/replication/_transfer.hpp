@@ -367,9 +367,7 @@ inline RequestChildrenIterator request_children_iterator(
                                  data.size() - offset);
 }
 
-// =============================================================================
 // Sender Implementation
-// =============================================================================
 
 // Simple arena allocator for path strings
 // Reduces heap allocations by batch-allocating memory for all paths

@@ -35,7 +35,7 @@ struct _TrieNode {
   uint8_t _compressed_len;
   uint8_t _lower_offset;
   uint8_t _array_offset;
-  uint8_t _compressed_data[];
+  uint8_t _compressed_data[1];
 
   static constexpr uint16_t NULL_MASK = uint16_t(1) << 15;
   constexpr static int NONE = -1;
@@ -141,7 +141,6 @@ struct _TrieNode {
     _compressed_len = prefix.size();
     memcpy(_compressed_data, prefix.data(), _compressed_len);
 
-    uint16_t idx0 = 0, idx1 = 1;
     std::pair<uint16_t, uint16_t> result(0, 1);
     if (key2 < key1) {
       std::swap(key1, key2);
@@ -676,6 +675,7 @@ struct _LeafNode {
   uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
 
   void set_big() { value_size |= BIG_VALUE_FLAG; }
+  void clear_big() { value_size &= ~BIG_VALUE_FLAG; }
 
   void set(const Slice& key, size_t value_size_) {
     assert(key.size() < 256);

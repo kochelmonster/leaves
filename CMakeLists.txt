@@ -138,6 +138,9 @@ option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded
 
 include(CheckCXXCompilerFlag)
 include(CheckCXXSourceRuns)
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
+include(CTest)
 
 # Helper: check that the compiler supports a flag AND the CPU can execute the instructions.
 # check_cxx_compiler_flag only tests compilation, not runtime — using it alone causes
@@ -198,80 +201,121 @@ endif()
 
 add_subdirectory("BLAKE3/c")
 
-add_library(core INTERFACE)
-target_sources(core INTERFACE 
-    # include/leaves.hpp
-    include/leaves/intern/core/_util.hpp
-    include/leaves/intern/core/_exception.hpp
-    include/leaves/intern/core/_bits.hpp
-    include/leaves/intern/memory/_memory.hpp
-    include/leaves/intern/storage/_mmap.hpp
-    include/leaves/intern/db/_cursor.hpp
-    include/leaves/intern/core/_node.hpp
-    include/leaves/intern/db/_inserter.hpp
-    include/leaves/intern/storage/_fstore.hpp
-    include/leaves/intern/memory/_twoquecache.hpp
+add_library(leaves INTERFACE)
+add_library(leaves::leaves ALIAS leaves)
+add_library(core ALIAS leaves)
+add_library(leaves_replication INTERFACE)
+add_library(leaves::replication ALIAS leaves_replication)
+set_target_properties(leaves_replication PROPERTIES EXPORT_NAME replication)
+
+target_sources(leaves INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/leaves.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/mmap.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/fstore.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/db.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/cursor.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/confluence.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_util.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_exception.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_bits.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/memory/_memory.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/storage/_mmap.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/db/_cursor.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/core/_node.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/db/_inserter.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/storage/_fstore.hpp>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/intern/memory/_twoquecache.hpp>
 )
 
-if (LEAVES_SINGLE_PROCESS)
-    target_compile_definitions(core INTERFACE LEAVES_SINGLE_PROCESS)
-elseif (HAVE_BOOST_PROCESS)
-    target_link_libraries(core INTERFACE Boost::process)
+if (TARGET Boost::headers)
+    target_link_libraries(leaves INTERFACE Boost::headers)
+elseif (TARGET Boost::boost)
+    target_link_libraries(leaves INTERFACE Boost::boost)
+else()
+    target_include_directories(leaves INTERFACE ${Boost_INCLUDE_DIRS})
 endif()
 
-target_include_directories(core INTERFACE ${Boost_INCLUDE_DIRS})
-target_include_directories(core
-                           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
-                           )
-target_include_directories(core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c)
+if (LEAVES_SINGLE_PROCESS)
+    target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
+endif()
+
+target_include_directories(leaves
+                           INTERFACE
+                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+target_sources(leaves_replication INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/replication.hpp>)
+target_link_libraries(leaves_replication INTERFACE leaves BLAKE3::blake3)
 
 if (LEAVES_BUILD_TESTS)
 
-add_library(test INTERFACE)
+function(leaves_add_test target)
+    set(options)
+    set(oneValueArgs TIMEOUT)
+    set(multiValueArgs LABELS)
+    cmake_parse_arguments(LEAVES_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-target_include_directories(test
+    if (NOT LEAVES_TEST_TIMEOUT)
+        set(LEAVES_TEST_TIMEOUT 30)
+    endif()
+
+    if (NOT LEAVES_TEST_LABELS)
+        set(LEAVES_TEST_LABELS native unit)
+    endif()
+
+    add_test(NAME ${target} COMMAND $<TARGET_FILE:${target}>)
+    set_tests_properties(${target} PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        TIMEOUT ${LEAVES_TEST_TIMEOUT}
+        LABELS "${LEAVES_TEST_LABELS}")
+endfunction()
+
+add_library(leaves_test_support INTERFACE)
+
+target_include_directories(leaves_test_support
                            INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            )
-target_include_directories(test INTERFACE src)
-target_link_libraries(test INTERFACE core)
-target_compile_options(test INTERFACE -g)
-target_compile_definitions(test INTERFACE 
+target_include_directories(leaves_test_support INTERFACE src)
+target_link_libraries(leaves_test_support INTERFACE core)
+target_compile_options(leaves_test_support INTERFACE -g)
+target_compile_definitions(leaves_test_support INTERFACE 
     DEBUG 
     TESTING
     CMPFILES="${CMAKE_CURRENT_SOURCE_DIR}/tests/cmpfiles/") 
-target_sources(test INTERFACE
+target_sources(leaves_test_support INTERFACE
     tests/test.hpp)
 
 if (LEAVES_GCOV)
-target_compile_options(test INTERFACE -g --coverage)
-target_compile_definitions(test INTERFACE DEBUG GCOV_ENABLED)
-target_link_options(test INTERFACE --coverage)
+target_compile_options(leaves_test_support INTERFACE -g --coverage)
+target_compile_definitions(leaves_test_support INTERFACE DEBUG GCOV_ENABLED)
+target_link_options(leaves_test_support INTERFACE --coverage)
 else (LEAVES_GCOV)
-target_compile_options(test INTERFACE -g)
-target_compile_definitions(test INTERFACE DEBUG)
+target_compile_options(leaves_test_support INTERFACE -g)
+target_compile_definitions(leaves_test_support INTERFACE DEBUG)
 endif (LEAVES_GCOV)
 
 if (LEAVES_ASAN AND NOT LEAVES_GCOV)
-target_compile_options(test INTERFACE -fsanitize=address -fno-omit-frame-pointer)
-target_link_options(test INTERFACE -fsanitize=address)
+target_compile_options(leaves_test_support INTERFACE -fsanitize=address -fno-omit-frame-pointer)
+target_link_options(leaves_test_support INTERFACE -fsanitize=address)
 endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
     include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_mmap PUBLIC test)
+target_link_libraries(test_mmap PUBLIC leaves_test_support)
 
 add_executable(test_transfer tests/test_transfer.cpp)
-target_link_libraries(test_transfer PUBLIC core test blake3)
+target_link_libraries(test_transfer PUBLIC core leaves_test_support blake3)
 
 add_executable(test_replication_fsm tests/test_replication_fsm.cpp)
-target_link_libraries(test_replication_fsm PUBLIC core test blake3)
+target_link_libraries(test_replication_fsm PUBLIC core leaves_test_support blake3)
 
 add_executable(test_replication_api tests/test_replication_api.cpp)
-target_link_libraries(test_replication_api PUBLIC core test blake3)
+target_link_libraries(test_replication_api PUBLIC core leaves_test_support blake3)
 
 add_executable(test_replication_multiclient tests/test_replication_multiclient.cpp)
-target_link_libraries(test_replication_multiclient PUBLIC core test blake3)
+target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_support blake3)
 
 add_executable(ws_replication_server tests/ws_replication/server.cpp)
 target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
@@ -282,72 +326,113 @@ target_link_libraries(kv_demo_server PUBLIC core blake3 pthread)
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
     include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_fstore PUBLIC test)
+target_link_libraries(test_fstore PUBLIC leaves_test_support)
 
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
     include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_memory PUBLIC test)
+target_link_libraries(test_memory PUBLIC leaves_test_support)
 
 add_executable(test_memstore tests/test_memstore.cpp)
 target_sources(test_memstore INTERFACE
     include/leaves/intern/_memstore.hpp include/leaves/intern/_memory.hpp)
-target_link_libraries(test_memstore PUBLIC core test)
+target_link_libraries(test_memstore PUBLIC core leaves_test_support)
 
 add_executable(test_bits tests/test_bits.cpp)
 target_sources(test_memory INTERFACE
     include/intern/_bits.hpp)
-target_link_libraries(test_bits PUBLIC test)
+target_link_libraries(test_bits PUBLIC leaves_test_support)
 
 add_executable(test_cursor tests/test_cursor.cpp)
-target_link_libraries(test_cursor PUBLIC core test)
+target_link_libraries(test_cursor PUBLIC core leaves_test_support)
 
 add_executable(test_node tests/test_node.cpp)
-target_link_libraries(test_node PUBLIC core test)
+target_link_libraries(test_node PUBLIC core leaves_test_support)
 
 add_executable(test_db tests/test_db.cpp)
-target_link_libraries(test_db PUBLIC core test)
+target_link_libraries(test_db PUBLIC core leaves_test_support)
 
 add_executable(test_bigmemory tests/test_bigmemory.cpp)
-target_link_libraries(test_bigmemory PUBLIC core test)
+target_link_libraries(test_bigmemory PUBLIC core leaves_test_support)
 
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
     include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_map_storage PUBLIC core test)
+target_link_libraries(test_map_storage PUBLIC core leaves_test_support)
 
 add_executable(test_file_storage tests/test_file_storage.cpp)
 target_sources(test_file_storage INTERFACE
     include/fstore.hpp include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_file_storage PUBLIC core test)
+target_link_libraries(test_file_storage PUBLIC core leaves_test_support)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
 
 add_executable(test_merger tests/test_merger.cpp)
-target_link_libraries(test_merger PUBLIC core test)
+target_link_libraries(test_merger PUBLIC core leaves_test_support)
+
+add_executable(test_tributary tests/test_tributary.cpp)
+target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
-target_link_libraries(test_hash_updater PUBLIC core test blake3)
+target_link_libraries(test_hash_updater PUBLIC core leaves_test_support blake3)
 
 add_executable(test_hash_lookup tests/test_hash_lookup.cpp)
-target_link_libraries(test_hash_lookup PUBLIC core test blake3)
+target_link_libraries(test_hash_lookup PUBLIC core leaves_test_support blake3)
 
 add_executable(test_serial tests/test_serial.cpp)
-target_link_libraries(test_serial PUBLIC test)
+target_link_libraries(test_serial PUBLIC leaves_test_support)
 
 add_executable(test_twoquecache tests/test_twoquecache.cpp)
-target_link_libraries(test_twoquecache PUBLIC test)
+target_link_libraries(test_twoquecache PUBLIC leaves_test_support)
 
-target_link_libraries(test_file_storage PUBLIC core test)
+target_link_libraries(test_file_storage PUBLIC core leaves_test_support)
 
 add_executable(test_multithread tests/test_multithread.cpp)
-target_link_libraries(test_multithread PUBLIC core test pthread)
+target_link_libraries(test_multithread PUBLIC core leaves_test_support pthread)
 
 add_executable(test_executor tests/test_executor.cpp)
-target_link_libraries(test_executor PUBLIC core test pthread)
+target_link_libraries(test_executor PUBLIC core leaves_test_support pthread)
 
 add_executable(test_aspect tests/test_aspect.cpp)
-target_link_libraries(test_aspect PUBLIC core test blake3)
+target_link_libraries(test_aspect PUBLIC core leaves_test_support blake3)
+
+add_executable(test_metrics_aspects tests/test_metrics_aspects.cpp)
+target_link_libraries(test_metrics_aspects PUBLIC core leaves_test_support)
+
+foreach(target IN ITEMS
+    test_mmap
+    test_fstore
+    test_memory
+    test_memstore
+    test_bits
+    test_cursor
+    test_node
+    test_db
+    test_bigmemory
+    test_map_storage
+    test_file_storage
+    test_string_insert
+    test_merger
+    test_hash_updater
+    test_hash_lookup
+    test_serial
+    test_twoquecache
+    test_aspect
+    test_metrics_aspects)
+    leaves_add_test(${target} LABELS "native;unit")
+endforeach()
+
+foreach(target IN ITEMS
+    test_transfer
+    test_replication_fsm
+    test_replication_api
+    test_tributary
+    test_executor)
+    leaves_add_test(${target} TIMEOUT 60 LABELS "native;integration")
+endforeach()
+
+leaves_add_test(test_multithread TIMEOUT 120 LABELS "native;stress;concurrency")
+leaves_add_test(test_replication_multiclient TIMEOUT 120 LABELS "native;integration;network")
 
 add_executable(profile tests/profile.cpp)
 
@@ -374,6 +459,7 @@ COMMAND ./test_bigmemory
 COMMAND ./test_string_insert
 COMMAND ./test_multithread
 COMMAND ./test_merger
+COMMAND ./test_tributary
 COMMAND ./test_serial
 COMMAND ./test_transfer
 COMMAND ./test_replication_fsm
@@ -390,18 +476,31 @@ COMMAND ./test_executor
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect test_executor
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect test_executor
 )
 
 endif(LEAVES_BUILD_TESTS)
 
+set(LEAVES_GTEST_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/third_party/googletest/googlemock/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/third_party/googletest/googlemock
+    ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/third_party/googletest/googletest/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/third_party/googletest/googletest)
+
 if (LEAVES_BUILD_BENCHMARKS) 
+set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Build LevelDB's unit tests" FORCE)
+set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "Build LevelDB's benchmarks" FORCE)
+set(LEVELDB_INSTALL OFF CACHE BOOL "Install LevelDB's header and library" FORCE)
+set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Enable installation of benchmark." FORCE)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Enable testing of the benchmark library." FORCE)
+include_directories(SYSTEM ${LEAVES_GTEST_INCLUDE_DIRS})
+add_subdirectory("leveldb/third_party/benchmark")
 add_subdirectory("leveldb")
 
 set(DEBUG_BENCHMARKS OFF CACHE BOOL "Build benchmarks with debug info")
 
 add_library(lbench INTERFACE)
-target_include_directories(lbench INTERFACE leveldb)
+target_include_directories(lbench SYSTEM INTERFACE leveldb ${LEAVES_GTEST_INCLUDE_DIRS})
 
 target_sources(lbench INTERFACE 
     "leveldb/util/histogram.cc"
@@ -410,18 +509,15 @@ target_sources(lbench INTERFACE
     "leveldb/util/testutil.h")
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
-target_link_libraries(db_bench_leaves PUBLIC core lbench gmock gtest    
-    benchmark leveldb pthread core blake3)
+target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb pthread blake3)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
-target_link_libraries(db_bench_mdb PUBLIC core lbench gmock gtest 
-    benchmark leveldb lmdb pthread)
+target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb pthread)
 target_compile_options(db_bench_mdb PRIVATE -O3 -march=native -funroll-loops -flto=auto)
 target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
-target_link_libraries(db_bench_memory PUBLIC core lbench gmock gtest 
-    benchmark leveldb pthread)
+target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb pthread)
 
 add_executable(bench_hash_updater benchmarks/bench_hash_updater.cpp)
 target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
@@ -438,7 +534,7 @@ if (DEBUG_BENCHMARKS)
     target_compile_definitions(bench_hash_updater PRIVATE DEBUG)
 else()
     target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
-    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
     target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
     target_compile_options(bench_hash_updater PRIVATE -O3 -march=native -funroll-loops -flto=auto)
@@ -473,3 +569,38 @@ endif()
 
 
 endif (LEAVES_BUILD_BENCHMARKS) 
+
+install(TARGETS leaves EXPORT leavesTargets
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(TARGETS leaves_replication EXPORT leavesReplicationTargets
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/leaves"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/leaves-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config-version.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(EXPORT leavesTargets
+    FILE leaves-targets.cmake
+    NAMESPACE leaves::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+install(EXPORT leavesReplicationTargets
+    FILE leaves-replication-targets.cmake
+    NAMESPACE leaves::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/leaves-config-version.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leaves")
+
+set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Header-only trie-based embedded key-value store")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_GENERATOR "TGZ")
+include(CPack)
