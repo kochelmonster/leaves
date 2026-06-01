@@ -5,7 +5,6 @@
 
 #include "mmap.hpp"
 #include "intern/multi/_confluence_db.hpp"
-#include "intern/replication/_replication_db.hpp"
 
 namespace leaves {
 
@@ -158,12 +157,6 @@ class ConfluenceDB {
 // Convenience aliases for the common mmap case with the default conflict policy.
 using MapConfluenceDB     = ConfluenceDB<MapStorage>;
 using MapConfluenceCursor = ConfluenceCursor<MapStorage>;
-
-// Convenience aliases for the mmap + replication combination.
-using MapReplicationConfluenceDB =
-    ConfluenceDB<MapStorage, _DefaultConflictPolicy, _ReplicationDB>;
-using MapReplicationConfluenceCursor =
-    ConfluenceCursor<MapStorage, _DefaultConflictPolicy, _ReplicationDB>;
 
 }  // namespace leaves
 

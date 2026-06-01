@@ -303,7 +303,7 @@ endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
     include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_mmap PUBLIC leaves_test_support)
+target_link_libraries(test_mmap PUBLIC leaves_test_support blake3)
 
 add_executable(test_transfer tests/test_transfer.cpp)
 target_link_libraries(test_transfer PUBLIC core leaves_test_support blake3)
@@ -326,7 +326,7 @@ target_link_libraries(kv_demo_server PUBLIC core blake3 pthread)
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
     include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_fstore PUBLIC leaves_test_support)
+target_link_libraries(test_fstore PUBLIC leaves_test_support blake3)
 
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
@@ -350,7 +350,7 @@ add_executable(test_node tests/test_node.cpp)
 target_link_libraries(test_node PUBLIC core leaves_test_support)
 
 add_executable(test_db tests/test_db.cpp)
-target_link_libraries(test_db PUBLIC core leaves_test_support)
+target_link_libraries(test_db PUBLIC core leaves_test_support blake3)
 
 add_executable(test_bigmemory tests/test_bigmemory.cpp)
 target_link_libraries(test_bigmemory PUBLIC core leaves_test_support)
@@ -363,7 +363,7 @@ target_link_libraries(test_map_storage PUBLIC core leaves_test_support)
 add_executable(test_file_storage tests/test_file_storage.cpp)
 target_sources(test_file_storage INTERFACE
     include/fstore.hpp include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
-target_link_libraries(test_file_storage PUBLIC core leaves_test_support)
+target_link_libraries(test_file_storage PUBLIC core leaves_test_support blake3)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
 
@@ -384,8 +384,6 @@ target_link_libraries(test_serial PUBLIC leaves_test_support)
 
 add_executable(test_twoquecache tests/test_twoquecache.cpp)
 target_link_libraries(test_twoquecache PUBLIC leaves_test_support)
-
-target_link_libraries(test_file_storage PUBLIC core leaves_test_support)
 
 add_executable(test_multithread tests/test_multithread.cpp)
 target_link_libraries(test_multithread PUBLIC core leaves_test_support pthread)

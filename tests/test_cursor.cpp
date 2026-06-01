@@ -6,7 +6,6 @@ Test the the cursor with without burst table
 
 #include <boost/endian/conversion.hpp>
 
-#include "blake3.h"
 #include "test.hpp"
 
 using boost::endian::big_to_native;
