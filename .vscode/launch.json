@@ -236,7 +236,7 @@
             ]
         },
         {
-            "name": "(gdb)) test_cursor",
+            "name": "(gdb) test_cursor",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_cursor",
