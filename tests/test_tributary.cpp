@@ -538,6 +538,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
     auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
     std::unique_ptr<CDB> cdb(cdb_ptr);
     cdb->set_idle_timeout_seconds(0);
+    cdb->start_monitor();
 
     bool ok = run_phase(*cdb, kLoadOpsPerThread, /*inserts_only=*/true, "LOAD");
     BOOST_REQUIRE_MESSAGE(ok, "Deadlock during LOAD phase");
@@ -554,6 +555,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
     auto [storage, main_db, cdb_ptr] = open_cdb(TEST_FILE, saved_header);
     std::unique_ptr<CDB> cdb(cdb_ptr);
     cdb->set_idle_timeout_seconds(0);
+    cdb->start_monitor();
 
     bool ok = run_phase(*cdb, kRunOpsPerThread, /*inserts_only=*/false, "RUN");
     BOOST_CHECK_MESSAGE(ok,

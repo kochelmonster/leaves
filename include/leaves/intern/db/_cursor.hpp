@@ -612,6 +612,7 @@ struct _TransactionalCursor
   Aspect& _aspect() { return this->_db->aspect(); }
 
   ~_TransactionalCursor() {
+    if (is_transaction_active()) rollback();
     if (this->_txn) this->_txn->refs.fetch_sub(1);
   }
 

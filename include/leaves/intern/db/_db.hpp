@@ -271,53 +271,59 @@ struct _DB {
   // memset).
   void reset_in_place() {
     if (is_active()) throw TransactionActive();
-    std::scoped_lock lock(_storage.file_lock());
 
-    auto read_txn = resolve<Transaction>(&_header->read_txn);
+    area_ptr first_area;
+    txn_ptr txn;
+    {
+      std::scoped_lock lock(_storage.file_lock());
 
-    // Return all single areas after the first (the first holds the header).
-    if (_header->area_list_head_single) {
-      area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
-      offset_t second = first->next;
-      if (second && read_txn->area_list_tail_single &&
-          second != _header->area_list_head_single) {
-        _storage.return_single_areas(second, read_txn->area_list_tail_single);
-        first->next = 0;
-        make_dirty(first);
+      auto read_txn = resolve<Transaction>(&_header->read_txn);
+
+      // Return all single areas after the first (the first holds the header).
+      if (_header->area_list_head_single) {
+        area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
+        offset_t second = first->next;
+        if (second && read_txn->area_list_tail_single &&
+            second != _header->area_list_head_single) {
+          _storage.return_single_areas(second, read_txn->area_list_tail_single);
+          first->next = 0;
+          make_dirty(first);
+        }
       }
+
+      // Return the entire multi-area chain.
+      if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
+        _storage.return_multi_areas(_header->area_list_head_multi,
+                                    read_txn->area_list_tail_multi);
+        _header->area_list_head_multi = 0;
+      }
+
+      // Re-initialise the in-place transaction at header + header_size.
+      offset_t header_off = (uint64_t)_storage.resolve(_header);
+      uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
+      _header->prepared_txn = _header->read_txn = header_off + header_size;
+      _header->next_txn_page = 0;
+      _header->txn_cursor_id.store(0);
+
+      first_area = resolve<Area>(&_header->area_list_head_single, WRITE);
+      offset_t first_area_offset = _header->area_list_head_single;
+
+      txn = resolve<Transaction>(&_header->read_txn);
+      memset((char*)txn, 0, sizeof(Transaction));
+      txn->slot_id = Transaction::SLOT_ID;
+      txn->used = sizeof(Transaction);
+      txn->txn_id = tid_t(1);
+      txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+      txn->next_txn = 0;
+      txn->refs.store(0);
+      txn->start_txn = _header->read_txn;
+      txn->area_list_tail_single = first_area_offset;
+      txn->area_list_tail_multi = 0;
+      txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
+                            first_area->end());
     }
-
-    // Return the entire multi-area chain.
-    if (_header->area_list_head_multi && read_txn->area_list_tail_multi) {
-      _storage.return_multi_areas(_header->area_list_head_multi,
-                                  read_txn->area_list_tail_multi);
-      _header->area_list_head_multi = 0;
-    }
-
-    // Re-initialise the in-place transaction at header + header_size.
-    offset_t header_off = (uint64_t)_storage.resolve(_header);
-    uint32_t header_size = padding(sizeof(Header), MIN_PAGE_SIZE);
-    _header->prepared_txn = _header->read_txn = header_off + header_size;
-    _header->next_txn_page = 0;
-    _header->txn_cursor_id.store(0);
-
-    area_ptr first_area =
-        resolve<Area>(&_header->area_list_head_single, WRITE);
-    offset_t first_area_offset = _header->area_list_head_single;
-
-    txn_ptr txn = resolve<Transaction>(&_header->read_txn);
-    memset((char*)txn, 0, sizeof(Transaction));
-    txn->slot_id = Transaction::SLOT_ID;
-    txn->used = sizeof(Transaction);
-    txn->txn_id = tid_t(1);
-    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
-    txn->next_txn = 0;
-    txn->refs.store(0);
-    txn->start_txn = _header->read_txn;
-    txn->area_list_tail_single = first_area_offset;
-    txn->area_list_tail_multi = 0;
-    txn->mem_manager.init(_header->read_txn + PAGE_SIZES[txn->slot_id],
-                          first_area->end());
+    // Release file_lock before clone(): clone() calls alloc_single_area()
+    // which takes file_lock, and interprocess_mutex is non-reentrant.
 
     // Pre-allocate the next transaction page (mirrors init()).
     _active_txn = txn;
@@ -617,7 +623,12 @@ struct _DB {
 
   bool commit(uint64_t cursor_id, bool sync = false,
               TransactionOrigin origin = TransactionOrigin::user) {
-    if (!prepare_commit(cursor_id, false, origin)) return false;
+    try {
+      if (!prepare_commit(cursor_id, false, origin)) return false;
+    } catch (...) {
+      rollback(cursor_id, origin);
+      throw;
+    }
 
     // Atomically switch to new transaction (area tails are preserved in
     // transaction)

@@ -73,6 +73,10 @@ class TCursor {
 
   void rollback() { _cursor->rollback(); }
 
+  bool is_transaction_active() const {
+    return _cursor && _cursor->is_transaction_active();
+  }
+
   auto& aspect_context() { return _cursor->_aspect_context; }
   const auto& aspect_context() const { return _cursor->_aspect_context; }
 
