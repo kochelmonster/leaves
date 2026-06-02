@@ -602,6 +602,7 @@ struct _TransactionalCursor
   txn_ptr _txn;
   uint64_t _id{0};
   std::string _refind_buffer;
+  bool _use_wal{false};
   [[no_unique_address]] CursorContext _aspect_context;
 
   _TransactionalCursor(DB* db, offset_e* root) : Cursor(db, root) {
@@ -705,6 +706,7 @@ struct _TransactionalCursor
     Slice transformed = _aspect().on_write(this->key(), value, _aspect_context);
     void* space = reserve(transformed.size());
     optimized_memcpy(space, transformed.data(), transformed.size());
+    if (_use_wal) this->_db->wal_put(this->key(), value);
     this->_db->flush();
   }
 
@@ -719,6 +721,7 @@ struct _TransactionalCursor
         throw NoValidPosition();  // Aspect rejected the delete
       }
     }
+    if (_use_wal) this->_db->wal_delete(this->key());
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();
@@ -728,14 +731,22 @@ struct _TransactionalCursor
   }
 
   bool start_transaction(bool non_blocking = false,
-                         TransactionOrigin origin = TransactionOrigin::user) {
+                         TransactionOrigin origin = TransactionOrigin::user,
+                         bool use_wal = false) {
     if (this->_db->txn_cursor_id() != _id) {
+      if (use_wal) {
+        _use_wal = true;
+        this->_db->open_wal();
+      } else {
+        _use_wal = false;
+      }
       if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
         return false;
       txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking, origin);
       if (!new_txn) return false;
       assert(new_txn->refs.load() == 0);  // no one can reference it yet
       _set_txn(new_txn);
+      if (_use_wal) this->_db->wal_begin(new_txn->txn_id.value());
       _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
     }
     return true;
@@ -749,6 +760,19 @@ struct _TransactionalCursor
               TransactionOrigin origin = TransactionOrigin::user) {
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
+    if (_use_wal) {
+      // Durability is provided by the WAL: persist the logical log (PREPARE +
+      // COMMIT, both fsynced) and let the main DB commit asynchronously. The
+      // storage-wide checkpoint thread flushes the main DB in the background.
+      uint64_t tid = this->_txn ? this->_txn->txn_id.value() : 0;
+      this->_db->wal_prepare();
+      this->_db->wal_commit(tid);
+      bool committed = this->_db->commit(_id, false, origin);
+      if (committed) {
+        _aspect().on_commit(*this->_db, origin, _aspect_context);
+      }
+      return committed;
+    }
     bool committed = this->_db->commit(_id, sync, origin);
     if (committed) {
       _aspect().on_commit(*this->_db, origin, _aspect_context);
@@ -760,6 +784,7 @@ struct _TransactionalCursor
     if (this->_db->txn_cursor_id() != _id) return false;
     if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context))
       return false;
+    if (_use_wal) this->_db->wal_abort();
     if (this->_db->rollback(_id, origin)) {
       _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context);
       // Switch back to the committed read transaction.

@@ -63,8 +63,9 @@ class TCursor {
 
   void update() { _cursor->update(); }
 
-  bool start_transaction(bool non_blocking = false) {
-    return _cursor->start_transaction(non_blocking);
+  bool start_transaction(bool non_blocking = false, bool use_wal = false) {
+    return _cursor->start_transaction(non_blocking,
+                                      TransactionOrigin::user, use_wal);
   }
 
   tid_t prepare_commit(bool sync = false) { return _cursor->prepare_commit(sync); }

@@ -352,6 +352,9 @@ target_link_libraries(test_node PUBLIC core leaves_test_support)
 add_executable(test_db tests/test_db.cpp)
 target_link_libraries(test_db PUBLIC core leaves_test_support blake3)
 
+add_executable(test_wal tests/test_wal.cpp)
+target_link_libraries(test_wal PUBLIC core leaves_test_support blake3)
+
 add_executable(test_bigmemory tests/test_bigmemory.cpp)
 target_link_libraries(test_bigmemory PUBLIC core leaves_test_support)
 
@@ -406,6 +409,7 @@ foreach(target IN ITEMS
     test_cursor
     test_node
     test_db
+    test_wal
     test_bigmemory
     test_map_storage
     test_file_storage

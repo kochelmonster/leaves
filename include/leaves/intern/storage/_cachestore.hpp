@@ -18,6 +18,7 @@
 #include "../memory/_twoquecache.hpp"
 #include "../util/_threadpool.hpp"
 #include "_db_directory.hpp"
+#include "_wal.hpp"
 
 namespace leaves {
 
@@ -92,6 +93,10 @@ struct _CacheStore : public Opers_,
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
+  // Storage-wide WAL checkpoint thread. Declared before _dbs so that _dbs is
+  // destroyed first (each DB destructor unregisters its _WalWriter) and the
+  // manager is torn down afterwards.
+  _WalManager _wal_manager;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 
   _CacheStore(size_t capacity = 500 * M,
@@ -103,6 +108,10 @@ struct _CacheStore : public Opers_,
 
   // must be called in the subclasses' destructor
   void destroy() {
+    // Stop the WAL checkpoint thread before tearing down storage so no
+    // background flush races with the final flush below.
+    _wal_manager.stop();
+
     // Wait for any pending flush tasks to complete
     this->wait_idle();
 
@@ -111,6 +120,15 @@ struct _CacheStore : public Opers_,
     this->sync_writes();
     close();
   }
+
+  // Register a DB's WAL writer with the storage-wide checkpoint thread.
+  // The flush callback performs a synchronous flush + fsync of the main DB.
+  void register_wal(_WalWriter* w) {
+    _wal_manager.register_wal(w, [this] { this->flush(true, true); });
+  }
+
+  void unregister_wal(_WalWriter* w) { _wal_manager.unregister_wal(w); }
+
 
   uint64_t new_cursor_id() {
     return _last_cursor_id.fetch_add(1, std::memory_order_relaxed) + 1;

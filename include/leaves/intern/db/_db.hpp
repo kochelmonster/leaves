@@ -9,6 +9,7 @@
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
 #include "../util/_page_hist.hpp"
+#include "../storage/_wal.hpp"
 #include "_aspect.hpp"
 #include "_cursor.hpp"
 
@@ -179,6 +180,11 @@ struct _DB {
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id{0};
 
+  // Optional write-ahead log (logical operation log). Opened lazily by
+  // open_wal() on the first WAL-enabled transaction.
+  _WalWriter _wal;
+  bool _wal_open{false};
+
   _DB(Storage& storage, offset_t header, std::string_view name)
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
@@ -193,7 +199,15 @@ struct _DB {
     init(header);
   }
 
+  ~_DB() {
+    if (_wal_open) {
+      _storage.unregister_wal(&_wal);
+      _wal.close();
+    }
+  }
+
   Self& self() { return *static_cast<Self*>(this); }
+
 
   void init(offset_t* header) {
     auto area_ptr = _storage.alloc_single_area();
@@ -345,6 +359,71 @@ struct _DB {
     _aspect.init_cursor_context(cursor->_aspect_context);
     return cursor;
   }
+
+  // ---- Write-ahead log (logical operation log) -------------------------
+  bool wal_enabled() const { return _wal_open; }
+
+  // Base path for this DB's WAL file pair: "<storage-file>.<db-name>".
+  std::string wal_base_path() const {
+    return std::string(_storage.filename()) + "." + _name;
+  }
+
+  // Idempotently open the WAL: open the file pair, replay any committed
+  // transactions left from a previous run into the main DB, truncate both
+  // files, then register with the storage-wide checkpoint thread.
+  void open_wal() {
+    if (_wal_open) return;
+    if (!_wal.open(wal_base_path()))
+      throw std::runtime_error("failed to open WAL files");
+    recover_wal();
+    _storage.register_wal(&_wal);
+    _wal_open = true;
+  }
+
+  // Replay committed transactions from both WAL files (ordered by txn_id)
+  // using a throwaway non-WAL cursor, then reset both files to empty.
+  void recover_wal() {
+    std::vector<_WalTxn> all = wal_parse(_wal._path[0]);
+    {
+      std::vector<_WalTxn> t1 = wal_parse(_wal._path[1]);
+      all.insert(all.end(), std::make_move_iterator(t1.begin()),
+                 std::make_move_iterator(t1.end()));
+    }
+    std::sort(all.begin(), all.end(), [](const _WalTxn& a, const _WalTxn& b) {
+      return tid_t(static_cast<uint32_t>(a.txn_id)) <
+             tid_t(static_cast<uint32_t>(b.txn_id));
+    });
+
+    if (!all.empty()) {
+      cursor_ptr cursor = create_cursor();
+      for (const _WalTxn& t : all) {
+        cursor->start_transaction();  // non-WAL replay
+        for (const _WalOpRecord& op : t.ops) {
+          cursor->find(Slice(op.key));
+          if (op.is_delete) {
+            if (cursor->is_valid()) cursor->remove();
+          } else {
+            cursor->value(Slice(op.val));
+          }
+        }
+        cursor->commit(true);  // fsync into main DB
+      }
+    }
+
+    _wal.truncate(0);
+    _wal.truncate(1);
+    _wal._next_log.store(0);
+    _wal._active_log.store(0);
+    _wal._last_commit.store(0);
+    _wal._flushed_upto.store(0);
+  }
+
+  void wal_begin(uint64_t txn_id) { _wal.begin(txn_id); }
+  void wal_put(const Slice& key, const Slice& val) { _wal.put(key, val); }
+  void wal_delete(const Slice& key) { _wal.del(key); }
+  void wal_prepare() { _wal.prepare(); }
+  void wal_commit(uint64_t txn_id) { _wal.commit(txn_id); }
+  void wal_abort() { _wal.abort(); }
 
   const db_type* _internal() const { return this; }  // for _Dumper
 
