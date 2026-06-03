@@ -564,7 +564,7 @@ struct _Merger {
 
     struct SharedBranch {
       int key;
-      src_offset_e src_off_val;  // value copy — immune to src_trie mutation
+      src_offset_e* src_off;
       offset_e dst_off;
     };
     SharedBranch shared[257];
@@ -585,7 +585,7 @@ struct _Merger {
         // Shared branch — merge recursively later (skip incomplete src)
         if (*src_off != 0) {
           shared[shared_count++] = {
-              k, *src_off,
+              k, src_off,
               *dst_trie->offset(k)};
         }
       } else {
@@ -619,7 +619,7 @@ struct _Merger {
       *new_trie->offset(k) = shared[si].dst_off;
 
       src_cursor.current_key.resize(current_key.size());
-      src_cursor.push(&shared[si].src_off_val);
+      src_cursor.push(shared[si].src_off);
       dst_cursor.stack.clear(_stack_before_new_trie);
       dst_cursor.current_key.resize(_new_trie_keypos);
       merge_node(current_key);

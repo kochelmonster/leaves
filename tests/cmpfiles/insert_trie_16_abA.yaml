@@ -1,9 +1,9 @@
 type: trie
 id: 548800
 page: 548792
-freespace: 24
+freespace: 16
 txn: 18
-size: 152
+size: 160
 compressed: 
   size: 2
   key: "[a][b]"

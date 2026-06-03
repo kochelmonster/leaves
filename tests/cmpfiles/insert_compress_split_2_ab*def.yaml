@@ -1,20 +1,20 @@
 type: trie
 id: 535088
 page: 535080
-freespace: 8
+freespace: 16
 txn: 4
-size: 32
+size: 40
 compressed: 
   size: 2
   key: "[a][b]"
 branches: "[*][c]"
 children: 
-  - 539225
+  - 539241
   - 535048
 ---
 type: leaf
-id: 539225
-page: 539217
+id: 539241
+page: 539233
 freespace: 21
 size: 19
 txn: 4

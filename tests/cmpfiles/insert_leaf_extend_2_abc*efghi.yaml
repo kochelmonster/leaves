@@ -1,6 +1,6 @@
 type: trie
-id: 535128
-page: 535120
+id: 535144
+page: 535136
 freespace: 16
 txn: 4
 size: 40
@@ -15,16 +15,16 @@ children:
 type: trie
 id: 535088
 page: 535080
-freespace: 8
+freespace: 16
 txn: 4
-size: 32
+size: 40
 compressed: 
   size: 6
   key: "[*][e][f][g][h][i]"
 branches: "[][j]"
 children: 
   - 535049
-  - 539281
+  - 539297
 ---
 type: leaf
 id: 535049
@@ -38,8 +38,8 @@ valuesize: 9
 value: "abc*efghi"
 ---
 type: leaf
-id: 539281
-page: 539273
+id: 539297
+page: 539289
 freespace: 24
 size: 16
 txn: 4
