@@ -193,6 +193,19 @@ struct _TributaryCursor : public _TransactionalCursor<CursorTraits_> {
     _insert_tombstone(key);
   }
 
+  // Remove by key: delete from this tributary's data trie if the key is
+  // present locally, and ALWAYS record the deletion in delete_root.  This
+  // lets a producer delete a key that currently lives in another tributary
+  // or the main DB — the tombstone propagates the deletion during merge.
+  template <bool callaspect = true>
+  void remove(const Slice& key) {
+    this->find(key);
+    if (this->is_valid() && key == this->current_key) {
+      Base::template remove<callaspect>();
+    }
+    _insert_tombstone(std::string(key.data(), key.size()));
+  }
+
   // Override value(slice) write: write to main trie + un-delete if needed
   void value(const Slice& v) {
     // Clear any tombstone for this key before writing

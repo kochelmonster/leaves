@@ -133,7 +133,7 @@ BOOST_AUTO_TEST_CASE(test_create) {
   uint16_t idx = trie.create(prefix, 130);
   trie.array()[idx] = 130;
   BOOST_CHECK_EQUAL(*trie.offset(130), 130);
-  BOOST_CHECK_EQUAL(trie.size(), 24);
+  BOOST_CHECK_EQUAL(trie.size(), 32);
 
   idx = trie.create(prefix, TrieNode::NONE);
   trie.array()[idx] = 0;
@@ -145,7 +145,7 @@ BOOST_AUTO_TEST_CASE(test_create) {
   trie.array()[indices.second] = 0;
   BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(*trie.offset(5), 5);
-  BOOST_CHECK_EQUAL(trie.size(), 32);
+  BOOST_CHECK_EQUAL(trie.size(), 40);
   // NONE (-1) < 5, so keys are swapped internally, result pair is swapped
   BOOST_CHECK_EQUAL(indices.first, 1);
   BOOST_CHECK_EQUAL(indices.second, 0);

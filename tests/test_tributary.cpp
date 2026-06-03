@@ -103,10 +103,22 @@ BOOST_AUTO_TEST_CASE(test_tributary_overwrite_latest_wins) {
   auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
   std::unique_ptr<CDB> cdb(cdb_ptr);
 
-  // Write first value (lower txn_id)
-  write_kv(*cdb, "key", "old");
-  // Write second value (higher txn_id)
-  write_kv(*cdb, "key", "new");
+  // "Latest wins" is only guaranteed for a single producer (one cursor reusing
+  // its sticky tributary slot).  Across separate tributaries there is no global
+  // commit order, so the winner of concurrent overwrites is unspecified.
+  auto writer = cdb->create_cursor();
+
+  // First overwrite (older)
+  BOOST_REQUIRE(writer->start_transaction());
+  writer->find(Slice("key"));
+  writer->value(Slice("old"));
+  BOOST_REQUIRE(writer->commit());
+
+  // Second overwrite (newer) — same producer/slot, so this must win.
+  BOOST_REQUIRE(writer->start_transaction());
+  writer->find(Slice("key"));
+  writer->value(Slice("new"));
+  BOOST_REQUIRE(writer->commit());
 
   auto cursor = cdb->create_cursor();
   cursor->find(Slice("key"));
@@ -119,19 +131,25 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_propagates) {
   auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
   std::unique_ptr<CDB> cdb(cdb_ptr);
 
-  write_kv(*cdb, "key", "value");
-
-  // Delete the key
-  {
-    auto cursor = cdb->create_cursor();
-    BOOST_REQUIRE(cursor->start_transaction());
-    cursor->find(Slice("key"));
-    BOOST_REQUIRE(cursor->is_valid());
-    cursor->remove();
-    BOOST_REQUIRE(cursor->commit());
-  }
-
+  // Read-your-own-delete is only guaranteed within a single producer (one
+  // cursor reusing its sticky tributary slot).  Across separate tributaries
+  // there is no global commit order, so a tombstone in one tributary is not
+  // guaranteed to shadow a value in another until both are merged
+  // (see test_tributary_delete_then_merge).
   auto cursor = cdb->create_cursor();
+
+  BOOST_REQUIRE(cursor->start_transaction());
+  cursor->find(Slice("key"));
+  cursor->value(Slice("value"));
+  BOOST_REQUIRE(cursor->commit());
+
+  // Delete the key via the same producer/slot.
+  BOOST_REQUIRE(cursor->start_transaction());
+  cursor->find(Slice("key"));
+  BOOST_REQUIRE(cursor->is_valid());
+  cursor->remove();
+  BOOST_REQUIRE(cursor->commit());
+
   cursor->find(Slice("key"));
   BOOST_CHECK(!cursor->is_valid());
 }
