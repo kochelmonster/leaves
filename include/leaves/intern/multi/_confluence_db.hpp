@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -143,7 +144,7 @@ struct _ConfluenceMeta {
 // - Keeps an in-process vector of all live TributaryDB instances.
 // - Each producer calls claim_tributary() → gets a TributaryDB* to write into.
 // - A background thread merges tributaries exceeding the write_count threshold
-//   or idle for longer than idle_timeout_seconds.
+//   or attached for longer than max_attached_age_seconds.
 // - Reads merge-scan the main DB + all live tributaries.
 
 template <typename MainDB_, typename ConflictPolicy_ = _DefaultConflictPolicy>
@@ -168,11 +169,36 @@ struct _ConfluenceDB {
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
   std::atomic<uint32_t> _merge_write_threshold{50000};
-  std::atomic<uint64_t> _idle_timeout_seconds{300};
+  // Max time a slot may stay ATTACHED before the age sweep merges it, in
+  // milliseconds (settable to sub-second values via set_max_attached_age).
+  std::atomic<uint64_t> _max_attached_age_ms{1000};
 
-  std::atomic<bool> _monitor_cancelled{false};
-  std::atomic<bool> _monitor_interrupt{false};
-  std::atomic<uint64_t> _monitor_job_id{0};
+  // Event-driven merging.  Merges run on the storage thread pool; producers
+  // only mark slots MERGING and call _schedule_merge().  Idle ATTACHED slots
+  // are merged by a periodic age sweep (see _ensure_age_sweep).
+  //
+  // Single-job + no-lost-wakeup: _schedule_merge() bumps _merge_signal (seq_cst)
+  // BEFORE the CAS on _merge_task_active (seq_cst), and producers publish
+  // slot.state=MERGING BEFORE calling it.  The merge job drains until no MERGING
+  // slot remains, clears _merge_task_active (J1), re-checks _merge_signal (J2),
+  // and re-loops only if it re-wins the CAS.  _merge_done tracks the last
+  // completed drain generation so merge_now()/merge_all_now() can block on it.
+  std::atomic<bool> _merge_task_active{false}; // a merge task is queued/running
+  std::mutex _monitor_mutex;
+  std::condition_variable _monitor_done_cv;  // wakes drain-completion waiters
+  // Number of merge tasks this DB has submitted but whose _run_merge_task has
+  // not yet fully returned.  Incremented at submit (before submit_task) and
+  // decremented at every _run_merge_task exit.  The destructor waits on this
+  // (not the whole shared pool's wait_idle()) so unrelated tasks from other
+  // DBs/cachestore/replication on the same pool cannot delay teardown.
+  std::atomic<uint32_t> _merge_task_inflight{0};
+  std::condition_variable _merge_task_gone_cv;  // wakes dtor when inflight hits 0
+  std::atomic<uint64_t> _merge_signal{0};    // bumped to request a drain pass
+  std::atomic<uint64_t> _merge_done{0};      // last drain generation completed
+  std::atomic<bool> _merge_force{false};     // next pass drains all ATTACHED+MERGING
+  std::atomic<bool> _shutdown{false};        // set in dtor; gates idle-timer arming
+  std::atomic<uint64_t> _age_sweep_job_id{0};  // pending age-sweep job id (0 = none)
+  std::mutex _age_sweep_mutex;               // serializes age-sweep arming
   ConflictPolicy_ _conflict_policy;
 
   // Hard cap on tributary slots, both per-process and cross-process.  The
@@ -204,12 +230,20 @@ struct _ConfluenceDB {
   std::mutex _merge_error_mutex;
   std::exception_ptr _pending_merge_error;
 
+  // Serializes merge EXECUTION. Without this lock, two drain passes (e.g. the
+  // monitor's periodic pass and a synchronous merge_all_now fallback) could
+  // both build a _merge_slots list at the same time: one would CAS a slot
+  // ATTACHED→MERGING, the other would see it already in MERGING state and fall
+  // through merge_tributary() into a concurrent _do_merge on the same slot.
+  // This lock ensures only one merge pass runs at a time. Always acquired
+  // OUTSIDE _meta->chain_lock to avoid lock-order inversion.
+  std::mutex _merge_exec_mutex;
+
   // Reader: returns the in-process TributaryDB at index i, or nullptr if
   // not yet materialised.  Caller bounds i < _tributaries_count.load(acquire).
   TributaryDB* _trib_at(size_t i) const { return _tribs[i].get(); }
 
-  // auto_monitor: start the background merge thread immediately.
-  _ConfluenceDB(MainDB_& main_db, bool auto_monitor = true)
+  _ConfluenceDB(MainDB_& main_db)
       : _main_db(main_db) {
     if (_main_db._header->extra_offset == 0) {
       // Optimistic first-creation path: acquire the write lock then re-check.
@@ -258,12 +292,32 @@ struct _ConfluenceDB {
           std::memory_order_release);
     }
     sanitize();
-    if (auto_monitor) start_monitor();
   }
 
   ~_ConfluenceDB() {
-    cancel_monitor();
+    // Precondition: no live cursors/producers; the only concurrent actor is an
+    // in-flight pool merge job.
+    //
+    // Stop the age sweep from arming a delayed job (which wait_idle() does NOT
+    // track) and cancel the pending one, so a straggler cannot re-arm an age
+    // sweep that fires after `this` is gone.
+    _shutdown.store(true, std::memory_order_seq_cst);
+    {
+      std::lock_guard<std::mutex> g(_age_sweep_mutex);
+      uint64_t id = _age_sweep_job_id.exchange(0, std::memory_order_relaxed);
+      if (id) _main_db._storage.cancel_job(id);
+    }
+    // Drain all unmerged tributaries via the merge job, then wait ONLY for this
+    // DB's own merge task to fully return (not the whole shared pool) so no task
+    // still holds a `this` pointer.  Unrelated tasks from other DBs sharing the
+    // pool do not delay teardown.
     merge_all_now();
+    {
+      std::unique_lock<std::mutex> lk(_monitor_mutex);
+      _merge_task_gone_cv.wait(lk, [this] {
+        return _merge_task_inflight.load(std::memory_order_acquire) == 0;
+      });
+    }
   }
 
   txn_ptr txn() { return _main_db.txn(); }
@@ -275,26 +329,17 @@ struct _ConfluenceDB {
     _merge_write_threshold.store(n, std::memory_order_relaxed);
   }
 
-  void set_idle_timeout_seconds(uint64_t s) {
-    _idle_timeout_seconds.store(s, std::memory_order_relaxed);
+  void set_max_attached_age_ms(uint64_t ms) {
+    _max_attached_age_ms.store(ms, std::memory_order_relaxed);
   }
 
-  void merge_now() { merge_eligible_tributaries(); }
+  // Request a merge pass and block until it completes.
+  void merge_now() { _request_drain_and_wait(/*force=*/false); }
 
-  // Merge ALL free tributaries synchronously regardless of threshold/idle.
+  // Merge ALL free tributaries (ATTACHED+MERGING) regardless of threshold/idle.
+  // Same path as merge_now(), then flushes main.
   void merge_all_now() {
-    _merge_slots.clear();
-    {
-      std::scoped_lock lock(_meta->chain_lock);
-      size_t n = _tributaries_count.load(std::memory_order_acquire);
-      for (size_t i = 0; i < n; ++i) {
-        TributaryDB* trib = _trib_at(i);
-        uint8_t s = trib->_header->state.load(std::memory_order_relaxed);
-        if (s == Slot::ATTACHED || s == Slot::MERGING)
-          _merge_slots.push_back(trib);
-      }
-    }
-    for (auto* trib : _merge_slots) merge_tributary(trib);
+    _request_drain_and_wait(/*force=*/true);
     _main_db.flush();
   }
 
@@ -464,10 +509,8 @@ struct _ConfluenceDB {
   // Walk the chain, claim a free slot or allocate a new one.
   // Returns a borrowed TributaryDB* (state = WRITING, refs = 1).
   //
-  // With MAX_TRIBUTARIES capped, if all slots are in use and no EMPTY slot
-  // is available, this backs off (pause/yield/sleep) and retries until a
-  // slot becomes claimable. Forward progress is provided by the background
-  // merge monitor running on the storage thread pool.
+  // At the MAX_TRIBUTARIES cap with no EMPTY slot, signal the merge job to
+  // recycle MERGING/idle slots back to EMPTY, then back off and retry.
   TributaryDB* claim_tributary() {
     unsigned spin = 0;
     for (;;) {
@@ -481,7 +524,12 @@ struct _ConfluenceDB {
         if (auto* trib = _alloc_new_slot()) return trib;
       }
 
-      // Cap reached and no FREE slot — back off and retry.
+      // Cap reached and no FREE slot — schedule a merge to recycle
+      // MERGING/idle slots, then retry before backing off.
+      _schedule_merge();
+      if (auto* t = _try_claim()) return t;
+
+      // Still none — back off and retry.
       if (spin < 16) {
 #if defined(LEAVES_X86_64)
         _mm_pause();
@@ -562,10 +610,188 @@ struct _ConfluenceDB {
     _main_db.flush();
   }
 
-  void merge_eligible_tributaries() {
+  // Drain primitive: schedule a pass and block until one that observes this
+  // request completes.  Equivalent to merge_now().
+  void merge_eligible_tributaries() { _request_drain_and_wait(/*force=*/false); }
+
+  // Schedule a drain pass and block until a pass that observes this request
+  // completes.  force=true drains ALL ATTACHED+MERGING slots; force=false
+  // applies the normal MERGING/idle policy.
+  void _request_drain_and_wait(bool force) {
+    if (force) _merge_force.store(true, std::memory_order_release);
+    uint64_t req;
+    {
+      std::lock_guard<std::mutex> lk(_monitor_mutex);
+      req = _merge_signal.fetch_add(1, std::memory_order_seq_cst) + 1;
+    }
+    _schedule_merge_task();
+    std::unique_lock<std::mutex> lk(_monitor_mutex);
+    _monitor_done_cv.wait(lk, [&] {
+      return _merge_done.load(std::memory_order_acquire) >= req;
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Dekker-style retire handshake (producer wake vs. merge-job retire)
+  //
+  // The hazard: a producer publishes a MERGING slot and tries to wake a merge
+  // job exactly as the running job decides it has no more work and exits.  If
+  // the wake is lost the slot is orphaned (its keys never reach main).
+  //
+  // Both sides do a seq_cst STORE followed by a seq_cst LOAD on a shared pair
+  // of variables (_merge_signal and _merge_task_active) — the classic Dekker
+  // pattern.  Under the single seq_cst total order at least one side observes
+  // the other's store, so the slot is never orphaned:
+  //
+  //   Producer (commit/rollback/start-fail):
+  //     W1  store slot.state = MERGING            (release)
+  //     W2  _merge_signal.fetch_add(1)            (seq_cst)   <- store
+  //         CAS _merge_task_active false->true    (seq_cst)   <- load
+  //           win  -> submit a fresh task
+  //           lose -> a job is live; W2 guarantees it re-checks (see below)
+  //
+  //   Merge job (_run_merge_task), per pass:
+  //         sig = _merge_signal.load()            (seq_cst)
+  //         ... drain all MERGING slots ...
+  //     J1  store _merge_task_active = false      (seq_cst)   <- store
+  //     J2  _merge_signal.load() != sig           (seq_cst)   <- load
+  //           || _has_merging_slot()
+  //         if more: re-win CAS or let producer's task run
+  //
+  // Why no wakeup is lost when the producer's CAS loses (a job still owns
+  // _merge_task_active): consider the seq_cst total order of the producer's W2
+  // store and the job's J1 store.  If W2 precedes J1, then the job's J2 load
+  // (after J1) observes the bumped _merge_signal (sig differs) and re-loops.
+  // If J1 precedes W2, then the producer's CAS-load (after W2) observes
+  // _merge_task_active==false and the producer wins, submitting a fresh task.
+  // Exactly one of these holds, so the MERGING slot published at W1 is always
+  // drained — never orphaned.
+  // ------------------------------------------------------------------------
+
+  // Fire-and-forget merge wake.  Never blocks.  The caller MUST have published
+  // slot.state=MERGING (release, step W1) before calling.  W2 bumps
+  // _merge_signal (seq_cst) before the CAS in _schedule_merge_task().
+  void _schedule_merge() {
+    _merge_signal.fetch_add(1, std::memory_order_seq_cst);  // W2
+    _schedule_merge_task();
+  }
+
+  // Submit a single coalesced merge task: at most one is queued/running at a
+  // time (_merge_task_active).  The CAS is seq_cst so it pairs with the merge
+  // job's J1 (clear) / J2 (re-check) in _run_merge_task.
+  void _schedule_merge_task() {
+    bool expected = false;
+    if (!_merge_task_active.compare_exchange_strong(
+            expected, true, std::memory_order_seq_cst))
+      return;  // a task is already pending/running
+    // Count the task as in-flight BEFORE submitting so the destructor cannot
+    // observe inflight==0 while a task is queued-but-not-yet-started.  Balanced
+    // by _retire_merge_task() at every _run_merge_task exit.
+    _merge_task_inflight.fetch_add(1, std::memory_order_acq_rel);
+    _main_db._storage.submit_task([this] { _run_merge_task(); });
+  }
+
+  // Balance the in-flight increment from _schedule_merge_task() and wake the
+  // destructor's wait if this was the last in-flight merge task.
+  void _retire_merge_task() {
+    {
+      std::lock_guard<std::mutex> lk(_monitor_mutex);
+      _merge_task_inflight.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    _merge_task_gone_cv.notify_all();
+  }
+
+  // Body of a pool merge task.  Drains until no MERGING slot remains, publishing
+  // _merge_done after each pass to wake blocked callers, then runs the retire
+  // handshake: clear _merge_task_active (J1), re-check (J2), and re-loop only on
+  // re-winning the CAS so exactly one job is live and no wakeup is lost.
+  void _run_merge_task() {
+    for (;;) {
+      uint64_t sig = _merge_signal.load(std::memory_order_seq_cst);
+      bool pending_idle = false;
+
+      // Inner loop: drain until a pass finds no MERGING slot remaining.
+      for (;;) {
+        bool force = _merge_force.exchange(false, std::memory_order_acq_rel);
+        _DrainResult r{};
+        try {
+          std::scoped_lock exec(_merge_exec_mutex);
+          r = _drain_locked(force);
+        } catch (...) {
+          r = _DrainResult{};
+        }
+        pending_idle = pending_idle || r.pending_idle;
+        {
+          std::lock_guard<std::mutex> lk(_monitor_mutex);
+          uint64_t done = _merge_done.load(std::memory_order_relaxed);
+          if (sig > done) _merge_done.store(sig, std::memory_order_release);
+        }
+        _monitor_done_cv.notify_all();
+        if (!r.merging_seen) break;  // no MERGING slot remained — pass complete
+      }
+
+      // A not-yet-aged ATTACHED slot remains: ensure an age sweep is armed so
+      // it is merged once it has been attached long enough.
+      if (pending_idle) _ensure_age_sweep();
+
+      // J1: release task ownership (seq_cst — pairs with producer's W1/W2).
+      _merge_task_active.store(false, std::memory_order_seq_cst);
+
+      // J2 trigger: a wakeup raised since this pass began (signal bumped) or a
+      // MERGING slot that appeared after our last collect.
+      bool more = (_merge_signal.load(std::memory_order_seq_cst) != sig) ||
+                  _has_merging_slot();
+      if (!more) { _retire_merge_task(); return; }
+
+      // J2 gate: re-loop ONLY if we re-win ownership; otherwise the producer's
+      // own CAS won and it submitted (or will submit) a fresh task.
+      bool expected = false;
+      if (!_merge_task_active.compare_exchange_strong(
+              expected, true, std::memory_order_seq_cst)) {
+        _retire_merge_task();
+        return;  // another scheduler won; it owns the next pass
+      }
+    }
+  }
+
+  // Result of one drain pass.
+  struct _DrainResult {
+    bool merging_seen = false;   // a MERGING slot was collected this pass
+    bool pending_idle = false;   // a not-yet-idle ATTACHED slot remains
+  };
+
+  // True if any slot is currently in the MERGING state.  Cheap scan under
+  // chain_lock; used by the merge job's J2 re-check.
+  bool _has_merging_slot() {
+    std::scoped_lock lock(_meta->chain_lock);
+    size_t n = _tributaries_count.load(std::memory_order_acquire);
+    for (size_t i = 0; i < n; ++i) {
+      if (_trib_at(i)->_header->state.load(std::memory_order_acquire) ==
+          Slot::MERGING)
+        return true;
+    }
+    return false;
+  }
+
+  // One full drain pass.  MUST hold _merge_exec_mutex (serializes _do_merge and
+  // slot recycling).
+  _DrainResult _drain_locked(bool force) {
+    return _collect_and_merge_locked(force);
+  }
+
+  // Selects eligible tributaries and merges them. MUST be called with
+  // _merge_exec_mutex held (serializes _do_merge and slot recycling).
+  //   * MERGING slots are always merged (a producer marked them — event-driven).
+  //   * ATTACHED slots are merged when force is set (merge_all_now) or when
+  //     attached past max_attached_age_seconds (the periodic age sweep catches
+  //     these).
+  // Returns whether a MERGING slot was seen (drives the loop-until-empty) and
+  // whether a not-yet-idle ATTACHED slot remains (drives idle-timer re-arm).
+  _DrainResult _collect_and_merge_locked(bool force) {
     uint64_t now = _current_time();
     uint64_t idle_timeout =
-        _idle_timeout_seconds.load(std::memory_order_relaxed);
+        _max_attached_age_ms.load(std::memory_order_relaxed);
+    _DrainResult result{};
     _merge_slots.clear();
     {
       std::scoped_lock lock(_meta->chain_lock);
@@ -576,111 +802,66 @@ struct _ConfluenceDB {
         uint8_t state = slot->state.load(std::memory_order_relaxed);
         // Already marked for merge by a writer — pick it up directly.
         if (state == Slot::MERGING) {
+          result.merging_seen = true;
           _merge_slots.push_back(trib);
           continue;
         }
-        bool should_merge = false;
         if (state == Slot::ATTACHED) {
-          // ATTACHED: cursor owns this slot exclusively. Only the idle timeout
-          // can trigger a merge. The CAS in merge_tributary() races with the
-          // cursor's ATTACHED→WRITING CAS in start_transaction(); exactly one
-          // winner proceeds.
-          auto lut = slot->last_used_time.load(std::memory_order_acquire);
-          if (lut > 0 && (now - lut) >= idle_timeout) should_merge = true;
+          // ATTACHED: cursor owns this slot exclusively. The CAS in
+          // merge_tributary() races with the cursor's ATTACHED→WRITING CAS in
+          // start_transaction(); exactly one winner proceeds.
+          if (force) {
+            _merge_slots.push_back(trib);
+          } else {
+            auto lut = slot->last_used_time.load(std::memory_order_acquire);
+            if (lut > 0 && (now - lut) >= idle_timeout)
+              _merge_slots.push_back(trib);
+            else if (lut > 0)
+              result.pending_idle = true;  // not idle long enough yet
+          }
         }
-        if (should_merge) _merge_slots.push_back(trib);
       }
     }
     for (auto* trib : _merge_slots) merge_tributary(trib);
+    return result;
   }
 
-  void start_monitor() {
-    _monitor_cancelled.store(false, std::memory_order_release);
-    uint64_t expected = 0;
-    if (!_monitor_job_id.compare_exchange_strong(expected, UINT64_MAX,
-                                                 std::memory_order_acq_rel))
-      return;
-    _monitor_job_id.store(
-        _main_db._storage.schedule_after(std::chrono::seconds(0),
-                                         [this] { _run_monitor(); }),
-        std::memory_order_release);
+  // Periodic age sweep.  Called at every transaction end that leaves a slot
+  // ATTACHED (and re-armed by the merge job while a not-yet-aged ATTACHED slot
+  // remains).  Arms a SINGLE sweep if none is pending; an already-armed sweep is
+  // left untouched so its deadline is measured from the first arm, NOT pushed
+  // out by later activity on other slots.  Each sweep judges every slot against
+  // its own last_used_time, so a slot attached past the age limit is merged on
+  // the next sweep regardless of writes to other slots.  No-op after shutdown.
+  void _ensure_age_sweep() {
+    if (_shutdown.load(std::memory_order_acquire)) return;
+    uint64_t timeout_ms = _max_attached_age_ms.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> g(_age_sweep_mutex);
+    if (_shutdown.load(std::memory_order_acquire)) return;
+    if (_age_sweep_job_id.load(std::memory_order_relaxed) != 0) return;
+    _age_sweep_job_id.store(
+        _main_db._storage.schedule_after(std::chrono::milliseconds(timeout_ms),
+                                         [this] { _run_age_sweep(); }),
+        std::memory_order_relaxed);
   }
 
-  void cancel_monitor() {
-    _monitor_cancelled.store(true, std::memory_order_release);
-    _monitor_interrupt.store(true, std::memory_order_release);
-    for (;;) {
-      uint64_t job_id = _monitor_job_id.exchange(0, std::memory_order_acq_rel);
-      if (!job_id) break;
-      if (job_id != UINT64_MAX) _main_db._storage.cancel_job(job_id);
-      std::this_thread::yield();
-    }
-    if (!_main_db._storage._pool_shutdown.load(std::memory_order_acquire))
-      _main_db._storage.wait_idle();
+  // Age-sweep body: clear the job id and schedule a (non-forced) merge pass,
+  // which merges only ATTACHED slots now attached past the age limit.  The
+  // merge job re-arms via _ensure_age_sweep() if a not-yet-aged slot remains.
+  void _run_age_sweep() {
+    _age_sweep_job_id.store(0, std::memory_order_relaxed);
+    if (_shutdown.load(std::memory_order_acquire)) return;
+    _schedule_merge();
   }
 
   static uint64_t _current_time() {
     return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
   }
 
-  // Recycle MERGED slots whose last reference was orphaned (e.g. the holding
-  // thread died between fill_sources and _release_sources).  A 2-second grace
-  // period ensures any live cursor that pinned the slot while it was MERGING
-  // has already called _release_sources before we touch refs.  Called once
-  // per monitor period so contention is negligible.
-  void _recover_merged_slots() {
-    uint64_t now = _current_time();
-    size_t n = _tributaries_count.load(std::memory_order_acquire);
-    for (size_t i = 0; i < n; ++i) {
-      TributaryDB* t = _trib_at(i);
-      slot_ptr slot = t->_header;
-      if (slot->state.load(std::memory_order_acquire) != Slot::MERGED)
-        continue;
-      // Only act on slots that have been MERGED for at least 2 seconds.
-      uint64_t lut = slot->last_used_time.load(std::memory_order_acquire);
-      if (lut == 0 || now - lut < 2)
-        continue;
-      // CAS refs 1 → 0: act as the final unpinner that was never called.
-      // If a live cursor concurrently calls _unpin_slot and wins the CAS,
-      // it will trigger recycle instead — either way exactly one recycle runs.
-      uint32_t expected = 1;
-      if (slot->refs.compare_exchange_strong(expected, 0,
-                                             std::memory_order_acq_rel)) {
-        // Force-clear stale transaction refs that may have been left by a
-        // crashed process.  State=MERGED and we own the last slot ref, so
-        // no live cursor should hold a txn ref on this trib; any remaining
-        // refs are orphaned and must be zeroed before reset_in_place()
-        // checks is_active().
-        t->iter_transactions([](auto txn) -> bool {
-          txn->refs.store(0, std::memory_order_relaxed);
-          return false;
-        });
-        _recycle_slot(t);
-      }
-    }
-  }
-
-  void _run_monitor() {
-    if (!_monitor_cancelled.load(std::memory_order_acquire)) {
-      try {
-        merge_eligible_tributaries();
-        _recover_merged_slots();
-      } catch (...) {
-      }
-    }
-    if (!_monitor_cancelled.load(std::memory_order_acquire)) {
-      _monitor_job_id.store(
-          _main_db._storage.schedule_after(std::chrono::seconds(1),
-                                           [this] { _run_monitor(); }),
-          std::memory_order_release);
-    } else {
-      _monitor_job_id.store(0, std::memory_order_release);
-    }
-  }
-
+  // Apply one tributary's deletions then data into the main DB and commit.
   void _do_merge(TributaryDB* trib) {
     using TxnType = typename TributaryDB::Transaction;
     using TribCursorTraits = typename TributaryDB::CursorTraits;
@@ -858,6 +1039,26 @@ struct _PinnedSource {
     _refresh_del_cursor();
   }
 
+  // Reclaim our own slot in place after an age-merge transitioned it to
+  // MERGED while we kept our pin.  The merge already flushed our data to main,
+  // so the tributary trie can be reset and reused as a fresh DB on the SAME
+  // slot, keeping our existing pin (refs unchanged).  Precondition: caller has
+  // already CAS'd slot->state MERGED→FIRST_WRITING so the merge job's temp
+  // _unpin_slot will not recycle this slot, and _slot/_trib_db are still ours.
+  void reclaim_in_place() {
+    // Drop the stale read cursors first so the tributary has no active txn
+    // refs; reset_in_place() throws TransactionActive() otherwise.
+    _trib_cursor.reset();
+    _del_cursor.reset();
+    _trib_db->reset_in_place();
+    _slot->write_count.store(0, std::memory_order_relaxed);
+    _slot->last_used_time.store(0, std::memory_order_relaxed);
+    _trib_cursor =
+        std::make_unique<TribCursor>(_trib_db, &_trib_db->txn()->root);
+    _trib_db->aspect().init_cursor_context(_trib_cursor->_aspect_context);
+    _refresh_del_cursor();
+  }
+
   // (Re-)build _del_cursor pointing at the cursor's current _txn delete_root.
   // Called after reinit() and after a writer's start_transaction()/commit()/
   // rollback() since those change the cursor's _txn.
@@ -964,8 +1165,35 @@ struct _ConfluenceCursor {
         _pending_write_keys = 0;
         return true;
       }
-      // CAS failed: monitor stole the slot (ATTACHED→MERGING) — release
-      // our single claim ref and fall through to acquire a fresh slot.
+      // CAS failed: the age sweep (or merge_all_now) transitioned our slot.
+      // Because we still hold our pin, the slot was never recycled and still
+      // carries our identity — no other cursor can have claimed it (only EMPTY
+      // slots are claimable, and refs >= 1 prevents recycle to EMPTY).
+      if (expected == Slot::MERGED) {
+        // Age-merge completed: our data is already flushed to main. Reclaim
+        // the same slot in place, keeping our pin (refs unchanged).
+        uint8_t m = Slot::MERGED;
+        if (_write_source._slot->state.compare_exchange_strong(
+                m, Slot::FIRST_WRITING, std::memory_order_acq_rel)) {
+          _write_source.reclaim_in_place();
+          if (!_write_source._trib_cursor->start_transaction(non_blocking)) {
+            // Failed to open a txn — hand the slot to the merge job and drop
+            // our pin (same as the slow-path failure handling below).
+            _write_source._slot->state.store(Slot::MERGING,
+                                             std::memory_order_release);
+            _write_source.park();
+            _cdb->_schedule_merge();
+            return false;
+          }
+          _write_source._refresh_del_cursor();
+          _in_transaction = true;
+          _pending_write_keys = 0;
+          return true;
+        }
+        // CAS lost (should not happen while we hold the pin) — fall through.
+      }
+      // MERGING (merge still in progress) or any other unexpected state:
+      // release our claim ref and fall through to acquire a fresh slot.
       _write_source.park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
     }
 
@@ -979,6 +1207,11 @@ struct _ConfluenceCursor {
       // All slots occupied — release read source refs and spin.
       for (;;) {
         _release_sources();
+        // Recycle MERGING/idle slots back to EMPTY (we hold no slot refs here,
+        // so a merge can proceed freely), then retry the claim.
+        _cdb->_schedule_merge();
+        trib = _cdb->_try_claim_or_alloc();
+        if (trib) break;
         if (spin < 16) {
 #if defined(LEAVES_X86_64)
           _mm_pause();
@@ -1010,9 +1243,11 @@ struct _ConfluenceCursor {
     _write_source.park();  // drop any stale cursor objects (slot is null → no-op on refs)
     _write_source.reinit(_cdb, trib, slot, slot_off);
     if (!_write_source._trib_cursor->start_transaction(non_blocking)) {
-      // Failed — transition to MERGING so monitor will clean up, then release pin.
-      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+      // Failed — transition to MERGING so the merge job will clean up, then
+      // release pin.
+      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
       _write_source.park();  // refs-- (1→0)
+      _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
       return false;
     }
     _write_source._refresh_del_cursor();
@@ -1038,8 +1273,15 @@ struct _ConfluenceCursor {
           _cdb->_merge_write_threshold.load(std::memory_order_relaxed);
       if (new_wc >= threshold) {
         // Threshold reached: transition to MERGING and release our claim pin.
-        _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+        bool first_commit = (old_state == Slot::FIRST_WRITING);
+        _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
+        if (first_commit) {
+          // FIRST_WRITING→MERGING (bypassing ATTACHED): a new readable source —
+          // bump state_epoch so long-lived readers refresh and pick it up.
+          _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
+        }
         _write_source.park();  // _unpin_slot → refs-- (1→0)
+        _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
       } else {
         // Stay attached: WRITING/FIRST_WRITING → ATTACHED
         bool first_commit = (old_state == Slot::FIRST_WRITING);
@@ -1049,6 +1291,9 @@ struct _ConfluenceCursor {
           // Slot now has a readable snapshot for the first time.
           _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
         }
+        // Transaction ended leaving the slot ATTACHED: ensure an age sweep is
+        // armed so this slot is merged after it has been attached long enough.
+        _cdb->_ensure_age_sweep();
       }
     }
     _in_transaction = false;
@@ -1064,10 +1309,14 @@ struct _ConfluenceCursor {
     if (s == Slot::WRITING) {
       // Slot had a prior committed snapshot: revert to ATTACHED, keep pin.
       _write_source._slot->state.store(Slot::ATTACHED, std::memory_order_release);
+      // Transaction ended leaving the slot ATTACHED: ensure an age sweep is
+      // armed so this slot is merged after it has been attached long enough.
+      _cdb->_ensure_age_sweep();
     } else {
       // FIRST_WRITING: no prior snapshot — release the slot (no-op merge).
-      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
       _write_source.park();  // _unpin_slot → refs-- (1→0)
+      _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
     }
     _in_transaction = false;
     _pending_write_keys = 0;
@@ -1087,10 +1336,11 @@ struct _ConfluenceCursor {
   void remove() {
     assert(_in_transaction);
     _materialize_write();
-    if (_write_source._trib_cursor->is_valid()) {
-      ++_pending_write_keys;
-    }
-    _write_source._trib_cursor->remove();
+    // Always record the deletion (tombstone in delete_root) for the key the
+    // cursor is positioned on, even if it is not present in this producer's
+    // own tributary trie — _TributaryCursor::remove(key) handles both cases.
+    _write_source._trib_cursor->remove(Slice(_iter_key));
+    ++_pending_write_keys;
   }
 
   void _ensure_sources() {
@@ -1107,14 +1357,6 @@ struct _ConfluenceCursor {
       return;
     uint64_t cur_chain_epoch =
         _cdb->_meta->chain_epoch.load(std::memory_order_acquire);
-
-    // Refresh main DB snapshot.
-    // Pin the new txn first so the old _root pointer stays valid through
-    // set_root's dereference, then release the old pin.
-    auto new_txn = _cdb->txn_ref();
-    _main_cursor->set_root(&new_txn->root);
-    if (_main_txn) _main_txn->refs.fetch_sub(1, std::memory_order_acq_rel);
-    _main_txn = std::move(new_txn);
 
     // Park old sources before rebuilding.
     // park() → _unpin_slot() may trigger _recycle_slot which scans the
@@ -1162,8 +1404,23 @@ struct _ConfluenceCursor {
       fill_sources_lockfree();
     }
 
-    _sources_state_epoch =
-        _cdb->_meta->state_epoch.load(std::memory_order_relaxed);
+    // Refresh the main DB snapshot LAST, after scanning slot states above.
+    // A merge does main commit then slot->state.store(MERGED, release); if our
+    // acquire-load sees a slot as MERGED and skips it, that merge's prior main
+    // commit happens-before the txn_ref() below, so this snapshot includes it.
+    // (Taking the snapshot first was a TOCTOU that could drop a just-merged key.)
+    // Pin the new txn first so the old _root pointer stays valid through
+    // set_root's dereference, then release the old pin.
+    auto new_txn = _cdb->txn_ref();
+    _main_cursor->set_root(&new_txn->root);
+    if (_main_txn) _main_txn->refs.fetch_sub(1, std::memory_order_acq_rel);
+    _main_txn = std::move(new_txn);
+
+    // Cache the epoch sampled at the TOP of this rebuild (not a freshly
+    // reloaded, possibly-newer value): any merge that bumped the epoch during
+    // this rebuild will then force another rebuild on the next call rather than
+    // being silently treated as already-reflected.
+    _sources_state_epoch = cur_state_epoch;
   }
 
   void _release_sources() {
@@ -1174,17 +1431,19 @@ struct _ConfluenceCursor {
   }
 
   // Detach the sticky write slot.  Safe to call when _slot is null (no-op).
-  // Detach the sticky write slot.  Safe to call when _slot is null (no-op).
-  // ATTACHED → MERGING so the monitor picks it up on the next cycle.
-  // For other states (e.g. MERGING after monitor steal) the state is already
+  // ATTACHED → MERGING so a merge picks it up on the next cycle.
+  // For other states (e.g. MERGING after a merge steal) the state is already
   // correct — just release our claim pin via park().
   void _release_write_source() {
     if (!_write_source._slot) return;
     uint8_t s = _write_source._slot->state.load(std::memory_order_relaxed);
+    bool now_merging = false;
     if (s == Slot::ATTACHED) {
-      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);
+      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
+      now_merging = true;
     }
     _write_source.park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
+    if (now_merging) _cdb->_schedule_merge();  // W2: wake a merge for it
   }
 
   bool _resolve_key(const Slice& key, Slice& value_out) {
@@ -1495,7 +1754,7 @@ struct _ConfluenceCursor {
   }
   static uint64_t _current_time() {
     return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
   }

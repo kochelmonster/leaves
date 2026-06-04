@@ -79,7 +79,7 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   static constexpr uint8_t MERGED        = 5;  // merged into main DB; awaiting recycle to EMPTY
   static constexpr uint8_t ATTACHED      = 6;  // sticky: cursor holds exclusive claim between txns
 
-  std::atomic<uint64_t> last_used_time{0}; // epoch seconds, set on commit
+  std::atomic<uint64_t> last_used_time{0}; // epoch milliseconds, set on commit
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   std::atomic<uint32_t> write_count{0};    // committed writes since creation
   std::atomic<uint8_t>  state{EMPTY};

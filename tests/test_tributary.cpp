@@ -39,7 +39,7 @@ using TestHandle = std::tuple<std::unique_ptr<StorageImpl>,
 static TestHandle make_cdb(const char* path) {
   auto storage = std::make_unique<StorageImpl>(path);
   auto* main_db = storage->template open<_DB>("main");
-  auto* cdb = new CDB(*main_db, false);
+  auto* cdb = new CDB(*main_db);
   return {std::move(storage), main_db, cdb};
 }
 
@@ -47,7 +47,7 @@ static TestHandle make_cdb(const char* path) {
 static TestHandle open_cdb(const char* path, offset_t /*header*/) {
   auto storage = std::make_unique<StorageImpl>(path);
   auto* main_db = storage->template open<_DB>("main");
-  auto* cdb = new CDB(*main_db, false);
+  auto* cdb = new CDB(*main_db);
   return {std::move(storage), main_db, cdb};
 }
 
@@ -162,8 +162,8 @@ BOOST_AUTO_TEST_CASE(test_tributary_merge_into_main) {
   write_kv(*cdb, "alpha", "1");
   write_kv(*cdb, "beta",  "2");
 
-  // Force merge all tributaries (set idle_timeout=0 so any written slot qualifies)
-  cdb->set_idle_timeout_seconds(0);
+  // Force merge all tributaries (set max age=0 so any written slot qualifies)
+  cdb->set_max_attached_age_ms(0);
   cdb->merge_eligible_tributaries();
 
   // After merge the data should be in the main DB
@@ -174,6 +174,152 @@ BOOST_AUTO_TEST_CASE(test_tributary_merge_into_main) {
   cursor->find(Slice("beta"));
   BOOST_CHECK(cursor->is_valid());
   BOOST_CHECK_EQUAL(cursor->value(), Slice("2"));
+}
+
+// ---------------------------------------------------------------------------
+// Regression: an ATTACHED slot that has aged past max_attached_age_seconds must
+// be merged by the periodic age sweep EVEN under continuous writes to other
+// slots.  The previous debounce design re-armed (cancel+reschedule) the timer
+// on every transaction end, so sustained activity on slot B perpetually
+// deferred slot A's age-out and A was never merged by the age path.  With the
+// arm-once sweep, A's first deadline stands and A reaches main within ~2x the
+// age limit.
+//
+// Cursor A is kept ALIVE for the whole test so its slot stays ATTACHED: if A
+// were destroyed, ~_ConfluenceCursor would mark the slot MERGING and merge it
+// directly, bypassing (and hiding) the age path we are testing.  Merge is
+// observed by reading the MAIN DB directly (a main-only cursor does not see
+// tributaries), so a hit proves the age sweep actually merged A.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(test_tributary_age_merge_not_starved_by_other_slots) {
+  TributaryPreparation p;
+  auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
+  std::unique_ptr<CDB> cdb(cdb_ptr);
+
+  // High write threshold so commits stay ATTACHED: only the age sweep (not the
+  // write-count threshold) may merge these slots.
+  cdb->set_merge_write_threshold(1000000);
+  // Short max attached age so the sweep fires quickly.
+  cdb->set_max_attached_age_ms(1000);
+
+  // Producer A: write a single key and KEEP the cursor alive so its sticky slot
+  // stays ATTACHED and begins to age (only the age sweep may merge it).
+  auto a = cdb->create_cursor();
+  BOOST_REQUIRE(a->start_transaction());
+  a->find(Slice("A_key"));
+  a->value(Slice("A_val"));
+  BOOST_REQUIRE(a->commit());
+
+  // Producer B: a separate cursor that keeps committing.  Each commit re-enters
+  // the age-sweep arming path; under the old debounce this perpetually cancelled
+  // A's pending sweep so A never aged out.
+  std::atomic<bool> stop{false};
+  std::thread b([&] {
+    auto bc = cdb->create_cursor();
+    int i = 0;
+    while (!stop.load(std::memory_order_acquire)) {
+      if (bc->start_transaction()) {
+        std::string k = "B_" + std::to_string(i++);
+        bc->find(Slice(k));
+        bc->value(Slice("v"));
+        bc->commit();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  });
+
+  // Within ~2x the age limit A's slot must have been merged into main.
+  bool merged = false;
+  for (int waited = 0; waited < 4000 && !merged; waited += 50) {
+    auto m = main_db->create_cursor();
+    m->find(Slice("A_key"));
+    if (m->is_valid() && m->value() == Slice("A_val"))
+      merged = true;
+    else
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  stop.store(true, std::memory_order_release);
+  b.join();
+
+  BOOST_CHECK_MESSAGE(merged,
+      "ATTACHED slot A was never merged into main within 2x the age limit "
+      "despite continuous writes to other slots (age-sweep starvation)");
+}
+
+// Regression: a long-idle sticky cursor whose ATTACHED slot was age-merged to
+// MERGED must NOT have its live pin stolen and the slot recycled out from under
+// it.  The old _recover_merged_slots_locked() "steal" did exactly that after a
+// 2s grace, freeing the slot to EMPTY while cursor A still cached its pointer.
+// A second cursor C would then reclaim the SAME slot, and when A woke its
+// CAS(ATTACHED→WRITING) would succeed on C's incarnation — an ABA that let A
+// scribble into C's tributary and corrupt C's refcount (lost data / underflow).
+//
+// With owner-only-unpin, A keeps its pin through the age-merge (slot stays
+// MERGED, refs>=1, never recycled), C claims a DIFFERENT slot, and when A wakes
+// it reclaims its own slot in place.  This test drives that exact sequence and
+// asserts all three keys survive a final flush to main with correct values.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(test_tributary_idle_owner_pin_not_stolen) {
+  TributaryPreparation p;
+  auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
+  std::unique_ptr<CDB> cdb(cdb_ptr);
+
+  // Stay-attached on commit (only the age sweep may merge), short age limit.
+  cdb->set_merge_write_threshold(1000000);
+  cdb->set_max_attached_age_ms(1000);
+
+  // Cursor A writes one key and stays ALIVE + idle so its slot stays ATTACHED
+  // and ages out.  A keeps its sticky pin the whole time.
+  auto a = cdb->create_cursor();
+  BOOST_REQUIRE(a->start_transaction());
+  a->find(Slice("A_key"));
+  a->value(Slice("A_val"));
+  BOOST_REQUIRE(a->commit());
+
+  // Let A's slot age past the limit, then force the age-merge: A's slot goes
+  // MERGED (data flushed to main) while A still holds its pin.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+  cdb->merge_now();
+
+  // Keep the slot MERGED for >2s — the window in which the old steal would have
+  // recycled A's slot — and drive merge passes the way steady-state activity
+  // would have, so the old _recover_merged_slots_locked() path would fire.
+  for (int i = 0; i < 6; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    cdb->merge_now();
+  }
+
+  // Cursor C claims a slot and commits.  Under the old code A's slot is now
+  // EMPTY and C would reuse it; under the fix A's slot is still reserved so C
+  // takes a different one.  Either way C's data must survive.
+  auto c = cdb->create_cursor();
+  BOOST_REQUIRE(c->start_transaction());
+  c->find(Slice("C_key"));
+  c->value(Slice("C_val"));
+  BOOST_REQUIRE(c->commit());
+
+  // A wakes and writes again.  With the fix it reclaims its own (MERGED) slot
+  // in place; under the old code its cached pin now aliases C's slot (ABA).
+  BOOST_REQUIRE(a->start_transaction());
+  a->find(Slice("A_key2"));
+  a->value(Slice("A_val2"));
+  BOOST_REQUIRE(a->commit());
+
+  // Flush everything to main and verify NO data was lost or corrupted.
+  cdb->merge_all_now();
+  auto m1 = main_db->create_cursor();
+  m1->find(Slice("A_key"));
+  BOOST_CHECK_MESSAGE(m1->is_valid() && m1->value() == Slice("A_val"),
+                      "A_key/A_val lost after age-merge + reclaim");
+  auto m2 = main_db->create_cursor();
+  m2->find(Slice("C_key"));
+  BOOST_CHECK_MESSAGE(m2->is_valid() && m2->value() == Slice("C_val"),
+                      "C_key/C_val lost — A's stale pin corrupted C's slot");
+  auto m3 = main_db->create_cursor();
+  m3->find(Slice("A_key2"));
+  BOOST_CHECK_MESSAGE(m3->is_valid() && m3->value() == Slice("A_val2"),
+                      "A_key2/A_val2 lost after in-place slot reclaim");
 }
 
 BOOST_AUTO_TEST_CASE(test_tributary_delete_then_merge) {
@@ -194,7 +340,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_then_merge) {
   }
 
   // Force merge — deletion should propagate to main DB
-  cdb->set_idle_timeout_seconds(0);
+  cdb->set_max_attached_age_ms(0);
   cdb->merge_eligible_tributaries();
 
   auto cursor = cdb->create_cursor();
@@ -268,6 +414,13 @@ BOOST_AUTO_TEST_CASE(test_tributary_writing_state_not_sanitized) {
 
   // Allocate at least one tributary slot.
   write_kv(*cdb, "key1", "value1");
+
+  // Background merging is always on: when the write cursor above released its
+  // slot it transitioned ATTACHED→MERGING and scheduled a merge task on the
+  // storage pool.  Quiesce that task before the white-box state surgery below,
+  // otherwise the background merge holds _meta->chain_lock while sanitize()
+  // re-initialises it via placement-new — a data race that aborts.
+  cdb->_main_db._storage.wait_idle();
 
   // Simulate crash: force WRITING state + stuck spinlock on every live tributary.
   using Slot = CDB::Slot;
@@ -347,7 +500,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_header_area_not_freed) {
     }
   };
 
-  cdb->set_idle_timeout_seconds(0);
+  cdb->set_max_attached_age_ms(0);
   for (int cycle = 0; cycle < 30; ++cycle) {
     // Large values force extra area allocations inside the tributary so that
     // reset_in_place() must actually return areas, exercising the code path.
@@ -555,8 +708,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
   {
     auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
     std::unique_ptr<CDB> cdb(cdb_ptr);
-    cdb->set_idle_timeout_seconds(0);
-    cdb->start_monitor();
+    cdb->set_max_attached_age_ms(0);
 
     bool ok = run_phase(*cdb, kLoadOpsPerThread, /*inserts_only=*/true, "LOAD");
     BOOST_REQUIRE_MESSAGE(ok, "Deadlock during LOAD phase");
@@ -572,8 +724,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
   {
     auto [storage, main_db, cdb_ptr] = open_cdb(TEST_FILE, saved_header);
     std::unique_ptr<CDB> cdb(cdb_ptr);
-    cdb->set_idle_timeout_seconds(0);
-    cdb->start_monitor();
+    cdb->set_max_attached_age_ms(0);
 
     bool ok = run_phase(*cdb, kRunOpsPerThread, /*inserts_only=*/false, "RUN");
     BOOST_CHECK_MESSAGE(ok,
@@ -641,3 +792,137 @@ BOOST_AUTO_TEST_CASE(test_merge_error_propagated_to_cursor) {
     cursor->rollback();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Retire-race stress: writers transition slots to MERGING right as the merge
+// job retires.  With merge_write_threshold==1 every commit flips its slot to
+// MERGING and calls _schedule_merge(), maximally exercising the Dekker
+// handshake between a producer's signal+CAS (W1/W2) and the merge job's
+// J1 clear / J2 re-acquire.  The invariant under test: no MERGING tributary is
+// ever orphaned — after a final drain every committed key is visible in main.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(test_tributary_retire_race_no_orphan_merging) {
+  constexpr int kThreads     = 8;
+  constexpr int kOpsPerThread = 4000;
+  constexpr int kRounds      = 3;
+
+  for (int round = 0; round < kRounds; ++round) {
+    TributaryPreparation p;
+    auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
+    std::unique_ptr<CDB> cdb(cdb_ptr);
+    // Threshold 1: every commit releases its slot into MERGING immediately,
+    // so the merge job is constantly retiring while writers re-arm it.
+    cdb->set_merge_write_threshold(1);
+
+    std::atomic<bool> go{false};
+    // Worker threads MUST NOT call BOOST_* assertion macros: Boost.Test's
+    // logger/framework state is not thread-safe and would itself race.  Record
+    // failures into atomics and assert on the main thread after join().
+    std::atomic<int> start_failures{0};
+    std::atomic<int> commit_failures{0};
+    std::vector<std::thread> writers;
+    for (int t = 0; t < kThreads; ++t) {
+      writers.emplace_back([&, t] {
+        while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+        auto cursor = cdb->create_cursor();
+        for (int i = 0; i < kOpsPerThread; ++i) {
+          std::string key = std::to_string(t) + "_" + std::to_string(i);
+          std::string val = "v" + key;
+          if (!cursor->start_transaction()) {
+            start_failures.fetch_add(1, std::memory_order_relaxed);
+            continue;
+          }
+          cursor->find(Slice(key));
+          cursor->value(Slice(val));
+          if (!cursor->commit())
+            commit_failures.fetch_add(1, std::memory_order_relaxed);
+        }
+      });
+    }
+    go.store(true, std::memory_order_release);
+    for (auto& w : writers) w.join();
+
+    BOOST_REQUIRE_EQUAL(start_failures.load(), 0);
+    BOOST_REQUIRE_EQUAL(commit_failures.load(), 0);
+
+    // Final drain: every MERGING/ATTACHED slot must be picked up.  If any
+    // wakeup was lost, an orphaned MERGING slot would leave its keys invisible.
+    cdb->merge_all_now();
+
+    // Verify every committed key is visible in the merged main DB.
+    auto cursor = cdb->create_cursor();
+    for (int t = 0; t < kThreads; ++t) {
+      for (int i = 0; i < kOpsPerThread; ++i) {
+        std::string key = std::to_string(t) + "_" + std::to_string(i);
+        cursor->find(Slice(key));
+        BOOST_REQUIRE_MESSAGE(cursor->is_valid(),
+            "round " << round << " missing key " << key
+                     << " (orphaned MERGING slot?)");
+        BOOST_CHECK_EQUAL(cursor->value(), Slice("v" + key));
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Read/merge visibility race: a reader that refreshes its snapshot while a
+// background merge is committing must never lose a committed key.
+//
+// The hazard (TOCTOU in _ensure_sources): the reader refreshes its MAIN-DB
+// snapshot first, then scans per-slot states.  If a merge commits its data to
+// main and flips the slot ATTACHED/MERGING→MERGED in that window, the reader
+// skips the tributary (state==MERGED) but its main snapshot predates the merge
+// commit — so the just-committed key briefly vanishes from the merged view.
+//
+// A writer commits keys with threshold=1 (every commit immediately schedules a
+// merge), publishing the highest committed index.  A reader continuously looks
+// up the latest published key; it must ALWAYS find it.  BOOST_* is not called
+// from the reader thread (records the first lost key into atomics instead).
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(test_tributary_read_during_merge_no_loss) {
+  TributaryPreparation p;
+  auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
+  std::unique_ptr<CDB> cdb(cdb_ptr);
+
+  // threshold=1: each commit transitions its slot to MERGING and schedules a
+  // merge, maximizing the read-vs-merge race window.
+  cdb->set_merge_write_threshold(1);
+
+  constexpr int kKeys = 20000;
+  std::atomic<int> last_committed{-1};
+  std::atomic<bool> done{false};
+  std::atomic<int> lost_key{-1};  // first key index the reader failed to see
+
+  std::thread reader([&] {
+    auto rcursor = cdb->create_cursor();  // long-lived: relies on epoch refresh
+    while (!done.load(std::memory_order_acquire)) {
+      int j = last_committed.load(std::memory_order_acquire);
+      if (j < 0) { std::this_thread::yield(); continue; }
+      std::string key = "k" + std::to_string(j);
+      rcursor->find(Slice(key));
+      if (!rcursor->is_valid()) {
+        int expected = -1;
+        lost_key.compare_exchange_strong(expected, j);
+        break;
+      }
+    }
+  });
+
+  auto wcursor = cdb->create_cursor();
+  for (int i = 0; i < kKeys; ++i) {
+    std::string key = "k" + std::to_string(i);
+    BOOST_REQUIRE(wcursor->start_transaction());
+    wcursor->find(Slice(key));
+    wcursor->value(Slice("v" + std::to_string(i)));
+    BOOST_REQUIRE(wcursor->commit());
+    last_committed.store(i, std::memory_order_release);
+    if (lost_key.load(std::memory_order_acquire) >= 0) break;
+  }
+  done.store(true, std::memory_order_release);
+  reader.join();
+
+  BOOST_CHECK_MESSAGE(lost_key.load() < 0,
+      "reader lost committed key k" << lost_key.load()
+          << " during a concurrent merge (snapshot/slot-state TOCTOU)");
+}
+

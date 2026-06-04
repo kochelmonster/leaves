@@ -87,6 +87,10 @@ static int FLAGS_use_confluence = 0;
 // auto-merge during the benchmark and isolate writer-path overhead.
 static uint32_t FLAGS_merge_threshold = 0;
 
+// When true and ConfluenceDB is active, flush all tributaries into the main DB
+// after each write benchmark completes (not included in the benchmark timing).
+static bool FLAGS_merge_after_write = false;
+
 // When non-empty, append the exact key & value sequence used by each write
 // phase to this file (binary format). Used by test_merger to replay the
 // crashing benchmark workload deterministically in a single thread.
@@ -494,27 +498,36 @@ class Benchmark {
 
       bool known = true;
       bool write_sync = false;
+      bool is_write = false;
       if (name == Slice("fillseq")) {
+        is_write = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillbatch")) {
+        is_write = true;
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillrandom")) {
+        is_write = true;
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("overwrite")) {
+        is_write = true;
         Write(write_sync, RANDOM, EXISTING, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillrandsync")) {
+        is_write = true;
         write_sync = true;
         Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size, 1);
       } else if (name == Slice("fillseqsync")) {
+        is_write = true;
         write_sync = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_ / 100, FLAGS_value_size, 1);
       } else if (name == Slice("fillrand100K")) {
+        is_write = true;
         Write(write_sync, RANDOM, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("fillseq100K")) {
+        is_write = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("readseq")) {
         ReadSequential();
@@ -539,6 +552,11 @@ class Benchmark {
       }
       if (known) {
         Stop(name);
+        // Optionally flush all tributaries into the main DB after a write
+        // benchmark (not timed, so it does not affect the reported rate).
+        if (is_write && FLAGS_merge_after_write && confluence_db_) {
+          confluence_db_->merge_all_now();
+        }
 #if 0  // old STATISTICS block - moved to WriteImpl
         if (using_replicating_ && map_storage_) {
           std::cout << "File size: "
@@ -988,6 +1006,9 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--merge_threshold=%d%c", &n, &junk) == 1 &&
                n >= 0) {
       FLAGS_merge_threshold = static_cast<uint32_t>(n);
+    } else if (sscanf(argv[i], "--merge_after_write=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_merge_after_write = (n == 1) ? true : false;
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;

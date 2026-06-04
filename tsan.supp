@@ -1,0 +1,37 @@
+# ThreadSanitizer suppressions for the leaves test suite.
+#
+# Usage:
+#   TSAN_OPTIONS="suppressions=$PWD/tsan.supp" setarch -R ./build-tsan/test_xxx
+#
+# Each entry suppresses a KNOWN, BY-DESIGN race that TSan cannot reason about,
+# or a third-party limitation outside our control.  Do NOT add product code
+# here to silence a real bug — only the lock-free patterns documented below.
+
+# --- Lock-free mmap snapshot reads (by design) -----------------------------
+# Readers pin a transaction/epoch, then read trie memory that a writer may
+# concurrently touch.  Safety comes from the atomic epoch/refcount handshake
+# (state_epoch, txn refs), which TSan does not model, so it flags the raw
+# memory access on the resolved pointer.
+race:leaves::_MemoryMapFile*::resolve
+race:leaves::_DB*::resolve
+race:leaves::prefetch
+race:leaves::SimplePointer
+race:leaves::_MemoryMapFile*::flush
+
+# --- Lock-free trie traversal primitives (by design) -----------------------
+# A reader cursor walks a pinned snapshot of the trie (offsets, nodes,
+# compressed key fragments) while the merge job concurrently mutates the same
+# structure.  The snapshot is kept alive by the epoch/refcount handshake above,
+# so these non-atomic reads of trie metadata are safe but unmodellable by TSan.
+race:leaves::_Offset
+race:leaves::_TrieNode
+race:leaves::_LeafNode
+race:leaves::_Transition
+
+# --- Boost.Test framework internals (third party) --------------------------
+# Boost.Test's logger and framework singletons are not thread-safe.  Our tests
+# keep BOOST_* assertions on the main thread, but defensively suppress the
+# framework internals in case a future test logs from a worker.
+race:boost::unit_test::
+race:s_log_impl
+race:s_frk_state
