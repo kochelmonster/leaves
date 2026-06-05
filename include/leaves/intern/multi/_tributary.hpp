@@ -79,7 +79,7 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   static constexpr uint8_t MERGED        = 5;  // merged into main DB; awaiting recycle to EMPTY
   static constexpr uint8_t ATTACHED      = 6;  // sticky: cursor holds exclusive claim between txns
 
-  std::atomic<uint64_t> last_used_time{0}; // epoch seconds, set on commit
+  std::atomic<uint64_t> last_used_time{0}; // epoch milliseconds, set on commit
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   std::atomic<uint32_t> write_count{0};    // committed writes since creation
   std::atomic<uint8_t>  state{EMPTY};
@@ -191,6 +191,19 @@ struct _TributaryCursor : public _TransactionalCursor<CursorTraits_> {
 
     // 2. Record deletion in delete_root (empty value = tombstone)
     _insert_tombstone(key);
+  }
+
+  // Remove by key: delete from this tributary's data trie if the key is
+  // present locally, and ALWAYS record the deletion in delete_root.  This
+  // lets a producer delete a key that currently lives in another tributary
+  // or the main DB — the tombstone propagates the deletion during merge.
+  template <bool callaspect = true>
+  void remove(const Slice& key) {
+    this->find(key);
+    if (this->is_valid() && key == this->current_key) {
+      Base::template remove<callaspect>();
+    }
+    _insert_tombstone(std::string(key.data(), key.size()));
   }
 
   // Override value(slice) write: write to main trie + un-delete if needed

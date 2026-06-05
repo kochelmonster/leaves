@@ -113,11 +113,11 @@ class ConfluenceDB {
   ConfluenceDB& operator=(const ConfluenceDB&) = delete;
 
   // Opens (or creates) the named confluence database on the given storage.
-  // auto_monitor: start the background merge thread immediately (default true).
-  ConfluenceDB(storage_ptr storage, const char* name, bool auto_monitor = true)
+  // Background merging runs automatically on the storage thread pool.
+  ConfluenceDB(storage_ptr storage, const char* name)
       : _storage(storage),
         _main_tdb(storage, name),
-        _impl(new DBImpl(*_main_tdb._internal(), auto_monitor)) {}
+        _impl(new DBImpl(*_main_tdb._internal())) {}
 
   ~ConfluenceDB() { delete _impl; }
 
@@ -130,15 +130,14 @@ class ConfluenceDB {
 
   // Merge a tributary into the main DB once this many writes have accumulated.
   void set_merge_write_threshold(uint32_t n) { _impl->set_merge_write_threshold(n); }
-  // Merge a tributary after it has been idle for this many seconds.
-  void set_idle_timeout_seconds(uint64_t s)  { _impl->set_idle_timeout_seconds(s); }
+  // Merge a tributary once it has been attached this many milliseconds since
+  // its last write.
+  void set_max_attached_age_ms(uint64_t ms)  { _impl->set_max_attached_age_ms(ms); }
 
   // --- Lifecycle ---
 
   // Crash recovery: merge all unclaimed tributaries left by a previous crash.
   void sanitize()                   { _impl->sanitize(); }
-  void start_monitor()              { _impl->start_monitor(); }
-  void cancel_monitor()             { _impl->cancel_monitor(); }
   void merge_eligible_tributaries() { _impl->merge_eligible_tributaries(); }
   // Merge all threshold/idle-eligible tributaries synchronously.
   void merge_now()                  { _impl->merge_now(); }

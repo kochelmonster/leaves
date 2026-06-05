@@ -8,7 +8,6 @@
 #include <cstring>  // for std::memcpy
 #include <memory>
 #include <thread>
-#include "../third_party/unordered_dense.h"
 
 #include "../core/_exception.hpp"
 #include "../core/_port.hpp"
@@ -16,6 +15,7 @@
 #include "../db/_db.hpp"
 #include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
 #include "../memory/_twoquecache.hpp"
+#include "../third_party/unordered_dense.h"
 #include "../util/_threadpool.hpp"
 #include "_db_directory.hpp"
 #include "_wal.hpp"
@@ -26,15 +26,16 @@ struct _CacheBase {
   using DBEntry = _DBDirectoryEntry;
 };
 
-template <typename Traits_, typename Opers_,
-          typename Self_ = void>
-struct _CacheStore : public Opers_,
-                     public _ThreadPoolMixin<_CacheStore<Traits_, Opers_, Self_>> {
+template <typename Traits_, typename Opers_, typename Self_ = void>
+struct _CacheStore
+    : public Opers_,
+      public _ThreadPoolMixin<_CacheStore<Traits_, Opers_, Self_>> {
   typedef Traits_ Traits;
   // CRTP: if Self_ is provided, use it as the storage type seen by DB;
   // otherwise default to this class itself (non-derived usage).
-  using CacheStore = std::conditional_t<
-      std::is_void_v<Self_>, _CacheStore<Traits_, Opers_, Self_>, Self_>;
+  using CacheStore =
+      std::conditional_t<std::is_void_v<Self_>,
+                         _CacheStore<Traits_, Opers_, Self_>, Self_>;
   using page_ptr = typename Traits::ptr;
   using area_ptr = typename Traits::template Pointer<Area>;
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
@@ -85,7 +86,8 @@ struct _CacheStore : public Opers_,
     }
   }
 
-  // Dirty area tracking — guarded by _dirty_mutex (shared with background flush)
+  // Dirty area tracking — guarded by _dirty_mutex (shared with background
+  // flush)
   mutable SpinLock _dirty_mutex;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_pending;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_committed;
@@ -99,12 +101,11 @@ struct _CacheStore : public Opers_,
   _WalManager _wal_manager;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 
-  _CacheStore(size_t capacity = 500 * M,
-              size_t pool_threads = 1, size_t avg_item_size = 512 * K)
+  _CacheStore(size_t capacity = 500 * M, size_t pool_threads = 1,
+              size_t avg_item_size = 512 * K)
       : _ThreadPoolMixin<_CacheStore>(pool_threads),
         _cache(capacity, 0.25f, 0.5f, avg_item_size),
-        _capacity(capacity) {
-  }
+        _capacity(capacity) {}
 
   // must be called in the subclasses' destructor
   void destroy() {
@@ -184,7 +185,8 @@ struct _CacheStore : public Opers_,
         probe -= AREA_SIZE;
         cached = _cache.get(probe);
         // Make sure the found entry actually spans our offset
-        if (cached && cached->area()->offset() + cached->area()->size() <= area_offset) {
+        if (cached &&
+            cached->area()->offset() + cached->area()->size() <= area_offset) {
           cached = nullptr;  // belongs to a different, earlier area
           break;
         }
@@ -244,11 +246,12 @@ struct _CacheStore : public Opers_,
     return offset_t(p._iref->offset() + p._offset).type(p.type);
   }
 
-  FORCE_INLINE void prefetch(const offset_t* /*offset_ptr*/, Access /*access*/ = READ) const {
+  FORCE_INLINE void prefetch(const offset_t* /*offset_ptr*/,
+                             Access /*access*/ = READ) const {
     // No-op for file storage: data gets cached in TwoQCache on first access
   }
 
-  FORCE_INLINE void prefetch(void* mem, Access access=READ) const {
+  FORCE_INLINE void prefetch(void* mem, Access access = READ) const {
     leaves::prefetch(mem, access);
   }
 
@@ -289,7 +292,10 @@ struct _CacheStore : public Opers_,
 
   area_ptr alloc_single_area() {
     auto result = _header->area_pool.alloc_single_area(*this);
-    if (result) { make_header_dirty(); return result; }
+    if (result) {
+      make_header_dirty();
+      return result;
+    }
     return emplace_new_area(AREA_SIZE);
   }
 
@@ -297,7 +303,10 @@ struct _CacheStore : public Opers_,
     // Ensure size is multiple of AREA_SIZE
     const uint64_t aligned = padding(size, AREA_SIZE);
     auto result = _header->area_pool.alloc_multi_area(aligned, *this);
-    if (result) { make_header_dirty(); return result; }
+    if (result) {
+      make_header_dirty();
+      return result;
+    }
     return emplace_new_area(aligned);
   }
 
@@ -331,13 +340,15 @@ struct _CacheStore : public Opers_,
       _dirty_committed.clear();
     }
 
-    bool header_dirty = _header_dirty.exchange(false, std::memory_order_acq_rel);
+    bool header_dirty =
+        _header_dirty.exchange(false, std::memory_order_acq_rel);
     write_batch(blocks_to_write, header_dirty);
   }
 
   void list_dbs(std::vector<std::string>& result) {
     _for_each_db_entry([&](DBEntry& entry) {
       if (entry.offset) result.push_back(entry.name);
+      return true;
     });
   }
 
@@ -447,14 +458,14 @@ struct _CacheStore : public Opers_,
 
   // First-page capacity for DB entries
   uint16_t _first_page_capacity() const {
-    return _DBDirectoryPage::capacity_for(
-        4 * K - sizeof(typename Opers_::FileHeader));
+    return _DBDirectoryPage::capacity_for(4 * K -
+                                          sizeof(typename Opers_::FileHeader));
   }
 
   // Overflow page capacity
   static constexpr uint16_t _overflow_page_capacity() {
-    return _DBDirectoryPage::capacity_for(
-        4 * K - offsetof(_DBDirectoryPage, entries));
+    return _DBDirectoryPage::capacity_for(4 * K -
+                                          offsetof(_DBDirectoryPage, entries));
   }
 
   // Walk all DB entries across all directory pages, calling fn(DBEntry&)
@@ -463,7 +474,9 @@ struct _CacheStore : public Opers_,
     // First page: entries embedded in FileHeader
     uint16_t cap = _first_page_capacity();
     uint16_t count = std::min(_header->db_entry_count, cap);
-    for (uint16_t i = 0; i < count; i++) fn(_header->dbs[i]);
+    for (uint16_t i = 0; i < count; i++) {
+      if (!fn(_header->dbs[i])) return;
+    }
 
     // Overflow pages
     offset_t next = _header->db_next_page;
@@ -473,7 +486,9 @@ struct _CacheStore : public Opers_,
       auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
-      for (uint16_t i = 0; i < pcount; i++) fn(page->entries[i]);
+      for (uint16_t i = 0; i < pcount; i++) {
+        if (!fn(page->entries[i])) break;
+      }
       next = page->next;
     }
   }
@@ -582,7 +597,8 @@ struct _CacheStore : public Opers_,
     return db;
   }
 
-  // Open an existing DB from a known offset — verifies type, sanitizes if needed.
+  // Open an existing DB from a known offset — verifies type, sanitizes if
+  // needed.
   template <template <typename> class DBClass, typename... Args>
   DBClass<CacheStore>* _open_existing(const char* name, offset_t offset,
                                       Args&&... args) {
@@ -623,7 +639,8 @@ struct _CacheStore : public Opers_,
     tmp.return_areas();
   }
 
-  // Remove a DB from overflow pages via read-modify-write. Returns true if found.
+  // Remove a DB from overflow pages via read-modify-write. Returns true if
+  // found.
   template <template <typename> class DBClass = _DB>
   bool _remove_from_overflow_pages(const char* name) {
     offset_t next = _header->db_next_page;

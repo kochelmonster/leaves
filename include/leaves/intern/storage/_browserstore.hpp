@@ -16,14 +16,15 @@
  *
  * Build requirements:
  * - Compile with Emscripten: emcc -sASYNCIFY
- * - Link flags: -sASYNCIFY -sASYNCIFY_ADD_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete']
+ * - Link flags: -sASYNCIFY
+ * -sASYNCIFY_ADD_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete']
  */
 
 #ifdef __EMSCRIPTEN__
 
 #include <emscripten.h>
-#include <emscripten/val.h>
 #include <emscripten/bind.h>
+#include <emscripten/val.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -33,31 +34,30 @@
 #include <string>
 #include <vector>
 
-#include "_cachestore.hpp"
-#include "../db/_db.hpp"
 #include "../core/_exception.hpp"
-#include "../memory/_memory.hpp"
 #include "../core/_node.hpp"
 #include "../core/_traits.hpp"
+#include "../db/_db.hpp"
+#include "../memory/_memory.hpp"
+#include "_cachestore.hpp"
 
 // EM_JS functions must be at file scope (outside namespace).
 // Async IDB writes with a JS-only pending counter — avoids calling back
 // into WASM from IDB callbacks, which is unsafe during Asyncify sleep.
 EM_JS(void, leaves_idb_async_write,
       (const char* db, const char* key, const void* data, int size), {
-  if (!Module._leavesWrites) Module._leavesWrites = 0;
-  Module._leavesWrites++;
-  IDBStore.setFile(UTF8ToString(db), UTF8ToString(key),
-    new Uint8Array(HEAPU8.subarray(data, data + size)),
-    function(error) {
-      Module._leavesWrites--;
-      if (error) err('[leaves] IDB async write error');
-    });
-});
+        if (!Module._leavesWrites) Module._leavesWrites = 0;
+        Module._leavesWrites++;
+        IDBStore.setFile(
+            UTF8ToString(db), UTF8ToString(key),
+            new Uint8Array(HEAPU8.subarray(data, data + size)),
+            function(error) {
+              Module._leavesWrites--;
+              if (error) err('[leaves] IDB async write error');
+            });
+      });
 
-EM_JS(int, leaves_pending_writes, (), {
-  return Module._leavesWrites || 0;
-});
+EM_JS(int, leaves_pending_writes, (), { return Module._leavesWrites || 0; });
 
 namespace leaves {
 
@@ -102,16 +102,16 @@ struct _BrowserStoreTraits {
   // Aggregate waste vs. the prior file-backend buckets drops ~3 pp on
   // most scenarios and ~10 pp on hex_strings/v1000.
   static constexpr uint16_t PAGE_SIZES[] = {
-       40,   // smallest TrieNode + PageHeader
-       56,   // 3 branches
-       64,   // 4 branches (8B-aligned)
-       80,   // 5-6 branches
+      40,    // smallest TrieNode + PageHeader
+      56,    // 3 branches
+      64,    // 4 branches (8B-aligned)
+      80,    // 5-6 branches
       120,   // 7-8 branches
       152,   // hex 0-9A-F peak
       192,   // mid-fanout (10-12 branches)
-     1024,   // mid-fanout peak
-     1056,   // mid-fanout peak (adjacent, different vsize regime)
-     4096,   // PAGE_CONTAINER_SIZE cap (binary / overflow)
+      1024,  // mid-fanout peak
+      1056,  // mid-fanout peak (adjacent, different vsize regime)
+      4096,  // PAGE_CONTAINER_SIZE cap (binary / overflow)
   };
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
@@ -144,9 +144,9 @@ struct _BrowserOperations : _CacheBase {
     Mutex file_lock;
     AreaPool area_pool;
     uint32_t sanitize_generation;  // incremented on each storage open
-    uint16_t db_entry_count;  // entries used in first directory page
-    offset_t db_next_page;    // link to overflow directory page (0 = none)
-    DBEntry dbs[];            // flexible array fills to 4K boundary
+    uint16_t db_entry_count;       // entries used in first directory page
+    offset_t db_next_page;         // link to overflow directory page (0 = none)
+    DBEntry dbs[];                 // flexible array fills to 4K boundary
 
     FileHeader()
         : signature{},
@@ -165,8 +165,8 @@ struct _BrowserOperations : _CacheBase {
     }
   };
 
-  std::string _db_name;       // IndexedDB database name
-  std::string _store_name;    // Object store name
+  std::string _db_name;     // IndexedDB database name
+  std::string _store_name;  // Object store name
   FileHeader* _header;
   mutable std::mutex _io_mutex;  // For thread-safety even in browser
 
@@ -177,9 +177,7 @@ struct _BrowserOperations : _CacheBase {
 
   size_t file_size() const { return _header->file_size; }
 
-  size_t calc_header_size() const {
-    return 4 * K;
-  }
+  size_t calc_header_size() const { return 4 * K; }
 
   // Initialize IndexedDB connection
   void open(const char* db_name) {
@@ -254,16 +252,12 @@ struct _BrowserOperations : _CacheBase {
 
   // IndexedDB store operation using Emscripten Asyncify
   void _idb_store_data(uint64_t key, const void* data, size_t size) const {
-    std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
+    std::string key_str =
+        (key == 0) ? "header" : ("area_" + std::to_string(key));
 
     int error = 0;
-    emscripten_idb_store(
-        _db_name.c_str(),
-        key_str.c_str(),
-        const_cast<void*>(data),
-        size,
-        &error
-    );
+    emscripten_idb_store(_db_name.c_str(), key_str.c_str(),
+                         const_cast<void*>(data), size, &error);
 
     if (error) {
       throw std::runtime_error("IndexedDB store failed for key: " + key_str);
@@ -272,7 +266,8 @@ struct _BrowserOperations : _CacheBase {
 
   // IndexedDB load operation using Emscripten Asyncify
   void _idb_load_data(uint64_t key, void* data, size_t size) const {
-    std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
+    std::string key_str =
+        (key == 0) ? "header" : ("area_" + std::to_string(key));
 
     // Serve from read-ahead buffer if same key (avoids double IDB load)
     if (key == _read_cache_key && !_read_cache.empty()) {
@@ -290,13 +285,8 @@ struct _BrowserOperations : _CacheBase {
     int loaded_size = 0;
     int error = 0;
 
-    emscripten_idb_load(
-        _db_name.c_str(),
-        key_str.c_str(),
-        &loaded_data,
-        &loaded_size,
-        &error
-    );
+    emscripten_idb_load(_db_name.c_str(), key_str.c_str(), &loaded_data,
+                        &loaded_size, &error);
 
     if (error || !loaded_data) {
       // Key not found - return zeros (new area)
@@ -328,13 +318,10 @@ struct _BrowserOperations : _CacheBase {
 
   // Fire-and-forget async IDB write — JS glue copies buffer immediately
   void _idb_async_store_data(uint64_t key, const void* data, size_t size) {
-    std::string key_str = (key == 0) ? "header" : ("area_" + std::to_string(key));
-    leaves_idb_async_write(
-        _db_name.c_str(),
-        key_str.c_str(),
-        data,
-        static_cast<int>(size)
-    );
+    std::string key_str =
+        (key == 0) ? "header" : ("area_" + std::to_string(key));
+    leaves_idb_async_write(_db_name.c_str(), key_str.c_str(), data,
+                           static_cast<int>(size));
   }
 
   // Flush any pending data
@@ -351,11 +338,13 @@ struct _BrowserOperations : _CacheBase {
  *   auto* db = store["my_collection"];
  *   db->put(key, value);
  */
-struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> {
-  typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> base_t;
+struct _BrowserStore
+    : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> {
+  typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore>
+      base_t;
 
-  _BrowserStore(const char* db_name,
-                size_t capacity = 100 * M, size_t pool_threads = 0)
+  _BrowserStore(const char* db_name, size_t capacity = 100 * M,
+                size_t pool_threads = 0)
       : base_t(capacity, pool_threads, _BrowserStoreTraits::AREA_SIZE) {
     // Note: pool_threads=0 for browser (single-threaded)
     _init_browser_db(db_name);
@@ -379,7 +368,8 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _Bro
       // Create new database
       _header = new (buffer) FileHeader();
       // Align file_size to AREA_SIZE so areas are AREA_SIZE-aligned
-      _header->file_size = leaves::padding(header_size, _BrowserStoreTraits::AREA_SIZE);
+      _header->file_size =
+          leaves::padding(header_size, _BrowserStoreTraits::AREA_SIZE);
       // Write initial header
       write(0, buffer, header_size);
     } else {
@@ -393,6 +383,8 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _Bro
     assert(((uint64_t)_header & 7) == 0);
     _sanitize();
   }
+
+  uint32_t sanitize_generation() { return _header->sanitize_generation; }
 
   bool _try_load_header(char* buffer, size_t header_size) {
     try {
@@ -413,7 +405,12 @@ struct _BrowserStore : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _Bro
     auto* self = this;
     _recover_areas<_DBHeader<base_t>, _BrowserStoreTraits::AREA_SIZE>(
         _header->area_pool,
-        [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
+        [self](auto fn) {
+          self->_for_each_db_entry([&](auto& e) {
+            if (e.offset) fn(e.offset);
+            return true;
+          });
+        },
         _header->file_size,
         leaves::padding(calc_header_size(), _BrowserStoreTraits::AREA_SIZE),
         [self](uint64_t pos, void* buf, size_t size) {
