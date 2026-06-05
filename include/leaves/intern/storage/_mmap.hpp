@@ -231,35 +231,10 @@ struct _MemoryMapFile
 
     assert(((uint64_t)_memory & 7) == 0);
     sanitize();
-    if constexpr (MAX_PROCESSES > 1)
-      set_pid();
-  }
-
-  void set_pid() {
-#ifdef LEAVES_SINGLE_PROCESS
-    std::scoped_lock flock_guard(file_lock());
-#else
-    boost::interprocess::file_lock flock(filename());
-    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-        flock_guard(flock);
-#endif
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-      if (!_memory->processes[i]) {
-        _memory->processes[i] = _pid;
-        return;
-      }
-    }
-    throw NoProcess();
   }
 
   void remove_pid() {
-#ifdef LEAVES_SINGLE_PROCESS
     std::scoped_lock flock_guard(file_lock());
-#else
-    boost::interprocess::file_lock flock(filename());
-    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-        flock_guard(flock);
-#endif
     for (int i = 0; i < MAX_PROCESSES; i++) {
       if (_memory->processes[i] == _pid) {
         _memory->processes[i] = 0;
@@ -307,7 +282,7 @@ struct _MemoryMapFile
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
       // Only rebuild the free-area pool if the previous close was NOT clean
-      // (i.e., crash recovery). On a clean reopen the persisted pool state
+      // (i.e. crash recovery). On a clean reopen the persisted pool state
       // is authoritative and rebuilding would lose ownership of any areas
       // not registered in the storage DB directory (e.g. confluence tributary
       // slots).
@@ -315,6 +290,19 @@ struct _MemoryMapFile
       _memory->clean_close = 0;  // now dirty until next clean close
       ++_memory->sanitize_generation;
       _memory->last_cursor_id.store(0);
+    }
+    // Register our pid inside the same critical section so concurrent openers
+    // are serialized: a later opener observes our pid and is NOT a first opener.
+    if constexpr (MAX_PROCESSES > 1) {
+      bool placed = false;
+      for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (!_memory->processes[i]) {
+          _memory->processes[i] = _pid;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) throw NoProcess();
     }
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       std::filesystem::resize_file(filename(), _memory->file_size);
@@ -395,13 +383,7 @@ struct _MemoryMapFile
 
   area_ptr resize_file(uint64_t size) {
     // Extend storage with new area - grow by at least 10*AREA_SIZE
-#ifndef LEAVES_SINGLE_PROCESS
-    // Multi-process: need OS file_lock since caller holds in-memory mutex only
-    boost::interprocess::file_lock flock(filename());
-    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-        flock_guard(flock);
-#endif
-    // Single-process: caller (_db.hpp) already holds file_lock() SpinLock
+    // caller (_db.hpp) already holds file_lock() 
 
     // Geometric growth: grow by at least 25% of current size or 10*AREA_SIZE
     constexpr uint64_t MIN_GROWTH = 10 * AREA_SIZE;
@@ -468,13 +450,8 @@ struct _MemoryMapFile
     using DB = DBClass<MemoryMapFile>;
     if (strlen(name) >= sizeof(DBEntry::name)) throw KeyTooBig();
 
-#ifdef LEAVES_SINGLE_PROCESS
     std::scoped_lock flock_guard(file_lock());
-#else
-    boost::interprocess::file_lock flock(filename());
-    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-        flock_guard(flock);
-#endif
+
     // 1. Check cache
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
@@ -536,13 +513,8 @@ struct _MemoryMapFile
   template <template <typename> class DBClass = _DB>
   void remove(const char* name) {
     using DB = DBClass<MemoryMapFile>;
-#ifdef LEAVES_SINGLE_PROCESS
     std::scoped_lock flock_guard(file_lock());
-#else
-    boost::interprocess::file_lock flock(filename());
-    boost::interprocess::scoped_lock<boost::interprocess::file_lock>
-        flock_guard(flock);
-#endif
+
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
       if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();

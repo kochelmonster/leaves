@@ -436,6 +436,10 @@ BOOST_AUTO_TEST_CASE(test_tributary_writing_state_not_sanitized) {
   }
 
   // Crash-recovery path (normally called in the constructor on reopen).
+  // sanitize() runs recovery once per storage generation (so concurrent openers
+  // don't double-recover); force it to treat the current generation as not-yet
+  // recovered, simulating a fresh crash/reopen cycle for this white-box test.
+  cdb->_meta->recovered_generation.store(~0ull, std::memory_order_relaxed);
   cdb->sanitize();
 
   // With original code _merge_unclaimed_tributaries() skips WRITING =>

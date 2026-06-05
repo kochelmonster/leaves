@@ -135,6 +135,7 @@ struct _ConfluenceMeta {
   std::atomic<uint64_t> chain_epoch{0};   // incremented when a slot is added
   std::atomic<uint32_t> slots_count{0};   // monotonic high-water-mark hint
   std::atomic<uint64_t> slots[MAX_TRIBUTARIES]{};  // claimed via CAS(0->off)
+  std::atomic<uint64_t> recovered_generation{0};   // last storage sanitize_generation recovered
 };
 
 // _ConfluenceDB: Multiproducer LSM meta-database wrapper
@@ -262,6 +263,7 @@ struct _ConfluenceDB {
         new (&meta->slots_count) std::atomic<uint32_t>(0);
         for (size_t i = 0; i < _ConfluenceMeta<Storage>::MAX_TRIBUTARIES; ++i)
           new (&meta->slots[i]) std::atomic<uint64_t>(0);
+        new (&meta->recovered_generation) std::atomic<uint64_t>(0);
         _main_db.make_dirty(meta);
         init_cursor->commit(true);
       } else {
@@ -344,11 +346,26 @@ struct _ConfluenceDB {
   }
 
   void sanitize() {
-    // Reinitialise the cross-process mutex in case the previous owner crashed.
-    new (&_meta->chain_lock) typename Storage::Mutex();
-    _main_db.sanitize();
-    _merge_unclaimed_tributaries();
-    _main_db.flush();
+    // Crash recovery (reinit the cross-process chain_lock, re-sanitize the main
+    // DB, drain orphaned tributaries) must run exactly once per crash/reopen
+    // cycle and complete before any concurrent opener starts using the DB.
+    //
+    // We run it under the storage's OS file lock — the same lock open<>() holds
+    // — so a second process opening concurrently blocks here until recovery
+    // finishes, and then observes recovered_generation == the current storage
+    // sanitize_generation and skips.  This closes the race where is_first_opener
+    // is decided at storage-open time but the chain_lock reinit happens later,
+    // possibly while another live process already holds chain_lock.
+    _main_db._storage.with_file_lock([this] {
+      uint64_t gen = _main_db._storage.sanitize_generation();
+      if (_meta->recovered_generation.load(std::memory_order_acquire) == gen)
+        return;  // another opener already recovered this generation
+      new (&_meta->chain_lock) typename Storage::Mutex();
+      _main_db.sanitize();
+      _merge_unclaimed_tributaries();
+      _main_db.flush();
+      _meta->recovered_generation.store(gen, std::memory_order_release);
+    });
   }
 
   // Allocate a new TributaryDB.  Called under _meta->chain_lock for
@@ -564,6 +581,12 @@ struct _ConfluenceDB {
     if (!transitioned) {
       if (expected != Slot::MERGING) return false;
     }
+    // Cross-process arbitration: only one LIVE process may execute the merge of
+    // a given MERGING slot.  A second concurrent _do_merge on the same slot
+    // would read the tributary trie after the first process recycles it
+    // (use-after-reset).  Different slots are already serialized by the main
+    // DB's interprocess write lock, so per-slot ownership is sufficient.
+    if (!_claim_merge_ownership(slot)) return false;
     slot->refs.fetch_add(1, std::memory_order_acq_rel);
     try {
       _do_merge(trib);
@@ -572,6 +595,7 @@ struct _ConfluenceDB {
       // Recovery happens on next process start via _merge_unclaimed_tributaries()
       // once the storage region has been enlarged.
       slot->refs.fetch_sub(1, std::memory_order_acq_rel);
+      slot->merge_owner_pid.store(0, std::memory_order_release);  // release claim
       // Surface the exception to the next cursor access.
       {
         std::lock_guard<std::mutex> lk(_merge_error_mutex);
@@ -581,9 +605,53 @@ struct _ConfluenceDB {
       return false;
     }
     slot->state.store(Slot::MERGED, std::memory_order_release);
+    slot->merge_owner_pid.store(0, std::memory_order_release);  // release claim
     _meta->state_epoch.fetch_add(1, std::memory_order_release);
     _unpin_slot(trib);
     return true;
+  }
+
+  // Claim cross-process execution ownership of a MERGING slot.  Returns true if
+  // this process owns the merge (newly claimed, already ours, or reclaimed from
+  // a dead owner); false if a different LIVE process owns it.  Single-process
+  // builds always succeed with no overhead.
+  bool _claim_merge_ownership(slot_ptr slot) {
+    if constexpr (Storage::MAX_PROCESSES <= 1) {
+      (void)slot;
+      return true;
+    } else {
+      uint32_t self = _main_db._storage.process_pid();
+      for (;;) {
+        uint32_t owner = 0;
+        if (slot->merge_owner_pid.compare_exchange_strong(
+                owner, self, std::memory_order_acq_rel,
+                std::memory_order_acquire))
+          return true;  // was unowned — claimed
+        if (owner == self) return true;  // already ours
+        if (_main_db._storage.is_pid_alive(owner))
+          return false;  // a live process owns it — skip
+        // Owner is dead: try to reclaim its slot.
+        if (slot->merge_owner_pid.compare_exchange_strong(
+                owner, self, std::memory_order_acq_rel,
+                std::memory_order_relaxed))
+          return true;  // reclaimed from dead owner
+        // Lost the reclaim race; re-evaluate.
+      }
+    }
+  }
+
+  // True if a MERGING slot is currently owned by a different LIVE process (so
+  // this process must not touch it — its owner will finish the merge).
+  bool _is_foreign_live_owned(slot_ptr slot) {
+    if constexpr (Storage::MAX_PROCESSES <= 1) {
+      (void)slot;
+      return false;
+    } else {
+      uint32_t owner = slot->merge_owner_pid.load(std::memory_order_acquire);
+      if (owner == 0) return false;
+      if (owner == _main_db._storage.process_pid()) return false;
+      return _main_db._storage.is_pid_alive(owner);
+    }
   }
 
   void _unpin_slot(TributaryDB* trib) {
@@ -766,8 +834,9 @@ struct _ConfluenceDB {
     std::scoped_lock lock(_meta->chain_lock);
     size_t n = _tributaries_count.load(std::memory_order_acquire);
     for (size_t i = 0; i < n; ++i) {
-      if (_trib_at(i)->_header->state.load(std::memory_order_acquire) ==
-          Slot::MERGING)
+      slot_ptr slot = _trib_at(i)->_header;
+      if (slot->state.load(std::memory_order_acquire) == Slot::MERGING &&
+          !_is_foreign_live_owned(slot))
         return true;
     }
     return false;
@@ -802,6 +871,10 @@ struct _ConfluenceDB {
         uint8_t state = slot->state.load(std::memory_order_relaxed);
         // Already marked for merge by a writer — pick it up directly.
         if (state == Slot::MERGING) {
+          // A MERGING slot owned by a different live process is its owner's
+          // responsibility; skip it so we neither double-merge nor busy-loop
+          // waiting for it to leave MERGING.
+          if (_is_foreign_live_owned(slot)) continue;
           result.merging_seen = true;
           _merge_slots.push_back(trib);
           continue;
@@ -932,6 +1005,7 @@ struct _ConfluenceDB {
 
         // Reset slot-level fields (live in _TributaryHeader, not _DBHeader).
         new (&slot->refs) std::atomic<uint32_t>(0);
+        new (&slot->merge_owner_pid) std::atomic<uint32_t>(0);
         if (state == Slot::EMPTY) {
           // No data; nothing to do.
         } else if (state == Slot::MERGED) {

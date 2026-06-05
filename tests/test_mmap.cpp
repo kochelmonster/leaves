@@ -113,11 +113,11 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
 #ifndef LEAVES_SINGLE_PROCESS
   for(int i = 0; i < db.MAX_PROCESSES; i++) {
     if (!db._memory->processes[i])
-      db._memory->processes[i] = 0xFFFFFFFF;
+      db._memory->processes[i] = db._pid;
   }
   
   try {
-    db.set_pid();
+    db.sanitize();
     BOOST_FAIL("Expected NoProcess exception not thrown");
   } catch (const NoProcess& e) {
     // this is right

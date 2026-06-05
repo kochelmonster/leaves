@@ -83,6 +83,7 @@ struct _TributaryHeader : public _DBHeader<Storage_> {
   std::atomic<uint32_t> refs{0};           // pin count: writers + readers + merger
   std::atomic<uint32_t> write_count{0};    // committed writes since creation
   std::atomic<uint8_t>  state{EMPTY};
+  std::atomic<uint32_t> merge_owner_pid{0}; // pid executing this slot's merge (0 = unclaimed)
 };
 
 // Forward declarations
