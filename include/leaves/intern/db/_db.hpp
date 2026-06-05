@@ -87,15 +87,13 @@ struct _Transaction : public _TransactionBase<Traits_> {
 // Default database header (defined outside _DB for reusability)
 template <typename Storage_>
 struct _DBHeader {
-  using Mutex = typename Storage_::Mutex;
-
   offset_t read_txn;      // the current read transaction
   offset_t prepared_txn;  // the transaction being prepared for commit
   offset_t next_txn_page; // Optimation: preprepared transaction
-  Mutex txn_lock;
+  SpinLock txn_lock;
+  SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
   std::atomic<uint64_t>
       txn_cursor_id;  // the id of the cursor holding the transaction
-  SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
 
   // Atomic area management - no AreaList objects, just head pointers
   // Areas are linked lists in storage, operations use atomic head/tail pattern
@@ -201,7 +199,7 @@ struct _DB {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
-    new (&_header->txn_lock) Mutex();
+    new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
 
     // Initialize area lists with the first allocated area (area_ptr)
@@ -773,7 +771,7 @@ struct _DB {
   }
 
   void sanitize() {
-    new (&_header->txn_lock) Mutex();
+    new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
     _header->txn_cursor_id.store(0);
     iter_transactions([this](txn_ptr txn) -> bool {

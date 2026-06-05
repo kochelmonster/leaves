@@ -128,14 +128,17 @@ template <typename Storage_>
 struct _ConfluenceMeta {
   using Mutex = typename Storage_::Mutex;
   static constexpr size_t MAX_TRIBUTARIES = 128;
-  Mutex chain_lock;                       // in-process publish serialization
-  std::atomic<uint64_t> state_epoch{0};   // incremented when a tributary's readable status changes:
-                                          //   FIRST_WRITING→ATTACHED (first commit; new readable slot)
-                                          //   MERGING→MERGED         (slot leaves readable set)
-  std::atomic<uint64_t> chain_epoch{0};   // incremented when a slot is added
-  std::atomic<uint32_t> slots_count{0};   // monotonic high-water-mark hint
+  Mutex chain_lock;       // in-process publish serialization
+  Mutex merge_exec_lock;  // cross-process merge execution serialization
+  std::atomic<uint64_t> state_epoch{
+      0};  // incremented when a tributary's readable status changes:
+           //   FIRST_WRITING→ATTACHED (first commit; new readable slot)
+           //   MERGING→MERGED         (slot leaves readable set)
+  std::atomic<uint64_t> chain_epoch{0};  // incremented when a slot is added
+  std::atomic<uint32_t> slots_count{0};  // monotonic high-water-mark hint
   std::atomic<uint64_t> slots[MAX_TRIBUTARIES]{};  // claimed via CAS(0->off)
-  std::atomic<uint64_t> recovered_generation{0};   // last storage sanitize_generation recovered
+  std::atomic<uint64_t> recovered_generation{
+      0};  // last storage sanitize_generation recovered
 };
 
 // _ConfluenceDB: Multiproducer LSM meta-database wrapper
@@ -178,13 +181,15 @@ struct _ConfluenceDB {
   // only mark slots MERGING and call _schedule_merge().  Idle ATTACHED slots
   // are merged by a periodic age sweep (see _ensure_age_sweep).
   //
-  // Single-job + no-lost-wakeup: _schedule_merge() bumps _merge_signal (seq_cst)
-  // BEFORE the CAS on _merge_task_active (seq_cst), and producers publish
-  // slot.state=MERGING BEFORE calling it.  The merge job drains until no MERGING
-  // slot remains, clears _merge_task_active (J1), re-checks _merge_signal (J2),
-  // and re-loops only if it re-wins the CAS.  _merge_done tracks the last
-  // completed drain generation so merge_now()/merge_all_now() can block on it.
-  std::atomic<bool> _merge_task_active{false}; // a merge task is queued/running
+  // Single-job + no-lost-wakeup: _schedule_merge() bumps _merge_signal
+  // (seq_cst) BEFORE the CAS on _merge_task_active (seq_cst), and producers
+  // publish slot.state=MERGING BEFORE calling it.  The merge job drains until
+  // no MERGING slot remains, clears _merge_task_active (J1), re-checks
+  // _merge_signal (J2), and re-loops only if it re-wins the CAS.  _merge_done
+  // tracks the last completed drain generation so merge_now()/merge_all_now()
+  // can block on it.
+  std::atomic<bool> _merge_task_active{
+      false};  // a merge task is queued/running
   std::mutex _monitor_mutex;
   std::condition_variable _monitor_done_cv;  // wakes drain-completion waiters
   // Number of merge tasks this DB has submitted but whose _run_merge_task has
@@ -193,19 +198,23 @@ struct _ConfluenceDB {
   // (not the whole shared pool's wait_idle()) so unrelated tasks from other
   // DBs/cachestore/replication on the same pool cannot delay teardown.
   std::atomic<uint32_t> _merge_task_inflight{0};
-  std::condition_variable _merge_task_gone_cv;  // wakes dtor when inflight hits 0
-  std::atomic<uint64_t> _merge_signal{0};    // bumped to request a drain pass
-  std::atomic<uint64_t> _merge_done{0};      // last drain generation completed
-  std::atomic<bool> _merge_force{false};     // next pass drains all ATTACHED+MERGING
-  std::atomic<bool> _shutdown{false};        // set in dtor; gates idle-timer arming
-  std::atomic<uint64_t> _age_sweep_job_id{0};  // pending age-sweep job id (0 = none)
-  std::mutex _age_sweep_mutex;               // serializes age-sweep arming
+  std::condition_variable
+      _merge_task_gone_cv;                 // wakes dtor when inflight hits 0
+  std::atomic<uint64_t> _merge_signal{0};  // bumped to request a drain pass
+  std::atomic<uint64_t> _merge_done{0};    // last drain generation completed
+  std::atomic<bool> _merge_force{
+      false};                          // next pass drains all ATTACHED+MERGING
+  std::atomic<bool> _shutdown{false};  // set in dtor; gates idle-timer arming
+  std::atomic<uint64_t> _age_sweep_job_id{
+      0};                       // pending age-sweep job id (0 = none)
+  std::mutex _age_sweep_mutex;  // serializes age-sweep arming
   ConflictPolicy_ _conflict_policy;
 
   // Hard cap on tributary slots, both per-process and cross-process.  The
   // persistent slot table in _ConfluenceMeta has this exact size; the
   // allocator scans the array for the first un-claimed entry via CAS.
-  static constexpr size_t MAX_TRIBUTARIES = _ConfluenceMeta<Storage>::MAX_TRIBUTARIES;
+  static constexpr size_t MAX_TRIBUTARIES =
+      _ConfluenceMeta<Storage>::MAX_TRIBUTARIES;
 
   MainDB_& _main_db;
   meta_ptr _meta;
@@ -222,7 +231,8 @@ struct _ConfluenceDB {
   // A stale value only triggers a slow-path reconcile via chain_lock; never
   // a correctness issue.
   std::atomic<uint64_t> _tributaries_chain_epoch{UINT64_MAX};
-  std::vector<TributaryDB*> _merge_slots;  // reused across merge calls, avoids heap
+  std::vector<TributaryDB*>
+      _merge_slots;  // reused across merge calls, avoids heap
 
   // Async merge error propagation: merge_tributary()'s catch block stores the
   // exception here; _ensure_sources() / start_transaction() rethrow it on the
@@ -231,21 +241,11 @@ struct _ConfluenceDB {
   std::mutex _merge_error_mutex;
   std::exception_ptr _pending_merge_error;
 
-  // Serializes merge EXECUTION. Without this lock, two drain passes (e.g. the
-  // monitor's periodic pass and a synchronous merge_all_now fallback) could
-  // both build a _merge_slots list at the same time: one would CAS a slot
-  // ATTACHED→MERGING, the other would see it already in MERGING state and fall
-  // through merge_tributary() into a concurrent _do_merge on the same slot.
-  // This lock ensures only one merge pass runs at a time. Always acquired
-  // OUTSIDE _meta->chain_lock to avoid lock-order inversion.
-  std::mutex _merge_exec_mutex;
-
   // Reader: returns the in-process TributaryDB at index i, or nullptr if
   // not yet materialised.  Caller bounds i < _tributaries_count.load(acquire).
   TributaryDB* _trib_at(size_t i) const { return _tribs[i].get(); }
 
-  _ConfluenceDB(MainDB_& main_db)
-      : _main_db(main_db) {
+  _ConfluenceDB(MainDB_& main_db) : _main_db(main_db) {
     if (_main_db._header->extra_offset == 0) {
       // Optimistic first-creation path: acquire the write lock then re-check.
       auto init_cursor = _main_db.create_cursor();
@@ -256,8 +256,10 @@ struct _ConfluenceDB {
             sizeof(_ConfluenceMeta<Storage>));
         _main_db._header->extra_offset = _main_db.resolve(meta);
         _main_db.make_dirty(_main_db._header);
-        memset(reinterpret_cast<char*>(&*meta), 0, sizeof(_ConfluenceMeta<Storage>));
+        memset(reinterpret_cast<char*>(&*meta), 0,
+               sizeof(_ConfluenceMeta<Storage>));
         new (&meta->chain_lock) typename Storage::Mutex();
+        new (&meta->merge_exec_lock) typename Storage::Mutex();
         new (&meta->state_epoch) std::atomic<uint64_t>(0);
         new (&meta->chain_epoch) std::atomic<uint64_t>(0);
         new (&meta->slots_count) std::atomic<uint32_t>(0);
@@ -284,8 +286,8 @@ struct _ConfluenceDB {
         if (!raw) continue;  // never-allocated gap (should not occur)
         offset_t slot_off;
         slot_off = raw;
-        _tribs[i] = std::make_unique<TributaryDB>(
-            _main_db._storage, slot_off, "_tributary");
+        _tribs[i] = std::make_unique<TributaryDB>(_main_db._storage, slot_off,
+                                                  "_tributary");
         published = i + 1;
       }
       _tributaries_count.store(published, std::memory_order_release);
@@ -310,9 +312,9 @@ struct _ConfluenceDB {
       if (id) _main_db._storage.cancel_job(id);
     }
     // Drain all unmerged tributaries via the merge job, then wait ONLY for this
-    // DB's own merge task to fully return (not the whole shared pool) so no task
-    // still holds a `this` pointer.  Unrelated tasks from other DBs sharing the
-    // pool do not delay teardown.
+    // DB's own merge task to fully return (not the whole shared pool) so no
+    // task still holds a `this` pointer.  Unrelated tasks from other DBs
+    // sharing the pool do not delay teardown.
     merge_all_now();
     {
       std::unique_lock<std::mutex> lk(_monitor_mutex);
@@ -349,23 +351,17 @@ struct _ConfluenceDB {
     // Crash recovery (reinit the cross-process chain_lock, re-sanitize the main
     // DB, drain orphaned tributaries) must run exactly once per crash/reopen
     // cycle and complete before any concurrent opener starts using the DB.
-    //
-    // We run it under the storage's OS file lock — the same lock open<>() holds
-    // — so a second process opening concurrently blocks here until recovery
-    // finishes, and then observes recovered_generation == the current storage
-    // sanitize_generation and skips.  This closes the race where is_first_opener
-    // is decided at storage-open time but the chain_lock reinit happens later,
-    // possibly while another live process already holds chain_lock.
-    _main_db._storage.with_file_lock([this] {
-      uint64_t gen = _main_db._storage.sanitize_generation();
-      if (_meta->recovered_generation.load(std::memory_order_acquire) == gen)
-        return;  // another opener already recovered this generation
-      new (&_meta->chain_lock) typename Storage::Mutex();
-      _main_db.sanitize();
-      _merge_unclaimed_tributaries();
-      _main_db.flush();
-      _meta->recovered_generation.store(gen, std::memory_order_release);
-    });
+    std::scoped_lock lock(_main_db._storage.file_lock());
+
+    uint64_t gen = _main_db._storage.sanitize_generation();
+    if (_meta->recovered_generation.load(std::memory_order_acquire) == gen)
+      return;  // another opener already recovered this generation
+    new (&_meta->chain_lock) typename Storage::Mutex();
+    new (&_meta->merge_exec_lock) typename Storage::Mutex();
+    _main_db.sanitize();
+    _merge_unclaimed_tributaries();
+    _main_db.flush();
+    _meta->recovered_generation.store(gen, std::memory_order_release);
   }
 
   // Allocate a new TributaryDB.  Called under _meta->chain_lock for
@@ -401,27 +397,26 @@ struct _ConfluenceDB {
     size_t claimed_idx = MAX_TRIBUTARIES;
     for (size_t i = 0; i < MAX_TRIBUTARIES; ++i) {
       uint64_t expected = 0;
-      if (_meta->slots[i].compare_exchange_strong(
-              expected, my_off,
-              std::memory_order_acq_rel,
-              std::memory_order_relaxed)) {
+      if (_meta->slots[i].compare_exchange_strong(expected, my_off,
+                                                  std::memory_order_acq_rel,
+                                                  std::memory_order_relaxed)) {
         claimed_idx = i;
         break;
       }
     }
     if (claimed_idx == MAX_TRIBUTARIES) {
-      // Cap reached: leak the just-allocated tributary header (rare).
-      // The slot is unreachable, no chain corruption.
+      std::scoped_lock flock(_main_db._storage.file_lock());
+      TributaryDB trib(_main_db._storage, trib_off, "_tributary");
+      trib.return_areas();
       return nullptr;
     }
 
     // Bump slots_count to at least claimed_idx + 1 (monotonic high-water mark).
     uint32_t target = static_cast<uint32_t>(claimed_idx + 1);
     uint32_t cur = _meta->slots_count.load(std::memory_order_relaxed);
-    while (cur < target &&
-           !_meta->slots_count.compare_exchange_weak(
-               cur, target, std::memory_order_release,
-               std::memory_order_relaxed)) {
+    while (cur < target && !_meta->slots_count.compare_exchange_weak(
+                               cur, target, std::memory_order_release,
+                               std::memory_order_relaxed)) {
       // cur reloaded by CAS on failure
     }
 
@@ -429,13 +424,14 @@ struct _ConfluenceDB {
     _main_db.flush();
     _meta->chain_epoch.fetch_add(1, std::memory_order_release);
     // No state_epoch bump here: FIRST_WRITING has no readable snapshot yet.
-    // The epoch is bumped in commit() when the first FIRST_WRITING→ATTACHED transition occurs.
+    // The epoch is bumped in commit() when the first FIRST_WRITING→ATTACHED
+    // transition occurs.
 
     // Publish into in-process mirror.  Caller holds _meta->chain_lock so
     // writers within this process are serialized; cross-process writers
     // touch different _tribs[] arrays (one per process).
-    _tribs[claimed_idx] = std::make_unique<TributaryDB>(
-        _main_db._storage, trib_off, "_tributary");
+    _tribs[claimed_idx] = std::make_unique<TributaryDB>(_main_db._storage,
+                                                        trib_off, "_tributary");
     TributaryDB* result = _tribs[claimed_idx].get();
     size_t pub = _tributaries_count.load(std::memory_order_relaxed);
     while (pub < claimed_idx + 1 &&
@@ -455,8 +451,7 @@ struct _ConfluenceDB {
   // Must be called under _meta->chain_lock (in-process writers serialized).
   void _update_tributaries() {
     uint64_t chain_epoch = _meta->chain_epoch.load(std::memory_order_acquire);
-    if (chain_epoch ==
-        _tributaries_chain_epoch.load(std::memory_order_relaxed))
+    if (chain_epoch == _tributaries_chain_epoch.load(std::memory_order_relaxed))
       return;
     uint32_t hwm = _meta->slots_count.load(std::memory_order_acquire);
     size_t max_seen = _tributaries_count.load(std::memory_order_relaxed);
@@ -466,8 +461,8 @@ struct _ConfluenceDB {
       if (!raw) continue;  // writer mid-CAS or gap; pick up next pass
       offset_t slot_off;
       slot_off = raw;
-      _tribs[i] = std::make_unique<TributaryDB>(
-          _main_db._storage, slot_off, "_tributary");
+      _tribs[i] = std::make_unique<TributaryDB>(_main_db._storage, slot_off,
+                                                "_tributary");
       if (i + 1 > max_seen) max_seen = i + 1;
     }
     _tributaries_count.store(max_seen, std::memory_order_release);
@@ -561,8 +556,7 @@ struct _ConfluenceDB {
         std::this_thread::yield();
       } else {
         unsigned shift = std::min<unsigned>(spin - 64, 10);
-        std::this_thread::sleep_for(
-            std::chrono::microseconds(1u << shift));
+        std::this_thread::sleep_for(std::chrono::microseconds(1u << shift));
       }
       ++spin;
     }
@@ -581,77 +575,30 @@ struct _ConfluenceDB {
     if (!transitioned) {
       if (expected != Slot::MERGING) return false;
     }
-    // Cross-process arbitration: only one LIVE process may execute the merge of
-    // a given MERGING slot.  A second concurrent _do_merge on the same slot
-    // would read the tributary trie after the first process recycles it
-    // (use-after-reset).  Different slots are already serialized by the main
-    // DB's interprocess write lock, so per-slot ownership is sufficient.
-    if (!_claim_merge_ownership(slot)) return false;
+    // Merge execution is serialized cross-process by _meta->merge_exec_lock,
+    // so a MERGING slot can only be processed by one merge pass at a time.
     slot->refs.fetch_add(1, std::memory_order_acq_rel);
     try {
       _do_merge(trib);
     } catch (...) {
       // Merge failed (e.g. StorageFull). Slot stays in MERGING state.
-      // Recovery happens on next process start via _merge_unclaimed_tributaries()
-      // once the storage region has been enlarged.
+      // Recovery happens on next process start via
+      // _merge_unclaimed_tributaries() once the storage region has been
+      // enlarged.
       slot->refs.fetch_sub(1, std::memory_order_acq_rel);
-      slot->merge_owner_pid.store(0, std::memory_order_release);  // release claim
       // Surface the exception to the next cursor access.
       {
         std::lock_guard<std::mutex> lk(_merge_error_mutex);
-        if (!_pending_merge_error) _pending_merge_error = std::current_exception();
+        if (!_pending_merge_error)
+          _pending_merge_error = std::current_exception();
         _has_merge_error.store(true, std::memory_order_release);
       }
       return false;
     }
     slot->state.store(Slot::MERGED, std::memory_order_release);
-    slot->merge_owner_pid.store(0, std::memory_order_release);  // release claim
     _meta->state_epoch.fetch_add(1, std::memory_order_release);
     _unpin_slot(trib);
     return true;
-  }
-
-  // Claim cross-process execution ownership of a MERGING slot.  Returns true if
-  // this process owns the merge (newly claimed, already ours, or reclaimed from
-  // a dead owner); false if a different LIVE process owns it.  Single-process
-  // builds always succeed with no overhead.
-  bool _claim_merge_ownership(slot_ptr slot) {
-    if constexpr (Storage::MAX_PROCESSES <= 1) {
-      (void)slot;
-      return true;
-    } else {
-      uint32_t self = _main_db._storage.process_pid();
-      for (;;) {
-        uint32_t owner = 0;
-        if (slot->merge_owner_pid.compare_exchange_strong(
-                owner, self, std::memory_order_acq_rel,
-                std::memory_order_acquire))
-          return true;  // was unowned — claimed
-        if (owner == self) return true;  // already ours
-        if (_main_db._storage.is_pid_alive(owner))
-          return false;  // a live process owns it — skip
-        // Owner is dead: try to reclaim its slot.
-        if (slot->merge_owner_pid.compare_exchange_strong(
-                owner, self, std::memory_order_acq_rel,
-                std::memory_order_relaxed))
-          return true;  // reclaimed from dead owner
-        // Lost the reclaim race; re-evaluate.
-      }
-    }
-  }
-
-  // True if a MERGING slot is currently owned by a different LIVE process (so
-  // this process must not touch it — its owner will finish the merge).
-  bool _is_foreign_live_owned(slot_ptr slot) {
-    if constexpr (Storage::MAX_PROCESSES <= 1) {
-      (void)slot;
-      return false;
-    } else {
-      uint32_t owner = slot->merge_owner_pid.load(std::memory_order_acquire);
-      if (owner == 0) return false;
-      if (owner == _main_db._storage.process_pid()) return false;
-      return _main_db._storage.is_pid_alive(owner);
-    }
   }
 
   void _unpin_slot(TributaryDB* trib) {
@@ -680,7 +627,9 @@ struct _ConfluenceDB {
 
   // Drain primitive: schedule a pass and block until one that observes this
   // request completes.  Equivalent to merge_now().
-  void merge_eligible_tributaries() { _request_drain_and_wait(/*force=*/false); }
+  void merge_eligible_tributaries() {
+    _request_drain_and_wait(/*force=*/false);
+  }
 
   // Schedule a drain pass and block until a pass that observes this request
   // completes.  force=true drains ALL ATTACHED+MERGING slots; force=false
@@ -694,9 +643,8 @@ struct _ConfluenceDB {
     }
     _schedule_merge_task();
     std::unique_lock<std::mutex> lk(_monitor_mutex);
-    _monitor_done_cv.wait(lk, [&] {
-      return _merge_done.load(std::memory_order_acquire) >= req;
-    });
+    _monitor_done_cv.wait(
+        lk, [&] { return _merge_done.load(std::memory_order_acquire) >= req; });
   }
 
   // ------------------------------------------------------------------------
@@ -749,8 +697,8 @@ struct _ConfluenceDB {
   // job's J1 (clear) / J2 (re-check) in _run_merge_task.
   void _schedule_merge_task() {
     bool expected = false;
-    if (!_merge_task_active.compare_exchange_strong(
-            expected, true, std::memory_order_seq_cst))
+    if (!_merge_task_active.compare_exchange_strong(expected, true,
+                                                    std::memory_order_seq_cst))
       return;  // a task is already pending/running
     // Count the task as in-flight BEFORE submitting so the destructor cannot
     // observe inflight==0 while a task is queued-but-not-yet-started.  Balanced
@@ -769,10 +717,11 @@ struct _ConfluenceDB {
     _merge_task_gone_cv.notify_all();
   }
 
-  // Body of a pool merge task.  Drains until no MERGING slot remains, publishing
-  // _merge_done after each pass to wake blocked callers, then runs the retire
-  // handshake: clear _merge_task_active (J1), re-check (J2), and re-loop only on
-  // re-winning the CAS so exactly one job is live and no wakeup is lost.
+  // Body of a pool merge task.  Drains until no MERGING slot remains,
+  // publishing _merge_done after each pass to wake blocked callers, then runs
+  // the retire handshake: clear _merge_task_active (J1), re-check (J2), and
+  // re-loop only on re-winning the CAS so exactly one job is live and no wakeup
+  // is lost.
   void _run_merge_task() {
     for (;;) {
       uint64_t sig = _merge_signal.load(std::memory_order_seq_cst);
@@ -783,7 +732,7 @@ struct _ConfluenceDB {
         bool force = _merge_force.exchange(false, std::memory_order_acq_rel);
         _DrainResult r{};
         try {
-          std::scoped_lock exec(_merge_exec_mutex);
+          std::scoped_lock exec(_meta->merge_exec_lock);
           r = _drain_locked(force);
         } catch (...) {
           r = _DrainResult{};
@@ -809,7 +758,10 @@ struct _ConfluenceDB {
       // MERGING slot that appeared after our last collect.
       bool more = (_merge_signal.load(std::memory_order_seq_cst) != sig) ||
                   _has_merging_slot();
-      if (!more) { _retire_merge_task(); return; }
+      if (!more) {
+        _retire_merge_task();
+        return;
+      }
 
       // J2 gate: re-loop ONLY if we re-win ownership; otherwise the producer's
       // own CAS won and it submitted (or will submit) a fresh task.
@@ -824,8 +776,8 @@ struct _ConfluenceDB {
 
   // Result of one drain pass.
   struct _DrainResult {
-    bool merging_seen = false;   // a MERGING slot was collected this pass
-    bool pending_idle = false;   // a not-yet-idle ATTACHED slot remains
+    bool merging_seen = false;  // a MERGING slot was collected this pass
+    bool pending_idle = false;  // a not-yet-idle ATTACHED slot remains
   };
 
   // True if any slot is currently in the MERGING state.  Cheap scan under
@@ -835,22 +787,23 @@ struct _ConfluenceDB {
     size_t n = _tributaries_count.load(std::memory_order_acquire);
     for (size_t i = 0; i < n; ++i) {
       slot_ptr slot = _trib_at(i)->_header;
-      if (slot->state.load(std::memory_order_acquire) == Slot::MERGING &&
-          !_is_foreign_live_owned(slot))
+      if (slot->state.load(std::memory_order_acquire) == Slot::MERGING)
         return true;
     }
     return false;
   }
 
-  // One full drain pass.  MUST hold _merge_exec_mutex (serializes _do_merge and
-  // slot recycling).
+  // One full drain pass.  MUST hold _meta->merge_exec_lock (serializes
+  // _do_merge and slot recycling across processes).
   _DrainResult _drain_locked(bool force) {
     return _collect_and_merge_locked(force);
   }
 
   // Selects eligible tributaries and merges them. MUST be called with
-  // _merge_exec_mutex held (serializes _do_merge and slot recycling).
-  //   * MERGING slots are always merged (a producer marked them — event-driven).
+  // _meta->merge_exec_lock held (serializes _do_merge and slot recycling across
+  // processes).
+  //   * MERGING slots are always merged (a producer marked them —
+  //   event-driven).
   //   * ATTACHED slots are merged when force is set (merge_all_now) or when
   //     attached past max_attached_age_seconds (the periodic age sweep catches
   //     these).
@@ -871,10 +824,6 @@ struct _ConfluenceDB {
         uint8_t state = slot->state.load(std::memory_order_relaxed);
         // Already marked for merge by a writer — pick it up directly.
         if (state == Slot::MERGING) {
-          // A MERGING slot owned by a different live process is its owner's
-          // responsibility; skip it so we neither double-merge nor busy-loop
-          // waiting for it to leave MERGING.
-          if (_is_foreign_live_owned(slot)) continue;
           result.merging_seen = true;
           _merge_slots.push_back(trib);
           continue;
@@ -901,11 +850,12 @@ struct _ConfluenceDB {
 
   // Periodic age sweep.  Called at every transaction end that leaves a slot
   // ATTACHED (and re-armed by the merge job while a not-yet-aged ATTACHED slot
-  // remains).  Arms a SINGLE sweep if none is pending; an already-armed sweep is
-  // left untouched so its deadline is measured from the first arm, NOT pushed
-  // out by later activity on other slots.  Each sweep judges every slot against
-  // its own last_used_time, so a slot attached past the age limit is merged on
-  // the next sweep regardless of writes to other slots.  No-op after shutdown.
+  // remains).  Arms a SINGLE sweep if none is pending; an already-armed sweep
+  // is left untouched so its deadline is measured from the first arm, NOT
+  // pushed out by later activity on other slots.  Each sweep judges every slot
+  // against its own last_used_time, so a slot attached past the age limit is
+  // merged on the next sweep regardless of writes to other slots.  No-op after
+  // shutdown.
   void _ensure_age_sweep() {
     if (_shutdown.load(std::memory_order_acquire)) return;
     uint64_t timeout_ms = _max_attached_age_ms.load(std::memory_order_relaxed);
@@ -973,7 +923,10 @@ struct _ConfluenceDB {
 
       main_cursor->commit();
     } catch (...) {
-      try { main_cursor->rollback(); } catch (...) {}
+      try {
+        main_cursor->rollback();
+      } catch (...) {
+      }
       throw;
     }
   }
@@ -1005,7 +958,6 @@ struct _ConfluenceDB {
 
         // Reset slot-level fields (live in _TributaryHeader, not _DBHeader).
         new (&slot->refs) std::atomic<uint32_t>(0);
-        new (&slot->merge_owner_pid) std::atomic<uint32_t>(0);
         if (state == Slot::EMPTY) {
           // No data; nothing to do.
         } else if (state == Slot::MERGED) {
@@ -1107,8 +1059,7 @@ struct _PinnedSource {
     _trib_db = trib;
     _slot = slot;
     _slot_off = slot_off;
-    _trib_cursor =
-        std::make_unique<TribCursor>(trib, &trib->txn()->root);
+    _trib_cursor = std::make_unique<TribCursor>(trib, &trib->txn()->root);
     trib->aspect().init_cursor_context(_trib_cursor->_aspect_context);
     _refresh_del_cursor();
   }
@@ -1197,8 +1148,9 @@ struct _ConfluenceCursor {
   // valid while _sources are held — nulled by _release_sources())
   Slice _value_storage;
   bool _valid{false};
-  bool _pending_find{false};  // find() is lazy; materialized on first is_valid/value/next/prev
-  Slice _search_key;          // non-owning view into _iter_key; set eagerly by find()
+  bool _pending_find{
+      false};  // find() is lazy; materialized on first is_valid/value/next/prev
+  Slice _search_key;  // non-owning view into _iter_key; set eagerly by find()
   explicit _ConfluenceCursor(ConfluenceDB_* cdb) : _cdb(cdb) {
     _main_txn = _cdb->txn_ref();
     _main_cursor = std::make_unique<_Cursor<MainCursorTraits>>(
@@ -1229,12 +1181,12 @@ struct _ConfluenceCursor {
               expected, Slot::WRITING, std::memory_order_acq_rel)) {
         // We won the CAS — slot is ours again.
         if (!_write_source._trib_cursor->start_transaction(non_blocking)) {
-            // Roll back state: WRITING → ATTACHED
-            _write_source._slot->state.store(Slot::ATTACHED,
-                                             std::memory_order_release);
-            return false;
-          }
-          _write_source._refresh_del_cursor();
+          // Roll back state: WRITING → ATTACHED
+          _write_source._slot->state.store(Slot::ATTACHED,
+                                           std::memory_order_release);
+          return false;
+        }
+        _write_source._refresh_del_cursor();
         _in_transaction = true;
         _pending_write_keys = 0;
         return true;
@@ -1268,7 +1220,8 @@ struct _ConfluenceCursor {
       }
       // MERGING (merge still in progress) or any other unexpected state:
       // release our claim ref and fall through to acquire a fresh slot.
-      _write_source.park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
+      _write_source
+          .park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
     }
 
     // Slow path: acquire a fresh write slot.
@@ -1300,8 +1253,7 @@ struct _ConfluenceCursor {
           std::this_thread::yield();
         } else {
           unsigned shift = std::min<unsigned>(spin - 64, 10);
-          std::this_thread::sleep_for(
-              std::chrono::microseconds(1u << shift));
+          std::this_thread::sleep_for(std::chrono::microseconds(1u << shift));
         }
         ++spin;
         trib = _cdb->_try_claim_or_alloc();
@@ -1314,13 +1266,15 @@ struct _ConfluenceCursor {
     // Do NOT do an extra refs.fetch_add here — park() via _unpin_slot will
     // release that one pin.
     offset_t slot_off = (uint64_t)_cdb->_main_db._storage.resolve(slot);
-    _write_source.park();  // drop any stale cursor objects (slot is null → no-op on refs)
+    _write_source.park();  // drop any stale cursor objects (slot is null →
+                           // no-op on refs)
     _write_source.reinit(_cdb, trib, slot, slot_off);
     if (!_write_source._trib_cursor->start_transaction(non_blocking)) {
       // Failed — transition to MERGING so the merge job will clean up, then
       // release pin.
-      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
-      _write_source.park();  // refs-- (1→0)
+      _write_source._slot->state.store(Slot::MERGING,
+                                       std::memory_order_release);  // W1
+      _write_source.park();     // refs-- (1→0)
       _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
       return false;
     }
@@ -1332,48 +1286,50 @@ struct _ConfluenceCursor {
 
   bool commit(bool sync = false) {
     if (!_in_transaction) return false;
-    bool ok = _write_source._trib_cursor->commit(sync);
-    if (!ok) {
-      _write_source._trib_cursor->rollback();
-    } else {
-      uint32_t new_wc = _write_source._slot->write_count.fetch_add(
-                            _pending_write_keys, std::memory_order_relaxed) +
-                        _pending_write_keys;
-      _write_source._slot->last_used_time.store(_current_time(),
-                                                std::memory_order_release);
-      uint8_t old_state = _write_source._slot->state.load(
-          std::memory_order_relaxed);
-      uint32_t threshold =
-          _cdb->_merge_write_threshold.load(std::memory_order_relaxed);
-      if (new_wc >= threshold) {
-        // Threshold reached: transition to MERGING and release our claim pin.
-        bool first_commit = (old_state == Slot::FIRST_WRITING);
-        _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
-        if (first_commit) {
-          // FIRST_WRITING→MERGING (bypassing ATTACHED): a new readable source —
-          // bump state_epoch so long-lived readers refresh and pick it up.
-          _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
-        }
-        _write_source.park();  // _unpin_slot → refs-- (1→0)
-        _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
-      } else {
-        // Stay attached: WRITING/FIRST_WRITING → ATTACHED
-        bool first_commit = (old_state == Slot::FIRST_WRITING);
-        _write_source._slot->state.store(Slot::ATTACHED,
-                                         std::memory_order_release);
-        if (first_commit) {
-          // Slot now has a readable snapshot for the first time.
-          _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
-        }
-        // Transaction ended leaving the slot ATTACHED: ensure an age sweep is
-        // armed so this slot is merged after it has been attached long enough.
-        _cdb->_ensure_age_sweep();
-      }
+    if (!_write_source._trib_cursor->commit(sync)) {
+      assert(false && "tributary commit failed for this cursor's transaction");
+      return false;
     }
+
+    uint32_t new_wc = _write_source._slot->write_count.fetch_add(
+                          _pending_write_keys, std::memory_order_relaxed) +
+                      _pending_write_keys;
+    _write_source._slot->last_used_time.store(_current_time(),
+                                              std::memory_order_release);
+    uint8_t old_state =
+        _write_source._slot->state.load(std::memory_order_relaxed);
+    uint32_t threshold =
+        _cdb->_merge_write_threshold.load(std::memory_order_relaxed);
+    if (new_wc >= threshold) {
+      // Threshold reached: transition to MERGING and release our claim pin.
+      bool first_commit = (old_state == Slot::FIRST_WRITING);
+      _write_source._slot->state.store(Slot::MERGING,
+                                       std::memory_order_release);  // W1
+      if (first_commit) {
+        // FIRST_WRITING→MERGING (bypassing ATTACHED): a new readable source —
+        // bump state_epoch so long-lived readers refresh and pick it up.
+        _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
+      }
+      _write_source.park();     // _unpin_slot → refs-- (1→0)
+      _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
+    } else {
+      // Stay attached: WRITING/FIRST_WRITING → ATTACHED
+      bool first_commit = (old_state == Slot::FIRST_WRITING);
+      _write_source._slot->state.store(Slot::ATTACHED,
+                                       std::memory_order_release);
+      if (first_commit) {
+        // Slot now has a readable snapshot for the first time.
+        _cdb->_meta->state_epoch.fetch_add(1, std::memory_order_release);
+      }
+      // Transaction ended leaving the slot ATTACHED: ensure an age sweep is
+      // armed so this slot is merged after it has been attached long enough.
+      _cdb->_ensure_age_sweep();
+    }
+
     _in_transaction = false;
     _pending_write_keys = 0;
     _value_storage = Slice();
-    return ok;
+    return true;
   }
 
   bool rollback() {
@@ -1382,14 +1338,16 @@ struct _ConfluenceCursor {
     uint8_t s = _write_source._slot->state.load(std::memory_order_relaxed);
     if (s == Slot::WRITING) {
       // Slot had a prior committed snapshot: revert to ATTACHED, keep pin.
-      _write_source._slot->state.store(Slot::ATTACHED, std::memory_order_release);
+      _write_source._slot->state.store(Slot::ATTACHED,
+                                       std::memory_order_release);
       // Transaction ended leaving the slot ATTACHED: ensure an age sweep is
       // armed so this slot is merged after it has been attached long enough.
       _cdb->_ensure_age_sweep();
     } else {
       // FIRST_WRITING: no prior snapshot — release the slot (no-op merge).
-      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
-      _write_source.park();  // _unpin_slot → refs-- (1→0)
+      _write_source._slot->state.store(Slot::MERGING,
+                                       std::memory_order_release);  // W1
+      _write_source.park();     // _unpin_slot → refs-- (1→0)
       _cdb->_schedule_merge();  // W2: wake a merge for this MERGING slot
     }
     _in_transaction = false;
@@ -1427,8 +1385,7 @@ struct _ConfluenceCursor {
     }
     uint64_t cur_state_epoch =
         _cdb->_meta->state_epoch.load(std::memory_order_acquire);
-    if (_sources_state_epoch == cur_state_epoch)
-      return;
+    if (_sources_state_epoch == cur_state_epoch) return;
     uint64_t cur_chain_epoch =
         _cdb->_meta->chain_epoch.load(std::memory_order_acquire);
 
@@ -1440,8 +1397,7 @@ struct _ConfluenceCursor {
 
     auto fill_sources_lockfree = [&] {
       size_t fill = 0;
-      size_t n =
-          _cdb->_tributaries_count.load(std::memory_order_acquire);
+      size_t n = _cdb->_tributaries_count.load(std::memory_order_acquire);
       for (size_t i = 0; i < n; ++i) {
         TributaryDB* t = _cdb->_trib_at(i);
         slot_ptr slot = t->_header;
@@ -1482,8 +1438,8 @@ struct _ConfluenceCursor {
     // A merge does main commit then slot->state.store(MERGED, release); if our
     // acquire-load sees a slot as MERGED and skips it, that merge's prior main
     // commit happens-before the txn_ref() below, so this snapshot includes it.
-    // (Taking the snapshot first was a TOCTOU that could drop a just-merged key.)
-    // Pin the new txn first so the old _root pointer stays valid through
+    // (Taking the snapshot first was a TOCTOU that could drop a just-merged
+    // key.) Pin the new txn first so the old _root pointer stays valid through
     // set_root's dereference, then release the old pin.
     auto new_txn = _cdb->txn_ref();
     _main_cursor->set_root(&new_txn->root);
@@ -1500,7 +1456,7 @@ struct _ConfluenceCursor {
   void _release_sources() {
     for (size_t i = 0; i < _sources_n; ++i) _sources[i].park();
     _sources_n = 0;
-    _value_storage = Slice();  // null to prevent dangling
+    _value_storage = Slice();           // null to prevent dangling
     _sources_state_epoch = UINT64_MAX;  // force rebuild on next _ensure_sources
   }
 
@@ -1513,7 +1469,8 @@ struct _ConfluenceCursor {
     uint8_t s = _write_source._slot->state.load(std::memory_order_relaxed);
     bool now_merging = false;
     if (s == Slot::ATTACHED) {
-      _write_source._slot->state.store(Slot::MERGING, std::memory_order_release);  // W1
+      _write_source._slot->state.store(Slot::MERGING,
+                                       std::memory_order_release);  // W1
       now_merging = true;
     }
     _write_source.park();  // _unpin_slot → refs--, resets slot+trib_db+cursors
@@ -1551,9 +1508,9 @@ struct _ConfluenceCursor {
             src._del_cursor->is_valid() && key == src._del_cursor->current_key;
       }
       if (found || deleted) {
-        _candidates.push_back(
-            {src._trib_cursor->_txn->txn_id,
-             found ? src._trib_cursor->value() : Slice(), deleted});
+        _candidates.push_back({src._trib_cursor->_txn->txn_id,
+                               found ? src._trib_cursor->value() : Slice(),
+                               deleted});
       }
     }
     if (_in_transaction) {
@@ -1627,8 +1584,7 @@ struct _ConfluenceCursor {
     _pending_find = false;
     _ensure_sources();
     _main_cursor->first();
-    for (size_t i = 0; i < _sources_n; ++i)
-      _sources[i]._trib_cursor->first();
+    for (size_t i = 0; i < _sources_n; ++i) _sources[i]._trib_cursor->first();
     if (_in_transaction) _write_source._trib_cursor->first();
     _advance_to_next_valid();
   }
@@ -1654,8 +1610,7 @@ struct _ConfluenceCursor {
     _pending_find = false;
     _ensure_sources();
     _main_cursor->last();
-    for (size_t i = 0; i < _sources_n; ++i)
-      _sources[i]._trib_cursor->last();
+    for (size_t i = 0; i < _sources_n; ++i) _sources[i]._trib_cursor->last();
     if (_in_transaction) _write_source._trib_cursor->last();
     _advance_to_prev_valid();
   }
@@ -1715,8 +1670,8 @@ struct _ConfluenceCursor {
           deleted = src._del_cursor->is_valid() &&
                     src._del_cursor->current_key == _iter_key;
         }
-        _candidates.push_back(
-            {src._trib_cursor->_txn->txn_id, src._trib_cursor->value(), deleted});
+        _candidates.push_back({src._trib_cursor->_txn->txn_id,
+                               src._trib_cursor->value(), deleted});
       }
       if (_in_transaction && _write_source._trib_cursor->is_valid() &&
           _write_source._trib_cursor->current_key == _iter_key) {
@@ -1727,7 +1682,7 @@ struct _ConfluenceCursor {
                     _write_source._del_cursor->current_key == _iter_key;
         }
         _candidates.push_back({_write_source._trib_cursor->_txn->txn_id,
-                                _write_source._trib_cursor->value(), deleted});
+                               _write_source._trib_cursor->value(), deleted});
       }
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
@@ -1790,8 +1745,8 @@ struct _ConfluenceCursor {
           deleted = src._del_cursor->is_valid() &&
                     src._del_cursor->current_key == _iter_key;
         }
-        _candidates.push_back(
-            {src._trib_cursor->_txn->txn_id, src._trib_cursor->value(), deleted});
+        _candidates.push_back({src._trib_cursor->_txn->txn_id,
+                               src._trib_cursor->value(), deleted});
       }
       if (_in_transaction && _write_source._trib_cursor->is_valid() &&
           _write_source._trib_cursor->current_key == _iter_key) {
@@ -1802,7 +1757,7 @@ struct _ConfluenceCursor {
                     _write_source._del_cursor->current_key == _iter_key;
         }
         _candidates.push_back({_write_source._trib_cursor->_txn->txn_id,
-                                _write_source._trib_cursor->value(), deleted});
+                               _write_source._trib_cursor->value(), deleted});
       }
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)

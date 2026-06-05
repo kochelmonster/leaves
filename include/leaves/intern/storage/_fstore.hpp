@@ -14,10 +14,10 @@
 #include <boost/multi_index/member.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
 #include <boost/multi_index_container.hpp>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
-#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <future>
@@ -28,13 +28,13 @@
 #include <thread>
 #include <unordered_map>
 
-#include "_cachestore.hpp"
-#include "../db/_db.hpp"
 #include "../core/_exception.hpp"
-#include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
-#include "../core/_node.hpp"    // for _TrieNode
+#include "../core/_node.hpp"  // for _TrieNode
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
+#include "../db/_db.hpp"
+#include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
+#include "_cachestore.hpp"
 
 // Removed interprocess mutex and process ID references since they're no longer
 // needed
@@ -70,11 +70,12 @@ struct _StoreTraits {
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 1;
-  static constexpr uint16_t PAGE_SIZES[] = {                    // Page sizes (header + node)
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 2),    // 2 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 3),    // 3 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 4),    // 4 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 10),   // 5-10 branches
+  static constexpr uint16_t PAGE_SIZES[] = {  // Page sizes (header + node)
+      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 2),  // 2 branches
+      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 3),  // 3 branches
+      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 4),  // 4 branches
+      sizeof(PageHeader) +
+          _TrieNode<_StoreTraits>::size(1, 10),  // 5-10 branches
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 64),   // base64
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 256),  // binary
@@ -103,9 +104,9 @@ struct _FileOperations : _CacheBase {
     Mutex file_lock;     // Kept for compatibility but no longer needed
     AreaPool area_pool;  // pool for both single and multi areas
     uint32_t sanitize_generation;  // incremented on each storage open
-    uint16_t db_entry_count;  // entries used in first directory page
-    offset_t db_next_page;    // link to overflow directory page (0 = none)
-    DBEntry dbs[];            // flexible array fills to 4K boundary
+    uint16_t db_entry_count;       // entries used in first directory page
+    offset_t db_next_page;         // link to overflow directory page (0 = none)
+    DBEntry dbs[];                 // flexible array fills to 4K boundary
 
     FileHeader()
         : signature{},
@@ -138,16 +139,14 @@ struct _FileOperations : _CacheBase {
 
   size_t file_size() const { return _header->file_size; }
 
-  size_t calc_header_size() const {
-    return 4 * K;
-  }
+  size_t calc_header_size() const { return 4 * K; }
 
   void open(const char* path) {
     _filepath = path;
 #ifdef _WIN32
     _fd = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
-                      FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                      OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                      FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+                      FILE_ATTRIBUTE_NORMAL, NULL);
     if (_fd == INVALID_HANDLE_VALUE) {
       throw std::runtime_error("Failed to open file: error " +
                                std::to_string(GetLastError()));
@@ -187,8 +186,8 @@ struct _FileOperations : _CacheBase {
       ov.Offset = static_cast<DWORD>(pos);
       ov.OffsetHigh = static_cast<DWORD>(pos >> 32);
       DWORD n = 0;
-      DWORD to_write = static_cast<DWORD>(
-          std::min<size_t>(size - written, MAXDWORD));
+      DWORD to_write =
+          static_cast<DWORD>(std::min<size_t>(size - written, MAXDWORD));
       if (!WriteFile(_fd, src + written, to_write, &n, &ov) || n == 0) {
         throw std::runtime_error("Failed to write data: error " +
                                  std::to_string(GetLastError()));
@@ -216,8 +215,8 @@ struct _FileOperations : _CacheBase {
       ov.Offset = static_cast<DWORD>(pos);
       ov.OffsetHigh = static_cast<DWORD>(pos >> 32);
       DWORD n = 0;
-      DWORD to_read = static_cast<DWORD>(
-          std::min<size_t>(size - total, MAXDWORD));
+      DWORD to_read =
+          static_cast<DWORD>(std::min<size_t>(size - total, MAXDWORD));
       if (!ReadFile(_fd, dst + total, to_read, &n, &ov) || n == 0) {
         throw std::runtime_error("Failed to read data: error " +
                                  std::to_string(GetLastError()));
@@ -238,8 +237,7 @@ struct _FileOperations : _CacheBase {
 #ifdef _WIN32
     LARGE_INTEGER li;
     li.QuadPart = static_cast<LONGLONG>(new_size);
-    if (!SetFilePointerEx(_fd, li, NULL, FILE_BEGIN) ||
-        !SetEndOfFile(_fd)) {
+    if (!SetFilePointerEx(_fd, li, NULL, FILE_BEGIN) || !SetEndOfFile(_fd)) {
       throw std::runtime_error("Failed to resize file: error " +
                                std::to_string(GetLastError()));
     }
@@ -323,8 +321,8 @@ template <typename Traits_ = _StoreTraits>
 struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
   typedef _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> base_t;
 
-  _FileStore(const char* path,
-             size_t capacity = 500 * M, size_t pool_threads = 1)
+  _FileStore(const char* path, size_t capacity = 500 * M,
+             size_t pool_threads = 1)
       : base_t(capacity, pool_threads, Traits_::AREA_SIZE) {
     init_dbfile(path);
     // Thread pool already started by base constructor
@@ -343,7 +341,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
       _FileOperations::open(path);
       this->_header = new (buffer.get()) FileHeader();
       // Align initial file_size to AREA_SIZE so areas are AREA_SIZE-aligned
-      this->_header->file_size = leaves::padding(header_size, Traits_::AREA_SIZE);
+      this->_header->file_size =
+          leaves::padding(header_size, Traits_::AREA_SIZE);
       this->resize(this->_header->file_size);
       // Write header
       this->write(0, buffer.get(), header_size);
@@ -358,7 +357,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     }
 
     assert(((uint64_t)this->_header & 7) == 0);
-    buffer.release();  // ownership transferred to _header (freed in ~_FileStore)
+    buffer
+        .release();  // ownership transferred to _header (freed in ~_FileStore)
     sanitize();
   }
 
@@ -366,7 +366,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     // No locking needed since we're single-process
     recover_areas();
     ++this->_header->sanitize_generation;
-    if (std::filesystem::file_size(this->filename()) != this->_header->file_size)
+    if (std::filesystem::file_size(this->filename()) !=
+        this->_header->file_size)
       std::filesystem::resize_file(this->filename(), this->_header->file_size);
   }
 
@@ -375,7 +376,12 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     auto* self = this;
     _recover_areas<_DBHeader<base_t>, Traits_::AREA_SIZE>(
         this->_header->area_pool,
-        [self](auto fn) { self->_for_each_db_entry([&](auto& e) { if (e.offset) fn(e.offset); }); },
+        [self](auto fn) {
+          self->_for_each_db_entry([&](auto& e) {
+            if (e.offset) fn(e.offset);
+            return true;
+          });
+        },
         this->_header->file_size,
         leaves::padding(this->calc_header_size(), Traits_::AREA_SIZE),
         [self](uint64_t pos, void* buf, size_t size) {
@@ -391,6 +397,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     auto area_ptr = this->alloc_multi_area(size);
     return *area_ptr;  // Convert Area* to AreaSlice
   }
+
+  uint32_t sanitize_generation() { return this->_header->sanitize_generation; }
 };
 
 }  // namespace leaves

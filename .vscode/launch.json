@@ -184,13 +184,13 @@
             ]
         },
         {
-            "name": "(gdb) test_map_storage",
+            "name": "(gdb) test_mmap",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/test_map_storage",
+            "program": "${workspaceFolder}/build/test_mmap",
             "args": [
                 "-t",
-                "test_map_storage_random_insert_and_read"
+                "test_exceptions"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
@@ -624,6 +624,37 @@
             "program": "${workspaceFolder}/build/test_hash_updater",
             "args": [
                 "--run_test=parallel_long_key_prefix"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) test_triburary",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_tributary",
+            "args": [
+                "--run_test=test_tributary_writing_state_not_sanitized"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",

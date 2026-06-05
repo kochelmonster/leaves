@@ -373,6 +373,9 @@ target_link_libraries(test_merger PUBLIC core leaves_test_support)
 add_executable(test_tributary tests/test_tributary.cpp)
 target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
+add_executable(test_multiprocess tests/test_multiprocess.cpp)
+target_link_libraries(test_multiprocess PUBLIC core leaves_test_support pthread)
+
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
 target_link_libraries(test_hash_updater PUBLIC core leaves_test_support blake3)
 
@@ -428,8 +431,8 @@ foreach(target IN ITEMS
     test_executor)
     leaves_add_test(${target} TIMEOUT 60 LABELS "native;integration")
 endforeach()
-
 leaves_add_test(test_multithread TIMEOUT 120 LABELS "native;stress;concurrency")
+leaves_add_test(test_multiprocess TIMEOUT 120 LABELS "native;stress;multiprocess")
 leaves_add_test(test_replication_multiclient TIMEOUT 120 LABELS "native;integration;network")
 
 add_executable(profile tests/profile.cpp)
@@ -522,6 +525,16 @@ target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
 
 add_executable(bench_page_sizes benchmarks/bench_page_sizes.cpp)
 target_link_libraries(bench_page_sizes PUBLIC core pthread)
+
+add_executable(bench_merge benchmarks/bench_merge.cpp)
+target_link_libraries(bench_merge PUBLIC core pthread blake3)
+target_compile_options(bench_merge PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+target_compile_definitions(bench_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+
+add_executable(bench_overwrite_vs_merge benchmarks/bench_overwrite_vs_merge.cpp)
+target_link_libraries(bench_overwrite_vs_merge PUBLIC core pthread blake3)
+target_compile_options(bench_overwrite_vs_merge PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
 
 if (DEBUG_BENCHMARKS)
     target_compile_options(db_bench_leaves PRIVATE -g -O0)
