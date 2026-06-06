@@ -32,16 +32,16 @@ struct _Transition {
   Cursor* cursor;
   node_ptr node;
 
-  static_assert(sizeof(node_ptr) == sizeof(trie_ptr) && sizeof(node_ptr) == sizeof(leaf_ptr),
+  static_assert(sizeof(node_ptr) == sizeof(trie_ptr) &&
+                    sizeof(node_ptr) == sizeof(leaf_ptr),
                 "pointer sizes must match for type-punning");
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstrict-aliasing"
   trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
 
   leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
-  const leaf_ptr& leaf() const { return *reinterpret_cast<const leaf_ptr*>(&node); }
-#pragma GCC diagnostic pop
+  const leaf_ptr& leaf() const {
+    return *reinterpret_cast<const leaf_ptr*>(&node);
+  }
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -652,7 +652,9 @@ struct _TransactionalCursor
 
     uint16_t size_modified = BigMemory::template modify_size<LeafNode>(
         this->rest_key.size(), size, BIG_INLINE_SIZE);
+
     void* result = Cursor::reserve(size_modified);
+
     if (size_modified != size) {
       BigValue* bvalue = (BigValue*)result;
       get_bigmemory().alloc(size, bvalue);
@@ -664,7 +666,7 @@ struct _TransactionalCursor
       }
       auto data_ptr = bvalue->data(this->_db);
       this->_db->make_dirty(data_ptr);
-      return (char*)data_ptr;
+      result = static_cast<char*>(data_ptr);
     }
     return result;
   }
@@ -730,9 +732,8 @@ struct _TransactionalCursor
     _Deleter(*this).exec();
   }
 
-  bool start_transaction(bool non_blocking = false,
-                         TransactionOrigin origin = TransactionOrigin::user,
-                         bool use_wal = false) {
+  bool start_transaction(bool non_blocking = false, bool use_wal = false,
+                         TransactionOrigin origin = TransactionOrigin::user) {
     if (this->_db->txn_cursor_id() != _id) {
       if (use_wal) {
         _use_wal = true;
@@ -740,14 +741,16 @@ struct _TransactionalCursor
       } else {
         _use_wal = false;
       }
-      if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
+      if (!_aspect().before_start_transaction(*this->_db, origin,
+                                              _aspect_context))
         return false;
       txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking, origin);
       if (!new_txn) return false;
       assert(new_txn->refs.load() == 0);  // no one can reference it yet
       _set_txn(new_txn);
       if (_use_wal) this->_db->wal_begin(new_txn->txn_id.value());
-      _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
+      _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin,
+                                     _aspect_context);
     }
     return true;
   }
@@ -782,11 +785,13 @@ struct _TransactionalCursor
 
   bool rollback(TransactionOrigin origin = TransactionOrigin::user) {
     if (this->_db->txn_cursor_id() != _id) return false;
-    if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context))
+    if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin,
+                                   _aspect_context))
       return false;
     if (_use_wal) this->_db->wal_abort();
     if (this->_db->rollback(_id, origin)) {
-      _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context);
+      _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin,
+                            _aspect_context);
       // Switch back to the committed read transaction.
       // Don't decrement _txn->refs — rollback() already reset the recycled
       // page to refs=0 and repurposed it as next_txn_page.

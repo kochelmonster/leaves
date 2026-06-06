@@ -1623,7 +1623,7 @@ struct ReplicationReceiverFSM {
       current_wire_root_type = _temp_root.type();
     }
 
-    _cursor->start_transaction(false, TransactionOrigin::merge);
+    _cursor->start_transaction(false, false, TransactionOrigin::merge);
     try {
       // Link pre-allocated big value multi-area to this transaction
       // (must happen before any merge phase that references big values)
