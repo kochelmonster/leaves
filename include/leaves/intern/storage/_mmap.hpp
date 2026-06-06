@@ -27,7 +27,6 @@
 #include "../core/_util.hpp"
 #include "../db/_db.hpp"
 #include "../memory/_memory.hpp"
-#include "_wal.hpp"
 #include "../third_party/unordered_dense.h"
 #include "../util/_threadpool.hpp"
 #include "_db_directory.hpp"
@@ -173,9 +172,6 @@ struct _MemoryMapFile
   mapped_region _region;
   FileHeader* _memory;
   pid_type _pid;
-  // Storage-wide WAL checkpoint thread. Declared before _dbs so it is torn
-  // down after the DBs (each DB destructor unregisters its _WalWriter).
-  _WalManager _wal_manager;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
@@ -196,7 +192,6 @@ struct _MemoryMapFile
   }
 
   ~_MemoryMapFile() {
-    _wal_manager.stop();   // stop checkpoint thread before destroying DBs
     _dbs.clear();          // destroy DBs first (cancels any scheduled jobs)
     this->stop_pool();     // stop worker threads before unmapping
     if constexpr (MAX_PROCESSES > 1)
@@ -208,13 +203,6 @@ struct _MemoryMapFile
   }
 
   const char* filename() const { return _file.get_name(); }
-
-  // Register a DB's WAL writer with the storage-wide checkpoint thread.
-  void register_wal(_WalWriter* w) {
-    _wal_manager.register_wal(w, [this] { this->flush(true, true); });
-  }
-
-  void unregister_wal(_WalWriter* w) { _wal_manager.unregister_wal(w); }
 
   Mutex& file_lock() { return _memory->file_lock; }
 

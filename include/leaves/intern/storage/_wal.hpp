@@ -6,9 +6,7 @@
 // Design: next_log / active_log ping-pong state machine with two fixed files
 // per DB.  A transaction writes only to the file selected at start_transaction
 // (active_log = next_log) and that selection never changes underneath it, so a
-// transaction's records + sentinels always land in ONE file.  A storage-wide
-// background thread (_WalManager) periodically flushes the main DB and switches
-// next_log to the other (truncated) file.  No swap mutex needed — only atomics.
+// transaction's records + sentinels always land in ONE file.  
 //
 // Per-file format:
 //   [magic: 8 bytes "LVSWAL01"]
@@ -208,8 +206,7 @@ struct _WalWriter {
   // Ping-pong state (see file header comment).
   std::atomic<int> _next_log{0};    // changed only by WAL thread
   std::atomic<int> _active_log{0};  // changed only by start_transaction
-  std::atomic<uint64_t> _last_commit{0};   // changed only by commit
-  std::atomic<uint64_t> _flushed_upto{0};  // changed only by WAL thread
+  std::atomic<uint64_t> _last_commit[2]{0, 0};   // changed only by commit
 
   // Per-transaction record buffer (BEGIN + PUT/DELETE).  Accumulated during the
   // transaction; written to file[active_log] at prepare().  Safe because the
@@ -217,6 +214,7 @@ struct _WalWriter {
   std::vector<uint8_t> _buf;
 
   bool _open{false};
+  bool _prepared{false};
 
   // Ensure file[idx] has a valid magic header; reset write offset.
   void _init_file(int idx) {
@@ -250,6 +248,8 @@ struct _WalWriter {
     }
     _next_log.store(0);
     _active_log.store(0);
+    _last_commit[0].store(0);
+    _last_commit[1].store(0);
     _open = true;
     return true;
   }
@@ -263,6 +263,8 @@ struct _WalWriter {
     _buf.clear();
     _buf.push_back(static_cast<uint8_t>(_WalOp::BEGIN));
     _wal_put_u64(_buf, txn_id);
+    _last_commit[idx].store(txn_id);
+    _prepared = false;
   }
 
   void put(const Slice& key, const Slice& val) {
@@ -283,23 +285,28 @@ struct _WalWriter {
   }
 
   // Append PREPARE, flush the buffered records to the active file, fdatasync.
+  // Throws std::runtime_error on I/O failure.
   void prepare() {
+    if (_prepared) return;  // idempotent
     _buf.push_back(static_cast<uint8_t>(_WalOp::PREPARE));
     int idx = _active_log.load();
-    _wal_pwrite(_fd[idx], _write_off[idx], _buf.data(), _buf.size());
+    if (!_wal_pwrite(_fd[idx], _write_off[idx], _buf.data(), _buf.size()))
+      throw std::runtime_error("WAL prepare: pwrite failed");
     _write_off[idx] += _buf.size();
     _wal_sync(_fd[idx]);
     _buf.clear();
+    _prepared = true;
   }
 
   // Append COMMIT, fdatasync, publish last_commit.
+  // Throws std::runtime_error on I/O failure.
   void commit(uint64_t txn_id) {
     int idx = _active_log.load();
     uint8_t rec = static_cast<uint8_t>(_WalOp::COMMIT);
-    _wal_pwrite(_fd[idx], _write_off[idx], &rec, 1);
+    if (!_wal_pwrite(_fd[idx], _write_off[idx], &rec, 1))
+      throw std::runtime_error("WAL commit: pwrite failed");
     _write_off[idx] += 1;
     _wal_sync(_fd[idx]);
-    _last_commit.store(txn_id);
   }
 
   // Abort the current transaction (rollback): drop the in-memory buffer.
@@ -314,6 +321,15 @@ struct _WalWriter {
     _write_off[idx] = WAL_HEADER_SIZE;
   }
 
+  void reset() {
+    truncate(0);
+    truncate(1);
+    _next_log.store(0);
+    _active_log.store(0);
+    _last_commit[0].store(0);
+    _last_commit[1].store(0);
+  }
+
   void close() {
     if (!_open) return;
     for (int i = 0; i < 2; i++) {
@@ -321,6 +337,19 @@ struct _WalWriter {
       _fd[i] = WAL_INVALID_FD;
     }
     _open = false;
+  }
+
+  void flushed(uint64_t txn_id) {
+    for (int i = 0; i < 2; i++) {
+      if (_last_commit[i].load() <= txn_id) {
+        _wal_truncate(_fd[i], 0);
+        _wal_pwrite(_fd[i], 0, WAL_MAGIC, sizeof(WAL_MAGIC));
+        _wal_sync(_fd[i]);
+        _write_off[i] = WAL_HEADER_SIZE;
+        _last_commit[i].store(0);
+        _next_log.store(1 - i);
+      }
+    }
   }
 };
 
@@ -405,96 +434,6 @@ inline std::vector<_WalTxn> wal_parse(const std::string& path) {
 
   return result;
 }
-
-// ---------------------------------------------------------------------------
-// _WalManager — storage-wide background checkpoint thread.  Manages the
-// registered set of _WalWriter pairs (one per WAL-enabled DB).
-// ---------------------------------------------------------------------------
-struct _WalManager {
-  std::thread _thread;
-  std::mutex _mutex;
-  std::condition_variable _cv;
-  std::vector<_WalWriter*> _wals;
-  bool _stop{false};
-  bool _running{false};
-  uint32_t _interval_ms{200};
-  std::function<void()> _flush_fn;
-
-  ~_WalManager() { stop(); }
-
-  // Register a WAL writer.  Lazily starts the background thread on first
-  // registration so non-WAL workloads pay nothing.
-  void register_wal(_WalWriter* w, std::function<void()> flush_fn) {
-    std::lock_guard<std::mutex> lk(_mutex);
-    _wals.push_back(w);
-    if (!_running) {
-      _flush_fn = std::move(flush_fn);
-      _stop = false;
-      _running = true;
-      _thread = std::thread([this] { run(); });
-    }
-  }
-
-  void unregister_wal(_WalWriter* w) {
-    std::lock_guard<std::mutex> lk(_mutex);
-    _wals.erase(std::remove(_wals.begin(), _wals.end(), w), _wals.end());
-  }
-
-  void stop() {
-    {
-      std::lock_guard<std::mutex> lk(_mutex);
-      if (!_running) return;
-      _stop = true;
-    }
-    _cv.notify_all();
-    if (_thread.joinable()) _thread.join();
-    _running = false;
-  }
-
-  void run() {
-    std::unique_lock<std::mutex> lk(_mutex);
-    while (!_stop) {
-      _cv.wait_for(lk, std::chrono::milliseconds(_interval_ms),
-                   [this] { return _stop; });
-      if (_stop) break;
-      checkpoint_all(lk);
-    }
-  }
-
-  // Called with _mutex held.  Keeps the lock through the flush so a
-  // concurrently destructing DB (unregister_wal) cannot free a _WalWriter
-  // mid-checkpoint.
-  void checkpoint_all(std::unique_lock<std::mutex>& /*lk*/) {
-    bool any_pending = false;
-    for (auto* w : _wals) {
-      if (w->_last_commit.load() != w->_flushed_upto.load()) {
-        any_pending = true;
-        break;
-      }
-    }
-    if (!any_pending) return;
-
-    // Snapshot last_commit BEFORE the flush; the flush persists at least these.
-    std::vector<uint64_t> snap(_wals.size());
-    for (size_t i = 0; i < _wals.size(); i++)
-      snap[i] = _wals[i]->_last_commit.load();
-
-    if (_flush_fn) _flush_fn();  // storage.flush(sync=true): persist + fsync DB
-
-    for (size_t i = 0; i < _wals.size(); i++) {
-      _WalWriter* w = _wals[i];
-      w->_flushed_upto.store(snap[i]);
-      // Switch only when the active file equals next_log (no in-flight txn is
-      // bound to the other file): truncate the other and hand it over.
-      int next = w->_next_log.load();
-      if (next == w->_active_log.load()) {
-        int other = 1 - next;
-        w->truncate(other);
-        w->_next_log.store(other);
-      }
-    }
-  }
-};
 
 }  // namespace leaves
 

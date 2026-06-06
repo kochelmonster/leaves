@@ -582,10 +582,61 @@ struct _Cursor : public _ICursor<Traits_, _Cursor<Traits_>> {
   using Cursor::Cursor;
 };
 
+// Write-Ahead Log mixin — provides WAL operations via CRTP to any cursor.
+// The derived type must be a _TransactionalCursor exposing _db, _id, _aspect,
+// and _aspect_context.
+template <typename Derived_>
+struct _WalAware {
+  using Derived = Derived_;
+
+  bool _use_wal{false};
+
+  void _wal_setup(bool use_wal) {
+    if (use_wal)
+      _wal_open();
+    else
+      _wal_close();
+  }
+
+  void _wal_open() {
+    _use_wal = true;
+    _derived()._db->open_wal();
+  }
+
+  void _wal_close() { _use_wal = false; }
+
+  void _wal_begin(uint64_t txn_id) {
+    if (_use_wal) _derived()._db->wal_begin(txn_id);
+  }
+
+  void _wal_log_put(const Slice& key, const Slice& value) {
+    if (_use_wal) _derived()._db->wal_put(key, value);
+  }
+
+  void _wal_log_delete(const Slice& key) {
+    if (_use_wal) _derived()._db->wal_delete(key);
+  }
+
+  void _wal_prepare_commit() {
+    if (_use_wal) _derived()._db->wal_prepare();
+  }
+
+  void _wal_commit(uint64_t txn_id) {
+    if (_use_wal) _derived()._db->wal_commit(txn_id);
+  }
+
+  void _wal_abort() {
+    if (_use_wal) _derived()._db->wal_abort();
+  }
+
+  Derived& _derived() { return *static_cast<Derived*>(this); }
+};
+
 // Full cursor with find, transactions, and modification operations
 template <typename Traits_>
 struct _TransactionalCursor
-    : public _ICursor<Traits_, _TransactionalCursor<Traits_>> {
+    : public _ICursor<Traits_, _TransactionalCursor<Traits_>>,
+      public _WalAware<_TransactionalCursor<Traits_>> {
   typedef Traits_ Traits;
   typedef _ICursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
   typedef _BigMemory<_Cursor<Traits_>> BigMemory;
@@ -602,7 +653,6 @@ struct _TransactionalCursor
   txn_ptr _txn;
   uint64_t _id{0};
   std::string _refind_buffer;
-  bool _use_wal{false};
   [[no_unique_address]] CursorContext _aspect_context;
 
   _TransactionalCursor(DB* db, offset_e* root) : Cursor(db, root) {
@@ -708,7 +758,7 @@ struct _TransactionalCursor
     Slice transformed = _aspect().on_write(this->key(), value, _aspect_context);
     void* space = reserve(transformed.size());
     optimized_memcpy(space, transformed.data(), transformed.size());
-    if (_use_wal) this->_db->wal_put(this->key(), value);
+    this->_wal_log_put(this->key(), value);
     this->_db->flush();
   }
 
@@ -723,7 +773,7 @@ struct _TransactionalCursor
         throw NoValidPosition();  // Aspect rejected the delete
       }
     }
-    if (_use_wal) this->_db->wal_delete(this->key());
+    this->_wal_log_delete(this->key());
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();
@@ -735,12 +785,7 @@ struct _TransactionalCursor
   bool start_transaction(bool non_blocking = false, bool use_wal = false,
                          TransactionOrigin origin = TransactionOrigin::user) {
     if (this->_db->txn_cursor_id() != _id) {
-      if (use_wal) {
-        _use_wal = true;
-        this->_db->open_wal();
-      } else {
-        _use_wal = false;
-      }
+      this->_wal_setup(use_wal);
       if (!_aspect().before_start_transaction(*this->_db, origin,
                                               _aspect_context))
         return false;
@@ -748,7 +793,7 @@ struct _TransactionalCursor
       if (!new_txn) return false;
       assert(new_txn->refs.load() == 0);  // no one can reference it yet
       _set_txn(new_txn);
-      if (_use_wal) this->_db->wal_begin(new_txn->txn_id.value());
+      this->_wal_begin(new_txn->txn_id.value());
       _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin,
                                      _aspect_context);
     }
@@ -756,6 +801,7 @@ struct _TransactionalCursor
   }
 
   tid_t prepare_commit(bool sync = true) {
+    this->_wal_prepare_commit();
     return this->_db->prepare_commit(_id, sync);
   }
 
@@ -763,19 +809,10 @@ struct _TransactionalCursor
               TransactionOrigin origin = TransactionOrigin::user) {
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
-    if (_use_wal) {
-      // Durability is provided by the WAL: persist the logical log (PREPARE +
-      // COMMIT, both fsynced) and let the main DB commit asynchronously. The
-      // storage-wide checkpoint thread flushes the main DB in the background.
-      uint64_t tid = this->_txn ? this->_txn->txn_id.value() : 0;
-      this->_db->wal_prepare();
-      this->_db->wal_commit(tid);
-      bool committed = this->_db->commit(_id, false, origin);
-      if (committed) {
-        _aspect().on_commit(*this->_db, origin, _aspect_context);
-      }
-      return committed;
-    }
+
+    this->_wal_prepare_commit();
+    this->_wal_commit(this->_txn->txn_id.value());
+
     bool committed = this->_db->commit(_id, sync, origin);
     if (committed) {
       _aspect().on_commit(*this->_db, origin, _aspect_context);
@@ -788,7 +825,7 @@ struct _TransactionalCursor
     if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin,
                                    _aspect_context))
       return false;
-    if (_use_wal) this->_db->wal_abort();
+    this->_wal_abort();
     if (this->_db->rollback(_id, origin)) {
       _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin,
                             _aspect_context);
