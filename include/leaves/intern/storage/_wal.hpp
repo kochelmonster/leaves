@@ -11,7 +11,7 @@
 // Per-file format:
 //   [magic: 8 bytes "LVSWAL01"]
 //   record*, where each record is one of:
-//     [BEGIN   0x01][txn_id: u64 LE]
+//     [BEGIN   0x01][txn_id: u32 LE]
 //     [PUT     0x02][ksz: u32 LE][vsz: u32 LE][key bytes][val bytes]
 //     [DELETE  0x03][ksz: u32 LE][key bytes]
 //     [PREPARE 0x04]
@@ -38,6 +38,7 @@
 #include <thread>
 #include <vector>
 
+#include "../core/_serial.hpp"
 #include "../core/_util.hpp"  // Slice, tid_t
 
 namespace leaves {
@@ -66,7 +67,7 @@ struct _WalOpRecord {
 };
 
 struct _WalTxn {
-  uint64_t txn_id{0};
+  uint32_t txn_id{0};
   std::vector<_WalOpRecord> ops;
 };
 
@@ -257,13 +258,13 @@ struct _WalWriter {
   bool is_open() const { return _open; }
 
   // Begin a transaction: pin the active file and start the record buffer.
-  void begin(uint64_t txn_id) {
+  void begin(uint32_t txn_id) {
     int idx = _next_log.load();
+    _last_commit[idx].store(txn_id);
     _active_log.store(idx);
     _buf.clear();
     _buf.push_back(static_cast<uint8_t>(_WalOp::BEGIN));
-    _wal_put_u64(_buf, txn_id);
-    _last_commit[idx].store(txn_id);
+    _wal_put_u32(_buf, txn_id);
     _prepared = false;
   }
 
@@ -300,7 +301,7 @@ struct _WalWriter {
 
   // Append COMMIT, fdatasync, publish last_commit.
   // Throws std::runtime_error on I/O failure.
-  void commit(uint64_t txn_id) {
+  void commit() {
     int idx = _active_log.load();
     uint8_t rec = static_cast<uint8_t>(_WalOp::COMMIT);
     if (!_wal_pwrite(_fd[idx], _write_off[idx], &rec, 1))
@@ -339,16 +340,15 @@ struct _WalWriter {
     _open = false;
   }
 
-  void flushed(uint64_t txn_id) {
-    for (int i = 0; i < 2; i++) {
-      if (_last_commit[i].load() <= txn_id) {
-        _wal_truncate(_fd[i], 0);
-        _wal_pwrite(_fd[i], 0, WAL_MAGIC, sizeof(WAL_MAGIC));
-        _wal_sync(_fd[i]);
-        _write_off[i] = WAL_HEADER_SIZE;
-        _last_commit[i].store(0);
-        _next_log.store(1 - i);
-      }
+  void flushed(uint32_t txn_id) {
+    int idx = 1 - _active_log.load();
+    if (tid_t(_last_commit[idx].load()) <= tid_t(txn_id)) {
+      _wal_truncate(_fd[idx], 0);
+      _wal_pwrite(_fd[idx], 0, WAL_MAGIC, sizeof(WAL_MAGIC));
+      _wal_sync(_fd[idx]);
+      _write_off[idx] = WAL_HEADER_SIZE;
+      _last_commit[idx].store(0);
+      _next_log.store(idx);
     }
   }
 };

@@ -49,12 +49,12 @@ BOOST_AUTO_TEST_CASE(wal_writer_parse_roundtrip) {
     w.put(Slice("a"), Slice("1"));
     w.put(Slice("b"), Slice("2"));
     w.prepare();
-    w.commit(1);
+    w.commit();
 
     w.begin(2);
     w.del(Slice("a"));
     w.prepare();
-    w.commit(2);
+    w.commit();
 
     w.close();
   }
@@ -95,7 +95,7 @@ BOOST_AUTO_TEST_CASE(wal_incomplete_transaction_skipped) {
     w.begin(1);
     w.put(Slice("k"), Slice("v"));
     w.prepare();
-    w.commit(1);
+    w.commit();
 
     // Prepared but never committed (simulated crash during checkpoint).
     w.begin(2);
@@ -123,7 +123,7 @@ BOOST_AUTO_TEST_CASE(wal_truncate_clears_file) {
   w.begin(1);
   w.put(Slice("a"), Slice("1"));
   w.prepare();
-  w.commit(1);
+  w.commit();
 
   BOOST_REQUIRE_EQUAL(wal_parse(base + ".wal.0").size(), 1u);
   w.truncate(0);
@@ -176,13 +176,13 @@ BOOST_AUTO_TEST_CASE(wal_recovery_replays_committed) {
     w.put(Slice("a"), Slice("1"));
     w.put(Slice("b"), Slice("2"));
     w.prepare();
-    w.commit(1);
+    w.commit();
 
     w.begin(2);
     w.put(Slice("c"), Slice("3"));
     w.del(Slice("a"));
     w.prepare();
-    w.commit(2);
+    w.commit();
 
     // Incomplete — must NOT be replayed.
     w.begin(3);
@@ -222,6 +222,96 @@ BOOST_AUTO_TEST_CASE(wal_recovery_replays_committed) {
 // The storage-wide checkpoint thread flushes the main DB and eventually
 // truncates the WAL files (ping-pong), leaving committed data in the DB.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// flushed() truncates the files whose last_commit <= txn_id, resetting
+// _next_log (ping-pong buffer switch).  Verify both files are emptied and
+// the next transaction lands in the other file.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(wal_flushed_buffer_switch) {
+  DirPreparation dir;
+  std::string base = (dir.tempDir / "fs").string();
+
+  {
+    _WalWriter w;
+    BOOST_REQUIRE(w.open(base));
+
+    // --- Phase 1: Txn 1 commits to file 0 ---
+    BOOST_CHECK_EQUAL(w._next_log.load(), 0);
+    w.begin(1);
+    BOOST_CHECK_EQUAL(w._active_log.load(), 0);
+    w.put(Slice("a"), Slice("1"));
+    w.prepare();
+    w.commit();
+    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 1u);
+
+    // --- Phase 2: async flushed(1) is submitted but NOT yet executed.
+    // Meanwhile a new transaction starts: begin() pins _active_log
+    // (still 0, next_log not yet switched) and bumps _last_commit[0] to 2.
+    w.begin(2);
+    BOOST_CHECK_EQUAL(w._active_log.load(), 0);
+    w.put(Slice("b"), Slice("2"));
+    w.prepare();
+    w.commit();
+    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 2u);
+
+    // --- Phase 3: Now flushed(1) runs (async task catches up).
+    // flushed() only touches the NON-active file: idx = 1 - _active_log = 1.
+    // _last_commit[1]=0 <= 1 → file 1 is truncated, _next_log → 1.
+    w.flushed(1);
+
+    // File 0 (active) survived intact — never touched by flushed()
+    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 2u);
+    BOOST_CHECK_GT(w._write_off[0], WAL_HEADER_SIZE);
+    // File 1 was truncated
+    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 0u);
+    BOOST_CHECK_EQUAL(w._write_off[1], WAL_HEADER_SIZE);
+    // _next_log flipped to the non-active file: 1
+    BOOST_CHECK_EQUAL(w._next_log.load(), 1);
+
+    // --- Phase 4: Txn 3 starts → uses file 1 (next_log was set to 1) ---
+    w.begin(3);
+    BOOST_CHECK_EQUAL(w._active_log.load(), 1);
+    w.put(Slice("c"), Slice("3"));
+    w.prepare();
+    w.commit();
+    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 3u);
+
+    // --- Phase 5: flushed(3) truncates the non-active file (idx = 1-1 = 0).
+    // _last_commit[0]=2 <= 3 → file 0 truncated, _next_log → 0.
+    w.flushed(3);
+    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 0u);
+    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 3u);  // active file preserved
+    BOOST_CHECK_EQUAL(w._write_off[0], WAL_HEADER_SIZE);
+    BOOST_CHECK_GT(w._write_off[1], WAL_HEADER_SIZE);  // still has data
+    BOOST_CHECK_EQUAL(w._next_log.load(), 0);
+
+    // --- Phase 6: Txn 4 starts → uses file 0 (next_log is 0) ---
+    w.begin(4);
+    BOOST_CHECK_EQUAL(w._active_log.load(), 0);
+    w.put(Slice("d"), Slice("4"));
+    w.prepare();
+    w.commit();
+    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 4u);
+
+    // --- Phase 7: flushed(4) clears the non-active file (idx = 1-0 = 1).
+    // _last_commit[1]=3 <= 4 → file 1 truncated.
+    w.flushed(4);
+    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 0u);
+    BOOST_CHECK_EQUAL(w._write_off[1], WAL_HEADER_SIZE);
+    // _next_log → 1
+    BOOST_CHECK_EQUAL(w._next_log.load(), 1);
+
+    w.close();
+  }
+
+  // After final flushed(4): file 0 still has active txn 4, file 1 is empty
+  auto txn0 = wal_parse(base + ".wal.0");
+  auto txn1 = wal_parse(base + ".wal.1");
+  BOOST_REQUIRE_EQUAL(txn0.size(), 1u);
+  BOOST_CHECK_EQUAL(txn0[0].txn_id, 4u);
+  BOOST_CHECK(txn1.empty());
+}
+
 BOOST_AUTO_TEST_CASE(wal_background_checkpoint_truncates) {
   DirPreparation dir;
   std::string path = dir.db_path();

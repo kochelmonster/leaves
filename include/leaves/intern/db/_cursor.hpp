@@ -605,7 +605,7 @@ struct _WalAware {
 
   void _wal_close() { _use_wal = false; }
 
-  void _wal_begin(uint64_t txn_id) {
+  void _wal_begin(uint32_t txn_id) {
     if (_use_wal) _derived()._db->wal_begin(txn_id);
   }
 
@@ -621,7 +621,7 @@ struct _WalAware {
     if (_use_wal) _derived()._db->wal_prepare();
   }
 
-  void _wal_commit(uint64_t txn_id) {
+  void _wal_commit(uint32_t txn_id) {
     if (_use_wal) _derived()._db->wal_commit(txn_id);
   }
 
