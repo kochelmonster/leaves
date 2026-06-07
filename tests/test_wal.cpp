@@ -60,7 +60,8 @@ BOOST_AUTO_TEST_CASE(wal_writer_parse_roundtrip) {
   }
 
   // Everything was written to file index 0 (next_log starts at 0).
-  std::vector<_WalTxn> txns = wal_parse(base + ".wal.0");
+  std::vector<_WalTxn> txns;
+  wal_parse(base + ".wal.0", txns);
   BOOST_REQUIRE_EQUAL(txns.size(), 2u);
 
   BOOST_CHECK_EQUAL(txns[0].txn_id, 1u);
@@ -77,7 +78,8 @@ BOOST_AUTO_TEST_CASE(wal_writer_parse_roundtrip) {
   BOOST_CHECK_EQUAL(txns[1].ops[0].key, "a");
 
   // The other file must be empty (only the magic header).
-  std::vector<_WalTxn> other = wal_parse(base + ".wal.1");
+  std::vector<_WalTxn> other;
+  wal_parse(base + ".wal.1", other);
   BOOST_CHECK(other.empty());
 }
 
@@ -106,7 +108,8 @@ BOOST_AUTO_TEST_CASE(wal_incomplete_transaction_skipped) {
     w.close();
   }
 
-  std::vector<_WalTxn> txns = wal_parse(base + ".wal.0");
+  std::vector<_WalTxn> txns;
+  wal_parse(base + ".wal.0", txns);
   BOOST_REQUIRE_EQUAL(txns.size(), 1u);
   BOOST_CHECK_EQUAL(txns[0].txn_id, 1u);
 }
@@ -125,9 +128,13 @@ BOOST_AUTO_TEST_CASE(wal_truncate_clears_file) {
   w.prepare();
   w.commit();
 
-  BOOST_REQUIRE_EQUAL(wal_parse(base + ".wal.0").size(), 1u);
+  std::vector<_WalTxn> txns;
+  wal_parse(base + ".wal.0", txns);
+  BOOST_REQUIRE_EQUAL(txns.size(), 1u);
   w.truncate(0);
-  BOOST_CHECK(wal_parse(base + ".wal.0").empty());
+  txns.clear();
+  wal_parse(base + ".wal.0", txns);
+  BOOST_CHECK(txns.empty());
   w.close();
 }
 
@@ -214,8 +221,11 @@ BOOST_AUTO_TEST_CASE(wal_recovery_replays_committed) {
   BOOST_CHECK(!cursor.is_valid());  // incomplete txn3 skipped
 
   // After recovery both WAL files are reset to empty.
-  BOOST_CHECK(wal_parse(base + ".wal.0").empty());
-  BOOST_CHECK(wal_parse(base + ".wal.1").empty());
+  std::vector<_WalTxn> txns;
+  wal_parse(base + ".wal.0", txns);
+  BOOST_CHECK(txns.empty());
+  wal_parse(base + ".wal.0", txns);
+  BOOST_CHECK(txns.empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -305,8 +315,10 @@ BOOST_AUTO_TEST_CASE(wal_flushed_buffer_switch) {
   }
 
   // After final flushed(4): file 0 still has active txn 4, file 1 is empty
-  auto txn0 = wal_parse(base + ".wal.0");
-  auto txn1 = wal_parse(base + ".wal.1");
+  std::vector<_WalTxn> txn0;
+  std::vector<_WalTxn> txn1;
+  wal_parse(base + ".wal.0", txn0);
+  wal_parse(base + ".wal.1", txn1);
   BOOST_REQUIRE_EQUAL(txn0.size(), 1u);
   BOOST_CHECK_EQUAL(txn0[0].txn_id, 4u);
   BOOST_CHECK(txn1.empty());

@@ -39,7 +39,8 @@
 #include <vector>
 
 #include "../core/_serial.hpp"
-#include "../core/_util.hpp"  // Slice, tid_t
+#include "../core/_util.hpp"
+#include "../core/_exception.hpp"
 
 namespace leaves {
 
@@ -197,6 +198,85 @@ inline uint64_t _wal_read_u64(const uint8_t* p) {
 }
 
 // ---------------------------------------------------------------------------
+// wal_parse — read one WAL file, return its replayable (BEGIN+PREPARE+COMMIT)
+// transactions.  Incomplete trailing data is silently discarded.
+// ---------------------------------------------------------------------------
+inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result) {
+  _wal_fd_t fd = _wal_open(path);
+  if (fd == WAL_INVALID_FD) return;
+
+  uint64_t size = _wal_size(fd);
+  if (size < WAL_HEADER_SIZE) {
+    _wal_close(fd);
+    return;
+  }
+
+  std::vector<uint8_t> data(size);
+  if (!_wal_pread(fd, 0, data.data(), size)) {
+    _wal_close(fd);
+    return;
+  }
+  _wal_close(fd);
+
+  if (std::memcmp(data.data(), WAL_MAGIC, sizeof(WAL_MAGIC)) != 0)
+    return;
+
+  size_t pos = WAL_HEADER_SIZE;
+  const size_t n = data.size();
+
+  bool in_txn = false;
+  bool prepared = false;
+  _WalTxn cur;
+
+  auto need = [&](size_t bytes) -> bool { return pos + bytes <= n; };
+
+  while (pos < n) {
+    uint8_t tag = data[pos];
+    if (tag == static_cast<uint8_t>(_WalOp::BEGIN)) {
+      if (!need(1 + 8)) break;
+      cur = _WalTxn{};
+      cur.txn_id = _wal_read_u64(&data[pos + 1]);
+      pos += 1 + 8;
+      in_txn = true;
+      prepared = false;
+    } else if (tag == static_cast<uint8_t>(_WalOp::PUT)) {
+      if (!in_txn || !need(1 + 8)) break;
+      uint32_t ksz = _wal_read_u32(&data[pos + 1]);
+      uint32_t vsz = _wal_read_u32(&data[pos + 5]);
+      if (!need(1 + 8 + static_cast<size_t>(ksz) + vsz)) break;
+      _WalOpRecord op;
+      op.is_delete = false;
+      op.key.assign(reinterpret_cast<const char*>(&data[pos + 9]), ksz);
+      op.val.assign(reinterpret_cast<const char*>(&data[pos + 9 + ksz]), vsz);
+      cur.ops.push_back(std::move(op));
+      pos += 1 + 8 + ksz + vsz;
+    } else if (tag == static_cast<uint8_t>(_WalOp::DELETE)) {
+      if (!in_txn || !need(1 + 4)) break;
+      uint32_t ksz = _wal_read_u32(&data[pos + 1]);
+      if (!need(1 + 4 + static_cast<size_t>(ksz))) break;
+      _WalOpRecord op;
+      op.is_delete = true;
+      op.key.assign(reinterpret_cast<const char*>(&data[pos + 5]), ksz);
+      cur.ops.push_back(std::move(op));
+      pos += 1 + 4 + ksz;
+    } else if (tag == static_cast<uint8_t>(_WalOp::PREPARE)) {
+      if (!in_txn) break;
+      prepared = true;
+      pos += 1;
+    } else if (tag == static_cast<uint8_t>(_WalOp::COMMIT)) {
+      if (!in_txn) break;
+      pos += 1;
+      if (prepared) result.push_back(std::move(cur));
+      in_txn = false;
+      prepared = false;
+    } else {
+      // Unknown/garbage tag — stop parsing (truncated/corrupt tail).
+      break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // _WalWriter — one per DB, owns the two-file pair and the ping-pong state.
 // ---------------------------------------------------------------------------
 struct _WalWriter {
@@ -228,6 +308,16 @@ struct _WalWriter {
     } else {
       _write_off[idx] = size;
     }
+  }
+
+  void parse(const std::string& base_path, std::vector<_WalTxn>& out) {
+    wal_parse(base_path + ".wal.0", out);
+    wal_parse(base_path + ".wal.1", out);
+    std::sort(out.begin(), out.end(), [](const _WalTxn& a, const _WalTxn& b) {
+      return tid_t(static_cast<uint32_t>(a.txn_id)) <
+             tid_t(static_cast<uint32_t>(b.txn_id));
+    });
+
   }
 
   // Open both files; create if missing.  base_path is e.g. "/path/bench.lvs.name".
@@ -286,13 +376,13 @@ struct _WalWriter {
   }
 
   // Append PREPARE, flush the buffered records to the active file, fdatasync.
-  // Throws std::runtime_error on I/O failure.
+  // Throws leaves::WalError on I/O failure.
   void prepare() {
     if (_prepared) return;  // idempotent
     _buf.push_back(static_cast<uint8_t>(_WalOp::PREPARE));
     int idx = _active_log.load();
     if (!_wal_pwrite(_fd[idx], _write_off[idx], _buf.data(), _buf.size()))
-      throw std::runtime_error("WAL prepare: pwrite failed");
+      throw WalError("WAL prepare: pwrite failed");
     _write_off[idx] += _buf.size();
     _wal_sync(_fd[idx]);
     _buf.clear();
@@ -300,12 +390,12 @@ struct _WalWriter {
   }
 
   // Append COMMIT, fdatasync, publish last_commit.
-  // Throws std::runtime_error on I/O failure.
+  // Throws leaves::WalError on I/O failure.
   void commit() {
     int idx = _active_log.load();
     uint8_t rec = static_cast<uint8_t>(_WalOp::COMMIT);
     if (!_wal_pwrite(_fd[idx], _write_off[idx], &rec, 1))
-      throw std::runtime_error("WAL commit: pwrite failed");
+      throw WalError("WAL commit: pwrite failed");
     _write_off[idx] += 1;
     _wal_sync(_fd[idx]);
   }
@@ -352,89 +442,6 @@ struct _WalWriter {
     }
   }
 };
-
-// ---------------------------------------------------------------------------
-// wal_parse — read one WAL file, return its replayable (BEGIN+PREPARE+COMMIT)
-// transactions.  Incomplete trailing data is silently discarded.
-// ---------------------------------------------------------------------------
-inline std::vector<_WalTxn> wal_parse(const std::string& path) {
-  std::vector<_WalTxn> result;
-  _wal_fd_t fd = _wal_open(path);
-  if (fd == WAL_INVALID_FD) return result;
-
-  uint64_t size = _wal_size(fd);
-  if (size < WAL_HEADER_SIZE) {
-    _wal_close(fd);
-    return result;
-  }
-
-  std::vector<uint8_t> data(size);
-  if (!_wal_pread(fd, 0, data.data(), size)) {
-    _wal_close(fd);
-    return result;
-  }
-  _wal_close(fd);
-
-  if (std::memcmp(data.data(), WAL_MAGIC, sizeof(WAL_MAGIC)) != 0)
-    return result;
-
-  size_t pos = WAL_HEADER_SIZE;
-  const size_t n = data.size();
-
-  bool in_txn = false;
-  bool prepared = false;
-  _WalTxn cur;
-
-  auto need = [&](size_t bytes) -> bool { return pos + bytes <= n; };
-
-  while (pos < n) {
-    uint8_t tag = data[pos];
-    if (tag == static_cast<uint8_t>(_WalOp::BEGIN)) {
-      if (!need(1 + 8)) break;
-      cur = _WalTxn{};
-      cur.txn_id = _wal_read_u64(&data[pos + 1]);
-      pos += 1 + 8;
-      in_txn = true;
-      prepared = false;
-    } else if (tag == static_cast<uint8_t>(_WalOp::PUT)) {
-      if (!in_txn || !need(1 + 8)) break;
-      uint32_t ksz = _wal_read_u32(&data[pos + 1]);
-      uint32_t vsz = _wal_read_u32(&data[pos + 5]);
-      if (!need(1 + 8 + static_cast<size_t>(ksz) + vsz)) break;
-      _WalOpRecord op;
-      op.is_delete = false;
-      op.key.assign(reinterpret_cast<const char*>(&data[pos + 9]), ksz);
-      op.val.assign(reinterpret_cast<const char*>(&data[pos + 9 + ksz]), vsz);
-      cur.ops.push_back(std::move(op));
-      pos += 1 + 8 + ksz + vsz;
-    } else if (tag == static_cast<uint8_t>(_WalOp::DELETE)) {
-      if (!in_txn || !need(1 + 4)) break;
-      uint32_t ksz = _wal_read_u32(&data[pos + 1]);
-      if (!need(1 + 4 + static_cast<size_t>(ksz))) break;
-      _WalOpRecord op;
-      op.is_delete = true;
-      op.key.assign(reinterpret_cast<const char*>(&data[pos + 5]), ksz);
-      cur.ops.push_back(std::move(op));
-      pos += 1 + 4 + ksz;
-    } else if (tag == static_cast<uint8_t>(_WalOp::PREPARE)) {
-      if (!in_txn) break;
-      prepared = true;
-      pos += 1;
-    } else if (tag == static_cast<uint8_t>(_WalOp::COMMIT)) {
-      if (!in_txn) break;
-      pos += 1;
-      if (prepared) result.push_back(std::move(cur));
-      in_txn = false;
-      prepared = false;
-    } else {
-      // Unknown/garbage tag — stop parsing (truncated/corrupt tail).
-      break;
-    }
-  }
-
-  return result;
-}
-
 }  // namespace leaves
 
 #endif  // _LEAVES__WAL_HPP

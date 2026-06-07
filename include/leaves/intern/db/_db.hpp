@@ -136,21 +136,12 @@ struct _WalDbMixin {
     if (_wal_open) return;
     if (!_wal.open(wal_base_path()))
       throw std::runtime_error("failed to open WAL files");
-    wal_recover();
     _wal_open = true;
   }
 
   void wal_recover() {
-    std::vector<_WalTxn> all = wal_parse(_wal._path[0]);
-    {
-      std::vector<_WalTxn> t1 = wal_parse(_wal._path[1]);
-      all.insert(all.end(), std::make_move_iterator(t1.begin()),
-                 std::make_move_iterator(t1.end()));
-    }
-    std::sort(all.begin(), all.end(), [](const _WalTxn& a, const _WalTxn& b) {
-      return tid_t(static_cast<uint32_t>(a.txn_id)) <
-             tid_t(static_cast<uint32_t>(b.txn_id));
-    });
+    std::vector<_WalTxn> all;
+    _wal.parse(wal_base_path(), all);
 
     if (!all.empty()) {
       auto cursor = _derived().create_cursor();
@@ -888,6 +879,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       _header->next_txn_page = resolve(next);
       _active_txn.reset();
     }
+
+    this->wal_recover();
 
     make_dirty(_header);
     flush();

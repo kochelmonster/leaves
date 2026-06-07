@@ -192,10 +192,9 @@ struct _MemoryMapFile
   }
 
   ~_MemoryMapFile() {
-    _dbs.clear();          // destroy DBs first (cancels any scheduled jobs)
-    this->stop_pool();     // stop worker threads before unmapping
-    if constexpr (MAX_PROCESSES > 1)
-      remove_pid();
+    _dbs.clear();       // destroy DBs first (cancels any scheduled jobs)
+    this->stop_pool();  // stop worker threads before unmapping
+    if constexpr (MAX_PROCESSES > 1) remove_pid();
     if (_memory) {
       _memory->clean_close = 1;
       _region.flush(0, _memory->file_size, false);
@@ -229,9 +228,8 @@ struct _MemoryMapFile
       std::ifstream fin(path);
       char signature[sizeof(MMAP_SIGNATURE)];
       fin.read(signature, sizeof(signature));
-      if (strcmp(signature, MMAP_SIGNATURE)) {
-        throw std::runtime_error("wrong filetype");
-      }
+      if (strcmp(signature, MMAP_SIGNATURE)) throw TypeMismatch();
+
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();

@@ -148,14 +148,15 @@ struct _FileOperations : _CacheBase {
                       FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
                       FILE_ATTRIBUTE_NORMAL, NULL);
     if (_fd == INVALID_HANDLE_VALUE) {
-      throw std::runtime_error("Failed to open file: error " +
-                               std::to_string(GetLastError()));
+      throw FileError(
+          "Failed to open file: error " + std::to_string(GetLastError()),
+          GetLastError());
     }
 #else
     _fd = ::open(path, O_RDWR | O_CREAT, 0644);
     if (_fd < 0) {
-      throw std::runtime_error("Failed to open file: " +
-                               std::string(std::strerror(errno)));
+      throw FileError(
+          "Failed to open file: " + std::string(std::strerror(errno)), errno);
     }
 #endif
   }
@@ -189,15 +190,17 @@ struct _FileOperations : _CacheBase {
       DWORD to_write =
           static_cast<DWORD>(std::min<size_t>(size - written, MAXDWORD));
       if (!WriteFile(_fd, src + written, to_write, &n, &ov) || n == 0) {
-        throw std::runtime_error("Failed to write data: error " +
-                                 std::to_string(GetLastError()));
+        throw FileError(
+            "Failed to write data: error " + std::to_string(GetLastError()),
+            GetLastError());
       }
 #else
       ssize_t n = ::pwrite(_fd, src + written, size - written,
                            static_cast<off_t>(file_offset + written));
       if (n <= 0) {
-        throw std::runtime_error("Failed to write data: " +
-                                 std::string(std::strerror(errno)));
+        throw FileError(
+            "Failed to write data: " + std::string(std::strerror(errno)),
+            errno);
       }
 #endif
       written += n;
@@ -218,15 +221,17 @@ struct _FileOperations : _CacheBase {
       DWORD to_read =
           static_cast<DWORD>(std::min<size_t>(size - total, MAXDWORD));
       if (!ReadFile(_fd, dst + total, to_read, &n, &ov) || n == 0) {
-        throw std::runtime_error("Failed to read data: error " +
-                                 std::to_string(GetLastError()));
+        throw FileError(
+            "Failed to read data: error " + std::to_string(GetLastError()),
+            GetLastError());
       }
 #else
       ssize_t n = ::pread(_fd, dst + total, size - total,
                           static_cast<off_t>(file_offset + total));
       if (n <= 0) {
-        throw std::runtime_error("Failed to read data: " +
-                                 std::string(std::strerror(errno)));
+        throw FileError(
+            "Failed to read data: " + std::string(std::strerror(errno)),
+            errno);
       }
 #endif
       total += n;
@@ -238,13 +243,15 @@ struct _FileOperations : _CacheBase {
     LARGE_INTEGER li;
     li.QuadPart = static_cast<LONGLONG>(new_size);
     if (!SetFilePointerEx(_fd, li, NULL, FILE_BEGIN) || !SetEndOfFile(_fd)) {
-      throw std::runtime_error("Failed to resize file: error " +
-                               std::to_string(GetLastError()));
+      throw FileError(
+          "Failed to resize file: error " + std::to_string(GetLastError()),
+          GetLastError());
     }
 #else
     if (::ftruncate(_fd, static_cast<off_t>(new_size)) != 0) {
-      throw std::runtime_error("Failed to resize file: " +
-                               std::string(std::strerror(errno)));
+      throw FileError(
+          "Failed to resize file: " + std::string(std::strerror(errno)),
+          errno);
     }
 #endif
   }
@@ -351,9 +358,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
       this->read(0, buffer.get(), header_size);
       this->_header = (FileHeader*)buffer.get();
 
-      if (strcmp(this->_header->signature, FSTORE_SIGNATURE)) {
-        throw std::runtime_error("wrong filetype");
-      }
+      if (strcmp(this->_header->signature, FSTORE_SIGNATURE))
+        throw TypeMismatch();
     }
 
     assert(((uint64_t)this->_header & 7) == 0);
