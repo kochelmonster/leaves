@@ -94,6 +94,7 @@ struct _CacheStore
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
+
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 
   _CacheStore(size_t capacity = 500 * M, size_t pool_threads = 1,

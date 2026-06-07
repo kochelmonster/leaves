@@ -3,14 +3,13 @@
 
 #include <memory>
 
+#include "intern/core/_util.hpp"
 #include "intern/db/_cursor.hpp"
 #include "intern/db/_db.hpp"
-#include "intern/core/_util.hpp"
 
 namespace leaves {
 
-template <typename Storage,
-          template <typename> class DBClass = _DB>
+template <typename Storage, template <typename> class DBClass = _DB>
 class TCursor {
  public:
   typedef typename Storage::storage_ptr storage_ptr;
@@ -23,7 +22,8 @@ class TCursor {
   TCursor() = default;
 
   TCursor(TCursor&& other) noexcept
-    : _storage(std::move(other._storage)), _cursor(std::move(other._cursor)) {}
+      : _storage(std::move(other._storage)),
+        _cursor(std::move(other._cursor)) {}
 
   ~TCursor() {
     _cursor.reset();
@@ -32,8 +32,8 @@ class TCursor {
 
   TCursor& operator=(TCursor&& other) noexcept {
     if (this != &other) {
-    _cursor = std::move(other._cursor);
-    _storage = std::move(other._storage);
+      _cursor = std::move(other._cursor);
+      _storage = std::move(other._storage);
     }
     return *this;
   }
@@ -63,11 +63,14 @@ class TCursor {
 
   void update() { _cursor->update(); }
 
-  bool start_transaction(bool non_blocking = false) {
-    return _cursor->start_transaction(non_blocking);
+  bool start_transaction(bool non_blocking = false, bool use_wal = false) {
+    return _cursor->start_transaction(non_blocking, use_wal,
+                                      TransactionOrigin::user);
   }
 
-  tid_t prepare_commit(bool sync = false) { return _cursor->prepare_commit(sync); }
+  tid_t prepare_commit(bool sync = false) {
+    return _cursor->prepare_commit(sync);
+  }
 
   void commit(bool sync = false) { _cursor->commit(sync); }
 

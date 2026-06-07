@@ -228,9 +228,8 @@ struct _MemoryMapFile
       std::ifstream fin(path);
       char signature[sizeof(MMAP_SIGNATURE)];
       fin.read(signature, sizeof(signature));
-      if (strcmp(signature, MMAP_SIGNATURE)) {
-        throw std::runtime_error("wrong filetype");
-      }
+      if (strcmp(signature, MMAP_SIGNATURE)) throw TypeMismatch();
+
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();

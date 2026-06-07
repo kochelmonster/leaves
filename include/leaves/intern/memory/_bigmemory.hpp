@@ -19,7 +19,7 @@ struct _BigValue {
   _little_uint32_t value_size;    // size of the actual value data
 
   template <typename DB_>
-  auto data(DB_* db) {
+  NOINLINE auto data(DB_* db) {
     offset_t temp_offset(chunk_offset);
     return db->template resolve<_BigValueChunk>(&temp_offset, READ);
   }

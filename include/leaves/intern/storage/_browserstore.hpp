@@ -260,7 +260,7 @@ struct _BrowserOperations : _CacheBase {
                          const_cast<void*>(data), size, &error);
 
     if (error) {
-      throw std::runtime_error("IndexedDB store failed for key: " + key_str);
+      throw LeavesException("IndexedDB store failed for key: " + key_str);
     }
   }
 
@@ -376,7 +376,7 @@ struct _BrowserStore
       _header = reinterpret_cast<FileHeader*>(buffer);
 
       if (strcmp(_header->signature, BROWSERSTORE_SIGNATURE)) {
-        throw std::runtime_error("Invalid browser store signature");
+        throw TypeMismatch();
       }
     }
 
@@ -446,7 +446,7 @@ struct _BrowserStore
   // Browser-specific: Import database from buffer
   void import_from_buffer(const std::vector<char>& data) {
     if (data.size() < sizeof(FileHeader)) {
-      throw std::runtime_error("Invalid import data");
+      throw LeavesException("Invalid import data");
     }
 
     size_t header_size = calc_header_size();
@@ -476,8 +476,10 @@ struct _BrowserStore
 namespace leaves {
 
 struct _BrowserStore {
-  _BrowserStore(...) {
-    static_assert(false, "_BrowserStore requires Emscripten compilation");
+  template <typename... Args>
+  _BrowserStore(Args&&...) {
+    static_assert(sizeof...(Args) < 0,
+                  "_BrowserStore requires Emscripten compilation");
   }
 };
 

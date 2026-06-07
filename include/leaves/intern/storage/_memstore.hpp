@@ -6,12 +6,12 @@
 #include <memory>
 #include <vector>
 
-#include "../db/_db.hpp"
 #include "../core/_exception.hpp"
-#include "../memory/_memory.hpp"
 #include "../core/_node.hpp"
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"
+#include "../db/_db.hpp"
+#include "../memory/_memory.hpp"
 
 namespace leaves {
 
@@ -38,13 +38,14 @@ struct _MemoryTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;  // Same as file store
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t PAGE_SIZES[] = {                      // Page sizes (header + node)
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 2),    // 2 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 3),    // 3 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 4),    // 4 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 10),   // 5-10 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 16),   // hex 0-9A-F
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 64),   // base64
+  static constexpr uint16_t PAGE_SIZES[] = {  // Page sizes (header + node)
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 2),  // 2 branches
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 3),  // 3 branches
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 4),  // 4 branches
+      sizeof(PageHeader) +
+          _TrieNode<_MemoryTraits>::size(1, 10),  // 5-10 branches
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 16),  // hex 0-9A-F
+      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 64),  // base64
       sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
@@ -147,12 +148,13 @@ struct _MemoryDB {
   // not file offsets, so the low 3 metadata bits must not be stripped.
   page_ptr resolve(const offset_t* offset_ptr, Access /*access*/ = READ) const {
     offset_t offset = *offset_ptr;
-    return page_ptr(reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
+    return page_ptr(
+        reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
   }
 
   template <typename T>
   typename Traits::template Pointer<T> resolve(const offset_t* offset_ptr,
-                                      Access access = READ) const {
+                                               Access access = READ) const {
     offset_t offset = *offset_ptr;
     return typename Traits::template Pointer<T>(
         reinterpret_cast<void*>(offset.raw() & ~offset_t::TYPE_MASK));
@@ -224,7 +226,7 @@ struct _MemoryStorage {
   }
 
   area_ptr alloc_multi_area(uint64_t /*size*/) {
-    throw std::runtime_error(
+    throw NotImplemented(
         "Multi-area allocation not supported in memory storage - use single "
         "areas only");
   }

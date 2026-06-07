@@ -22,10 +22,13 @@
 #if defined(_MSC_VER)
 #include <xmmintrin.h>  // For _mm_prefetch and _MM_HINT_T0 on MSVC
 #define FORCE_INLINE __forceinline
+#define NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
 #define FORCE_INLINE inline __attribute__((always_inline))
+#define NOINLINE __attribute__((noinline))
 #else
 #define FORCE_INLINE inline
+#define NOINLINE
 #endif
 
 #ifndef __EMSCRIPTEN__

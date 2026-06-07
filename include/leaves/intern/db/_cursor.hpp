@@ -32,16 +32,16 @@ struct _Transition {
   Cursor* cursor;
   node_ptr node;
 
-  static_assert(sizeof(node_ptr) == sizeof(trie_ptr) && sizeof(node_ptr) == sizeof(leaf_ptr),
+  static_assert(sizeof(node_ptr) == sizeof(trie_ptr) &&
+                    sizeof(node_ptr) == sizeof(leaf_ptr),
                 "pointer sizes must match for type-punning");
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstrict-aliasing"
   trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
 
   leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
-  const leaf_ptr& leaf() const { return *reinterpret_cast<const leaf_ptr*>(&node); }
-#pragma GCC diagnostic pop
+  const leaf_ptr& leaf() const {
+    return *reinterpret_cast<const leaf_ptr*>(&node);
+  }
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key
@@ -582,10 +582,61 @@ struct _Cursor : public _ICursor<Traits_, _Cursor<Traits_>> {
   using Cursor::Cursor;
 };
 
+// Write-Ahead Log mixin — provides WAL operations via CRTP to any cursor.
+// The derived type must be a _TransactionalCursor exposing _db, _id, _aspect,
+// and _aspect_context.
+template <typename Derived_>
+struct _WalAware {
+  using Derived = Derived_;
+
+  bool _use_wal{false};
+
+  void _wal_setup(bool use_wal) {
+    if (use_wal)
+      _wal_open();
+    else
+      _wal_close();
+  }
+
+  void _wal_open() {
+    _use_wal = true;
+    _derived()._db->open_wal();
+  }
+
+  void _wal_close() { _use_wal = false; }
+
+  void _wal_begin(uint32_t txn_id) {
+    if (_use_wal) _derived()._db->wal_begin(txn_id);
+  }
+
+  void _wal_log_put(const Slice& key, const Slice& value) {
+    if (_use_wal) _derived()._db->wal_put(key, value);
+  }
+
+  void _wal_log_delete(const Slice& key) {
+    if (_use_wal) _derived()._db->wal_delete(key);
+  }
+
+  void _wal_prepare_commit() {
+    if (_use_wal) _derived()._db->wal_prepare();
+  }
+
+  void _wal_commit(uint32_t txn_id) {
+    if (_use_wal) _derived()._db->wal_commit(txn_id);
+  }
+
+  void _wal_abort() {
+    if (_use_wal) _derived()._db->wal_abort();
+  }
+
+  Derived& _derived() { return *static_cast<Derived*>(this); }
+};
+
 // Full cursor with find, transactions, and modification operations
 template <typename Traits_>
 struct _TransactionalCursor
-    : public _ICursor<Traits_, _TransactionalCursor<Traits_>> {
+    : public _ICursor<Traits_, _TransactionalCursor<Traits_>>,
+      public _WalAware<_TransactionalCursor<Traits_>> {
   typedef Traits_ Traits;
   typedef _ICursor<Traits_, _TransactionalCursor<Traits_>> Cursor;
   typedef _BigMemory<_Cursor<Traits_>> BigMemory;
@@ -651,7 +702,9 @@ struct _TransactionalCursor
 
     uint16_t size_modified = BigMemory::template modify_size<LeafNode>(
         this->rest_key.size(), size, BIG_INLINE_SIZE);
+
     void* result = Cursor::reserve(size_modified);
+
     if (size_modified != size) {
       BigValue* bvalue = (BigValue*)result;
       get_bigmemory().alloc(size, bvalue);
@@ -663,7 +716,7 @@ struct _TransactionalCursor
       }
       auto data_ptr = bvalue->data(this->_db);
       this->_db->make_dirty(data_ptr);
-      return (char*)data_ptr;
+      result = static_cast<char*>(data_ptr);
     }
     return result;
   }
@@ -705,6 +758,7 @@ struct _TransactionalCursor
     Slice transformed = _aspect().on_write(this->key(), value, _aspect_context);
     void* space = reserve(transformed.size());
     optimized_memcpy(space, transformed.data(), transformed.size());
+    this->_wal_log_put(this->key(), value);
     this->_db->flush();
   }
 
@@ -719,6 +773,7 @@ struct _TransactionalCursor
         throw NoValidPosition();  // Aspect rejected the delete
       }
     }
+    this->_wal_log_delete(this->key());
     const Transition& back = this->stack.back();
     if (back.leaf()->is_big()) {
       BigValue* bvalue = (BigValue*)back.leaf()->vdata();
@@ -727,21 +782,26 @@ struct _TransactionalCursor
     _Deleter(*this).exec();
   }
 
-  bool start_transaction(bool non_blocking = false,
+  bool start_transaction(bool non_blocking = false, bool use_wal = false,
                          TransactionOrigin origin = TransactionOrigin::user) {
     if (this->_db->txn_cursor_id() != _id) {
-      if (!_aspect().before_start_transaction(*this->_db, origin, _aspect_context))
+      this->_wal_setup(use_wal);
+      if (!_aspect().before_start_transaction(*this->_db, origin,
+                                              _aspect_context))
         return false;
       txn_ptr new_txn = this->_db->start_transaction(_id, non_blocking, origin);
       if (!new_txn) return false;
       assert(new_txn->refs.load() == 0);  // no one can reference it yet
       _set_txn(new_txn);
-      _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin, _aspect_context);
+      this->_wal_begin(new_txn->txn_id.value());
+      _aspect().on_start_transaction(*this->_db, new_txn->txn_id, origin,
+                                     _aspect_context);
     }
     return true;
   }
 
   tid_t prepare_commit(bool sync = true) {
+    this->_wal_prepare_commit();
     return this->_db->prepare_commit(_id, sync);
   }
 
@@ -749,6 +809,10 @@ struct _TransactionalCursor
               TransactionOrigin origin = TransactionOrigin::user) {
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
+
+    this->_wal_prepare_commit();
+    this->_wal_commit(this->_txn->txn_id.value());
+
     bool committed = this->_db->commit(_id, sync, origin);
     if (committed) {
       _aspect().on_commit(*this->_db, origin, _aspect_context);
@@ -758,10 +822,13 @@ struct _TransactionalCursor
 
   bool rollback(TransactionOrigin origin = TransactionOrigin::user) {
     if (this->_db->txn_cursor_id() != _id) return false;
-    if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context))
+    if (!_aspect().before_rollback(*this->_db, this->_txn->txn_id, origin,
+                                   _aspect_context))
       return false;
+    this->_wal_abort();
     if (this->_db->rollback(_id, origin)) {
-      _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin, _aspect_context);
+      _aspect().on_rollback(*this->_db, this->_txn->txn_id, origin,
+                            _aspect_context);
       // Switch back to the committed read transaction.
       // Don't decrement _txn->refs — rollback() already reset the recycled
       // page to refs=0 and repurposed it as next_txn_page.

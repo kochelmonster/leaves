@@ -397,6 +397,10 @@ struct TestStorage {
   template <typename PtrType>
   void make_dirty(PtrType /* block */) { }
 
+  // WAL hooks (no-op for the in-memory test storage)
+  void register_wal(leaves::_WalWriter* /* w */) {}
+  void unregister_wal(leaves::_WalWriter* /* w */) {}
+
   // New area allocation methods required by _db.hpp
   area_ptr alloc_single_area() {
     auto result = single_areas.pop(*this);

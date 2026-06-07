@@ -74,6 +74,9 @@ static bool FLAGS_writemap = false;
 // don't explicitly sync meta data
 static bool FLAGS_metasync = false;
 
+// Use write-ahead logging
+static bool FLAGS_use_wal = false;
+
 // Use FileStorage instead of MapStorage
 static bool FLAGS_use_file_storage = false;
 
@@ -235,6 +238,7 @@ class Benchmark {
     const int kKeySize = FLAGS_binary_key ? 8 : 16;
     PrintEnvironment();
     std::fprintf(stdout, "Storage:     %s\n", storage_name());
+    std::fprintf(stdout, "WAL:         %s\n", FLAGS_use_wal ? "enabled" : "disabled");
     std::fprintf(stdout, "Keys:        %d bytes each (%s)\n", kKeySize,
                  FLAGS_binary_key ? "binary uint64 big-endian" : "decimal string");
     std::fprintf(
@@ -724,6 +728,7 @@ class Benchmark {
 
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
+      cursor.start_transaction(false, FLAGS_use_wal);
       for (int j = 0; j < entries_per_batch; j++) {
         mkey = bench_key(i + j);
         int iter = i + j;
@@ -1020,6 +1025,10 @@ int main(int argc, char** argv) {
       }
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
+    } else if (sscanf(argv[i], "--use_wal=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_use_wal = (n == 1);
+      std::fprintf(stderr, "WAL: %s\n", FLAGS_use_wal ? "enabled" : "disabled");
     } else if (strncmp(argv[i], "--dump_workload=", 16) == 0) {
       FLAGS_dump_workload = argv[i] + 16;
     } else {

@@ -2,6 +2,7 @@
 #define _LEAVES__EXCEPTIONS_HPP
 
 #include <exception>
+#include <string>
 
 #ifndef _MSC_VER
 #define NOEXCEPT noexcept
@@ -13,10 +14,13 @@
 #endif
 #endif
 
-
 namespace leaves {
 
-class LeavesException : public std::exception {};
+class LeavesException : public std::runtime_error {
+ public:
+  LeavesException(const char* msg = "leaves exception") : std::runtime_error(msg) {}
+  LeavesException(const std::string& msg) : std::runtime_error(msg) {}
+};
 
 class TransactionActive : public LeavesException {};
 
@@ -24,32 +28,45 @@ class NoProcess : public LeavesException {};
 
 class NoValidPosition : public LeavesException {};
 
-class NotImplemented : public LeavesException {};
+class NotImplemented : public LeavesException {
+ public:
+  NotImplemented(const char* msg = "not implemented") : LeavesException(msg) {}
+};
 
 class KeyTooBig : public LeavesException {};
 
 class TypeMismatch : public LeavesException {
- private:
-  const char* _msg;
  public:
-  TypeMismatch(const char* msg = "db type mismatch") : _msg(msg) {}
-  const char* what() const NOEXCEPT { return _msg; }
+  TypeMismatch(const char* msg = "db type mismatch") : LeavesException(msg) {}
 };
 
 class StorageFull : public LeavesException {
  public:
-  const char* what() const NOEXCEPT { return "storage full: file size would exceed mapped region"; }
+  StorageFull(
+      const char* msg = "storage full: file size would exceed mapped region")
+      : LeavesException(msg) {}
 };
 
 class WrongValue : public LeavesException {
- private:
-  const char* _msg;
-
  public:
-  WrongValue(const char* msg) : _msg(msg) {}
-
-  const char* what() const NOEXCEPT { return _msg; }
+  WrongValue(const char* msg) : LeavesException(msg) {}
 };
+
+class WalError : public LeavesException {
+ public:
+  WalError(const char* msg) : LeavesException(msg) {}
+};
+
+class FileError : public LeavesException {
+ public:
+  FileError(const std::string& msg, int err)
+      : LeavesException(msg), _errno(err) {}
+  int code() const { return _errno; }
+
+ private:
+  int _errno;
+};
+
 
 }  // namespace leaves
 

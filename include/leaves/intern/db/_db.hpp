@@ -8,6 +8,7 @@
 
 #include "../core/_port.hpp"
 #include "../memory/_memory.hpp"
+#include "../storage/_wal.hpp"
 #include "../util/_page_hist.hpp"
 #include "_aspect.hpp"
 #include "_cursor.hpp"
@@ -87,9 +88,9 @@ struct _Transaction : public _TransactionBase<Traits_> {
 // Default database header (defined outside _DB for reusability)
 template <typename Storage_>
 struct _DBHeader {
-  offset_t read_txn;      // the current read transaction
-  offset_t prepared_txn;  // the transaction being prepared for commit
-  offset_t next_txn_page; // Optimation: preprepared transaction
+  offset_t read_txn;       // the current read transaction
+  offset_t prepared_txn;   // the transaction being prepared for commit
+  offset_t next_txn_page;  // Optimation: preprepared transaction
   SpinLock txn_lock;
   SpinLock txn_ref_lock;  // protects txn() + refs.fetch_add() atomicity
   std::atomic<uint64_t>
@@ -113,14 +114,87 @@ struct _DBHeader {
   offset_t extra_offset{0};
 };
 
+// Write-Ahead Log mixin for _DB — provides WAL open/recover/begin/put/delete/
+// prepare/commit/abort operations via CRTP. The derived type (_DB) must expose
+// _storage, _name, and create_cursor().
+template <typename Derived_>
+struct _WalDbMixin {
+  using Derived = Derived_;
+
+  SpinLock _flush_lock;  // avoid DB is destroyed during a flush
+  _WalWriter _wal;
+  bool _wal_open{false};
+
+
+  bool wal_enabled() const { return _wal_open; }
+
+  std::string wal_base_path() const {
+    return std::string(_derived()._storage.filename()) + "." + _derived()._name;
+  }
+
+  void open_wal() {
+    if (_wal_open) return;
+    if (!_wal.open(wal_base_path()))
+      throw std::runtime_error("failed to open WAL files");
+    _wal_open = true;
+  }
+
+  void wal_recover() {
+    std::vector<_WalTxn> all;
+    _wal.parse(wal_base_path(), all);
+
+    if (!all.empty()) {
+      auto cursor = _derived().create_cursor();
+      for (const _WalTxn& t : all) {
+        cursor->start_transaction();
+        for (const _WalOpRecord& op : t.ops) {
+          cursor->find(Slice(op.key));
+          if (op.is_delete) {
+            if (cursor->is_valid()) cursor->remove();
+          } else {
+            cursor->value(Slice(op.val));
+          }
+        }
+        cursor->commit(true);
+      }
+    }
+
+    _wal.reset();
+  }
+
+  void wal_begin(uint32_t txn_id) { _wal.begin(txn_id); }
+  void wal_put(const Slice& key, const Slice& val) { _wal.put(key, val); }
+  void wal_delete(const Slice& key) { _wal.del(key); }
+  void wal_prepare() { _wal.prepare(); }
+  void wal_commit(uint32_t txn_id) {
+    _wal.commit();
+    _derived()._storage.submit_task([this, txn_id] {
+      std::lock_guard<SpinLock> lock(_flush_lock);
+      _derived()._storage.flush(true, true);
+      _wal.flushed(txn_id);
+    });
+  }
+  void wal_abort() { _wal.abort(); }
+
+  void wal_close() {
+    if (_wal_open) {
+      std::lock_guard<SpinLock> lock(_flush_lock);
+      _wal.close();
+      _wal_open = false;
+    }
+  }
+
+  Derived& _derived() { return *static_cast<Derived*>(this); }
+  const Derived& _derived() const { return *static_cast<const Derived*>(this); }
+};
+
 // Make _DB accept Transaction and Header as template parameters
 // Self_ enables CRTP: derived classes pass themselves so _DB can
 // statically dispatch to overrides (e.g. _on_txn_freed) without virtual.
 template <typename Storage_,
           typename Transaction_ = _Transaction<typename Storage_::Traits>,
-          typename Header_ = _DBHeader<Storage_>,
-          typename Self_ = void>
-struct _DB {
+          typename Header_ = _DBHeader<Storage_>, typename Self_ = void>
+struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
   typedef Storage_ Storage;
   typedef Transaction_ Transaction;
   typedef Header_ Header;
@@ -132,8 +206,9 @@ struct _DB {
   using offset_e = typename Traits::offset_e;
 
   // CRTP self-type: derived class if provided, otherwise this class.
-  using Self = std::conditional_t<std::is_void_v<Self_>,
-      _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
+  using Self =
+      std::conditional_t<std::is_void_v<Self_>,
+                         _DB<Storage_, Transaction_, Header_, Self_>, Self_>;
 
   typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
 
@@ -190,6 +265,8 @@ struct _DB {
       : _storage(storage), _name(name) {
     init(header);
   }
+
+  ~_DB() { this->wal_close(); }
 
   Self& self() { return *static_cast<Self*>(this); }
 
@@ -390,8 +467,8 @@ struct _DB {
     // Record the raw requested size (incl. PageHeader) for PAGE_SIZES tuning.
     // No-op unless LEAVES_PAGE_HIST is defined at compile time.
     _page_hist_record((uint32_t)space + (uint32_t)sizeof(PageHeader));
-    page_ptr result = alloc_slot(
-        MemManager::assign_slot(space + sizeof(PageHeader)));
+    page_ptr result =
+        alloc_slot(MemManager::assign_slot(space + sizeof(PageHeader)));
     result->used = space;
     return result;
   }
@@ -504,7 +581,6 @@ struct _DB {
     return _active_txn ? _active_txn->txn_id : tid_t(0);
   }
 
-
   uint64_t txn_cursor_id() const { return _header->txn_cursor_id.load(); }
 
   bool is_active() const {
@@ -521,8 +597,9 @@ struct _DB {
   // Start a write transaction. If nonblocking is true, this will return false
   // immediately when the txn_lock cannot be acquired.
   // May only be called by cursor
-  txn_ptr start_transaction(uint64_t cursor_id, bool nonblocking = false,
-                            TransactionOrigin /*origin*/ = TransactionOrigin::user) {
+  txn_ptr start_transaction(
+      uint64_t cursor_id, bool nonblocking = false,
+      TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     if (!nonblocking)
       _header->txn_lock.lock();
     else if (!_header->txn_lock.try_lock())
@@ -567,7 +644,8 @@ struct _DB {
     return _active_txn;
   }
 
-  bool rollback(uint64_t cursor_id, TransactionOrigin /*origin*/ = TransactionOrigin::user) {
+  bool rollback(uint64_t cursor_id,
+                TransactionOrigin /*origin*/ = TransactionOrigin::user) {
     if (_header->txn_cursor_id.load() != cursor_id) return false;
 
     // Return areas allocated during write transaction
@@ -581,7 +659,8 @@ struct _DB {
     // Reuse _active_txn's page for next pre-allocated transaction.
     // _active_txn was allocated from read_txn's committed space, so it
     // remains valid after rollback. Just overwrite with read_txn state.
-    memcpy(reinterpret_cast<char*>(&*_active_txn), reinterpret_cast<const char*>(&*read_txn), sizeof(Transaction));
+    memcpy(reinterpret_cast<char*>(&*_active_txn),
+           reinterpret_cast<const char*>(&*read_txn), sizeof(Transaction));
     _active_txn->mem_manager.reinit_locks();
     new (&_active_txn->refs) std::atomic<uint32_t>(0);
     _header->next_txn_page = resolve(_active_txn);
@@ -683,9 +762,11 @@ struct _DB {
 
     if (offset.type() == TRIE) {
       trie_ptr branch = resolve<TrieNode>(&offset);
-      auto* hdr = reinterpret_cast<PageHeader*>((char*)branch - sizeof(PageHeader));
-      stat.branch.add(hdr->slot_id, 1,
-                      PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - branch->size());
+      auto* hdr =
+          reinterpret_cast<PageHeader*>((char*)branch - sizeof(PageHeader));
+      stat.branch.add(
+          hdr->slot_id, 1,
+          PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - branch->size());
       auto count = branch->count();
       offset_e* array = branch->array();
       for (int i = 0; i < count; i++) {
@@ -695,9 +776,11 @@ struct _DB {
     }
     if (offset.type() == LEAF) {
       leaf_ptr leaf = resolve<LeafNode>(&offset);
-      auto* hdr = reinterpret_cast<PageHeader*>((char*)leaf - sizeof(PageHeader));
-      stat.leaf.add(hdr->slot_id, 1,
-                    PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - leaf->size());
+      auto* hdr =
+          reinterpret_cast<PageHeader*>((char*)leaf - sizeof(PageHeader));
+      stat.leaf.add(
+          hdr->slot_id, 1,
+          PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - leaf->size());
       return;
     }
   }
@@ -718,7 +801,8 @@ struct _DB {
     if (!_aspect.before_defrag(self())) return;
 
     uint64_t defrag_cursor_id = new_cursor_id();
-    auto txn = start_transaction(defrag_cursor_id, false, TransactionOrigin::defrag);
+    auto txn =
+        start_transaction(defrag_cursor_id, false, TransactionOrigin::defrag);
     assert(txn);
 
     if (!txn->free_bigmem_root) {
@@ -757,8 +841,7 @@ struct _DB {
       if (start_multi == 0) {
         // First-ever multi-area allocation: no committed tail to walk from,
         // return the whole chain from head.
-        _storage.return_multi_areas(
-            _header->area_list_head_multi, end_multi);
+        _storage.return_multi_areas(_header->area_list_head_multi, end_multi);
         _header->area_list_head_multi = 0;
       } else {
         area_ptr start_area = resolve<Area>(&start_multi, WRITE);
@@ -796,6 +879,8 @@ struct _DB {
       _header->next_txn_page = resolve(next);
       _active_txn.reset();
     }
+
+    this->wal_recover();
 
     make_dirty(_header);
     flush();
