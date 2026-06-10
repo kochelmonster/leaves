@@ -241,6 +241,19 @@ struct _ConfluenceDB {
   std::mutex _merge_error_mutex;
   std::exception_ptr _pending_merge_error;
 
+  // Returns the stored async merge error (if any) and clears it.
+  // One-shot: first-error-wins (subsequent errors are silently dropped).
+  // Safe to call from any public method.  Returns nullptr if no error.
+  std::exception_ptr get_merge_error() {
+    if (!_has_merge_error.load(std::memory_order_acquire))
+      return nullptr;
+    std::lock_guard<std::mutex> lk(_merge_error_mutex);
+    if (!_pending_merge_error) return nullptr;
+    auto e = std::exchange(_pending_merge_error, nullptr);
+    _has_merge_error.store(false, std::memory_order_release);
+    return e;
+  }
+
   // Reader: returns the in-process TributaryDB at index i, or nullptr if
   // not yet materialised.  Caller bounds i < _tributaries_count.load(acquire).
   TributaryDB* _trib_at(size_t i) const { return _tribs[i].get(); }
@@ -311,6 +324,14 @@ struct _ConfluenceDB {
       uint64_t id = _age_sweep_job_id.exchange(0, std::memory_order_relaxed);
       if (id) _main_db._storage.cancel_job(id);
     }
+    // Silently consume any async merge error before draining — throwing from a
+    // destructor would call std::terminate.  The error is moot because the DB
+    // is shutting down anyway.
+    {
+      std::lock_guard<std::mutex> lk(_merge_error_mutex);
+      _pending_merge_error = nullptr;
+    }
+    _has_merge_error.store(false, std::memory_order_release);
     // Drain all unmerged tributaries via the merge job, then wait ONLY for this
     // DB's own merge task to fully return (not the whole shared pool) so no
     // task still holds a `this` pointer.  Unrelated tasks from other DBs
@@ -327,7 +348,9 @@ struct _ConfluenceDB {
   txn_ptr txn() { return _main_db.txn(); }
   txn_ptr txn_ref() { return _main_db.txn_ref(); }
 
-  cursor_ptr create_cursor() { return std::make_shared<Cursor>(this); }
+  cursor_ptr create_cursor() {
+    return std::make_shared<Cursor>(this);
+  }
 
   void set_merge_write_threshold(uint32_t n) {
     _merge_write_threshold.store(n, std::memory_order_relaxed);
@@ -338,7 +361,9 @@ struct _ConfluenceDB {
   }
 
   // Request a merge pass and block until it completes.
-  void merge_now() { _request_drain_and_wait(/*force=*/false); }
+  void merge_now() {
+    _request_drain_and_wait(/*force=*/false);
+  }
 
   // Merge ALL free tributaries (ATTACHED+MERGING) regardless of threshold/idle.
   // Same path as merge_now(), then flushes main.
@@ -581,10 +606,12 @@ struct _ConfluenceDB {
     try {
       _do_merge(trib);
     } catch (...) {
-      // Merge failed (e.g. StorageFull). Slot stays in MERGING state.
-      // Recovery happens on next process start via
+      // Merge failed (e.g. StorageFull). Transition back to ATTACHED so the
+      // drain loop does not retry this slot forever.  The data is preserved;
+      // recovery happens on next process start via
       // _merge_unclaimed_tributaries() once the storage region has been
       // enlarged.
+      slot->state.store(Slot::ATTACHED, std::memory_order_release);
       slot->refs.fetch_sub(1, std::memory_order_acq_rel);
       // Surface the exception to the next cursor access.
       {
@@ -1166,14 +1193,6 @@ struct _ConfluenceCursor {
 
   bool start_transaction(bool non_blocking = false) {
     if (_in_transaction) return true;
-    // Propagate any async merge error before entering a new transaction.
-    if (_cdb->_has_merge_error.load(std::memory_order_acquire)) {
-      std::lock_guard<std::mutex> lk(_cdb->_merge_error_mutex);
-      auto e = std::exchange(_cdb->_pending_merge_error, nullptr);
-      _cdb->_has_merge_error.store(false, std::memory_order_release);
-      if (e) std::rethrow_exception(e);
-    }
-
     // Fast path: reuse sticky write slot if still ATTACHED and not idle.
     if (_write_source._slot) {
       uint8_t expected = Slot::ATTACHED;
@@ -1377,12 +1396,6 @@ struct _ConfluenceCursor {
 
   void _ensure_sources() {
     // Propagate any async merge error to the calling cursor op.
-    if (_cdb->_has_merge_error.load(std::memory_order_acquire)) {
-      std::lock_guard<std::mutex> lk(_cdb->_merge_error_mutex);
-      auto e = std::exchange(_cdb->_pending_merge_error, nullptr);
-      _cdb->_has_merge_error.store(false, std::memory_order_release);
-      if (e) std::rethrow_exception(e);
-    }
     uint64_t cur_state_epoch =
         _cdb->_meta->state_epoch.load(std::memory_order_acquire);
     if (_sources_state_epoch == cur_state_epoch) return;

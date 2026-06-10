@@ -17,3 +17,4 @@ js/leaves.wasm
 tests/ws_replication/node_modules
 *.gcov
 *.lvs*
+.cache

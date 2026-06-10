@@ -145,6 +145,11 @@ class ConfluenceDB {
   // write phase completes so reads see a clean single-source state.
   void merge_all_now()              { _impl->merge_all_now(); }
   // Access the underlying implementation (for advanced / test use).
+  // Returns the stored async merge error (if any) and clears it.
+  // One-shot: first-error-wins (subsequent errors are silently dropped).
+  // Returns nullptr if no error.  Safe to call from any thread.
+  std::exception_ptr get_merge_error() { return _impl->get_merge_error(); }
+
   DBImpl* _internal() const { return _impl; }
 
  private:

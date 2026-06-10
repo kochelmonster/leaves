@@ -36,12 +36,15 @@ struct _Transition {
                     sizeof(node_ptr) == sizeof(leaf_ptr),
                 "pointer sizes must match for type-punning");
 
-  trie_ptr& trie() { return *reinterpret_cast<trie_ptr*>(&node); }
-
-  leaf_ptr& leaf() { return *reinterpret_cast<leaf_ptr*>(&node); }
-  const leaf_ptr& leaf() const {
-    return *reinterpret_cast<const leaf_ptr*>(&node);
-  }
+  // All three Pointer<> instantiations have identical layout (same underlying
+  // storage type, same size). The reinterpret_cast is intentional and safe;
+  // suppress the GCC strict-aliasing warning at this specific point.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+  trie_ptr& trie() { return reinterpret_cast<trie_ptr&>(node); }
+  leaf_ptr& leaf() { return reinterpret_cast<leaf_ptr&>(node); }
+  const leaf_ptr& leaf() const { return reinterpret_cast<const leaf_ptr&>(node); }
+#pragma GCC diagnostic pop
 
   uint16_t prefix;     // count of equal chars in compressed node
   uint16_t keypos;     // position inside the key

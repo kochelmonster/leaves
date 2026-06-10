@@ -13,7 +13,6 @@ template <typename T, NodeTypes t = TRIE>
 struct SimplePointer {
   static constexpr NodeTypes type = t;
 
-  SimplePointer(const SimplePointer& src) : p(src.p) {}
   SimplePointer(void* src = nullptr) : p((void*)src) {}
   SimplePointer(std::nullptr_t)
       : p(nullptr) {}  // Explicit nullptr_t constructor
@@ -21,11 +20,6 @@ struct SimplePointer {
   // Allow conversion from SimplePointer of different types
   template <typename U, NodeTypes u>
   SimplePointer(const SimplePointer<U, u>& src) : p(src.p) {}
-
-  SimplePointer& operator=(const SimplePointer& src) {
-    p = src.p;
-    return *this;
-  }
 
   // Allow assignment from SimplePointer of different types
   template <typename U, NodeTypes u>
@@ -69,6 +63,9 @@ struct SimplePointer {
 
   void* p = nullptr;
 };
+
+static_assert(std::is_trivially_copyable_v<SimplePointer<int>>,
+              "SimplePointer should be trivially copyable");
 
 struct AreaSlice;
 
