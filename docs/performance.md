@@ -33,7 +33,7 @@ For a more accurate comparison, I switched to YCSB-cpp — but the pure C++ benc
 
 #### How much overhead does a benchmark framework add?
 
-To quantify this, we profiled the same workloads against LMDB using both the original unoptimized YCSB-cpp and our optimized version. Using Linux `perf` with per-shared-object attribution, we measured what fraction of application-level CPU time is spent inside the database library (liblmdb) versus the benchmark framework (key generation, value serialization, field construction, measurement).
+To quantify this, we profiled the same workloads against LMDB using both the original unoptimized YCSB-cpp and our optimized version. Using Linux `perf` with per-shared-object attribution, I measured what fraction of application-level CPU time is spent inside the database library (liblmdb) versus the benchmark framework (key generation, value serialization, field construction, measurement).
 
 | Workload | Version | DB time | Framework time | Framework overhead |
 | --- | --- | --- | --- | --- |
@@ -41,10 +41,11 @@ To quantify this, we profiled the same workloads against LMDB using both the ori
 | Analytics Read (100% read) | Optimized YCSB-cpp | 57.2% | 8.4% | **12.8%** |
 | RMW (50% read, 50% RMW) | Original YCSB-cpp | 37.6% | 23.1% | **38.0%** |
 | RMW (50% read, 50% RMW) | Optimized YCSB-cpp | 53.6% | 11.2% | **17.3%** |
-| Batch Insert (80% insert) | Original YCSB-cpp | 27.8% | 25.4% | **47.8%** |
-| Batch Insert (80% insert) | Optimized YCSB-cpp | 28.7% | 24.9% | **46.5%** |
+| Batch Insert (80% insert, 15% update, 5% read) | Original YCSB-cpp | 27.8% | 25.4% | **47.8%** |
+| Batch Insert (80% insert, 15% update, 5% read) | Optimized YCSB-cpp | 28.7% | 24.9% | **46.5%** |
 
 *Framework overhead = Framework / (Framework + DB). Remaining time is system (libc, kernel, page faults).*
+*RMW = read-modify-write.*
 
 In read-heavy workloads, the unoptimized benchmark wastes nearly **40%** of its application CPU time on framework code — constructing field vectors, allocating strings, copying values — instead of measuring the database. After optimization (contiguous memory buffers, pre-allocated field names, zero-copy slices), that drops to **13%**.
 

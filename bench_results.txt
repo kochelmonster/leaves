@@ -1,7 +1,0 @@
-nohup: ignoring input
-Engine:      Leaves _BrowserStore vs bare IndexedDB
-Keys:        16 bytes each
-Values:      100 bytes each
-Entries:     100000
-RawSize:     11.1 MB (estimated)
-------------------------------------------------

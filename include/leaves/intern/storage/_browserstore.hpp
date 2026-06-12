@@ -111,6 +111,9 @@ struct _BrowserStoreTraits {
       192,   // mid-fanout (10-12 branches)
       1024,  // mid-fanout peak
       1056,  // mid-fanout peak (adjacent, different vsize regime)
+      1536,  // for data nodes
+      2560,  // for data nodes
+      3072,  // for data nodes
       4096,  // PAGE_CONTAINER_SIZE cap (binary / overflow)
   };
   static constexpr uint16_t PAGE_SIZES_COUNT =

@@ -233,10 +233,10 @@ inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result) {
   while (pos < n) {
     uint8_t tag = data[pos];
     if (tag == static_cast<uint8_t>(_WalOp::BEGIN)) {
-      if (!need(1 + 8)) break;
+      if (!need(1 + 4)) break;
       cur = _WalTxn{};
-      cur.txn_id = _wal_read_u64(&data[pos + 1]);
-      pos += 1 + 8;
+      cur.txn_id = _wal_read_u32(&data[pos + 1]);
+      pos += 1 + 4;
       in_txn = true;
       prepared = false;
     } else if (tag == static_cast<uint8_t>(_WalOp::PUT)) {

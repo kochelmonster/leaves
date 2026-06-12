@@ -83,7 +83,7 @@ struct _MemoryMapTraits {
 #endif
   static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 3;
 
-  static constexpr uint16_t PAGE_SIZES[] = {  // Page sizes (header + node)
+  static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
       sizeof(PageHeader) +
           _TrieNode<_MemoryMapTraits>::size(1, 2),  // 2 branches
       sizeof(PageHeader) +
@@ -96,7 +96,16 @@ struct _MemoryMapTraits {
           _TrieNode<_MemoryMapTraits>::size(1, 16),  // hex 0-9A-F
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
       sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
+      sizeof(PageHeader) + 1024,
+      sizeof(PageHeader) + 1024 + 512,
       4 * K};
+  static constexpr auto PAGE_SIZES = [] {
+    std::array<uint16_t, std::size(PAGE_SIZES_DECL)> a{};
+    for (std::size_t i = 0; i < std::size(PAGE_SIZES_DECL); ++i)
+      a[i] = PAGE_SIZES_DECL[i];
+    std::sort(a.begin(), a.end());
+    return a;
+  }();
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
 

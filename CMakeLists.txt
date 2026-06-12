@@ -5,6 +5,7 @@ project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Emscripten (WebAssembly) ───────────────────────────────────
 if(EMSCRIPTEN)
@@ -473,6 +474,7 @@ COMMAND ./test_replication_multiclient
 COMMAND ./test_hash_lookup
 COMMAND ./test_hash_updater
 COMMAND ./test_fstore
+COMMAND ./test_wal
 COMMAND ./test_memstore
 COMMAND ./test_map_storage
 COMMAND ./test_file_storage

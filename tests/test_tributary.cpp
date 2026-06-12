@@ -743,10 +743,10 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
 // Simulates a failed async merge by injecting an exception directly into
 // _ConfluenceDB's error slot (as merge_tributary()'s catch block would do),
 // then verifies:
-//   1. first() rethrows the exception (eager: calls _ensure_sources() directly).
-//   2. find() + is_valid() rethrows the exception (lazy materialization path).
-//   3. start_transaction() also rethrows before the error is drained.
-//   4. Delivery is one-shot: subsequent accesses succeed normally.
+//   1. Cursor operations (first(), is_valid(), start_transaction()) do NOT
+//      throw; the error is surfaced by explicitly calling get_merge_error().
+//   2. get_merge_error() returns and clears the stored exception (one-shot).
+//   3. After the error is drained, subsequent cursor accesses succeed normally.
 BOOST_AUTO_TEST_CASE(test_merge_error_propagated_to_cursor) {
   TributaryPreparation p;
   auto [storage, main_db, cdb_ptr] = make_cdb(TEST_FILE);
@@ -761,36 +761,48 @@ BOOST_AUTO_TEST_CASE(test_merge_error_propagated_to_cursor) {
     cdb->_has_merge_error.store(true, std::memory_order_release);
   };
 
-  // --- Part 1: first() rethrows then clears --------------------------------
+  // --- Part 1: error retrievable via get_merge_error() after first() -------
   {
     inject();
     auto cursor = cdb->create_cursor();
-    // first() calls _ensure_sources() eagerly → must throw.
-    BOOST_CHECK_THROW(cursor->first(), std::runtime_error);
+    // first() does NOT throw; error is polled separately.
+    cursor->first();
+    // get_merge_error() returns the pending exception and clears it (one-shot).
+    auto e = cdb->get_merge_error();
+    BOOST_REQUIRE(e != nullptr);
+    BOOST_CHECK_THROW(std::rethrow_exception(e), std::runtime_error);
     // Error is cleared: next first() succeeds and positions on the key.
     cursor->first();
     BOOST_REQUIRE(cursor->is_valid());
     BOOST_CHECK_EQUAL(cursor->key().string(), "hello");
   }
 
-  // --- Part 2: find() + is_valid() rethrows then clears -------------------
+  // --- Part 2: error retrievable after find() + is_valid() ----------------
   {
     inject();
     auto cursor = cdb->create_cursor();
-    // find() is lazy (no _ensure_sources()); is_valid() triggers materialization.
+    // find() is lazy; is_valid() triggers materialization — neither throws.
     cursor->find(Slice("hello"));
-    BOOST_CHECK_THROW(cursor->is_valid(), std::runtime_error);
+    cursor->is_valid();
+    // get_merge_error() returns and clears the error.
+    auto e = cdb->get_merge_error();
+    BOOST_REQUIRE(e != nullptr);
+    BOOST_CHECK_THROW(std::rethrow_exception(e), std::runtime_error);
     // Error cleared: re-issue find and check it works.
     cursor->find(Slice("hello"));
     BOOST_REQUIRE(cursor->is_valid());
     BOOST_CHECK_EQUAL(cursor->value().string(), "world");
   }
 
-  // --- Part 3: start_transaction() rethrows then clears -------------------
+  // --- Part 3: error retrievable after start_transaction() ----------------
   {
     inject();
     auto cursor = cdb->create_cursor();
-    BOOST_CHECK_THROW(cursor->start_transaction(), std::runtime_error);
+    // start_transaction() does NOT throw; poll the error separately.
+    if (cursor->start_transaction()) cursor->rollback();
+    auto e = cdb->get_merge_error();
+    BOOST_REQUIRE(e != nullptr);
+    BOOST_CHECK_THROW(std::rethrow_exception(e), std::runtime_error);
     // Error cleared: start_transaction() succeeds on the next call.
     BOOST_REQUIRE(cursor->start_transaction());
     cursor->rollback();
