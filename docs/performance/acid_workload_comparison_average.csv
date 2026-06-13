@@ -1,3 +1,3 @@
-workload_label,badger,leaves,leveldb,lmdb,rocksdb,sqlite,wiredtiger
-ACID A/C/I,51214.3,811806.0,1881.49,2217.99,1989.42,4369.95,3278.32
-ACID Txn,63176.4,695619.0,0.0,1256.13,0.0,3088.29,2425.44
+workload_label,badger,leaves,leveldb,lmdb,redis,rocksdb,sqlite,wiredtiger
+ACID A/C/I,51425.9,836610.0,1952.12,2234.45,56723.4,2011.2,4379.58,3284.95
+ACID Txn,63000.6,692572.0,0.0,1277.18,0.0,0.0,3086.78,2424.2
