@@ -80,6 +80,11 @@ This workload represents read-only serving layers such as feature stores, recomm
 **Configuration:**  
 The workload uses `readproportion=1.0` with a zipfian distribution over one million records. RocksDB and LevelDB use a 1 GB block cache (`rocksdb.cache_size`, `leveldb.cache_size`). WiredTiger is forced into B-tree mode by disabling LSM parameters. Binary keys are enabled where supported.
 
+- Dataset: 1,000,000 records
+- Operations: 500,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 Performance is dominated by lookup cost. LSM engines must consult multiple structures, while B-tree engines require logarithmic traversal with comparator overhead, resulting in a cost of O(k · log n). The trie-based structure used by Leaves performs lookups in O(k), depending only on key length and independent of dataset size. This removes both comparator overhead and dataset-dependent scaling, resulting in a simpler and faster lookup path. Leaves and LMDB therefore lead, with LSM engines following.
 
@@ -92,6 +97,11 @@ Represents buffered ingestion systems such as event batching, log aggregation, o
 
 **Configuration:**  
 Uses `insertproportion=0.80`, `updateproportion=0.15`, `readproportion=0.05`, `insertorder=hashed`, batch sizes (`batch_size ∈ {1,8,32,64}`), and binary keys.
+
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Batching amortizes commit and synchronization costs across multiple operations. LSM engines benefit from write buffering and sequential I/O, while B-tree engines must still locate the insertion position and perform structural updates for each insert. For copy-on-write engines such as LMDB and Leaves, batching reduces the number of copy-on-write operations by grouping multiple updates into a single transaction, significantly reducing data duplication and write amplification.
@@ -106,6 +116,11 @@ Represents bulk modification workloads such as periodic state updates, counter r
 **Configuration:**  
 Uses `updateproportion=0.80`, `readproportion=0.20`, zipfian distribution, batch sizes (`batch_size ∈ {1,8,32,64}`), and binary keys.
 
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 Batching reduces commit overhead by grouping updates into fewer transactions. LSM engines still incur write amplification as updates propagate through levels, while B-tree engines must perform structural updates per operation. For copy-on-write engines such as LMDB and Leaves, batching reduces copy-on-write operations, allowing multiple updates to be applied within a single version of the data.
 
@@ -118,6 +133,11 @@ This workload models metadata and profile lookup services with a small number of
 
 **Configuration:**  
 Uses `readproportion=0.95` with zipfian distribution. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode. No batching is applied.
+
+- Dataset: 1,000,000 records
+- Operations: 2,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Same lookup-dominated behavior as **Analytics Read**; see above for structural differences (LSM vs B-tree vs trie).
@@ -132,6 +152,11 @@ Represents event ingestion pipelines such as logging and telemetry systems.
 **Configuration:**  
 Uses `insertproportion=0.70` with uniform distribution and `insertorder=hashed`. Batching (`batch_size=64`) and binary keys are enabled across engines.
 
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 Write throughput dominates. LSM engines benefit from sequential write buffering, while B-tree engines must locate the insertion position and perform structural updates on each write. The trie-based structure used by Leaves finds the insertion position in O(k) time and avoids rebalancing or restructuring operations required by B-trees. This reduces the per-insert overhead and leads to consistently higher throughput.
 
@@ -144,6 +169,11 @@ Models recency-biased systems such as activity feeds and monitoring dashboards.
 
 **Configuration:**  
 Uses `requestdistribution=latest`. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
+
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Same lookup/update trade-offs as **Ingest** and **Analytics Read**; locality helps LSM, but trie lookup still avoids comparator overhead.
@@ -158,6 +188,11 @@ Represents counters and mutable records where each operation reads and updates d
 **Configuration:**  
 Uses `readproportion=0.50` and `readmodifywriteproportion=0.50`. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
 
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 Combination of **Analytics Read** (lookup) and **Ingest** (write path); see those sections for details.
 
@@ -170,6 +205,11 @@ Represents short pagination queries and recent history lookups.
 
 **Configuration:**  
 Uses fixed scan length of 10 with zipfian distribution. RocksDB and LevelDB use 1 GB cache. WiredTiger uses B-tree mode with larger leaf pages.
+
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 This workload is still largely dominated by the lookup cost of the starting key, as only a small number of subsequent entries are scanned. LSM engines incur additional overhead due to merging across levels during iteration, while B-tree engines benefit from ordered leaf traversal once the starting point is found. The trie-based structure used by Leaves provides faster lookup of the starting key, but offers less advantage during sequential traversal. As a result, performance reflects a balance between lookup efficiency and short-range scan cost.
@@ -184,6 +224,11 @@ Represents larger scans such as batch export or analytics queries.
 **Configuration:**  
 Same as Range 10 but with scan length 100.
 
+- Dataset: 1,000,000 records
+- Operations: 500,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 As scan length increases, traversal cost and data locality become dominant factors. LSM engines incur additional overhead due to multi-level merging during scans. B-tree engines benefit from strong data locality, as records are stored in contiguous pages, allowing efficient sequential access once the scan begins. While the trie-based structure used by Leaves provides faster random access to the scan start, its layout is less optimized for long sequential scans. As a result, LMDB outperforms Leaves in this workload: for short ranges, the faster lookup compensates for scan cost, but for larger ranges, the data locality advantage of LMDB becomes dominant.
 
@@ -196,6 +241,11 @@ Models user session storage with frequent reads and updates.
 
 **Configuration:**  
 Uses `readproportion=0.50` and `updateproportion=0.50` with batching and binary keys enabled. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
+
+- Dataset: 1,000,000 records
+- Operations: 1,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Mixed workload; combines effects described in **Analytics Read** and **Ingest**.
@@ -210,6 +260,11 @@ This workload models transactional update patterns under strict durability const
 **Configuration:**  
 Durability is enforced via database-specific settings: LMDB disables `nosync`, RocksDB enables `sync`, WiredTiger enables transactional fsync, SQLite uses WAL and full sync, and Leaves enables WAL.
 
+- Dataset: 100,000 records
+- Operations: 400,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 Durability dominates; same fsync/logging effects as in **ACID Transactions**.
 
@@ -222,6 +277,11 @@ This workload models explicit multi-key transactions. Each operation executes a 
 
 **Configuration:**  
 Uses `transactionmode=multikey_acid` with strict durability settings.
+
+- Dataset: 100,000 records
+- Operations: 200,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Same durability and coordination costs as **ACID A/C/I**, with additional multi-key overhead.
@@ -236,6 +296,11 @@ Represents multi-threaded web backends handling user sessions.
 **Configuration:**  
 Uses `threadcount=8`. Leaves uses `confluence` format. RocksDB uses 2 GB cache. WiredTiger uses 4 GB cache and B-tree mode.
 
+- Dataset: 2,000,000 records
+- Operations: 2,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
 **Explanation:**  
 Concurrency introduces contention. LMDB serializes writes, limiting scalability. RocksDB benefits from concurrent write support. Leaves isolates writes per thread and merges asynchronously, achieving higher scalability.
 
@@ -248,6 +313,11 @@ Represents high-throughput ingestion systems with many parallel writers.
 
 **Configuration:**  
 Uses `insertproportion=0.70` and `threadcount=8`. Leaves uses `confluence` format and large mapsize. RocksDB and WiredTiger increase cache sizes.
+
+- Dataset: 2,000,000 records
+- Operations: 2,000,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Write scalability depends on contention. LSM engines scale via buffering but still share structures. B-tree engines are limited by centralized updates. Leaves distributes writes across threads and merges them asynchronously, resulting in superior scalability.
@@ -319,12 +389,14 @@ All results in this article use the optimized benchmark to ensure measurements r
 
 ---
 
-### Hardware
+### Test-System
 
 - CPU: i7-12700KF  
 - RAM: 32 GB DDR4  
-- NVMe SSD  
-
+- NVMe KINGSTON SNV2S2000G
+- OS: Ubuntu 24.04.4
+- Filesystem: ext4 with default settings (barrier=1, journaling enabled)
+- Kernel: 6.8.0-31-generic
 ---
 
 ## Architecture and Capabilities of Leaves
