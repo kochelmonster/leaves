@@ -1,57 +1,295 @@
 # The Fastest Key-Value Store? A Fair Fight Against LMDB
 
-"The fastest key-value store" is a common claim in the database world.
+“The fastest key-value store” is a common claim in the database world.
 
-We put nine key-value engines that once claimed to be the fastest, through a rigorous benchmark suite and compared them against the dominant embedded reference: the Lightning Memory-Mapped Database (LMDB).
-There is only one that consistently outperforms LMDB across a wide range of practical workloads, while still providing ACID transactions and ordered scans.
+Yet most published benchmarks avoid a direct comparison with LMDB — even though it is widely regarded as one of the fastest embedded key-value stores available. Without including LMDB, it is unclear what “fast” actually means.
 
-## The contenders
+This benchmark explicitly includes LMDB as the baseline and compares it against a range of modern engines.
 
-The lineup covers a broad range of architectures:
+All databases are configured for their **maximum achievable performance** using comparable settings where possible. This includes batching, cache sizing, binary keys, and other engine-specific optimizations. ACID workloads are evaluated separately with strict durability enabled.
+
+The goal is simple: measure how these systems perform against a known high-performance reference.
+
+The result challenges common assumptions: even LMDB is consistently outperformed.
+
+---
+
+## Results
+
+![Workload Comparison](workload_comparison_average.png)
+![ACID Comparison](acid_workload_comparison_average.png)
+![Concurrent Comparison](concurrent_workload_comparison_average.png)
+
+Across all workloads, a clear performance hierarchy emerges. LMDB is consistently several times faster than traditional embedded competitors and reaches up to approximately **6× higher throughput** than WiredTiger and SQLite in read-heavy workloads, and about **2–4× faster** than LevelDB and RocksDB in single-threaded scenarios. Despite its reputation, RocksDB shows lower throughput than LevelDB in these single-threaded scenarios and only demonstrates its strengths under concurrent workloads, where it scales more effectively and narrows the gap. WiredTiger is consistently limited by internal overhead, while Redis is dominated by network round-trip costs rather than storage performance.
+
+At the same time, a new competitor appears: Leaves. Using a persistent trie design with copy-on-write storage, it exceeds the performance of all other engines. Compared to LMDB, it achieves roughly **1.5–2× higher throughput** in most standard workloads and up to **2–3× in concurrent scenarios**, while in ACID workloads the difference becomes much larger, reaching over **two orders of magnitude** due to different durability strategies.
+
+---
+
+Leaves consistently leads across workloads, with the largest gains in read-heavy and concurrent scenarios, while LMDB remains the strongest B-tree baseline.
+
+---
+
+## Benchmark fairness
+
+All systems were configured for maximum throughput using recommended settings where available. This includes cache sizing, batching, and binary keys. ACID workloads are evaluated separately with full durability enabled.
+
+The goal is not to compare default configurations, but to measure the achievable performance of each system under comparable conditions.
+
+---
+
+## Why tries were not used in storage engines
+
+Trie-based data structures have been known for decades, but have not been used in general-purpose storage engines due to their memory overhead.
+
+A naive trie node with a fanout of 256 stores a pointer for every possible child. In sparse trees, most of these pointers are unused. For example, a node with only two children still requires 256 pointers, wasting significant memory (e.g. 254 × 8 bytes per node).
+
+Leaves avoids this problem by using a sparse node representation:
+
+- Radix compression merges linear paths and reduces tree depth  
+- Bitfield indexing stores only pointers for existing children  
+
+This shifts node size from fixed fanout to data-dependent size, eliminating wasted pointers in sparse nodes and making trie-based indexing viable for high-performance storage engines.
+
+Unlike LSM trees, which trade read performance for write efficiency via multiple levels, the trie structure maintains a single searchable structure without read amplification.
+
+---
+
+## The Contenders
 
 | Engine | Type | Architecture |
 | --- | --- | --- |
-| **LMDB** | Embedded | B+ tree, memory-mapped, copy-on-write |
-| **LevelDB** | Embedded | LSM tree, sorted string tables |
-| **RocksDB** | Embedded | LSM tree (LevelDB fork, optimized) |
-| **WiredTiger** | Embedded | B-tree / LSM hybrid (MongoDB's engine) |
-| **SQLite** | Embedded | B-tree with SQL layer |
-| **BadgerDB** | Embedded | LSM tree with value log (Go, via CGo) |
-| **Redis** | Client/Server | In-memory hash tables |
-| **DragonflyDB** | Client/Server | In-memory (Redis-compatible, multithreaded) |
-| **Leaves** | Embedded | Trie-based, memory-mapped, copy-on-write |
+| [LMDB](https://symas.com/lmdb/) | Embedded | B+ tree, memory-mapped, copy-on-write |
+| [LevelDB](https://github.com/google/leveldb) | Embedded | LSM tree, SSTables |
+| [RocksDB](https://rocksdb.org/) | Embedded | LSM tree (optimized LevelDB fork) |
+| [WiredTiger](https://www.mongodb.com/try/download/wiredtiger) | Embedded | B-tree / LSM hybrid |
+| [SQLite](https://www.sqlite.org/) | Embedded | B-tree with SQL layer |
+| [BadgerDB](https://github.com/dgraph-io/badger) | Embedded | LSM + value log (Go via CGo) |
+| [Redis](https://redis.io/) | Client/Server | In-memory hash tables |
+| [Leaves](https://github.com/kochelmonster/leaves) | Embedded | Trie-based, memory-mapped, copy-on-write |
 
-## Early learnt lessons
+---
 
-Mordern key-value stores can be so fast that the slightest overhead already skews the results. Therefore for this article we focused on embedded key-value stores. For demonstration Redis, DragonflyDB, and BadgerDB were included — Redis and DragonflyDB are left behind by network round-trip cost, and BadgerDB pays a CGo boundary crossing penalty on every operation.
+## Workload Scenario Breakdown
+
+### Analytics Read (100% read)
+
+**Scenario:**  
+This workload represents read-only serving layers such as feature stores, recommendation systems, and profile lookup services, where precomputed data is accessed at high rates with strong locality.
+
+**Configuration:**  
+The workload uses `readproportion=1.0` with a zipfian distribution over one million records. RocksDB and LevelDB use a 1 GB block cache (`rocksdb.cache_size`, `leveldb.cache_size`). WiredTiger is forced into B-tree mode by disabling LSM parameters. Binary keys are enabled where supported.
+
+**Explanation:**  
+Performance is dominated by lookup cost. LSM engines must consult multiple structures, while B-tree engines require logarithmic traversal with comparator overhead, resulting in a cost of O(k · log n). The trie-based structure used by Leaves performs lookups in O(k), depending only on key length and independent of dataset size. This removes both comparator overhead and dataset-dependent scaling, resulting in a simpler and faster lookup path. Leaves and LMDB therefore lead, with LSM engines following.
+
+---
+
+### Batch Insert
+
+**Scenario:**  
+Represents buffered ingestion systems such as event batching, log aggregation, or bulk data import pipelines.
+
+**Configuration:**  
+Uses `insertproportion=0.80`, `updateproportion=0.15`, `readproportion=0.05`, `insertorder=hashed`, batch sizes (`batch_size ∈ {1,8,32,64}`), and binary keys.
+
+**Explanation:**  
+Batching amortizes commit and synchronization costs across multiple operations. LSM engines benefit from write buffering and sequential I/O, while B-tree engines must still locate the insertion position and perform structural updates for each insert. For copy-on-write engines such as LMDB and Leaves, batching reduces the number of copy-on-write operations by grouping multiple updates into a single transaction, significantly reducing data duplication and write amplification.
+
+---
+
+### Batch Update
+
+**Scenario:**  
+Represents bulk modification workloads such as periodic state updates, counter refreshes, or large-scale metadata updates.
+
+**Configuration:**  
+Uses `updateproportion=0.80`, `readproportion=0.20`, zipfian distribution, batch sizes (`batch_size ∈ {1,8,32,64}`), and binary keys.
+
+**Explanation:**  
+Batching reduces commit overhead by grouping updates into fewer transactions. LSM engines still incur write amplification as updates propagate through levels, while B-tree engines must perform structural updates per operation. For copy-on-write engines such as LMDB and Leaves, batching reduces copy-on-write operations, allowing multiple updates to be applied within a single version of the data.
+
+---
+
+### Cache (95% read / 5% update)
+
+**Scenario:**  
+This workload models metadata and profile lookup services with a small number of frequently accessed keys.
+
+**Configuration:**  
+Uses `readproportion=0.95` with zipfian distribution. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode. No batching is applied.
+
+**Explanation:**  
+Same lookup-dominated behavior as **Analytics Read**; see above for structural differences (LSM vs B-tree vs trie).
+
+---
+
+### Ingest (70% insert / 20% update / 10% read)
+
+**Scenario:**  
+Represents event ingestion pipelines such as logging and telemetry systems.
+
+**Configuration:**  
+Uses `insertproportion=0.70` with uniform distribution and `insertorder=hashed`. Batching (`batch_size=64`) and binary keys are enabled across engines.
+
+**Explanation:**  
+Write throughput dominates. LSM engines benefit from sequential write buffering, while B-tree engines must locate the insertion position and perform structural updates on each write. The trie-based structure used by Leaves finds the insertion position in O(k) time and avoids rebalancing or restructuring operations required by B-trees. This reduces the per-insert overhead and leads to consistently higher throughput.
+
+---
+
+### Latest (95% read / 5% insert)
+
+**Scenario:**  
+Models recency-biased systems such as activity feeds and monitoring dashboards.
+
+**Configuration:**  
+Uses `requestdistribution=latest`. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
+
+**Explanation:**  
+Same lookup/update trade-offs as **Ingest** and **Analytics Read**; locality helps LSM, but trie lookup still avoids comparator overhead.
+
+---
+
+### RMW (Read-Modify-Write)
+
+**Scenario:**  
+Represents counters and mutable records where each operation reads and updates data.
+
+**Configuration:**  
+Uses `readproportion=0.50` and `readmodifywriteproportion=0.50`. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
+
+**Explanation:**  
+Combination of **Analytics Read** (lookup) and **Ingest** (write path); see those sections for details.
+
+---
+
+### Range 10
+
+**Scenario:**  
+Represents short pagination queries and recent history lookups.
+
+**Configuration:**  
+Uses fixed scan length of 10 with zipfian distribution. RocksDB and LevelDB use 1 GB cache. WiredTiger uses B-tree mode with larger leaf pages.
+
+**Explanation:**  
+This workload is still largely dominated by the lookup cost of the starting key, as only a small number of subsequent entries are scanned. LSM engines incur additional overhead due to merging across levels during iteration, while B-tree engines benefit from ordered leaf traversal once the starting point is found. The trie-based structure used by Leaves provides faster lookup of the starting key, but offers less advantage during sequential traversal. As a result, performance reflects a balance between lookup efficiency and short-range scan cost.
+
+---
+
+### Range 100
+
+**Scenario:**  
+Represents larger scans such as batch export or analytics queries.
+
+**Configuration:**  
+Same as Range 10 but with scan length 100.
+
+**Explanation:**  
+As scan length increases, traversal cost and data locality become dominant factors. LSM engines incur additional overhead due to multi-level merging during scans. B-tree engines benefit from strong data locality, as records are stored in contiguous pages, allowing efficient sequential access once the scan begins. While the trie-based structure used by Leaves provides faster random access to the scan start, its layout is less optimized for long sequential scans. As a result, LMDB outperforms Leaves in this workload: for short ranges, the faster lookup compensates for scan cost, but for larger ranges, the data locality advantage of LMDB becomes dominant.
+
+---
+
+### Session (50% read / 50% update)
+
+**Scenario:**  
+Models user session storage with frequent reads and updates.
+
+**Configuration:**  
+Uses `readproportion=0.50` and `updateproportion=0.50` with batching and binary keys enabled. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
+
+**Explanation:**  
+Mixed workload; combines effects described in **Analytics Read** and **Ingest**.
+
+---
+
+### ACID A/C/I
+
+**Scenario:**  
+This workload models transactional update patterns under strict durability constraints. Each operation consists of a mix of reads, updates, and read-modify-write operations (25% reads, 35% updates, 40% RMW) executed with full synchronization guarantees. It approximates systems that require atomic updates to individual records while maintaining consistency and isolation.
+
+**Configuration:**  
+Durability is enforced via database-specific settings: LMDB disables `nosync`, RocksDB enables `sync`, WiredTiger enables transactional fsync, SQLite uses WAL and full sync, and Leaves enables WAL.
+
+**Explanation:**  
+Durability dominates; same fsync/logging effects as in **ACID Transactions**.
+
+---
+
+### ACID Transactions
+
+**Scenario:**  
+This workload models explicit multi-key transactions. Each operation executes a transaction that reads multiple keys and updates them atomically within a single commit. The workload therefore measures the cost of coordinating multi-key updates under strict durability and isolation guarantees, similar to financial transfers or strongly consistent state transitions.
+
+**Configuration:**  
+Uses `transactionmode=multikey_acid` with strict durability settings.
+
+**Explanation:**  
+Same durability and coordination costs as **ACID A/C/I**, with additional multi-key overhead.
+
+---
+
+### Concurrent Session (8 threads)
+
+**Scenario:**  
+Represents multi-threaded web backends handling user sessions.
+
+**Configuration:**  
+Uses `threadcount=8`. Leaves uses `confluence` format. RocksDB uses 2 GB cache. WiredTiger uses 4 GB cache and B-tree mode.
+
+**Explanation:**  
+Concurrency introduces contention. LMDB serializes writes, limiting scalability. RocksDB benefits from concurrent write support. Leaves isolates writes per thread and merges asynchronously, achieving higher scalability.
+
+---
+
+### Concurrent Write (8 threads)
+
+**Scenario:**  
+Represents high-throughput ingestion systems with many parallel writers.
+
+**Configuration:**  
+Uses `insertproportion=0.70` and `threadcount=8`. Leaves uses `confluence` format and large mapsize. RocksDB and WiredTiger increase cache sizes.
+
+**Explanation:**  
+Write scalability depends on contention. LSM engines scale via buffering but still share structures. B-tree engines are limited by centralized updates. Leaves distributes writes across threads and merges them asynchronously, resulting in superior scalability.
+
+---
+
+## Benchmark
+
+### Benchmark framework
+
+Benchmarks are executed using a modified YCSB-cpp:  
+https://github.com/kochelmonster/YCSB-cpp  
+
+Supports:
+- scenario matrix (batch, ACID, concurrent)  
+- per-database tuning  
+- reproducibility  
+
+---
 
 ### Benchmark overhead
 
-I started with the original Java YCSB and was surprised about LMDB not showing the expected performance. Some profiling revealed the problem: the benchmark framework itself was consuming a large fraction of the CPU time, especially in read-heavy workloads. That overhead was hiding the true performance differences between engines.
+Modern key-value stores can be so fast that even small benchmark overheads distort the results.
 
-For a more accurate comparison, I switched to YCSB-cpp — but the pure C++ benchmark also spent most of its time in framework code, not the database. So I did some heavy optimization for lower overhead in hot paths.
-
-#### How much overhead does a benchmark framework add?
-
-To quantify this, we profiled the same workloads against LMDB using both the original unoptimized YCSB-cpp and our optimized version. Using Linux `perf` with per-shared-object attribution, I measured what fraction of application-level CPU time is spent inside the database library (liblmdb) versus the benchmark framework (key generation, value serialization, field construction, measurement).
+To quantify this, the same workloads were profiled against LMDB using both the original and optimized YCSB-cpp versions. Using Linux `perf` with per-shared-object attribution, the fraction of application CPU time spent inside the database versus the benchmark framework was measured.
 
 | Workload | Version | DB time | Framework time | Framework overhead |
 | --- | --- | --- | --- | --- |
-| Analytics Read (100% read) | Original YCSB-cpp | 37.5% | 23.5% | **38.5%** |
-| Analytics Read (100% read) | Optimized YCSB-cpp | 57.2% | 8.4% | **12.8%** |
-| RMW (50% read, 50% RMW) | Original YCSB-cpp | 37.6% | 23.1% | **38.0%** |
-| RMW (50% read, 50% RMW) | Optimized YCSB-cpp | 53.6% | 11.2% | **17.3%** |
-| Batch Insert (80% insert, 15% update, 5% read) | Original YCSB-cpp | 27.8% | 25.4% | **47.8%** |
-| Batch Insert (80% insert, 15% update, 5% read) | Optimized YCSB-cpp | 28.7% | 24.9% | **46.5%** |
+| Analytics Read | Original | 37.5% | 23.5% | **38.5%** |
+| Analytics Read | Optimized | 57.2% | 8.4% | **12.8%** |
+| RMW | Original | 37.6% | 23.1% | **38.0%** |
+| RMW | Optimized | 53.6% | 11.2% | **17.3%** |
+| Batch Insert | Original | 27.8% | 25.4% | **47.8%** |
+| Batch Insert | Optimized | 28.7% | 24.9% | **46.5%** |
 
-*Framework overhead = Framework / (Framework + DB). Remaining time is system (libc, kernel, page faults).*
-*RMW = read-modify-write.*
+Framework overhead = Framework / (Framework + DB)
 
-In read-heavy workloads, the unoptimized benchmark wastes nearly **40%** of its application CPU time on framework code — constructing field vectors, allocating strings, copying values — instead of measuring the database. After optimization (contiguous memory buffers, pre-allocated field names, zero-copy slices), that drops to **13%**.
+In read-heavy workloads, the unoptimized benchmark wastes nearly 40% of application CPU time outside the database. After optimization, this drops to roughly 13–17%.
 
-The batch insert workload shows similar framework overhead in both versions because write-commit cost dominates — the framework's per-operation overhead is small compared to the disk/mmap commit.
+Batch insert workloads show similar overhead in both versions because commit cost dominates, making framework overhead relatively less visible.
 
-The throughput impact is significant:
+#### Throughput impact
 
 | Workload | Original YCSB-cpp | Optimized YCSB-cpp | Speedup |
 | --- | --- | --- | --- |
@@ -59,229 +297,62 @@ The throughput impact is significant:
 | RMW | 402,996 ops/sec | 610,086 ops/sec | **1.51×** |
 | Batch Insert | 176,398 ops/sec | 193,318 ops/sec | 1.10× |
 
-We verified the same pattern with LevelDB: the original framework consumes 15–25% of application time in read-heavy workloads, dropping to 6–8% after optimization.
+#### How overhead biases comparisons
 
-#### How overhead favors slower databases
+Benchmark overhead adds a roughly constant per-operation cost.
 
-Benchmark overhead adds a roughly constant per-operation cost. A faster database finishes its work sooner, so the overhead takes a larger share of each measured operation. A slower database spends more time in real work, making the same overhead proportionally smaller.
+- Faster databases complete their work quickly → overhead becomes a larger fraction
+- Slower databases spend more time in actual work → overhead is less visible
 
-This compresses the apparent gap between engines. Measuring LMDB and LevelDB on the same Analytics Read workload:
+This compresses the apparent performance gap.
 
-| Benchmark | LMDB ops/sec | LevelDB ops/sec | LMDB / LevelDB |
+Example (LMDB vs LevelDB):
+
+| Benchmark | LMDB ops/sec | LevelDB ops/sec | Ratio |
 | --- | --- | --- | --- |
-| Original YCSB-cpp | 782,150 | 474,798 | **1.65×** |
-| Optimized YCSB-cpp | 1,129,890 | 622,623 | **1.81×** |
+| Original | 782,150 | 474,798 | **1.65×** |
+| Optimized | 1,129,890 | 622,623 | **1.81×** |
 
-LMDB is actually **1.81×** faster than LevelDB on this workload, but through the unoptimized benchmark it only appears **1.65×** faster. The constant framework overhead eats into LMDB's advantage more than LevelDB's, because LMDB completes its database work faster and spends proportionally more time waiting in benchmark code.
+The unoptimized benchmark underestimates the true performance difference. This effect applies to all fast engines.
 
-The same effect applies to every engine that is faster than the benchmark's overhead floor. The faster the engine, the more its real advantage gets hidden. All results in this article use the optimized framework to ensure the numbers reflect actual engine performance, not framework artifacts.
+All results in this article use the optimized benchmark to ensure measurements reflect actual database performance rather than framework artifacts.
 
-### 2. Best-performance configuration per engine
+---
 
-Each database was configured for maximum throughput, not defaults. This includes workload-level and backend-level switches such as:
+### Hardware
 
-- Binary keys where supported (Leaves, LMDB, LevelDB, RocksDB)
-- Batch size tuning on write-heavy workloads
-- Engine-specific fast-path settings (LMDB's writemap, RocksDB's compression, WiredTiger's cache)
-- Scenario-specific sync/transaction settings for ACID runs
+- CPU: i7-12700KF  
+- RAM: 32 GB DDR4  
+- NVMe SSD  
 
-The goal was not to make one database look good, but to give each engine its strongest realistic setup.
+---
 
-### 3. In-process focus
+## Architecture and Capabilities of Leaves
 
-The core competition is limited to in-process embedded stores, because socket or IPC boundaries can dominate latency and distort the database engine comparison. BadgerDB's CGo boundary crossing adds a similar penalty — each call from C++ into Go pays a goroutine setup and context switch cost.
+Leaves is based on a persistent trie structure combined with copy-on-write storage and a concurrency model designed for parallel workloads. More details can be found in the [Leaves documentation](https://github.com/kochelmonster/leaves).
 
-Redis, DragonflyDB, and BadgerDB are shown as reference points:
+**Trie-based indexing** O(k) lookup independent of dataset size; avoids comparator-based traversal.
 
-- Redis and DragonflyDB demonstrate the network overhead floor
-- BadgerDB shows the CGo interop cost on an otherwise competitive LSM engine
-- None are directly comparable to pure in-process, pointer-level access paths
+**Copy-on-write and batching** Persistent structure with batched updates to reduce write amplification.
 
-### 4. Workloads and scenarios
+**Memory-mapped storage** Direct access via OS paging without a separate buffer manager.
 
-The benchmark matrix spans practical application patterns:
+**Confluence concurrency model** Per-thread write isolation with asynchronous merging.
 
-- Session state
-- Cache-like lookups
-- Analytics reads
-- Ingest
-- Latest-skewed reads
-- Range 10 / Range 100 scans
-- Read-modify-write
-- Batch insert/update variants
-- ACID A/C/I and explicit multi-key ACID transactions
+**Merkle-trie replication** Replication uses a separate hash trie, enabling efficient synchronization without affecting normal operation.
 
-## Results: The Big Bar Reveal
+**Efficient set operations** Merge and intersection operate directly on the trie structure with structural sharing.
 
-![Workload Comparison](../../YCSB-cpp/benchmark_graphs/workload_comparison_average.png)
+**Header-only implementation** No separate build or linking step; easy embedding.
 
-Now back to the opening question.
+**Browser execution via WebAssembly** Runs in the browser using IndexedDB as backend with the same data structure.
 
-The large bar belongs to **Leaves**.
-
-Across the main workload suite, Leaves is consistently the top performer and clearly ahead of the classic fast embedded set, including LMDB.
-
-The competitive landscape breaks down into clear tiers:
-
-1. **Leaves** — first place on every workload, 1.3–1.6× ahead of LMDB on read-heavy work
-2. **LMDB** — the established king of embedded key-value stores, strong across the board
-3. **WiredTiger** — solid on scans (Range 10: 361K), but trails LMDB on reads
-4. **LevelDB / RocksDB** — mid-tier LSM engines, respectable but well behind the B-tree/trie leaders
-5. **SQLite** — surprisingly competitive on reads despite the SQL layer overhead
-6. **BadgerDB** — a capable Go LSM engine, but CGo interop costs suppress throughput to 40–187K ops/sec
-7. **Redis / DragonflyDB** — network-bound, 10–82K ops/sec range. DragonflyDB's multithreading does not help at single-thread benchmark scale
-
-The most interesting result is the gap between embedded engines. LMDB at 1.2M ops/sec on Analytics Read is excellent — and Leaves still beats it by 37%.
-
-## Why Leaves Performs So Well
-
-Leaves combines several properties that matter for real workload throughput:
-
-- Trie-based ordered storage with efficient navigation
-- Cursor-centric API for reads, writes, and scans
-- Copy-on-write internals with lock-free readers and consistent snapshots
-- ACID transactions with commit/rollback and optional sync
-- Multiple storage backends (memory-mapped and file-backed)
-- Header-only C++20 design with low integration overhead
-
-In short: Leaves is built like an embedded systems component, not as a wrapped client/server architecture. That shows up in mixed real-world workloads.
-
-## Workload Scenario Breakdown
-
-This section explains what each scenario represents, which knobs matter, and why performance behaves the way it does.
-
-### Session (50% read / 50% update)
-
-Simulates mutable per-user state.
-
-Important switches:
-
-- `*.batch_size=64` on engines that support batching
-- Binary keys on supported engines
-
-Why behavior looks like this:
-
-- Frequent updates reward efficient update/merge paths
-- Read-write alternation reduces effective batch depth
-- Engines with low per-op overhead and efficient in-memory structures win
-
-### Cache (95% read / 5% update)
-
-Simulates metadata/profile lookup services.
-
-Important switches:
-
-- Read-heavy setup with zipfian access distribution
-
-Why behavior looks like this:
-
-- Read path efficiency dominates
-- Locking, lookup depth, and key encoding overhead become decisive
-
-### Analytics Read (100% read)
-
-Simulates read-only feature serving.
-
-Important switches:
-
-- Pure read path, no write effects
-
-Why behavior looks like this:
-
-- This is the cleanest read-latency proxy
-- High cache locality plus lightweight cursor navigation strongly helps
-
-### Ingest (70% insert / 20% update / 10% read)
-
-Simulates event pipelines with occasional correction updates.
-
-Important switches:
-
-- `insertorder=hashed`
-- Batch size and binary key on supported engines
-
-Why behavior looks like this:
-
-- Insert/update cost and commit strategy dominate
-- Engines that can absorb high mutation rates without expensive per-op sync perform best
-
-### Latest (95% read / 5% insert)
-
-Simulates recency-biased feeds.
-
-Important switches:
-
-- `requestdistribution=latest`
-
-Why behavior looks like this:
-
-- Hot recent keys stress pointer locality and update of near-head data
-- Engines with efficient hot-set handling do well
-
-### Range 10 / Range 100
-
-Simulates pagination and larger window scans.
-
-Important switches:
-
-- Fixed scan lengths (`10` and `100`)
-- Ordered access requirement
-
-Why behavior looks like this:
-
-- Range cost scales with scan depth and traversal efficiency
-- True ordered scan implementation matters more than point lookup speed
-
-### RMW (read-modify-write)
-
-Simulates counters, aggregates, and document patching.
-
-Important switches:
-
-- 50/50 read and RMW mix
-
-Why behavior looks like this:
-
-- Both read and update machinery are in the hot loop
-- Merge/update semantics and allocation behavior become primary bottlenecks
-
-### Batch Insert / Batch Update Scenarios
-
-Stress tests for write-heavy behavior under different batch sizes.
-
-Important switches:
-
-- `batch_size` variants: 1, 8, 32, 64
-
-Why behavior looks like this:
-
-- Larger batches can dramatically reduce commit overhead
-- Mixed read/write phases still cap effective batching in realistic traces
-
-### ACID A/C/I and Explicit ACID Txn
-
-Validates correctness-oriented transaction behavior under stricter settings.
-
-Important switches:
-
-- Durable sync/transaction settings per engine
-- Explicit multi-key transaction mode where supported
-
-Why behavior looks like this:
-
-- Durability and transactional guarantees add unavoidable overhead
-- Relative gaps narrow, but architecture still matters
+---
 
 ## Conclusion
 
-If you benchmark embedded key-value engines seriously, LMDB is the baseline you must beat.
+LMDB remains a strong baseline for embedded databases.
 
-In this comparison — nine engines, eight workloads, multiple scenario variants — most engines do not.
+However, this benchmark shows that a fundamentally different design — a persistent trie — can outperform both B-tree and LSM-based systems across a wide range of workloads.
 
-One does.
-
-**Leaves is the standout performer across the practical workload matrix, while still providing ACID transactions, ordered scans, and replication-ready architecture.**
-
-The results also show why architecture matters more than marketing claims. BadgerDB is a well-regarded Go engine, but CGo boundary crossing costs make it 5–30× slower than native C/C++ embedded stores on the same workloads. Redis and DragonflyDB, despite being "fast" in-memory stores, are fundamentally limited by network round-trips when competing against in-process engines.
-
-If your target is maximum in-process key-value throughput with modern embedded semantics, Leaves is the new reference candidate.
+This result follows directly from architectural differences in lookup, write path, and concurrency.

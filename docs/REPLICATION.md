@@ -4,7 +4,7 @@ This document describes the TransferTrie-based replication algorithm for efficie
 
 ## Motivation
 
-The traditional Merkle set reconciliation approach (as described in [REPLICATION.md](REPLICATION.md)) requires `O(depth × number_of_diffs)` network round trips. For databases with deep tries and many small changes, this becomes inefficient.
+The traditional Merkle set reconciliation approach requires `O(depth × number_of_diffs)` network round trips. For databases with deep tries and many small changes, this becomes inefficient.
 
 The TransferTrie approach uses a simple **breadth-first push model** with a fixed-size transfer buffer, achieving efficient synchronization without complex trie intermixing.
 
