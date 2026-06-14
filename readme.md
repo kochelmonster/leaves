@@ -295,17 +295,4 @@ When configured with Emscripten, the native build path is replaced with browser-
 - [docs/SERIAL_NUMBER_ARITHMETIC.md](docs/SERIAL_NUMBER_ARITHMETIC.md)
 - [benchmarks/README.md](benchmarks/README.md)
 
-## Roadmap
 
-- Conversion tools for value to binary-sortable representations
-- TransferTrie result and join support
-- Joiner support
-- Subtrie replication
-- Subtrie removal
-
-
-
-parallel tests fix
-
-
-process crash 
