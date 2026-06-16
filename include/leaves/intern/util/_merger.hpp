@@ -311,7 +311,7 @@ struct _Merger {
     assert(src_split_pos < 256);
 
     if (src.is_leaf()) {
-      int key = split_pos < current_key.size() ? current_key[split_pos]
+      int key = split_pos < current_key.size() ? (uint8_t)current_key[split_pos]
                                                : TrieNode::NONE;
       auto& src_leaf = src.leaf();
       assert(src_leaf->key_size >= src_split_pos);
@@ -341,7 +341,7 @@ struct _Merger {
 
     if (split_pos < current_key.size()) {
       assert(src.is_trie());
-      int key = current_key[split_pos];
+      int key = (uint8_t)current_key[split_pos];
 
       // A new trie with two branches for the old dst and the new src
       // But first, selectively copy the src side — if nothing survives
@@ -662,7 +662,7 @@ struct _Merger {
   typename CursorDst::Transition::trie_ptr expand_trie_with_branch(
       typename CursorDst::Transition::trie_ptr& dst_trie, int suffix_len,
       uint16_t* loffset, std::string& current_key) {
-    int branch_key = suffix_len ? current_key[dst_cursor.current_key.size()]
+    int branch_key = suffix_len ? (uint8_t)current_key[dst_cursor.current_key.size()]
                                 : TrieNode::NONE;
     assert(!(branch_key == TrieNode::NONE ? dst_trie->has_none()
                                           : dst_trie->isset(branch_key)));

@@ -226,7 +226,7 @@ class Slice {
     return (0 < cmp) - (cmp < 0);
   }
 
-  char operator[](size_t index) const { return data()[index]; }
+  unsigned char operator[](size_t index) const { return data()[index]; }
 
   const char* data() const { return _data; }
 

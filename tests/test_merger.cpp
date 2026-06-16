@@ -3355,6 +3355,35 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_replay) {
   BOOST_CHECK_GT(count, 0);
 }
 
+BOOST_AUTO_TEST_CASE(test_merger_negative_char_key) {
+  // Test merging a key with a character that has a value > 127
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor_pub = src_db.cursor();
+
+  std::string key_with_negative_char = "key";
+  key_with_negative_char += (char)0x80;
+
+  src_cursor_pub.find(key_with_negative_char);
+  src_cursor_pub.value("value_negative_char");
+  src_cursor_pub.commit();
+
+  auto src_internal = src_db._internal();
+  auto dst_internal = dest_storage->open("test")._internal();
+
+  OverwritePolicy handler;
+  exec_merger(*dst_internal, *src_internal, handler);
+
+  // Verify the key was merged correctly
+  auto dst_cursor_pub = dest_storage->open("test").cursor();
+  dst_cursor_pub.find(key_with_negative_char);
+  BOOST_CHECK(dst_cursor_pub.is_valid());
+  BOOST_CHECK_EQUAL(dst_cursor_pub.value(), Slice("value_negative_char"));
+}
+
 // =============================================================================
 // REPLAY-LAST-MERGE test
 //
