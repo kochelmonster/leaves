@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..", "..");
+const ROOT = join(__dirname);
 
 // ── Parse args ──────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -75,6 +75,7 @@ function startHttpServer() {
         // Try WASM dir for other assets
         filePath = join(WASM_DIR, url.pathname.slice(1));
       }
+      console.log("  serving", url.pathname, "->", filePath);
 
       try {
         const data = readFileSync(filePath);

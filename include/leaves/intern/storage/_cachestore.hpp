@@ -16,10 +16,25 @@
 #include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
 #include "../memory/_twoquecache.hpp"
 #include "../third_party/unordered_dense.h"
+#ifdef __EMSCRIPTEN__
+extern "C" {
+#include <emscripten.h>
+}
+#include "../util/_browser_threadpool.hpp"
+#else
 #include "../util/_threadpool.hpp"
+#endif
 #include "_db_directory.hpp"
 
 namespace leaves {
+
+#ifdef __EMSCRIPTEN__
+template <typename T>
+using ThreadPool = _BrowserThreadPoolMixin<T>;
+#else
+template <typename T>
+using ThreadPool = _ThreadPoolMixin<T>;
+#endif
 
 struct _CacheBase {
   using DBEntry = _DBDirectoryEntry;
@@ -28,7 +43,7 @@ struct _CacheBase {
 template <typename Traits_, typename Opers_, typename Self_ = void>
 struct _CacheStore
     : public Opers_,
-      public _ThreadPoolMixin<_CacheStore<Traits_, Opers_, Self_>> {
+      public ThreadPool<_CacheStore<Traits_, Opers_, Self_>> {
   typedef Traits_ Traits;
   // CRTP: if Self_ is provided, use it as the storage type seen by DB;
   // otherwise default to this class itself (non-derived usage).
@@ -99,7 +114,7 @@ struct _CacheStore
 
   _CacheStore(size_t capacity = 500 * M, size_t pool_threads = 1,
               size_t avg_item_size = 512 * K)
-      : _ThreadPoolMixin<_CacheStore>(pool_threads),
+      : ThreadPool<_CacheStore>(pool_threads),
         _cache(capacity, 0.25f, 0.5f, avg_item_size),
         _capacity(capacity) {}
 

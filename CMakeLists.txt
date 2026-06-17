@@ -104,10 +104,7 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
     )
 
-    # ── KV Browser Demo (embind, no main) ───────────────────────
-    add_executable(kv_demo_client examples/kv_browser/client.cpp)
-    target_link_libraries(kv_demo_client PRIVATE wasm_core blake3)
-    target_link_options(kv_demo_client PRIVATE -lembind --no-entry)
+
 
     return()   # stop here; nothing below applies to WASM
 endif()
@@ -321,8 +318,7 @@ target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_suppo
 add_executable(ws_replication_server tests/ws_replication/server.cpp)
 target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
 
-add_executable(kv_demo_server examples/kv_browser/server.cpp)
-target_link_libraries(kv_demo_server PUBLIC core blake3 pthread)
+
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE

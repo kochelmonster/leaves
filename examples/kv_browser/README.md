@@ -40,18 +40,23 @@ Open multiple browser tabs to see changes sync in real time.
 ## Build
 
 ```bash
-# Native server
-cmake --build build -j --target kv_demo_server
-
-# WASM client (configure once, then build)
+# Configure the project (do this once)
+# For native server:
+cmake -B build -G Ninja
+# For WASM client:
 emcmake cmake -B build-wasm -G Ninja
+
+# Build the targets
+# Native server:
+cmake --build build -j --target kv_demo_server
+# WASM client:
 cmake --build build-wasm -j --target kv_demo_client
 ```
 
 ## Run
 
 ```bash
-node examples/kv_browser/run.mjs
+node run.mjs
 ```
 
 This starts the native WebSocket server, an HTTP server with the required
