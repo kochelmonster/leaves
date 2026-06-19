@@ -234,7 +234,7 @@ struct _BrowserOperations : _CacheBase {
     }
 #ifndef NDEBUG
     if (!blocks_to_write.empty()) {
-      std::fprintf(stderr, "[flush] %zu areas, %zu KB async to IDB\n",
+      std::fprintf(stdout, "[flush] %zu areas, %zu KB async to IDB\n",
                    blocks_to_write.size(), total_bytes / 1024);
     }
 #endif
@@ -343,6 +343,7 @@ struct _BrowserOperations : _CacheBase {
  */
 struct _BrowserStore
     : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> {
+ public:
   typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore>
       base_t;
 
@@ -362,7 +363,7 @@ struct _BrowserStore
     size_t header_size = 4 * K;
     char* buffer = new char[header_size];
 
-    open(db_name);
+    _BrowserOperations::open(db_name);
 
     // Try to load existing header from IndexedDB
     bool exists = _try_load_header(buffer, header_size);

@@ -3,16 +3,77 @@
 <head><meta charset="utf-8"><title>Leaves JS API Test</title></head>
 <body>
 <pre id="output">Loading...</pre>
-<script>
-var Module = {
-  noInitialRun: true,
-  onRuntimeInitialized: function() {
-    window.moduleReady = true;
-  }
-};
-</script>
-<script src="leaves.js"></script>
-<script>
+<script type="module">
+import createModule from './leaves.js';
+import { LeavesReplicationSender, LeavesReplicationReceiver } from './leaves_replication.js';
+
+async function runReplicationTest(log, check) {
+    log('\n=== Replication Test ===');
+
+    const Module = await createModule();
+    const store1 = await Module.LeavesStore.createReplicationDB('repl_db1_' + Date.now(), 10 * 1024 * 1024);
+    const c1 = await store1.createCursor();
+    await c1.find('key1');
+    await c1.setValue('value1');
+    await c1.commit(false);
+    log('Store 1 created and data added');
+
+    const store2 = await Module.LeavesStore.createReplicationDB('repl_db2_' + Date.now(), 10 * 1024 * 1024);
+    log('Store 2 created');
+
+    const sender = new LeavesReplicationSender(store1, Module);
+    const receiver = new LeavesReplicationReceiver(store2, Module);
+
+    let onCompleteCalled = false;
+    const events = {
+        onComplete: () => {
+            log('Replication complete');
+            onCompleteCalled = true;
+        },
+        onError: (msg) => {
+            log('Replication error: ' + msg);
+        }
+    };
+
+    const transport1 = {
+        send: (data) => {
+            log('t1 -> t2');
+            setTimeout(() => receiver.onMessageReceived(data), 0);
+        }
+    };
+
+    const transport2 = {
+        send: (data) => {
+            log('t2 -> t1');
+            setTimeout(() => sender.onMessageReceived(data), 0);
+        }
+    };
+
+    sender.begin(transport1, events);
+    receiver.begin(transport2, events);
+
+    // wait for completion
+    for (let i = 0; i < 100 && !onCompleteCalled; ++i) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    check('onComplete called', onCompleteCalled, true);
+
+    const c2 = await store2.createCursor();
+    await c2.find('key1');
+    check('replicated data isValid', c2.isValid(), true);
+    check('replicated data value', await c2.getValue(), 'value1');
+
+    c1.delete();
+    c2.delete();
+    await store1.close();
+    await store2.close();
+    store1.delete();
+    store2.delete();
+}
+
+window.runReplicationTest = runReplicationTest;
+
 async function runTest() {
   var out = document.getElementById('output');
   function log(msg) { out.textContent += msg + '\n'; console.log(msg); }
@@ -30,7 +91,8 @@ async function runTest() {
       }
     }
 
-    var store = await Module.LeavesStore.create('test_api_' + Date.now(), 8, 10 * 1024 * 1024);
+    const Module = await createModule();
+    var store = await Module.LeavesStore.create('test_api_' + Date.now(), 10 * 1024 * 1024);
     log('Store created');
 
     // --- String key/value ---
@@ -126,16 +188,18 @@ async function runTest() {
     } else {
       log('\n=== SOME TESTS FAILED ===');
     }
+
+    if (window.runReplicationTest) {
+        await window.runReplicationTest(log, check);
+    }
+
   } catch (e) {
     log('ERROR: ' + e.message + '\n' + e.stack);
   }
 }
 
 // Wait for module then run
-(function poll() {
-  if (window.moduleReady) runTest();
-  else setTimeout(poll, 50);
-})();
+runTest();
 </script>
 </body>
 </html>

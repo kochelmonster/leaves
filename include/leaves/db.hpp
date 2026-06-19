@@ -8,8 +8,7 @@
 
 namespace leaves {
 
-template <typename Storage,
-          template <typename> class DBClass = _DB>
+template <typename Storage, template <typename> class DBClass = _DB>
 class TDB {
  public:
   typedef typename Storage::storage_ptr storage_ptr;
@@ -34,6 +33,8 @@ class TDB {
 
   db_type* _internal() const { return _db; }
 
+  storage_ptr storage() const { return _storage; }
+
   auto& aspect() { return _db->aspect(); }
   const auto& aspect() const { return _db->aspect(); }
 
@@ -48,7 +49,7 @@ class TDB {
 
  private:
   storage_ptr _storage;
-  DBImpl *_db;
+  DBImpl* _db;
 };
 
 }  // namespace leaves

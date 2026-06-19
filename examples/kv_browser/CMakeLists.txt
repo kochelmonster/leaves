@@ -16,20 +16,43 @@ if(EMSCRIPTEN)
         ../../BLAKE3/c
     )
 
+    if(LEAVES_BROWSER_DEBUG)
+        message(STATUS "kv_browser: debug mode (diagnostic output enabled)")
+        target_compile_definitions(wasm_core INTERFACE DEBUG)
+        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -g -O0)
+    else()
+        message(STATUS "kv_browser: release mode (diagnostic output suppressed)")
+        target_compile_definitions(wasm_core INTERFACE NDEBUG)
+        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -O3)
+    endif()
+
     add_executable(kv_demo_client client.cpp)
     target_link_libraries(kv_demo_client PRIVATE wasm_core blake3)
     target_compile_options(kv_demo_client PRIVATE -fwasm-exceptions)
-    target_link_options(kv_demo_client PRIVATE
-        -lembind
-        --no-entry
-        -fwasm-exceptions
-        --profiling-funcs
-        -sJSPI
-        "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
-        -sALLOW_MEMORY_GROWTH=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        -sENVIRONMENT=web,node
-    )
+    if(LEAVES_BROWSER_DEBUG)
+        target_link_options(kv_demo_client PRIVATE
+            -lembind
+            --no-entry
+            -fwasm-exceptions
+            --profiling-funcs
+            -sJSPI
+            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            -sALLOW_MEMORY_GROWTH=1
+            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            -sENVIRONMENT=web,node
+        )
+    else()
+        target_link_options(kv_demo_client PRIVATE
+            -lembind
+            --no-entry
+            -fwasm-exceptions
+            -sJSPI
+            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            -sALLOW_MEMORY_GROWTH=1
+            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            -sENVIRONMENT=web,node
+        )
+    endif()
 else()
     find_package(Boost 1.80 REQUIRED)
     include_directories(${Boost_INCLUDE_DIRS})

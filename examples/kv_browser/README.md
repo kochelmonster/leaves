@@ -43,14 +43,18 @@ Open multiple browser tabs to see changes sync in real time.
 # Configure the project (do this once)
 # For native server:
 cmake -B build -G Ninja
-# For WASM client:
+# For WASM client (release mode — default, suppresses debug diagnostics):
 emcmake cmake -B build-wasm -G Ninja
+# For WASM client (debug mode — enables diagnostic output like [flush] messages):
+emcmake cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
 
 # Build the targets
 # Native server:
 cmake --build build -j --target kv_demo_server
-# WASM client:
+# WASM client (release):
 cmake --build build-wasm -j --target kv_demo_client
+# WASM client (debug):
+cmake --build build-wasm-debug -j --target kv_demo_client
 ```
 
 ## Run

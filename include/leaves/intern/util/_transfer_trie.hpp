@@ -158,7 +158,7 @@ struct _TransferTrie {
     }
 
     // Zero out offset array (will be filled by caller)
-    std::memset(dest->array(), 0, src->array_size());
+    std::memset((void*)dest->array(), 0, src->array_size());
     return dest;
   }
 

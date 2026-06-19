@@ -21,6 +21,8 @@ class TCursor {
       : _storage(storage), _cursor(db->create_cursor()) {}
   TCursor() = default;
 
+  TCursor(const TCursor& other) = default;
+
   TCursor(TCursor&& other) noexcept
       : _storage(std::move(other._storage)),
         _cursor(std::move(other._cursor)) {}

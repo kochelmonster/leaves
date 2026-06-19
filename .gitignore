@@ -13,6 +13,7 @@ benchmarks/profile.cpuprofile
 benchmarks/trace.json
 benchmarks/profile_browser.mjs
 js/leaves.js
+js/leaves_replication.js
 js/leaves.wasm
 tests/ws_replication/node_modules
 *.gcov

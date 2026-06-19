@@ -355,7 +355,9 @@ struct _CacheStore
   template <template <typename> class DBClass = _DB, typename... Args>
   DBClass<CacheStore>* open(const char* name, Args&&... args) {
     using DB = DBClass<CacheStore>;
-    if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) throw KeyTooBig();
+    if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) {
+      throw std::runtime_error("Database name too long");
+    }
 
     std::scoped_lock flock_guard(this->_self().file_lock());
 
@@ -390,8 +392,8 @@ struct _CacheStore
 
     // 4. Create new DB — prefer a free slot in first page
     if (free_slot) {
-      std::strncpy(free_slot->name, name, sizeof(DBEntry::name) - 1);
-      free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
+      std::strncpy(free_slot->name, name, sizeof(free_slot->name) - 1);
+      free_slot->name[sizeof(free_slot->name) - 1] = '\0';
       auto* db = new DB(_self(), &free_slot->offset, std::string_view(name),
                         std::forward<Args>(args)...);
       db->_header->sanitize_generation = _header->sanitize_generation;
@@ -404,8 +406,8 @@ struct _CacheStore
     if (hwm < cap) {
       auto& slot = _header->dbs[hwm];
       _header->db_entry_count = hwm + 1;
-      std::strncpy(slot.name, name, sizeof(DBEntry::name) - 1);
-      slot.name[sizeof(DBEntry::name) - 1] = '\0';
+      std::strncpy(slot.name, name, sizeof(slot.name) - 1);
+      slot.name[sizeof(slot.name) - 1] = '\0';
       auto* db = new DB(_self(), &slot.offset, std::string_view(name),
                         std::forward<Args>(args)...);
       db->_header->sanitize_generation = _header->sanitize_generation;
@@ -530,8 +532,8 @@ struct _CacheStore
           auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
                             std::forward<Args>(args)...);
           db->_header->sanitize_generation = _header->sanitize_generation;
-          std::strncpy(page->entries[i].name, name, sizeof(DBEntry::name) - 1);
-          page->entries[i].name[sizeof(DBEntry::name) - 1] = '\0';
+          std::strncpy(page->entries[i].name, name, sizeof(page->entries[i].name) - 1);
+          page->entries[i].name[sizeof(page->entries[i].name) - 1] = '\0';
           page->entries[i].offset = tmp_offset;
           this->write((uint64_t)cur, buf, 4 * K);
           make_header_dirty();
@@ -547,8 +549,8 @@ struct _CacheStore
                           std::forward<Args>(args)...);
         db->_header->sanitize_generation = _header->sanitize_generation;
         auto& slot = page->entries[page->count];
-        std::strncpy(slot.name, name, sizeof(DBEntry::name) - 1);
-        slot.name[sizeof(DBEntry::name) - 1] = '\0';
+        std::strncpy(slot.name, name, sizeof(slot.name) - 1);
+        slot.name[sizeof(slot.name) - 1] = '\0';
         slot.offset = tmp_offset;
         page->count++;
         this->write((uint64_t)cur, buf, 4 * K);
@@ -573,8 +575,8 @@ struct _CacheStore
     auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
                       std::forward<Args>(args)...);
     db->_header->sanitize_generation = _header->sanitize_generation;
-    std::strncpy(page->entries[0].name, name, sizeof(DBEntry::name) - 1);
-    page->entries[0].name[sizeof(DBEntry::name) - 1] = '\0';
+    std::strncpy(page->entries[0].name, name, sizeof(page->entries[0].name) - 1);
+    page->entries[0].name[sizeof(page->entries[0].name) - 1] = '\0';
     page->entries[0].offset = tmp_offset;
     page->count = 1;
     page->next = 0;

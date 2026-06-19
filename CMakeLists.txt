@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Emscripten (WebAssembly) ───────────────────────────────────
+option(LEAVES_BROWSER_DEBUG "Build browser WASM targets in debug mode (with diagnostic output)" OFF)
+
 if(EMSCRIPTEN)
     message(STATUS "Building for WebAssembly — only _BrowserStore")
 
@@ -34,33 +36,50 @@ if(EMSCRIPTEN)
         include/leaves/intern/replication/_replication_db.hpp
         include/leaves/intern/replication/_replication_fsm.hpp
         include/leaves/intern/replication/_transfer.hpp
-        include/leaves/intern/util/_executor.hpp
-        include/leaves/intern/util/_task_group.hpp
         include/leaves/intern/util/_threadpool.hpp
         include/leaves/intern/util/_transfer_trie.hpp
         include/leaves/browserstore.hpp
         include/leaves/replication.hpp
+        include/leaves/db.hpp
+        include/leaves/cursor.hpp
     )
     target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
     target_include_directories(wasm_core INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c
     )
-    target_compile_options(wasm_core INTERFACE -fwasm-exceptions)
-    target_link_options(wasm_core INTERFACE
-        -fwasm-exceptions
-        --profiling-funcs
-        -sJSPI
-        "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
-        -sALLOW_MEMORY_GROWTH=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        -sENVIRONMENT=web,node
-    )
 
-    add_executable(test_browserstore tests/test_browserstore.cpp)
-    target_link_libraries(test_browserstore PRIVATE wasm_core blake3)
-    target_compile_definitions(test_browserstore PRIVATE TESTING)
-    target_link_options(test_browserstore PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
+    if(LEAVES_BROWSER_DEBUG)
+        message(STATUS "Browser WASM: debug mode (diagnostic output enabled)")
+        target_compile_definitions(wasm_core INTERFACE DEBUG)
+        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -g -O0)
+        target_link_options(wasm_core INTERFACE
+            -fwasm-exceptions
+            --profiling-funcs
+            -sJSPI
+            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            -sALLOW_MEMORY_GROWTH=1
+            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            -sENVIRONMENT=web,node
+        )
+    else()
+        message(STATUS "Browser WASM: release mode (diagnostic output suppressed)")
+        target_compile_definitions(wasm_core INTERFACE NDEBUG)
+        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -O3)
+        target_link_options(wasm_core INTERFACE
+            -fwasm-exceptions
+            -sJSPI
+            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            -sALLOW_MEMORY_GROWTH=1
+            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            -sENVIRONMENT=web,node
+        )
+    endif()
+
+    #add_executable(test_browserstore tests/test_browserstore.cpp)
+    #target_link_libraries(test_browserstore PRIVATE wasm_core blake3)
+    #target_compile_definitions(test_browserstore PRIVATE TESTING)
+    #target_link_options(test_browserstore PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
 
     add_executable(db_bench_browser benchmarks/db_bench_browser.cpp)
     target_link_libraries(db_bench_browser PRIVATE wasm_core blake3)
@@ -83,17 +102,30 @@ if(EMSCRIPTEN)
     target_link_options(leaves PRIVATE
         -lembind
         --no-entry
+        -sMODULARIZE=1
+        -sEXPORT_ES6=1
+        "-sEXPORTED_RUNTIME_METHODS=['FS','callMain','setValue','getValue']"
     )
     set_target_properties(leaves PROPERTIES OUTPUT_NAME "leaves")
 
-    add_custom_command(TARGET leaves POST_BUILD
+    add_custom_command(
+        OUTPUT
+            ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
         COMMAND ${CMAKE_COMMAND} -E copy
             $<TARGET_FILE:leaves>
             ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.js
         COMMAND ${CMAKE_COMMAND} -E copy
             $<TARGET_FILE_DIR:leaves>/leaves.wasm
             ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
+        DEPENDS leaves
         COMMENT "Copying leaves library WASM to js/"
+    )
+
+    add_custom_target(leaves_js_output ALL
+        DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
     )
 
     add_executable(ws_replication_client tests/ws_replication/client.cpp)
@@ -104,7 +136,25 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
     )
 
-
+    # ── Browser test target ────────────────────────────────────
+    # Build all browser WASM targets in debug mode:
+    #   cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
+    #   cmake --build build-wasm-debug --target browser_test
+    if(LEAVES_BROWSER_DEBUG)
+        add_custom_target(browser_test ALL
+            DEPENDS
+                leaves_js_output
+                db_bench_browser
+                ws_replication_client
+            COMMENT "Building all browser WASM targets in debug mode"
+        )
+    else()
+        add_custom_target(browser_test
+            COMMAND ${CMAKE_COMMAND} -E echo
+                "To build browser WASM in debug mode, reconfigure with -DLEAVES_BROWSER_DEBUG=ON"
+            COMMENT "browser_test requires LEAVES_BROWSER_DEBUG=ON"
+        )
+    endif()
 
     return()   # stop here; nothing below applies to WASM
 endif()

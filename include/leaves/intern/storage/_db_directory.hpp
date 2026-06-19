@@ -8,7 +8,7 @@
 namespace leaves {
 
 struct _DBDirectoryEntry {
-  char name[21];
+  char name[56];
   offset_t offset;
 };
 

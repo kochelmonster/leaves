@@ -107,6 +107,41 @@ cmake -B build-release -G Ninja \
 cmake --build build-release -j
 ```
 
+### Emscripten/WebAssembly Build
+
+To build the WebAssembly targets, you first need to install and activate the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html).
+
+Once your environment is configured, you can generate the build files using the Emscripten toolchain. The recommended way is to use the `emcmake` wrapper. The default configuration builds in **release mode** (`-O3`, `NDEBUG`, no diagnostic output):
+
+```bash
+emcmake cmake -B build-wasm
+```
+
+Alternatively, you can manually specify the path to the Emscripten toolchain file:
+
+```bash
+cmake -B build-wasm -DCMAKE_TOOLCHAIN_FILE=<path-to-emscripten-sdk>/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
+```
+
+Then, run the build:
+
+```bash
+cmake --build build-wasm -j
+```
+
+#### Debug Mode for Browser Testing
+
+To enable diagnostic output (such as `[flush]` messages from the browser store) and include debug symbols, configure with `-DLEAVES_BROWSER_DEBUG=ON`:
+
+```bash
+emcmake cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
+cmake --build build-wasm-debug -j --target browser_test
+```
+
+This builds all browser WASM targets (`leaves_js_output`, `db_bench_browser`, `ws_replication_client`) with `DEBUG` defined, `-g -O0` flags, and profiling symbols.
+
+The build will place the generated Javascript and WebAssembly files in the `js/`, `benchmarks/`, and `examples/` directories. For example, you will find `leaves.js` and `leaves.wasm` in the `js/` directory.
+
 ## Using Leaves in Another Project
 
 Leaves is header-only at the database layer. To consume it directly, add `include/` to your include path.
@@ -116,6 +151,27 @@ target_include_directories(mytarget PRIVATE /path/to/leaves/include)
 ```
 
 If you use replication, also compile the bundled BLAKE3 sources from `BLAKE3/c/` and add that directory to your include path.
+
+### Using `add_subdirectory`
+
+As an alternative to installing, you can add Leaves as a Git submodule and include it directly in your build with `add_subdirectory`.
+
+1.  **Add the submodule:**
+    ```bash
+    git submodule add https://github.com/kochelmonster/leaves.git extern/leaves
+    ```
+
+2.  **Call `add_subdirectory`:** In your `CMakeLists.txt`, disable tests and benchmarks and then add the directory.
+    ```cmake
+    set(LEAVES_BUILD_TESTS OFF)
+    set(LEAVES_BUILD_BENCHMARKS OFF)
+    add_subdirectory(extern/leaves)
+    ```
+
+3.  **Link the target:**
+    ```cmake
+    target_link_libraries(mytarget PRIVATE leaves::leaves)
+    ```
 
 ### Install and package
 
@@ -286,6 +342,84 @@ For benchmark flags and additional examples, see [benchmarks/README.md](benchmar
 ## Browser and WebAssembly
 
 When configured with Emscripten, the native build path is replaced with browser-oriented targets such as `test_browserstore`, `db_bench_browser`, `leaves`, `kv_demo_client`, and `ws_replication_client`. The build copies generated JS and WASM artifacts into `js/` and `benchmarks/` for local use.
+
+### Example: Using `BrowserStorage`
+
+After building the project with Emscripten, you will have `leaves.js` and `leaves.wasm` in the `js/` directory. You can then use them in your web application.
+
+Most of the API functions are asynchronous and return Javascript `Promise`s, so using `async/await` is recommended.
+
+Here is a basic example:
+
+**index.html**
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Leaves-JS Example</title>
+</head>
+<body>
+    <h1>Leaves-JS Example</h1>
+    <script src="leaves.js"></script>
+    <script src="example.js"></script>
+</body>
+</html>
+```
+
+**example.js**
+```javascript
+async function run() {
+    // The 'leaves' module is loaded automatically by leaves.js
+    const Module = await leaves();
+
+    console.log("Leaves module loaded.");
+
+    // Create or open a store
+    const store = await Module.LeavesStore.create("my-db", 1024 * 1024);
+    console.log("Store created.");
+
+    // Open a database within the store
+    const db = await store.db("my-first-db");
+    console.log("Database opened.");
+
+    // Create a cursor
+    const cursor = await db.createCursor();
+    console.log("Cursor created.");
+
+    // Write a key-value pair
+    await cursor.find("hello");
+    await cursor.setValue("world from Javascript!");
+    await cursor.commit(true); // true for sync
+    console.log("Wrote 'hello' -> 'world from Javascript!'");
+
+    // Read the value back
+    await cursor.find("hello");
+    if (cursor.isValid()) {
+        const value = await cursor.getValue();
+        console.log("Read value:", value);
+    } else {
+        console.log("Key 'hello' not found.");
+    }
+
+    // Close the store
+    await store.close();
+    console.log("Store closed.");
+}
+
+run().catch(console.error);
+```
+
+### Running the Browser Test
+
+After building with Emscripten, you can run the test suite in a browser:
+
+1.  **Start a web server:**
+    ```bash
+    python3 -m http.server -d js 8000
+    ```
+
+2.  **Open the test page:**
+    Open `http://localhost:8000/test.html` in your web browser. The test results will be displayed on the page.
 
 ## Additional Documentation
 
