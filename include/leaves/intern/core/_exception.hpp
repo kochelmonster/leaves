@@ -35,9 +35,10 @@ class NotImplemented : public LeavesException {
 
 class KeyTooBig : public LeavesException {};
 
-class TypeMismatch : public LeavesException {
- public:
-  TypeMismatch(const char* msg = "db type mismatch") : LeavesException(msg) {}
+class TypeMismatch : public LeavesException { 
+public:
+  TypeMismatch(const char* msg = "type mismatch") : LeavesException(msg) {}
+  TypeMismatch(const std::string& msg) : LeavesException(msg) {}
 };
 
 class StorageFull : public LeavesException {

@@ -84,7 +84,6 @@ enum class ReplicationError : uint8_t {
   INTERNAL_ERROR = 0x04,
   PAYLOAD_TOO_LARGE = 0x05,
   RESOURCE_LIMIT = 0x06,
-  STORAGE_FULL = 0x07
 };
 
 }  // namespace leaves

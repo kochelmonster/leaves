@@ -20,10 +20,10 @@
 #endif
 
 #include "leaves/fstore.hpp"
-#include "leaves/mmap.hpp"
-#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/replication/_replication_fsm.hpp"
+#include "leaves/mmap.hpp"
 
 using namespace leaves;
 
@@ -40,9 +40,8 @@ using FileReceiverFSM = ReplicationReceiverFSM<FileDBImpl>;
 
 BOOST_AUTO_TEST_CASE(test_storage_full_what_message) {
   StorageFull ex;
-  BOOST_CHECK_EQUAL(
-      std::string(ex.what()),
-      "storage full: file size would exceed mapped region");
+  BOOST_CHECK_EQUAL(std::string(ex.what()),
+                    "storage full: file size would exceed mapped region");
 }
 
 // =============================================================================
@@ -197,7 +196,6 @@ struct ReplicationFixture {
 // =============================================================================
 // Tests
 // =============================================================================
-
 
 BOOST_AUTO_TEST_SUITE(ReplicationFSMTests)
 
@@ -525,7 +523,7 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
 
   // Create a larger dataset with common data distributed throughout the tree
   // This ensures pruning happens across multiple buffer transmissions
-  
+
   // Insert common keys with various prefixes to spread them across trie
   // Use larger values to ensure we need multiple buffers
   {
@@ -535,8 +533,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     for (int i = 0; i < 100; ++i) {
       std::string key = "common_" + std::to_string(i);
       // Make values large enough to force multiple buffers
-      std::string value = "shared_value_" + std::to_string(i) + 
-                         "_padding_to_increase_size_" + std::string(200, 'x');
+      std::string value = "shared_value_" + std::to_string(i) +
+                          "_padding_to_increase_size_" + std::string(200, 'x');
       sender_cursor.find(Slice(key));
       sender_cursor.value(Slice(value));
       receiver_cursor.find(Slice(key));
@@ -552,7 +550,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     auto cursor = sender_db.cursor();
     for (int i = 0; i < 50; ++i) {
       std::string key = "sender_only_" + std::to_string(i);
-      std::string value = "new_value_" + std::to_string(i) + std::string(200, 'y');
+      std::string value =
+          "new_value_" + std::to_string(i) + std::string(200, 'y');
       cursor.find(Slice(key));
       cursor.value(Slice(value));
     }
@@ -564,7 +563,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     auto cursor = receiver_db.cursor();
     for (int i = 0; i < 30; ++i) {
       std::string key = "receiver_only_" + std::to_string(i);
-      std::string value = "local_value_" + std::to_string(i) + std::string(200, 'z');
+      std::string value =
+          "local_value_" + std::to_string(i) + std::string(200, 'z');
       cursor.find(Slice(key));
       cursor.value(Slice(value));
     }
@@ -604,7 +604,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   TestEvents sender_events, receiver_events;
 
   // Use a small buffer size to force multiple round trips and test pruning
-  constexpr size_t SMALL_BUFFER = 8192;  // 8KB buffer forces multiple transmissions
+  constexpr size_t SMALL_BUFFER =
+      8192;  // 8KB buffer forces multiple transmissions
   SenderFSM sender(sender_impl, SMALL_BUFFER);
   ReceiverFSM receiver(receiver_impl);
 
@@ -618,7 +619,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
   BOOST_CHECK(sender_events.completed);
   BOOST_CHECK(receiver_events.completed);
 
-  // Verify progress callbacks were made (indicating multiple buffer transmissions)
+  // Verify progress callbacks were made (indicating multiple buffer
+  // transmissions)
   BOOST_CHECK_GT(sender_events.progress_calls, 0);
 
   // Verify results in receiver
@@ -634,8 +636,9 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     // Common keys should still exist with same values
     for (int i = 0; i < 100; ++i) {
       std::string key = "common_" + std::to_string(i);
-      std::string expected = "shared_value_" + std::to_string(i) + 
-                            "_padding_to_increase_size_" + std::string(200, 'x');
+      std::string expected = "shared_value_" + std::to_string(i) +
+                             "_padding_to_increase_size_" +
+                             std::string(200, 'x');
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Common key missing: " + key);
       BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
@@ -645,7 +648,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     // Sender-only keys should now exist in receiver
     for (int i = 0; i < 50; ++i) {
       std::string key = "sender_only_" + std::to_string(i);
-      std::string expected = "new_value_" + std::to_string(i) + std::string(200, 'y');
+      std::string expected =
+          "new_value_" + std::to_string(i) + std::string(200, 'y');
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
                             "Sender-only key not replicated: " + key);
@@ -656,7 +660,8 @@ BOOST_FIXTURE_TEST_CASE(test_differential_update, ReplicationFixture) {
     // Receiver-only keys should still exist (merge, not replace)
     for (int i = 0; i < 30; ++i) {
       std::string key = "receiver_only_" + std::to_string(i);
-      std::string expected = "local_value_" + std::to_string(i) + std::string(200, 'z');
+      std::string expected =
+          "local_value_" + std::to_string(i) + std::string(200, 'z');
       cursor.find(Slice(key));
       BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
                             "Receiver-only key was deleted: " + key);
@@ -677,7 +682,7 @@ BOOST_FIXTURE_TEST_CASE(test_fsm_reuse, ReplicationFixture) {
   // completion, allowing the same FSM code path to be used for multiple
   // replication rounds. In practice, each round uses fresh FSM instances
   // with new transactions.
-  
+
   auto sender_path = test_temp_dir / "sender_reuse.lvs";
   auto receiver_path = test_temp_dir / "receiver_reuse.lvs";
 
@@ -856,13 +861,12 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   // the send buffer so _temp_buffer_memory() tracks actual data.
   constexpr size_t SEND_BUFFER = 16 * 1024;  // 16 KB
   constexpr size_t RECV_BUFFER = SEND_BUFFER;
-  constexpr size_t MEMORY_BUDGET = RECV_BUFFER * 3;  // ~48 KB — a few subtrees before fraction
+  constexpr size_t MEMORY_BUDGET =
+      RECV_BUFFER * 3;  // ~48 KB — a few subtrees before fraction
 
   SenderFSM sender(sender_impl, SEND_BUFFER);
-  ReceiverFSM receiver(receiver_impl,
-                       ReplicationMergePolicy<DBImpl>{},
-                       RECV_BUFFER,
-                       MEMORY_BUDGET);
+  ReceiverFSM receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{},
+                       RECV_BUFFER, MEMORY_BUDGET);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -967,10 +971,8 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
   constexpr size_t MEMORY_BUDGET = RECV_BUFFER * 3;  // ~48 KB
 
   SenderFSM sender(sender_impl, SEND_BUFFER);
-  ReceiverFSM receiver(receiver_impl,
-                       ReplicationMergePolicy<DBImpl>{},
-                       RECV_BUFFER,
-                       MEMORY_BUDGET);
+  ReceiverFSM receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{},
+                       RECV_BUFFER, MEMORY_BUDGET);
 
   receiver.begin(&receiver_transport, &receiver_events);
   sender.begin(&sender_transport, &sender_events);
@@ -1015,8 +1017,7 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
       std::string expected =
           "lval_" + std::to_string(i) + std::string(150, 'l');
       cursor.find(Slice(key));
-      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
-                            "Local key was deleted: " + key);
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Local key was deleted: " + key);
       BOOST_CHECK_MESSAGE(cursor.value() == Slice(expected),
                           "Local key value changed: " + key);
     }
@@ -1027,7 +1028,8 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
 // Test big value replication and memory management
 // =============================================================================
 
-BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag,
+                        ReplicationFixture) {
   // Create sender and receiver databases
   auto sender_path = test_temp_dir / "sender_bigval.lvs";
   auto receiver_path = test_temp_dir / "receiver_bigval.lvs";
@@ -1040,20 +1042,21 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
 
   // Big value size - must exceed MAX_PAGE_SIZE (4K) minus leaf overhead
   // to trigger big value storage
-  const size_t BIG_VALUE_SIZE = 8 * 1024;  // 8KB - definitely triggers big value
+  const size_t BIG_VALUE_SIZE =
+      8 * 1024;  // 8KB - definitely triggers big value
 
   // Insert multiple big values on sender
   {
     auto cursor = sender_db.cursor();
     cursor.start_transaction();
-    
+
     for (int i = 0; i < 5; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
       std::vector<char> value(BIG_VALUE_SIZE, 'A' + i);
       cursor.find(Slice(key));
       cursor.value(Slice(value.data(), value.size()));
     }
-    
+
     cursor.commit();
   }
 
@@ -1063,7 +1066,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
     for (int i = 0; i < 5; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), "Sender missing big key: " + key);
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
+                            "Sender missing big key: " + key);
       BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
       BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A' + i);
     }
@@ -1084,8 +1088,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
     TestEvents sender_events, receiver_events;
 
     SenderFSM sender(sender_impl);
-    ReceiverFSM receiver(receiver_impl,
-                         ReplicationMergePolicy<DBImpl>{});
+    ReceiverFSM receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -1104,15 +1107,16 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
     for (int i = 0; i < 5; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), 
-                            "Receiver missing big key after replication: " + key);
+      BOOST_REQUIRE_MESSAGE(
+          cursor.is_valid(),
+          "Receiver missing big key after replication: " + key);
       BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
       BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A' + i);
       // Check entire value content
       std::vector<char> expected(BIG_VALUE_SIZE, 'A' + i);
-      BOOST_CHECK_MESSAGE(
-          std::memcmp(cursor.value().data(), expected.data(), BIG_VALUE_SIZE) == 0,
-          "Big value content mismatch for key: " + key);
+      BOOST_CHECK_MESSAGE(std::memcmp(cursor.value().data(), expected.data(),
+                                      BIG_VALUE_SIZE) == 0,
+                          "Big value content mismatch for key: " + key);
     }
   }
 
@@ -1131,7 +1135,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
   {
     auto cursor = receiver_db.cursor();
     cursor.start_transaction();
-    
+
     // Delete consecutive big values (0, 1, 2) to test has_successor merging
     for (int i = 0; i < 3; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
@@ -1139,7 +1143,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
       BOOST_REQUIRE(cursor.is_valid());
       cursor.remove();
     }
-    
+
     cursor.commit();
   }
 
@@ -1166,7 +1170,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
     for (int i = 3; i < 5; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_REQUIRE_MESSAGE(cursor.is_valid(), 
+      BOOST_REQUIRE_MESSAGE(cursor.is_valid(),
                             "Big key missing after defrag: " + key);
       BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
       BOOST_CHECK_EQUAL(cursor.value().data()[0], 'A' + i);
@@ -1174,16 +1178,18 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
   }
 
   // Allocate a large value that should fit in the merged space
-  // 3 chunks of 8KB aligned to 4KB = merged space should be able to hold a larger value
+  // 3 chunks of 8KB aligned to 4KB = merged space should be able to hold a
+  // larger value
   {
     auto cursor = receiver_db.cursor();
     cursor.start_transaction();
-    
-    const size_t LARGE_SIZE = 20 * 1024;  // 20KB should fit in merged 24KB+ space
+
+    const size_t LARGE_SIZE =
+        20 * 1024;  // 20KB should fit in merged 24KB+ space
     std::vector<char> large_value(LARGE_SIZE, 'Z');
     cursor.find("large_after_defrag");
     cursor.value(Slice(large_value.data(), large_value.size()));
-    
+
     cursor.commit();
   }
 
@@ -1194,11 +1200,12 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_replication_and_defrag, ReplicationFixtur
     BOOST_REQUIRE(cursor.is_valid());
     BOOST_CHECK_EQUAL(cursor.value().size(), 20 * 1024);
     BOOST_CHECK_EQUAL(cursor.value().data()[0], 'Z');
-    
+
     // Verify defrag actually merged the chunks - the new allocation should
     // start at the same address as the former bigkey_0's data
     BOOST_CHECK_MESSAGE(cursor.value().data() == bigkey_0_data_ptr,
-                        "Defrag did not merge freed chunks - new allocation at different address");
+                        "Defrag did not merge freed chunks - new allocation at "
+                        "different address");
   }
 }
 
@@ -1369,14 +1376,16 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_replication, ReplicationFixture) {
     for (int i = 0; i < 5; ++i) {
       std::string key = "key_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_CHECK_MESSAGE(!cursor.is_valid(), "Deleted key still present: " + key);
+      BOOST_CHECK_MESSAGE(!cursor.is_valid(),
+                          "Deleted key still present: " + key);
     }
 
     // Verify the correct keys remain (5-9)
     for (int i = 5; i < 10; ++i) {
       std::string key = "key_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_CHECK_MESSAGE(cursor.is_valid(), "Missing key after applying deletes: " + key);
+      BOOST_CHECK_MESSAGE(cursor.is_valid(),
+                          "Missing key after applying deletes: " + key);
     }
   }
 
@@ -1401,7 +1410,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_replication, ReplicationFixture) {
   }
 }
 
-BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication,
+                        ReplicationFixture) {
   // Verify that re-inserting a previously deleted key survives replication.
   // The deletion trie still contains the key, but because the deletion trie
   // is merged BEFORE the main trie (phase order), the main trie merge
@@ -1457,7 +1467,10 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
     auto cursor = src_db.cursor();
     int count = 0;
     cursor.first();
-    while (cursor.is_valid()) { count++; cursor.next(); }
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 8);
   }
 
@@ -1473,7 +1486,10 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
 
     int del_count = 0;
     del_cursor.first();
-    while (del_cursor.is_valid()) { del_count++; del_cursor.next(); }
+    while (del_cursor.is_valid()) {
+      del_count++;
+      del_cursor.next();
+    }
     BOOST_CHECK_EQUAL(del_count, 5);
   }
 
@@ -1505,7 +1521,10 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
     auto cursor = dst_db.cursor();
     int count = 0;
     cursor.first();
-    while (cursor.is_valid()) { count++; cursor.next(); }
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 8);
 
     // Re-inserted keys 0-2 should be present with new values
@@ -1524,7 +1543,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
     for (int i = 3; i < 5; ++i) {
       std::string key = "key_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_CHECK_MESSAGE(!cursor.is_valid(), "Deleted key still present: " + key);
+      BOOST_CHECK_MESSAGE(!cursor.is_valid(),
+                          "Deleted key still present: " + key);
     }
 
     // Original keys 5-9 should remain
@@ -1542,7 +1562,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_reinsert_survives_replication, Replication
 // These tests verify that the FSM correctly rejects crafted/malicious messages
 // and transitions to ERROR state without crashing or corrupting data.
 
-// Helper: build a raw message with arbitrary bytes (bypasses builder validation)
+// Helper: build a raw message with arbitrary bytes (bypasses builder
+// validation)
 static std::vector<uint8_t> build_raw_msg(ReplicationMsgType type,
                                           uint64_t session_id,
                                           const uint8_t* payload,
@@ -1556,7 +1577,8 @@ static std::vector<uint8_t> build_raw_msg(ReplicationMsgType type,
   hdr->version = REPLICATION_PROTOCOL_VERSION;
   std::memset(hdr->reserved, 0, sizeof(hdr->reserved));
   if (payload_size > 0)
-    std::memcpy(buf.data() + sizeof(ReplicationMsgHeader), payload, payload_size);
+    std::memcpy(buf.data() + sizeof(ReplicationMsgHeader), payload,
+                payload_size);
   return buf;
 }
 
@@ -1690,7 +1712,8 @@ BOOST_FIXTURE_TEST_CASE(test_sender_wrong_state_message, ReplicationFixture) {
   BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
 }
 
-BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload,
+                        ReplicationFixture) {
   // Sender receives SUBTRIE_ACK with malformed RequestChildren payload
   auto path = test_temp_dir / "sender_badack.lvs";
   auto storage = Storage::create(path.c_str());
@@ -1716,10 +1739,11 @@ BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload, ReplicationFixture)
   sender.begin(&sender_transport, &events);
   BOOST_CHECK(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
 
-  // Send SUBTRIE_ACK with garbage payload (wrong magic for RequestChildrenHeader)
-  uint8_t garbage_payload[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                               0x00};
+  // Send SUBTRIE_ACK with garbage payload (wrong magic for
+  // RequestChildrenHeader)
+  uint8_t garbage_payload[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                               0x00, 0x00, 0x00, 0x00, 0x00};
   auto bad = build_raw_msg(ReplicationMsgType::SUBTRIE_ACK, sender.session_id(),
                            garbage_payload, sizeof(garbage_payload));
   sender.on_message_received(bad.data(), bad.size());
@@ -1808,8 +1832,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
 
   // Now inject a message with a different session ID
   uint64_t wrong_session = sender.session_id() ^ 0xFFFFFFFF;
-  auto bad = build_raw_msg(ReplicationMsgType::COMPLETE, wrong_session,
-                           nullptr, 0);
+  auto bad =
+      build_raw_msg(ReplicationMsgType::COMPLETE, wrong_session, nullptr, 0);
   feed_receiver(receiver, bad.data(), bad.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -1832,8 +1856,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_payload_too_large, ReplicationFixture) {
   TestEvents events;
 
   // Create receiver with very small max_payload_size (256 bytes)
-  ReceiverFSM receiver(impl, {}, 64 * 1024, 256 * 1024 * 1024,
-                       256);
+  ReceiverFSM receiver(impl, {}, 64 * 1024, 256 * 1024 * 1024, 256);
 
   receiver.begin(&transport, &events);
 
@@ -1911,7 +1934,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_unexpected_msg_type, ReplicationFixture) {
 // 7. Receiver: malformed TRIE_DATA payload
 // ---------------------------------------------------------------------------
 
-BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header,
+                        ReplicationFixture) {
   // Receiver gets TRIE_DATA with truncated/invalid TransferTrieHeader
   auto path = test_temp_dir / "recv_badtrie.lvs";
   auto storage = Storage::create(path.c_str());
@@ -1927,8 +1951,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header, ReplicationFixture) 
 
   // Build TRIE_DATA with payload too small for TransferTrieHeader (45 bytes)
   uint8_t tiny_payload[10] = {0};
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           tiny_payload, sizeof(tiny_payload));
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, tiny_payload,
+                           sizeof(tiny_payload));
   feed_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -1955,8 +1979,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_magic, ReplicationFixture) {
   tth->magic = 0xBAADF00D;
   tth->version = 1;
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           fake_tth.data(), fake_tth.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, fake_tth.data(),
+                           fake_tth.size());
   feed_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -1985,8 +2009,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_subtrie_path_overflow,
   tth->version = 1;
   tth->subtrie_path_len = 9999;  // way beyond buffer
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -2088,8 +2112,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_truncated,
 
   // Send BIG_VALUE_START with only 4 bytes (need 12)
   uint8_t tiny[] = {0x01, 0x00, 0x00, 0x00};
-  auto msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1,
-                           tiny, sizeof(tiny));
+  auto msg =
+      build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1, tiny, sizeof(tiny));
   feed_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -2119,9 +2143,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_too_large,
   bvh.count = 1;
   bvh.total_aligned_size = 1024 * 1024;
 
-  auto msg = build_raw_msg(
-      ReplicationMsgType::BIG_VALUE_START, 1,
-      reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
+  auto msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1,
+                           reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
   feed_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -2148,9 +2171,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_integer_overflow,
   bvh.count = 1;
   bvh.total_aligned_size = UINT64_MAX - 100;
 
-  auto msg = build_raw_msg(
-      ReplicationMsgType::BIG_VALUE_START, 1,
-      reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
+  auto msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1,
+                           reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
   feed_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -2191,8 +2213,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
   TestEvents sender_events, receiver_events;
 
   // Use a small max_payload (200) so first real msg fits but second won't
-  ReceiverFSM receiver(dst_impl, {}, 64 * 1024,
-                       256 * 1024 * 1024, 200);
+  ReceiverFSM receiver(dst_impl, {}, 64 * 1024, 256 * 1024 * 1024, 200);
 
   SenderFSM sender(src_impl);
 
@@ -2216,8 +2237,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
 
   // Now inject a second TRIE_DATA with payload > 200 bytes -> PAYLOAD_TOO_LARGE
   std::vector<uint8_t> big_payload(300, 0x42);
-  auto bad = build_raw_msg(ReplicationMsgType::TRIE_DATA,
-                           receiver.session_id(),
+  auto bad = build_raw_msg(ReplicationMsgType::TRIE_DATA, receiver.session_id(),
                            big_payload.data(), big_payload.size());
   feed_receiver(receiver, bad.data(), bad.size());
 
@@ -2316,9 +2336,9 @@ BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
   rcb.begin(sender.session_id(), DbType::DB_MAIN);
 
   uint64_t wrong = sender.session_id() + 1;
-  auto bad = build_raw_msg(ReplicationMsgType::SUBTRIE_ACK, wrong,
-                           reinterpret_cast<const uint8_t*>(rcb.finalize().data()),
-                           rcb.size());
+  auto bad = build_raw_msg(
+      ReplicationMsgType::SUBTRIE_ACK, wrong,
+      reinterpret_cast<const uint8_t*>(rcb.finalize().data()), rcb.size());
   sender.on_message_received(bad.data(), bad.size());
 
   BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
@@ -2422,8 +2442,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
     TestEvents sender_events, receiver_events;
 
     SenderFSM sender(sender_impl);
-    ReceiverFSM receiver(receiver_impl,
-                         ReplicationMergePolicy<DBImpl>{});
+    ReceiverFSM receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -2514,8 +2533,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
     TestEvents sender_events, receiver_events;
 
     SenderFSM sender(sender_impl);
-    ReceiverFSM receiver(receiver_impl,
-                         ReplicationMergePolicy<DBImpl>{});
+    ReceiverFSM receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -2544,8 +2562,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
       if (claimed_slot >= 0) {
         uint64_t slot_val =
             receiver_impl->_header->replication_slots[claimed_slot]._offset;
-        constexpr uint64_t SENTINEL =
-            DBImpl::Header::REPLICATION_SLOT_SENTINEL;
+        constexpr uint64_t SENTINEL = DBImpl::Header::REPLICATION_SLOT_SENTINEL;
         if (slot_val != 0 && slot_val != SENTINEL) {
           // BIG_VALUE_START was processed — the slot holds a real area offset.
           // Stop here to simulate a crash.
@@ -2591,8 +2608,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
   for (uint16_t i = 0; i < N; ++i) {
     BOOST_CHECK_MESSAGE(
         receiver_impl->_header->replication_slots[i]._offset == 0,
-        "Slot " + std::to_string(i) +
-            " is non-zero after sanitize(): " +
+        "Slot " + std::to_string(i) + " is non-zero after sanitize(): " +
             std::to_string(
                 receiver_impl->_header->replication_slots[i]._offset));
   }
@@ -2610,9 +2626,8 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
     auto cursor = receiver_db.cursor();
     cursor.find("post_crash_key");
     BOOST_REQUIRE(cursor.is_valid());
-    BOOST_CHECK_EQUAL(
-        std::string(cursor.value().data(), cursor.value().size()),
-        "post_crash_value");
+    BOOST_CHECK_EQUAL(std::string(cursor.value().data(), cursor.value().size()),
+                      "post_crash_value");
   }
 }
 
@@ -2656,8 +2671,7 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
   std::vector<ReceiverContext> receivers(N);
   for (uint16_t i = 0; i < N; ++i) {
     receivers[i].fsm = std::make_unique<ReceiverFSM>(
-        receiver_impl,
-        ReplicationMergePolicy<DBImpl>{});
+        receiver_impl, ReplicationMergePolicy<DBImpl>{});
     receivers[i].fsm->begin(&receivers[i].transport, &receivers[i].events);
 
     // Each should have claimed a unique slot
@@ -2666,16 +2680,14 @@ BOOST_FIXTURE_TEST_CASE(test_slot_exhaustion, ReplicationFixture) {
 
   // Verify all N slots are occupied (sentinel value since no BIG_VALUE_START)
   for (uint16_t i = 0; i < N; ++i) {
-    BOOST_CHECK_EQUAL(
-        receiver_impl->_header->replication_slots[i]._offset,
-        DBImpl::Header::REPLICATION_SLOT_SENTINEL);
+    BOOST_CHECK_EQUAL(receiver_impl->_header->replication_slots[i]._offset,
+                      DBImpl::Header::REPLICATION_SLOT_SENTINEL);
   }
 
   // Create one more receiver — should fail to claim a slot
   TestTransport extra_transport;
   TestEvents extra_events;
-  ReceiverFSM extra_receiver(receiver_impl,
-                             ReplicationMergePolicy<DBImpl>{});
+  ReceiverFSM extra_receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{});
   extra_receiver.begin(&extra_transport, &extra_events);
 
   BOOST_CHECK_EQUAL(extra_receiver._replication_slot.slot_index(), -1);
@@ -2734,8 +2746,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
     TestEvents sender_events, receiver_events;
 
     SenderFSM sender(sender_impl);
-    ReceiverFSM receiver(receiver_impl,
-                         ReplicationMergePolicy<DBImpl>{});
+    ReceiverFSM receiver(receiver_impl, ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -2761,8 +2772,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
       if (claimed_slot >= 0) {
         uint64_t slot_val =
             receiver_impl->_header->replication_slots[claimed_slot]._offset;
-        constexpr uint64_t SENTINEL =
-            DBImpl::Header::REPLICATION_SLOT_SENTINEL;
+        constexpr uint64_t SENTINEL = DBImpl::Header::REPLICATION_SLOT_SENTINEL;
         if (slot_val != 0 && slot_val != SENTINEL) break;
       }
 
@@ -2807,8 +2817,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
 
   // All slots must be zero
   for (uint16_t i = 0; i < N; ++i) {
-    BOOST_CHECK_EQUAL(
-        receiver_impl->_header->replication_slots[i]._offset, 0u);
+    BOOST_CHECK_EQUAL(receiver_impl->_header->replication_slots[i]._offset, 0u);
   }
 
   // Verify the DB is still usable after the error
@@ -2824,9 +2833,8 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
     auto cursor = receiver_db.cursor();
     cursor.find("post_error_key");
     BOOST_REQUIRE(cursor.is_valid());
-    BOOST_CHECK_EQUAL(
-        std::string(cursor.value().data(), cursor.value().size()),
-        "post_error_value");
+    BOOST_CHECK_EQUAL(std::string(cursor.value().data(), cursor.value().size()),
+                      "post_error_value");
   }
 }
 
@@ -2890,8 +2898,7 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
 
     ReplicationSenderFSM<DBImpl> sender(mmap_impl);
     ReplicationReceiverFSM<FileDBImpl> receiver(
-        file_impl,
-        ReplicationMergePolicy<FileDBImpl>{});
+        file_impl, ReplicationMergePolicy<FileDBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
@@ -2950,21 +2957,18 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
     TestEvents sender_events, receiver_events;
 
     ReplicationSenderFSM<FileDBImpl> sender(file_impl);
-    ReplicationReceiverFSM<DBImpl> receiver(
-        mmap2_impl,
-        ReplicationMergePolicy<DBImpl>{});
+    ReplicationReceiverFSM<DBImpl> receiver(mmap2_impl,
+                                            ReplicationMergePolicy<DBImpl>{});
 
     receiver.begin(&receiver_transport, &receiver_events);
     sender.begin(&sender_transport, &sender_events);
 
     run_protocol(sender, receiver, sender_transport, receiver_transport, 200);
 
-    BOOST_REQUIRE_MESSAGE(
-        sender.state() == decltype(sender)::State::IDLE,
-        "File sender not IDLE");
-    BOOST_REQUIRE_MESSAGE(
-        receiver.state() == decltype(receiver)::State::IDLE,
-        "Mmap receiver not IDLE");
+    BOOST_REQUIRE_MESSAGE(sender.state() == decltype(sender)::State::IDLE,
+                          "File sender not IDLE");
+    BOOST_REQUIRE_MESSAGE(receiver.state() == decltype(receiver)::State::IDLE,
+                          "Mmap receiver not IDLE");
     BOOST_CHECK(sender_events.completed);
     BOOST_CHECK(receiver_events.completed);
   }
@@ -3004,7 +3008,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
 // when the DB root is zero (empty DB), not a non-null pointer to offset 0.
 // Before the fix, the receiver would resolve offset 0 and read garbage hash
 // bytes from the DB header, potentially causing incorrect hash comparisons.
-BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie,
+                        ReplicationFixture) {
   auto sender_path = test_temp_dir / "sender_empty_root.lvs";
   auto receiver_path = test_temp_dir / "receiver_empty_root.lvs";
 
@@ -3163,8 +3168,8 @@ BOOST_FIXTURE_TEST_CASE(test_multithreaded_replication, ReplicationFixture) {
 
   // Adapters forward send() to the peer's thread-safe queue.
   ThreadedTransportAdapter sender_adapter, receiver_adapter;
-  sender_adapter._peer = &receiver_tsq;   // sender.send() → receiver queue
-  receiver_adapter._peer = &sender_tsq;   // receiver.send() → sender queue
+  sender_adapter._peer = &receiver_tsq;  // sender.send() → receiver queue
+  receiver_adapter._peer = &sender_tsq;  // receiver.send() → sender queue
 
   TestEvents sender_events, receiver_events;
 
@@ -3310,12 +3315,10 @@ BOOST_FIXTURE_TEST_CASE(test_partial_failure_disconnect, ReplicationFixture) {
   // Neither side should be IDLE (didn't finish) or COMPLETE
   // They should be in a sending/awaiting state, or the protocol loop broke
   // because of no activity
-  BOOST_CHECK_MESSAGE(
-      sender.state() != SenderFSM::State::IDLE,
-      "Sender should NOT have completed after disconnect");
-  BOOST_CHECK_MESSAGE(
-      receiver.state() != ReceiverFSM::State::IDLE,
-      "Receiver should NOT have completed after disconnect");
+  BOOST_CHECK_MESSAGE(sender.state() != SenderFSM::State::IDLE,
+                      "Sender should NOT have completed after disconnect");
+  BOOST_CHECK_MESSAGE(receiver.state() != ReceiverFSM::State::IDLE,
+                      "Receiver should NOT have completed after disconnect");
 
   // Neither side should have reported completion
   BOOST_CHECK(!sender_events.completed);
@@ -3443,9 +3446,8 @@ BOOST_FIXTURE_TEST_CASE(test_last_activity_timeout, ReplicationFixture) {
 
   // A hypothetical 10ms timeout would fire for the receiver (idle > 20+30ms)
   auto timeout_threshold = std::chrono::milliseconds(10);
-  BOOST_CHECK_MESSAGE(
-      (now - receiver.last_activity()) > timeout_threshold,
-      "Receiver idle time should exceed the timeout threshold");
+  BOOST_CHECK_MESSAGE((now - receiver.last_activity()) > timeout_threshold,
+                      "Receiver idle time should exceed the timeout threshold");
 
   // --- Test 5: Complete replication, activity updates along the way ---
   run_protocol(sender, receiver, sender_transport, receiver_transport, 200);
@@ -3463,16 +3465,14 @@ BOOST_FIXTURE_TEST_CASE(test_last_activity_timeout, ReplicationFixture) {
   auto receiver_since_complete = final_check - receiver.last_activity();
 
   // Should have been active within the last second (generous margin)
-  BOOST_CHECK_LT(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          sender_since_complete)
-          .count(),
-      1000);
-  BOOST_CHECK_LT(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          receiver_since_complete)
-          .count(),
-      1000);
+  BOOST_CHECK_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
+                     sender_since_complete)
+                     .count(),
+                 1000);
+  BOOST_CHECK_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
+                     receiver_since_complete)
+                     .count(),
+                 1000);
 }
 
 // =============================================================================
@@ -3520,7 +3520,10 @@ BOOST_FIXTURE_TEST_CASE(test_purge_basic_lifecycle, ReplicationFixture) {
     _Cursor<CursorTraits> del_cursor(impl, &txn->deletion_root);
     int count = 0;
     del_cursor.first();
-    while (del_cursor.is_valid()) { count++; del_cursor.next(); }
+    while (del_cursor.is_valid()) {
+      count++;
+      del_cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 5);
   }
 
@@ -3542,7 +3545,10 @@ BOOST_FIXTURE_TEST_CASE(test_purge_basic_lifecycle, ReplicationFixture) {
     auto cursor = db.cursor();
     int count = 0;
     cursor.first();
-    while (cursor.is_valid()) { count++; cursor.next(); }
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 5);
     for (int i = 5; i < 10; ++i) {
       std::string key = "key_" + std::to_string(i);
@@ -3552,7 +3558,8 @@ BOOST_FIXTURE_TEST_CASE(test_purge_basic_lifecycle, ReplicationFixture) {
   }
 }
 
-BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff,
+                        ReplicationFixture) {
   auto path = (test_temp_dir / "purge_cutoff.lvs").string();
   auto storage = Storage::create(path.c_str());
   auto db = storage->open<_ReplicationDB>("test");
@@ -3595,7 +3602,10 @@ BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff, ReplicationFixture
     _Cursor<CursorTraits> del_cursor(impl, &txn->deletion_root);
     int count = 0;
     del_cursor.first();
-    while (del_cursor.is_valid()) { count++; del_cursor.next(); }
+    while (del_cursor.is_valid()) {
+      count++;
+      del_cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 5);
   }
 
@@ -3679,8 +3689,8 @@ BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
       auto& del_cursor = cursor->get_deletion_cursor();
       _little_uint64_t ts_le = 1;
       for (int i = 0; i < 5000; ++i) {
-        std::string key = "intr_" + std::to_string(attempt) + "_" +
-                          std::to_string(i);
+        std::string key =
+            "intr_" + std::to_string(attempt) + "_" + std::to_string(i);
         del_cursor.find(Slice(key));
         del_cursor.value(Slice((uint8_t*)&ts_le, sizeof(ts_le)));
       }
@@ -3724,8 +3734,8 @@ BOOST_FIXTURE_TEST_CASE(test_acquire_hash_trie_fallback_when_offset_missing,
   auto first = impl->acquire_hash_trie();
 
   // Simulate a lost hashed snapshot pointer before another session arrives.
-  impl->_header->hash_control.hashed_txn_offset.store(0,
-                                                      std::memory_order_release);
+  impl->_header->hash_control.hashed_txn_offset.store(
+      0, std::memory_order_release);
 
   auto second = impl->acquire_hash_trie();
   BOOST_REQUIRE(!!second);
@@ -3902,9 +3912,9 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_sanitize, ReplicationFixture) {
       for (int i = 0; i < 10; ++i) {
         std::string key = "key_" + std::to_string(i);
         cursor.find(Slice(key));
-        BOOST_CHECK_MESSAGE(cursor.is_valid(),
-                            "Key missing after crash recovery: key_" +
-                                std::to_string(i));
+        BOOST_CHECK_MESSAGE(
+            cursor.is_valid(),
+            "Key missing after crash recovery: key_" + std::to_string(i));
       }
     }
 
@@ -4023,7 +4033,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_multiple_chunks, ReplicationFixture) {
   }
 }
 
-BOOST_FIXTURE_TEST_CASE(test_big_value_with_small_interleaved, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_big_value_with_small_interleaved,
+                        ReplicationFixture) {
   auto src_path = (test_temp_dir / "bv_interleave_src.lvs").string();
   auto dst_path = (test_temp_dir / "bv_interleave_dst.lvs").string();
 
@@ -4086,7 +4097,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_with_small_interleaved, ReplicationFixtur
       if (i % 2 == 0) {
         std::string expected = "small_val_" + std::to_string(i);
         BOOST_CHECK_EQUAL(
-            std::string(cursor.value().data(), cursor.value().size()), expected);
+            std::string(cursor.value().data(), cursor.value().size()),
+            expected);
       } else {
         BOOST_CHECK_EQUAL(cursor.value().size(), BIG_VALUE_SIZE);
         BOOST_CHECK_EQUAL(cursor.value().data()[0], 'B' + i);
@@ -4095,7 +4107,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_with_small_interleaved, ReplicationFixtur
   }
 }
 
-BOOST_FIXTURE_TEST_CASE(test_big_value_deletion_replication, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_big_value_deletion_replication,
+                        ReplicationFixture) {
   auto src_path = (test_temp_dir / "bv_del_src.lvs").string();
   auto dst_path = (test_temp_dir / "bv_del_dst.lvs").string();
 
@@ -4169,9 +4182,9 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_deletion_replication, ReplicationFixture)
     for (int i = 0; i < 3; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
       cursor.find(Slice(key));
-      BOOST_CHECK_MESSAGE(!cursor.is_valid(),
-                          "Deleted big key still present: bigkey_" +
-                              std::to_string(i));
+      BOOST_CHECK_MESSAGE(
+          !cursor.is_valid(),
+          "Deleted big key still present: bigkey_" + std::to_string(i));
     }
     for (int i = 3; i < 5; ++i) {
       std::string key = "bigkey_" + std::to_string(i);
@@ -4190,7 +4203,10 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_deletion_replication, ReplicationFixture)
     _Cursor<CursorTraits> del_cursor(dst_impl, &txn->deletion_root);
     int count = 0;
     del_cursor.first();
-    while (del_cursor.is_valid()) { count++; del_cursor.next(); }
+    while (del_cursor.is_valid()) {
+      count++;
+      del_cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 3);
   }
 }
@@ -4266,7 +4282,8 @@ BOOST_FIXTURE_TEST_CASE(
 // Concurrent Purge + Replication
 // =============================================================================
 
-BOOST_FIXTURE_TEST_CASE(test_concurrent_purge_and_replication, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_concurrent_purge_and_replication,
+                        ReplicationFixture) {
   auto src_path = (test_temp_dir / "conc_purge_src.lvs").string();
   auto dst_path = (test_temp_dir / "conc_purge_dst.lvs").string();
 
@@ -4335,7 +4352,10 @@ BOOST_FIXTURE_TEST_CASE(test_concurrent_purge_and_replication, ReplicationFixtur
     auto cursor = dst_db.cursor();
     int count = 0;
     cursor.first();
-    while (cursor.is_valid()) { count++; cursor.next(); }
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, 50);
   }
 }
@@ -4344,7 +4364,8 @@ BOOST_FIXTURE_TEST_CASE(test_concurrent_purge_and_replication, ReplicationFixtur
 // Large-Scale Transfer Tests
 // =============================================================================
 
-BOOST_FIXTURE_TEST_CASE(test_large_scale_fractional_replication, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_large_scale_fractional_replication,
+                        ReplicationFixture) {
   auto src_path = (test_temp_dir / "scale_src.lvs").string();
   auto dst_path = (test_temp_dir / "scale_dst.lvs").string();
 
@@ -4398,7 +4419,10 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_fractional_replication, ReplicationFixt
     auto cursor = dst_db.cursor();
     int count = 0;
     cursor.first();
-    while (cursor.is_valid()) { count++; cursor.next(); }
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, NUM_KEYS);
 
     // Spot-check some keys
@@ -4417,7 +4441,8 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_fractional_replication, ReplicationFixt
   }
 }
 
-BOOST_FIXTURE_TEST_CASE(test_large_scale_incremental_update, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_large_scale_incremental_update,
+                        ReplicationFixture) {
   auto src_path = (test_temp_dir / "incr_src.lvs").string();
   auto dst_path = (test_temp_dir / "incr_dst.lvs").string();
 
@@ -4520,7 +4545,10 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_incremental_update, ReplicationFixture)
     auto cursor = dst_db.cursor();
     int count = 0;
     cursor.first();
-    while (cursor.is_valid()) { count++; cursor.next(); }
+    while (cursor.is_valid()) {
+      count++;
+      cursor.next();
+    }
     BOOST_CHECK_EQUAL(count, NUM_KEYS);
 
     // Verify updated keys
@@ -4530,8 +4558,7 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_incremental_update, ReplicationFixture)
       cursor.find(Slice(key));
       BOOST_REQUIRE(cursor.is_valid());
       BOOST_CHECK_EQUAL(
-          std::string(cursor.value().data(), cursor.value().size()),
-          "updated");
+          std::string(cursor.value().data(), cursor.value().size()), "updated");
     }
 
     // Verify new keys
@@ -4558,7 +4585,8 @@ BOOST_FIXTURE_TEST_CASE(test_large_scale_incremental_update, ReplicationFixture)
 // Empty Deletion Trie Edge Case
 // =============================================================================
 
-BOOST_FIXTURE_TEST_CASE(test_replication_empty_deletion_trie, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_replication_empty_deletion_trie,
+                        ReplicationFixture) {
   auto src_path = (test_temp_dir / "empty_del_src.lvs").string();
   auto dst_path = (test_temp_dir / "empty_del_dst.lvs").string();
 
@@ -4796,7 +4824,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_message, ReplicationFixture) {
   BOOST_CHECK(re.error == ReplicationError::INTERNAL_ERROR);
 }
 
-// Test: receiver gets ERROR message with empty payload (defaults to INTERNAL_ERROR)
+// Test: receiver gets ERROR message with empty payload (defaults to
+// INTERNAL_ERROR)
 BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_empty_payload,
                         ReplicationFixture) {
   auto src_path = (test_temp_dir / "rcv_err_empty_src.lvs").string();
@@ -4843,7 +4872,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_empty_payload,
 }
 
 // Test: receiver gets invalid parse_expected (wrong version)
-BOOST_FIXTURE_TEST_CASE(test_receiver_parse_expected_invalid, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_parse_expected_invalid,
+                        ReplicationFixture) {
   auto dst_path = (test_temp_dir / "rcv_parse_inv.lvs").string();
   auto dst_storage = Storage::create(dst_path.c_str());
   auto dst_db = dst_storage->open<_ReplicationDB>("test");
@@ -4883,7 +4913,12 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_complete, ReplicationFixture) {
   auto p = (test_temp_dir / "snd_complete.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
-  { auto c = db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
+  {
+    auto c = db.cursor();
+    c.find(Slice("k"));
+    c.value(Slice("v"));
+    c.commit();
+  }
   auto* impl = db._internal();
   wait_for_hashing(impl);
 
@@ -4913,7 +4948,12 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_idle, ReplicationFixture) {
   auto dst_stor = Storage::create(dst_p.c_str());
   auto src_db = src_stor->open<_ReplicationDB>("test");
   auto dst_db = dst_stor->open<_ReplicationDB>("test");
-  { auto c = src_db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
+  {
+    auto c = src_db.cursor();
+    c.find(Slice("k"));
+    c.value(Slice("v"));
+    c.commit();
+  }
   auto* src_impl = src_db._internal();
   auto* dst_impl = dst_db._internal();
   wait_for_hashing(src_impl);
@@ -4943,7 +4983,12 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_error, ReplicationFixture) {
   auto p = (test_temp_dir / "snd_errstate.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
-  { auto c = db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
+  {
+    auto c = db.cursor();
+    c.find(Slice("k"));
+    c.value(Slice("v"));
+    c.commit();
+  }
   auto* impl = db._internal();
   wait_for_hashing(impl);
 
@@ -4968,11 +5013,17 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_error, ReplicationFixture) {
 }
 
 // Lines 410-412: Malformed SUBTRIE_ACK with iterator error
-BOOST_FIXTURE_TEST_CASE(test_sender_subtrie_ack_iterator_error, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_sender_subtrie_ack_iterator_error,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "snd_ackiter.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
-  { auto c = db.cursor(); c.find(Slice("k")); c.value(Slice("v")); c.commit(); }
+  {
+    auto c = db.cursor();
+    c.find(Slice("k"));
+    c.value(Slice("v"));
+    c.commit();
+  }
   auto* impl = db._internal();
   wait_for_hashing(impl);
 
@@ -5026,7 +5077,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_partial_header, ReplicationFixture) {
 
 // Line 1081: _process_received_message with valid parse_expected but bad magic
 // after buffer grows (magic in data gets corrupted)
-BOOST_FIXTURE_TEST_CASE(test_receiver_msg_corrupt_after_grow, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_msg_corrupt_after_grow,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_corrupt.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5065,7 +5117,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_corrupt_after_grow, ReplicationFixture
   BOOST_CHECK(re.error == ReplicationError::INVALID_MESSAGE);
 }
 
-// Lines 1112-1115: Receiver in ERROR state receives another message (default case)
+// Lines 1112-1115: Receiver in ERROR state receives another message (default
+// case)
 BOOST_FIXTURE_TEST_CASE(test_receiver_msg_after_error, ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_errstate.lvs").string();
   auto stor = Storage::create(p.c_str());
@@ -5105,10 +5158,11 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_after_error, ReplicationFixture) {
 
 // Helper: build a TRIE_DATA message with a valid TransferTrieHeader
 // but custom raw node data following it.
-static std::vector<uint8_t> build_trie_data_msg(
-    uint64_t session_id, uint32_t node_count,
-    const uint8_t* node_data, size_t node_data_size,
-    uint64_t root_offset = 0) {
+static std::vector<uint8_t> build_trie_data_msg(uint64_t session_id,
+                                                uint32_t node_count,
+                                                const uint8_t* node_data,
+                                                size_t node_data_size,
+                                                uint64_t root_offset = 0) {
   // Aligned header size
   size_t raw_hdr = sizeof(TransferTrieHeader);
   size_t aligned_hdr = (raw_hdr + 7) & ~size_t(7);
@@ -5159,7 +5213,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_zero_root, ReplicationFixture) {
 }
 
 // Line 1538, 1550: _compare_wire_with_local with root pointing outside buffer
-BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_badroot.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5188,13 +5243,13 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset, ReplicationFixt
   tth->snapshot_id = 0;
   tth->db_type = static_cast<uint8_t>(DbType::DB_MAIN);
   // Set root offset to point way past the buffer end (relative to &root field)
-  // _Offset<>::resolve() adds the stored value to the address of the field itself.
-  // So pointing 99999 bytes forward is definitely out of bounds.
+  // _Offset<>::resolve() adds the stored value to the address of the field
+  // itself. So pointing 99999 bytes forward is definitely out of bounds.
   tth->root = 99999;
   std::memcpy(payload.data() + aligned_hdr, dummy, sizeof(dummy));
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -5202,7 +5257,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset, ReplicationFixt
 }
 
 // Lines 1400-1406: Leaf bounds check — leaf node extends past buffer end
-BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_truncleaf.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5235,13 +5291,13 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf, ReplicationFixtu
   // _Offset encoding: raw_value = distance | RELATIVE_FLAG | type
   // distance = target - &root, must be 8-byte aligned
   // RELATIVE_FLAG = 0x4, LEAF type = 1
-  ptrdiff_t distance = (ptrdiff_t)(payload.data() + aligned_hdr) -
-                       (ptrdiff_t)(&tth->root);
+  ptrdiff_t distance =
+      (ptrdiff_t)(payload.data() + aligned_hdr) - (ptrdiff_t)(&tth->root);
   uint64_t raw_offset = (uint64_t)distance | 0x4 | 1;  // RELATIVE | LEAF
   tth->root = raw_offset;
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // The leaf bounds check should prune the node (set wire_node=0, return true)
@@ -5250,7 +5306,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf, ReplicationFixtu
 }
 
 // Lines 1464-1470: Trie bounds check — trie node extends past buffer end
-BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_trunctrie.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5263,7 +5320,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie, ReplicationFixtu
   receiver.begin(&r2s, &re);
 
   // Build a TRIE_DATA payload where root resolves within the buffer but
-  // has too few bytes for a complete trie node (line 1464: (trie+1) > buffer_end)
+  // has too few bytes for a complete trie node (line 1464: (trie+1) >
+  // buffer_end)
   size_t aligned_hdr = (sizeof(TransferTrieHeader) + 7) & ~size_t(7);  // 48
   size_t node_data_size = 8;  // too small for TempTrieNode (~38 bytes)
   std::vector<uint8_t> payload(aligned_hdr + node_data_size, 0);
@@ -5278,13 +5336,13 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie, ReplicationFixtu
   tth->db_type = static_cast<uint8_t>(DbType::DB_MAIN);
 
   // _Offset encoding: distance | RELATIVE_FLAG | TRIE type (0)
-  ptrdiff_t distance = (ptrdiff_t)(payload.data() + aligned_hdr) -
-                       (ptrdiff_t)(&tth->root);
+  ptrdiff_t distance =
+      (ptrdiff_t)(payload.data() + aligned_hdr) - (ptrdiff_t)(&tth->root);
   uint64_t raw_offset = (uint64_t)distance | 0x4 | 0;  // RELATIVE | TRIE
   tth->root = raw_offset;
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // Trie bounds check prunes the bad node (return true), no error
@@ -5298,7 +5356,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie, ReplicationFixtu
 // Lines 581, 697, 709-710, 713, 735-745, 748: deletion trie merge paths
 // This test creates data with deletions, replicates it, and verifies the
 // deletion trie is replicated and applied correctly.
-BOOST_FIXTURE_TEST_CASE(test_deletion_trie_with_meta_replication, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_deletion_trie_with_meta_replication,
+                        ReplicationFixture) {
   auto src_p = (test_temp_dir / "del_meta_src.lvs").string();
   auto dst_p = (test_temp_dir / "del_meta_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
@@ -5365,7 +5424,7 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_with_meta_replication, ReplicationFix
       std::string key = "del_key_" + std::to_string(i);
       c.find(Slice(key));
       BOOST_CHECK_MESSAGE(!c.is_valid(),
-                           "Key " + key + " should be deleted on dst");
+                          "Key " + key + " should be deleted on dst");
     }
     // Non-deleted keys should exist
     for (int i = 5; i < 10; ++i) {
@@ -5380,7 +5439,8 @@ BOOST_FIXTURE_TEST_CASE(test_deletion_trie_with_meta_replication, ReplicationFix
 // Coverage: StorageFull exception during merge (lines 1737-1747)
 // =============================================================================
 
-BOOST_FIXTURE_TEST_CASE(test_receiver_storage_full_during_merge, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_storage_full_during_merge,
+                        ReplicationFixture) {
   try {
     auto src_p = (test_temp_dir / "sfull_src.lvs").string();
     auto dst_p = (test_temp_dir / "sfull_dst.lvs").string();
@@ -5420,8 +5480,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_storage_full_during_merge, ReplicationFixt
 
     // If the FSM caught it, check the error state
     if (receiver.state() == ReceiverFSM::State::ERROR) {
-      BOOST_CHECK(re.error == ReplicationError::STORAGE_FULL ||
-                  re.error == ReplicationError::INTERNAL_ERROR);
+      BOOST_CHECK(re.error == ReplicationError::INTERNAL_ERROR);
     }
   } catch (const StorageFull&) {
     // StorageFull thrown outside the FSM's try-catch — acceptable
@@ -5455,7 +5514,8 @@ BOOST_AUTO_TEST_CASE(test_receive_buffer_parse_expected_insufficient_data) {
 // =============================================================================
 
 // Lines 1405-1406: Leaf header fits but leaf->size() exceeds buffer
-BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_leafsize.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5467,7 +5527,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixtu
   receiver.begin(&r2s, &re);
 
   // We need: remaining >= sizeof(TempLeafNode)==35 but < leaf->size().
-  // Set remaining=40 (>35), and leaf key_size=3 + value_size=5 → size=35+8=43 > 40.
+  // Set remaining=40 (>35), and leaf key_size=3 + value_size=5 → size=35+8=43
+  // > 40.
   size_t aligned_hdr = (sizeof(TransferTrieHeader) + 7) & ~size_t(7);  // 48
   size_t node_data_size = 40;  // 8-byte aligned
   std::vector<uint8_t> payload(aligned_hdr + node_data_size, 0);
@@ -5481,8 +5542,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixtu
   tth->snapshot_id = 0;
   tth->db_type = static_cast<uint8_t>(DbType::DB_MAIN);
 
-  ptrdiff_t distance = (ptrdiff_t)(payload.data() + aligned_hdr) -
-                       (ptrdiff_t)(&tth->root);
+  ptrdiff_t distance =
+      (ptrdiff_t)(payload.data() + aligned_hdr) - (ptrdiff_t)(&tth->root);
   tth->root = (uint64_t)distance | 0x4 | 1;  // RELATIVE | LEAF
 
   // Set the TempLeafNode fields to make size() exceed remaining
@@ -5492,8 +5553,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixtu
   leaf->key_size = 3;
   // leaf->size() = 35 + 3 + 5 = 43 > 40 bytes remaining
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // Bounds check prunes the node (return true), no error
@@ -5501,7 +5562,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer, ReplicationFixtu
 }
 
 // Lines 1469-1470: Trie header fits but trie->size() exceeds buffer
-BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_triesize.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5513,7 +5575,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer, ReplicationFixtu
   receiver.begin(&r2s, &re);
 
   // Need: remaining >= sizeof(TempTrieNode)==38 but < trie->size().
-  // Set remaining=40, and trie _array_offset=6 _array_len=3 → size=6*8+3*8=72 > 40
+  // Set remaining=40, and trie _array_offset=6 _array_len=3 → size=6*8+3*8=72 >
+  // 40
   size_t aligned_hdr = (sizeof(TransferTrieHeader) + 7) & ~size_t(7);
   size_t node_data_size = 40;
   std::vector<uint8_t> payload(aligned_hdr + node_data_size, 0);
@@ -5527,26 +5590,27 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer, ReplicationFixtu
   tth->snapshot_id = 0;
   tth->db_type = static_cast<uint8_t>(DbType::DB_MAIN);
 
-  ptrdiff_t distance = (ptrdiff_t)(payload.data() + aligned_hdr) -
-                       (ptrdiff_t)(&tth->root);
+  ptrdiff_t distance =
+      (ptrdiff_t)(payload.data() + aligned_hdr) - (ptrdiff_t)(&tth->root);
   tth->root = (uint64_t)distance | 0x4 | 0;  // RELATIVE | TRIE
 
   // Set the TempTrieNode fields to make size() exceed remaining
   using TempTrieNode = _TransferTrie<32>::TrieNode;
   auto* trie = reinterpret_cast<TempTrieNode*>(payload.data() + aligned_hdr);
-  trie->_array_offset = 6;   // array_start = 48
-  trie->_array_len = 3;      // array_size = 24, size = 72 > 40
+  trie->_array_offset = 6;  // array_start = 48
+  trie->_array_len = 3;     // array_size = 24, size = 72 > 40
   trie->_compressed_len = 0;
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
 }
 
 // Lines 1438-1439: Big value leaf with vsize < sizeof(BigValueDataHeader)
-BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_bvleafsmall.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5561,9 +5625,10 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, Replicatio
   // This triggers L1438: vsize() < sizeof(BigValueDataHeader)
   using TempLeafNode = _TransferTrie<32>::LeafNode;
   size_t aligned_hdr = (sizeof(TransferTrieHeader) + 7) & ~size_t(7);
-  // Leaf needs: header(35) + key_size + vsize bytes. Use key_size=1, vsize=2 (with BIG flag)
-  // The hash at the leaf must NOT match local so we reach the is_big() check.
-  size_t leaf_total = sizeof(TempLeafNode) + 1 + 2;  // 38
+  // Leaf needs: header(35) + key_size + vsize bytes. Use key_size=1, vsize=2
+  // (with BIG flag) The hash at the leaf must NOT match local so we reach the
+  // is_big() check.
+  size_t leaf_total = sizeof(TempLeafNode) + 1 + 2;       // 38
   size_t node_data_size = (leaf_total + 7) & ~size_t(7);  // 40
   std::vector<uint8_t> payload(aligned_hdr + node_data_size, 0);
   auto* tth = reinterpret_cast<TransferTrieHeader*>(payload.data());
@@ -5576,8 +5641,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, Replicatio
   tth->snapshot_id = 0;
   tth->db_type = static_cast<uint8_t>(DbType::DB_MAIN);
 
-  ptrdiff_t distance = (ptrdiff_t)(payload.data() + aligned_hdr) -
-                       (ptrdiff_t)(&tth->root);
+  ptrdiff_t distance =
+      (ptrdiff_t)(payload.data() + aligned_hdr) - (ptrdiff_t)(&tth->root);
   tth->root = (uint64_t)distance | 0x4 | 1;  // RELATIVE | LEAF
 
   auto* leaf = reinterpret_cast<TempLeafNode*>(payload.data() + aligned_hdr);
@@ -5587,8 +5652,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, Replicatio
   leaf->hash[0] = 0xFF;
   leaf->data[0] = 'A';  // key byte
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   BOOST_TEST_MESSAGE("State after: " << static_cast<int>(receiver.state()));
@@ -5597,7 +5662,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small, Replicatio
 }
 
 // Lines 1444-1445: Big value leaf with bv_hdr->value_size > max
-BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_bvleaflarge.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5627,30 +5693,31 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large, Repli
   tth->snapshot_id = 0;
   tth->db_type = static_cast<uint8_t>(DbType::DB_MAIN);
 
-  ptrdiff_t distance = (ptrdiff_t)(payload.data() + aligned_hdr) -
-                       (ptrdiff_t)(&tth->root);
+  ptrdiff_t distance =
+      (ptrdiff_t)(payload.data() + aligned_hdr) - (ptrdiff_t)(&tth->root);
   tth->root = (uint64_t)distance | 0x4 | 1;  // RELATIVE | LEAF
 
   auto* leaf = reinterpret_cast<TempLeafNode*>(payload.data() + aligned_hdr);
   leaf->key_size = 1;
   leaf->value_size = 12 | (1 << 15);  // BIG_VALUE_FLAG set, vsize=12
-  leaf->hash[0] = 0xFF;  // non-matching hash
-  leaf->data[0] = 'A';   // key byte
+  leaf->hash[0] = 0xFF;               // non-matching hash
+  leaf->data[0] = 'A';                // key byte
 
   // Set BigValueDataHeader at the value position with enormous value_size
   auto* bv_hdr = reinterpret_cast<BigValueDataHeader*>(leaf->data + 1);
   bv_hdr->wire_chunk_offset = 0;
   bv_hdr->value_size = 0xFFFFFFFF;  // way over any max
 
-  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-                           payload.data(), payload.size());
+  auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
+                           payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
 }
 
 // Lines 1494-1496: Trie child array extends past buffer
-BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer,
+                        ReplicationFixture) {
   auto p = (test_temp_dir / "rcv_triearray.lvs").string();
   auto stor = Storage::create(p.c_str());
   auto db = stor->open<_ReplicationDB>("test");
@@ -5672,9 +5739,10 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer, Replicatio
   // (so we enter the child iteration) AND the array extends beyond buffer_end.
   // But L1469 already checks trie->size() >= remaining. So L1494 is only
   // reachable if trie->size() passes but the array calculation overflows or
-  // differs. Actually, array() returns (offset_e*)((uint8_t*)this + array_start()),
-  // while buffer_end is an absolute address. If the trie's hash DOESN'T match
-  // the local hash, we proceed to iterate children. The check at L1494 is:
+  // differs. Actually, array() returns (offset_e*)((uint8_t*)this +
+  // array_start()), while buffer_end is an absolute address. If the trie's hash
+  // DOESN'T match the local hash, we proceed to iterate children. The check at
+  // L1494 is:
   //   (char*)(wire_array + count) > buffer_end
   // Since wire_array = trie->array() = (offset_e*)((char*)trie + array_start())
   // And count = trie->count(), this equals:
@@ -5687,9 +5755,9 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer, Replicatio
   // location in the buffer where the trie fits but the array extends past end.
   //
   // Actually, the child array check IS different from the header size check in
-  // a subtle way: trie->size() uses in-struct offsets (relative to struct start),
-  // but the array check uses absolute pointers. They should be equivalent...
-  // unless there's overflow. Let me think about this differently.
+  // a subtle way: trie->size() uses in-struct offsets (relative to struct
+  // start), but the array check uses absolute pointers. They should be
+  // equivalent... unless there's overflow. Let me think about this differently.
   //
   // Actually for a nested child within a parent trie, the child trie is
   // pointed to by an offset in the parent's child array. The child trie could
@@ -5702,9 +5770,9 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer, Replicatio
   // For L1494 to fire, child_trie->size() must fit in buffer (passes L1469)
   // BUT (wire_array + count) > buffer_end. Since size() == array_end() ==
   // array_start + count*8, and wire_array starts at (char*)trie + array_start,
-  // (wire_array + count) == (char*)trie + array_start + count*8 == (char*)trie + size().
-  // So the check is (char*)trie + size() > buffer_end — same as L1469!
-  // This means L1494 is dead code for any trie that passes L1469.
+  // (wire_array + count) == (char*)trie + array_start + count*8 == (char*)trie
+  // + size(). So the check is (char*)trie + size() > buffer_end — same as
+  // L1469! This means L1494 is dead code for any trie that passes L1469.
   //
   // Skip this test — L1494-1496 appears to be dead code.
   BOOST_CHECK(true);  // placeholder
@@ -5779,7 +5847,7 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_header_spans_chunk, ReplicationFixture) {
   // After header(12) + data, chunk_bytes = 1048571, leaving 5 bytes
   // Value2's header (12 bytes) won't fit → spans chunk boundary
   const size_t VAL1_SIZE = 1048576 - 12 - 5;  // 1048559 bytes
-  const size_t VAL2_SIZE = 8 * 1024;           // 8KB
+  const size_t VAL2_SIZE = 8 * 1024;          // 8KB
 
   std::vector<char> val1(VAL1_SIZE, 'A');
   std::vector<char> val2(VAL2_SIZE, 'B');
@@ -5828,7 +5896,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_header_spans_chunk, ReplicationFixture) {
 // Receiver has locally deleted keys; sender tries to replicate those keys.
 // may_add_leaf should consult the deletion trie snapshot and reject them.
 // =============================================================================
-BOOST_FIXTURE_TEST_CASE(test_receiver_deletion_root_snapshot, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_deletion_root_snapshot,
+                        ReplicationFixture) {
   auto src_p = (test_temp_dir / "snap_src.lvs").string();
   auto dst_p = (test_temp_dir / "snap_dst.lvs").string();
   auto src_stor = Storage::create(src_p.c_str());
@@ -5886,15 +5955,15 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_deletion_root_snapshot, ReplicationFixture
     for (int i = 0; i < 5; ++i) {
       std::string key = "snap_key_" + std::to_string(i);
       c.find(Slice(key));
-      BOOST_CHECK_MESSAGE(!c.is_valid(),
+      BOOST_CHECK_MESSAGE(
+          !c.is_valid(),
           "Key " + key + " should remain deleted after replication");
     }
     // Non-deleted keys should still exist
     for (int i = 5; i < 10; ++i) {
       std::string key = "snap_key_" + std::to_string(i);
       c.find(Slice(key));
-      BOOST_CHECK_MESSAGE(c.is_valid(),
-          "Key " + key + " should still exist");
+      BOOST_CHECK_MESSAGE(c.is_valid(), "Key " + key + " should still exist");
     }
   }
 }
@@ -5903,7 +5972,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_deletion_root_snapshot, ReplicationFixture
 // Coverage: Big value data error on receiver (L1216-1217)
 // Craft a BIG_VALUE_DATA that triggers area overflow
 // =============================================================================
-BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow,
+                        ReplicationFixture) {
   auto dst_p = (test_temp_dir / "bvd_err.lvs").string();
   auto dst_stor = MapStorage::create(dst_p.c_str());
   auto dst_db = dst_stor->open<_ReplicationDB>("test");
@@ -5922,7 +5992,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow, ReplicationFixtur
   thdr.node_count = 0;
   thdr.db_type = static_cast<uint8_t>(DbType::DB_MAIN);
   auto trie_msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1,
-      (const uint8_t*)&thdr, sizeof(thdr));
+                                (const uint8_t*)&thdr, sizeof(thdr));
   feed_message_to_receiver(receiver, trie_msg.data(), trie_msg.size());
   // Receiver sends SUBTRIE_ACK — it's now in RECEIVING state
 
@@ -5931,7 +6001,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow, ReplicationFixtur
   bvs_hdr.count = 1;
   bvs_hdr.total_aligned_size = 4096;  // Only allocate 4KB
   auto bvs_msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1,
-      (const uint8_t*)&bvs_hdr, sizeof(bvs_hdr));
+                               (const uint8_t*)&bvs_hdr, sizeof(bvs_hdr));
   feed_message_to_receiver(receiver, bvs_msg.data(), bvs_msg.size());
 
   // Now send BIG_VALUE_DATA claiming a much larger value than allocated
@@ -5941,7 +6011,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow, ReplicationFixtur
 
   // Just send the header — the handle_data will detect area overflow
   auto bvd_msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_DATA, 1,
-      (const uint8_t*)&bvd_hdr, sizeof(bvd_hdr));
+                               (const uint8_t*)&bvd_hdr, sizeof(bvd_hdr));
   feed_message_to_receiver(receiver, bvd_msg.data(), bvd_msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -6086,9 +6156,9 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_area_overflow,
   start.count = 1;
   start.total_aligned_size = 4096;
 
-  auto start_msg = build_raw_msg(
-      ReplicationMsgType::BIG_VALUE_START, 1,
-      reinterpret_cast<const uint8_t*>(&start), sizeof(start));
+  auto start_msg =
+      build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1,
+                    reinterpret_cast<const uint8_t*>(&start), sizeof(start));
   feed_receiver(receiver, start_msg.data(), start_msg.size());
   BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::AWAITING_BIG_VALUES);
 
@@ -6096,9 +6166,9 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_area_overflow,
   data_hdr.wire_chunk_offset = 777;
   data_hdr.value_size = 16 * 1024 * 1024;  // force area overflow in handle_data
 
-  auto data_msg = build_raw_msg(
-      ReplicationMsgType::BIG_VALUE_DATA, 1,
-      reinterpret_cast<const uint8_t*>(&data_hdr), sizeof(data_hdr));
+  auto data_msg = build_raw_msg(ReplicationMsgType::BIG_VALUE_DATA, 1,
+                                reinterpret_cast<const uint8_t*>(&data_hdr),
+                                sizeof(data_hdr));
   feed_receiver(receiver, data_msg.data(), data_msg.size());
 
   BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
@@ -6146,7 +6216,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_storage_full,
   run_protocol(sender, receiver, s2r, r2s, 200);
 
   BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERROR);
-  BOOST_CHECK(receiver.error() == ReplicationError::STORAGE_FULL);
+  BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
 }
 
 BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
@@ -6181,8 +6251,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
   r2s.set_peer(&s2r);
   TestEvents se, re;
 
-  using ThrowReceiver =
-      ReplicationReceiverFSM<DBImpl, ThrowStdExceptionPolicy>;
+  using ThrowReceiver = ReplicationReceiverFSM<DBImpl, ThrowStdExceptionPolicy>;
   SenderFSM sender(src_impl);
   ThrowReceiver receiver(dst_impl, {});
   receiver.begin(&r2s, &re);
@@ -6193,7 +6262,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
   BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
 }
 
-BOOST_FIXTURE_TEST_CASE(test_big_value_overwrite_replication, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_big_value_overwrite_replication,
+                        ReplicationFixture) {
   // Replicate big values, modify them, and replicate again.
   // The second merge overwrites a big-value leaf in the receiver,
   // exercising StandardMergePolicy::free_big via ReplicationMergePolicy.
@@ -6280,7 +6350,8 @@ BOOST_FIXTURE_TEST_CASE(test_big_value_overwrite_replication, ReplicationFixture
   }
 }
 
-BOOST_FIXTURE_TEST_CASE(test_replication_merge_diverse_trie_shapes, ReplicationFixture) {
+BOOST_FIXTURE_TEST_CASE(test_replication_merge_diverse_trie_shapes,
+                        ReplicationFixture) {
   // Exercise diverse merge paths in the ReplicationDB instantiation of _Merger:
   //  - leaf-leaf exact match overwrite (merge_leaf_node cmp==0)
   //  - leaf divergence creating new trie (resolve_divergence with leaf)
@@ -6299,11 +6370,16 @@ BOOST_FIXTURE_TEST_CASE(test_replication_merge_diverse_trie_shapes, ReplicationF
   // Receiver: build a trie with long compressed prefixes
   {
     auto cursor = receiver_db.cursor();
-    cursor.find("abcdefghij");  cursor.value("r1");
-    cursor.find("abcdefghik");  cursor.value("r2");
-    cursor.find("xyz");         cursor.value("r3");
-    cursor.find("xyw");         cursor.value("r4");
-    cursor.find("mno");         cursor.value("r5");
+    cursor.find("abcdefghij");
+    cursor.value("r1");
+    cursor.find("abcdefghik");
+    cursor.value("r2");
+    cursor.find("xyz");
+    cursor.value("r3");
+    cursor.find("xyw");
+    cursor.value("r4");
+    cursor.find("mno");
+    cursor.value("r5");
     cursor.commit();
   }
 
@@ -6311,16 +6387,23 @@ BOOST_FIXTURE_TEST_CASE(test_replication_merge_diverse_trie_shapes, ReplicationF
   {
     auto cursor = sender_db.cursor();
     // Exact overwrite
-    cursor.find("xyz");         cursor.value("s_xyz");
+    cursor.find("xyz");
+    cursor.value("s_xyz");
     // Leaf divergence: sender has "xya" where receiver has "xyw"/"xyz" trie
-    cursor.find("xya");         cursor.value("s_xya");
-    // Trie split: sender matches partial prefix "abcde" of receiver's "abcdefghi"
-    cursor.find("abcde1");      cursor.value("s1");
-    cursor.find("abcde2");      cursor.value("s2");
+    cursor.find("xya");
+    cursor.value("s_xya");
+    // Trie split: sender matches partial prefix "abcde" of receiver's
+    // "abcdefghi"
+    cursor.find("abcde1");
+    cursor.value("s1");
+    cursor.find("abcde2");
+    cursor.value("s2");
     // New branch in existing trie
-    cursor.find("mnop");        cursor.value("s_mnop");
+    cursor.find("mnop");
+    cursor.value("s_mnop");
     // Completely new subtree
-    cursor.find("qqq");         cursor.value("s_qqq");
+    cursor.find("qqq");
+    cursor.value("s_qqq");
     cursor.commit();
   }
 

@@ -3,8 +3,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <thread>
 
+#include "../db/_check.hpp"
 #include "../db/_db.hpp"
 #include "_hash.hpp"
 

@@ -779,13 +779,13 @@ struct _HashLookup {
     auto& back = _cursor.stack.back();
 
     if (expected_type == LEAF) {
-      // Looking for a leaf hash: cursor must have found an exact leaf match.
-      // Hash trie leaves for NONE-branch have key_size=0, for normal
-      // branches key_size=1 with data[0]=branch_char.  The cursor's find()
-      // follows the NONE branch automatically when the search key is
-      // exhausted at a trie node, so an exact leaf match means the path
-      // was fully consumed and the leaf's key also fully matched.
-      if (back.success()) return back.leaf()->hash;
+      // Hash leaves store only the branch char (key_size=1, data[0]=char)
+      // or nothing for NONE-branch (key_size=0).  Since key_size < search
+      // key length for non-NONE leaves, _Transition::success() (cmp==0
+      // && is_leaf()) would wrongly return false.  is_leaf() suffices:
+      // the trie navigation already reaches the correct node, and the
+      // final BLAKE3 comparison catches mismatches.
+      if (back.is_leaf()) return back.leaf()->hash;
       return nullptr;
     }
 

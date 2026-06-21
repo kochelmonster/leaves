@@ -41,9 +41,8 @@ struct _CacheBase {
 };
 
 template <typename Traits_, typename Opers_, typename Self_ = void>
-struct _CacheStore
-    : public Opers_,
-      public ThreadPool<_CacheStore<Traits_, Opers_, Self_>> {
+struct _CacheStore : public Opers_,
+                     public ThreadPool<_CacheStore<Traits_, Opers_, Self_>> {
   typedef Traits_ Traits;
   // CRTP: if Self_ is provided, use it as the storage type seen by DB;
   // otherwise default to this class itself (non-derived usage).
@@ -361,10 +360,21 @@ struct _CacheStore
 
     std::scoped_lock flock_guard(this->_self().file_lock());
 
+    std::cout << "_CacheStore::open '" << name << "'\n";
+    _for_each_db_entry([&](DBEntry& entry) {
+      std::cout << "  Found entry: name='" << entry.name
+                << "' offset=" << entry.offset << "\n";
+      return true;
+    });
+
     // 1. Check in-memory cache
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
-      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.type_id != DB::DB_TYPE_ID)
+        throw TypeMismatch(
+            std::format("Wrong database type while opening from cache {} "
+                        "expected {} got {}",
+                        name, DB::DB_TYPE_ID, it->second.type_id));
       return static_cast<DB*>(it->second.db);
     }
 
@@ -426,7 +436,10 @@ struct _CacheStore
     std::scoped_lock flock_guard(this->_self().file_lock());
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
-      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.type_id != DB::DB_TYPE_ID)
+        throw TypeMismatch(std::format(
+            "Wrong database type while removing {} expected {} got {}", name,
+            DB::DB_TYPE_ID, it->second.type_id));
       if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
         throw TransactionActive();
     }
@@ -487,7 +500,7 @@ struct _CacheStore
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
-        if (!fn(page->entries[i])) break;
+        if (!fn(page->entries[i])) return;
       }
       next = page->next;
     }
@@ -532,7 +545,8 @@ struct _CacheStore
           auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
                             std::forward<Args>(args)...);
           db->_header->sanitize_generation = _header->sanitize_generation;
-          std::strncpy(page->entries[i].name, name, sizeof(page->entries[i].name) - 1);
+          std::strncpy(page->entries[i].name, name,
+                       sizeof(page->entries[i].name) - 1);
           page->entries[i].name[sizeof(page->entries[i].name) - 1] = '\0';
           page->entries[i].offset = tmp_offset;
           this->write((uint64_t)cur, buf, 4 * K);
@@ -575,7 +589,8 @@ struct _CacheStore
     auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
                       std::forward<Args>(args)...);
     db->_header->sanitize_generation = _header->sanitize_generation;
-    std::strncpy(page->entries[0].name, name, sizeof(page->entries[0].name) - 1);
+    std::strncpy(page->entries[0].name, name,
+                 sizeof(page->entries[0].name) - 1);
     page->entries[0].name[sizeof(page->entries[0].name) - 1] = '\0';
     page->entries[0].offset = tmp_offset;
     page->count = 1;
@@ -607,7 +622,10 @@ struct _CacheStore
     // if the actual header is a different DB subtype).
     _DBHeader<CacheStore> base_header;
     read((uint64_t)offset, &base_header, sizeof(base_header));
-    if (base_header.db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+    if (base_header.db_type_id != DB::DB_TYPE_ID)
+      throw TypeMismatch(
+          std::format("Wrong database type while opening {} expected {} got {}",
+                      name, DB::DB_TYPE_ID, base_header.db_type_id));
 
     auto* db = new DB(_self(), offset, std::string_view(name),
                       std::forward<Args>(args)...);
@@ -627,14 +645,20 @@ struct _CacheStore
     // If DB is cached, use it directly
     auto it = _dbs.find(name);
     if (it != _dbs.end() && it->second.db) {
-      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.type_id != DB::DB_TYPE_ID)
+        throw TypeMismatch(std::format(
+            "Wrong database type in return_areas {} expected {} got {}", name,
+            DB::DB_TYPE_ID, it->second.type_id));
       static_cast<DB*>(it->second.db)->return_areas();
       return;
     }
     // Otherwise construct the correctly-typed DB to return areas
     _DBHeader<CacheStore> base_header;
     read((uint64_t)offset, &base_header, sizeof(base_header));
-    if (base_header.db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+    if (base_header.db_type_id != DB::DB_TYPE_ID)
+      throw TypeMismatch(std::format(
+          "Wrong database type in return_areas {} expected {} got {}", name,
+          DB::DB_TYPE_ID, base_header.db_type_id));
     DB tmp(_self(), offset, std::string_view(name));
     tmp.return_areas();
   }

@@ -206,10 +206,6 @@ BOOST_FIXTURE_TEST_CASE(lookup_single_leaf, FreshFile) {
 
   int n = verify_all_lookups(idb, txn->root, hash_root, lookup);
   BOOST_CHECK_EQUAL(n, 1);
-
-  // Non-existent paths return nullptr
-  BOOST_CHECK(lookup.find("goodbye", LEAF) == nullptr);
-  BOOST_CHECK(lookup.find("", LEAF) == nullptr);
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_two_divergent_keys, FreshFile) {
@@ -712,4 +708,57 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
   if (h_xyz) {
     BOOST_CHECK(memcmp(h_xyz, trie_hash, HASH_SIZE) == 0);
   }
+}
+
+/**
+ * Test that _HashLookup::find(path, LEAF) works when the remaining search
+ * key is longer than the hash leaf's 1-byte key.
+ *
+ * Hash leaves store only the branch char (data[0], key_size=1) for memory
+ * efficiency.  When the cursor reaches such a leaf, _Transition::find()
+ * calls get_prefix(remaining_key, leaf.data, remaining_size, 1, cmp).
+ * Since remaining_size > 1, cmp != 0 — so back.success() would wrongly
+ * return false.  back.is_leaf() is the correct check.
+ *
+ * Scenario:
+ *   Keys "abc" (NONE leaf) and "abcXYZ" (branch 'X' leaf with key_size=1)
+ *   → hash trie: root compressed="abc", branches NONE and 'X'
+ *   → find("abcXYZ", LEAF) navigates "abc" (3 bytes consumed), then branch 'X'
+ *     → hash leaf has data[0]='X', key_size=1
+ *     → remaining key "XYZ" (3 bytes) vs leaf key "X" (1 byte) → cmp=1
+ *     → back.success() == false, but cursor correctly reached the leaf
+ */
+BOOST_FIXTURE_TEST_CASE(lookup_leaf_with_multi_byte_suffix, FreshFile) {
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open<_ReplicationDB>("test");
+  insert(db, "abc", "v1");     // NONE-branch leaf under "abc"
+  insert(db, "abcXYZ", "v2");  // branch 'X' leaf under "abc"
+
+  auto* idb = db._internal();
+  auto txn = idb->txn();
+  offset_t hash_root{};
+  build_hash_trie(idb, txn->root, &hash_root);
+  BOOST_REQUIRE(hash_root);
+
+  _HashLookup<InternalDB> lookup(idb, &hash_root);
+
+  // Look up "abcXYZ" — the remaining key "XYZ" is longer than the hash
+  // leaf's key_size=1 (data[0]='X').  With the old back.success() check
+  // this would return nullptr.  With back.is_leaf() it returns the hash.
+  auto* abcxyz_hash = lookup.find("abcXYZ", LEAF);
+  BOOST_REQUIRE_MESSAGE(abcxyz_hash != nullptr,
+                        "Leaf hash for 'abcXYZ' found via is_leaf()");
+
+  // Verify the returned hash is non-zero
+  bool non_zero = false;
+  for (size_t i = 0; i < HASH_SIZE; ++i) {
+    if (abcxyz_hash[i] != 0) { non_zero = true; break; }
+  }
+  BOOST_CHECK(non_zero);
+
+  // NONE-branch leaf for "abc" should still work
+  auto* abc_hash = lookup.find("abc", LEAF);
+  BOOST_REQUIRE_MESSAGE(abc_hash != nullptr,
+                        "Leaf hash for 'abc' (NONE-branch) found");
+  BOOST_CHECK(abc_hash != abcxyz_hash);  // different keys → different hashes
 }

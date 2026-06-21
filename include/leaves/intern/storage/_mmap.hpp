@@ -237,7 +237,10 @@ struct _MemoryMapFile
       std::ifstream fin(path);
       char signature[sizeof(MMAP_SIGNATURE)];
       fin.read(signature, sizeof(signature));
-      if (strcmp(signature, MMAP_SIGNATURE)) throw TypeMismatch();
+      if (strcmp(signature, MMAP_SIGNATURE))
+        throw TypeMismatch(
+            std::format("Invalid database signature: expected '{}' got '{}'",
+                        MMAP_SIGNATURE, signature));
 
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
@@ -477,7 +480,10 @@ struct _MemoryMapFile
     // 1. Check cache
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
-      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.type_id != DB::DB_TYPE_ID)
+        throw TypeMismatch(std::format(
+            "Type mismatch while opening DB '{}': expected '{}' got '{}'",
+            name, DB::DB_TYPE_ID, it->second.type_id));
       return static_cast<DB*>(it->second.db);
     }
 
@@ -501,7 +507,10 @@ struct _MemoryMapFile
       // Verify type before constructing
       auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
           (char*)_memory + (uint64_t)found->offset);
-      if (base_header->db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (base_header->db_type_id != DB::DB_TYPE_ID) 
+        throw TypeMismatch(std::format(
+            "Type mismatch while opening DB '{}': expected '{}' got '{}'",
+            name, DB::DB_TYPE_ID, base_header->db_type_id));
 
       auto* db = new DB(_self(), found->offset, std::string_view(name),
                         std::forward<Args>(args)...);
@@ -543,7 +552,10 @@ struct _MemoryMapFile
 
     auto it = _dbs.find(name);
     if (it != _dbs.end()) {
-      if (it->second.type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+      if (it->second.type_id != DB::DB_TYPE_ID) 
+        throw TypeMismatch(std::format(
+            "Type mismatch while removing DB '{}': expected '{}' got '{}'",
+            name, DB::DB_TYPE_ID, it->second.type_id));
       if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
         throw TransactionActive();
     }
@@ -559,7 +571,10 @@ struct _MemoryMapFile
         } else {
           auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
               (char*)_memory + (uint64_t)entry.offset);
-          if (base_header->db_type_id != DB::DB_TYPE_ID) throw TypeMismatch();
+          if (base_header->db_type_id != DB::DB_TYPE_ID) 
+            throw TypeMismatch(std::format(
+                "Type mismatch while removing DB '{}': expected '{}' got '{}'",
+                name, DB::DB_TYPE_ID, base_header->db_type_id));
           DB tmp(_self(), entry.offset, std::string_view(name));
           tmp.return_areas();
         }
@@ -599,7 +614,7 @@ struct _MemoryMapFile
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
-        if (!fn(page->entries[i])) break;
+        if (!fn(page->entries[i])) return;
       }
       next = page->next;
     }

@@ -76,10 +76,6 @@ if(EMSCRIPTEN)
         )
     endif()
 
-    #add_executable(test_browserstore tests/test_browserstore.cpp)
-    #target_link_libraries(test_browserstore PRIVATE wasm_core blake3)
-    #target_compile_definitions(test_browserstore PRIVATE TESTING)
-    #target_link_options(test_browserstore PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
 
     add_executable(db_bench_browser benchmarks/db_bench_browser.cpp)
     target_link_libraries(db_bench_browser PRIVATE wasm_core blake3)

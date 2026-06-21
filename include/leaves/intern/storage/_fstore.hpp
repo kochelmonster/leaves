@@ -80,7 +80,7 @@ struct _StoreTraits {
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 64),   // base64
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 256),  // binary
       sizeof(PageHeader) + 1024,
-      sizeof(PageHeader) + 1024 + 512,      
+      sizeof(PageHeader) + 1024 + 512,
       4 * K};
   static constexpr auto PAGE_SIZES = [] {
     std::array<uint16_t, std::size(PAGE_SIZES_DECL)> a{};
@@ -239,8 +239,7 @@ struct _FileOperations : _CacheBase {
                           static_cast<off_t>(file_offset + total));
       if (n <= 0) {
         throw FileError(
-            "Failed to read data: " + std::string(std::strerror(errno)),
-            errno);
+            "Failed to read data: " + std::string(std::strerror(errno)), errno);
       }
 #endif
       total += n;
@@ -259,8 +258,7 @@ struct _FileOperations : _CacheBase {
 #else
     if (::ftruncate(_fd, static_cast<off_t>(new_size)) != 0) {
       throw FileError(
-          "Failed to resize file: " + std::string(std::strerror(errno)),
-          errno);
+          "Failed to resize file: " + std::string(std::strerror(errno)), errno);
     }
 #endif
   }
@@ -368,7 +366,9 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
       this->_header = (FileHeader*)buffer.get();
 
       if (strcmp(this->_header->signature, FSTORE_SIGNATURE))
-        throw TypeMismatch();
+        throw TypeMismatch(
+            std::format("Invalid database signature: expected '{}' got '{}'",
+                        FSTORE_SIGNATURE, this->_header->signature));
     }
 
     assert(((uint64_t)this->_header & 7) == 0);

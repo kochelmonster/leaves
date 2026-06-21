@@ -129,12 +129,8 @@ struct _BigValueReceiver {
     size_t alloc_size = static_cast<size_t>(alloc_size_64);
     try {
       _multi_area = db->_storage.alloc_multi_area(alloc_size);
-    } catch (const StorageFull&) {
-      return {ReplicationError::STORAGE_FULL,
-              "Storage full during big value allocation"};
-    } catch (const std::exception&) {
-      return {ReplicationError::INTERNAL_ERROR,
-              "Exception during big value allocation"};
+    } catch (const std::exception& e) {
+      return {ReplicationError::INTERNAL_ERROR, e.what()};
     }
 
     slot.track_area(_multi_area);

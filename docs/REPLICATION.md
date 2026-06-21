@@ -567,15 +567,7 @@ struct MultiMasterPolicy {
 - [ ] Sync both DBs in one round
 - [ ] Expiry and pruning
 
-### Phase 6: Replication Policies
-- [ ] MasterSlavePolicy
-- [ ] PeerToPeerPolicy
-- [ ] MultiMasterPolicy with version vectors
 
-### Phase 7: Optimizations
-- [ ] Compression (LZ4 for speed, Zstd for ratio)
-- [ ] Parallel subtrie transfers
-- [ ] Connection pooling
 
 ## Wire Protocol Messages
 

@@ -32,15 +32,20 @@ struct Preparation {
 // defined in node.cpp
 
 template <typename T>
-inline void dump_graph(const char* output, T& storage) {
+inline void dump_graph(const char* output, T& storage, offset_t* root_offset) {
   std::ofstream out(output);
-  _Dumper<T>(storage, &storage._internal()->txn()->root, false).dump(out);
+  _Dumper<T>(storage, root_offset, false).dump(out);
 }
 
 template <typename T>
-inline void compare_graph(const char* input, T& storage) {
+inline void dump_graph(const char* output, T& storage) {
+  dump_graph(output, storage, &storage._internal()->txn()->root);
+}
+
+template <typename T>
+inline void compare_graph(const char* input, T& storage, offset_t* root_offset) {
   std::stringstream cstr;
-  _Dumper<T>(storage, &storage._internal()->txn()->root, false).dump(cstr);
+  _Dumper<T>(storage, root_offset, false).dump(cstr);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
   std::string cmp((std::istreambuf_iterator<char>(in)),
@@ -60,6 +65,12 @@ inline void compare_graph(const char* input, T& storage) {
 }
 
 template <typename T>
+inline void compare_graph(const char* input, T& storage) {
+  compare_graph(input, storage, &storage._internal()->txn()->root);
+}
+
+
+template <typename T>
 inline void check_graph(const char* name, T& storage, const char* dbname = "test") {
   std::string truncated_name(name);
   if (truncated_name.length() > 32) {
@@ -76,6 +87,25 @@ inline void check_graph(const char* name, T& storage, const char* dbname = "test
   dump_graph(path.c_str(), db);
 #else
   compare_graph(path.c_str(), db);
+#endif
+}
+
+template <typename T>
+inline void check_graph(const char* name, T& storage, offset_t* root_offset) {
+  std::string truncated_name(name);
+  if (truncated_name.length() > 32) {
+    truncated_name = truncated_name.substr(0, 32);
+  }
+  std::string path(CMPFILES);
+  path.append(truncated_name);
+  path.append(".yaml");
+  std::replace(path.begin(), path.end(), ' ', '_');
+
+#ifdef GENERATE
+  std::cout << "generate graph " << name << std::endl;
+  dump_graph(path.c_str(), storage, root_offset);
+#else
+  compare_graph(path.c_str(), storage, root_offset);
 #endif
 }
 
