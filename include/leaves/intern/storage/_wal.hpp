@@ -377,14 +377,14 @@ struct _WalWriter {
 
   // Append PREPARE, flush the buffered records to the active file, fdatasync.
   // Throws leaves::WalError on I/O failure.
-  void prepare() {
+  void prepare(bool skip_sync = false) {
     if (_prepared) return;  // idempotent
     _buf.push_back(static_cast<uint8_t>(_WalOp::PREPARE));
     int idx = _active_log.load();
     if (!_wal_pwrite(_fd[idx], _write_off[idx], _buf.data(), _buf.size()))
       throw WalError("WAL prepare: pwrite failed");
     _write_off[idx] += _buf.size();
-    _wal_sync(_fd[idx]);
+    if (!skip_sync) _wal_sync(_fd[idx]);
     _buf.clear();
     _prepared = true;
   }

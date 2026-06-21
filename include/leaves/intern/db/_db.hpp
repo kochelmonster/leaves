@@ -165,7 +165,7 @@ struct _WalDbMixin {
   void wal_begin(uint32_t txn_id) { _wal.begin(txn_id); }
   void wal_put(const Slice& key, const Slice& val) { _wal.put(key, val); }
   void wal_delete(const Slice& key) { _wal.del(key); }
-  void wal_prepare() { _wal.prepare(); }
+  void wal_prepare(bool skip_sync = false) { _wal.prepare(skip_sync); }
   void wal_commit(uint32_t txn_id) {
     _wal.commit();
     _derived()._storage.submit_task([this, txn_id] {

@@ -620,8 +620,8 @@ struct _WalAware {
     if (_use_wal) _derived()._db->wal_delete(key);
   }
 
-  void _wal_prepare_commit() {
-    if (_use_wal) _derived()._db->wal_prepare();
+  void _wal_prepare_commit(bool skip_sync = false) {
+    if (_use_wal) _derived()._db->wal_prepare(skip_sync);
   }
 
   void _wal_commit(uint32_t txn_id) {
@@ -813,7 +813,7 @@ struct _TransactionalCursor
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
 
-    this->_wal_prepare_commit();
+    this->_wal_prepare_commit(true);
     this->_wal_commit(this->_txn->txn_id.value());
 
     bool committed = this->_db->commit(_id, sync, origin);
