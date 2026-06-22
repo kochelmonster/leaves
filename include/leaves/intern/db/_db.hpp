@@ -124,6 +124,7 @@ struct _WalDbMixin {
   SpinLock _flush_lock;  // avoid DB is destroyed during a flush
   _WalWriter _wal;
   bool _wal_open{false};
+  uint64_t _wal_flush_threshold{100 * 1024 * 1024};  // 1 MB default
 
 
   bool wal_enabled() const { return _wal_open; }
@@ -166,13 +167,17 @@ struct _WalDbMixin {
   void wal_put(const Slice& key, const Slice& val) { _wal.put(key, val); }
   void wal_delete(const Slice& key) { _wal.del(key); }
   void wal_prepare(bool skip_sync = false) { _wal.prepare(skip_sync); }
+  void set_wal_flush_threshold(uint64_t bytes) { _wal_flush_threshold = bytes; }
+
   void wal_commit(uint32_t txn_id) {
     _wal.commit();
-    _derived()._storage.submit_task([this, txn_id] {
-      std::lock_guard<SpinLock> lock(_flush_lock);
-      _derived()._storage.flush(true, true);
-      _wal.flushed(txn_id);
-    });
+    if (_wal.active_data_size() >= _wal_flush_threshold) {
+      _derived()._storage.submit_task([this, txn_id] {
+        std::lock_guard<SpinLock> lock(_flush_lock);
+        _derived()._storage.flush(true, true);
+        _wal.flushed(txn_id);
+      });
+    }
   }
   void wal_abort() { _wal.abort(); }
 

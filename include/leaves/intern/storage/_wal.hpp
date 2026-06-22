@@ -347,6 +347,11 @@ struct _WalWriter {
 
   bool is_open() const { return _open; }
 
+  uint64_t active_data_size() const {
+    int idx = _active_log.load();
+    return _write_off[idx] - WAL_HEADER_SIZE;
+  }
+
   // Begin a transaction: pin the active file and start the record buffer.
   void begin(uint32_t txn_id) {
     int idx = _next_log.load();
