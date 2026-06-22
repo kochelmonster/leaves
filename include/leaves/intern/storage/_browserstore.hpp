@@ -57,6 +57,21 @@ EM_JS(void, leaves_idb_async_write,
             });
       });
 
+EM_JS(void, leaves_idb_delete_database, (const char* db), {
+  var dbName = UTF8ToString(db);
+  // Remove the cached database handle so a subsequent create will re-open fresh
+  if (IDBStore.dbs) {
+    delete IDBStore.dbs[dbName];
+  }
+  var req = indexedDB.deleteDatabase(dbName);
+  req.onsuccess = function() {
+    console.log('[leaves] IndexedDB database deleted: ' + dbName);
+  };
+  req.onerror = function() {
+    err('[leaves] Failed to delete IndexedDB database: ' + dbName);
+  };
+});
+
 EM_JS(int, leaves_pending_writes, (), { return Module._leavesWrites || 0; });
 
 namespace leaves {
@@ -66,8 +81,10 @@ static const size_t BROWSERSTORE_SIGNATURE_SIZE =
     padding(sizeof(BROWSERSTORE_SIGNATURE), 8);
 
 // Store traits - same as _StoreTraits but tuned for browser environment
+// Parameterized on AspectType to allow JS callbacks via JSAspect.
+template <typename AspectType = DefaultAspect>
 struct _BrowserStoreTraits {
-  using Aspect = DefaultAspect;
+  using Aspect = AspectType;
   typedef uint8_t hash_t[0];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
@@ -168,8 +185,7 @@ struct _BrowserOperations : _CacheBase {
     }
   };
 
-  std::string _db_name;     // IndexedDB database name
-  std::string _store_name;  // Object store name
+  std::string _store_name;  // Object store name (IndexedDB name)
   FileHeader* _header;
   mutable std::mutex _io_mutex;  // For thread-safety even in browser
 
@@ -183,9 +199,9 @@ struct _BrowserOperations : _CacheBase {
   size_t calc_header_size() const { return 4 * K; }
 
   // Initialize IndexedDB connection
-  void open(const char* db_name) {
-    _db_name = db_name;
-    _store_name = "leaves_data";
+  void init(const char* name) {
+    _store_name = name;
+    std::cout << "BrowserStorage initialized: " << name << std::endl;
     // IndexedDB initialization happens on first access
   }
 
@@ -249,7 +265,7 @@ struct _BrowserOperations : _CacheBase {
     }
   }
 
-  const char* filename() const { return _db_name.c_str(); }
+  const char* filename() const { return _store_name.c_str(); }
 
   Mutex& file_lock() { return _header->file_lock; }
 
@@ -259,7 +275,7 @@ struct _BrowserOperations : _CacheBase {
         (key == 0) ? "header" : ("area_" + std::to_string(key));
 
     int error = 0;
-    emscripten_idb_store(_db_name.c_str(), key_str.c_str(),
+    emscripten_idb_store(_store_name.c_str(), key_str.c_str(),
                          const_cast<void*>(data), size, &error);
 
     if (error) {
@@ -288,7 +304,7 @@ struct _BrowserOperations : _CacheBase {
     int loaded_size = 0;
     int error = 0;
 
-    emscripten_idb_load(_db_name.c_str(), key_str.c_str(), &loaded_data,
+    emscripten_idb_load(_store_name.c_str(), key_str.c_str(), &loaded_data,
                         &loaded_size, &error);
 
     if (error || !loaded_data) {
@@ -323,7 +339,7 @@ struct _BrowserOperations : _CacheBase {
   void _idb_async_store_data(uint64_t key, const void* data, size_t size) {
     std::string key_str =
         (key == 0) ? "header" : ("area_" + std::to_string(key));
-    leaves_idb_async_write(_db_name.c_str(), key_str.c_str(), data,
+    leaves_idb_async_write(_store_name.c_str(), key_str.c_str(), data,
                            static_cast<int>(size));
   }
 
@@ -340,60 +356,72 @@ struct _BrowserOperations : _CacheBase {
  *   _BrowserStore store("my_database", 16, 100 * M);
  *   auto* db = store["my_collection"];
  *   db->put(key, value);
+ *
+ * Template parameter AspectType selects the Aspect implementation
+ * (DefaultAspect for no-op, JSAspect for JS callbacks).
  */
+template <typename AspectType = DefaultAspect>
 struct _BrowserStore
-    : _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore> {
+    : _CacheStore<_BrowserStoreTraits<AspectType>, _BrowserOperations,
+                  _BrowserStore<AspectType>> {
  public:
-  typedef _CacheStore<_BrowserStoreTraits, _BrowserOperations, _BrowserStore>
-      base_t;
+  using traits_t = _BrowserStoreTraits<AspectType>;
+  using base_t =
+      _CacheStore<traits_t, _BrowserOperations, _BrowserStore<AspectType>>;
 
-  _BrowserStore(const char* db_name, size_t capacity = 100 * M,
+  _BrowserStore(const char* store_name, size_t capacity = 100 * M,
                 size_t pool_threads = 0)
-      : base_t(capacity, pool_threads, _BrowserStoreTraits::AREA_SIZE) {
+      : base_t(capacity, pool_threads, traits_t::AREA_SIZE) {
     // Note: pool_threads=0 for browser (single-threaded)
-    _init_browser_db(db_name);
+    _init_browser_db(store_name);
   }
 
   ~_BrowserStore() {
-    destroy();
-    delete[] reinterpret_cast<char*>(_header);
+    this->destroy();
+    delete[] reinterpret_cast<char*>(this->_header);
   }
 
-  void _init_browser_db(const char* db_name) {
+  void _init_browser_db(const char* store_name) {
     size_t header_size = 4 * K;
     char* buffer = new char[header_size];
 
-    _BrowserOperations::open(db_name);
+    this->init(store_name);
 
     // Try to load existing header from IndexedDB
     bool exists = _try_load_header(buffer, header_size);
-
+    std::cout << (exists ? "Existing storage loaded: "
+                         : "No existing storage, creating new: ")
+              << store_name << std::endl;
     if (!exists) {
       // Create new database
-      _header = new (buffer) FileHeader();
+      this->_header = new (buffer) typename _BrowserOperations::FileHeader();
       // Align file_size to AREA_SIZE so areas are AREA_SIZE-aligned
-      _header->file_size =
-          leaves::padding(header_size, _BrowserStoreTraits::AREA_SIZE);
+      this->_header->file_size =
+          leaves::padding(header_size, traits_t::AREA_SIZE);
       // Write initial header
-      write(0, buffer, header_size);
+      this->write(0, buffer, header_size);
     } else {
-      _header = reinterpret_cast<FileHeader*>(buffer);
+      this->_header =
+          reinterpret_cast<typename _BrowserOperations::FileHeader*>(buffer);
 
-      if (strcmp(_header->signature, BROWSERSTORE_SIGNATURE)) {
-        throw TypeMismatch();
+      if (strcmp(this->_header->signature, BROWSERSTORE_SIGNATURE)) {
+        throw TypeMismatch(
+            std::format("Invalid database signature: expected '{}' got '{}'",
+                        BROWSERSTORE_SIGNATURE, this->_header->signature));
       }
     }
 
-    assert(((uint64_t)_header & 7) == 0);
-    _sanitize();
+    assert(((uint64_t)this->_header & 7) == 0);
+    this->_sanitize();
   }
 
-  uint32_t sanitize_generation() { return _header->sanitize_generation; }
+  uint32_t sanitize_generation() { return this->_header->sanitize_generation; }
 
   bool _try_load_header(char* buffer, size_t header_size) {
     try {
-      read(0, buffer, header_size);
-      auto* h = reinterpret_cast<FileHeader*>(buffer);
+      this->read(0, buffer, header_size);
+      auto* h =
+          reinterpret_cast<typename _BrowserOperations::FileHeader*>(buffer);
       return strcmp(h->signature, BROWSERSTORE_SIGNATURE) == 0;
     } catch (...) {
       return false;
@@ -401,22 +429,22 @@ struct _BrowserStore
   }
 
   void _sanitize() {
-    _recover_areas();
-    ++_header->sanitize_generation;
+    this->_recover_areas();
+    ++this->_header->sanitize_generation;
   }
 
   void _recover_areas() {
     auto* self = this;
-    _recover_areas<_DBHeader<base_t>, _BrowserStoreTraits::AREA_SIZE>(
-        _header->area_pool,
+    _recover_areas<_DBHeader<base_t>, traits_t::AREA_SIZE>(
+        this->_header->area_pool,
         [self](auto fn) {
           self->_for_each_db_entry([&](auto& e) {
             if (e.offset) fn(e.offset);
             return true;
           });
         },
-        _header->file_size,
-        leaves::padding(calc_header_size(), _BrowserStoreTraits::AREA_SIZE),
+        this->_header->file_size,
+        leaves::padding(this->calc_header_size(), traits_t::AREA_SIZE),
         [self](uint64_t pos, void* buf, size_t size) {
           self->read(pos, buf, size);
         },
@@ -427,19 +455,19 @@ struct _BrowserStore
 
   // Compatibility method
   AreaSlice get_area(size_t size) {
-    auto area_ptr = alloc_multi_area(size);
+    auto area_ptr = this->alloc_multi_area(size);
     return *area_ptr;
   }
 
   // Browser-specific: Export database to transferable format
   std::vector<char> export_to_buffer() const {
     std::vector<char> result;
-    size_t total_size = _header->file_size;
+    size_t total_size = this->_header->file_size;
     result.resize(total_size);
 
     // Export header
-    size_t header_size = calc_header_size();
-    std::memcpy(result.data(), _header, header_size);
+    size_t header_size = this->calc_header_size();
+    std::memcpy(result.data(), this->_header, header_size);
 
     // Export all areas (would need iteration over stored keys)
     // This is a simplified version - full implementation would
@@ -449,26 +477,35 @@ struct _BrowserStore
 
   // Browser-specific: Import database from buffer
   void import_from_buffer(const std::vector<char>& data) {
-    if (data.size() < sizeof(FileHeader)) {
+    if (data.size() < sizeof(typename _BrowserOperations::FileHeader)) {
       throw LeavesException("Invalid import data");
     }
 
-    size_t header_size = calc_header_size();
-    std::memcpy(static_cast<void*>(_header), data.data(), header_size);
+    size_t header_size = this->calc_header_size();
+    std::memcpy(static_cast<void*>(this->_header), data.data(), header_size);
 
     // Write header
-    write(0, _header, header_size);
+    this->write(0, this->_header, header_size);
 
     // Import areas (simplified - full version would parse all areas)
+  }
+
+  // Browser-specific: Delete the entire IndexedDB database
+  // Flushes pending writes, then removes the database entirely.
+  void delete_storage() {
+    // Flush and close all pending operations
+    this->destroy();
+    // Delete the IndexedDB database from JS
+    leaves_idb_delete_database(this->_store_name.c_str());
   }
 
   // Browser-specific: Clear all data
   void clear_database() {
     // Delete all known keys from IndexedDB
     int error = 0;
-    emscripten_idb_delete(_db_name.c_str(), "header", &error);
+    emscripten_idb_delete(this->_db_name.c_str(), "header", &error);
     // Reinitialize
-    _init_browser_db(_db_name.c_str());
+    this->_init_browser_db(this->_db_name.c_str());
   }
 };
 
@@ -476,9 +513,12 @@ struct _BrowserStore
 
 #else  // !__EMSCRIPTEN__
 
+#include "../db/_aspect.hpp"
+
 // Stub for non-Emscripten builds - provides compile-time error
 namespace leaves {
 
+template <typename AspectType = DefaultAspect>
 struct _BrowserStore {
   template <typename... Args>
   _BrowserStore(Args&&...) {

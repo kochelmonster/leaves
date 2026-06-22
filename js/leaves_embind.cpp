@@ -1,8 +1,20 @@
 // Embind bindings for leaves _BrowserStore
 //
-// Exposes LeavesStore, LeavesDB, and LeavesCursor to JavaScript.
+// Exposes LeavesStore, LeavesDB, LeavesCursor, and
+// ReplicationSender/Receiver to JavaScript.
+//
+// The underlying storage always uses _BrowserStore<JSAspect> so that
+// all databases (both regular and replication) support aspect callbacks.
+// JSAspect is a no-op pass-through when no callbacks are set, so this
+// is fully backward-compatible with existing non-aspect code.
+//
 // Build: emcmake cmake -B build-wasm && cmake --build build-wasm -j
 // Usage: see js/leaves.mjs or docs/BROWSER_STORAGE.md
+//
+// JS API (matching C++ API):
+//   var store = await Module.LeavesStore.create('storage_name', capacity);
+//   var db    = await store.open('database_name');
+//   var c     = db.createCursor();
 
 #ifdef __EMSCRIPTEN__
 
@@ -10,6 +22,7 @@
 #include <emscripten/val.h>
 
 #include <leaves/intern/storage/_browserstore.hpp>
+#include "_js_aspect.hpp"
 
 #include <memory>
 #include <string>
@@ -20,10 +33,11 @@ using namespace emscripten;
 #include "leaves/db.hpp"
 #include "leaves/replication.hpp"
 
-// ── Type aliases ─────────────────────────────────────────────────
+// ── Storage wrapper ────────────────────────────────────────────────
+// Always uses _BrowserStore<JSAspect> so all DB types support aspects.
 
 struct BrowserStoreWrapper {
-    using StorageImpl = leaves::_BrowserStore;
+    using StorageImpl = leaves::_BrowserStore<leaves::JSAspect>;
     using storage_ptr = std::shared_ptr<BrowserStoreWrapper>;
 
     std::shared_ptr<StorageImpl> _storage;
@@ -35,7 +49,6 @@ struct BrowserStoreWrapper {
     StorageImpl* operator->() { return _storage.get(); }
 };
 
-
 using Store = leaves::TDB<BrowserStoreWrapper>;
 using DB = Store::db_type;
 using Cursor = Store::Cursor;
@@ -45,6 +58,17 @@ using ReplicationDBImpl = ReplicationDB::db_type;
 using ReplicationCursorImpl = typename ReplicationDBImpl::Cursor;
 using replication_cursor_ptr = std::shared_ptr<ReplicationCursorImpl>;
 
+// ── Pure storage wrapper (no auto-opened DB) ──────────────────────
+// Matches the C++ pattern: create a storage, then open databases within it.
+
+struct JSStore {
+    BrowserStoreWrapper::storage_ptr _storage;
+
+    BrowserStoreWrapper::StorageImpl* operator->() { return _storage->_storage.get(); }
+};
+
+// A database handle: storage + DB pointer (opened within that storage)
+// All DBs opened through LeavesStore are aspect-capable.
 struct JSDB {
     BrowserStoreWrapper::storage_ptr storage;
     DB* db;
@@ -104,26 +128,28 @@ struct ReplicationDBCursor {
     bool start_transaction(bool non_blocking) {
         return _cursor->start_transaction(non_blocking);
     }
+
+    // Return the per-cursor JS context object (aspect support)
+    val aspect_context() const {
+        return _cursor->_aspect_context.js_context;
+    }
 };
 
-// Factory — embind passes std::string; constructor wants const char*
-static Store* make_store(const std::string& name, size_t capacity) {
-  auto storage = std::make_shared<BrowserStoreWrapper>(name.c_str(), capacity, 0);
-  return new Store(storage, name.c_str());
-}
-
-static ReplicationDB* make_replication_db(const std::string& name, size_t capacity) {
-    auto storage = std::make_shared<BrowserStoreWrapper>(name.c_str(), capacity, 0);
-    return new ReplicationDB(storage, name.c_str());
+// ── Factory functions ────────────────────────────────────────────
+// Create a storage with a storage name.
+static JSStore* make_store(const std::string& name, size_t capacity) {
+  JSStore* s = new JSStore();
+  s->_storage = std::make_shared<BrowserStoreWrapper>(name.c_str(), capacity, 0);
+  return s;
 }
 
 // Close — async IDB flush. Must be be called before .delete() to avoid crash.
-static void store_close(Store& s) {
-  s._internal()->_storage.destroy();
+static void store_delete_storage(JSStore& s) {
+  s._storage->_storage->delete_storage();
 }
 
-static void replication_db_close(ReplicationDB& s) {
-  s._internal()->_storage.destroy();
+static void store_close(JSStore& s) {
+  s._storage->_storage->destroy();
 }
 
 // Number of IDB write operations still in flight (global counter)
@@ -131,19 +157,26 @@ static int store_pending_writes() {
   return leaves_pending_writes();
 }
 
-// ── Wrapper functions ────────────────────────────────────────────
-// Slice is a non-owning view — all JS conversions must copy data.
-
-static JSDB store_db(Store& s, const std::string& name) {
-  DB* db = s._internal()->_storage.template open<leaves::_DB>(name.c_str());
-  return JSDB{s.storage(), db};
+// ── Open databases from a store ──────────────────────────────────
+// Open a regular DB within this store.
+static JSDB store_open(JSStore& s, const std::string& name) {
+  DB* db = s._storage->_storage->template open<leaves::_DB>(name.c_str());
+  return JSDB{s._storage, db};
 }
 
-static JSDB replication_db_db(ReplicationDB& s, const std::string& name) {
-  DB* db = s._internal()->_storage.template open<leaves::_DB>(name.c_str());
-  return JSDB{s.storage(), db};
+// Open a replication DB within this store.
+static ReplicationDB* store_open_replication(JSStore& s, const std::string& name) {
+  return new ReplicationDB(s._storage, name.c_str());
 }
 
+// ── Aspect callbacks on a DB handle ──────────────────────────────
+// Set JS callbacks on any LeavesDB (regular or opened from replication).
+
+static void jsdb_set_aspect_callbacks(JSDB& jsdb, val callbacks) {
+    jsdb.db->aspect().set_callbacks(callbacks);
+}
+
+// ── Cursor functions for DB ──────────────────────────────────────
 static Cursor jsdb_create_cursor(JSDB& jsdb) {
     return Cursor(jsdb.storage, jsdb.db);
 }
@@ -152,20 +185,20 @@ static ReplicationDBCursor replication_db_create_cursor(ReplicationDB& s) {
     return ReplicationDBCursor(s.storage(), s._internal());
 }
 
-static std::vector<std::string> store_list_dbs(Store& s) {
+static std::vector<std::string> store_list_dbs(JSStore& s) {
   std::vector<std::string> result;
-  s._internal()->_storage.list_dbs(result);
+  s._storage->_storage->list_dbs(result);
   return result;
 }
 
-static val store_export(Store& s) {
-  auto buf = s._internal()->_storage.export_to_buffer();
+static val store_export(JSStore& s) {
+  auto buf = s._storage->_storage->export_to_buffer();
   return val(typed_memory_view(buf.size(), reinterpret_cast<const uint8_t*>(buf.data()))).call<val>("slice");
 }
 
-static void store_import(Store& s, const std::string& data) {
+static void store_import(JSStore& s, const std::string& data) {
   std::vector<char> buf(data.begin(), data.end());
-  s._internal()->_storage.import_from_buffer(buf);
+  s._storage->_storage->import_from_buffer(buf);
 }
 
 // Cursor key/value — string variants
@@ -219,6 +252,11 @@ static bool cursor_commit(Cursor& c, bool sync) { c.commit(sync); return true;}
 static bool cursor_rollback(Cursor& c) { c.rollback(); return true;}
 static bool cursor_start_transaction(Cursor& c, bool non_blocking) {
   return c.start_transaction(non_blocking, false); // use_wal always false
+}
+
+// Return the per-cursor JS context object (aspect support)
+static val cursor_aspect_context(Cursor& c) {
+    return c.aspect_context().js_context;
 }
 
 // JSTransport: a C++ implementation of ReplicationTransport that forwards calls to a JS object
@@ -342,52 +380,75 @@ EMSCRIPTEN_BINDINGS(leaves) {
 
   register_vector<std::string>("VectorString");
 
-  class_<Store>("LeavesStore")
+  // ── Storage (JSStore) ──────────────────────────────────────────
+  // A storage holds the IndexedDB connection. Use .open(dbName) to get a DB.
+  //
+  // All databases opened through this store support aspect callbacks.
+  // Set them via LeavesDB.setAspectCallbacks(callbacksObject).
+  //
+  // Usage:
+  //   var store = await Module.LeavesStore.create('storageName', capacity);
+  //   var db    = await store.open('dbName');
+  //   var c     = db.createCursor();
+
+  class_<JSStore>("LeavesStore")
       .class_function("create", &make_store, allow_raw_pointers(), async())
-      .class_function("createReplicationDB", &make_replication_db, allow_raw_pointers(), async())
       .class_function("pendingWrites", &store_pending_writes)
+      .function("open", &store_open, async())
+      .function("openReplication", &store_open_replication, allow_raw_pointers(), async())
+      .function("deleteStorage", &store_delete_storage, async())
       .function("close", &store_close, async())
-      .function("db", &store_db, allow_raw_pointers(), async())
       .function("listDbs", &store_list_dbs)
       .function("exportToBuffer", &store_export)
       .function("importFromBuffer", &store_import, async());
 
-    class_<ReplicationDB>("LeavesReplicationDB")
-        .function("close", &replication_db_close, async())
-        .function("db", &replication_db_db, allow_raw_pointers(), async())
-        .function("createCursor", &replication_db_create_cursor);
+  class_<ReplicationDBCursor>("LeavesReplicationDBCursor")
+      .function("startTransaction", &ReplicationDBCursor::start_transaction, async())
+      .function("find", &ReplicationDBCursor::find, async())
+      .function("first", &ReplicationDBCursor::first, async())
+      .function("last", &ReplicationDBCursor::last, async())
+      .function("next", &ReplicationDBCursor::next, async())
+      .function("prev", &ReplicationDBCursor::prev, async())
+      .function("isValid", &ReplicationDBCursor::is_valid)
+      .function("key", &ReplicationDBCursor::key)
+      .function("getValue", &ReplicationDBCursor::get_value, async())
+      .function("setValue", &ReplicationDBCursor::set_value, async())
+      .function("getValueBytes", &ReplicationDBCursor::get_value_bytes, async())
+      .function("setValueBytes", &ReplicationDBCursor::set_value_bytes, async())
+      .function("remove", &ReplicationDBCursor::remove, async())
+      .function("commit", &ReplicationDBCursor::commit, async())
+      .function("rollback", &ReplicationDBCursor::rollback, async())
+      .function("aspectContext", &ReplicationDBCursor::aspect_context);
 
-    class_<ReplicationDBCursor>("LeavesReplicationDBCursor")
-        .function("startTransaction", &ReplicationDBCursor::start_transaction, async())
-        .function("find", &ReplicationDBCursor::find, async())
-        .function("first", &ReplicationDBCursor::first, async())
-        .function("last", &ReplicationDBCursor::last, async())
-        .function("next", &ReplicationDBCursor::next, async())
-        .function("prev", &ReplicationDBCursor::prev, async())
-        .function("isValid", &ReplicationDBCursor::is_valid)
-        .function("key", &ReplicationDBCursor::key)
-        .function("getValue", &ReplicationDBCursor::get_value, async())
-        .function("setValue", &ReplicationDBCursor::set_value, async())
-        .function("getValueBytes", &ReplicationDBCursor::get_value_bytes, async())
-        .function("setValueBytes", &ReplicationDBCursor::set_value_bytes, async())
-        .function("remove", &ReplicationDBCursor::remove, async())
-        .function("commit", &ReplicationDBCursor::commit, async())
-        .function("rollback", &ReplicationDBCursor::rollback, async());
+  // ── DB ─────────────────────────────────────────────────────────
+  // A database handle (opened from a store). Provides createCursor()
+  // and aspect callbacks.
 
   class_<JSDB>("LeavesDB")
+      .function("setAspectCallbacks", &jsdb_set_aspect_callbacks)
       .function("createCursor", &jsdb_create_cursor, allow_raw_pointers());
 
-    class_<ReplicationSenderJS>("ReplicationSender")
-        .constructor<ReplicationDB&>()
-        .function("begin", &ReplicationSenderJS::begin)
-        .function("onMessageReceived", &ReplicationSenderJS::on_message_received)
-        .function("state", &ReplicationSenderJS::state);
+  // ── ReplicationDB (returned by openReplication) ─────────────────
 
-    class_<ReplicationReceiverJS>("ReplicationReceiver")
-        .constructor<ReplicationDB&>()
-        .function("begin", &ReplicationReceiverJS::begin)
-        .function("onMessageReceived", &ReplicationReceiverJS::on_message_received)
-        .function("state", &ReplicationReceiverJS::state);
+  class_<ReplicationDB>("ReplicationDB")
+      .function("createCursor", &replication_db_create_cursor, allow_raw_pointers());
+
+  // ── Replication sender/receiver ─────────────────────────────────
+
+  class_<ReplicationSenderJS>("ReplicationSender")
+      .constructor<ReplicationDB&>()
+      .function("begin", &ReplicationSenderJS::begin)
+      .function("onMessageReceived", &ReplicationSenderJS::on_message_received)
+      .function("state", &ReplicationSenderJS::state);
+
+  class_<ReplicationReceiverJS>("ReplicationReceiver")
+      .constructor<ReplicationDB&>()
+      .function("begin", &ReplicationReceiverJS::begin)
+      .function("onMessageReceived", &ReplicationReceiverJS::on_message_received)
+      .function("state", &ReplicationReceiverJS::state);
+
+  // ── Cursor ─────────────────────────────────────────────────────
+  // Full API including aspect context support.
 
   class_<Cursor>("LeavesCursor")
       .smart_ptr<cursor_ptr>("LeavesCursorPtr")
@@ -406,7 +467,8 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("setValueBytes", &cursor_set_value_bytes, async())
       .function("remove", &cursor_remove, async())
       .function("commit", &cursor_commit, async())
-      .function("rollback", &cursor_rollback, async());
+      .function("rollback", &cursor_rollback, async())
+      .function("aspectContext", &cursor_aspect_context);
 }
 
 #endif  // __EMSCRIPTEN__

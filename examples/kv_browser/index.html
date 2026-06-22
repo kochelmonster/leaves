@@ -126,28 +126,27 @@
   </tbody>
 </table>
 
-<script>
+<script type="module">
+import createModule from './leaves.js';
+import { LeavesReplicationSender, LeavesReplicationReceiver } from './leaves_replication.js';
+
 // ── State ───────────────────────────────────────────────────────
 
 const params = new URLSearchParams(location.search);
 const PORT = params.get("port") || "19876";
 let ready = false;
 let syncing = false;
-
-// ── Module setup ────────────────────────────────────────────────
-
-var Module = {
-  onRuntimeInitialized: function() {
-    init();
-  },
-  print: function(t) { console.log(t); },
-  printErr: function(t) { console.warn(t); },
-};
-</script>
-<script src="kv_demo.js"></script>
-<script>
+let store, cursor, Module, ws;
+let textQueue = [];
+let binQueue = [];
+let notificationPending = false;
 
 // ── UI helpers ──────────────────────────────────────────────────
+
+window.addKV = addKV;
+window.removeKV = removeKV;
+window.clearAll = clearAll;
+window.manualSync = manualSync;
 
 function setStatus(text, color) {
   document.getElementById("status-text").textContent = text;
@@ -174,7 +173,6 @@ function renderTable(rows) {
   countEl.textContent = rows.length + " entr" + (rows.length === 1 ? "y" : "ies");
 
   tbody.innerHTML = rows.map(function(row) {
-    // Escape HTML to prevent XSS
     const ek = escapeHtml(row.key);
     const ev = escapeHtml(row.value);
     return '<tr>'
@@ -203,33 +201,79 @@ function updateSyncTime() {
 // ── Core operations ─────────────────────────────────────────────
 
 async function refresh() {
-  const rows = await Module.kvGetAll();
-  // Convert val proxy to plain array
-  const arr = [];
-  for (let i = 0; i < rows.length; i++) {
-    arr.push({ key: rows[i].key, value: rows[i].value });
+  const rows = [];
+  await cursor.first();
+  while (cursor.isValid()) {
+    rows.push({ key: cursor.key(), value: await cursor.getValue() });
+    await cursor.next();
   }
-  renderTable(arr);
+  renderTable(rows);
 }
 
 async function doSync() {
-  if (syncing) return;
+  console.log('[client] doSync enter');
+  if (syncing) {
+    console.log('[client] doSync: already syncing, returning');
+    return;
+  }
   syncing = true;
   setStatus("Syncing...", "yellow");
+
   try {
-    const ok = await Module.kvSync();
-    if (ok) {
-      await refresh();
-      setStatus("Connected", "green");
-      updateSyncTime();
-    } else {
-      setStatus("Sync failed", "red");
+    console.log('[client] sending SYNC request');
+    ws.send("SYNC");
+
+    const receiver = new LeavesReplicationReceiver(store, Module);
+    const sender = new LeavesReplicationSender(store, Module);
+
+    // Phase 1: Receive from server — begin receiver only
+    let onReceiveComplete = new Promise(resolve => {
+        receiver.begin({ send: data => ws.send(data) }, {
+            onComplete: resolve,
+            onError: (sid, err, msg) => console.error('Receiver error:', msg || err)
+        });
+    });
+
+    while (receiver.state() === 'active') {
+        const msg = await nextBinMessage();
+        if (msg === null) throw new Error("WebSocket closed during receive");
+        receiver.onMessageReceived(msg);
     }
+    await onReceiveComplete;
+
+    // Wait for PULL
+    const pull = await nextTextMessage();
+    if (pull !== 'PULL') throw new Error('Expected PULL, got ' + pull);
+
+    // Phase 2: Send to server — begin sender only now
+    let onSendComplete = new Promise(resolve => {
+        sender.begin({ send: data => ws.send(data) }, {
+            onComplete: resolve,
+            onError: (sid, err, msg) => console.error('Sender error:', msg || err)
+        });
+    });
+
+    while (sender.state() === 'active') {
+        const msg = await nextBinMessage();
+        if (msg === null) throw new Error("WebSocket closed during send");
+        sender.onMessageReceived(msg);
+    }
+    await onSendComplete;
+
+    // Wait for DONE
+    const done = await nextTextMessage();
+    if (done !== 'DONE') throw new Error('Expected DONE, got ' + done);
+
+    await refresh();
+    setStatus("Connected", "green");
+    updateSyncTime();
+
   } catch (e) {
     console.error("sync error:", e);
-    setStatus("Sync error", "red");
+    setStatus("Sync error: " + e.message, "red");
+  } finally {
+    syncing = false;
   }
-  syncing = false;
 }
 
 // ── User actions ────────────────────────────────────────────────
@@ -242,7 +286,9 @@ async function addKV() {
   if (!key) { keyEl.focus(); return; }
 
   setButtons(false);
-  await Module.kvPut(key, value);
+  await cursor.find(key);
+  await cursor.setValue(value);
+  await cursor.commit(true);
   keyEl.value = "";
   valEl.value = "";
   keyEl.focus();
@@ -253,18 +299,24 @@ async function addKV() {
 
 async function removeKV(key) {
   setButtons(false);
-  await Module.kvRemove(key);
+  await cursor.find(key);
+  if (cursor.isValid()) {
+      await cursor.remove();
+      await cursor.commit(true);
+  }
   await refresh();
   await doSync();
   setButtons(true);
 }
 
 async function clearAll() {
-  const rows = await Module.kvGetAll();
   setButtons(false);
-  for (let i = 0; i < rows.length; i++) {
-    await Module.kvRemove(rows[i].key);
+  await cursor.first();
+  while (cursor.isValid()) {
+    await cursor.remove();
+    await cursor.next();
   }
+  await cursor.commit(true);
   await refresh();
   await doSync();
   setButtons(true);
@@ -276,15 +328,56 @@ async function manualSync() {
   setButtons(true);
 }
 
-// ── Notification polling ────────────────────────────────────────
+// ── WebSocket and notification handling ─────────────────────────
+
+function connectWs() {
+    return new Promise((resolve, reject) => {
+        const url = "ws://" + location.hostname + ":" + PORT;
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => resolve(true);
+        ws.onclose = () => { ready = false; setStatus("Disconnected", "red"); };
+        ws.onerror = (e) => { console.error("ws error", e); reject(e); };
+
+        ws.onmessage = (ev) => {
+            if (typeof ev.data === "string") {
+                if (ev.data === 'SYNC') {
+                    console.log('[client] received SYNC notification');
+                    notificationPending = true;
+                } else {
+                    console.log('[client] received text:', ev.data);
+                    textQueue.push(ev.data);
+                }
+            } else {
+                const arr = new Uint8Array(ev.data);
+                console.log('[client] received binary:', arr.length, 'bytes');
+                binQueue.push(arr);
+            }
+        };
+    });
+}
+
+function nextMessage(queue) {
+    if (queue.length > 0) return Promise.resolve(queue.shift());
+    return new Promise(resolve => {
+        const check = () => {
+            if (queue.length > 0) resolve(queue.shift());
+            else if (!ws || ws.readyState !== WebSocket.OPEN) resolve(null);
+            else setTimeout(check, 10);
+        };
+        check();
+    });
+}
+
+function nextTextMessage() { return nextMessage(textQueue); }
+function nextBinMessage() { return nextMessage(binQueue); }
 
 async function pollNotifications() {
   if (!ready || syncing) return;
-  try {
-    if (!Module.kvHasNotification()) return;
+  if (notificationPending) {
+    notificationPending = false;
     await doSync();
-  } catch (e) {
-    console.error("poll error:", e);
   }
 }
 
@@ -301,34 +394,47 @@ document.addEventListener("keydown", function(e) {
 
 // ── Init ────────────────────────────────────────────────────────
 
+const STORAGE_KEY = 'leaves_kv_db_name';
+
 async function init() {
-  document.getElementById("loading").textContent = "Connecting...";
-
   try {
-    const dbName = "kv_demo_" + location.port;
-    await Module.kvCreate(dbName);
+    document.getElementById("loading").textContent = "Loading WASM...";
+    Module = await createModule();
 
-    const url = "ws://" + location.hostname + ":" + PORT;
-    await Module.kvConnect(url);
-
-    if (!Module.kvIsConnected()) {
-      setStatus("Connection failed", "red");
-      document.getElementById("loading").classList.add("hidden");
-      return;
+    if (typeof Module.supportsJSPI === 'function' && !Module.supportsJSPI()) {
+      throw new Error("This browser does not support JavaScript Promise Integration (JSPI). Please use Chrome 128+ or enable the #enable-jspi flag in chrome://flags.");
     }
+
+    document.getElementById("loading").textContent = "Connecting...";
+    // Use a previously-saved DB name, or fall back to the default.
+    // This avoids the stale-IDB TypeMismatch on reload: once a fresh
+    // name has been stored we never touch the old (stale) database again.
+    const dbName = localStorage.getItem(STORAGE_KEY) || "kv_demo_" + (location.port || 'default');
+    try {
+      store = await Module.LeavesStore.createReplicationDB(dbName, 10 * 1024 * 1024);
+    } catch (e) {
+      // WebAssembly exceptions don't expose a string .message.
+      // Fall back to a fresh name (the WASM module holds an open
+      // IDB connection from the failed open, so deleteDatabase on
+      // the old name would be permanently blocked).
+      console.warn('DB open failed, creating fresh DB:', e);
+      const freshName = "kv_demo_" + (location.port || 'default') + "_" + Date.now();
+      store = await Module.LeavesStore.createReplicationDB(freshName, 10 * 1024 * 1024);
+      localStorage.setItem(STORAGE_KEY, freshName);
+    }
+    cursor = await store.createCursor();
+
+    await connectWs();
 
     setStatus("Connected — initial sync...", "yellow");
     document.getElementById("loading").classList.add("hidden");
 
-    // Initial sync
     await doSync();
 
     ready = true;
     setButtons(true);
     setStatus("Connected", "green");
 
-    // Poll the local WebSocket notification queue.
-    // This is cheap and lets server-pushed SYNC hints trigger promptly.
     setInterval(pollNotifications, 250);
 
   } catch (e) {
@@ -337,6 +443,9 @@ async function init() {
     document.getElementById("loading").classList.add("hidden");
   }
 }
+
+init();
+
 </script>
 
 </body>

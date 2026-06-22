@@ -38,7 +38,6 @@
 
 #include "leaves/replication.hpp"
 #include "leaves/mmap.hpp"
-//#include "leaves/intern/replication/_replication_db.hpp"
 
 namespace beast = boost::beast;
 namespace ws    = beast::websocket;
@@ -98,6 +97,9 @@ static void broadcast_sync_notification(const std::set<int>& excluded_clients) {
     clients = g_clients;
   }
 
+  std::cerr << "[server] broadcast SYNC to " << clients.size()
+            << " clients (excluding " << excluded_clients.size() << ")\n";
+
   for (const auto& session : clients) {
     if (!session || !session->alive.load()) continue;
     if (excluded_clients.count(session->id)) continue;
@@ -136,7 +138,10 @@ struct ServerSyncNotifier {
             std::set<int> excluded;
             {
               std::lock_guard<std::mutex> lock(mutex);
-              if (txn_id_snapshot != _last_txn_id) return;
+              if (txn_id_snapshot != _last_txn_id) {
+                std::cerr << "[server] sync debounce: skipped (txn changed)\n";
+                return;
+              }
               pending_job_id = 0;
               excluded.swap(excluded_clients);
             }
@@ -151,7 +156,13 @@ static ServerSyncNotifier g_sync_notifier;
 struct ServerAspect : public DefaultAspect {
   template <typename DB, typename Ctx>
   void on_commit(DB& db, TransactionOrigin, Ctx&) {
-    if (g_commit_origin_client_id <= 0) return;
+    if (g_commit_origin_client_id <= 0) {
+      std::cerr << "[server] on_commit skipped (origin="
+                << g_commit_origin_client_id << ")\n";
+      return;
+    }
+    std::cerr << "[server] on_commit triggered by client "
+              << g_commit_origin_client_id << "\n";
     g_sync_notifier.schedule(db, g_commit_origin_client_id);
   }
 };
@@ -175,11 +186,14 @@ static void remove_client(int id) {
 struct DemoEvents : ReplicationEvents {
   bool completed = false;
   bool errored = false;
-  void on_complete(uint64_t, size_t n) override {
+  void on_complete(uint64_t session_id, size_t n) override {
+    std::cerr << "[server] on_complete session=" << session_id
+              << " n=" << n << "\n";
     completed = true;
   }
-  void on_error(uint64_t, ReplicationError, const char* r) override {
-    std::cerr << "[server] repl error: " << r << "\n";
+  void on_error(uint64_t session_id, ReplicationError err, const char* r) override {
+    std::cerr << "[server] on_error session=" << session_id
+              << " err=" << static_cast<int>(err) << " msg=" << r << "\n";
     errored = true;
   }
   void on_progress(uint64_t, size_t, size_t) override {}
@@ -211,6 +225,8 @@ static void handle_client(
       buf.consume(buf.size());
 
       if (msg != "SYNC") {
+        std::cerr << "[server] client " << client_id
+                  << " ignoring text: " << msg << "\n";
         continue;
       }
 
@@ -228,6 +244,12 @@ static void handle_client(
         ReplicationSender<ServerStorage> sender(db);
         sender.begin(&transport, &events);
 
+        std::cerr << "[server] client " << client_id
+                  << " Phase1 bytes_transferred="
+                  << sender.bytes_transferred()
+                  << " nodes_transferred=" << sender.nodes_transferred()
+                  << " state=" << static_cast<int>(sender.state()) << "\n";
+
         while (sender.state() == ReplicationState::ACTIVE) {
           wss.read(buf);
           auto d = buf.cdata();
@@ -241,6 +263,9 @@ static void handle_client(
                     << " send phase failed\n";
           continue;
         }
+        std::cerr << "[server] client " << client_id
+                  << " Phase1 done: nodes=" << sender.nodes_transferred()
+                  << " bytes=" << sender.bytes_transferred() << "\n";
       }
 
       // Send "PULL" to signal client should now send
@@ -258,11 +283,19 @@ static void handle_client(
         ReplicationReceiver<ServerStorage> receiver(db);
         receiver.begin(&transport, &events);
 
+        std::cerr << "[server] client " << client_id
+                  << " Phase2 before receive: bytes="
+                  << receiver.bytes_transferred()
+                  << " nodes=" << receiver.nodes_transferred() << "\n";
+
         while (receiver.state() == ReplicationState::ACTIVE) {
           wss.read(buf);
 
           if (wss.got_text()) {
             // Unexpected text during receive phase — skip
+            std::cerr << "[server] client " << client_id
+                      << " unexpected text during Phase2: "
+                      << beast::buffers_to_string(buf.cdata()) << "\n";
             buf.consume(buf.size());
             continue;
           }
@@ -285,10 +318,10 @@ static void handle_client(
           buf.consume(buf.size());
         }
 
-        if (events.errored) {
-          std::cerr << "[server] client " << client_id
-                    << " receive phase failed\n";
-        }
+        std::cerr << "[server] client " << client_id
+                  << " Phase2 done: nodes=" << receiver.nodes_transferred()
+                  << " bytes=" << receiver.bytes_transferred()
+                  << " completed=" << events.completed << "\n";
       }
 
       // Send "DONE" to signal sync complete

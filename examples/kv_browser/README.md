@@ -22,7 +22,7 @@ Open multiple browser tabs to see changes sync in real time.
   server-specific aspect debounces post-commit `SYNC` hints so bursts of
   commits collapse into a single client refresh notification.
 
-- **Client** (`client.cpp`): Emscripten/WASM module using Embind to expose
+- **Client** (`js/leaves.js`): Pre-built WASM module using Embind to expose
   a `KVDemo` API to JavaScript. Local data lives in IndexedDB via
   `ReplicatingBrowserStorage`.
 
@@ -33,28 +33,18 @@ Open multiple browser tabs to see changes sync in real time.
 ## Prerequisites
 
 - CMake, Ninja, GCC/Clang (for the native server)
-- Emscripten SDK (for the WASM client)
 - Node.js 18+ (for the runner script)
 - Chrome 128+ or another browser with [JSPI](https://v8.dev/blog/jspi) support
 
 ## Build
 
-```bash
-# Configure the project (do this once)
-# For native server:
-cmake -B build -G Ninja
-# For WASM client (release mode — default, suppresses debug diagnostics):
-emcmake cmake -B build-wasm -G Ninja
-# For WASM client (debug mode — enables diagnostic output like [flush] messages):
-emcmake cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
+The WASM client must be pre-built in the leaves project. You only need to build the native server.
 
-# Build the targets
-# Native server:
+```bash
+# From the examples/kv_browser directory:
+# Configure and build the native server (do this once)
+cmake -B build -G Ninja
 cmake --build build -j --target kv_demo_server
-# WASM client (release):
-cmake --build build-wasm -j --target kv_demo_client
-# WASM client (debug):
-cmake --build build-wasm-debug -j --target kv_demo_client
 ```
 
 ## Run
@@ -73,7 +63,7 @@ Options:
 | `--ws-port`     | 19876   | WebSocket server port|
 | `--http-port`   | 8080    | HTTP server port     |
 | `--server`      | `build/kv_demo_server` | Path to server binary |
-| `--wasm-dir`    | `build-wasm` | Directory with WASM artifacts |
+| `--wasm-dir`    | `../../js` | Directory with WASM artifacts |
 
 ## Sync Protocol
 

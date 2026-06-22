@@ -124,14 +124,6 @@ if(EMSCRIPTEN)
             ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
     )
 
-    add_executable(ws_replication_client tests/ws_replication/client.cpp)
-    target_link_libraries(ws_replication_client PRIVATE wasm_core blake3)
-    target_compile_definitions(ws_replication_client PRIVATE TESTING)
-    target_link_options(ws_replication_client PRIVATE
-        -sEXIT_RUNTIME=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
-    )
-
     # ── Browser test target ────────────────────────────────────
     # Build all browser WASM targets in debug mode:
     #   cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
@@ -141,7 +133,6 @@ if(EMSCRIPTEN)
             DEPENDS
                 leaves_js_output
                 db_bench_browser
-                ws_replication_client
             COMMENT "Building all browser WASM targets in debug mode"
         )
     else()
@@ -363,8 +354,6 @@ target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_suppo
 
 add_executable(ws_replication_server tests/ws_replication/server.cpp)
 target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
-
-
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE

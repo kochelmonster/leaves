@@ -8,7 +8,7 @@
             "name": "(gdb) Attach",
             "type": "cppdbg",
             "request": "attach",
-            "program": "enter program name, for example ${workspaceFolder}/a.out",
+            "program": "${workspaceFolder}/examples/kv_browser/build/kv_demo_server",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -24,36 +24,25 @@
             ]
         },
         {
-            "name": "(gdb) Launch",
+            "name": "(gdb) Launch benchmark",
             "type": "cppdbg",
             "request": "launch",
-            "_program": "${workspaceFolder}/build/db_bench_leaves",
-            "_program": "${workspaceFolder}/build/test_memory",
-            "program": "${workspaceFolder}/build/test_cursor",
+            "program": "${workspaceFolder}/build/db_bench_leaves",
             "args": [
-                "-t",
-                "insert_bigkeys"
-            ],
-            "_args": [
-                "-t",
-                "test_strings"
-            ],
-            "_args": [
-                "-t",
-                "test_big_area_revolve"
-            ],
-            "_args": [
-                "--benchmarks=fillrand100K"
-            ],
-            "_args": [
-                "--benchmarks=fillseq"
-            ],
-            "_args": [
-                "--benchmarks=fillrandsync,fillrandom"
+                "--use_wal=1",
+                "--benchmarks=fillrandom",
+                "--batch_size=1",
+                "--num=10000",
+                "--batch_size=100000"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -85,7 +74,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -117,7 +111,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -149,7 +148,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -181,7 +185,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -213,7 +222,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -290,10 +304,17 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
-            "logging": { "engineLogging": true },
+            "logging": {
+                "engineLogging": true
+            },
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -323,7 +344,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -355,7 +381,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -387,7 +418,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "preLaunchTask": "Copy YCSB backup for debug",
@@ -417,7 +453,12 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -453,7 +494,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -482,7 +528,12 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -504,16 +555,21 @@
             ]
         },
         {
-            "name": "test_fractional_replication",
+            "name": "test_single_key_replication",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_replication_fsm",
             "args": [
-                "--run_test=ReplicationFSMTests/test_fractional_replication_differential"
+                "--run_test=ReplicationFSMTests/test_single_key_replication"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -544,7 +600,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -575,7 +636,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -646,7 +712,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -677,7 +748,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -708,7 +784,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [

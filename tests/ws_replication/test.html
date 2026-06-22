@@ -16,13 +16,18 @@
 <h1>Leaves — WebSocket Replication Test</h1>
 <div id="output">Loading WASM module...</div>
 
-<script>
+<script type="module">
+import createModule from './leaves.js';
+import { LeavesReplicationReceiver } from './leaves_replication.js';
+
 // Get port from URL query string: ?port=19876
 const params = new URLSearchParams(location.search);
 const PORT = params.get("port") || "19876";
 
+// ── UI logging ────────────────────────────────────────────────
+const el = document.getElementById("output");
+
 function log(msg, cls) {
-  const el = document.getElementById("output");
   if (cls) {
     const span = document.createElement("span");
     span.className = cls;
@@ -31,40 +36,165 @@ function log(msg, cls) {
   } else {
     el.appendChild(document.createTextNode(msg + "\n"));
   }
-  console.log(msg);
 }
 
-var Module = {
-  noInitialRun: true,
-  onRuntimeInitialized: function() {
-    log("WASM module loaded", "info");
-    runTest();
-  },
-  print: function(text) { log(text); },
-  printErr: function(text) { log(text, "info"); }
-};
-</script>
-<script src="ws_replication_client.js"></script>
-<script>
+// ── Test state ────────────────────────────────────────────────
+let failures = 0;
+
+function check(cond, msg) {
+  if (!cond) {
+    log(`  FAIL: ${msg}`, "fail");
+    failures++;
+  } else {
+    log(`  PASS: ${msg}`, "pass");
+  }
+}
+
+function checkEq(a, b, msg) {
+  if (a !== b) {
+    log(`  FAIL: ${msg} — got '${a}', expected '${b}'`, "fail");
+    failures++;
+  } else {
+    log(`  PASS: ${msg}`, "pass");
+  }
+}
+
+// ── Run test ──────────────────────────────────────────────────
 async function runTest() {
-  const el = document.getElementById("output");
   el.textContent = "";
   log("=== WebSocket Replication Browser Test ===");
-  log("Connecting to ws://localhost:" + PORT);
+  log("");
 
   try {
-    const ret = await Module.callMain([PORT]);
+    // 1. Load WASM module
+    log("Loading WASM module...", "info");
+    const Module = await createModule();
+    log("WASM module loaded", "info");
     log("");
-    if (ret === 0) {
+
+    // 2. Create storage
+    log("Creating storage...", "info");
+    const store = await Module.LeavesStore.create("test_ws_repl", 100 * 1024 * 1024);
+    const repldb = await store.openReplication("testdb");
+    log("Storage created", "info");
+    log("");
+
+    // 3. Connect WebSocket to native server
+    const url = "ws://localhost:" + PORT;
+    log(`Connecting to ${url}...`, "info");
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+
+    await new Promise((resolve, reject) => {
+      ws.onopen = resolve;
+      ws.onerror = reject;
+      setTimeout(() => reject(new Error("WebSocket timeout")), 10000);
+    });
+    log("Connected", "info");
+    log("");
+
+    // 4. Set up message queues
+    let textQueue = [];
+    let binQueue = [];
+
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        textQueue.push(ev.data);
+      } else {
+        binQueue.push(new Uint8Array(ev.data));
+      }
+    };
+
+    ws.onclose = () => {};
+    ws.onerror = (e) => log("WebSocket error: " + e, "fail");
+
+    // 5. Receive replication data
+    log("Receiving replication...", "info");
+
+    const receiver = new LeavesReplicationReceiver(repldb, Module);
+
+    let completed = false;
+    let errored = false;
+
+    receiver.begin({ send: data => ws.send(data) }, {
+      onComplete: (sid, n) => {
+        log(`Replication complete: ${n} nodes`, "info");
+        completed = true;
+      },
+      onError: (sid, err) => {
+        log(`Replication error: ${err}`, "fail");
+        errored = true;
+      }
+    });
+
+    while (receiver.state() === "active") {
+      const msg = await nextMessage(binQueue, ws);
+      if (msg === null) {
+        log("WebSocket closed during receive", "fail");
+        errored = true;
+        break;
+      }
+      receiver.onMessageReceived(msg);
+    }
+
+    if (errored) {
+      log("Replication failed", "fail");
+    } else {
+      log("Replication finished", "info");
+      log("");
+
+      // 6. Verify replicated data
+      log("Verifying replicated data...", "info");
+
+      const c = repldb.createCursor();
+
+      await c.find("hello");
+      check(c.isValid(), "key 'hello' exists");
+      if (c.isValid()) checkEq(c.getValue(), "world", "hello → world");
+
+      await c.find("foo");
+      check(c.isValid(), "key 'foo' exists");
+      if (c.isValid()) checkEq(c.getValue(), "bar", "foo → bar");
+
+      await c.find("count");
+      check(c.isValid(), "key 'count' exists");
+      if (c.isValid()) checkEq(c.getValue(), "12345", "count → 12345");
+
+      c.delete();
+    }
+
+    // 7. Cleanup
+    ws.close();
+    await store.close();
+
+    log("");
+    if (failures === 0) {
       log("=== PASS ===", "pass");
     } else {
-      log("=== FAIL (exit " + ret + ") ===", "fail");
+      log(`=== FAIL (${failures} check(s) failed) ===`, "fail");
     }
+
   } catch (e) {
     log("Exception: " + e.message, "fail");
     log("=== FAIL ===", "fail");
   }
 }
+
+// ── Message queue helper ──────────────────────────────────────
+function nextMessage(queue, ws) {
+  if (queue.length > 0) return Promise.resolve(queue.shift());
+  return new Promise(resolve => {
+    const check = () => {
+      if (queue.length > 0) resolve(queue.shift());
+      else if (!ws || ws.readyState !== WebSocket.OPEN) resolve(null);
+      else setTimeout(check, 10);
+    };
+    check();
+  });
+}
+
+// ── Start ─────────────────────────────────────────────────────
+runTest();
 </script>
 </body>
 </html>

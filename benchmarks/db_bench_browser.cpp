@@ -154,7 +154,7 @@ class Benchmark {
   int done_;
 
   // Leaves storage — lazily created
-  leaves::_BrowserStore* store_;
+  leaves::_BrowserStore<>* store_;
   int db_num_;
   // Raw IDB counter for fresh databases
   int idb_num_;
