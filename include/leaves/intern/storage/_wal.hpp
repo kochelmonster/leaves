@@ -17,7 +17,7 @@
 //     [PREPARE 0x04]
 //     [COMMIT  0x05]
 // A transaction is replayable on recovery only if it contains, in order,
-// BEGIN ... PREPARE COMMIT.  Any trailing incomplete transaction is discarded.
+// BEGIN ... PREPARE COMMIT.  Any trailing unprepared transaction is discarded
 
 #ifdef _WIN32
 #include <windows.h>
@@ -213,8 +213,11 @@ inline uint64_t _wal_read_u64(const uint8_t* p) {
 // ---------------------------------------------------------------------------
 // wal_parse — read one WAL file, return its replayable (BEGIN+PREPARE+COMMIT)
 // transactions.  Incomplete trailing data is silently discarded.
+// If a dangling (prepared but not committed) transaction is present at end,
+// and dangling is non-null, it is written there.
 // ---------------------------------------------------------------------------
-inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result) {
+inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result,
+                      _WalTxn* dangling = nullptr) {
   _wal_fd_t fd = _wal_open(path);
   if (fd == WAL_INVALID_FD) return;
 
@@ -287,6 +290,12 @@ inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result) {
       break;
     }
   }
+
+  // If we ended with a prepared but uncommitted transaction, it's the dangling
+  // one — return it if the caller asked for it.
+  if (in_txn && prepared && dangling) {
+    *dangling = std::move(cur);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -324,14 +333,14 @@ struct _WalWriter {
     }
   }
 
-  void parse(const std::string& base_path, std::vector<_WalTxn>& out) {
-    wal_parse(base_path + ".wal.0", out);
-    wal_parse(base_path + ".wal.1", out);
+  void parse(const std::string& base_path, std::vector<_WalTxn>& out,
+             _WalTxn* dangling = nullptr) {
+    wal_parse(base_path + ".wal.0", out, dangling);
+    wal_parse(base_path + ".wal.1", out, dangling);
     std::sort(out.begin(), out.end(), [](const _WalTxn& a, const _WalTxn& b) {
       return tid_t(static_cast<uint32_t>(a.txn_id)) <
              tid_t(static_cast<uint32_t>(b.txn_id));
     });
-
   }
 
   // Open both files; create if missing.  base_path is e.g. "/path/bench.lvs.name".

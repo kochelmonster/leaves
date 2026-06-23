@@ -145,12 +145,20 @@ struct _WalDbMixin {
   }
 
   void wal_recover() {
+    _WalTxn dangling;
     std::vector<_WalTxn> all;
-    _wal.parse(wal_base_path(), all);
+    _wal.parse(wal_base_path(), all, &dangling);
 
+    tid_t read_txn_id = _derived().txn()->txn_id;
+
+    // Replay committed transactions that are newer than the read transaction.
+    // Any transaction whose txn_id <= read_txn_id was already applied.
+    bool have_committed = false;
     if (!all.empty()) {
       auto cursor = _derived().create_cursor();
       for (const _WalTxn& t : all) {
+        if (tid_t(t.txn_id) <= read_txn_id) continue;
+        have_committed = true;
         cursor->start_transaction();
         for (const _WalOpRecord& op : t.ops) {
           cursor->find(Slice(op.key));
@@ -164,9 +172,33 @@ struct _WalDbMixin {
       }
     }
 
+    // Handle the dangling (prepared but not committed) transaction.
+    // Apply its operations and leave it as prepared_txn so that sanitize()
+    // can restore it as the active write transaction.
+    if (dangling.txn_id != 0 && tid_t(dangling.txn_id) > read_txn_id) {
+      auto cursor = _derived().create_cursor();
+      cursor->start_transaction();
+      for (const _WalOpRecord& op : dangling.ops) {
+        cursor->find(Slice(op.key));
+        if (op.is_delete) {
+          if (cursor->is_valid()) cursor->remove();
+        } else {
+          cursor->value(Slice(op.val));
+        }
+      }
+      // prepare_commit via cursor uses cursor's own _id (which matches
+      // txn_cursor_id set by start_transaction).  This sets prepared_txn
+      // but does NOT advance read_txn — the transaction stays "prepared"
+      // so sanitize() can restore it as the active write transaction.
+      cursor->prepare_commit(false);
+      _derived().end_transaction();
+      have_committed = true;
+    }
+
     // Flush replayed data to storage before removing WAL files so crash
     // after this point does not lose recovered state.
-    _derived().flush(true, true);
+    if (have_committed)
+      _derived().flush(true, true);
     _wal.reset(wal_base_path());
   }
 
@@ -892,6 +924,15 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     }
 
     this->wal_recover();
+
+    // If wal_recover left a dangling (prepared but not committed) transaction,
+    // restore it as the active write transaction so the caller can commit or
+    // rollback.  This happens when the last WAL transaction was prepared but
+    // never committed before a crash.
+    if (_header->prepared_txn != _header->read_txn) {
+      _header->txn_lock.lock();
+      _active_txn = resolve<Transaction>(&_header->prepared_txn);
+    }
 
     make_dirty(_header);
     flush();

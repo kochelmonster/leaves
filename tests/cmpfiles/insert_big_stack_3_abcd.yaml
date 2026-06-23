@@ -1,6 +1,6 @@
 type: trie
-id: 535792
-page: 535784
+id: 535832
+page: 535824
 freespace: 8
 txn: 5
 size: 32
@@ -9,12 +9,12 @@ compressed:
   key: "[a]"
 branches: "[][b]"
 children: 
-  - 530217
-  - 535752
+  - 530257
+  - 535792
 ---
 type: leaf
-id: 530217
-page: 530209
+id: 530257
+page: 530249
 freespace: 36
 size: 4
 txn: 3
@@ -24,8 +24,8 @@ valuesize: 1
 value: "a"
 ---
 type: trie
-id: 535752
-page: 535744
+id: 535792
+page: 535784
 freespace: 8
 txn: 5
 size: 32
@@ -34,12 +34,12 @@ compressed:
   key: "[b]"
 branches: "[][c]"
 children: 
-  - 534993
-  - 535712
+  - 535033
+  - 535752
 ---
 type: leaf
-id: 534993
-page: 534985
+id: 535033
+page: 535025
 freespace: 35
 size: 5
 txn: 4
@@ -49,8 +49,8 @@ valuesize: 2
 value: "ab"
 ---
 type: trie
-id: 535712
-page: 535704
+id: 535752
+page: 535744
 freespace: 8
 txn: 5
 size: 32
@@ -59,12 +59,12 @@ compressed:
   key: "[c]"
 branches: "[][d]"
 children: 
-  - 525521
-  - 535833
+  - 525561
+  - 535873
 ---
 type: leaf
-id: 525521
-page: 525513
+id: 525561
+page: 525553
 freespace: 34
 size: 6
 txn: 5
@@ -74,8 +74,8 @@ valuesize: 3
 value: "abc"
 ---
 type: leaf
-id: 535833
-page: 535825
+id: 535873
+page: 535865
 freespace: 32
 size: 8
 txn: 5

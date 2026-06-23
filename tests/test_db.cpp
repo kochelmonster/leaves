@@ -509,10 +509,10 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     BOOST_REQUIRE(db->_active_txn != nullptr);
     BOOST_CHECK_EQUAL(db->_active_txn->txn_id, prepared_tid);
     
-    // The transaction is already active (recovered), just need to acquire lock and commit
-    // We need to simulate that a cursor with ID 0 takes ownership
-    BOOST_CHECK(db->_header->txn_lock.try_lock());
-    db->_header->txn_cursor_id.store(0);
+    // The transaction is already active (recovered) with txn_lock held by sanitize.
+    // We need to simulate that a cursor with ID 0 takes ownership, then commit.
+    BOOST_CHECK(!db->_header->txn_lock.try_lock());
+    BOOST_CHECK_EQUAL(db->_header->txn_cursor_id.load(), 0);
     
     // Commit should finalize the prepared transaction
     BOOST_CHECK(db->commit(0));

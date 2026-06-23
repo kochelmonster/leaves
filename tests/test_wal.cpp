@@ -307,20 +307,20 @@ BOOST_AUTO_TEST_CASE(wal_recovery_replays_committed) {
     TestWal tw;
     BOOST_REQUIRE(tw.open(base));
 
-    tw.w.begin(1);
+    tw.w.begin(2);
     tw.w.put(Slice("a"), Slice("1"));
     tw.w.put(Slice("b"), Slice("2"));
     tw.w.prepare();
     tw.w.commit();
 
-    tw.w.begin(2);
+    tw.w.begin(3);
     tw.w.put(Slice("c"), Slice("3"));
     tw.w.del(Slice("a"));
     tw.w.prepare();
     tw.w.commit();
 
     // Incomplete — must NOT be replayed.
-    tw.w.begin(3);
+    tw.w.begin(4);
     tw.w.put(Slice("d"), Slice("4"));
     tw.w.prepare();
 
@@ -328,8 +328,8 @@ BOOST_AUTO_TEST_CASE(wal_recovery_replays_committed) {
   }
 
   // Step 3: Reopen the storage.  Opening the existing "recoverdb" triggers
-  // _open_existing() → sanitize() → wal_recover(), which replays txns 1 & 2
-  // and discards incomplete txn 3.  Plain reads reflect the recovered state.
+  // _open_existing() → sanitize() → wal_recover(), which replays txns 2 & 3
+  // and discards incomplete txn 4.  Plain reads reflect the recovered state.
   {
     auto storage = FileStorage::create(path.c_str());
     auto db = storage->open("recoverdb");
