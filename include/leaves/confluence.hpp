@@ -151,6 +151,7 @@ class ConfluenceDB {
   std::exception_ptr get_merge_error() { return _impl->get_merge_error(); }
 
   DBImpl* _internal() const { return _impl; }
+  MainTDB& _internal_main() { return _main_tdb; }
 
  private:
   storage_ptr  _storage;
