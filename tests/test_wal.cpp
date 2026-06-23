@@ -57,6 +57,14 @@ void push_u32_le(std::vector<uint8_t>& buf, uint32_t v) {
   buf.push_back((v >> 24) & 0xFF);
 }
 
+// Helper: create an open _WalWriter with a stack-local WalState.
+struct TestWal {
+  WalState state;
+  _WalWriter w;
+  bool open(const std::string& base) { return w.open(base, &state); }
+  bool open(const char* base) { return w.open(std::string(base), &state); }
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -67,24 +75,24 @@ BOOST_AUTO_TEST_CASE(wal_writer_parse_roundtrip) {
   std::string base = (dir.tempDir / "rt").string();
 
   {
-    _WalWriter w;
-    BOOST_CHECK(!w.is_open());
-    BOOST_REQUIRE(w.open(base));
-    BOOST_CHECK(w.is_open());
+    TestWal tw;
+    BOOST_CHECK(!tw.w.is_open());
+    BOOST_REQUIRE(tw.open(base));
+    BOOST_CHECK(tw.w.is_open());
 
-    w.begin(1);
-    w.put(Slice("a"), Slice("1"));
-    w.put(Slice("b"), Slice("2"));
-    w.prepare();
-    w.commit();
+    tw.w.begin(1);
+    tw.w.put(Slice("a"), Slice("1"));
+    tw.w.put(Slice("b"), Slice("2"));
+    tw.w.prepare();
+    tw.w.commit();
 
-    w.begin(2);
-    w.del(Slice("a"));
-    w.prepare();
-    w.commit();
+    tw.w.begin(2);
+    tw.w.del(Slice("a"));
+    tw.w.prepare();
+    tw.w.commit();
 
-    w.close();
-    BOOST_CHECK(!w.is_open());
+    tw.w.close();
+    BOOST_CHECK(!tw.w.is_open());
   }
 
   // Everything was written to file index 0 (next_log starts at 0).
@@ -121,22 +129,22 @@ BOOST_AUTO_TEST_CASE(wal_writer_reopen_existing_file) {
 
   // First open: creates new files.
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
-    w.begin(10);
-    w.put(Slice("x"), Slice("42"));
-    w.prepare();
-    w.commit();
-    w.close();
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
+    tw.w.begin(10);
+    tw.w.put(Slice("x"), Slice("42"));
+    tw.w.prepare();
+    tw.w.commit();
+    tw.w.close();
   }
 
   // Second open: files already exist with data (size >= WAL_HEADER_SIZE).
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
-    // _write_off[0] should be > WAL_HEADER_SIZE (existing file).
-    BOOST_CHECK_GT(w._write_off[0], WAL_HEADER_SIZE);
-    w.close();
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
+    // write_off[0] should be > WAL_HEADER_SIZE (existing file).
+    BOOST_CHECK_GT(tw.state.write_off[0], WAL_HEADER_SIZE);
+    tw.w.close();
   }
 }
 
@@ -148,21 +156,21 @@ BOOST_AUTO_TEST_CASE(wal_writer_abort) {
   std::string base = (dir.tempDir / "abort").string();
 
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
 
     // Commit txn 1 normally.
-    w.begin(1);
-    w.put(Slice("keep"), Slice("v"));
-    w.prepare();
-    w.commit();
+    tw.w.begin(1);
+    tw.w.put(Slice("keep"), Slice("v"));
+    tw.w.prepare();
+    tw.w.commit();
 
     // Begin txn 2 and abort before prepare — nothing must reach disk.
-    w.begin(2);
-    w.put(Slice("discard"), Slice("x"));
-    w.abort();
+    tw.w.begin(2);
+    tw.w.put(Slice("discard"), Slice("x"));
+    tw.w.abort();
 
-    w.close();
+    tw.w.close();
   }
 
   std::vector<_WalTxn> txns;
@@ -179,14 +187,14 @@ BOOST_AUTO_TEST_CASE(wal_writer_prepare_idempotent) {
   std::string base = (dir.tempDir / "idem").string();
 
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
-    w.begin(1);
-    w.put(Slice("k"), Slice("v"));
-    w.prepare();
-    w.prepare();  // second call must be a no-op
-    w.commit();
-    w.close();
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
+    tw.w.begin(1);
+    tw.w.put(Slice("k"), Slice("v"));
+    tw.w.prepare();
+    tw.w.prepare();  // second call must be a no-op
+    tw.w.commit();
+    tw.w.close();
   }
 
   std::vector<_WalTxn> txns;
@@ -203,21 +211,21 @@ BOOST_AUTO_TEST_CASE(wal_incomplete_transaction_skipped) {
   std::string base = (dir.tempDir / "incomplete").string();
 
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
 
-    w.begin(1);
-    w.put(Slice("k"), Slice("v"));
-    w.prepare();
-    w.commit();
+    tw.w.begin(1);
+    tw.w.put(Slice("k"), Slice("v"));
+    tw.w.prepare();
+    tw.w.commit();
 
     // Prepared but never committed (simulated crash during checkpoint).
-    w.begin(2);
-    w.put(Slice("hanging"), Slice("x"));
-    w.prepare();
+    tw.w.begin(2);
+    tw.w.put(Slice("hanging"), Slice("x"));
+    tw.w.prepare();
     // no commit
 
-    w.close();
+    tw.w.close();
   }
 
   std::vector<_WalTxn> txns;
@@ -233,21 +241,21 @@ BOOST_AUTO_TEST_CASE(wal_truncate_clears_file) {
   DirPreparation dir;
   std::string base = (dir.tempDir / "trunc").string();
 
-  _WalWriter w;
-  BOOST_REQUIRE(w.open(base));
-  w.begin(1);
-  w.put(Slice("a"), Slice("1"));
-  w.prepare();
-  w.commit();
+  TestWal tw;
+  BOOST_REQUIRE(tw.open(base));
+  tw.w.begin(1);
+  tw.w.put(Slice("a"), Slice("1"));
+  tw.w.prepare();
+  tw.w.commit();
 
   std::vector<_WalTxn> txns;
   wal_parse(base + ".wal.0", txns);
   BOOST_REQUIRE_EQUAL(txns.size(), 1u);
-  w.truncate(0);
+  tw.w.truncate(0);
   txns.clear();
   wal_parse(base + ".wal.0", txns);
   BOOST_CHECK(txns.empty());
-  w.close();
+  tw.w.close();
 }
 
 // ---------------------------------------------------------------------------
@@ -296,27 +304,27 @@ BOOST_AUTO_TEST_CASE(wal_recovery_replays_committed) {
   // Step 2: Pre-populate the WAL file pair.
   // wal_base_path() == filename() + "." + db_name == path + ".recoverdb"
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
 
-    w.begin(1);
-    w.put(Slice("a"), Slice("1"));
-    w.put(Slice("b"), Slice("2"));
-    w.prepare();
-    w.commit();
+    tw.w.begin(1);
+    tw.w.put(Slice("a"), Slice("1"));
+    tw.w.put(Slice("b"), Slice("2"));
+    tw.w.prepare();
+    tw.w.commit();
 
-    w.begin(2);
-    w.put(Slice("c"), Slice("3"));
-    w.del(Slice("a"));
-    w.prepare();
-    w.commit();
+    tw.w.begin(2);
+    tw.w.put(Slice("c"), Slice("3"));
+    tw.w.del(Slice("a"));
+    tw.w.prepare();
+    tw.w.commit();
 
     // Incomplete — must NOT be replayed.
-    w.begin(3);
-    w.put(Slice("d"), Slice("4"));
-    w.prepare();
+    tw.w.begin(3);
+    tw.w.put(Slice("d"), Slice("4"));
+    tw.w.prepare();
 
-    w.close();
+    tw.w.close();
   }
 
   // Step 3: Reopen the storage.  Opening the existing "recoverdb" triggers
@@ -354,76 +362,76 @@ BOOST_AUTO_TEST_CASE(wal_flushed_buffer_switch) {
   std::string base = (dir.tempDir / "fs").string();
 
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
 
     // --- Phase 1: Txn 1 commits to file 0 ---
-    BOOST_CHECK_EQUAL(w._next_log.load(), 0);
-    w.begin(1);
-    BOOST_CHECK_EQUAL(w._active_log.load(), 0);
-    w.put(Slice("a"), Slice("1"));
-    w.prepare();
-    w.commit();
-    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 1u);
+    BOOST_CHECK_EQUAL(tw.state.next_log.load(), 0);
+    tw.w.begin(1);
+    BOOST_CHECK_EQUAL(tw.state.active_log.load(), 0);
+    tw.w.put(Slice("a"), Slice("1"));
+    tw.w.prepare();
+    tw.w.commit();
+    BOOST_CHECK_EQUAL(tw.state.last_commit[0].load(), 1u);
 
     // --- Phase 2: async flushed(1) is submitted but NOT yet executed.
-    // Meanwhile a new transaction starts: begin() pins _active_log
-    // (still 0, next_log not yet switched) and bumps _last_commit[0] to 2.
-    w.begin(2);
-    BOOST_CHECK_EQUAL(w._active_log.load(), 0);
-    w.put(Slice("b"), Slice("2"));
-    w.prepare();
-    w.commit();
-    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 2u);
+    // Meanwhile a new transaction starts: begin() pins active_log
+    // (still 0, next_log not yet switched) and bumps last_commit[0] to 2.
+    tw.w.begin(2);
+    BOOST_CHECK_EQUAL(tw.state.active_log.load(), 0);
+    tw.w.put(Slice("b"), Slice("2"));
+    tw.w.prepare();
+    tw.w.commit();
+    BOOST_CHECK_EQUAL(tw.state.last_commit[0].load(), 2u);
 
     // --- Phase 3: Now flushed(1) runs (async task catches up).
-    // flushed() only touches the NON-active file: idx = 1 - _active_log = 1.
-    // _last_commit[1]=0 <= 1 → file 1 is truncated, _next_log → 1.
-    w.flushed(1);
+    // flushed() only touches the NON-active file: idx = 1 - active_log = 1.
+    // last_commit[1]=0 <= 1 → file 1 is truncated, next_log → 1.
+    tw.w.flushed(1);
 
     // File 0 (active) survived intact — never touched by flushed()
-    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 2u);
-    BOOST_CHECK_GT(w._write_off[0], WAL_HEADER_SIZE);
+    BOOST_CHECK_EQUAL(tw.state.last_commit[0].load(), 2u);
+    BOOST_CHECK_GT(tw.state.write_off[0], WAL_HEADER_SIZE);
     // File 1 was truncated
-    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 0u);
-    BOOST_CHECK_EQUAL(w._write_off[1], WAL_HEADER_SIZE);
-    // _next_log flipped to the non-active file: 1
-    BOOST_CHECK_EQUAL(w._next_log.load(), 1);
+    BOOST_CHECK_EQUAL(tw.state.last_commit[1].load(), 0u);
+    BOOST_CHECK_EQUAL(tw.state.write_off[1], WAL_HEADER_SIZE);
+    // next_log flipped to the non-active file: 1
+    BOOST_CHECK_EQUAL(tw.state.next_log.load(), 1);
 
     // --- Phase 4: Txn 3 starts → uses file 1 (next_log was set to 1) ---
-    w.begin(3);
-    BOOST_CHECK_EQUAL(w._active_log.load(), 1);
-    w.put(Slice("c"), Slice("3"));
-    w.prepare();
-    w.commit();
-    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 3u);
+    tw.w.begin(3);
+    BOOST_CHECK_EQUAL(tw.state.active_log.load(), 1);
+    tw.w.put(Slice("c"), Slice("3"));
+    tw.w.prepare();
+    tw.w.commit();
+    BOOST_CHECK_EQUAL(tw.state.last_commit[1].load(), 3u);
 
     // --- Phase 5: flushed(3) truncates the non-active file (idx = 1-1 = 0).
-    // _last_commit[0]=2 <= 3 → file 0 truncated, _next_log → 0.
-    w.flushed(3);
-    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 0u);
-    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 3u);  // active file preserved
-    BOOST_CHECK_EQUAL(w._write_off[0], WAL_HEADER_SIZE);
-    BOOST_CHECK_GT(w._write_off[1], WAL_HEADER_SIZE);  // still has data
-    BOOST_CHECK_EQUAL(w._next_log.load(), 0);
+    // last_commit[0]=2 <= 3 → file 0 truncated, next_log → 0.
+    tw.w.flushed(3);
+    BOOST_CHECK_EQUAL(tw.state.last_commit[0].load(), 0u);
+    BOOST_CHECK_EQUAL(tw.state.last_commit[1].load(), 3u);  // active file preserved
+    BOOST_CHECK_EQUAL(tw.state.write_off[0], WAL_HEADER_SIZE);
+    BOOST_CHECK_GT(tw.state.write_off[1], WAL_HEADER_SIZE);  // still has data
+    BOOST_CHECK_EQUAL(tw.state.next_log.load(), 0);
 
     // --- Phase 6: Txn 4 starts → uses file 0 (next_log is 0) ---
-    w.begin(4);
-    BOOST_CHECK_EQUAL(w._active_log.load(), 0);
-    w.put(Slice("d"), Slice("4"));
-    w.prepare();
-    w.commit();
-    BOOST_CHECK_EQUAL(w._last_commit[0].load(), 4u);
+    tw.w.begin(4);
+    BOOST_CHECK_EQUAL(tw.state.active_log.load(), 0);
+    tw.w.put(Slice("d"), Slice("4"));
+    tw.w.prepare();
+    tw.w.commit();
+    BOOST_CHECK_EQUAL(tw.state.last_commit[0].load(), 4u);
 
     // --- Phase 7: flushed(4) clears the non-active file (idx = 1-0 = 1).
-    // _last_commit[1]=3 <= 4 → file 1 truncated.
-    w.flushed(4);
-    BOOST_CHECK_EQUAL(w._last_commit[1].load(), 0u);
-    BOOST_CHECK_EQUAL(w._write_off[1], WAL_HEADER_SIZE);
-    // _next_log → 1
-    BOOST_CHECK_EQUAL(w._next_log.load(), 1);
+    // last_commit[1]=3 <= 4 → file 1 truncated.
+    tw.w.flushed(4);
+    BOOST_CHECK_EQUAL(tw.state.last_commit[1].load(), 0u);
+    BOOST_CHECK_EQUAL(tw.state.write_off[1], WAL_HEADER_SIZE);
+    // next_log → 1
+    BOOST_CHECK_EQUAL(tw.state.next_log.load(), 1);
 
-    w.close();
+    tw.w.close();
   }
 
   // After final flushed(4): file 0 still has active txn 4, file 1 is empty
@@ -443,34 +451,34 @@ BOOST_AUTO_TEST_CASE(wal_flushed_no_truncate_when_newer) {
   DirPreparation dir;
   std::string base = (dir.tempDir / "fnt").string();
 
-  _WalWriter w;
-  BOOST_REQUIRE(w.open(base));
+  TestWal tw;
+  BOOST_REQUIRE(tw.open(base));
 
   // txn 5 goes to file 0
-  w.begin(5);
-  w.put(Slice("k"), Slice("v"));
-  w.prepare();
-  w.commit();
-  BOOST_CHECK_EQUAL(w._last_commit[0].load(), 5u);
+  tw.w.begin(5);
+  tw.w.put(Slice("k"), Slice("v"));
+  tw.w.prepare();
+  tw.w.commit();
+  BOOST_CHECK_EQUAL(tw.state.last_commit[0].load(), 5u);
 
   // active_log is 0; non-active is 1.
-  // _last_commit[1] = 0 which is <= 3, so file 1 would be truncated.
+  // last_commit[1] = 0 which is <= 3, so file 1 would be truncated.
   // But we want to test when last_commit IS newer (> txn_id).
   // Put a large "commit id" into file 1 without actually committing.
   // Directly set via atomic to simulate a state where file 1 has commit 10.
-  w._last_commit[1].store(10);
+  tw.state.last_commit[1].store(10);
 
-  uint64_t write_off_1_before = w._write_off[1];
+  uint64_t write_off_1_before = tw.state.write_off[1];
 
   // flushed(3): non-active is file 1, last_commit[1]=10 > 3 → no truncate.
-  w.flushed(3);
+  tw.w.flushed(3);
   // File 1 should NOT be changed.
-  BOOST_CHECK_EQUAL(w._last_commit[1].load(), 10u);
-  BOOST_CHECK_EQUAL(w._write_off[1], write_off_1_before);
-  // _next_log should remain unchanged (was 0).
-  BOOST_CHECK_EQUAL(w._next_log.load(), 0);
+  BOOST_CHECK_EQUAL(tw.state.last_commit[1].load(), 10u);
+  BOOST_CHECK_EQUAL(tw.state.write_off[1], write_off_1_before);
+  // next_log should remain unchanged (was 0).
+  BOOST_CHECK_EQUAL(tw.state.next_log.load(), 0);
 
-  w.close();
+  tw.w.close();
 }
 
 // ---------------------------------------------------------------------------
@@ -482,43 +490,43 @@ BOOST_AUTO_TEST_CASE(wal_writer_parse_sorts_two_files) {
 
   // Write txn 2 to file 0, txn 1 to file 1 — parse() must sort them.
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
 
     // Force writes to file 0.
-    w._next_log.store(0);
-    w.begin(2);
-    w.put(Slice("b"), Slice("2"));
-    w.prepare();
-    w.commit();
-    w.close();
+    tw.state.next_log.store(0);
+    tw.w.begin(2);
+    tw.w.put(Slice("b"), Slice("2"));
+    tw.w.prepare();
+    tw.w.commit();
+    tw.w.close();
   }
 
   // Manually write txn 1 directly to file 1.
   {
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
-    w._next_log.store(1);
-    w.begin(1);
-    w.put(Slice("a"), Slice("1"));
-    w.prepare();
-    w.commit();
-    w.close();
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
+    tw.state.next_log.store(1);
+    tw.w.begin(1);
+    tw.w.put(Slice("a"), Slice("1"));
+    tw.w.prepare();
+    tw.w.commit();
+    tw.w.close();
   }
 
-  _WalWriter w;
+  TestWal tw;
   // We only need parse() — open the writer to give it the paths.
-  BOOST_REQUIRE(w.open(base));
+  BOOST_REQUIRE(tw.open(base));
 
   std::vector<_WalTxn> out;
-  w.parse(base, out);
+  tw.w.parse(base, out);
 
   // parse() must have sorted them: txn 1 first, then txn 2.
   BOOST_REQUIRE_EQUAL(out.size(), 2u);
   BOOST_CHECK_EQUAL(out[0].txn_id, 1u);
   BOOST_CHECK_EQUAL(out[1].txn_id, 2u);
 
-  w.close();
+  tw.w.close();
 }
 
 // ---------------------------------------------------------------------------
@@ -911,8 +919,8 @@ BOOST_AUTO_TEST_CASE(wal_init_file_truncates_small_file) {
     // Create a tiny file, smaller than the WAL header.
     write_raw_wal(wal0, {1, 2, 3});
 
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
 
     // After open, the file should have been truncated and rewritten with the
     // magic header, so its size should be exactly WAL_HEADER_SIZE.
@@ -921,17 +929,17 @@ BOOST_AUTO_TEST_CASE(wal_init_file_truncates_small_file) {
     BOOST_CHECK_EQUAL(_wal_size(fd), WAL_HEADER_SIZE);
     _wal_close(fd);
 
-    w.close();
+    tw.w.close();
 }
 
 // ---------------------------------------------------------------------------
 // _WalWriter::open fails if a file can't be opened.
 // ---------------------------------------------------------------------------
 BOOST_AUTO_TEST_CASE(wal_writer_open_failure) {
-    _WalWriter w;
+    TestWal tw;
     // Try to open a WAL in a path that is not a directory, which will fail.
-    BOOST_CHECK(!w.open("/dev/null/wal"));
-    BOOST_CHECK(!w.is_open());
+    BOOST_CHECK(!tw.open("/dev/null/wal"));
+    BOOST_CHECK(!tw.w.is_open());
 }
 
 // ---------------------------------------------------------------------------
@@ -941,14 +949,14 @@ BOOST_AUTO_TEST_CASE(wal_writer_close_idempotent) {
     DirPreparation dir;
     std::string base = (dir.tempDir / "close_idem").string();
 
-    _WalWriter w;
-    BOOST_REQUIRE(w.open(base));
-    BOOST_CHECK(w.is_open());
-    w.close();
-    BOOST_CHECK(!w.is_open());
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
+    BOOST_CHECK(tw.w.is_open());
+    tw.w.close();
+    BOOST_CHECK(!tw.w.is_open());
     // Second call should do nothing and not crash.
-    w.close();
-    BOOST_CHECK(!w.is_open());
+    tw.w.close();
+    BOOST_CHECK(!tw.w.is_open());
 }
 
 // ---------------------------------------------------------------------------

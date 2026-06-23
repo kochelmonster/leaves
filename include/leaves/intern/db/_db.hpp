@@ -112,6 +112,8 @@ struct _DBHeader {
   // Extra offset for storing additional user-defined data beyond the header.
   // Defaults to 0 (no extra data).
   offset_t extra_offset{0};
+
+  WalState wal;
 };
 
 // Write-Ahead Log mixin for _DB — provides WAL open/recover/begin/put/delete/
@@ -123,21 +125,23 @@ struct _WalDbMixin {
 
   SpinLock _flush_lock;  // avoid DB is destroyed during a flush
   _WalWriter _wal;
-  bool _wal_open{false};
   uint64_t _wal_flush_threshold{100 * 1024 * 1024};  // 1 MB default
 
 
-  bool wal_enabled() const { return _wal_open; }
+  bool wal_enabled() const { return _wal.is_open(); }
 
   std::string wal_base_path() const {
     return std::string(_derived()._storage.filename()) + "." + _derived()._name;
   }
 
   void open_wal() {
-    if (_wal_open) return;
-    if (!_wal.open(wal_base_path()))
+    if (_wal.is_open()) return;
+    // Serialise WAL open across processes so that only one process initialises
+    // the WAL state in the DB Header.
+    std::scoped_lock lock(_derived()._storage.file_lock());
+    if (_wal.is_open()) return;  // double-check after acquiring lock
+    if (!_wal.open(wal_base_path(), &_derived()._header->wal))
       throw std::runtime_error("failed to open WAL files");
-    _wal_open = true;
   }
 
   void wal_recover() {
@@ -160,7 +164,10 @@ struct _WalDbMixin {
       }
     }
 
-    _wal.reset();
+    // Flush replayed data to storage before removing WAL files so crash
+    // after this point does not lose recovered state.
+    _derived().flush(true, true);
+    _wal.reset(wal_base_path());
   }
 
   void wal_begin(uint32_t txn_id) { _wal.begin(txn_id); }
@@ -182,10 +189,9 @@ struct _WalDbMixin {
   void wal_abort() { _wal.abort(); }
 
   void wal_close() {
-    if (_wal_open) {
+    if (_wal.is_open()) {
       std::lock_guard<SpinLock> lock(_flush_lock);
       _wal.close();
-      _wal_open = false;
     }
   }
 

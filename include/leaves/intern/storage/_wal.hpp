@@ -32,6 +32,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -70,6 +71,18 @@ struct _WalOpRecord {
 struct _WalTxn {
   uint32_t txn_id{0};
   std::vector<_WalOpRecord> ops;
+};
+
+// ---------------------------------------------------------------------------
+// WAL shared state that must reside in the DB Header (mmap'd) so that all
+// processes sharing a MemoryMappedFile see the same ping-pong state.
+// ---------------------------------------------------------------------------
+struct WalState {
+  uint64_t write_off[2];                  // current write position per file
+  std::atomic<int> next_log{0};           // file index for next transaction
+  std::atomic<int> active_log{0};         // file index of active transaction
+  std::atomic<uint64_t> last_commit[2];   // last committed txn_id per file
+  std::atomic<bool> is_open{false};       // true when WAL files are opened
 };
 
 // ---------------------------------------------------------------------------
@@ -278,24 +291,25 @@ inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result) {
 
 // ---------------------------------------------------------------------------
 // _WalWriter — one per DB, owns the two-file pair and the ping-pong state.
+// State that must be shared across processes (_write_off, _next_log,
+// _active_log, _last_commit, is_open) lives in a WalState struct in the
+// DB Header.  fd/path/buf are per-process.
 // ---------------------------------------------------------------------------
 struct _WalWriter {
   std::string _path[2];
   _wal_fd_t _fd[2]{WAL_INVALID_FD, WAL_INVALID_FD};
-  uint64_t _write_off[2]{WAL_HEADER_SIZE, WAL_HEADER_SIZE};
 
-  // Ping-pong state (see file header comment).
-  std::atomic<int> _next_log{0};    // changed only by WAL thread
-  std::atomic<int> _active_log{0};  // changed only by start_transaction
-  std::atomic<uint64_t> _last_commit[2]{0, 0};   // changed only by commit
+  // Pointer to shared state in the DB Header (mmap'd).
+  WalState* _state{nullptr};
 
   // Per-transaction record buffer (BEGIN + PUT/DELETE).  Accumulated during the
   // transaction; written to file[active_log] at prepare().  Safe because the
   // active file is fixed for the whole transaction.
   std::vector<uint8_t> _buf;
 
-  bool _open{false};
   bool _prepared{false};
+
+  bool is_open() const { return _state && _state->is_open.load(); }
 
   // Ensure file[idx] has a valid magic header; reset write offset.
   void _init_file(int idx) {
@@ -304,9 +318,9 @@ struct _WalWriter {
       _wal_truncate(_fd[idx], 0);
       _wal_pwrite(_fd[idx], 0, WAL_MAGIC, sizeof(WAL_MAGIC));
       _wal_sync(_fd[idx]);
-      _write_off[idx] = WAL_HEADER_SIZE;
+      _state->write_off[idx] = WAL_HEADER_SIZE;
     } else {
-      _write_off[idx] = size;
+      _state->write_off[idx] = size;
     }
   }
 
@@ -321,8 +335,10 @@ struct _WalWriter {
   }
 
   // Open both files; create if missing.  base_path is e.g. "/path/bench.lvs.name".
+  // state is a pointer to the WalState in the DB Header (mmap'd).
   // Returns false on failure.
-  bool open(const std::string& base_path) {
+  bool open(const std::string& base_path, WalState* state) {
+    _state = state;
     _path[0] = base_path + ".wal.0";
     _path[1] = base_path + ".wal.1";
     for (int i = 0; i < 2; i++) {
@@ -333,30 +349,29 @@ struct _WalWriter {
           _wal_close(_fd[j]);
           _fd[j] = WAL_INVALID_FD;
         }
+        _state = nullptr;
         return false;
       }
       _init_file(i);
     }
-    _next_log.store(0);
-    _active_log.store(0);
-    _last_commit[0].store(0);
-    _last_commit[1].store(0);
-    _open = true;
+    _state->next_log.store(0);
+    _state->active_log.store(0);
+    _state->last_commit[0].store(0);
+    _state->last_commit[1].store(0);
+    _state->is_open.store(true);
     return true;
   }
 
-  bool is_open() const { return _open; }
-
   uint64_t active_data_size() const {
-    int idx = _active_log.load();
-    return _write_off[idx] - WAL_HEADER_SIZE;
+    int idx = _state->active_log.load();
+    return _state->write_off[idx] - WAL_HEADER_SIZE;
   }
 
   // Begin a transaction: pin the active file and start the record buffer.
   void begin(uint32_t txn_id) {
-    int idx = _next_log.load();
-    _last_commit[idx].store(txn_id);
-    _active_log.store(idx);
+    int idx = _state->next_log.load();
+    _state->last_commit[idx].store(txn_id);
+    _state->active_log.store(idx);
     _buf.clear();
     _buf.push_back(static_cast<uint8_t>(_WalOp::BEGIN));
     _wal_put_u32(_buf, txn_id);
@@ -385,10 +400,10 @@ struct _WalWriter {
   void prepare(bool skip_sync = false) {
     if (_prepared) return;  // idempotent
     _buf.push_back(static_cast<uint8_t>(_WalOp::PREPARE));
-    int idx = _active_log.load();
-    if (!_wal_pwrite(_fd[idx], _write_off[idx], _buf.data(), _buf.size()))
+    int idx = _state->active_log.load();
+    if (!_wal_pwrite(_fd[idx], _state->write_off[idx], _buf.data(), _buf.size()))
       throw WalError("WAL prepare: pwrite failed");
-    _write_off[idx] += _buf.size();
+    _state->write_off[idx] += _buf.size();
     if (!skip_sync) _wal_sync(_fd[idx]);
     _buf.clear();
     _prepared = true;
@@ -397,11 +412,11 @@ struct _WalWriter {
   // Append COMMIT, fdatasync, publish last_commit.
   // Throws leaves::WalError on I/O failure.
   void commit() {
-    int idx = _active_log.load();
+    int idx = _state->active_log.load();
     uint8_t rec = static_cast<uint8_t>(_WalOp::COMMIT);
-    if (!_wal_pwrite(_fd[idx], _write_off[idx], &rec, 1))
+    if (!_wal_pwrite(_fd[idx], _state->write_off[idx], &rec, 1))
       throw WalError("WAL commit: pwrite failed");
-    _write_off[idx] += 1;
+    _state->write_off[idx] += 1;
     _wal_sync(_fd[idx]);
   }
 
@@ -414,36 +429,40 @@ struct _WalWriter {
     _wal_truncate(_fd[idx], 0);
     _wal_pwrite(_fd[idx], 0, WAL_MAGIC, sizeof(WAL_MAGIC));
     _wal_sync(_fd[idx]);
-    _write_off[idx] = WAL_HEADER_SIZE;
+    _state->write_off[idx] = WAL_HEADER_SIZE;
   }
 
-  void reset() {
-    truncate(0);
-    truncate(1);
-    _next_log.store(0);
-    _active_log.store(0);
-    _last_commit[0].store(0);
-    _last_commit[1].store(0);
+  // Remove both WAL files from disk.  Called during recovery *before* open(),
+  // so _state and _fd may not be set — we work from the base_path.
+  void reset(const std::string& base_path) {
+    auto remove_file = [](const std::string& p) {
+      // best-effort removal
+      std::error_code ec;
+      std::filesystem::remove(p, ec);
+    };
+    remove_file(base_path + ".wal.0");
+    remove_file(base_path + ".wal.1");
   }
 
   void close() {
-    if (!_open) return;
+    if (!is_open()) return;
     for (int i = 0; i < 2; i++) {
       _wal_close(_fd[i]);
       _fd[i] = WAL_INVALID_FD;
     }
-    _open = false;
+    _state->is_open.store(false);
+    _state = nullptr;
   }
 
   void flushed(uint32_t txn_id) {
-    int idx = 1 - _active_log.load();
-    if (tid_t(_last_commit[idx].load()) <= tid_t(txn_id)) {
+    int idx = 1 - _state->active_log.load();
+    if (tid_t(_state->last_commit[idx].load()) <= tid_t(txn_id)) {
       _wal_truncate(_fd[idx], 0);
       _wal_pwrite(_fd[idx], 0, WAL_MAGIC, sizeof(WAL_MAGIC));
       _wal_sync(_fd[idx]);
-      _write_off[idx] = WAL_HEADER_SIZE;
-      _last_commit[idx].store(0);
-      _next_log.store(idx);
+      _state->write_off[idx] = WAL_HEADER_SIZE;
+      _state->last_commit[idx].store(0);
+      _state->next_log.store(idx);
     }
   }
 };
