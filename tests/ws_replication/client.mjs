@@ -4,11 +4,13 @@
  *
  * Uses the modern Leaves JS API (leaves.js + leaves_replication.js).
  * Run via run.mjs which spawns this as a child process with
- * --experimental-wasm-jspi and a preload that mocks WebSocket/IndexedDB.
+ * a preload that mocks WebSocket/IndexedDB.
  *
- * Usage: node --experimental-wasm-jspi client.mjs <port> [--wasm-dir <dir>]
+ * Usage: node client.mjs <port> [--wasm-dir <dir>]
  */
 
+import { WebSocket } from "ws";
+import "fake-indexeddb/auto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,16 +51,6 @@ async function runTest() {
   console.log("");
 
   try {
-    // 0. JSPI pre-check
-    if (!('Suspending' in WebAssembly)) {
-      console.log("  FAIL: WebAssembly.Suspending (JSPI) is not available in this Node.js environment.");
-      console.log(`  This Emscripten WASM build requires JSPI support.`);
-      console.log(`  Current Node.js: ${process.version}`);
-      console.log("  Try a Node.js version where --experimental-wasm-jspi fully exposes WebAssembly.Suspending.");
-      console.log("=== FAIL ===");
-      process.exit(1);
-    }
-
     // 1. Load WASM module — we need to handle locateFile for Node.js
     console.log("Loading WASM module...");
     const createModule = (await import(join(WASM_DIR, "leaves.js"))).default;

@@ -16,7 +16,7 @@
  * Requirements:
  *   - Native server built:      cmake --build build -j --target ws_replication_server
  *   - Leaves JS library built:  cmake --build build-wasm -j --target leaves_js_output
- *   - Node.js 18+ with --experimental-wasm-jspi
+ *   - Node.js 18+ (WASM built with ASYNCIFY)
  */
 
 import { spawn } from "node:child_process";
@@ -78,24 +78,6 @@ async function main() {
   }
   console.log("  pre-flight checks OK");
 
-  // 0a. Quick JSPI capability check
-  const { execSync } = await import("node:child_process");
-  try {
-    const jspiCheck = execSync(
-      `${process.execPath} --experimental-wasm-jspi -e "console.log('Suspending' in WebAssembly)"`,
-      { encoding: "utf8" }
-    ).trim();
-    const jspiOk = jspiCheck === "true";
-    console.log(`  JSPI available on target Node: ${jspiOk}`);
-    if (!jspiOk) {
-      console.log("  ⚠ '--experimental-wasm-jspi' flag is accepted but WebAssembly.Suspending is not exposed.");
-      console.log("  ⚠ This Emscripten build requires a Node.js version where JSPI is fully enabled.");
-      console.log("  ⚠ Try a newer Node.js (23+) or rebuild WASM without JSPI.");
-    }
-  } catch (e) {
-    console.log(`  JSPI check failed: ${e.message}`);
-  }
-
   // 1. Start server
   const server = spawn(SERVER_BIN, [String(PORT), dbPath], {
     stdio: ["ignore", "pipe", "inherit"],
@@ -126,12 +108,9 @@ async function main() {
   });
   console.log("  server ready");
 
-  // 3. Run test client using Node.js with preload for ws + fake-indexeddb
-  const preload = join(__dirname, "client_preload.cjs");
+  // 3. Run test client using Node.js (ESM, loads own WebSocket + fake-indexeddb)
   const clientScript = join(__dirname, "client.mjs");
   const clientArgs = [
-    "--experimental-wasm-jspi",
-    "--require", preload,
     clientScript,
     String(PORT),
     "--wasm-dir", WASM_DIR,
@@ -172,13 +151,6 @@ async function main() {
 
   console.log(`\n  server exit: ${serverExit ?? "killed"}`);
   console.log(`  client exit: ${clientResult.code}`);
-
-  // Diagnose exit code 9 — Node.js bad option
-  if (clientResult.code === 9) {
-    console.log("  ⚠ Note: exit code 9 means Node.js rejected a command-line flag.");
-    console.log("  ⚠ The flag '--experimental-wasm-jspi' requires Node.js 22+.");
-    console.log(`  ⚠ Current version: ${process.version}`);
-  }
 
   if (clientOk && serverOk) {
     console.log("\n=== PASS ===");

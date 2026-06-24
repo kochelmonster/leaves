@@ -14,7 +14,7 @@
  * Requirements:
  *   - Native server built:      cmake --build build -j --target ws_replication_server
  *   - Leaves JS library built:  cmake --build build-wasm -j --target leaves_js_output
- *   - Chrome 128+ or Firefox with JSPI (origin trial)
+ *   - Browser with SharedArrayBuffer support (Chrome 92+, Firefox 90+, Safari 15.2+)
  */
 
 import { spawn, execSync } from "node:child_process";
