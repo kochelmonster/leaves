@@ -301,6 +301,10 @@ struct _ReplicationDB
         0, std::memory_order_relaxed);
 
     this->make_dirty(this->_header);
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] _ReplicationDB::init after Base::init offset=%llu db_type_id=%u (expected 1)\n",
+                 (unsigned long long)*header, (unsigned)this->_header->db_type_id);
+#endif
   }
 
   void set_retention(uint64_t seconds) {

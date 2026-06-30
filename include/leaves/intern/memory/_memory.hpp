@@ -756,9 +756,15 @@ void _recover_areas(AreaPool& pool,
         Area area_hdr;
         read_bytes((uint64_t)head, &area_hdr, sizeof(Area));
 
-        // Restore _offset on owned areas
-        area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
-        write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+        // Restore _offset on owned areas — CAS avoids write if already correct
+        {
+          uint64_t expected = (uint64_t)head;
+          if (!area_hdr._offset.compare_exchange_strong(expected, expected,
+                                                        std::memory_order_relaxed)) {
+            area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
+            write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+          }
+        }
 
         // Mark all AREA_SIZE sub-blocks as occupied
         uint64_t area_size = area_hdr.size();

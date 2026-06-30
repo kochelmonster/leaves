@@ -116,9 +116,39 @@ struct _DBHeader {
   WalState wal;
 };
 
+// ---------------------------------------------------------------------------
 // Write-Ahead Log mixin for _DB — provides WAL open/recover/begin/put/delete/
 // prepare/commit/abort operations via CRTP. The derived type (_DB) must expose
 // _storage, _name, and create_cursor().
+//
+// Under Emscripten (browser / WSM mode) there are no WAL files, so the mixin
+// is a no-op stub — all methods inline to nothing and no members are added.
+// ---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+
+template <typename Derived_>
+struct _WalDbMixin {
+  using Derived = Derived_;
+
+  bool wal_enabled() const { return false; }
+  std::string wal_base_path() const { return std::string(); }
+  void open_wal() {}
+  void wal_recover() {}
+  void wal_begin(uint32_t /*txn_id*/) {}
+  void wal_put(const Slice& /*key*/, const Slice& /*val*/) {}
+  void wal_delete(const Slice& /*key*/) {}
+  void wal_prepare(bool /*skip_sync*/ = false) {}
+  void set_wal_flush_threshold(uint64_t /*bytes*/) {}
+  void wal_commit(uint32_t /*txn_id*/) {}
+  void wal_abort() {}
+  void wal_close() {}
+
+  Derived& _derived() { return *static_cast<Derived*>(this); }
+  const Derived& _derived() const { return *static_cast<const Derived*>(this); }
+};
+
+#else  // !__EMSCRIPTEN__
+
 template <typename Derived_>
 struct _WalDbMixin {
   using Derived = Derived_;
@@ -231,6 +261,8 @@ struct _WalDbMixin {
   const Derived& _derived() const { return *static_cast<const Derived*>(this); }
 };
 
+#endif  // __EMSCRIPTEN__
+
 // Make _DB accept Transaction and Header as template parameters
 // Self_ enables CRTP: derived classes pass themselves so _DB can
 // statically dispatch to overrides (e.g. _on_txn_freed) without virtual.
@@ -299,6 +331,10 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _name(name) {
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] _DB::ctor offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu cursor id=%llu address=%p\n",
+                 (unsigned long long)header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->txn_cursor_id, (char*)_header);
+#endif
     if (_header->prepared_txn != _header->read_txn) {
       _active_txn = resolve<Transaction>(&_header->prepared_txn);
     }
@@ -319,6 +355,10 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] _DB::init offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u\n",
+                 (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID);
+#endif
     new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
 
@@ -351,6 +391,10 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header->next_txn_page = resolve(next);
     _active_txn.reset();
 
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] _DB::init / end offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu prepared_txn=%llu next_txn_page=%llu\n",
+                 (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->prepared_txn, (unsigned long long)_header->next_txn_page);
+#endif  
     make_dirty(_header);
     flush();
   }
@@ -900,6 +944,14 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
     _header->txn_cursor_id.store(0);
+
+    // Reset _active_txn before wal_recover(), which needs to start its own
+    // transactions to replay WAL entries.  The constructor may have set
+    // _active_txn from prepared_txn (e.g. after a two-phase prepare crash
+    // or a WAL prepare crash); wal_recover() requires a clean slate.  The
+    // post-recovery check below re-establishes _active_txn if needed.
+    _active_txn.reset();
+
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
       txn->mem_manager.reinit_locks();
@@ -917,7 +969,9 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       make_dirty(next);
     } else {
       txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
+      assert(_header->read_txn != 0);
       _active_txn = read_txn;
+
       auto next = read_txn->clone(*this);
       _header->next_txn_page = resolve(next);
       _active_txn.reset();
@@ -937,6 +991,101 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     make_dirty(_header);
     flush();
     _aspect.on_sanitize(self());
+  }
+
+  // Recursively check trie health starting from the given offset.
+  // Returns true if the entire subtree is structurally valid.
+  // Does not modify any state — purely a read-only validation.
+  bool _check_trie_health(offset_e offset) const {
+    if (!offset) return true;  // null/empty root is healthy
+
+    using PageHeader = typename Traits::PageHeader;
+    typedef _TrieNode<Traits> TrieNode;
+    typedef _LeafNode<Traits> LeafNode;
+    using trie_ptr = typename Traits::template Pointer<TrieNode>;
+    using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
+
+    if (offset.type() == TRIE) {
+      trie_ptr node = resolve<TrieNode>(&offset);
+      auto* hdr =
+          reinterpret_cast<const PageHeader*>((const char*)&*node - sizeof(PageHeader));
+
+      // Page-level checks
+      if (hdr->slot_id >= PAGE_SIZES_COUNT) return false;
+      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id]) return false;
+
+      // Trie node structural checks
+      if (node->len() > 255) return false;
+      int cnt = node->count();
+      if (cnt < 1 || cnt > TrieNode::MAX_BRANCH_COUNT) return false;
+
+      // Verify internal layout consistency
+      if (node->lower_start() != node->calc_lower_start()) return false;
+      if (node->array_start() != node->calc_array_start()) return false;
+
+      // Verify total node size fits within used page space
+      if (node->size() != hdr->used) return false;
+
+      // Recurse into children
+      offset_e* arr = node->array();
+      for (int i = 0; i < cnt; i++) {
+        if (!arr[i]) return false;
+        NodeTypes t = arr[i].type();
+        if (t != TRIE && t != LEAF) return false;
+        if (!_check_trie_health(arr[i])) return false;
+      }
+      return true;
+    }
+
+    if (offset.type() == LEAF) {
+      leaf_ptr leaf = resolve<LeafNode>(&offset);
+      auto* hdr =
+          reinterpret_cast<const PageHeader*>((const char*)&*leaf - sizeof(PageHeader));
+
+      // Page-level checks
+      if (hdr->slot_id >= PAGE_SIZES_COUNT) return false;
+      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id]) return false;
+
+      // Leaf node structural checks
+      if (leaf->key_size > 255) return false;
+      if (leaf->size() != hdr->used) return false;
+
+      return true;
+    }
+
+    // Unknown node type
+    return false;
+  }
+
+  // Repair the database by walking the trie of the current transaction and
+  // checking if the nodes are structurally healthy. If an unhealthy node is
+  // found, repair unwinds the transaction chain and takes the next older
+  // transaction until a healthy transaction is found.  This restores the
+  // database to a known-good state, potentially losing the most recent
+  // transaction's data.  Precondition: no active write transaction.
+  void repair() {
+    if (is_active()) throw TransactionActive();
+
+    offset_t last_healthy = 0;
+
+    // Iterate transactions from oldest to newest.
+    // Track the most recent healthy transaction.
+    // If we find an unhealthy one, stop and use the last healthy one before it.
+    iter_transactions([this, &last_healthy](txn_ptr txn) -> bool {
+      if (_check_trie_health(txn->root)) {
+        last_healthy = resolve(txn);
+        return false;  // continue checking
+      }
+      return true;  // unhealthy found, stop iterating
+    });
+
+    // If the last healthy transaction is not the current read_txn, switch to it.
+    if (last_healthy && last_healthy != _header->read_txn) {
+      _header->read_txn = last_healthy;
+      _header->prepared_txn = last_healthy;
+      make_dirty(_header);
+      flush();
+    }
   }
 };
 

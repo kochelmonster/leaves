@@ -1,5 +1,6 @@
 #ifndef _LEAVES__WAL_HPP
 #define _LEAVES__WAL_HPP
+#ifndef __EMSCRIPTEN__
 
 // Write-Ahead Log (logical operation log) for leaves.
 //
@@ -77,6 +78,8 @@ struct _WalTxn {
 // WAL shared state that must reside in the DB Header (mmap'd) so that all
 // processes sharing a MemoryMappedFile see the same ping-pong state.
 // ---------------------------------------------------------------------------
+// Under Emscripten (browser / WSM mode) there are no WAL files, so WalState
+// is an empty stub — the compiler can eliminate it via [[no_unique_address]].
 struct WalState {
   uint64_t write_off[2];                  // current write position per file
   std::atomic<int> next_log{0};           // file index for next transaction
@@ -476,5 +479,9 @@ struct _WalWriter {
   }
 };
 }  // namespace leaves
-
+#else // _EMSCRIPTEN__
+namespace leaves {
+struct WalState {};
+}
+#endif
 #endif  // _LEAVES__WAL_HPP

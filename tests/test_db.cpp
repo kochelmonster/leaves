@@ -1398,3 +1398,657 @@ BOOST_AUTO_TEST_CASE(test_db_init_zeros_first_area_next) {
   // The invariant: the new DB's first area must terminate the chain.
   BOOST_CHECK_EQUAL(head_area->next, offset_t(0));
 }
+
+// Test repair(): walk the trie of the current transaction and check nodes
+// are structurally healthy. If an unhealthy node is found, repair unwinds
+// to the next older transaction and re-establishes that as the read txn.
+BOOST_AUTO_TEST_CASE(test_repair_unhealthy_transaction) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_repair.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  using DB = std::remove_pointer_t<decltype(db)>;
+  using offset_e = typename DB::offset_e;
+
+  // Transaction 1: insert some data
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key1"));
+    cursor->value(Slice("value1"));
+    cursor->find(Slice("key2"));
+    cursor->value(Slice("value2"));
+    cursor->commit();
+  }
+
+  offset_t healthy_txn_offset = db->_header->read_txn;
+
+  // Transaction 2: insert more data
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key3"));
+    cursor->value(Slice("value3"));
+    cursor->find(Slice("key4"));
+    cursor->value(Slice("value4"));
+    cursor->commit();
+  }
+
+  // Corrupt a page in the current (unhealthy) transaction by modifying
+  // a trie node's slot_id to an out-of-range value.
+  {
+    using TrieNode = _TrieNode<DBMMap::Traits>;
+
+    auto txn = db->txn();
+    if (txn->root) {
+      auto root_val = static_cast<uint64_t>(txn->root);
+      offset_e root_offset(root_val);
+      if (root_offset.type() == TRIE) {
+        using page_ptr = typename DB::page_ptr;
+        page_ptr node = db->template resolve<TrieNode>(&root_offset);
+        // Calculate page header offset (node - sizeof(PageHeader))
+        page_ptr hdr = page_ptr((char*)(node) - sizeof(PageHeader));
+        // Corrupt: set slot_id to an invalid value
+        hdr->slot_id = 0xFF;
+        db->make_dirty(hdr);
+        db->flush(true, true);
+      }
+    }
+  }
+
+  // Now call repair() — should detect corruption and unwind to the
+  // healthy transaction (txn 1).
+  BOOST_CHECK_NO_THROW(db->repair());
+
+  // The read_txn should have been unwound to the healthy transaction
+  offset_t after_repair_offset = db->_header->read_txn;
+  BOOST_CHECK_EQUAL(after_repair_offset, healthy_txn_offset);
+
+  // Data from the healthy transaction should still be readable
+  {
+    auto cursor = db->create_cursor();
+    cursor->find(Slice("key1"));
+    BOOST_CHECK(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value().string(), "value1");
+
+    cursor->find(Slice("key2"));
+    BOOST_CHECK(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value().string(), "value2");
+  }
+}
+
+// Test that repair() on a healthy database is a no-op
+BOOST_AUTO_TEST_CASE(test_repair_healthy_db) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_repair_healthy.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Insert some data
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction(0);
+    cursor->find(Slice("a"));
+    cursor->value(Slice("1"));
+    cursor->find(Slice("b"));
+    cursor->value(Slice("2"));
+    cursor->commit();
+  }
+
+  offset_t txn_before = db->_header->read_txn;
+
+  // Repair on a healthy DB should not change anything
+  BOOST_CHECK_NO_THROW(db->repair());
+
+  offset_t txn_after = db->_header->read_txn;
+  BOOST_CHECK_EQUAL(txn_before, txn_after);
+
+  // Data should still be accessible
+  {
+    auto cursor = db->create_cursor();
+    cursor->find(Slice("a"));
+    BOOST_CHECK(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value().string(), "1");
+
+    cursor->find(Slice("b"));
+    BOOST_CHECK(cursor->is_valid());
+    BOOST_CHECK_EQUAL(cursor->value().string(), "2");
+  }
+}
+
+// Test that repair() throws TransactionActive when a write transaction is active
+BOOST_AUTO_TEST_CASE(test_repair_with_active_transaction) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "test_repair_active.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Start a write transaction but don't commit/rollback
+  db->start_transaction(0);
+
+  // repair() should throw because there's an active write transaction
+  BOOST_CHECK_THROW(db->repair(), TransactionActive);
+
+  // Clean up
+  db->rollback(0);
+}
+
+// ============================================================================
+// Thorough _check_trie_health tests
+// ============================================================================
+
+using DBType = std::remove_pointer_t<decltype(std::declval<DBMMap>().open(""))>;
+using DBTraits = DBType::Traits;
+using TPageHeader = DBTraits::PageHeader;
+using TOffset = DBTraits::offset_e;
+using TTrieNode = _TrieNode<DBTraits>;
+using TLeafNode = _LeafNode<DBTraits>;
+using TTriePtr = typename DBTraits::template Pointer<TTrieNode>;
+using TLeafPtr = typename DBTraits::template Pointer<TLeafNode, LEAF>;
+using TPagePtr = typename DBTraits::ptr;
+using DBHandle = DBType*;
+
+// Helper: navigate into trie to find the first leaf child offset.
+// If root is already a leaf, returns root. Otherwise traverses one level.
+static TOffset find_first_leaf(DBHandle db, TOffset root) {
+  if (root.type() == LEAF) return root;
+  // Root is TRIE — take its first child of type LEAF
+  auto trie = db->template resolve<TTrieNode>(&root);
+  auto arr = trie->array();
+  for (int i = 0; i < trie->count(); i++) {
+    if (arr[i].type() == LEAF) return arr[i];
+  }
+  // No direct leaf child — recurse into the first trie child
+  for (int i = 0; i < trie->count(); i++) {
+    if (arr[i].type() == TRIE) return find_first_leaf(db, arr[i]);
+  }
+  return TOffset(0);
+}
+
+// Helper: resolve PageHeader from an offset_e
+static TPageHeader* get_hdr(DBHandle db, TOffset off) {
+  auto leaf = db->template resolve<TLeafNode>(&off);
+  return reinterpret_cast<TPageHeader*>((char*)&*leaf - sizeof(TPageHeader));
+}
+
+// --- Null / empty tests ---
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_null_offset) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_null.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  BOOST_CHECK(db->_check_trie_health(TOffset(0)));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_empty_db) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_empty.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Freshly initialized DB — root is 0
+  auto txn = db->txn();
+  BOOST_CHECK(db->_check_trie_health(txn->root));
+}
+
+// --- Healthy trie tests ---
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_healthy_trie) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_healthy.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Insert keys to build a small trie
+  auto cursor = db->create_cursor();
+  cursor->start_transaction();
+  cursor->find(Slice("hello"));
+  cursor->value(Slice("world"));
+  cursor->find(Slice("hellp"));
+  cursor->value(Slice("earth"));
+  cursor->commit();
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+  BOOST_CHECK(db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_single_leaf) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_leaf.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  auto cursor = db->create_cursor();
+  cursor->start_transaction();
+  cursor->find(Slice("single"));
+  cursor->value(Slice("value"));
+  cursor->commit();
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == LEAF);
+  BOOST_CHECK(db->_check_trie_health(txn->root));
+}
+
+// --- LEAF corruption tests ---
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_leaf_slot_id_corrupt) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_lslot.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Single leaf
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key"));
+    cursor->value(Slice("val"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == LEAF);
+
+  // Corrupt slot_id on the leaf page header
+  auto* hdr = get_hdr(db, txn->root);
+  BOOST_REQUIRE(hdr->slot_id < DBTraits::PAGE_SIZES_COUNT);
+  hdr->slot_id = 0xFF;  // out of range
+  db->make_dirty(hdr);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_leaf_used_corrupt) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_lused.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key"));
+    cursor->value(Slice("val"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == LEAF);
+
+  auto* hdr = get_hdr(db, txn->root);
+  // Set used so large that used + sizeof(PageHeader) exceeds page size
+  hdr->used = DBTraits::PAGE_SIZES[0];  // equal to page size (borderline);
+  db->make_dirty(hdr);
+
+  // This should pass since used + sizeof(PageHeader) > PAGE_SIZES[slot_id] is false
+  // (used == page_size, so used + sizeof > page_size)
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_leaf_size_mismatch) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_lsize.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key"));
+    cursor->value(Slice("val"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == LEAF);
+
+  // Resolve the leaf to recompute its size after changing value_size
+  auto leaf = db->template resolve<TLeafNode>(&txn->root);
+  // Changing value_size makes leaf->size() != hdr->used
+  leaf->value_size = leaf->value_size + 1;
+  db->make_dirty(leaf);
+  db->flush(true, true);
+
+  // leaf->size() != hdr->used -> false
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+// --- TRIE node corruption tests ---
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_count_zero) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_tcnt0.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Insert two keys sharing a prefix to create a trie root
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  // Corrupt _array_len so count() == 0
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  trie->_array_len = 0;  // count = 0 (no NULL_MASK bit)
+  db->make_dirty(trie);
+  db->flush(true, true);
+
+  // cnt < 1 -> false
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_count_over_max) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_tcntmax.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  // Set count > MAX_BRANCH_COUNT (257)
+  trie->_array_len = TTrieNode::MAX_BRANCH_COUNT + 1;  // 258, no NULL_MASK
+  db->make_dirty(trie);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_lower_start_mismatch) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_lower.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  // Corrupt _lower_offset so lower_start() != calc_lower_start()
+  auto orig = trie->_lower_offset;
+  trie->_lower_offset = orig + 1;
+  db->make_dirty(trie);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_array_start_mismatch) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_arrstart.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  // Corrupt _array_offset so array_start() != calc_array_start()
+  auto orig = trie->_array_offset;
+  trie->_array_offset = orig + 1;
+  db->make_dirty(trie);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_used_corrupt) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_tused.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  // Resolve trie node, then get its header
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  auto* hdr = reinterpret_cast<TPageHeader*>((char*)&*trie - sizeof(TPageHeader));
+  uint16_t orig_used = hdr->used;
+  // Increase used past the real node size — must still be <= PAGE_SIZES[slot_id] - sizeof(PageHeader)
+  // to hit the size() != used check rather than the bounds check
+  hdr->used = orig_used + 1;
+  db->make_dirty(hdr);
+  db->flush(true, true);
+
+  // node->size() != hdr->used -> false  (verify node size is unchanged)
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_used_bounds_corrupt) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_tusedbnd.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  auto* hdr = reinterpret_cast<TPageHeader*>((char*)&*trie - sizeof(TPageHeader));
+  // Set used to page size so that used + sizeof(PageHeader) > PAGE_SIZES[slot_id]
+  hdr->used = DBTraits::PAGE_SIZES[hdr->slot_id];
+  db->make_dirty(hdr);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+// --- Child corruption (recursive detection) tests ---
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_null_child) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_nullchild.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Create a trie with two leaf children
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  // Null out the first child offset
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  trie->array()[0] = TOffset(0);
+  db->make_dirty(trie);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_unknown_child_type) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_unkchild.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("hello"));
+    cursor->value(Slice("world"));
+    cursor->find(Slice("hellp"));
+    cursor->value(Slice("earth"));
+    cursor->commit();
+  }
+
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  // Set a child's type bits to an invalid value (2 or 3)
+  auto trie = db->template resolve<TTrieNode>(&txn->root);
+  auto* child = &trie->array()[0];
+  // Preserve the raw address but set type to a non-TRIE/LEAF value
+  child->type((NodeTypes)2);
+  db->make_dirty(trie);
+  db->flush(true, true);
+
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_deep_trie_corruption) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_deep.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  // Insert enough keys with varied prefixes to create multi-level tries.
+  // Keys: aaa, aab, aba, abb, baa, bab, bba, bbb
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("aaa")); cursor->value(Slice("1"));
+    cursor->find(Slice("aab")); cursor->value(Slice("2"));
+    cursor->find(Slice("aba")); cursor->value(Slice("3"));
+    cursor->find(Slice("abb")); cursor->value(Slice("4"));
+    cursor->find(Slice("baa")); cursor->value(Slice("5"));
+    cursor->find(Slice("bab")); cursor->value(Slice("6"));
+    cursor->find(Slice("bba")); cursor->value(Slice("7"));
+    cursor->find(Slice("bbb")); cursor->value(Slice("8"));
+    cursor->commit();
+  }
+
+  // Root should be a trie.  Walk down to find a non-root node and corrupt it.
+  auto txn = db->txn();
+  BOOST_REQUIRE(txn->root.type() == TRIE);
+
+  // First, ensure the whole tree is healthy
+  BOOST_CHECK(db->_check_trie_health(txn->root));
+
+  // Find a leaf and corrupt its slot_id — this exercises recursion
+  TOffset leaf_off = find_first_leaf(db, txn->root);
+  BOOST_REQUIRE(leaf_off);
+  BOOST_REQUIRE(leaf_off.type() == LEAF);
+
+  auto* hdr = get_hdr(db, leaf_off);
+  BOOST_REQUIRE(hdr->slot_id < DBTraits::PAGE_SIZES_COUNT);
+  hdr->slot_id = 0xFF;
+  db->make_dirty(hdr);
+  db->flush(true, true);
+
+  // Corruption at depth should still be detected
+  BOOST_CHECK(!db->_check_trie_health(txn->root));
+}
+
+// --- Repair + health check ---
+
+BOOST_AUTO_TEST_CASE(test_check_trie_health_healthy_after_repair) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "tch_repaired.lvs";
+  DBMMap storage(dbFilePath.c_str());
+  auto db = storage.open("test");
+
+  using offset_e = typename DBTraits::offset_e;
+
+  // Transaction 1: healthy data
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key1")); cursor->value(Slice("val1"));
+    cursor->find(Slice("key2")); cursor->value(Slice("val2"));
+    cursor->commit();
+  }
+
+  // Transaction 2: more data, then corrupt
+  {
+    auto cursor = db->create_cursor();
+    cursor->start_transaction();
+    cursor->find(Slice("key3")); cursor->value(Slice("val3"));
+    cursor->commit();
+  }
+
+  // Corrupt the newest transaction
+  auto txn = db->txn();
+  if (txn->root && txn->root.type() == LEAF) {
+    auto* hdr = get_hdr(db, txn->root);
+    hdr->slot_id = 0xFF;
+    db->make_dirty(hdr);
+  } else if (txn->root && txn->root.type() == TRIE) {
+    auto trie = db->template resolve<TTrieNode>(&txn->root);
+    auto* hdr = reinterpret_cast<TPageHeader*>((char*)&*trie - sizeof(TPageHeader));
+    hdr->slot_id = 0xFF;
+    db->make_dirty(hdr);
+  }
+  db->flush(true, true);
+
+  // repair() should unwind to the healthy transaction
+  BOOST_REQUIRE_NO_THROW(db->repair());
+  BOOST_CHECK_EQUAL(db->_header->prepared_txn, db->_header->read_txn);
+
+  // After repair, the current transaction should be healthy
+  auto repaired_txn = db->txn();
+  BOOST_CHECK(db->_check_trie_health(repaired_txn->root));
+}

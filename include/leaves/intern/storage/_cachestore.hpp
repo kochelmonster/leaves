@@ -146,7 +146,7 @@ struct _CacheStore : public Opers_,
     if (sync) {
       write_dirty_blocks();
       this->sync_writes();
-    } else if (has_pending) {
+    } else if (has_pending || _header_dirty.load(std::memory_order_acquire)) {
       if (this->has_workers()) {
         // Native: thread pool coalescing via _flush_pending
         if (!_flush_pending.exchange(true)) {
@@ -155,10 +155,8 @@ struct _CacheStore : public Opers_,
             _flush_pending.store(false);
           });
         }
-      } else if (!this->has_pending_writes()) {
-        // WASM: fire async IDB writes if previous batch is done.
-        // If IDB is still busy, dirty pages accumulate in
-        // _dirty_committed until the next flush sees them.
+      } else {
+        // WASM
         write_dirty_blocks();
       }
     }
@@ -622,13 +620,24 @@ struct _CacheStore : public Opers_,
     // if the actual header is a different DB subtype).
     _DBHeader<CacheStore> base_header;
     read((uint64_t)offset, &base_header, sizeof(base_header));
-    if (base_header.db_type_id != DB::DB_TYPE_ID)
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] _open_existing '%s' offset=%llu read db_type_id=%u expecting=%u read_txn=%llu\n",
+                 name, (unsigned long long)offset, (unsigned)base_header.db_type_id, (unsigned)DB::DB_TYPE_ID, (unsigned long long)base_header.read_txn);
+#endif
+    if (base_header.db_type_id != DB::DB_TYPE_ID) {
       throw TypeMismatch(
           std::format("Wrong database type while opening {} expected {} got {}",
                       name, DB::DB_TYPE_ID, base_header.db_type_id));
+    }
 
     auto* db = new DB(_self(), offset, std::string_view(name),
                       std::forward<Args>(args)...);
+
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] sanitize db '%s' sanitize_generation=%llu current_generation=%llu\n",
+                 name, (unsigned long long)db->_header->sanitize_generation, (unsigned long long)_header->sanitize_generation);
+#endif
+
     // Sanitize if this DB hasn't been sanitized for the current generation
     if (db->_header->sanitize_generation != _header->sanitize_generation) {
       db->sanitize();
