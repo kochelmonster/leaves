@@ -286,6 +286,10 @@ struct _CacheStore : public Opers_,
   }
 
   area_ptr alloc_single_area() {
+#ifndef NDEBUG
+    fprintf(stderr, "alloc_single_area: file_size=%lu\n", _header->file_size);
+#endif
+
     auto result = _header->area_pool.alloc_single_area(*this);
     if (result) {
       make_header_dirty();
@@ -295,6 +299,10 @@ struct _CacheStore : public Opers_,
   }
 
   area_ptr alloc_multi_area(uint64_t size) {
+#ifndef NDEBUG
+    fprintf(stderr, "alloc_multi_area: file_size=%lu, requested_size=%llu\n", _header->file_size, (unsigned long long)size);
+#endif
+
     // Ensure size is multiple of AREA_SIZE
     const uint64_t aligned = padding(size, AREA_SIZE);
     auto result = _header->area_pool.alloc_multi_area(aligned, *this);

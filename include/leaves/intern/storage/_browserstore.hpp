@@ -375,7 +375,7 @@ struct _BrowserOperations : _CacheBase {
     int load_error = 0;
 
 #ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _idb_load_and_merge: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
+    std::fprintf(stdout, "[dbg] _idb_load_and_merge: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
                  (unsigned long long)key, key_buf, (unsigned long long)sub_offset, size);
 #endif
 
@@ -411,7 +411,7 @@ struct _BrowserOperations : _CacheBase {
     void* buf = _idb_load_and_merge(key, data, size, key_buf, write_size);
     const void* write_data = buf ? buf : data;
 #ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _idb_store_data: key=%llu key_str='%s' size=%zu write_size=%d\n",
+    std::fprintf(stdout, "[dbg] _idb_store_data: key=%llu key_str='%s' size=%zu write_size=%d\n",
                  (unsigned long long)key, key_buf, size, write_size);
 #endif 
 
@@ -439,7 +439,7 @@ struct _BrowserOperations : _CacheBase {
     idb_key_format(key_buf, 32, aligned_key);
 
 #ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _idb_load_data: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
+    std::fprintf(stdout, "[dbg] _idb_load_data: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
                  (unsigned long long)key, key_buf, (unsigned long long)sub_offset, size);
 #endif
 
@@ -464,7 +464,7 @@ struct _BrowserOperations : _CacheBase {
     int error = 0;
 
 #ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _idb_load_data: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
+    std::fprintf(stdout, "[dbg] _idb_load_data: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
                  (unsigned long long)key, key_buf, (unsigned long long)sub_offset, size);
 #endif 
     emscripten_idb_load(_store_name.c_str(), key_buf, &loaded_data,
@@ -525,7 +525,7 @@ struct _BrowserOperations : _CacheBase {
     int write_size;
 
 #ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _idb_async_store_data: key=%llu size=%zu\n",
+    std::fprintf(stdout, "[dbg] _idb_async_store_data: key=%llu size=%zu\n",
                   (unsigned long long)key, size);
 #endif
 

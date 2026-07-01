@@ -275,6 +275,11 @@ struct ReplicationSenderFSM {
     _sender.begin(db_type);
     _session_id = _sender.session_id();
 
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender begin: session_id=%llu db_type=%d\n",
+                  (unsigned long long)_session_id, (int)db_type);
+#endif
+
     _send_next_buffer();
   }
 
@@ -298,6 +303,11 @@ struct ReplicationSenderFSM {
     _last_activity = std::chrono::steady_clock::now();
 
     auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
+
+  #ifndef NDEBUG
+  std::fprintf(stderr, "[dbg] Sender received message: type=%u session_id=%llu payload_size=%u state=%u\n",
+                (unsigned)msg_type, (unsigned long long)hdr->session_id, (unsigned)hdr->payload_size, (unsigned)_state);
+  #endif
 
     switch (_state) {
       case State::AWAITING_RESPONSE:
@@ -337,6 +347,10 @@ struct ReplicationSenderFSM {
   void _handle_response(ReplicationMsgType msg_type, const Slice& payload) {
     switch (msg_type) {
       case ReplicationMsgType::COMPLETE:
+  #ifndef NDEBUG
+        std::fprintf(stderr, "[dbg] Sender received COMPLETE: session_id=%llu total_nodes=%zu\n",
+                      (unsigned long long)_session_id, _total_nodes);
+  #endif
         _db->release_hash_trie(_txn);
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
@@ -353,6 +367,10 @@ struct ReplicationSenderFSM {
         break;
 
       case ReplicationMsgType::FRACTION_COMPLETE:
+  #ifndef NDEBUG
+        std::fprintf(stderr, "[dbg] Sender received FRACTION_COMPLETE: session_id=%llu restarting round\n",
+                      (unsigned long long)_session_id);
+  #endif
         // Receiver merged what it had and wants a fresh round.
         // Re-acquire hash trie so the sender reads an updated snapshot.
         _db->release_hash_trie(_txn);
@@ -364,6 +382,11 @@ struct ReplicationSenderFSM {
         break;
 
       case ReplicationMsgType::ERROR:
+  #ifndef NDEBUG
+        std::fprintf(stderr, "[dbg] Sender received ERROR: session_id=%llu error=%d\n",
+                      (unsigned long long)_session_id,
+                      payload.size() > 0 ? (int)payload.data()[0] : -1);
+  #endif
         _state = State::ERROR;
         _error = payload.size() > 0
                      ? static_cast<ReplicationError>(payload.data()[0])
@@ -400,6 +423,12 @@ struct ReplicationSenderFSM {
       return;  // LCOV_EXCL_LINE
     }
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender SUBTRIE_ACK: session_id=%llu has_pending=%d has_pending_bv=%d\n",
+                  (unsigned long long)_session_id,
+                  (int)_sender.has_pending(), (int)_sender.has_pending_big_values());
+  #endif
+
     // Continue sending remaining nodes
     if (_sender.has_pending()) {
       _state = State::SENDING;
@@ -422,6 +451,11 @@ struct ReplicationSenderFSM {
 
     _total_nodes += node_count;
     _total_bytes += buffer.size();
+
+#ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender sending buffer: session_id=%llu nodes=%zu bytes=%zu\n",
+                  (unsigned long long)_session_id, node_count, buffer.size());
+#endif
 
     // Wrap in message envelope and send
     _msg_builder.begin(ReplicationMsgType::TRIE_DATA, _session_id);
@@ -458,6 +492,12 @@ struct ReplicationSenderFSM {
       total_aligned_size += padding(chunk_size, MAX_PAGE_SIZE);
     }
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender sending BIG_VALUE_START: session_id=%llu count=%zu total_aligned_size=%llu\n",
+                  (unsigned long long)_session_id, big_values.size(),
+                  (unsigned long long)total_aligned_size);
+  #endif
+
     // Send BIG_VALUE_START message
     _msg_builder.begin(ReplicationMsgType::BIG_VALUE_START, _session_id);
     BigValueStartHeader hdr;
@@ -477,6 +517,12 @@ struct ReplicationSenderFSM {
   // Handle BIG_VALUE_ACK - either continue sending or complete
   void _handle_big_value_ack() {
     const auto& big_values = _sender.pending_big_values();
+
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender BIG_VALUE_ACK: session_id=%llu state=%u bv_current_idx=%zu total_bv=%zu\n",
+                  (unsigned long long)_session_id, (unsigned)_state,
+                  _bv_current_idx, big_values.size());
+  #endif
 
     if (_state == State::AWAITING_BIG_VALUE_START_ACK) {
       // START was ACKed, begin sending data in chunks
@@ -511,6 +557,13 @@ struct ReplicationSenderFSM {
     _msg_builder.begin(ReplicationMsgType::BIG_VALUE_DATA, _session_id);
 
     size_t chunk_bytes = 0;
+
+  #ifndef NDEBUG
+    size_t start_idx = _bv_current_idx;
+    size_t start_offset_bv = _bv_current_offset;
+    size_t start_offset_header = _bv_header_bytes_sent;
+  #endif
+
     while (_bv_current_idx < big_values.size() &&
            chunk_bytes < BIG_VALUE_CHUNK_SIZE) {
       const auto& bv = big_values[_bv_current_idx];
@@ -572,6 +625,14 @@ struct ReplicationSenderFSM {
 
     _transport->send(_msg_builder.data(), _msg_builder.size());
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender sent BIG_VALUE_DATA: session_id=%llu idx=%zu->%zu offset=%zu->%zu chunk_bytes=%zu\n",
+                  (unsigned long long)_session_id,
+                  start_idx, _bv_current_idx,
+                  start_offset_bv, _bv_current_offset,
+                  chunk_bytes);
+  #endif
+
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
     }
@@ -584,6 +645,12 @@ struct ReplicationSenderFSM {
     if (_db_type == DbType::DB_MAIN) {
       if (_start_deletion_phase()) return;
     }
+
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender sending COMPLETE: session_id=%llu db_type=%d total_nodes=%zu total_bytes=%zu\n",
+                  (unsigned long long)_session_id, (int)_db_type,
+                  _total_nodes, _total_bytes);
+  #endif
 
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
@@ -600,6 +667,10 @@ struct ReplicationSenderFSM {
   bool _start_deletion_phase() {
     if constexpr (requires { _txn->deletion_root; }) {
       if (_txn->deletion_root) {
+  #ifndef NDEBUG
+        std::fprintf(stderr, "[dbg] Sender starting deletion phase: session_id=%llu\n",
+                      (unsigned long long)_session_id);
+  #endif
         _db_type = DbType::DB_DELETION;
         _sender.begin(_db_type);
         _state = State::SENDING;
@@ -611,6 +682,10 @@ struct ReplicationSenderFSM {
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Sender error: session_id=%llu error=%d reason=%s\n",
+                  (unsigned long long)_session_id, (int)error, reason ? reason : "");
+  #endif
     _db->release_hash_trie(_txn);
     _state = State::ERROR;
     _error = error;
@@ -993,6 +1068,10 @@ struct ReplicationReceiverFSM {
 
     // Claim a replication slot for crash-safe area tracking
     _replication_slot.claim();
+
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver begin: awaiting first message\n");
+  #endif
   }
 
   // Zero-Copy Receive Interface
@@ -1079,6 +1158,12 @@ struct ReplicationReceiverFSM {
     auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
     Slice payload = _receive_buffer.payload();
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver processing message: type=%u session_id=%llu payload_size=%zu state=%u\n",
+                  (unsigned)msg_type, (unsigned long long)_session_id,
+                  payload.size(), (unsigned)_state);
+  #endif
+
     switch (_state) {
       case State::RECEIVING:
       case State::AWAITING_BIG_VALUES:
@@ -1122,6 +1207,10 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::COMPLETE:
+  #ifndef NDEBUG
+        std::fprintf(stderr, "[dbg] Receiver COMPLETE: session_id=%llu merging all phases\n",
+                      (unsigned long long)_session_id);
+  #endif
         // Sender indicates sync is complete — merge all pending main and
         // current temp data in one short atomic transaction.
         if (!_merge_all_phases()) break;  // error already reported
@@ -1136,6 +1225,11 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::ERROR:
+  #ifndef NDEBUG
+        std::fprintf(stderr, "[dbg] Receiver ERROR: session_id=%llu error=%d\n",
+                      (unsigned long long)_session_id,
+                      payload.size() > 0 ? (int)payload.data()[0] : -1);
+  #endif
         _db->release_hash_trie(_txn);
         _state = State::ERROR;
         _error = payload.size() > 0
@@ -1173,6 +1267,13 @@ struct ReplicationReceiverFSM {
     _total_bytes += payload.size();
     _total_nodes += hdr->node_count;
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver TRIE_DATA: session_id=%llu db_type=%d node_count=%u path='%.*s' pending_children=%zu new_leaves=%zu\n",
+                  (unsigned long long)_session_id, (int)_current_db_type,
+                  (unsigned)hdr->node_count, (int)subtrie_path.size(), subtrie_path.data(),
+                  _pending_children, _new_leaves);
+  #endif
+
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
     }
@@ -1187,6 +1288,10 @@ struct ReplicationReceiverFSM {
       _transition_to_error(err.code, err.message);
       return;
     }
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver BIG_VALUE_START: session_id=%llu\n",
+                  (unsigned long long)_session_id);
+  #endif
     _state = State::AWAITING_BIG_VALUES;
     _send_big_value_ack();
   }
@@ -1202,6 +1307,11 @@ struct ReplicationReceiverFSM {
     _total_bytes += bytes_delta;
     _state = State::RECEIVING_BIG_VALUES;
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver BIG_VALUE_DATA: session_id=%llu bytes_delta=%zu all_received=%d\n",
+                  (unsigned long long)_session_id, bytes_delta, (int)all_received);
+  #endif
+
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
     }
@@ -1216,6 +1326,10 @@ struct ReplicationReceiverFSM {
   }
 
   void _send_big_value_ack() {
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver sending BIG_VALUE_ACK: session_id=%llu\n",
+                  (unsigned long long)_session_id);
+  #endif
     _msg_builder.begin(ReplicationMsgType::BIG_VALUE_ACK, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
   }
@@ -1417,6 +1531,11 @@ struct ReplicationReceiverFSM {
     // Hashes differ or local doesn't exist — leaf will be merged
     path.resize(path_len);
     ++_new_leaves;
+
+#ifndef NDEBUG
+    fprintf(stderr, "New leaf: %s (size=%u)\n", path.c_str(), leaf->vsize());
+#endif
+
     if (leaf->is_big()) {
       // Bounds-check the BigValueDataHeader within the leaf's value data
       if (leaf->vsize() < sizeof(BigValueDataHeader)) {
@@ -1546,6 +1665,11 @@ struct ReplicationReceiverFSM {
   // Defers any pending temp data from the previous phase (no merge, no
   // transaction).
   void _transition_db_type(DbType new_db_type) {
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver db_type transition: %d -> %d (session=%llu)\n",
+                  (int)_current_db_type, (int)new_db_type,
+                  (unsigned long long)_session_id);
+  #endif
     // Hold main trie data pending merge — no transaction is started,
     // data stays in memory until COMPLETE.
     _hold_pending_main();
@@ -1600,6 +1724,11 @@ struct ReplicationReceiverFSM {
     assert(_pending_main_root == nullptr &&
            "double hold: only one pending main root is supported");
 
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver hold_pending_main: session_id=%llu new_leaves=%zu\n",
+                  (unsigned long long)_session_id, _new_leaves);
+  #endif
+
     // Save the resolved root pointer and type before clearing _temp_root.
     // The pointer is into the temp buffer memory which we keep alive.
     _pending_main_root = _temp_root.template resolve<char>();
@@ -1621,9 +1750,14 @@ struct ReplicationReceiverFSM {
   // Otherwise performs a standard merge with big value storage.
   void _merge_phase(char* wire_root, uint8_t wire_root_type,
                     bool is_deletion_phase) {
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver merge_phase: session_id=%llu is_deletion=%d\n",
+                  (unsigned long long)_session_id, (int)is_deletion_phase);
+  #endif
     _temp_root.set_relative(wire_root);
     _temp_root.type((NodeTypes)wire_root_type);
     _wire_cursor.clear();
+    _cursor->clear();
 
     if (is_deletion_phase) {
       using Transaction = typename DB::Transaction;
@@ -1655,6 +1789,10 @@ struct ReplicationReceiverFSM {
     // round.  Callers are responsible for freeing temp buffers and
     // releasing the hash trie / replication slot.
     void _clear_merge_state() {
+  #ifndef NDEBUG
+      std::fprintf(stderr, "[dbg] Receiver clear_merge_state: session_id=%llu\n",
+                    (unsigned long long)_session_id);
+  #endif
       _temp_root = 0;
       _pending_main_buffers.clear();
       _big_value.clear();
@@ -1670,6 +1808,12 @@ struct ReplicationReceiverFSM {
     bool _merge_all_phases() {
       bool has_pending_main = (_pending_main_root != nullptr);
       bool has_current = (_temp_root != 0);
+
+
+#ifndef NDEBUG
+      fprintf(stderr, "Merging phases: pending_main=%d, current=%d\n",
+              has_pending_main, has_current);
+#endif
 
       if (!has_pending_main && !has_current) return true;
       
@@ -1734,6 +1878,12 @@ struct ReplicationReceiverFSM {
     for (const auto& [path, is_leaf] : _prune_paths) {
       _request_builder.add_path(path, is_leaf);
     }
+
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver sending SUBTRIE_ACK: session_id=%llu prune_paths=%zu\n",
+                  (unsigned long long)_session_id, _prune_paths.size());
+  #endif
+
     _prune_paths.clear();
 
     _msg_builder.begin(ReplicationMsgType::SUBTRIE_ACK, _session_id);
@@ -1745,6 +1895,10 @@ struct ReplicationReceiverFSM {
     // reset temp state, and tell sender to restart from root.
     // Always commits — the next round needs to see the merged state.
     void _send_fraction_complete() {
+  #ifndef NDEBUG
+      std::fprintf(stderr, "[dbg] Receiver sending FRACTION_COMPLETE: session_id=%llu (memory budget exceeded)\n",
+                    (unsigned long long)_session_id);
+  #endif
       // Merge all accumulated data (pending main + current) in one transaction.
       if (!_merge_all_phases()) return;  // error already reported
       _clear_merge_state();
@@ -1767,6 +1921,10 @@ struct ReplicationReceiverFSM {
     }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
+  #ifndef NDEBUG
+    std::fprintf(stderr, "[dbg] Receiver error: session_id=%llu error=%d reason=%s\n",
+                  (unsigned long long)_session_id, (int)error, reason ? reason : "");
+  #endif
     _db->release_hash_trie(_txn);
     _state = State::ERROR;
     _error = error;

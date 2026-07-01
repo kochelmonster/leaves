@@ -108,6 +108,13 @@ struct ReplicationDBCursor {
     _cursor->value(leaves::Slice(v.data(), v.size()));
   }
 
+  val key_bytes() const {
+    leaves::Slice k = _cursor->key();
+    return val(typed_memory_view(k.size(),
+                                 reinterpret_cast<const uint8_t*>(k.data())))
+        .call<val>("slice");
+  }
+
   val get_value_bytes() const {
     leaves::Slice v = _cursor->value();
     return val(typed_memory_view(v.size(),
@@ -129,14 +136,92 @@ struct ReplicationDBCursor {
   void next() { _cursor->next(); }
   void prev() { _cursor->prev(); }
   void remove() { _cursor->remove(); }
-  void commit(bool sync) { _cursor->commit(sync); }
-  void rollback() { _cursor->rollback(); }
+  bool commit(bool sync) { return _cursor->commit(sync); }
+  bool rollback() { return _cursor->rollback(); }
   bool start_transaction(bool non_blocking) {
     return _cursor->start_transaction(non_blocking);
   }
+  void update() { _cursor->update(); }
 
   // Return the per-cursor JS context object (aspect support)
   val aspect_context() const { return _cursor->_aspect_context.js_context; }
+
+  bool is_transaction_active() const {
+    return _cursor->is_transaction_active();
+  }
+};
+// ── CursorWrapper ──────────────────────────────────────────────────
+// Wraps the regular Cursor (TCursor<BrowserStoreWrapper>) for use from JS.
+// Mirrors the ReplicationDBCursor API for compatibility (both use
+// the modern member-function style).
+
+struct CursorWrapper {
+  Cursor _cursor;
+  BrowserStoreWrapper::storage_ptr _storage;
+
+  CursorWrapper(BrowserStoreWrapper::storage_ptr storage, DB* db)
+      : _storage(storage), _cursor(storage, db) {}
+
+  // Buffer for find key persistence (see cursor_find)
+  std::string _find_buffer;
+
+  bool is_valid() const { return _cursor.is_valid(); }
+
+  std::string key() const {
+    leaves::Slice k = _cursor.key();
+    return std::string(k.data(), k.size());
+  }
+
+  std::string get_value() const {
+    leaves::Slice v = _cursor.value();
+    return std::string(v.data(), v.size());
+  }
+
+  void set_value(const std::string& v) {
+    _cursor.value(leaves::Slice(v.data(), v.size()));
+  }
+
+  val key_bytes() const {
+    leaves::Slice k = _cursor.key();
+    return val(typed_memory_view(k.size(),
+                                 reinterpret_cast<const uint8_t*>(k.data())))
+        .call<val>("slice");
+  }
+
+  val get_value_bytes() const {
+    leaves::Slice v = _cursor.value();
+    return val(typed_memory_view(v.size(),
+                                 reinterpret_cast<const uint8_t*>(v.data())))
+        .call<val>("slice");
+  }
+
+  void set_value_bytes(const std::string& v) {
+    _cursor.value(leaves::Slice(v.data(), v.size()));
+  }
+
+  void find(const std::string& key) {
+    _find_buffer = key;
+    _cursor.find(leaves::Slice(_find_buffer.data(), _find_buffer.size()));
+  }
+
+  void first() { _cursor.first(); }
+  void last() { _cursor.last(); }
+  void next() { _cursor.next(); }
+  void prev() { _cursor.prev(); }
+  void remove() { _cursor.remove(); }
+  bool commit(bool sync) { return _cursor.commit(sync); }
+  bool rollback() { return _cursor.rollback(); }
+  bool start_transaction(bool non_blocking) {
+    return _cursor.start_transaction(non_blocking, false);  // use_wal always false
+  }
+  void update() { _cursor.update(); }
+
+  // Return the per-cursor JS context object (aspect support)
+  val aspect_context() const { return _cursor.aspect_context().js_context; }
+
+  bool is_transaction_active() const {
+    return _cursor.is_transaction_active();
+  }
 };
 
 // ── Factory functions ────────────────────────────────────────────
@@ -168,7 +253,7 @@ static JSDB store_open(JSStore& s, const std::string& name) {
 // Open a replication DB within this store.
 static ReplicationDB* store_open_replication(JSStore& s,
                                              const std::string& name) {
-  //return new ReplicationDB(s._storage, name.c_str());
+  // return new ReplicationDB(s._storage, name.c_str());
   try {
     return new ReplicationDB(s._storage, name.c_str());
   } catch (const std::exception& e) {
@@ -186,9 +271,14 @@ static void jsdb_set_aspect_callbacks(JSDB& jsdb, val callbacks) {
   jsdb.db->aspect().set_callbacks(callbacks);
 }
 
+// Set JS callbacks on a ReplicationDB.
+static void replication_db_set_aspect_callbacks(ReplicationDB& replDb, val callbacks) {
+  replDb.aspect().set_callbacks(callbacks);
+}
+
 // ── Cursor functions for DB ──────────────────────────────────────
-static Cursor jsdb_create_cursor(JSDB& jsdb) {
-  return Cursor(jsdb.storage, jsdb.db);
+static CursorWrapper jsdb_create_cursor(JSDB& jsdb) {
+  return CursorWrapper(jsdb.storage, jsdb.db);
 }
 
 static ReplicationDBCursor replication_db_create_cursor(ReplicationDB& s) {
@@ -211,75 +301,6 @@ static val store_export(JSStore& s) {
 static void store_import(JSStore& s, const std::string& data) {
   std::vector<char> buf(data.begin(), data.end());
   s._storage->_storage->import_from_buffer(buf);
-}
-
-// Cursor key/value — string variants
-static std::string cursor_key(Cursor& c) {
-  leaves::Slice k = c.key();
-  return std::string(k.data(), k.size());
-}
-
-static std::string cursor_get_value(Cursor& c) {
-  leaves::Slice v = c.value();
-  return std::string(v.data(), v.size());
-}
-
-static void cursor_set_value(Cursor& c, const std::string& v) {
-  c.value(leaves::Slice(v.data(), v.size()));
-}
-
-// Cursor key/value — binary (Uint8Array) variants
-static val cursor_key_bytes(Cursor& c) {
-  leaves::Slice k = c.key();
-  return val(typed_memory_view(k.size(),
-                               reinterpret_cast<const uint8_t*>(k.data())))
-      .call<val>("slice");
-}
-
-static val cursor_get_value_bytes(Cursor& c) {
-  leaves::Slice v = c.value();
-  return val(typed_memory_view(v.size(),
-                               reinterpret_cast<const uint8_t*>(v.data())))
-      .call<val>("slice");
-}
-
-static void cursor_set_value_bytes(Cursor& c, const std::string& v) {
-  // Embind converts Uint8Array to std::string automatically
-  c.value(leaves::Slice(v.data(), v.size()));
-}
-
-// Cursor find — the key must persist because cursor.rest_key (a Slice) keeps
-// a non-owning reference used by subsequent reserve()/insert operations.
-// WASM is single-threaded so a static buffer is safe.
-static std::string g_find_buffer;
-static void cursor_find(Cursor& c, const std::string& key) {
-  g_find_buffer = key;
-  c.find(leaves::Slice(g_find_buffer.data(), g_find_buffer.size()));
-}
-
-// Cursor navigation — wrap base-class methods (CRTP prevents direct member
-// ptrs)
-static bool cursor_is_valid(const Cursor& c) { return c.is_valid(); }
-static void cursor_first(Cursor& c) { c.first(); }
-static void cursor_last(Cursor& c) { c.last(); }
-static void cursor_next(Cursor& c) { c.next(); }
-static void cursor_prev(Cursor& c) { c.prev(); }
-static void cursor_remove(Cursor& c) { c.remove(); }
-static bool cursor_commit(Cursor& c, bool sync) {
-  c.commit(sync);
-  return true;
-}
-static bool cursor_rollback(Cursor& c) {
-  c.rollback();
-  return true;
-}
-static bool cursor_start_transaction(Cursor& c, bool non_blocking) {
-  return c.start_transaction(non_blocking, false);  // use_wal always false
-}
-
-// Return the per-cursor JS context object (aspect support)
-static val cursor_aspect_context(Cursor& c) {
-  return c.aspect_context().js_context;
 }
 
 // JSTransport: a C++ implementation of ReplicationTransport that forwards calls
@@ -444,11 +465,15 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("key", &ReplicationDBCursor::key)
       .function("getValue", &ReplicationDBCursor::get_value, async())
       .function("setValue", &ReplicationDBCursor::set_value, async())
+      .function("keyBytes", &ReplicationDBCursor::key_bytes)
       .function("getValueBytes", &ReplicationDBCursor::get_value_bytes, async())
       .function("setValueBytes", &ReplicationDBCursor::set_value_bytes, async())
       .function("remove", &ReplicationDBCursor::remove, async())
       .function("commit", &ReplicationDBCursor::commit, async())
       .function("rollback", &ReplicationDBCursor::rollback, async())
+      .function("isTransactionActive",
+                &ReplicationDBCursor::is_transaction_active)
+      .function("update", &ReplicationDBCursor::update)
       .function("aspectContext", &ReplicationDBCursor::aspect_context);
 
   // ── DB ─────────────────────────────────────────────────────────
@@ -462,6 +487,7 @@ EMSCRIPTEN_BINDINGS(leaves) {
   // ── ReplicationDB (returned by openReplication) ─────────────────
 
   class_<ReplicationDB>("ReplicationDB")
+      .function("setAspectCallbacks", &replication_db_set_aspect_callbacks)
       .function("createCursor", &replication_db_create_cursor,
                 allow_raw_pointers());
 
@@ -469,39 +495,41 @@ EMSCRIPTEN_BINDINGS(leaves) {
 
   class_<ReplicationSenderJS>("ReplicationSender")
       .constructor<ReplicationDB&>()
-      .function("begin", &ReplicationSenderJS::begin)
-      .function("onMessageReceived", &ReplicationSenderJS::on_message_received)
+      .function("begin", &ReplicationSenderJS::begin, async())
+      .function("onMessageReceived", &ReplicationSenderJS::on_message_received,
+                async())
       .function("state", &ReplicationSenderJS::state);
 
   class_<ReplicationReceiverJS>("ReplicationReceiver")
       .constructor<ReplicationDB&>()
-      .function("begin", &ReplicationReceiverJS::begin)
+      .function("begin", &ReplicationReceiverJS::begin, async())
       .function("onMessageReceived",
-                &ReplicationReceiverJS::on_message_received)
+                &ReplicationReceiverJS::on_message_received, async())
       .function("state", &ReplicationReceiverJS::state);
 
   // ── Cursor ─────────────────────────────────────────────────────
   // Full API including aspect context support.
 
-  class_<Cursor>("LeavesCursor")
-      .smart_ptr<cursor_ptr>("LeavesCursorPtr")
-      .function("startTransaction", &cursor_start_transaction, async())
-      .function("find", &cursor_find, async())
-      .function("first", &cursor_first, async())
-      .function("last", &cursor_last, async())
-      .function("next", &cursor_next, async())
-      .function("prev", &cursor_prev, async())
-      .function("isValid", &cursor_is_valid)
-      .function("key", &cursor_key)
-      .function("getValue", &cursor_get_value, async())
-      .function("setValue", &cursor_set_value, async())
-      .function("keyBytes", &cursor_key_bytes)
-      .function("getValueBytes", &cursor_get_value_bytes, async())
-      .function("setValueBytes", &cursor_set_value_bytes, async())
-      .function("remove", &cursor_remove, async())
-      .function("commit", &cursor_commit, async())
-      .function("rollback", &cursor_rollback, async())
-      .function("aspectContext", &cursor_aspect_context);
+  class_<CursorWrapper>("LeavesCursor")
+      .function("startTransaction", &CursorWrapper::start_transaction, async())
+      .function("find", &CursorWrapper::find, async())
+      .function("first", &CursorWrapper::first, async())
+      .function("last", &CursorWrapper::last, async())
+      .function("next", &CursorWrapper::next, async())
+      .function("prev", &CursorWrapper::prev, async())
+      .function("isValid", &CursorWrapper::is_valid)
+      .function("key", &CursorWrapper::key)
+      .function("getValue", &CursorWrapper::get_value, async())
+      .function("setValue", &CursorWrapper::set_value, async())
+      .function("keyBytes", &CursorWrapper::key_bytes)
+      .function("getValueBytes", &CursorWrapper::get_value_bytes, async())
+      .function("setValueBytes", &CursorWrapper::set_value_bytes, async())
+      .function("remove", &CursorWrapper::remove, async())
+      .function("commit", &CursorWrapper::commit, async())
+      .function("rollback", &CursorWrapper::rollback, async())
+      .function("isTransactionActive", &CursorWrapper::is_transaction_active)
+      .function("update", &CursorWrapper::update)
+      .function("aspectContext", &CursorWrapper::aspect_context);
 }
 
 #endif  // __EMSCRIPTEN__

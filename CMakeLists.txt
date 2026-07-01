@@ -38,7 +38,6 @@ if(EMSCRIPTEN)
         include/leaves/intern/replication/_transfer.hpp
         include/leaves/intern/util/_threadpool.hpp
         include/leaves/intern/util/_transfer_trie.hpp
-        include/leaves/browserstore.hpp
         include/leaves/replication.hpp
         include/leaves/db.hpp
         include/leaves/cursor.hpp
@@ -98,6 +97,8 @@ if(EMSCRIPTEN)
     target_link_options(leaves PRIVATE
         -lembind
         --no-entry
+        -sJSPI
+        "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
         -sMODULARIZE=1
         -sEXPORT_ES6=1
         "-sEXPORTED_RUNTIME_METHODS=['FS','callMain','setValue','getValue']"
@@ -411,6 +412,7 @@ target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support pthread)
 
+
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
 target_link_libraries(test_hash_updater PUBLIC core leaves_test_support blake3)
 
@@ -476,6 +478,10 @@ add_executable(profile tests/profile.cpp)
 # Dumper tool
 add_executable(dump-leaves tools/dump-leaves.cpp)
 target_link_libraries(dump-leaves PUBLIC core)
+
+# Merger test tool
+add_executable(merge-dbs tools/merge-dbs.cpp)
+target_link_libraries(merge-dbs PUBLIC core)
 
 # YCSB debug tool
 add_executable(ycsb-debug tests/ycsb-bug/ycsb-debug.cpp)

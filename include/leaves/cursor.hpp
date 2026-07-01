@@ -74,9 +74,9 @@ class TCursor {
     return _cursor->prepare_commit(sync);
   }
 
-  void commit(bool sync = false) { _cursor->commit(sync); }
+  bool commit(bool sync = false) { return _cursor->commit(sync); }
 
-  void rollback() { _cursor->rollback(); }
+  bool rollback() { return _cursor->rollback(); }
 
   bool is_transaction_active() const {
     return _cursor && _cursor->is_transaction_active();

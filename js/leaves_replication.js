@@ -14,12 +14,12 @@ export class LeavesReplicationSender {
         this._impl = new Module.ReplicationSender(replicationDB);
     }
 
-    begin(transport, events) {
-        this._impl.begin(transport, events);
+    async begin(transport, events) {
+        await this._impl.begin(transport, events);
     }
 
-    onMessageReceived(data) {
-        this._impl.onMessageReceived(data);
+    async onMessageReceived(data) {
+        await this._impl.onMessageReceived(data);
     }
 
     state() {
@@ -32,12 +32,12 @@ export class LeavesReplicationReceiver {
         this._impl = new Module.ReplicationReceiver(replicationDB);
     }
 
-    begin(transport, events) {
-        this._impl.begin(transport, events);
+    async begin(transport, events) {
+        await this._impl.begin(transport, events);
     }
 
-    onMessageReceived(data) {
-        this._impl.onMessageReceived(data);
+    async onMessageReceived(data) {
+        await this._impl.onMessageReceived(data);
     }
 
     state() {

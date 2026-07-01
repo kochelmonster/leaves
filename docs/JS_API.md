@@ -145,6 +145,11 @@ class LeavesCursor {
     // Delete the entry at current cursor position
     async remove(): Promise<void>;
 
+    // Check if this cursor currently holds an active write transaction
+    // Returns true between a successful startTransaction() and the
+    // subsequent commit() or rollback().
+    isTransactionActive(): boolean;
+
     // Commit or rollback pending changes
     async commit(sync?: boolean): Promise<void>;
     async rollback(): Promise<void>;

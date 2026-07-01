@@ -1024,7 +1024,7 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       if (node->array_start() != node->calc_array_start()) return false;
 
       // Verify total node size fits within used page space
-      if (node->size() != hdr->used) return false;
+      if (node->size() > hdr->used) return false;
 
       // Recurse into children
       offset_e* arr = node->array();

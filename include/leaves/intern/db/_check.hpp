@@ -1,6 +1,7 @@
 #ifndef _LEAVES__CHECK_HPP
 #define _LEAVES__CHECK_HPP
 
+#include <cstdio>
 #include <set>
 #include <sstream>
 #include <string>
@@ -64,10 +65,33 @@ template <typename T>
 struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
 };
 
-template <typename Container, bool with_headers = true>
+// Helper to detect if Traits has a hash array (vs scalar hash)
+// Hash trie nodes use hash_t = uint8_t[32] (BLAKE3)
+// Base DB nodes use hash_t = uint8_t (1 byte placeholder)
+template <typename T, typename = void>
+struct is_hash_trie_traits : std::false_type {};
+
+template <typename T>
+struct is_hash_trie_traits<T, std::void_t<typename T::hash_t>>
+    : std::integral_constant<bool, (sizeof(typename T::hash_t) > 1)> {};
+
+// Output hash in hex (used when dump_hash_trie is true)
+template <typename Traits>
+void dump_hash(std::ostream& out, const typename Traits::hash_t& hash) {
+  out << "hash: \"";
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&hash);
+  char hex[3];
+  for (size_t i = 0; i < sizeof(typename Traits::hash_t); i++) {
+    snprintf(hex, sizeof(hex), "%02x", bytes[i]);
+    out << hex;
+  }
+  out << "\"" << std::endl;
+}
+
+template <typename Container, bool with_headers = true,
+          typename Traits = typename Container::db_type::Traits>
 struct _Dumper {
   using DB = typename Container::db_type;
-  using Traits = typename DB::Traits;
   typedef _TrieNode<Traits> TrieNode;
   typedef _LeafNode<Traits> LeafNode;
   using offset_e = typename Traits::offset_e;
@@ -160,6 +184,10 @@ struct _Dumper {
       page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
       dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
     }
+    // Output hash for hash trie nodes
+    if constexpr (is_hash_trie_traits<Traits>::value) {
+      dump_hash<Traits>(out, leaf->hash);
+    }
     out << "keysize: " << (uint16_t)leaf->key_size << std::endl;
     out << "key: \"";
     for (int i = 0; i < leaf->key_size; i++) {
@@ -214,6 +242,10 @@ struct _Dumper {
       header_offset._offset = page_link->_offset - sizeof(PageHeader);
       page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
       dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
+    }
+    // Output hash for hash trie nodes (BLAKE3 of compressed prefix + child hashes)
+    if constexpr (is_hash_trie_traits<Traits>::value) {
+      dump_hash<Traits>(out, trie->hash);
     }
     out << "size: " << size << std::endl;
     out << "compressed: " << std::endl;
