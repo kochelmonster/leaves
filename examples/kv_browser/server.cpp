@@ -6,12 +6,12 @@
  * global mutex serializes replication access to the DB.
  *
  * Sync protocol per client request:
- *   1. Client sends text "SYNC"
- *   2. Server→Client: ReplicationSender FSM (binary LVRP)
- *   3. Server sends text "PULL"
- *   4. Client→Server: ReplicationReceiver FSM (binary LVRP)
- *   5. Server sends text "DONE"
- *   6. Notify other connected clients via text "SYNC"
+ *   "PUSH": Client has local changes, sends them to server (ReplicationReceiver).
+ *           Server broadcasts "SYNC" notification to other clients.
+ *   "PULL": Client wants server's data, server sends to client (ReplicationSender).
+ *   Server always replies with "DONE" when the binary transfer completes.
+ *   Server broadcasts "SYNC" text to all clients after a successful PUSH,
+ *           telling them to pull the latest state.
  *
  * Usage: ./kv_demo_server <port> <db_path>
  */
@@ -224,82 +224,20 @@ static void handle_client(
       auto msg = beast::buffers_to_string(buf.cdata());
       buf.consume(buf.size());
 
-      if (msg != "SYNC") {
-        std::cerr << "[server] client " << client_id
-                  << " ignoring text: " << msg << "\n";
-        continue;
-      }
+      if (msg == "PUSH") {
+        // Client has local changes, pushes them to us
+        std::cerr << "[server] client " << client_id << " push start\n";
+        std::lock_guard<std::mutex> db_lock(g_db_mutex);
+        auto db = storage->open<_ReplicationDB>("main");
 
-      std::cerr << "[server] client " << client_id << " sync start\n";
-
-      // Lock DB for exclusive replication access
-      std::lock_guard<std::mutex> db_lock(g_db_mutex);
-
-      auto db = storage->open<_ReplicationDB>("main");
-
-      // Phase 1: Server → Client (we send)
-      {
-        DemoEvents events;
-        BeastWsTransport transport(wss, session->write_mutex);
-        ReplicationSender<ServerStorage> sender(db);
-        sender.begin(&transport, &events);
-
-        std::cerr << "[server] client " << client_id
-                  << " Phase1 bytes_transferred="
-                  << sender.bytes_transferred()
-                  << " nodes_transferred=" << sender.nodes_transferred()
-                  << " state=" << static_cast<int>(sender.state()) << "\n";
-
-        while (sender.state() == ReplicationState::ACTIVE) {
-          wss.read(buf);
-          auto d = buf.cdata();
-          sender.on_message_received(
-              static_cast<const uint8_t*>(d.data()), d.size());
-          buf.consume(buf.size());
-        }
-
-        if (events.errored) {
-          std::cerr << "[server] client " << client_id
-                    << " send phase failed\n";
-          continue;
-        }
-        std::cerr << "[server] client " << client_id
-                  << " Phase1 done: nodes=" << sender.nodes_transferred()
-                  << " bytes=" << sender.bytes_transferred() << "\n";
-      }
-
-      // Send "PULL" to signal client should now send
-      {
-        std::lock_guard<std::mutex> lock(session->write_mutex);
-        wss.text(true);
-        wss.write(net::buffer(std::string("PULL")));
-      }
-
-      // Phase 2: Client → Server (we receive)
-      {
         ServerCommitScope commit_scope(client_id);
         DemoEvents events;
         BeastWsTransport transport(wss, session->write_mutex);
         ReplicationReceiver<ServerStorage> receiver(db);
         receiver.begin(&transport, &events);
 
-        std::cerr << "[server] client " << client_id
-                  << " Phase2 before receive: bytes="
-                  << receiver.bytes_transferred()
-                  << " nodes=" << receiver.nodes_transferred() << "\n";
-
         while (receiver.state() == ReplicationState::ACTIVE) {
           wss.read(buf);
-
-          if (wss.got_text()) {
-            // Unexpected text during receive phase — skip
-            std::cerr << "[server] client " << client_id
-                      << " unexpected text during Phase2: "
-                      << beast::buffers_to_string(buf.cdata()) << "\n";
-            buf.consume(buf.size());
-            continue;
-          }
-
           auto d = buf.cdata();
           auto& rb = receiver.receive_buffer();
           auto* src = static_cast<const uint8_t*>(d.data());
@@ -314,24 +252,67 @@ static void handle_client(
             off += chunk;
             receiver.on_data_received();
           }
-
           buf.consume(buf.size());
         }
 
+        if (!events.errored) {
+          std::cerr << "[server] client " << client_id
+                    << " push done: nodes=" << receiver.nodes_transferred()
+                    << " bytes=" << receiver.bytes_transferred() << "\n";
+          // Broadcast SYNC notification to other clients
+          g_sync_notifier.schedule(db, client_id);
+        } else {
+          std::cerr << "[server] client " << client_id << " push failed\n";
+        }
+
+        // Tell client we're done
+        {
+          std::lock_guard<std::mutex> lock(session->write_mutex);
+          wss.text(true);
+          wss.write(net::buffer(std::string("DONE")));
+        }
+
+      } else if (msg == "PULL") {
+        // Client wants our data, we send to them
+        std::cerr << "[server] client " << client_id << " pull start\n";
+        std::lock_guard<std::mutex> db_lock(g_db_mutex);
+        auto db = storage->open<_ReplicationDB>("main");
+
+        DemoEvents events;
+        BeastWsTransport transport(wss, session->write_mutex);
+        ReplicationSender<ServerStorage> sender(db);
+        sender.begin(&transport, &events);
+
+        while (sender.state() == ReplicationState::ACTIVE) {
+          wss.read(buf);
+          auto d = buf.cdata();
+          sender.on_message_received(
+              static_cast<const uint8_t*>(d.data()), d.size());
+          buf.consume(buf.size());
+        }
+
+        if (!events.errored) {
+          std::cerr << "[server] client " << client_id
+                    << " pull done: nodes=" << sender.nodes_transferred()
+                    << " bytes=" << sender.bytes_transferred() << "\n";
+        } else {
+          std::cerr << "[server] client " << client_id << " pull failed\n";
+        }
+
+        // Tell client we're done
+        {
+          std::lock_guard<std::mutex> lock(session->write_mutex);
+          wss.text(true);
+          wss.write(net::buffer(std::string("DONE")));
+        }
+
+      } else {
         std::cerr << "[server] client " << client_id
-                  << " Phase2 done: nodes=" << receiver.nodes_transferred()
-                  << " bytes=" << receiver.bytes_transferred()
-                  << " completed=" << events.completed << "\n";
+                  << " ignoring text: " << msg << "\n";
+        continue;
       }
 
-      // Send "DONE" to signal sync complete
-      {
-        std::lock_guard<std::mutex> lock(session->write_mutex);
-        wss.text(true);
-        wss.write(net::buffer(std::string("DONE")));
-      }
-
-      std::cerr << "[server] client " << client_id << " sync done\n";
+      std::cerr << "[server] client " << client_id << " done\n";
     }
   } catch (beast::system_error const& se) {
     if (se.code() != ws::error::closed) {

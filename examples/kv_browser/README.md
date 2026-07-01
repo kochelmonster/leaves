@@ -47,6 +47,12 @@ cmake -B build -G Ninja
 cmake --build build -j --target kv_demo_server
 ```
 
+**Build in Debug mode**:
+
+```bash
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+```
+
 ## Run
 
 ```bash
