@@ -21,6 +21,16 @@
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 
+// ASYNCIFY does not support embind's async() — synchronous (blocking) calls
+// are used instead. JSPI uses async() to return Promises. The JS API is
+// identical in both cases (callers always use await, which is a no-op on
+// non-Promise values).
+#ifdef LEAVES_ASYNCIFY
+#define LEAVES_ASYNC       /* nothing — ASYNCIFY uses synchronous calls */
+#else
+#define LEAVES_ASYNC , async()   /* JSPI: async() with leading comma */
+#endif
+
 #include <leaves/intern/storage/_browserstore.hpp>
 #include <memory>
 #include <string>
@@ -442,35 +452,35 @@ EMSCRIPTEN_BINDINGS(leaves) {
   //   var c     = db.createCursor();
 
   class_<JSStore>("LeavesStore")
-      .class_function("create", &make_store, allow_raw_pointers(), async())
+      .class_function("create", &make_store, allow_raw_pointers() LEAVES_ASYNC)
       .class_function("pendingWrites", &store_pending_writes)
-      .function("open", &store_open, async())
+      .function("open", &store_open LEAVES_ASYNC)
       .function("openReplication", &store_open_replication,
-                allow_raw_pointers(), async())
-      .function("deleteStorage", &store_delete_storage, async())
-      .function("close", &store_close, async())
+                allow_raw_pointers() LEAVES_ASYNC)
+      .function("deleteStorage", &store_delete_storage LEAVES_ASYNC)
+      .function("close", &store_close LEAVES_ASYNC)
       .function("listDbs", &store_list_dbs)
       .function("exportToBuffer", &store_export)
-      .function("importFromBuffer", &store_import, async());
+      .function("importFromBuffer", &store_import LEAVES_ASYNC);
 
   class_<ReplicationDBCursor>("LeavesReplicationDBCursor")
-      .function("startTransaction", &ReplicationDBCursor::start_transaction,
-                async())
-      .function("find", &ReplicationDBCursor::find, async())
-      .function("first", &ReplicationDBCursor::first, async())
-      .function("last", &ReplicationDBCursor::last, async())
-      .function("next", &ReplicationDBCursor::next, async())
-      .function("prev", &ReplicationDBCursor::prev, async())
+      .function("startTransaction", &ReplicationDBCursor::start_transaction
+                LEAVES_ASYNC)
+      .function("find", &ReplicationDBCursor::find LEAVES_ASYNC)
+      .function("first", &ReplicationDBCursor::first LEAVES_ASYNC)
+      .function("last", &ReplicationDBCursor::last LEAVES_ASYNC)
+      .function("next", &ReplicationDBCursor::next LEAVES_ASYNC)
+      .function("prev", &ReplicationDBCursor::prev LEAVES_ASYNC)
       .function("isValid", &ReplicationDBCursor::is_valid)
       .function("key", &ReplicationDBCursor::key)
-      .function("getValue", &ReplicationDBCursor::get_value, async())
-      .function("setValue", &ReplicationDBCursor::set_value, async())
+      .function("getValue", &ReplicationDBCursor::get_value LEAVES_ASYNC)
+      .function("setValue", &ReplicationDBCursor::set_value LEAVES_ASYNC)
       .function("keyBytes", &ReplicationDBCursor::key_bytes)
-      .function("getValueBytes", &ReplicationDBCursor::get_value_bytes, async())
-      .function("setValueBytes", &ReplicationDBCursor::set_value_bytes, async())
-      .function("remove", &ReplicationDBCursor::remove, async())
-      .function("commit", &ReplicationDBCursor::commit, async())
-      .function("rollback", &ReplicationDBCursor::rollback, async())
+      .function("getValueBytes", &ReplicationDBCursor::get_value_bytes LEAVES_ASYNC)
+      .function("setValueBytes", &ReplicationDBCursor::set_value_bytes LEAVES_ASYNC)
+      .function("remove", &ReplicationDBCursor::remove LEAVES_ASYNC)
+      .function("commit", &ReplicationDBCursor::commit LEAVES_ASYNC)
+      .function("rollback", &ReplicationDBCursor::rollback LEAVES_ASYNC)
       .function("isTransactionActive",
                 &ReplicationDBCursor::is_transaction_active)
       .function("update", &ReplicationDBCursor::update)
@@ -495,38 +505,38 @@ EMSCRIPTEN_BINDINGS(leaves) {
 
   class_<ReplicationSenderJS>("ReplicationSender")
       .constructor<ReplicationDB&>()
-      .function("begin", &ReplicationSenderJS::begin, async())
-      .function("onMessageReceived", &ReplicationSenderJS::on_message_received,
-                async())
+      .function("begin", &ReplicationSenderJS::begin LEAVES_ASYNC)
+      .function("onMessageReceived", &ReplicationSenderJS::on_message_received
+                LEAVES_ASYNC)
       .function("state", &ReplicationSenderJS::state);
 
   class_<ReplicationReceiverJS>("ReplicationReceiver")
       .constructor<ReplicationDB&>()
-      .function("begin", &ReplicationReceiverJS::begin, async())
+      .function("begin", &ReplicationReceiverJS::begin LEAVES_ASYNC)
       .function("onMessageReceived",
-                &ReplicationReceiverJS::on_message_received, async())
+                &ReplicationReceiverJS::on_message_received LEAVES_ASYNC)
       .function("state", &ReplicationReceiverJS::state);
 
   // ── Cursor ─────────────────────────────────────────────────────
   // Full API including aspect context support.
 
   class_<CursorWrapper>("LeavesCursor")
-      .function("startTransaction", &CursorWrapper::start_transaction, async())
-      .function("find", &CursorWrapper::find, async())
-      .function("first", &CursorWrapper::first, async())
-      .function("last", &CursorWrapper::last, async())
-      .function("next", &CursorWrapper::next, async())
-      .function("prev", &CursorWrapper::prev, async())
+      .function("startTransaction", &CursorWrapper::start_transaction LEAVES_ASYNC)
+      .function("find", &CursorWrapper::find LEAVES_ASYNC)
+      .function("first", &CursorWrapper::first LEAVES_ASYNC)
+      .function("last", &CursorWrapper::last LEAVES_ASYNC)
+      .function("next", &CursorWrapper::next LEAVES_ASYNC)
+      .function("prev", &CursorWrapper::prev LEAVES_ASYNC)
       .function("isValid", &CursorWrapper::is_valid)
       .function("key", &CursorWrapper::key)
-      .function("getValue", &CursorWrapper::get_value, async())
-      .function("setValue", &CursorWrapper::set_value, async())
+      .function("getValue", &CursorWrapper::get_value LEAVES_ASYNC)
+      .function("setValue", &CursorWrapper::set_value LEAVES_ASYNC)
       .function("keyBytes", &CursorWrapper::key_bytes)
-      .function("getValueBytes", &CursorWrapper::get_value_bytes, async())
-      .function("setValueBytes", &CursorWrapper::set_value_bytes, async())
-      .function("remove", &CursorWrapper::remove, async())
-      .function("commit", &CursorWrapper::commit, async())
-      .function("rollback", &CursorWrapper::rollback, async())
+      .function("getValueBytes", &CursorWrapper::get_value_bytes LEAVES_ASYNC)
+      .function("setValueBytes", &CursorWrapper::set_value_bytes LEAVES_ASYNC)
+      .function("remove", &CursorWrapper::remove LEAVES_ASYNC)
+      .function("commit", &CursorWrapper::commit LEAVES_ASYNC)
+      .function("rollback", &CursorWrapper::rollback LEAVES_ASYNC)
       .function("isTransactionActive", &CursorWrapper::is_transaction_active)
       .function("update", &CursorWrapper::update)
       .function("aspectContext", &CursorWrapper::aspect_context);

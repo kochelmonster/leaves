@@ -10,6 +10,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Emscripten (WebAssembly) ───────────────────────────────────
 option(LEAVES_BROWSER_DEBUG "Build browser WASM targets in debug mode (with diagnostic output)" OFF)
 
+# ── Async backend: JSPI (default) or ASYNCIFY ─────────────────
+set(LEAVES_ASYNC_BACKEND "JSPI" CACHE STRING "Async WASM backend: JSPI or ASYNCIFY")
+set_property(CACHE LEAVES_ASYNC_BACKEND PROPERTY STRINGS "JSPI" "ASYNCIFY")
+
+if(LEAVES_ASYNC_BACKEND STREQUAL "JSPI")
+    set(LEAVES_ASYNC_FLAG "-sJSPI")
+    set(LEAVES_ASYNC_IMPORTS "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']")
+    set(LEAVES_WASM_EXCEPTIONS "-fwasm-exceptions")
+else()
+    set(LEAVES_ASYNC_FLAG "-sASYNCIFY")
+    set(LEAVES_ASYNC_IMPORTS "-sASYNCIFY_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']")
+    set(LEAVES_WASM_EXCEPTIONS "-fexceptions")
+endif()
+
 if(EMSCRIPTEN)
     message(STATUS "Building for WebAssembly — only _BrowserStore")
 
@@ -43,6 +57,9 @@ if(EMSCRIPTEN)
         include/leaves/cursor.hpp
     )
     target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
+    if(LEAVES_ASYNC_BACKEND STREQUAL "ASYNCIFY")
+        target_compile_definitions(wasm_core INTERFACE LEAVES_ASYNCIFY)
+    endif()
     target_include_directories(wasm_core INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c
@@ -51,12 +68,12 @@ if(EMSCRIPTEN)
     if(LEAVES_BROWSER_DEBUG)
         message(STATUS "Browser WASM: debug mode (diagnostic output enabled)")
         target_compile_definitions(wasm_core INTERFACE DEBUG)
-        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -g -O0)
+        target_compile_options(wasm_core INTERFACE ${LEAVES_WASM_EXCEPTIONS} -g -O0)
         target_link_options(wasm_core INTERFACE
-            -fwasm-exceptions
+            ${LEAVES_WASM_EXCEPTIONS}
             --profiling-funcs
-            -sJSPI
-            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            ${LEAVES_ASYNC_FLAG}
+            ${LEAVES_ASYNC_IMPORTS}
             -sALLOW_MEMORY_GROWTH=1
             "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
             -sENVIRONMENT=web,node
@@ -64,11 +81,11 @@ if(EMSCRIPTEN)
     else()
         message(STATUS "Browser WASM: release mode (diagnostic output suppressed)")
         target_compile_definitions(wasm_core INTERFACE NDEBUG)
-        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -O3)
+        target_compile_options(wasm_core INTERFACE ${LEAVES_WASM_EXCEPTIONS} -O3)
         target_link_options(wasm_core INTERFACE
-            -fwasm-exceptions
-            -sJSPI
-            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            ${LEAVES_WASM_EXCEPTIONS}
+            ${LEAVES_ASYNC_FLAG}
+            ${LEAVES_ASYNC_IMPORTS}
             -sALLOW_MEMORY_GROWTH=1
             "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
             -sENVIRONMENT=web,node
@@ -97,8 +114,8 @@ if(EMSCRIPTEN)
     target_link_options(leaves PRIVATE
         -lembind
         --no-entry
-        -sJSPI
-        "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+        ${LEAVES_ASYNC_FLAG}
+        ${LEAVES_ASYNC_IMPORTS}
         -sMODULARIZE=1
         -sEXPORT_ES6=1
         "-sEXPORTED_RUNTIME_METHODS=['FS','callMain','setValue','getValue']"
