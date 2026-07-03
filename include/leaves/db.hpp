@@ -38,6 +38,8 @@ class TDB {
   auto& aspect() { return _db->aspect(); }
   const auto& aspect() const { return _db->aspect(); }
 
+  auto txn() const { return _db->txn(); }
+
   // Transaction management methods for crash recovery
   tid_t transaction_active() const { return _db->transaction_active(); }
   bool commit(bool sync = true) { return _db->commit(0, sync); }

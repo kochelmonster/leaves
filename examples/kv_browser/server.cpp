@@ -120,10 +120,8 @@ struct ServerSyncNotifier {
   tid_t _last_txn_id{};
   std::set<int> excluded_clients;
 
-  template <typename DB>
-  void schedule(DB& db, int origin_client_id) {
-    auto txn_id_snapshot = db.txn()->txn_id;
-
+  template <typename Pool>
+  void schedule(Pool& pool, tid_t txn_id_snapshot, int origin_client_id) {
     {
       std::lock_guard<std::mutex> lock(mutex);
       _last_txn_id = txn_id_snapshot;
@@ -131,9 +129,9 @@ struct ServerSyncNotifier {
         excluded_clients.insert(origin_client_id);
       }
       if (pending_job_id) {
-        db._storage.cancel_job(pending_job_id);
+        pool.cancel_job(pending_job_id);
       }
-      pending_job_id = db._storage.schedule_after(
+      pending_job_id = pool.schedule_after(
           SYNC_DEBOUNCE, [this, txn_id_snapshot]() {
             std::set<int> excluded;
             {
@@ -163,7 +161,7 @@ struct ServerAspect : public DefaultAspect {
     }
     std::cerr << "[server] on_commit triggered by client "
               << g_commit_origin_client_id << "\n";
-    g_sync_notifier.schedule(db, g_commit_origin_client_id);
+    g_sync_notifier.schedule(db._storage, db.txn()->txn_id, g_commit_origin_client_id);
   }
 };
 
@@ -260,7 +258,7 @@ static void handle_client(
                     << " push done: nodes=" << receiver.nodes_transferred()
                     << " bytes=" << receiver.bytes_transferred() << "\n";
           // Broadcast SYNC notification to other clients
-          g_sync_notifier.schedule(db, client_id);
+          g_sync_notifier.schedule(storage->thread_pool(), db.txn()->txn_id, client_id);
         } else {
           std::cerr << "[server] client " << client_id << " push failed\n";
         }
