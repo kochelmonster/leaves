@@ -142,6 +142,28 @@ This builds all browser WASM targets (`leaves_js_output`, `db_bench_browser`, `w
 
 The build will place the generated Javascript and WebAssembly files in the `js/`, `benchmarks/`, and `examples/` directories. For example, you will find `leaves.js` and `leaves.wasm` in the `js/` directory.
 
+#### Switching the Async Backend
+
+By default the WebAssembly build uses **JSPI** (JavaScript Promise Integration) to suspend and resume WASM execution across IndexedDB I/O calls. To switch to the older **ASYNCIFY** backend instead, configure with `-DLEAVES_ASYNC_BACKEND=ASYNCIFY`:
+
+```bash
+emcmake cmake -B build-wasm -G Ninja -DLEAVES_ASYNC_BACKEND=ASYNCIFY
+cmake --build build-wasm -j
+```
+
+Differences between the two backends:
+
+| | JSPI (default) | ASYNCIFY |
+|---|---|---|
+| Exception handling | `-fwasm-exceptions` (native WASM) | `-fexceptions` (JS-based) |
+| JS API | `async()` → returns Promise | synchronous (blocking) |
+| Main thread | non-blocking during I/O | blocks during I/O |
+| `.function("foo", &foo, async())` | `&foo, async()` | `&foo` (no-op, via `LEAVES_ASYNC` macro) |
+
+Both backends present the same JS API — callers always use `await`, which is a no-op on non-Promise values. The `LEAVES_ASYNCIFY` compile definition is set automatically when using ASYNCIFY, so the embind bindings compile correctly in either mode.
+
+Switch back by omitting the flag (defaults to `JSPI`) or passing `-DLEAVES_ASYNC_BACKEND=JSPI`.
+
 ## Using Leaves in Another Project
 
 Leaves is header-only at the database layer. To consume it directly, add `include/` to your include path.
