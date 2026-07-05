@@ -751,8 +751,16 @@ void _recover_areas(AreaPool& pool,
     DBHeader db_header;
     read_bytes((uint64_t)db_off, &db_header, sizeof(DBHeader));
 
+    // visited set for cycle detection — a corrupted next pointer can create
+    // a cycle that would otherwise loop forever (e.g. stale IndexedDB data).
+    std::unordered_set<uint64_t> visited;
     auto walk = [&](offset_t head) {
       while (head) {
+        if (!visited.insert((uint64_t)head).second) {
+          // Cycle detected — break to avoid infinite loop.
+          // This can happen if storage contains stale data from a crash.
+          break;
+        }
         Area area_hdr;
         read_bytes((uint64_t)head, &area_hdr, sizeof(Area));
 

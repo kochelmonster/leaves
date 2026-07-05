@@ -84,6 +84,9 @@ function startHttpServer() {
           "Content-Type": MIME[ext] || "application/octet-stream",
           "Cross-Origin-Opener-Policy": "same-origin",
           "Cross-Origin-Embedder-Policy": "require-corp",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0",
         });
         res.end(data);
       } catch {

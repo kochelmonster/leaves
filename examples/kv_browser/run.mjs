@@ -147,7 +147,7 @@ async function main() {
   const url = `http://localhost:${HTTP_PORT}/?port=${WS_PORT}`;
   console.log(`  Open in browser: ${url}`);
   console.log(`  Open a second tab at the same URL for live sync demo\n`);
-/*
+
   try {
     const opener =
       process.platform === "darwin"
@@ -159,7 +159,7 @@ async function main() {
   } catch {
     console.log("  (Could not auto-open browser — open the URL manually)");
   }
-*/
+
   // 4. Keep running until Ctrl+C
   console.log("  Press Ctrl+C to stop.\n");
 

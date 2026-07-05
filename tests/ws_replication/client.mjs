@@ -24,6 +24,13 @@ const PORT = args[0] || "19876";
 const wasmDirIdx = args.indexOf("--wasm-dir");
 const WASM_DIR = wasmDirIdx >= 0 ? args[wasmDirIdx + 1] : join(ROOT, "js");
 
+// ── Diagnostic logger with elapsed time ────────────────────────
+const t0 = Date.now();
+function dbg(...args) {
+  const t = (Date.now() - t0) / 1000;
+  console.log(`[${t.toFixed(3)}s]`, ...args);
+}
+
 // ── Test state ──────────────────────────────────────────────────
 let failures = 0;
 
@@ -51,43 +58,42 @@ async function runTest() {
   console.log("");
 
   try {
-    // 1. Load WASM module — we need to handle locateFile for Node.js
-    console.log("Loading WASM module...");
+    // ── 1. Load WASM module ──────────────────────────────────────
+    dbg("Step 1: Loading WASM module...");
     const createModule = (await import(join(WASM_DIR, "leaves.js"))).default;
     const { LeavesReplicationReceiver } = await import(join(WASM_DIR, "leaves_replication.js"));
 
+    dbg("Step 1b: Calling createModule()...");
     const Module = await createModule({
       locateFile: (path) => join(WASM_DIR, path),
     });
-    console.log("WASM module loaded");
+    dbg("Step 1c: WASM module loaded");
     console.log("");
 
-    // 2. Create storage
-    console.log("Creating storage...");
+    // ── 2. Create storage (LeavesStore + openReplication) ────────
+    dbg("Step 2: Creating LeavesStore...");
     const store = await Module.LeavesStore.create("test_ws_repl", 100 * 1024 * 1024);
+    dbg("Step 2b: LeavesStore created, typeof store=" + typeof store);
+
+    dbg("Step 2c: Calling store.openReplication('testdb')...");
     const repldb = await store.openReplication("testdb");
-    console.log("Storage created");
+    dbg("Step 2d: openReplication returned, typeof repldb=" + typeof repldb);
     console.log("");
 
-    // 3. Connect WebSocket to native server
+    // ── 3. Connect WebSocket to native server ─────────────────────
     const url = "ws://localhost:" + PORT;
-    console.log(`Connecting to ${url}...`);
+    dbg("Step 3: Connecting WebSocket to " + url + "...");
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
+    dbg("Step 3b: WebSocket object created, readyState=" + ws.readyState);
 
-    await new Promise((resolve, reject) => {
-      ws.onopen = resolve;
-      ws.onerror = reject;
-      setTimeout(() => reject(new Error("WebSocket timeout")), 10000);
-    });
-    console.log("Connected");
-    console.log("");
-
-    // 4. Set up message queues
+    // Set up message queues BEFORE awaiting onopen
     let textQueue = [];
     let binQueue = [];
 
     ws.onmessage = (ev) => {
+      const typ = typeof ev.data === "string" ? "text" : "binary";
+      dbg("Step 3c: onmessage received (" + typ + "), length=" + (ev.data.length || ev.data.byteLength));
       if (typeof ev.data === "string") {
         textQueue.push(ev.data);
       } else {
@@ -95,67 +101,92 @@ async function runTest() {
       }
     };
 
-    ws.onclose = () => {};
-    ws.onerror = (e) => console.log("WebSocket error:", e);
+    ws.onclose = () => {
+      dbg("Step 3d: WebSocket onclose fired, readyState=" + ws.readyState);
+    };
+    ws.onerror = (e) => {
+      dbg("Step 3e: WebSocket onerror fired, message=" + (e.message || e));
+    };
 
-    // 5. Receive replication data
-    console.log("Receiving replication...");
+    dbg("Step 3f: Awaiting WebSocket onopen...");
+    await new Promise((resolve, reject) => {
+      ws.onopen = () => { dbg("Step 3g: WebSocket onopen fired"); resolve(); };
+      ws.onerror = (e) => { dbg("Step 3h: WebSocket onerror during connect"); reject(e); };
+      setTimeout(() => reject(new Error("WebSocket timeout after 10s")), 10000);
+    });
+    dbg("Step 3i: WebSocket connected, readyState=" + ws.readyState);
+    console.log("");
 
+    // ── 4. Receive replication data via the FSM ───────────────────
+    dbg("Step 4: Creating LeavesReplicationReceiver...");
     const receiver = new LeavesReplicationReceiver(repldb, Module);
+    dbg("Step 4b: LeavesReplicationReceiver created");
 
     let completed = false;
     let errored = false;
 
-    receiver.begin({ send: data => ws.send(data) }, {
+    dbg("Step 4c: Calling receiver.begin()...");
+    await receiver.begin({ send: data => ws.send(data) }, {
       onComplete: (sid, n) => {
-        console.log(`  Replication complete: ${n} nodes`);
+        dbg("Step 4d: onComplete called, sid=" + sid + " nodes=" + n);
         completed = true;
       },
       onError: (sid, err) => {
-        console.log(`  Replication error: ${err}`);
+        dbg("Step 4e: onError called, sid=" + sid + " err=" + err);
         errored = true;
       }
     });
+    dbg("Step 4f: receiver.begin() returned, state=" + receiver.state());
 
+    dbg("Step 4g: Entering poll loop...");
+    let loopCount = 0;
     while (receiver.state() === "active") {
+      loopCount++;
+      dbg("Step 4h (iteration " + loopCount + "): state=active, binQueue.length=" + binQueue.length + " textQueue.length=" + textQueue.length + " calling nextMessage()...");
       const msg = await nextMessage(binQueue, ws);
       if (msg === null) {
-        console.log("WebSocket closed during receive");
+        dbg("Step 4i: nextMessage returned null (socket closed)");
         errored = true;
         break;
       }
-      receiver.onMessageReceived(msg);
+      dbg("Step 4j: nextMessage returned msg of length " + msg.length + ", calling onMessageReceived...");
+      await receiver.onMessageReceived(msg);
+      dbg("Step 4k: onMessageReceived returned, state=" + receiver.state());
     }
+
+    dbg("Step 4l: Exited poll loop (errored=" + errored + " completed=" + completed + " state=" + receiver.state() + ")");
 
     if (errored) {
       console.log("Replication failed");
     } else {
-      console.log("Replication finished");
+      dbg("Step 5a: Replication finished, verifying data...");
       console.log("");
 
-      // 6. Verify replicated data
+      // ── 5. Verify replicated data ───────────────────────────────
       console.log("Verifying replicated data...");
 
-      const c = repldb.createCursor();
+      const c = await repldb.createCursor();
 
       await c.find("hello");
       check(c.isValid(), "key 'hello' exists");
-      if (c.isValid()) checkEq(c.getValue(), "world", "hello → world");
+      if (c.isValid()) checkEq(await c.getValue(), "world", "hello → world");
 
       await c.find("foo");
       check(c.isValid(), "key 'foo' exists");
-      if (c.isValid()) checkEq(c.getValue(), "bar", "foo → bar");
+      if (c.isValid()) checkEq(await c.getValue(), "bar", "foo → bar");
 
       await c.find("count");
       check(c.isValid(), "key 'count' exists");
-      if (c.isValid()) checkEq(c.getValue(), "12345", "count → 12345");
+      if (c.isValid()) checkEq(await c.getValue(), "12345", "count → 12345");
 
       c.delete();
     }
 
-    // 7. Cleanup
+    // ── 6. Cleanup ───────────────────────────────────────────────
+    dbg("Step 6: Cleaning up (closing ws, closing store)...");
     ws.close();
     await store.close();
+    dbg("Step 6b: Cleanup done");
 
     console.log("");
     if (failures === 0) {

@@ -243,9 +243,13 @@ static JSStore* make_store(const std::string& name, size_t capacity) {
   return s;
 }
 
-// Close — async IDB flush. Must be be called before .delete() to avoid crash.
-static void store_delete_storage(JSStore& s) {
-  s._storage->_storage->delete_storage();
+// Delete an IndexedDB storage by name. The storage does not need to be open.
+// This is a static method — no JSStore instance is required.
+static void store_delete_storage(const std::string& name) {
+  leaves_idb_delete_database(name.c_str());
+  while (leaves_idb_delete_pending() > 0) {
+    emscripten_sleep(1);
+  }
 }
 
 static void store_close(JSStore& s) { s._storage->_storage->destroy(); }
@@ -410,13 +414,24 @@ class ReplicationReceiverJS {
   }
 
   void on_message_received(std::string message) {
-    auto& buffer = receiver_.receive_buffer();
-    if (buffer.available() < message.size()) {
-      return;
+    // Feed the message into the C++ receive buffer.  The C++ side handles
+    // buffer growth automatically once the message header is parsed.
+    size_t offset = 0;
+    while (offset < message.size()) {
+      auto& buffer = receiver_.receive_buffer();
+      size_t avail = buffer.available();
+      if (avail > 0) {
+        // Copy as much as fits in the current buffer
+        size_t chunk = std::min(message.size() - offset, avail);
+        std::memcpy(buffer.write_ptr(), message.data() + offset, chunk);
+        offset += chunk;
+        buffer.advance(chunk);
+      }
+      // After each write, check if a complete message has been received.
+      // on_data_received() handles buffer growth if the header says the
+      // payload exceeds the current buffer capacity.
+      receiver_.on_data_received();
     }
-    std::memcpy(buffer.write_ptr(), message.data(), message.size());
-    buffer.advance(message.size());
-    receiver_.on_data_received();
   }
 
   std::string state() const {
@@ -457,7 +472,7 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("open", &store_open LEAVES_ASYNC)
       .function("openReplication", &store_open_replication,
                 allow_raw_pointers() LEAVES_ASYNC)
-      .function("deleteStorage", &store_delete_storage LEAVES_ASYNC)
+      .class_function("deleteStorage", &store_delete_storage LEAVES_ASYNC)
       .function("close", &store_close LEAVES_ASYNC)
       .function("listDbs", &store_list_dbs)
       .function("exportToBuffer", &store_export)

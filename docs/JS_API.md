@@ -51,7 +51,7 @@ console.log('value:', await c.getValue());
 // Cleanup
 c.delete();
 await store.close();
-await store.deleteStorage();
+await Module.LeavesStore.deleteStorage('my_storage');
 ```
 
 ## LeavesStore
@@ -83,8 +83,8 @@ class LeavesStore {
     // Import data from a buffer
     importFromBuffer(data: string | Uint8Array): Promise<void>;
 
-    // Delete the entire IndexedDB storage (close first)
-    deleteStorage(): Promise<void>;
+    // Delete an IndexedDB storage by name. The storage does not need to be open.
+    static async deleteStorage(name: string): Promise<void>;
 
     // Close the storage (flush pending writes)
     close(): Promise<void>;
@@ -325,7 +325,7 @@ C++ objects allocated by embind must be freed explicitly with `.delete()`:
 ```javascript
 c.delete();           // free cursor
 store.close();        // flush and close
-store.deleteStorage(); // delete the entire IndexedDB storage
+Module.LeavesStore.deleteStorage('my_storage'); // delete the entire IndexedDB storage
 ```
 
 ### 6. C++ Vector Iteration
