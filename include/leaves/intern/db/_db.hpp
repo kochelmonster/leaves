@@ -331,10 +331,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _name(name) {
-#ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _DB::ctor offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu cursor id=%llu address=%p\n",
-                 (unsigned long long)header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->txn_cursor_id, (char*)_header);
-#endif
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::ctor offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu cursor id=%llu address=%p\n",
+                       (unsigned long long)header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->txn_cursor_id, (char*)_header);
     if (_header->prepared_txn != _header->read_txn) {
       _active_txn = resolve<Transaction>(&_header->prepared_txn);
     }
@@ -355,10 +353,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
-#ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _DB::init offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u\n",
-                 (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID);
-#endif
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::init offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u\n",
+               (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID);
     new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
 
@@ -391,10 +387,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header->next_txn_page = resolve(next);
     _active_txn.reset();
 
-#ifndef NDEBUG
-    std::fprintf(stderr, "[dbg] _DB::init / end offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu prepared_txn=%llu next_txn_page=%llu\n",
-                 (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->prepared_txn, (unsigned long long)_header->next_txn_page);
-#endif  
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::init / end offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu prepared_txn=%llu next_txn_page=%llu\n",
+               (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->prepared_txn, (unsigned long long)_header->next_txn_page);
     make_dirty(_header);
     flush();
   }

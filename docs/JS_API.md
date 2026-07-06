@@ -91,8 +91,31 @@ class LeavesStore {
 
     // Number of pending IndexedDB write operations (static, global)
     static pendingWrites(): number;
+
+    // Whether browser diagnostics were enabled at build time
+    static debugEnabled(): boolean;
+
+    // WASM heap memory API for low-copy pointer workflows
+    static malloc(size: number): number;
+    static free(ptr: number): void;
+    static heapU8Slice(ptr: number, len: number): Uint8Array;
+    static copyToHeap(dstPtr: number, bytes: Uint8Array): void;
+    static copyFromHeap(srcPtr: number, len: number): Uint8Array;
+    static allocCopy(bytes: Uint8Array): number;
 }
 ```
+
+### LeavesStore Memory API
+
+`LeavesStore` exposes a first-class memory API so callers can use pointer-based
+cursor writes without depending on raw Emscripten internals.
+
+- `malloc(size)` allocates WASM heap memory and returns a pointer.
+- `free(ptr)` releases previously allocated memory.
+- `heapU8Slice(ptr, len)` returns a `Uint8Array` view over `[ptr, ptr + len)`.
+- `copyToHeap(dstPtr, bytes)` copies bytes into WASM memory.
+- `copyFromHeap(srcPtr, len)` copies bytes out of WASM memory.
+- `allocCopy(bytes)` allocates and copies in one call.
 
 ## LeavesDB
 
@@ -138,6 +161,7 @@ class LeavesCursor {
 
     // Read/write value at current cursor position
     async getValue(): Promise<string>;
+    async setValuePtr(valuePtr: number, valueLen: number): Promise<void>;
     async setValue(value: string): Promise<void>;
     async getValueBytes(): Promise<Uint8Array>;
     async setValueBytes(value: Uint8Array): Promise<void>;
@@ -158,6 +182,10 @@ class LeavesCursor {
     aspectContext(): object;
 }
 ```
+
+`setValuePtr(valuePtr, valueLen)` is the low-copy write primitive.
+`setValue(value)` and `setValueBytes(value)` are kept as convenience wrappers
+that forward to the same underlying pointer-based write path.
 
 ### Usage Patterns
 
@@ -219,6 +247,33 @@ await c.commit(false);
 
 await c.find('bin_key');
 const got = new Uint8Array(await c.getValueBytes());
+```
+
+**Low-copy write with reusable WASM buffer:**
+```javascript
+const encoder = new TextEncoder();
+const memory = Module.LeavesStore;
+let ptr = 0;
+let capacity = 0;
+
+function ensureBuffer(needed) {
+    if (ptr && capacity >= needed) return;
+    if (ptr) memory.free(ptr);
+    ptr = memory.malloc(Math.max(1, needed));
+    if (!ptr) throw new Error('malloc failed');
+    capacity = Math.max(1, needed);
+}
+
+const text = 'value1';
+const bytes = encoder.encode(text);
+ensureBuffer(bytes.byteLength);
+memory.copyToHeap(ptr, bytes);
+
+await c.find('key1');
+await c.setValuePtr(ptr, bytes.byteLength);
+await c.commit(false);
+
+if (ptr) memory.free(ptr);
 ```
 
 ## Aspect API

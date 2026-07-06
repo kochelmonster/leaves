@@ -62,3 +62,30 @@ readseq      :     0.032 micros/op; 3437.0 MB/s
 ```
 
 Different storage types may perform better for different workloads and environments. Use this benchmarking tool to determine the optimal configuration for your use case.
+
+## Browser Benchmark
+
+The browser benchmark lives in [bench.html](bench.html) and runs entirely in JavaScript on top of [js/leaves.js](../js/leaves.js) via the embind API. It exercises `LeavesStore`, `LeavesDB`, and `LeavesCursor` directly from the browser rather than through a generated benchmark wasm entrypoint.
+
+### Run It Locally
+
+From the repository root:
+
+```bash
+# Build leaves.js + leaves.wasm (required once per rebuild)
+emcmake cmake -B build-wasm -G Ninja
+cmake --build build-wasm -j --target leaves_js_output
+
+# Start a local HTTP server from the repo root
+python3 -m http.server 8000
+```
+
+Then open:
+
+```text
+http://localhost:8000/benchmarks/bench.html
+```
+
+Notes:
+- Serve from the repository root so both `benchmarks/` and `js/` are reachable.
+- Stop the server with `Ctrl+C` when done.

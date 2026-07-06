@@ -138,9 +138,9 @@ emcmake cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
 cmake --build build-wasm-debug -j --target browser_test
 ```
 
-This builds all browser WASM targets (`leaves_js_output`, `db_bench_browser`, `ws_replication_client`) with `DEBUG` defined, `-g -O0` flags, and profiling symbols.
+This builds the browser WASM runtime targets used by the web UI, including `leaves_js_output` and `ws_replication_client`, with `DEBUG` defined, `-g -O0` flags, and profiling symbols.
 
-The build will place the generated Javascript and WebAssembly files in the `js/`, `benchmarks/`, and `examples/` directories. For example, you will find `leaves.js` and `leaves.wasm` in the `js/` directory.
+The build will place the generated Javascript and WebAssembly files in the `js/` and `examples/` directories. For example, you will find `leaves.js` and `leaves.wasm` in the `js/` directory, and `benchmarks/bench.html` uses that module together with a pure JavaScript benchmark runner.
 
 #### Switching the Async Backend
 
@@ -363,7 +363,7 @@ For benchmark flags and additional examples, see [benchmarks/README.md](benchmar
 
 ## Browser and WebAssembly
 
-When configured with Emscripten, the native build path is replaced with browser-oriented targets such as `test_browserstore`, `db_bench_browser`, `leaves`, `kv_demo_client`, and `ws_replication_client`. The build copies generated JS and WASM artifacts into `js/` and `benchmarks/` for local use.
+When configured with Emscripten, the native build path is replaced with browser-oriented targets such as `test_browserstore`, `leaves`, `kv_demo_client`, and `ws_replication_client`. The build copies generated JS and WASM artifacts into `js/` for local use, while the browser benchmark page loads `js/leaves.js` directly and runs its benchmark logic in JavaScript.
 
 ### Example: Using `BrowserStorage`
 
@@ -401,7 +401,7 @@ async function run() {
     console.log("Store created.");
 
     // Open a database within the store
-    const db = await store.db("my-first-db");
+    const db = await store.open("my-first-db");
     console.log("Database opened.");
 
     // Create a cursor
@@ -443,6 +443,28 @@ After building with Emscripten, you can run the test suite in a browser:
 2.  **Open the test page:**
     Open `http://localhost:8000/test.html` in your web browser. The test results will be displayed on the page.
 
+### Running the Browser Benchmark
+
+From the repository root, build the browser module outputs and start a local server:
+
+```bash
+emcmake cmake -B build-wasm -G Ninja
+cmake --build build-wasm -j --target leaves_js_output
+python3 -m http.server 8000
+```
+
+Then open `http://localhost:8000/benchmarks/bench.html`.
+
+For hang diagnosis, use the debug browser build so diagnostics are emitted from both the JS runner and BrowserStore wait loops:
+
+```bash
+emcmake cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
+cmake --build build-wasm-debug -j --target browser_test
+python3 -m http.server 8000
+```
+
+In `bench.html`, debug builds now print `[diag]` heartbeats with current phase, progress counters, pending IndexedDB writes, and the current await point. If a benchmark stalls, these lines show exactly where it is waiting (for example `cursor.commit`, `reqDone(get)`, or `wait_for_writes`).
+
 ## Additional Documentation
 
 - [docs/BROWSER_STORAGE.md](docs/BROWSER_STORAGE.md)
@@ -450,5 +472,6 @@ After building with Emscripten, you can run the test suite in a browser:
 - [docs/TRANSFER_TRIE_SYNC.md](docs/TRANSFER_TRIE_SYNC.md)
 - [docs/SERIAL_NUMBER_ARITHMETIC.md](docs/SERIAL_NUMBER_ARITHMETIC.md)
 - [benchmarks/README.md](benchmarks/README.md)
+
 
 

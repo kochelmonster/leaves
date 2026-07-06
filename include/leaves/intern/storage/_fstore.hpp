@@ -184,7 +184,7 @@ struct _FileOperations : _CacheBase {
 #endif
   }
 
-  void write(offset_t offset, const void* ptr, size_t size) const {
+  void _write_raw(offset_t offset, const void* ptr, size_t size) const {
     if (size == 0) return;
     auto* src = static_cast<const char*>(ptr);
     uint64_t file_offset = static_cast<uint64_t>(offset);
@@ -214,6 +214,11 @@ struct _FileOperations : _CacheBase {
 #endif
       written += n;
     }
+  }
+
+  // Compatibility wrapper for callers that still use direct store writes.
+  void write(offset_t offset, const void* ptr, size_t size) const {
+    _write_raw(offset, ptr, size);
   }
 
   void read(offset_t offset, void* ptr, size_t size) const {
@@ -295,7 +300,7 @@ struct _FileOperations : _CacheBase {
 
       if (batch_end == i) {
         // No contiguous blocks found, write the single block
-        write(start_offset, start_area, start_area->size());
+        _write_raw(start_offset, start_area, start_area->size());
         i++;
       } else {
         // We have contiguous blocks, allocate a temporary buffer and copy data
@@ -310,7 +315,7 @@ struct _FileOperations : _CacheBase {
         }
 
         // Write the entire batch at once
-        write(start_offset, buffer.data(), current_size);
+        _write_raw(start_offset, buffer.data(), current_size);
 
         // Move to the next non-contiguous block
         i = batch_end + 1;
@@ -318,12 +323,12 @@ struct _FileOperations : _CacheBase {
     }
 
     if (write_header) {
-      write(0, _header, calc_header_size());
+      _write_raw(0, _header, calc_header_size());
     }
   }
 
   // No-op: native pwrite/WriteFile calls are synchronous
-  void sync_writes() {}
+  void wait_for_writes() {}
   bool has_pending_writes() const { return false; }
 
   const char* filename() const { return _filepath.c_str(); }
@@ -358,8 +363,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
       this->_header->file_size =
           leaves::padding(header_size, Traits_::AREA_SIZE);
       this->resize(this->_header->file_size);
-      // Write header
-      this->write(0, buffer.get(), header_size);
+      this->make_header_dirty();
+      this->flush(true, true);
     } else {
       _FileOperations::open(path);
       this->read(0, buffer.get(), header_size);
@@ -384,6 +389,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     if (std::filesystem::file_size(this->filename()) !=
         this->_header->file_size)
       std::filesystem::resize_file(this->filename(), this->_header->file_size);
+    this->make_header_dirty();
+    this->flush(true, true);
   }
 
   // Rebuild the free area pool by scanning the file.
@@ -403,8 +410,14 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
           self->read(pos, buf, size);
         },
         [self](uint64_t pos, const void* buf, size_t size) {
-          self->write(pos, buf, size);
+          offset_t write_offset = static_cast<offset_t>(pos);
+          auto block = self->resolve(&write_offset, WRITE);
+          const uint64_t rel = pos - block.area()->offset();
+          assert(rel + size <= block.area()->size());
+          std::memcpy(static_cast<char*>(block), buf, size);
+          self->make_dirty(block);
         });
+    this->flush(true, true);
   }
 
   // Compatibility method for tests

@@ -33,88 +33,122 @@
 
 <div id="output">Ready. Click a button to start.</div>
 
-<script>
-var output = document.getElementById('output');
-var allButtons = document.querySelectorAll('button');
-var moduleReady = false;
+<script type="module">
+import createModule from '../js/leaves.js';
+import { runBrowserBenchmarks } from './db_bench_browser_runner.mjs';
 
-function log(msg) {
-  output.textContent += msg + '\n';
+const output = document.getElementById('output');
+const allButtons = document.querySelectorAll('button');
+let moduleReady = false;
+let Module = null;
+let diagEnabled = false;
+
+function stamp() {
+  return new Date().toISOString();
+}
+
+function emit(msg, level = 'log') {
+  const line = `[${stamp()}] ${msg}`;
+  output.textContent += `${line}\n`;
   output.scrollTop = output.scrollHeight;
+  const sink = typeof console[level] === 'function' ? console[level] : console.log;
+  sink(line);
+}
+
+function log(msg, level = 'log') {
+  emit(msg, level);
+}
+
+function stderrLevel(text) {
+  if (typeof text !== 'string') {
+    return 'error';
+  }
+  if (text.includes('[dbg]') || text.includes('[diag]') || text.includes('[flush]')) {
+    return 'warn';
+  }
+  return 'error';
 }
 
 function setButtons(on) {
-  allButtons.forEach(function(b) { b.disabled = !on; });
+  allButtons.forEach(button => {
+    button.disabled = !on;
+  });
 }
 
-// Emscripten Module configuration — must be set before loading the JS
-var Module = {
-  noInitialRun: true,
-  noExitRuntime: true,
-  arguments: [],
-  print: function(text) { log(text); },
-  printErr: function(text) { /* suppress progress spam */ },
-  onRuntimeInitialized: function() {
-    moduleReady = true;
-    log('WASM module loaded. Ready.\n');
-    setButtons(true);
+async function ensureModule() {
+  if (Module) {
+    return Module;
   }
-};
+  log('Loading WASM module...');
+  Module = await createModule({
+    noInitialRun: true,
+    noExitRuntime: true,
+    print: text => log(text),
+    printErr: text => log(`[stderr] ${text}`, stderrLevel(text)),
+  });
 
-var LEAVES = [
-  'fillseq','fillrandom','overwrite','readrandom','readseq',
-  'fillrand100K','fillseq100K','readseq100K','readrand100K'
-];
-var IDB = [
-  'idb_fillseq','idb_fillrandom','idb_overwrite','idb_readrandom','idb_readseq',
-  'idb_fillrand100K','idb_fillseq100K','idb_readseq100K','idb_readrand100K'
-];
+  const debugFn = Module?.LeavesStore?.debugEnabled;
+  if (typeof debugFn === 'function') {
+    diagEnabled = Boolean(debugFn());
+  } else {
+    // Keep diagnostics on if the runtime is stale and missing the capability probe.
+    diagEnabled = true;
+    log('WARNING: LeavesStore.debugEnabled() missing; forcing diagnostics on.', 'warn');
+  }
 
-function runBench(which) {
-  if (!moduleReady) { alert('WASM not loaded yet'); return; }
+  moduleReady = true;
+  log(`WASM module loaded. Ready. diagnostics=${diagEnabled ? 'on' : 'off'}\n`);
+  setButtons(true);
+  return Module;
+}
+
+async function runBench(which) {
+  if (!moduleReady) {
+    await ensureModule();
+  }
   setButtons(false);
   output.textContent = '';
 
-  var num = document.getElementById('num').value;
-  var valsize = document.getElementById('valsize').value;
-  var batchsize = document.getElementById('batchsize').value;
+  const num = Number(document.getElementById('num').value);
+  const valueSize = Number(document.getElementById('valsize').value);
+  const batchSize = Number(document.getElementById('batchsize').value);
 
-  var benchmarks;
-  if (which === 'leaves') benchmarks = LEAVES.join(',');
-  else if (which === 'idb') benchmarks = IDB.join(',');
-  else benchmarks = LEAVES.concat(IDB).join(',');
+  const startedAt = performance.now();
+  log(`Starting benchmark suite: ${which}`);
+  log(`Parameters: num=${num} valueSize=${valueSize} batchSize=${batchSize} diagnostics=${diagEnabled}`);
+  log('');
 
-  var args = [
-    '--num=' + num,
-    '--value_size=' + valsize,
-    '--batch_size=' + batchsize,
-    '--benchmarks=' + benchmarks
-  ];
-
-  log('Starting: ' + which + '  num=' + num + '\n');
-
-  // Yield to browser so UI updates before the WASM call
-  setTimeout(async function() {
-    try {
-      await Module.callMain(args);
-    } catch (e) {
-      // ExitStatus is thrown on normal exit — only log real errors
-      if (e && e.name !== 'ExitStatus') {
-        log('\nERROR: ' + (e.message || e));
-      }
+  try {
+    await runBrowserBenchmarks(Module, {
+      which,
+      num,
+      valueSize,
+      batchSize,
+      diagEnabled,
+      log,
+    });
+  } catch (error) {
+    log(`ERROR: ${error?.message || error}`, 'error');
+    if (error?.stack) {
+      log(error.stack, 'error');
     }
-    // Reset abort flag so module survives for re-runs
-    if (typeof Module['ABORT'] !== 'undefined') Module['ABORT'] = false;
-    log('\nDone.');
-    setButtons(true);
-  }, 50);
+  }
+
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  log(`Done. elapsedMs=${elapsedMs}`);
+  setButtons(true);
 }
 
-// Disable buttons until WASM is ready
+window.runBench = runBench;
 setButtons(false);
-output.textContent = 'Loading WASM module...\n';
+output.textContent = '';
+ensureModule().catch(error => {
+  output.textContent = '';
+  log(`Failed to load WASM module: ${error?.message || error}`, 'error');
+  if (error?.stack) {
+    log(error.stack, 'error');
+  }
+});
 </script>
-<!-- Load emscripten-generated JS last so Module config is in place -->
-<script src="db_bench_browser.js"></script>
 </body>
 </html>

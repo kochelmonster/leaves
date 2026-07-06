@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -45,6 +47,56 @@
 #include "_serial.hpp"
 
 namespace leaves {
+
+enum class LogSeverity : uint8_t {
+  info,
+  debug,
+  warn,
+  error,
+  critical,
+};
+
+inline const char* log_severity_name(LogSeverity severity) {
+  switch (severity) {
+    case LogSeverity::info:
+      return "info";
+    case LogSeverity::debug:
+      return "debug";
+    case LogSeverity::warn:
+      return "warn";
+    case LogSeverity::error:
+      return "error";
+    case LogSeverity::critical:
+      return "critical";
+    default:
+      return "unknown";
+  }
+}
+
+inline int default_log_call(LogSeverity severity, const char* fmt, ...) {
+  int written = std::fprintf(stderr, "[%s] ", log_severity_name(severity));
+  va_list args;
+  va_start(args, fmt);
+  written += std::vfprintf(stderr, fmt, args);
+  va_end(args);
+  return written;
+}
+
+// Internal logging for leaves intern headers.
+// Enable with -DLEAVES_LOG and optionally override LEAVES_LOG_CALL.
+#if defined(LEAVES_LOG)
+  #ifndef LEAVES_LOG_CALL
+    #define LEAVES_LOG_CALL(...) ::leaves::default_log_call(__VA_ARGS__)
+  #endif
+  #define LEAVES_LOG_INFO ::leaves::LogSeverity::info
+  #define LEAVES_LOG_DEBUG ::leaves::LogSeverity::debug
+  #define LEAVES_LOG_WARN ::leaves::LogSeverity::warn
+  #define LEAVES_LOG_ERROR ::leaves::LogSeverity::error
+  #define LEAVES_LOG_CRITICAL ::leaves::LogSeverity::critical
+  #define LEAVES_INTERNAL_LOG(severity, ...) LEAVES_LOG_CALL(severity, __VA_ARGS__)
+#else
+  #define LEAVES_INTERNAL_LOG(...) ((void)0)
+#endif
 
 // Optimized memcpy for database values
 inline void* optimized_memcpy(void* dest, const void* src, size_t n) {

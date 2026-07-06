@@ -18,6 +18,7 @@
 
 #ifdef __EMSCRIPTEN__
 
+#include <emscripten.h>
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 
@@ -32,6 +33,9 @@
 #endif
 
 #include <leaves/intern/storage/_browserstore.hpp>
+#include <cstdlib>
+#include <cstring>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -114,8 +118,13 @@ struct ReplicationDBCursor {
     return std::string(v.data(), v.size());
   }
 
+  void set_value_ptr(uintptr_t value_ptr, size_t value_len) {
+    const char* ptr = reinterpret_cast<const char*>(value_ptr);
+    _cursor->value(leaves::Slice(ptr, value_len));
+  }
+
   void set_value(const std::string& v) {
-    _cursor->value(leaves::Slice(v.data(), v.size()));
+    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
   }
 
   val key_bytes() const {
@@ -133,7 +142,7 @@ struct ReplicationDBCursor {
   }
 
   void set_value_bytes(const std::string& v) {
-    _cursor->value(leaves::Slice(v.data(), v.size()));
+    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
   }
 
   void find(const std::string& key) {
@@ -187,8 +196,13 @@ struct CursorWrapper {
     return std::string(v.data(), v.size());
   }
 
+  void set_value_ptr(uintptr_t value_ptr, size_t value_len) {
+    const char* ptr = reinterpret_cast<const char*>(value_ptr);
+    _cursor.value(leaves::Slice(ptr, value_len));
+  }
+
   void set_value(const std::string& v) {
-    _cursor.value(leaves::Slice(v.data(), v.size()));
+    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
   }
 
   val key_bytes() const {
@@ -206,7 +220,7 @@ struct CursorWrapper {
   }
 
   void set_value_bytes(const std::string& v) {
-    _cursor.value(leaves::Slice(v.data(), v.size()));
+    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
   }
 
   void find(const std::string& key) {
@@ -247,7 +261,20 @@ static JSStore* make_store(const std::string& name, size_t capacity) {
 // This is a static method — no JSStore instance is required.
 static void store_delete_storage(const std::string& name) {
   leaves_idb_delete_database(name.c_str());
+#ifndef NDEBUG
+  const double started = emscripten_get_now();
+  double next_log = started + 1000.0;
+#endif
   while (leaves_idb_delete_pending() > 0) {
+#ifndef NDEBUG
+    const double now = emscripten_get_now();
+    if (now >= next_log) {
+      std::fprintf(stdout,
+                   "[diag] waiting IndexedDB delete: store=%s pending=%d elapsed=%.0fms\n",
+                   name.c_str(), leaves_idb_delete_pending(), now - started);
+      next_log = now + 1000.0;
+    }
+#endif
     emscripten_sleep(1);
   }
 }
@@ -256,6 +283,55 @@ static void store_close(JSStore& s) { s._storage->_storage->destroy(); }
 
 // Number of IDB write operations still in flight (global counter)
 static int store_pending_writes() { return leaves_pending_writes(); }
+
+// Allocate/free raw WASM heap memory from JS call sites.
+// Returned pointers are suitable for setValuePtr and other pointer APIs.
+static uintptr_t store_malloc(size_t size) {
+  const size_t alloc_size = size == 0 ? 1 : size;
+  return reinterpret_cast<uintptr_t>(std::malloc(alloc_size));
+}
+
+static void store_free(uintptr_t ptr) {
+  if (ptr == 0) {
+    return;
+  }
+  std::free(reinterpret_cast<void*>(ptr));
+}
+
+// Return a Uint8Array view for a specific WASM heap region.
+static val store_heap_u8_slice(uintptr_t ptr, size_t len) {
+  return val(typed_memory_view(len, reinterpret_cast<uint8_t*>(ptr)));
+}
+
+static void store_copy_to_heap(uintptr_t dst_ptr, val bytes) {
+  const size_t len = bytes["length"].as<size_t>();
+  val dst = store_heap_u8_slice(dst_ptr, len);
+  dst.call<void>("set", bytes);
+}
+
+static val store_copy_from_heap(uintptr_t src_ptr, size_t len) {
+  const uint8_t* src = reinterpret_cast<const uint8_t*>(src_ptr);
+  return val(typed_memory_view(len, src)).call<val>("slice");
+}
+
+static uintptr_t store_alloc_copy(val bytes) {
+  const size_t len = bytes["length"].as<size_t>();
+  const uintptr_t ptr = store_malloc(len);
+  if (ptr == 0) {
+    return 0;
+  }
+  store_copy_to_heap(ptr, bytes);
+  return ptr;
+}
+
+// Whether this module was built with browser diagnostics enabled.
+static bool store_debug_enabled() {
+#ifdef NDEBUG
+  return false;
+#else
+  return true;
+#endif
+}
 
 // ── Open databases from a store ──────────────────────────────────
 // Open a regular DB within this store.
@@ -361,8 +437,7 @@ struct JSEvents : public leaves::ReplicationEvents {
 // ── ReplicationSenderJS ───────────────────────────────────────────
 // Directly wraps leaves::ReplicationSender for use from JavaScript.
 
-class ReplicationSenderJS {
- public:
+struct ReplicationSenderJS {
   using Sender =
       leaves::ReplicationSender<BrowserStoreWrapper, leaves::_ReplicationDB>;
 
@@ -391,7 +466,6 @@ class ReplicationSenderJS {
     return "unknown";
   }
 
- private:
   Sender sender_;
   std::unique_ptr<JSTransport> transport_;
   std::unique_ptr<JSEvents> events_;
@@ -400,8 +474,7 @@ class ReplicationSenderJS {
 // ── ReplicationReceiverJS ─────────────────────────────────────────
 // Directly wraps leaves::ReplicationReceiver for use from JavaScript.
 
-class ReplicationReceiverJS {
- public:
+struct ReplicationReceiverJS {
   using Receiver =
       leaves::ReplicationReceiver<BrowserStoreWrapper, leaves::_ReplicationDB>;
 
@@ -446,7 +519,6 @@ class ReplicationReceiverJS {
     return "unknown";
   }
 
- private:
   Receiver receiver_;
   std::unique_ptr<JSTransport> transport_;
   std::unique_ptr<JSEvents> events_;
@@ -469,6 +541,13 @@ EMSCRIPTEN_BINDINGS(leaves) {
   class_<JSStore>("LeavesStore")
       .class_function("create", &make_store, allow_raw_pointers() LEAVES_ASYNC)
       .class_function("pendingWrites", &store_pending_writes)
+      .class_function("debugEnabled", &store_debug_enabled)
+      .class_function("malloc", &store_malloc)
+      .class_function("free", &store_free)
+      .class_function("heapU8Slice", &store_heap_u8_slice)
+      .class_function("copyToHeap", &store_copy_to_heap)
+      .class_function("copyFromHeap", &store_copy_from_heap)
+      .class_function("allocCopy", &store_alloc_copy)
       .function("open", &store_open LEAVES_ASYNC)
       .function("openReplication", &store_open_replication,
                 allow_raw_pointers() LEAVES_ASYNC)
@@ -489,6 +568,7 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("isValid", &ReplicationDBCursor::is_valid)
       .function("key", &ReplicationDBCursor::key)
       .function("getValue", &ReplicationDBCursor::get_value LEAVES_ASYNC)
+      .function("setValuePtr", &ReplicationDBCursor::set_value_ptr LEAVES_ASYNC)
       .function("setValue", &ReplicationDBCursor::set_value LEAVES_ASYNC)
       .function("keyBytes", &ReplicationDBCursor::key_bytes)
       .function("getValueBytes", &ReplicationDBCursor::get_value_bytes LEAVES_ASYNC)
@@ -545,6 +625,7 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("isValid", &CursorWrapper::is_valid)
       .function("key", &CursorWrapper::key)
       .function("getValue", &CursorWrapper::get_value LEAVES_ASYNC)
+      .function("setValuePtr", &CursorWrapper::set_value_ptr LEAVES_ASYNC)
       .function("setValue", &CursorWrapper::set_value LEAVES_ASYNC)
       .function("keyBytes", &CursorWrapper::key_bytes)
       .function("getValueBytes", &CursorWrapper::get_value_bytes LEAVES_ASYNC)

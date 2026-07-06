@@ -76,6 +76,23 @@ function checkEq(a, b, msg) {
   }
 }
 
+async function setValuePtrFromString(Module, cursor, value) {
+  const bytes = new TextEncoder().encode(value);
+  const memory = Module?.LeavesStore;
+  if (!memory || typeof memory.allocCopy !== 'function' || typeof memory.free !== 'function') {
+    throw new Error("LeavesStore memory API is unavailable (allocCopy/free)");
+  }
+  const ptr = Number(memory.allocCopy(bytes));
+  if (!ptr) {
+    throw new Error("Failed to allocate temporary WASM value buffer");
+  }
+  try {
+    await cursor.setValuePtr(ptr, bytes.byteLength);
+  } finally {
+    memory.free(ptr);
+  }
+}
+
 // ── Run test ──────────────────────────────────────────────────
 async function runTest() {
   el.textContent = "";
@@ -206,6 +223,14 @@ async function runTest() {
       await c.find("count");
       check(c.isValid(), "key 'count' exists");
       if (c.isValid()) checkEq(await c.getValue(), "12345", "count → 12345");
+
+      await c.find("ptr_smoke");
+      await setValuePtrFromString(Module, c, "smoke_ptr");
+      await c.commit(false);
+
+      await c.find("ptr_smoke");
+      check(c.isValid(), "key 'ptr_smoke' exists");
+      if (c.isValid()) checkEq(await c.getValue(), "smoke_ptr", "ptr_smoke → smoke_ptr");
 
       c.delete();
     }
