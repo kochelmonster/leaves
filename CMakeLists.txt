@@ -316,6 +316,7 @@ target_link_libraries(leaves_test_support INTERFACE core)
 target_compile_options(leaves_test_support INTERFACE -g)
 target_compile_definitions(leaves_test_support INTERFACE 
     DEBUG 
+    LEAVES_LOG
     TESTING
     CMPFILES="${CMAKE_CURRENT_SOURCE_DIR}/tests/cmpfiles/") 
 target_sources(leaves_test_support INTERFACE
@@ -323,11 +324,11 @@ target_sources(leaves_test_support INTERFACE
 
 if (LEAVES_GCOV)
 target_compile_options(leaves_test_support INTERFACE -g --coverage)
-target_compile_definitions(leaves_test_support INTERFACE DEBUG GCOV_ENABLED)
+target_compile_definitions(leaves_test_support INTERFACE DEBUG LEAVES_LOG GCOV_ENABLED)
 target_link_options(leaves_test_support INTERFACE --coverage)
 else (LEAVES_GCOV)
 target_compile_options(leaves_test_support INTERFACE -g)
-target_compile_definitions(leaves_test_support INTERFACE DEBUG)
+target_compile_definitions(leaves_test_support INTERFACE DEBUG LEAVES_LOG)
 endif (LEAVES_GCOV)
 
 if (LEAVES_ASAN AND NOT LEAVES_GCOV)

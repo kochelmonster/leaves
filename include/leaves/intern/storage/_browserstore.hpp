@@ -28,12 +28,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../core/_exception.hpp"
@@ -44,30 +46,24 @@
 #include "_cachestore.hpp"
 
 // EM_JS functions must be at file scope (outside namespace).
-// Async IDB writes with a JS-side queue — avoids calling back into WASM
-// from IDB callbacks, which is unsafe during Asyncify / JSPI sleep.
+// Async IDB completion is tracked in JS and polled from C++.
 //
-// Writes are serialized: at most one IDB transaction is in-flight at a time.
-// _leavesWriteQueue accumulates pending write requests; the completion
-// callback drains the next item from the queue, guaranteeing FIFO order.
-// This prevents the header (which references areas via the DB directory)
-// from landing in IndexedDB before the areas themselves.
+// C++ owns the write queue and coalescing map using SmartPointer<Area>.
+// JS only tracks write request state and performs the actual async IDB write.
 EM_JS(void, leaves_init_write_state, (), {
   if (Module._leavesWriteState) {
     return;
   }
 
   var state = {
-    writeQueue: [],
-    toWriteMap: Object.create(null),
     firstError: null,
+    writeStatus: Object.create(null),
+    cppQueued: 0,
     inFlight: 0,
-    flusherRunning: false,
+    nextRequestId: 1,
   };
 
   Module._leavesWriteState = state;
-  Module._leavesWriteQueue = state.writeQueue;
-  Module._leavesWrites = 0;
 
   function formatError(error) {
     if (!error) {
@@ -81,99 +77,88 @@ EM_JS(void, leaves_init_write_state, (), {
     }
     return String(error);
   }
-
-  Module._leavesWriteFlush = function() {
-    var s = Module._leavesWriteState;
-    if (!s || s.inFlight > 0) {
-      return;
-    }
-
-    var item = null;
-    while (s.writeQueue.length > 0) {
-      var queueKey = s.writeQueue.shift();
-      item = s.toWriteMap[queueKey];
-      if (!item) {
-        continue;
-      }
-      delete s.toWriteMap[queueKey];
-      break;
-    }
-
-    if (!item) {
-      s.flusherRunning = false;
-      Module._leavesWrites = 0;
-      return;
-    }
-
-    s.inFlight = 1;
-    Module._leavesWrites = 1;
-
-    function onComplete(error) {
-      s.inFlight = 0;
-      Module._leavesWrites = 0;
-
-      if (error) {
-        var details = '[leaves] IDB async write error for db=' + item.db +
-                      ' key=' + item.key +
-                      ' reason=' + formatError(error);
-        if (!s.firstError) {
-          s.firstError = details;
-        }
-        err(details);
-      }
-
-      Module._leavesWriteFlush();
-    }
-
-    try {
-      IDBStore.setFile(item.db, item.key, item.data, onComplete);
-    } catch (error) {
-      onComplete(error);
-    }
-  };
-
-  Module._leavesWriteEnqueue = function(dbName, keyName, bytes) {
-    var s = Module._leavesWriteState;
-    if (!s) {
-      err('[leaves] IDB async write init missing state');
-      return;
-    }
-
-    var queueKey = dbName + '\x1f' + keyName;
-    var existing = s.toWriteMap[queueKey];
-    if (existing) {
-      existing.data = bytes;
-      return;
-    }
-
-    s.toWriteMap[queueKey] = {
-      db: dbName,
-      key: keyName,
-      data: bytes,
-    };
-    s.writeQueue.push(queueKey);
-    Module._leavesWriteQueue = s.writeQueue;
-
-    if (!s.flusherRunning) {
-      s.flusherRunning = true;
-      Module._leavesWriteFlush();
-    }
-  };
+  state.formatError = formatError;
 });
 
-EM_JS(void, leaves_idb_async_write,
+EM_JS(void, leaves_idb_cpp_queued_delta, (int delta), {
+  var s = Module._leavesWriteState;
+  if (!s) {
+    return;
+  }
+  s.cppQueued += delta;
+  if (s.cppQueued < 0) {
+    s.cppQueued = 0;
+  }
+});
+
+// Start one async IDB write and return a request id for polling.
+// Returns 0 only if write state is unavailable.
+EM_JS(uint32_t, leaves_idb_async_write_start,
       (const char* db, const char* key, const void* data, int size), {
-        if (!Module._leavesWriteEnqueue) {
-          err('[leaves] IDB async write init missing: enqueue unavailable');
-          return;
+        var s = Module._leavesWriteState;
+        if (!s) {
+          err('[leaves] IDB async write init missing state');
+          return 0;
         }
 
-        Module._leavesWriteEnqueue(
-          UTF8ToString(db),
-          UTF8ToString(key),
-          new Uint8Array(HEAPU8.subarray(data, data + size))
-        );
+        var dbName = UTF8ToString(db);
+        var keyName = UTF8ToString(key);
+        var reqId = s.nextRequestId++;
+        s.writeStatus[reqId] = 0;
+        s.inFlight += 1;
+
+        function complete(status, error) {
+          if (s.inFlight > 0) {
+            s.inFlight -= 1;
+          } else {
+            s.inFlight = 0;
+          }
+          if (status === 2) {
+            var formatter = s.formatError || function(x) { return String(x); };
+            var details = '[leaves] IDB async write error for db=' + dbName +
+                          ' key=' + keyName +
+                          ' reason=' + formatter(error);
+            if (!s.firstError) {
+              s.firstError = details;
+            }
+            err(details);
+          }
+          s.writeStatus[reqId] = status;
+        }
+
+        try {
+          var payload = new Uint8Array(HEAPU8.subarray(data, data + size));
+          IDBStore.setFile(dbName, keyName, payload, function(error) {
+            if (error) {
+              complete(2, error);
+              return;
+            }
+            complete(1, null);
+          });
+        } catch (error) {
+          complete(2, error);
+        }
+
+        return reqId;
       });
+
+// Poll request status.
+// 0: still in flight, 1: success, 2: failed, 3: unknown/consumed.
+EM_JS(int, leaves_idb_async_write_poll, (uint32_t request_id), {
+  var s = Module._leavesWriteState;
+  if (!s) {
+    return 3;
+  }
+  var st = s.writeStatus[request_id];
+  if (st === undefined) {
+    return 3;
+  }
+  if (st === 0) {
+    return 0;
+  }
+  delete s.writeStatus[request_id];
+  return st;
+});
 
 EM_JS(void, leaves_idb_delete_database, (const char* db), {
   var dbName = UTF8ToString(db);
@@ -202,10 +187,9 @@ EM_JS(int, leaves_idb_delete_pending, (), {
 EM_JS(int, leaves_pending_writes, (), {
   var s = Module._leavesWriteState;
   if (s) {
-    return s.inFlight + s.writeQueue.length;
+    return s.inFlight + s.cppQueued;
   }
-  var q = Module._leavesWriteQueue;
-  return (Module._leavesWrites || 0) + (q ? q.length : 0);
+  return 0;
 });
 
 EM_JS(int, leaves_idb_store_error_size, (), {
@@ -320,7 +304,19 @@ struct _BrowserOperations : _CacheBase {
   // the appropriate sub-offset.
   static constexpr size_t AREA_ALIGNMENT = AreaSize_;
 
-  bool has_pending_writes() const { return leaves_pending_writes() > 0; }
+  struct QueuedWrite {
+    SmartPointer<Area> area_owner;
+    uint64_t store_key = 0;
+  };
+
+  bool has_pending_writes() const {
+    std::lock_guard<std::mutex> lock(_write_mutex);
+    _poll_write_completion_locked();
+    if (!_write_inflight) {
+      _start_next_write_locked();
+    }
+    return _write_inflight || !_queued_writes.empty();
+  }
 
   std::exception_ptr get_store_error() const {
     int size = leaves_idb_store_error_size();
@@ -376,6 +372,12 @@ struct _BrowserOperations : _CacheBase {
   std::string _store_name;  // Object store name (IndexedDB name) — set once in init()
   FileHeader* _header;
   mutable std::mutex _io_mutex;  // For thread-safety even in browser
+  mutable std::mutex _write_mutex;
+  mutable std::deque<uint64_t> _write_order;
+  mutable std::unordered_map<uint64_t, QueuedWrite> _queued_writes;
+  mutable QueuedWrite _inflight_write;
+  mutable uint32_t _inflight_request_id = 0;
+  mutable bool _write_inflight = false;
 
   // Read-ahead cache: avoids double IDB round-trips when resolve()
   // first reads the AreaSlice header, then the full area from the same key.
@@ -421,19 +423,18 @@ struct _BrowserOperations : _CacheBase {
 
   template <typename BlockVector>
   void write_batch(BlockVector& blocks_to_write, bool write_header = false) {
-    // Push blocks into the JS-side write queue.
-    // Enqueue order is FIFO — areas are pushed before the header, so the
-    // header (which references these areas via the DB directory) can never
-    // land in IndexedDB before the areas themselves.
+    // Enqueue writes in FIFO order while coalescing same-key pending writes.
+    // Queue ownership stays in C++ as SmartPointer<Area> to avoid enqueue-time
+    // byte copies for normal area writes.
     size_t total_bytes = 0;
     for (const auto& block : blocks_to_write) {
-      const auto& area = block.area();
+      SmartPointer<Area> area(static_cast<Area*>(block.area()));
       total_bytes += area->size();
-      _idb_async_store_data(area->offset(), area, area->size());
+      _enqueue_write(_make_area_write(std::move(area)));
     }
 
     if (write_header) {
-      _idb_async_store_data(0, _header, calc_header_size());
+      _enqueue_write(_make_header_write());
     }
     if (!blocks_to_write.empty()) {
       LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "[flush] %zu areas, %zu KB async to IDB\n",
@@ -441,17 +442,25 @@ struct _BrowserOperations : _CacheBase {
     }
   }
 
-  // Wait until all in-flight async IDB writes complete.
-  // The pending counter lives in JS (Module._leavesWrites) so IDB
-  // callbacks can decrement it without calling back into WASM.
+  // Wait until this store's queued and in-flight writes are fully drained.
   void wait_for_writes() {
 #if defined(LEAVES_LOG)
     const double started = emscripten_get_now();
     double next_log = started + 1000.0;
 #endif
     while (true) {
-      int pending = leaves_pending_writes();
-      if (pending <= 0) {
+      int pending = 0;
+      {
+        std::lock_guard<std::mutex> lock(_write_mutex);
+        _poll_write_completion_locked();
+        if (!_write_inflight) {
+          _start_next_write_locked();
+        }
+        pending = static_cast<int>(_queued_writes.size()) +
+                  (_write_inflight ? 1 : 0);
+      }
+
+      if (pending == 0) {
         break;
       }
 #if defined(LEAVES_LOG)
@@ -470,54 +479,119 @@ struct _BrowserOperations : _CacheBase {
 
   Mutex& file_lock() { return _header->file_lock; }
 
-  // Load existing area data from IDB and patch in new data at the sub-offset.
-  //
-  // For a full aligned write (sub_offset == 0 && size >= AREA_ALIGNMENT),
-  // returns nullptr — the caller should use the original data directly.
-  // Otherwise, loads the existing data for the aligned key, copies the new
-  // data in place at the correct sub-offset, and returns the loaded buffer
-  // (caller must free() it).  out_size is set to the buffer size.
-  //
-  // key_buf must be at least 32 bytes.
-  void* _idb_load_and_merge(uint64_t key, const void* data, size_t size,
-                            char* key_buf, int& out_size) const {
-    uint64_t store_key = key - (key % AREA_ALIGNMENT);
-    uint64_t sub_offset = key - store_key;
-    idb_key_format(key_buf, 32, store_key);
-
-    // Fast path: writing a full aligned area (the common case for area data).
-    if (sub_offset == 0 && size >= AREA_ALIGNMENT) {
-      out_size = static_cast<int>(size);
-      return nullptr;
+  // Queue an aligned area write and start draining if idle.
+  void _enqueue_write(QueuedWrite&& write) const {
+    std::lock_guard<std::mutex> lock(_write_mutex);
+    auto it = _queued_writes.find(write.store_key);
+    if (it != _queued_writes.end()) {
+      it->second = std::move(write);
+      return;
     }
 
-    // Slow path: read-modify-write for sub-range writes.
-    void* existing = nullptr;
-    int existing_size = 0;
-    int load_error = 0;
+    _write_order.push_back(write.store_key);
+    _queued_writes.emplace(write.store_key, std::move(write));
+    leaves_idb_cpp_queued_delta(1);
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_idb_load_and_merge: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
-      (unsigned long long)key, key_buf, (unsigned long long)sub_offset,
-      size);
+    _poll_write_completion_locked();
+    if (!_write_inflight) {
+      _start_next_write_locked();
+    }
+  }
 
-    emscripten_idb_load(_store_name.c_str(), key_buf, &existing,
-                        &existing_size, &load_error);
+  QueuedWrite _make_area_write(SmartPointer<Area>&& area) const {
+    QueuedWrite write;
+    uint64_t aligned_offset = area->offset();
+    assert((aligned_offset % AREA_ALIGNMENT) == 0);
+    assert(area->size() >= AREA_ALIGNMENT);
+    write.store_key = aligned_offset;
+    write.area_owner = std::move(area);
+    return write;
+  }
 
-    if (existing && existing_size > 0) {
-      // Sub-range data never exceeds the loaded area, so patch in-place.
-      std::memcpy(static_cast<char*>(existing) + sub_offset, data, size);
-      out_size = existing_size;
-      return existing;
+  // Header writes are serialized as full aligned blocks under key area_0.
+  // The queued item still owns its payload through SmartPointer<Area>.
+  QueuedWrite _make_header_write() const {
+    const size_t payload_size = AREA_ALIGNMENT;
+    const size_t alloc_size = sizeof(Area) + payload_size;
+
+    Area* owner = reinterpret_cast<Area*>(::operator new(alloc_size));
+    owner->init(0, static_cast<uint32_t>(payload_size), 0);
+    owner->_ref.store(0, std::memory_order_relaxed);
+
+    char* payload = reinterpret_cast<char*>(owner) + sizeof(Area);
+    std::memset(payload, 0, payload_size);
+    std::memcpy(payload, _header, calc_header_size());
+
+    QueuedWrite write;
+    write.store_key = 0;
+    write.area_owner = SmartPointer<Area>(owner);
+    return write;
+  }
+
+  void _poll_write_completion_locked() const {
+    if (!_write_inflight) {
+      return;
     }
 
-    // No existing data — allocate and return only the written sub-range.
-    out_size = static_cast<int>(sub_offset + size);
-    existing = std::malloc(out_size);
-    if (existing) {
-      std::memset(existing, 0, out_size);
-      std::memcpy(static_cast<char*>(existing) + sub_offset, data, size);
+    int status = leaves_idb_async_write_poll(_inflight_request_id);
+    if (status == 0) {
+      return;
     }
-    return existing;
+
+    _inflight_request_id = 0;
+    _write_inflight = false;
+    _inflight_write = QueuedWrite{};
+  }
+
+  void _start_next_write_locked() const {
+    if (_write_inflight) {
+      return;
+    }
+
+    while (!_write_order.empty()) {
+      uint64_t key = _write_order.front();
+      _write_order.pop_front();
+
+      auto it = _queued_writes.find(key);
+      if (it == _queued_writes.end()) {
+        continue;
+      }
+
+      QueuedWrite next = std::move(it->second);
+      _queued_writes.erase(it);
+
+      char key_buf[32];
+      idb_key_format(key_buf, sizeof(key_buf), key);
+
+      const bool is_header_write = (key == 0);
+      const char* owner_bytes = static_cast<const char*>(next.area_owner);
+      const uint8_t* write_data = reinterpret_cast<const uint8_t*>(
+          owner_bytes + (is_header_write ? sizeof(Area) : 0));
+      int write_size = static_cast<int>(next.area_owner->size());
+      if (is_header_write) {
+        assert(next.area_owner->size() >= AREA_ALIGNMENT);
+      }
+
+      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                          "_idb_queue_start_write: key=%llu size=%d\n",
+                          (unsigned long long)key,
+                          write_size);
+
+      uint32_t request_id = leaves_idb_async_write_start(
+          _store_name.c_str(), key_buf, write_data, write_size);
+      if (request_id == 0) {
+        // Keep the write queued and let a later pump retry.
+        _queued_writes.emplace(key, std::move(next));
+        _write_order.push_front(key);
+        return;
+      }
+
+      leaves_idb_cpp_queued_delta(-1);
+      _inflight_write = std::move(next);
+      _inflight_request_id = request_id;
+      _write_inflight = true;
+      return;
+    }
   }
 
   // IndexedDB load operation using Emscripten Asyncify
@@ -601,29 +675,6 @@ struct _BrowserOperations : _CacheBase {
       // Free the allocated buffer from emscripten
       free(loaded_data);
     }
-  }
-
-  // Fire-and-forget async IDB write — JS glue copies buffer immediately
-  //
-  // When writing only a sub-range within an aligned area (e.g. a 4K header
-  // flush into area_0), we perform a synchronous read-modify-write before
-  // queueing the full merged buffer for async storage.  This prevents
-  // sub-range writes from silently truncating the stored area to only the
-  // written bytes, which would lose previously stored data at other offsets
-  // within the same aligned block (e.g. overflow directory pages co-located
-  // with the header in the first AREA_SIZE block).
-  void _idb_async_store_data(uint64_t key, const void* data, size_t size) const {
-    char key_buf[32];
-    int write_size;
-
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_idb_async_store_data: key=%llu size=%zu\n",
-               (unsigned long long)key, size);
-
-    void* buf = _idb_load_and_merge(key, data, size, key_buf, write_size);
-    const void* write_data = buf ? buf : data;
-    leaves_idb_async_write(_store_name.c_str(), key_buf, write_data,
-                           write_size);
-    if (buf) free(buf);
   }
 
   // Flush any pending data
@@ -749,6 +800,30 @@ struct _BrowserStore
           assert(rel + size <= block.area()->size());
           std::memcpy(static_cast<char*>(block), buf, size);
           self->make_dirty(block);
+        },
+        [self](auto&& mark_occupied_range) {
+          struct DirectoryPageHeader {
+            uint16_t count;
+            offset_t next;
+          };
+
+          offset_t next = self->_header->db_next_page;
+          const uint64_t max_pages =
+              self->_header->file_size / traits_t::AREA_SIZE + 1;
+          uint64_t visited_pages = 0;
+          while (next && visited_pages++ < max_pages) {
+            const uint64_t area_pos = (uint64_t)next - sizeof(Area);
+            mark_occupied_range(area_pos, traits_t::AREA_SIZE);
+            DirectoryPageHeader page_header{};
+            self->read((uint64_t)next, &page_header, sizeof(page_header));
+            next = page_header.next;
+          }
+
+          if (next) {
+            LEAVES_INTERNAL_LOG(
+                LEAVES_LOG_ERROR,
+                "_BrowserStore::_recover_areas stopping overflow-page occupancy scan due to cycle/overflow guard\n");
+          }
         });
     this->flush();
   }

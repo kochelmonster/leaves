@@ -290,6 +290,9 @@ struct _MemoryMapFile
         },
         [base](uint64_t pos, const void* buf, size_t size) {
           memcpy(base + pos, buf, size);
+        },
+        [](auto&& /*mark_occupied_range*/) {
+          // no overflow areas
         });
   }
 

@@ -83,20 +83,25 @@ struct _CacheStore : public Opers_,
     std::cout << "============================\n\n";
   }
 
-  void debug_reset() {
-    std::cout << "Resetting cache (clearing all entries)\n";
+  // Internal helper to drop all cache and dirty-tracking state.
+  // Callers must ensure pending writes are already drained.
+  void reset_cache_state() {
     {
       std::lock_guard<SpinLock> lock(_cache_mutex);
       _cache = Cache(_capacity);
     }
 
-    // Also reset the dirty areas map to avoid dangling references
     {
       std::lock_guard<SpinLock> lock(_dirty_mutex);
       _dirty_pending.clear();
       _dirty_committed.clear();
       _dirty_inflight.clear();
     }
+  }
+
+  void debug_reset() {
+    std::cout << "Resetting cache (clearing all entries)\n";
+    reset_cache_state();
   }
 
   // Dirty area tracking — guarded by _dirty_mutex (shared with background
@@ -491,9 +496,13 @@ struct _CacheStore : public Opers_,
                                           sizeof(typename Opers_::FileHeader));
   }
 
-  // Overflow page capacity
+  // Overflow area capacity: one directory page per whole area payload.
+  static constexpr size_t _overflow_page_bytes() {
+    return AREA_SIZE - sizeof(Area);
+  }
+
   static constexpr uint16_t _overflow_page_capacity() {
-    return _DBDirectoryPage::capacity_for(4 * K -
+    return _DBDirectoryPage::capacity_for(_overflow_page_bytes() -
                                           offsetof(_DBDirectoryPage, entries));
   }
 
@@ -556,15 +565,8 @@ struct _CacheStore : public Opers_,
     offset_t cur = _header->db_next_page;
 
     while (cur) {
-      alignas(8) char buf[4 * K];
-      {
-        page_ptr cur_block = resolve(&cur, READ);
-        const uint64_t cur_read_rel =
-            (uint64_t)cur - cur_block.area()->offset();
-        assert(cur_read_rel + 4 * K <= cur_block.area()->size());
-        std::memcpy(buf, static_cast<char*>(cur_block), 4 * K);
-      }
-      auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+      page_ptr cur_block = resolve(&cur, WRITE);
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(cur_block));
       uint16_t pcap = _overflow_page_capacity();
 
       // Re-use a free slot (zeroed offset) in existing entries
@@ -578,11 +580,7 @@ struct _CacheStore : public Opers_,
                        sizeof(page->entries[i].name) - 1);
           page->entries[i].name[sizeof(page->entries[i].name) - 1] = '\0';
           page->entries[i].offset = tmp_offset;
-          page_ptr page_block = resolve(&cur, WRITE);
-          const uint64_t write_rel = (uint64_t)cur - page_block.area()->offset();
-          assert(write_rel + 4 * K <= page_block.area()->size());
-          std::memcpy(static_cast<char*>(page_block), buf, 4 * K);
-          make_dirty(page_block);
+          make_dirty(cur_block);
           make_header_dirty();
           flush();
           _dbs[name] = _DBSlot::make(db);
@@ -601,11 +599,7 @@ struct _CacheStore : public Opers_,
         slot.name[sizeof(slot.name) - 1] = '\0';
         slot.offset = tmp_offset;
         page->count++;
-        page_ptr page_block = resolve(&cur, WRITE);
-        const uint64_t write_rel = (uint64_t)cur - page_block.area()->offset();
-        assert(write_rel + 4 * K <= page_block.area()->size());
-        std::memcpy(static_cast<char*>(page_block), buf, 4 * K);
-        make_dirty(page_block);
+        make_dirty(cur_block);
         make_header_dirty();
         flush();
         _dbs[name] = _DBSlot::make(db);
@@ -622,9 +616,9 @@ struct _CacheStore : public Opers_,
     if (!new_page_area) throw LeavesException();
     offset_t new_off = new_page_area->content_offset();
 
-    alignas(8) char buf[4 * K];
-    std::memset(buf, 0, 4 * K);
-    auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+    page_ptr new_page_block = resolve(&new_off, WRITE);
+    auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(new_page_block));
+    std::memset((void*)page, 0, _overflow_page_bytes());
 
     offset_t tmp_offset = 0;
     auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
@@ -637,29 +631,13 @@ struct _CacheStore : public Opers_,
     page->count = 1;
     page->next = 0;
 
-    page_ptr new_page_block = resolve(&new_off, WRITE);
-    const uint64_t new_write_rel = (uint64_t)new_off - new_page_block.area()->offset();
-    assert(new_write_rel + 4 * K <= new_page_block.area()->size());
-    std::memcpy(static_cast<char*>(new_page_block), buf, 4 * K);
     make_dirty(new_page_block);
 
     // Link from predecessor
     if (prev_offset) {
-      alignas(8) char prev_buf[4 * K];
-      {
-        page_ptr prev_read_block = resolve(&prev_offset, READ);
-        const uint64_t prev_read_rel =
-            (uint64_t)prev_offset - prev_read_block.area()->offset();
-        assert(prev_read_rel + 4 * K <= prev_read_block.area()->size());
-        std::memcpy(prev_buf, static_cast<char*>(prev_read_block), 4 * K);
-      }
-      auto* prev = reinterpret_cast<_DBDirectoryPage*>(prev_buf);
-      prev->next = new_off;
       page_ptr prev_page_block = resolve(&prev_offset, WRITE);
-      const uint64_t prev_write_rel =
-          (uint64_t)prev_offset - prev_page_block.area()->offset();
-      assert(prev_write_rel + 4 * K <= prev_page_block.area()->size());
-      std::memcpy(static_cast<char*>(prev_page_block), prev_buf, 4 * K);
+      auto* prev = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(prev_page_block));
+      prev->next = new_off;
       make_dirty(prev_page_block);
     } else {
       _header->db_next_page = new_off;
@@ -734,26 +712,15 @@ struct _CacheStore : public Opers_,
   bool _remove_from_overflow_pages(const char* name) {
     offset_t next = _header->db_next_page;
     while (next) {
-      alignas(8) char buf[4 * K];
-      {
-        page_ptr next_block = resolve(&next, READ);
-        const uint64_t read_rel = (uint64_t)next - next_block.area()->offset();
-        assert(read_rel + 4 * K <= next_block.area()->size());
-        std::memcpy(buf, static_cast<char*>(next_block), 4 * K);
-      }
-      auto* page = reinterpret_cast<_DBDirectoryPage*>(buf);
+      page_ptr next_block = resolve(&next, WRITE);
+      auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(next_block));
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
         if (page->entries[i].offset && !strcmp(page->entries[i].name, name)) {
           _return_areas_at<DBClass>(page->entries[i].offset, name);
           page->entries[i].offset = 0;
-          page_ptr page_block = resolve(&next, WRITE);
-          const uint64_t write_rel =
-              (uint64_t)next - page_block.area()->offset();
-          assert(write_rel + 4 * K <= page_block.area()->size());
-          std::memcpy(static_cast<char*>(page_block), buf, 4 * K);
-          make_dirty(page_block);
+          make_dirty(next_block);
           make_header_dirty();
           return true;
         }
