@@ -158,8 +158,6 @@ export class BrowserBenchmarkRunner {
     this.pendingWritesLast = -1;
     this.pendingWritesLastAtMs = 0;
     this.pendingWritesSampleEveryMs = 100;
-    this.valuePtr = 0;
-    this.valueCapacity = 0;
   }
 
   printHeader() {
@@ -215,26 +213,12 @@ export class BrowserBenchmarkRunner {
     return this.pendingWritesLast;
   }
 
-  memoryApi() {
-    return this.Module?.LeavesStore;
-  }
-
-  assertMemoryApi() {
-    const memory = this.memoryApi();
-    const missing = [];
-    if (!memory || typeof memory.malloc !== 'function') {
-      missing.push('LeavesStore.malloc');
+  heapU8() {
+    const heap = this.Module?.HEAPU8;
+    if (!heap || typeof heap.set !== 'function') {
+      throw new Error('Module.HEAPU8 is unavailable. Rebuild leaves.js with heap exports enabled.');
     }
-    if (!memory || typeof memory.free !== 'function') {
-      missing.push('LeavesStore.free');
-    }
-    if (!memory || typeof memory.copyToHeap !== 'function') {
-      missing.push('LeavesStore.copyToHeap');
-    }
-    if (missing.length > 0) {
-      throw new Error(`Leaves memory API not available: ${missing.join(', ')}. Rebuild leaves.js with updated LeavesStore memory bindings.`);
-    }
-    return memory;
+    return heap;
   }
 
   startHeartbeat(totalOps = undefined) {
@@ -310,45 +294,26 @@ export class BrowserBenchmarkRunner {
     }
   }
 
-  ensureValueBuffer(length) {
-    const memory = this.assertMemoryApi();
-    const needed = Math.max(1, Number(length) || 0);
-    if (this.valuePtr && this.valueCapacity >= needed) {
+  async writeReservedValue(cursor, value) {
+    if (cursor && typeof cursor.reserveBytes === 'function') {
+      const view = await cursor.reserveBytes(value.byteLength);
+      if (!view || typeof view.set !== 'function') {
+        throw new Error('Cursor.reserveBytes returned an invalid Uint8Array view.');
+      }
+      if (view.byteLength < value.byteLength) {
+        throw new Error(`Cursor.reserveBytes returned a short view (${view.byteLength} < ${value.byteLength}).`);
+      }
+      view.set(value);
       return;
     }
-    if (this.valuePtr) {
-      memory.free(this.valuePtr);
-      this.valuePtr = 0;
-      this.valueCapacity = 0;
+    if (!cursor || typeof cursor.reserve !== 'function') {
+      throw new Error('Cursor.reserve/reserveBytes is unavailable. Rebuild leaves.js with updated cursor bindings.');
     }
-    this.valuePtr = Number(memory.malloc(needed));
-    if (!this.valuePtr) {
-      throw new Error(`Failed to allocate WASM value buffer (${needed} bytes)`);
+    const ptr = Number(await cursor.reserve(value.byteLength));
+    if (!Number.isFinite(ptr) || ptr <= 0) {
+      throw new Error(`Cursor.reserve returned invalid pointer (${ptr}) for ${value.byteLength} bytes`);
     }
-    this.valueCapacity = needed;
-  }
-
-  releaseValueBuffer() {
-    const memory = this.memoryApi();
-    if (!this.valuePtr) {
-      return;
-    }
-    if (!memory || typeof memory.free !== 'function') {
-      throw new Error('LeavesStore.free is unavailable while releasing benchmark value buffer');
-    }
-    memory.free(this.valuePtr);
-    this.valuePtr = 0;
-    this.valueCapacity = 0;
-  }
-
-  async setCursorValuePtr(cursor, value) {
-    const memory = this.assertMemoryApi();
-    if (!cursor || typeof cursor.setValuePtr !== 'function') {
-      throw new Error('Cursor.setValuePtr is unavailable. Rebuild leaves.js with updated cursor bindings.');
-    }
-    this.ensureValueBuffer(value.byteLength);
-    memory.copyToHeap(this.valuePtr, value);
-    await cursor.setValuePtr(this.valuePtr, value.byteLength);
+    this.heapU8().set(value, ptr);
   }
 
   startRun() {
@@ -431,7 +396,7 @@ export class BrowserBenchmarkRunner {
         const value = this.gen.generateView(valueSize);
         this.bytes += key.length + value.byteLength;
         await this.withAwait('cursor.find', () => cursor.find(key), { op: this.done + 1 });
-        await this.withAwait('cursor.setValuePtr', () => this.setCursorValuePtr(cursor, value), { op: this.done + 1 });
+        await this.withAwait('cursor.reserve', () => this.writeReservedValue(cursor, value), { op: this.done + 1 });
         this.finishedSingleOp();
         this.maybeLogProgress('write-leaves-ops', Math.min(i + j + 1, numEntries), numEntries);
       }
@@ -666,36 +631,32 @@ export class BrowserBenchmarkRunner {
   }
 
   async run(which) {
-    try {
-      this.printHeader();
-      const selected = which === 'leaves' ? LEAVES_BENCHMARKS
-        : which === 'idb' ? IDB_BENCHMARKS
-        : [...LEAVES_BENCHMARKS, ...IDB_BENCHMARKS];
+    this.printHeader();
+    const selected = which === 'leaves' ? LEAVES_BENCHMARKS
+      : which === 'idb' ? IDB_BENCHMARKS
+      : [...LEAVES_BENCHMARKS, ...IDB_BENCHMARKS];
 
-      this.diag('selected-benchmarks', {
-        which,
-        count: selected.length,
-        list: selected.join(','),
-      });
+    this.diag('selected-benchmarks', {
+      which,
+      count: selected.length,
+      list: selected.join(','),
+    });
 
-      for (const name of selected) {
-        await this.runOne(name);
-      }
-
-      if (this.leavesStore) {
-        this.setPhase('teardown-leaves');
-        await this.withAwait('leavesStore.close', () => this.leavesStore.close(), {
-          storage: 'leavesStore',
-        });
-      }
-      if (this.rawDb) {
-        this.setPhase('teardown-raw');
-        this.rawDb.close();
-      }
-      this.setPhase('done');
-    } finally {
-      this.releaseValueBuffer();
+    for (const name of selected) {
+      await this.runOne(name);
     }
+
+    if (this.leavesStore) {
+      this.setPhase('teardown-leaves');
+      await this.withAwait('leavesStore.close', () => this.leavesStore.close(), {
+        storage: 'leavesStore',
+      });
+    }
+    if (this.rawDb) {
+      this.setPhase('teardown-raw');
+      this.rawDb.close();
+    }
+    this.setPhase('done');
   }
 }
 

@@ -55,6 +55,8 @@ class TCursor {
 
   void prev() { _cursor->prev(); }
 
+  void* reserve(size_t size) { return _cursor->reserve(size); }
+
   void value(const Slice& value) { _cursor->value(value); }
 
   Slice value() const { return _cursor->value(); }

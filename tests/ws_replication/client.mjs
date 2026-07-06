@@ -52,21 +52,31 @@ function checkEq(a, b, msg) {
   }
 }
 
-async function setValuePtrFromString(Module, cursor, value) {
+async function setValueFromStringWithReserve(Module, cursor, value) {
   const bytes = new TextEncoder().encode(value);
-  const memory = Module?.LeavesStore;
-  if (!memory || typeof memory.allocCopy !== 'function' || typeof memory.free !== 'function') {
-    throw new Error("LeavesStore memory API is unavailable (allocCopy/free)");
+  if (cursor && typeof cursor.reserveBytes === "function") {
+    const view = await cursor.reserveBytes(bytes.byteLength);
+    if (!view || typeof view.set !== "function") {
+      throw new Error("Cursor.reserveBytes returned an invalid Uint8Array view");
+    }
+    if (view.byteLength < bytes.byteLength) {
+      throw new Error("Cursor.reserveBytes returned a short view");
+    }
+    view.set(bytes);
+    return;
   }
-  const ptr = Number(memory.allocCopy(bytes));
+  if (!cursor || typeof cursor.reserve !== "function") {
+    throw new Error("Cursor.reserve is unavailable");
+  }
+  const heap = Module?.HEAPU8;
+  if (!heap || typeof heap.set !== "function") {
+    throw new Error("Module.HEAPU8 is unavailable");
+  }
+  const ptr = Number(await cursor.reserve(bytes.byteLength));
   if (!ptr) {
-    throw new Error("Failed to allocate temporary WASM value buffer");
+    throw new Error("Cursor.reserve returned an invalid pointer");
   }
-  try {
-    await cursor.setValuePtr(ptr, bytes.byteLength);
-  } finally {
-    memory.free(ptr);
-  }
+  heap.set(bytes, ptr);
 }
 
 // ── Run test ──────────────────────────────────────────────────
@@ -197,7 +207,7 @@ async function runTest() {
       if (c.isValid()) checkEq(await c.getValue(), "12345", "count → 12345");
 
       await c.find("ptr_smoke");
-      await setValuePtrFromString(Module, c, "smoke_ptr");
+      await setValueFromStringWithReserve(Module, c, "smoke_ptr");
       await c.commit(false);
 
       await c.find("ptr_smoke");

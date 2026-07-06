@@ -13,6 +13,7 @@ option(LEAVES_BROWSER_DEBUG "Build browser WASM targets in debug mode (with diag
 # ── Async backend: JSPI (default) or ASYNCIFY ─────────────────
 set(LEAVES_ASYNC_BACKEND "JSPI" CACHE STRING "Async WASM backend: JSPI or ASYNCIFY")
 set_property(CACHE LEAVES_ASYNC_BACKEND PROPERTY STRINGS "JSPI" "ASYNCIFY")
+set(LEAVES_WASM_RUNTIME_EXPORTS "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','FS','setValue','getValue','HEAPU8']")
 
 if(LEAVES_ASYNC_BACKEND STREQUAL "JSPI")
     set(LEAVES_ASYNC_FLAG "-sJSPI")
@@ -75,7 +76,7 @@ if(EMSCRIPTEN)
             ${LEAVES_ASYNC_FLAG}
             ${LEAVES_ASYNC_IMPORTS}
             -sALLOW_MEMORY_GROWTH=1
-            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            ${LEAVES_WASM_RUNTIME_EXPORTS}
             -sENVIRONMENT=web,node
         )
     else()
@@ -87,7 +88,7 @@ if(EMSCRIPTEN)
             ${LEAVES_ASYNC_FLAG}
             ${LEAVES_ASYNC_IMPORTS}
             -sALLOW_MEMORY_GROWTH=1
-            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            ${LEAVES_WASM_RUNTIME_EXPORTS}
             -sENVIRONMENT=web,node
         )
     endif()
@@ -101,7 +102,7 @@ if(EMSCRIPTEN)
         ${LEAVES_ASYNC_IMPORTS}
         -sMODULARIZE=1
         -sEXPORT_ES6=1
-        "-sEXPORTED_RUNTIME_METHODS=['FS','callMain','setValue','getValue']"
+        ${LEAVES_WASM_RUNTIME_EXPORTS}
     )
     set_target_properties(leaves PROPERTIES OUTPUT_NAME "leaves")
 

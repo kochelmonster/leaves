@@ -33,7 +33,7 @@
 #endif
 
 #include <leaves/intern/storage/_browserstore.hpp>
-#include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <memory>
@@ -118,13 +118,17 @@ struct ReplicationDBCursor {
     return std::string(v.data(), v.size());
   }
 
-  void set_value_ptr(uintptr_t value_ptr, size_t value_len) {
-    const char* ptr = reinterpret_cast<const char*>(value_ptr);
-    _cursor->value(leaves::Slice(ptr, value_len));
+  uintptr_t reserve(size_t size) {
+    return reinterpret_cast<uintptr_t>(_cursor->reserve(size));
+  }
+
+  val reserve_bytes(size_t size) {
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(_cursor->reserve(size));
+    return val(typed_memory_view(size, ptr));
   }
 
   void set_value(const std::string& v) {
-    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
+    _cursor->value(leaves::Slice(v.data(), v.size()));
   }
 
   val key_bytes() const {
@@ -142,7 +146,7 @@ struct ReplicationDBCursor {
   }
 
   void set_value_bytes(const std::string& v) {
-    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
+    _cursor->value(leaves::Slice(v.data(), v.size()));
   }
 
   void find(const std::string& key) {
@@ -196,13 +200,17 @@ struct CursorWrapper {
     return std::string(v.data(), v.size());
   }
 
-  void set_value_ptr(uintptr_t value_ptr, size_t value_len) {
-    const char* ptr = reinterpret_cast<const char*>(value_ptr);
-    _cursor.value(leaves::Slice(ptr, value_len));
+  uintptr_t reserve(size_t size) {
+    return reinterpret_cast<uintptr_t>(_cursor.reserve(size));
+  }
+
+  val reserve_bytes(size_t size) {
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(_cursor.reserve(size));
+    return val(typed_memory_view(size, ptr));
   }
 
   void set_value(const std::string& v) {
-    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
+    _cursor.value(leaves::Slice(v.data(), v.size()));
   }
 
   val key_bytes() const {
@@ -220,7 +228,7 @@ struct CursorWrapper {
   }
 
   void set_value_bytes(const std::string& v) {
-    set_value_ptr(reinterpret_cast<uintptr_t>(v.data()), v.size());
+    _cursor.value(leaves::Slice(v.data(), v.size()));
   }
 
   void find(const std::string& key) {
@@ -283,46 +291,6 @@ static void store_close(JSStore& s) { s._storage->_storage->destroy(); }
 
 // Number of IDB write operations still in flight (global counter)
 static int store_pending_writes() { return leaves_pending_writes(); }
-
-// Allocate/free raw WASM heap memory from JS call sites.
-// Returned pointers are suitable for setValuePtr and other pointer APIs.
-static uintptr_t store_malloc(size_t size) {
-  const size_t alloc_size = size == 0 ? 1 : size;
-  return reinterpret_cast<uintptr_t>(std::malloc(alloc_size));
-}
-
-static void store_free(uintptr_t ptr) {
-  if (ptr == 0) {
-    return;
-  }
-  std::free(reinterpret_cast<void*>(ptr));
-}
-
-// Return a Uint8Array view for a specific WASM heap region.
-static val store_heap_u8_slice(uintptr_t ptr, size_t len) {
-  return val(typed_memory_view(len, reinterpret_cast<uint8_t*>(ptr)));
-}
-
-static void store_copy_to_heap(uintptr_t dst_ptr, val bytes) {
-  const size_t len = bytes["length"].as<size_t>();
-  val dst = store_heap_u8_slice(dst_ptr, len);
-  dst.call<void>("set", bytes);
-}
-
-static val store_copy_from_heap(uintptr_t src_ptr, size_t len) {
-  const uint8_t* src = reinterpret_cast<const uint8_t*>(src_ptr);
-  return val(typed_memory_view(len, src)).call<val>("slice");
-}
-
-static uintptr_t store_alloc_copy(val bytes) {
-  const size_t len = bytes["length"].as<size_t>();
-  const uintptr_t ptr = store_malloc(len);
-  if (ptr == 0) {
-    return 0;
-  }
-  store_copy_to_heap(ptr, bytes);
-  return ptr;
-}
 
 // Whether this module was built with browser diagnostics enabled.
 static bool store_debug_enabled() {
@@ -542,12 +510,6 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .class_function("create", &make_store, allow_raw_pointers() LEAVES_ASYNC)
       .class_function("pendingWrites", &store_pending_writes)
       .class_function("debugEnabled", &store_debug_enabled)
-      .class_function("malloc", &store_malloc)
-      .class_function("free", &store_free)
-      .class_function("heapU8Slice", &store_heap_u8_slice)
-      .class_function("copyToHeap", &store_copy_to_heap)
-      .class_function("copyFromHeap", &store_copy_from_heap)
-      .class_function("allocCopy", &store_alloc_copy)
       .function("open", &store_open LEAVES_ASYNC)
       .function("openReplication", &store_open_replication,
                 allow_raw_pointers() LEAVES_ASYNC)
@@ -568,7 +530,8 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("isValid", &ReplicationDBCursor::is_valid)
       .function("key", &ReplicationDBCursor::key)
       .function("getValue", &ReplicationDBCursor::get_value LEAVES_ASYNC)
-      .function("setValuePtr", &ReplicationDBCursor::set_value_ptr LEAVES_ASYNC)
+      .function("reserve", &ReplicationDBCursor::reserve LEAVES_ASYNC)
+      .function("reserveBytes", &ReplicationDBCursor::reserve_bytes LEAVES_ASYNC)
       .function("setValue", &ReplicationDBCursor::set_value LEAVES_ASYNC)
       .function("keyBytes", &ReplicationDBCursor::key_bytes)
       .function("getValueBytes", &ReplicationDBCursor::get_value_bytes LEAVES_ASYNC)
@@ -625,7 +588,8 @@ EMSCRIPTEN_BINDINGS(leaves) {
       .function("isValid", &CursorWrapper::is_valid)
       .function("key", &CursorWrapper::key)
       .function("getValue", &CursorWrapper::get_value LEAVES_ASYNC)
-      .function("setValuePtr", &CursorWrapper::set_value_ptr LEAVES_ASYNC)
+      .function("reserve", &CursorWrapper::reserve LEAVES_ASYNC)
+      .function("reserveBytes", &CursorWrapper::reserve_bytes LEAVES_ASYNC)
       .function("setValue", &CursorWrapper::set_value LEAVES_ASYNC)
       .function("keyBytes", &CursorWrapper::key_bytes)
       .function("getValueBytes", &CursorWrapper::get_value_bytes LEAVES_ASYNC)
