@@ -160,30 +160,6 @@ EM_JS(int, leaves_idb_async_write_poll, (uint32_t request_id), {
   return st;
 });
 
-EM_JS(void, leaves_idb_delete_database, (const char* db), {
-  var dbName = UTF8ToString(db);
-  // Remove the cached database handle so a subsequent create will re-open fresh
-  console.log('[leaves] Deleting IndexedDB database: ' + dbName);
-  if (IDBStore.dbs) {
-    delete IDBStore.dbs[dbName];
-  }
-  Module._leavesDeletePending = 1;
-  console.log('[leaves] IndexedDB deleteDatabase request sent: ' + dbName);
-  var req = indexedDB.deleteDatabase(dbName);
-  req.onsuccess = function() {
-    Module._leavesDeletePending = 0;
-    console.log('[leaves] IndexedDB database deleted: ' + dbName);
-  };
-  req.onerror = function() {
-    Module._leavesDeletePending = 0;
-    err('[leaves] Failed to delete IndexedDB database: ' + dbName);
-  };
-});
-
-EM_JS(int, leaves_idb_delete_pending, (), {
-  return Module._leavesDeletePending || 0;
-});
-
 EM_JS(int, leaves_pending_writes, (), {
   var s = Module._leavesWriteState;
   if (s) {
@@ -863,35 +839,6 @@ struct _BrowserStore
     this->flush(true, true);
 
     // Import areas (simplified - full version would parse all areas)
-  }
-
-  // Browser-specific: Delete the entire IndexedDB database
-  // Flushes pending writes, then removes the database entirely.
-  // Blocks until IndexedDB deleteDatabase() completes — without this
-  // the subsequent create() may race with the still-in-progress deletion
-  // and hang on emscripten_idb_load.
-  void delete_storage() {
-    // Flush and close all pending operations
-    this->destroy();
-    // Delete the IndexedDB database from JS
-    leaves_idb_delete_database(this->_store_name.c_str());
-    // Wait for the async deleteDatabase() to complete
-#if defined(LEAVES_LOG)
-    const double started = emscripten_get_now();
-    double next_log = started + 1000.0;
-#endif
-    while (leaves_idb_delete_pending() > 0) {
-#if defined(LEAVES_LOG)
-      const double now = emscripten_get_now();
-      if (now >= next_log) {
-        LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "[diag] delete_storage waiting: store=%s pending=%d elapsed=%.0fms\n",
-            this->_store_name.c_str(), leaves_idb_delete_pending(),
-            now - started);
-        next_log = now + 1000.0;
-      }
-#endif
-      emscripten_sleep(1);
-    }
   }
 
   // Browser-specific: Clear all data

@@ -123,6 +123,23 @@ function reqDone(request) {
   });
 }
 
+function advanceCursor(request, cursor) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+    cursor.continue();
+  });
+}
+
+function deleteIndexedDb(name) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error(`Failed to delete IndexedDB ${name}`));
+    request.onblocked = () => reject(new Error(`IndexedDB deleteDatabase blocked for ${name}`));
+  });
+}
+
 export class BrowserBenchmarkRunner {
   constructor(Module, options) {
     this.Module = Module;
@@ -142,6 +159,8 @@ export class BrowserBenchmarkRunner {
     this.leavesDb = null;
     this.rawDb = null;
     this.rawStorageName = '';
+    this.createdLeavesStorageNames = [];
+    this.createdRawStorageNames = [];
     this.gen = new RandomGenerator();
     this.rand = new Random(301);
     this.start = 0;
@@ -295,25 +314,8 @@ export class BrowserBenchmarkRunner {
   }
 
   async writeReservedValue(cursor, value) {
-    if (cursor && typeof cursor.reserveBytes === 'function') {
-      const view = await cursor.reserveBytes(value.byteLength);
-      if (!view || typeof view.set !== 'function') {
-        throw new Error('Cursor.reserveBytes returned an invalid Uint8Array view.');
-      }
-      if (view.byteLength < value.byteLength) {
-        throw new Error(`Cursor.reserveBytes returned a short view (${view.byteLength} < ${value.byteLength}).`);
-      }
-      view.set(value);
-      return;
-    }
-    if (!cursor || typeof cursor.reserve !== 'function') {
-      throw new Error('Cursor.reserve/reserveBytes is unavailable. Rebuild leaves.js with updated cursor bindings.');
-    }
-    const ptr = Number(await cursor.reserve(value.byteLength));
-    if (!Number.isFinite(ptr) || ptr <= 0) {
-      throw new Error(`Cursor.reserve returned invalid pointer (${ptr}) for ${value.byteLength} bytes`);
-    }
-    this.heapU8().set(value, ptr);
+    const view = await cursor.reserveBytes(value.byteLength);
+    view.set(value);
   }
 
   startRun() {
@@ -353,6 +355,7 @@ export class BrowserBenchmarkRunner {
     }
     this.leafDbIndex += 1;
     const storageName = `${DEFAULT_STORAGE_PREFIX}_leaves_${this.runId}_${this.leafDbIndex}`;
+    this.createdLeavesStorageNames.push(storageName);
     this.diag('opening-fresh-leaves-storage', { storageName });
     this.leavesStore = await this.withAwait('LeavesStore.create',
       () => this.Module.LeavesStore.create(storageName, 10 * 1024 * 1024), { storageName });
@@ -457,10 +460,40 @@ export class BrowserBenchmarkRunner {
     }
     this.idbIndex += 1;
     this.rawStorageName = `${DEFAULT_STORAGE_PREFIX}_raw_${this.runId}_${this.idbIndex}`;
+    this.createdRawStorageNames.push(this.rawStorageName);
     this.diag('opening-fresh-raw-storage', { storageName: this.rawStorageName });
     this.rawDb = await this.withAwait('openIndexedDb', () => openIndexedDb(this.rawStorageName), {
       storageName: this.rawStorageName,
     });
+  }
+
+  async deleteCreatedStorage() {
+    const cleanupErrors = [];
+    for (const storageName of this.createdLeavesStorageNames) {
+      this.setPhase('delete-leaves-storage', { storageName });
+      try {
+        await this.withAwait('LeavesStore.deleteStorage', () => this.Module.LeavesStore.deleteStorage(storageName), {
+          storageName,
+        });
+      } catch (error) {
+        cleanupErrors.push(error);
+        this.log(`WARNING: failed to delete Leaves storage '${storageName}': ${error?.message || error}`);
+      }
+    }
+
+    for (const storageName of this.createdRawStorageNames) {
+      this.setPhase('delete-raw-storage', { storageName });
+      try {
+        await this.withAwait('indexedDB.deleteDatabase', () => deleteIndexedDb(storageName), {
+          storageName,
+        });
+      } catch (error) {
+        cleanupErrors.push(error);
+        this.log(`WARNING: failed to delete IndexedDB '${storageName}': ${error?.message || error}`);
+      }
+    }
+
+    return cleanupErrors;
   }
 
   async ensureRawDb() {
@@ -513,18 +546,26 @@ export class BrowserBenchmarkRunner {
     for (let r = 0; r < repeats; r += 1) {
       const tx = this.rawDb.transaction('kv', 'readonly');
       const store = tx.objectStore('kv');
-      for (let i = 0; i < this.num; i += 1) {
-        const key = padKey(i);
-        const value = await this.withAwait('reqDone(get)', () => reqDone(store.get(key)), {
-          mode: 'readonly',
-          repeat: r + 1,
-          index: i + 1,
-        });
+      const request = store.openCursor();
+      let cursor = await this.withAwait('reqDone(openCursor)', () => reqDone(request), {
+        mode: 'readonly',
+        repeat: r + 1,
+      });
+      let scanned = 0;
+      while (cursor) {
+        const key = cursor.key;
+        const value = cursor.value;
         if (value) {
-          this.bytes += key.length + value.byteLength;
+          this.bytes += String(key).length + value.byteLength;
         }
         this.finishedSingleOp();
-        this.maybeLogProgress('read-raw-seq', i + 1, this.num);
+        scanned += 1;
+        this.maybeLogProgress('read-raw-seq', scanned, this.num);
+        cursor = await this.withAwait('reqDone(continue)', () => advanceCursor(request, cursor), {
+          mode: 'readonly',
+          repeat: r + 1,
+          index: scanned + 1,
+        });
       }
       await this.withAwait('txDone', () => txDone(tx), {
         mode: 'readonly',
@@ -572,22 +613,21 @@ export class BrowserBenchmarkRunner {
       } else if (name === 'overwrite') {
         await this.writeLeaves('random', false, this.num, this.valueSize, this.batchSize, false);
       } else if (name === 'fillseqsync') {
-        await this.writeLeaves('sequential', true, Math.max(1, Math.floor(this.num / 100)), this.valueSize, 1, true);
+        await this.writeLeaves('sequential', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1, true);
       } else if (name === 'fillrandsync') {
-        await this.writeLeaves('random', true, Math.max(1, Math.floor(this.num / 100)), this.valueSize, 1, true);
+        await this.writeLeaves('random', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1, true);
       } else if (name === 'fillseq100K') {
-        await this.writeLeaves('sequential', true, Math.max(1, Math.floor(this.num / 1000)), 100000, 1, false);
+        await this.writeLeaves('sequential', true, Math.max(1, Math.floor(this.num / 10)), 100000, 1, false);
       } else if (name === 'fillrand100K') {
-        await this.writeLeaves('random', true, Math.max(1, Math.floor(this.num / 1000)), 100000, 1, false);
+        await this.writeLeaves('random', true, Math.max(1, Math.floor(this.num / 10)), 100000, 1, false);
       } else if (name === 'readseq') {
         await this.readLeavesSequential(1);
       } else if (name === 'readrandom') {
         await this.readLeavesRandom(this.reads);
       } else if (name === 'readseq100K') {
-        const repeats = Math.max(1, Math.floor(this.num / 1000));
-        await this.readLeavesSequential(repeats);
+        await this.readLeavesSequential(1);
       } else if (name === 'readrand100K') {
-        const readCount = Math.max(100, Math.floor(this.num / 1000));
+        const readCount = Math.max(100, Math.floor(this.num / 10));
         await this.readLeavesRandom(readCount);
       } else if (name === 'idb_fillseq') {
         await this.writeRaw('sequential', true, this.num, this.valueSize, this.batchSize);
@@ -596,22 +636,21 @@ export class BrowserBenchmarkRunner {
       } else if (name === 'idb_overwrite') {
         await this.writeRaw('random', false, this.num, this.valueSize, this.batchSize);
       } else if (name === 'idb_fillseqsync') {
-        await this.writeRaw('sequential', true, Math.max(1, Math.floor(this.num / 100)), this.valueSize, 1);
+        await this.writeRaw('sequential', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1);
       } else if (name === 'idb_fillrandsync') {
-        await this.writeRaw('random', true, Math.max(1, Math.floor(this.num / 100)), this.valueSize, 1);
+        await this.writeRaw('random', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1);
       } else if (name === 'idb_fillseq100K') {
-        await this.writeRaw('sequential', true, Math.max(1, Math.floor(this.num / 1000)), 100000, 1);
+        await this.writeRaw('sequential', true, Math.max(1, Math.floor(this.num / 10)), 100000, 1);
       } else if (name === 'idb_fillrand100K') {
-        await this.writeRaw('random', true, Math.max(1, Math.floor(this.num / 1000)), 100000, 1);
+        await this.writeRaw('random', true, Math.max(1, Math.floor(this.num / 10)), 100000, 1);
       } else if (name === 'idb_readseq') {
         await this.readRawSequential(1);
       } else if (name === 'idb_readrandom') {
         await this.readRawRandom(this.reads);
       } else if (name === 'idb_readseq100K') {
-        const repeats = Math.max(1, Math.floor(this.num / 1000));
-        await this.readRawSequential(repeats);
+        await this.readRawSequential(1);
       } else if (name === 'idb_readrand100K') {
-        const readCount = Math.max(100, Math.floor(this.num / 1000));
+        const readCount = Math.max(100, Math.floor(this.num / 10));
         await this.readRawRandom(readCount);
       } else {
         known = false;
@@ -642,21 +681,51 @@ export class BrowserBenchmarkRunner {
       list: selected.join(','),
     });
 
-    for (const name of selected) {
-      await this.runOne(name);
+    let runError = null;
+    try {
+      for (const name of selected) {
+        await this.runOne(name);
+      }
+    } catch (error) {
+      runError = error;
     }
 
-    if (this.leavesStore) {
-      this.setPhase('teardown-leaves');
-      await this.withAwait('leavesStore.close', () => this.leavesStore.close(), {
-        storage: 'leavesStore',
-      });
+    const teardownErrors = [];
+    try {
+      if (this.leavesStore) {
+        this.setPhase('teardown-leaves');
+        await this.withAwait('leavesStore.close', () => this.leavesStore.close(), {
+          storage: 'leavesStore',
+        });
+        this.leavesStore = null;
+        this.leavesDb = null;
+      }
+      if (this.rawDb) {
+        this.setPhase('teardown-raw');
+        this.rawDb.close();
+        this.rawDb = null;
+      }
+      teardownErrors.push(...await this.deleteCreatedStorage());
+    } catch (error) {
+      teardownErrors.push(error);
+      this.log(`WARNING: teardown failed: ${error?.message || error}`);
     }
-    if (this.rawDb) {
-      this.setPhase('teardown-raw');
-      this.rawDb.close();
-    }
+
     this.setPhase('done');
+
+    if (runError) {
+      if (teardownErrors.length > 0) {
+        runError.cleanupErrors = teardownErrors;
+      }
+      throw runError;
+    }
+    if (teardownErrors.length > 0) {
+      const [firstError, ...restErrors] = teardownErrors;
+      if (restErrors.length > 0) {
+        firstError.cleanupErrors = restErrors;
+      }
+      throw firstError;
+    }
   }
 }
 

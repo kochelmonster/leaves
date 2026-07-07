@@ -265,26 +265,39 @@ static JSStore* make_store(const std::string& name, size_t capacity) {
   return s;
 }
 
+EM_ASYNC_JS(void, leaves_delete_database_async, (const char* name), {
+  const dbName = UTF8ToString(name);
+  await new Promise((resolve, reject) => {
+    try {
+      console.log('[leaves] Deleting IndexedDB database: ' + dbName);
+      if (typeof IDBStore !== 'undefined' && IDBStore.dbs) {
+        delete IDBStore.dbs[dbName];
+      }
+
+      const request = indexedDB.deleteDatabase(dbName);
+      request.onsuccess = function() {
+        console.log('[leaves] IndexedDB database deleted: ' + dbName);
+        resolve();
+      };
+      request.onerror = function(event) {
+        const error = (event && event.target && event.target.error) ?
+            event.target.error :
+            new Error('[leaves] Failed to delete IndexedDB database: ' + dbName);
+        reject(error);
+      };
+      request.onblocked = function() {
+        reject(new Error('[leaves] IndexedDB deleteDatabase blocked: ' + dbName));
+      };
+    } catch (error) {
+      reject(error);
+    }
+  });
+});
+
 // Delete an IndexedDB storage by name. The storage does not need to be open.
 // This is a static method — no JSStore instance is required.
 static void store_delete_storage(const std::string& name) {
-  leaves_idb_delete_database(name.c_str());
-#ifndef NDEBUG
-  const double started = emscripten_get_now();
-  double next_log = started + 1000.0;
-#endif
-  while (leaves_idb_delete_pending() > 0) {
-#ifndef NDEBUG
-    const double now = emscripten_get_now();
-    if (now >= next_log) {
-      std::fprintf(stdout,
-                   "[diag] waiting IndexedDB delete: store=%s pending=%d elapsed=%.0fms\n",
-                   name.c_str(), leaves_idb_delete_pending(), now - started);
-      next_log = now + 1000.0;
-    }
-#endif
-    emscripten_sleep(1);
-  }
+  leaves_delete_database_async(name.c_str());
 }
 
 static void store_close(JSStore& s) { s._storage->_storage->destroy(); }
