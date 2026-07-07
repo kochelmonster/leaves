@@ -20,7 +20,6 @@
 console.log("[test.html] module script started (top-level)");
 
 import createModule from './leaves.js';
-import { LeavesReplicationReceiver } from './leaves_replication.js';
 
 window.onerror = function(msg, url, line, col, err) {
   console.log("[test.html] WINDOW.ONERROR: " + msg + " at " + url + ":" + line + ":" + col, err);
@@ -29,6 +28,7 @@ window.onerror = function(msg, url, line, col, err) {
 // Get port from URL query string: ?port=19876
 const params = new URLSearchParams(location.search);
 const PORT = params.get("port") || "19876";
+const STORAGE_NAME = params.get("storage") || "test_ws_repl1";
 
 // ── Diagnostic logger with elapsed time ────────────────────────
 // NOTE: Must also write to console.log() because DOM updates won't
@@ -76,21 +76,32 @@ function checkEq(a, b, msg) {
   }
 }
 
-async function setValuePtrFromString(Module, cursor, value) {
+async function setValueFromStringWithReserve(Module, cursor, value) {
   const bytes = new TextEncoder().encode(value);
-  const memory = Module?.LeavesStore;
-  if (!memory || typeof memory.allocCopy !== 'function' || typeof memory.free !== 'function') {
-    throw new Error("LeavesStore memory API is unavailable (allocCopy/free)");
+  if (cursor && typeof cursor.reserveBytes === "function") {
+    const view = await cursor.reserveBytes(bytes.byteLength);
+    if (!view || typeof view.set !== "function") {
+      throw new Error("Cursor.reserveBytes returned an invalid Uint8Array view");
+    }
+    if (view.byteLength < bytes.byteLength) {
+      throw new Error("Cursor.reserveBytes returned a short view");
+    }
+    view.set(bytes);
+    return;
   }
-  const ptr = Number(memory.allocCopy(bytes));
+
+  if (!cursor || typeof cursor.reserve !== "function") {
+    throw new Error("Cursor.reserve is unavailable");
+  }
+  const heap = Module?.HEAPU8;
+  if (!heap || typeof heap.set !== "function") {
+    throw new Error("Module.HEAPU8 is unavailable");
+  }
+  const ptr = Number(await cursor.reserve(bytes.byteLength));
   if (!ptr) {
-    throw new Error("Failed to allocate temporary WASM value buffer");
+    throw new Error("Cursor.reserve returned an invalid pointer");
   }
-  try {
-    await cursor.setValuePtr(ptr, bytes.byteLength);
-  } finally {
-    memory.free(ptr);
-  }
+  heap.set(bytes, ptr);
 }
 
 // ── Run test ──────────────────────────────────────────────────
@@ -109,7 +120,7 @@ async function runTest() {
     // ── 2. Delete stale storage, then create fresh ────────────────
     dbg("Step 2: Cleaning old storage...");
     try {
-      await Module.LeavesStore.deleteStorage("test_ws_repl");
+      await Module.LeavesStore.deleteStorage(STORAGE_NAME);
       dbg("Step 2b: Old storage deleted");
     } catch (e) {
       dbg("Step 2c: No old storage to delete (" + e.message + ")");
@@ -117,7 +128,7 @@ async function runTest() {
     log("done deleting old storage");
 
     dbg("Step 2d: Creating LeavesStore...");
-    const store = await Module.LeavesStore.create("test_ws_repl", 100 * 1024 * 1024);
+    const store = await Module.LeavesStore.create(STORAGE_NAME, 100 * 1024 * 1024);
     dbg("Step 2e: LeavesStore created, typeof store=" + typeof store);
 
     dbg("Step 2f: Calling store.openReplication('testdb')...");
@@ -163,9 +174,9 @@ async function runTest() {
     log("");
 
     // ── 4. Receive replication data via the FSM ───────────────────
-    dbg("Step 4: Creating LeavesReplicationReceiver...");
-    const receiver = new LeavesReplicationReceiver(repldb, Module);
-    dbg("Step 4b: LeavesReplicationReceiver created");
+    dbg("Step 4: Creating Module.ReplicationReceiver...");
+    const receiver = new Module.ReplicationReceiver(repldb);
+    dbg("Step 4b: Module.ReplicationReceiver created");
 
     let completed = false;
     let errored = false;
@@ -225,7 +236,7 @@ async function runTest() {
       if (c.isValid()) checkEq(await c.getValue(), "12345", "count → 12345");
 
       await c.find("ptr_smoke");
-      await setValuePtrFromString(Module, c, "smoke_ptr");
+      await setValueFromStringWithReserve(Module, c, "smoke_ptr");
       await c.commit(false);
 
       await c.find("ptr_smoke");
@@ -244,7 +255,7 @@ async function runTest() {
     // ── 7. Delete storage ────────────────────────────────────────
     dbg("Step 7: Deleting storage...");
     try {
-      await Module.LeavesStore.deleteStorage("test_ws_repl");
+      await Module.LeavesStore.deleteStorage(STORAGE_NAME);
       dbg("Step 7b: Storage deleted successfully");
       check(true, "storage deleted");
     } catch (e) {
