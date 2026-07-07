@@ -227,7 +227,7 @@ struct _BrowserStoreTraits {
 
   // Slightly smaller sizes for browser memory constraints
   static constexpr size_t MAX_KEY_SIZE = 512 * K;
-  static constexpr size_t AREA_SIZE = 64 * K;  // Smaller blocks for IDB
+  static constexpr size_t AREA_SIZE = 256 * K;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   // PAGE_SIZES values include sizeof(PageHeader); they are matched against
   // (space + sizeof(PageHeader)) by _DB::alloc_page / _MemManager::assign_slot.

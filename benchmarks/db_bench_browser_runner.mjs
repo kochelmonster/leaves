@@ -14,8 +14,6 @@ const LEAVES_BENCHMARKS = [
   'fillseq100K',
   'readseq100K',
   'readrand100K',
-  'fillseqsync',
-  'fillrandsync',
 ];
 
 const IDB_BENCHMARKS = [
@@ -28,8 +26,6 @@ const IDB_BENCHMARKS = [
   'idb_fillseq100K',
   'idb_readseq100K',
   'idb_readrand100K',
-  'idb_fillseqsync',
-  'idb_fillrandsync',
 ];
 
 function nowSeconds() {
@@ -612,10 +608,6 @@ export class BrowserBenchmarkRunner {
         await this.writeLeaves('random', true, this.num, this.valueSize, this.batchSize, false);
       } else if (name === 'overwrite') {
         await this.writeLeaves('random', false, this.num, this.valueSize, this.batchSize, false);
-      } else if (name === 'fillseqsync') {
-        await this.writeLeaves('sequential', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1, true);
-      } else if (name === 'fillrandsync') {
-        await this.writeLeaves('random', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1, true);
       } else if (name === 'fillseq100K') {
         await this.writeLeaves('sequential', true, Math.max(1, Math.floor(this.num / 10)), 100000, 1, false);
       } else if (name === 'fillrand100K') {
@@ -627,18 +619,13 @@ export class BrowserBenchmarkRunner {
       } else if (name === 'readseq100K') {
         await this.readLeavesSequential(1);
       } else if (name === 'readrand100K') {
-        const readCount = Math.max(100, Math.floor(this.num / 10));
-        await this.readLeavesRandom(readCount);
+        await this.readLeavesRandom(this.reads);
       } else if (name === 'idb_fillseq') {
         await this.writeRaw('sequential', true, this.num, this.valueSize, this.batchSize);
       } else if (name === 'idb_fillrandom') {
         await this.writeRaw('random', true, this.num, this.valueSize, this.batchSize);
       } else if (name === 'idb_overwrite') {
         await this.writeRaw('random', false, this.num, this.valueSize, this.batchSize);
-      } else if (name === 'idb_fillseqsync') {
-        await this.writeRaw('sequential', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1);
-      } else if (name === 'idb_fillrandsync') {
-        await this.writeRaw('random', true, Math.max(1, Math.floor(this.num / 1000)), this.valueSize, 1);
       } else if (name === 'idb_fillseq100K') {
         await this.writeRaw('sequential', true, Math.max(1, Math.floor(this.num / 10)), 100000, 1);
       } else if (name === 'idb_fillrand100K') {
@@ -650,8 +637,7 @@ export class BrowserBenchmarkRunner {
       } else if (name === 'idb_readseq100K') {
         await this.readRawSequential(1);
       } else if (name === 'idb_readrand100K') {
-        const readCount = Math.max(100, Math.floor(this.num / 10));
-        await this.readRawRandom(readCount);
+        await this.readRawRandom(this.reads);
       } else {
         known = false;
         if (name) {
