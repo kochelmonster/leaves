@@ -25,12 +25,6 @@ Readme:
 - Wie wird leaves in andere Projekte eingebunden? (z.B. YCSB) (über submodule, + install?)
 
 
-- ycsb-Readme update: alle Ä
+- ycsb-Readme update: alle 
 
-
-nderungen
-
-
-All browser testen mit async un ispci -> synchen
-label replication-both
-Only keep tmp-area path
+- ReplicationFSM alloc_area weg in BigValueReceiver
