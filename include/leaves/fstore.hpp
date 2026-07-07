@@ -34,6 +34,8 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
     return _storage->list_dbs(result);
   }
 
+  ThreadPool<typename StorageImpl::base_t>& thread_pool() { return *_storage; }
+
   Slice filename() const { return Slice(_storage->filename()); }
 
   size_t file_size() const { return _storage->file_size(); }

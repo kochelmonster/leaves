@@ -804,12 +804,15 @@ struct _TransactionalCursor
   }
 
   tid_t prepare_commit(bool sync = true) {
+    if (this->_db->txn_cursor_id() != _id) return tid_t(0);
     this->_wal_prepare_commit();
     return this->_db->prepare_commit(_id, sync);
   }
 
   bool commit(bool sync = false,
               TransactionOrigin origin = TransactionOrigin::user) {
+    if (this->_db->txn_cursor_id() != _id) return false;
+
     if (!_aspect().before_commit(*this->_db, origin, _aspect_context))
       return false;
 

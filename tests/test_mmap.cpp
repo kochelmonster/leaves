@@ -136,8 +136,6 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
     BOOST_CHECK_EQUAL(std::string(e.what()), "max_processes does not match.");
   }
   db._memory->max_processes = db.MAX_PROCESSES;  // restore
-
-  
 }
 
 // ── Overflow page tests for _MemoryMapFile coverage ─────────────────────

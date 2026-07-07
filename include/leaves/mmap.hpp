@@ -34,6 +34,8 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
     return _storage->list_dbs(result);
   }
 
+  typename StorageImpl::PoolMixin& thread_pool() { return *_storage; }
+
   Slice filename() const { return Slice(_storage->filename()); }
 
   size_t file_size() const { return _storage->file_size(); }
@@ -48,9 +50,6 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
 };
 
 using MapStorage = MapStorage_<>;
-
-
-
 
 }  // namespace leaves
 

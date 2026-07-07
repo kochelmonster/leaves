@@ -55,6 +55,8 @@ class TCursor {
 
   void prev() { _cursor->prev(); }
 
+  void* reserve(size_t size) { return _cursor->reserve(size); }
+
   void value(const Slice& value) { _cursor->value(value); }
 
   Slice value() const { return _cursor->value(); }
@@ -74,9 +76,9 @@ class TCursor {
     return _cursor->prepare_commit(sync);
   }
 
-  void commit(bool sync = false) { _cursor->commit(sync); }
+  bool commit(bool sync = false) { return _cursor->commit(sync); }
 
-  void rollback() { _cursor->rollback(); }
+  bool rollback() { return _cursor->rollback(); }
 
   bool is_transaction_active() const {
     return _cursor && _cursor->is_transaction_active();

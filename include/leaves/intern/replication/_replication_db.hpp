@@ -27,7 +27,11 @@ template <typename Storage_>
 struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
   using offset_e = typename Traits::offset_e;
+#if LEAVES_HAS_THREADS
   using HashMemManager = _MemManagerPool<Traits>;
+#else
+  using HashMemManager = _MemManager<Traits>;
+#endif
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
   template <typename T, typename = void>
@@ -155,7 +159,11 @@ struct _ReplicationDB
   struct HashDB {
     using Traits = typename Storage_::Traits;
     using offset_e = typename Traits::offset_e;
+#if LEAVES_HAS_THREADS
     using MemManager = _MemManagerPool<Traits>;
+#else
+    using MemManager = _MemManager<Traits>;
+#endif
     using PageHeader = typename Traits::PageHeader;
     using page_ptr = typename Traits::ptr;
 
@@ -301,25 +309,15 @@ struct _ReplicationDB
         0, std::memory_order_relaxed);
 
     this->make_dirty(this->_header);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "_ReplicationDB::init after Base::init offset=%llu "
+                        "db_type_id=%u (expected 1)\n",
+                        (unsigned long long)*header,
+                        (unsigned)this->_header->db_type_id);
   }
 
   void set_retention(uint64_t seconds) {
     _retention_seconds.store(seconds, std::memory_order_relaxed);
-  }
-
-  // Override commit.
-  bool commit(uint64_t cursor_id, bool sync = false,
-              TransactionOrigin origin = TransactionOrigin::user) {
-    // Prepare commit without computing hashes (base doesn't hash either)
-    if (!Base::prepare_commit(cursor_id, false, origin)) return false;
-
-    // Atomically switch to new transaction
-    this->_header->read_txn = this->_header->prepared_txn;
-    this->make_dirty(this->_header);
-    this->flush(sync, true);
-    this->end_transaction();
-
-    return true;
   }
 
   cursor_ptr create_cursor() {

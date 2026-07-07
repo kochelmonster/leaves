@@ -10,6 +10,21 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Emscripten (WebAssembly) ───────────────────────────────────
 option(LEAVES_BROWSER_DEBUG "Build browser WASM targets in debug mode (with diagnostic output)" OFF)
 
+# ── Async backend: JSPI (default) or ASYNCIFY ─────────────────
+set(LEAVES_ASYNC_BACKEND "JSPI" CACHE STRING "Async WASM backend: JSPI or ASYNCIFY")
+set_property(CACHE LEAVES_ASYNC_BACKEND PROPERTY STRINGS "JSPI" "ASYNCIFY")
+set(LEAVES_WASM_RUNTIME_EXPORTS "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','FS','setValue','getValue','HEAPU8']")
+
+if(LEAVES_ASYNC_BACKEND STREQUAL "JSPI")
+    set(LEAVES_ASYNC_FLAG "-sJSPI")
+    set(LEAVES_ASYNC_IMPORTS "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']")
+    set(LEAVES_WASM_EXCEPTIONS "-fwasm-exceptions")
+else()
+    set(LEAVES_ASYNC_FLAG "-sASYNCIFY")
+    set(LEAVES_ASYNC_IMPORTS "-sASYNCIFY_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']")
+    set(LEAVES_WASM_EXCEPTIONS "-fexceptions")
+endif()
+
 if(EMSCRIPTEN)
     message(STATUS "Building for WebAssembly — only _BrowserStore")
 
@@ -38,12 +53,14 @@ if(EMSCRIPTEN)
         include/leaves/intern/replication/_transfer.hpp
         include/leaves/intern/util/_threadpool.hpp
         include/leaves/intern/util/_transfer_trie.hpp
-        include/leaves/browserstore.hpp
         include/leaves/replication.hpp
         include/leaves/db.hpp
         include/leaves/cursor.hpp
     )
     target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
+    if(LEAVES_ASYNC_BACKEND STREQUAL "ASYNCIFY")
+        target_compile_definitions(wasm_core INTERFACE LEAVES_ASYNCIFY)
+    endif()
     target_include_directories(wasm_core INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/BLAKE3/c
@@ -52,55 +69,40 @@ if(EMSCRIPTEN)
     if(LEAVES_BROWSER_DEBUG)
         message(STATUS "Browser WASM: debug mode (diagnostic output enabled)")
         target_compile_definitions(wasm_core INTERFACE DEBUG)
-        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -g -O0)
+        target_compile_options(wasm_core INTERFACE ${LEAVES_WASM_EXCEPTIONS} -g -O0)
         target_link_options(wasm_core INTERFACE
-            -fwasm-exceptions
+            ${LEAVES_WASM_EXCEPTIONS}
             --profiling-funcs
-            -sJSPI
-            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            ${LEAVES_ASYNC_FLAG}
+            ${LEAVES_ASYNC_IMPORTS}
             -sALLOW_MEMORY_GROWTH=1
-            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            ${LEAVES_WASM_RUNTIME_EXPORTS}
             -sENVIRONMENT=web,node
         )
     else()
         message(STATUS "Browser WASM: release mode (diagnostic output suppressed)")
         target_compile_definitions(wasm_core INTERFACE NDEBUG)
-        target_compile_options(wasm_core INTERFACE -fwasm-exceptions -O3)
+        target_compile_options(wasm_core INTERFACE ${LEAVES_WASM_EXCEPTIONS} -O3)
         target_link_options(wasm_core INTERFACE
-            -fwasm-exceptions
-            -sJSPI
-            "-sJSPI_IMPORTS=['emscripten_idb_load','emscripten_idb_store','emscripten_idb_delete','emscripten_idb_exists','emscripten_sleep']"
+            ${LEAVES_WASM_EXCEPTIONS}
+            ${LEAVES_ASYNC_FLAG}
+            ${LEAVES_ASYNC_IMPORTS}
             -sALLOW_MEMORY_GROWTH=1
-            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+            ${LEAVES_WASM_RUNTIME_EXPORTS}
             -sENVIRONMENT=web,node
         )
     endif()
-
-
-    add_executable(db_bench_browser benchmarks/db_bench_browser.cpp)
-    target_link_libraries(db_bench_browser PRIVATE wasm_core blake3)
-    target_link_options(db_bench_browser PRIVATE "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']" -sINVOKE_RUN=0)
-
-    # Copy WASM artifacts to benchmarks/ for browser serving
-    add_custom_command(TARGET db_bench_browser POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-            $<TARGET_FILE:db_bench_browser>
-            ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/db_bench_browser.js
-        COMMAND ${CMAKE_COMMAND} -E copy
-            $<TARGET_FILE_DIR:db_bench_browser>/db_bench_browser.wasm
-            ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/db_bench_browser.wasm
-        COMMENT "Copying benchmark WASM to benchmarks/"
-    )
-
     # ── Leaves JS library (embind) ──────────────────────────────
     add_executable(leaves js/leaves_embind.cpp)
     target_link_libraries(leaves PRIVATE wasm_core blake3)
     target_link_options(leaves PRIVATE
         -lembind
         --no-entry
+        ${LEAVES_ASYNC_FLAG}
+        ${LEAVES_ASYNC_IMPORTS}
         -sMODULARIZE=1
         -sEXPORT_ES6=1
-        "-sEXPORTED_RUNTIME_METHODS=['FS','callMain','setValue','getValue']"
+        ${LEAVES_WASM_RUNTIME_EXPORTS}
     )
     set_target_properties(leaves PROPERTIES OUTPUT_NAME "leaves")
 
@@ -124,14 +126,6 @@ if(EMSCRIPTEN)
             ${CMAKE_CURRENT_SOURCE_DIR}/js/leaves.wasm
     )
 
-    add_executable(ws_replication_client tests/ws_replication/client.cpp)
-    target_link_libraries(ws_replication_client PRIVATE wasm_core blake3)
-    target_compile_definitions(ws_replication_client PRIVATE TESTING)
-    target_link_options(ws_replication_client PRIVATE
-        -sEXIT_RUNTIME=1
-        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','callMain']"
-    )
-
     # ── Browser test target ────────────────────────────────────
     # Build all browser WASM targets in debug mode:
     #   cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
@@ -140,8 +134,6 @@ if(EMSCRIPTEN)
         add_custom_target(browser_test ALL
             DEPENDS
                 leaves_js_output
-                db_bench_browser
-                ws_replication_client
             COMMENT "Building all browser WASM targets in debug mode"
         )
     else()
@@ -325,6 +317,7 @@ target_link_libraries(leaves_test_support INTERFACE core)
 target_compile_options(leaves_test_support INTERFACE -g)
 target_compile_definitions(leaves_test_support INTERFACE 
     DEBUG 
+    LEAVES_LOG
     TESTING
     CMPFILES="${CMAKE_CURRENT_SOURCE_DIR}/tests/cmpfiles/") 
 target_sources(leaves_test_support INTERFACE
@@ -332,11 +325,11 @@ target_sources(leaves_test_support INTERFACE
 
 if (LEAVES_GCOV)
 target_compile_options(leaves_test_support INTERFACE -g --coverage)
-target_compile_definitions(leaves_test_support INTERFACE DEBUG GCOV_ENABLED)
+target_compile_definitions(leaves_test_support INTERFACE DEBUG LEAVES_LOG GCOV_ENABLED)
 target_link_options(leaves_test_support INTERFACE --coverage)
 else (LEAVES_GCOV)
 target_compile_options(leaves_test_support INTERFACE -g)
-target_compile_definitions(leaves_test_support INTERFACE DEBUG)
+target_compile_definitions(leaves_test_support INTERFACE DEBUG LEAVES_LOG)
 endif (LEAVES_GCOV)
 
 if (LEAVES_ASAN AND NOT LEAVES_GCOV)
@@ -363,8 +356,6 @@ target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_suppo
 
 add_executable(ws_replication_server tests/ws_replication/server.cpp)
 target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
-
-
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
@@ -421,6 +412,7 @@ target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support pthread)
+
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
 target_link_libraries(test_hash_updater PUBLIC core leaves_test_support blake3)
@@ -487,6 +479,10 @@ add_executable(profile tests/profile.cpp)
 # Dumper tool
 add_executable(dump-leaves tools/dump-leaves.cpp)
 target_link_libraries(dump-leaves PUBLIC core)
+
+# Merger test tool
+add_executable(merge-dbs tools/merge-dbs.cpp)
+target_link_libraries(merge-dbs PUBLIC core)
 
 # YCSB debug tool
 add_executable(ycsb-debug tests/ycsb-bug/ycsb-debug.cpp)

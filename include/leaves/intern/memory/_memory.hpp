@@ -736,15 +736,29 @@ struct AreaPool {
 // void(uint64_t pos, const void* buf, size_t size) ForEachDBFn:
 // void(Fn) where Fn is void(offset_t db_offset) — calls Fn for each active DB
 template <typename DBHeader, size_t AREA_SIZE, typename ReadFn,
-          typename WriteFn, typename ForEachDBFn>
+          typename WriteFn, typename ForEachDBFn,
+          typename MarkExtraOccupiedFn>
 void _recover_areas(AreaPool& pool,
                     ForEachDBFn for_each_db, uint64_t file_size,
                     uint64_t first_area_pos, ReadFn read_bytes,
-                    WriteFn write_bytes) {
+                    WriteFn write_bytes,
+                    MarkExtraOccupiedFn mark_extra_occupied) {
   pool.init();
 
   // Phase 1: Walk owned DB chains, collect all AREA_SIZE sub-blocks as occupied
   std::unordered_set<uint64_t> occupied;
+  auto mark_occupied_range = [&](uint64_t start, uint64_t size) {
+    if (size == 0) return;
+    uint64_t cur = start;
+    uint64_t remaining = size;
+    while (true) {
+      occupied.insert(cur);
+      if (remaining <= AREA_SIZE) break;
+      cur += AREA_SIZE;
+      remaining -= AREA_SIZE;
+    }
+  };
+
   for_each_db([&](offset_t db_off) {
     if (!db_off) return;
 
@@ -753,25 +767,35 @@ void _recover_areas(AreaPool& pool,
 
     auto walk = [&](offset_t head) {
       while (head) {
+        if (occupied.count((uint64_t)head)) {
+          // Already known occupied: avoids cycles and overlapping chains.
+          break;
+        }
+        occupied.insert((uint64_t)head);
         Area area_hdr;
         read_bytes((uint64_t)head, &area_hdr, sizeof(Area));
 
-        // Restore _offset on owned areas
-        area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
-        write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+        // Restore _offset on owned areas — CAS avoids write if already correct
+        {
+          uint64_t expected = (uint64_t)head;
+          if (!area_hdr._offset.compare_exchange_strong(expected, expected,
+                                                        std::memory_order_relaxed)) {
+            area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
+            write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+          }
+        }
 
         // Mark all AREA_SIZE sub-blocks as occupied
         uint64_t area_size = area_hdr.size();
-        for (uint64_t off = (uint64_t)head; off < (uint64_t)head + area_size;
-             off += AREA_SIZE) {
-          occupied.insert(off);
-        }
+        mark_occupied_range((uint64_t)head, area_size);
         head = area_hdr.next;
       }
     };
     walk(db_header.area_list_head_single);
     walk(db_header.area_list_head_multi);
   });
+
+  mark_extra_occupied(mark_occupied_range);
 
   // Phase 2: Scan in AREA_SIZE steps, collect contiguous free runs.
   // Single AREA_SIZE blocks go to single_areas, contiguous runs to multi_areas.

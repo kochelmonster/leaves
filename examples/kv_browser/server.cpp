@@ -6,12 +6,12 @@
  * global mutex serializes replication access to the DB.
  *
  * Sync protocol per client request:
- *   1. Client sends text "SYNC"
- *   2. Server→Client: ReplicationSender FSM (binary LVRP)
- *   3. Server sends text "PULL"
- *   4. Client→Server: ReplicationReceiver FSM (binary LVRP)
- *   5. Server sends text "DONE"
- *   6. Notify other connected clients via text "SYNC"
+ *   "PUSH": Client has local changes, sends them to server
+ * (ReplicationReceiver). Server broadcasts "SYNC" notification to other
+ * clients. "PULL": Client wants server's data, server sends to client
+ * (ReplicationSender). Server always replies with "DONE" when the binary
+ * transfer completes. Server broadcasts "SYNC" text to all clients after a
+ * successful PUSH, telling them to pull the latest state.
  *
  * Usage: ./kv_demo_server <port> <db_path>
  */
@@ -20,11 +20,10 @@
 #define TESTING
 #endif
 
-#include <boost/asio.hpp>
-#include <boost/beast.hpp>
-
 #include <algorithm>
 #include <atomic>
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -36,13 +35,12 @@
 #include <thread>
 #include <vector>
 
-#include "leaves/replication.hpp"
 #include "leaves/mmap.hpp"
-//#include "leaves/intern/replication/_replication_db.hpp"
+#include "leaves/replication.hpp"
 
 namespace beast = boost::beast;
-namespace ws    = beast::websocket;
-namespace net   = boost::asio;
+namespace ws = beast::websocket;
+namespace net = boost::asio;
 using tcp = net::ip::tcp;
 using namespace leaves;
 
@@ -55,9 +53,7 @@ struct ServerCommitScope {
     g_commit_origin_client_id = client_id;
   }
 
-  ~ServerCommitScope() {
-    g_commit_origin_client_id = -1;
-  }
+  ~ServerCommitScope() { g_commit_origin_client_id = -1; }
 };
 
 // ── WebSocket transport adapter ─────────────────────────────────
@@ -98,6 +94,9 @@ static void broadcast_sync_notification(const std::set<int>& excluded_clients) {
     clients = g_clients;
   }
 
+  std::cerr << "[server] broadcast SYNC to " << clients.size()
+            << " clients (excluding " << excluded_clients.size() << ")\n";
+
   for (const auto& session : clients) {
     if (!session || !session->alive.load()) continue;
     if (excluded_clients.count(session->id)) continue;
@@ -118,31 +117,30 @@ struct ServerSyncNotifier {
   tid_t _last_txn_id{};
   std::set<int> excluded_clients;
 
-  template <typename DB>
-  void schedule(DB& db, int origin_client_id) {
-    auto txn_id_snapshot = db.txn()->txn_id;
-
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      _last_txn_id = txn_id_snapshot;
-      if (origin_client_id > 0) {
-        excluded_clients.insert(origin_client_id);
-      }
-      if (pending_job_id) {
-        db._storage.cancel_job(pending_job_id);
-      }
-      pending_job_id = db._storage.schedule_after(
-          SYNC_DEBOUNCE, [this, txn_id_snapshot]() {
-            std::set<int> excluded;
-            {
-              std::lock_guard<std::mutex> lock(mutex);
-              if (txn_id_snapshot != _last_txn_id) return;
-              pending_job_id = 0;
-              excluded.swap(excluded_clients);
-            }
-            broadcast_sync_notification(excluded);
-          });
+  template <typename Pool>
+  void schedule(Pool& pool, tid_t txn_id_snapshot, int origin_client_id) {
+    std::lock_guard<std::mutex> lock(mutex);
+    _last_txn_id = txn_id_snapshot;
+    if (origin_client_id > 0) {
+      excluded_clients.insert(origin_client_id);
     }
+    if (pending_job_id) {
+      pool.cancel_job(pending_job_id);
+    }
+    pending_job_id =
+        pool.schedule_after(SYNC_DEBOUNCE, [this, txn_id_snapshot]() {
+          std::set<int> excluded;
+          {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (txn_id_snapshot != _last_txn_id) {
+              std::cerr << "[server] sync debounce: skipped (txn changed)\n";
+              return;
+            }
+            pending_job_id = 0;
+            excluded.swap(excluded_clients);
+          }
+          broadcast_sync_notification(excluded);
+        });
   }
 };
 
@@ -151,8 +149,15 @@ static ServerSyncNotifier g_sync_notifier;
 struct ServerAspect : public DefaultAspect {
   template <typename DB, typename Ctx>
   void on_commit(DB& db, TransactionOrigin, Ctx&) {
-    if (g_commit_origin_client_id <= 0) return;
-    g_sync_notifier.schedule(db, g_commit_origin_client_id);
+    if (g_commit_origin_client_id <= 0) {
+      std::cerr << "[server] on_commit skipped (origin="
+                << g_commit_origin_client_id << ")\n";
+      return;
+    }
+    std::cerr << "[server] on_commit triggered by client "
+              << g_commit_origin_client_id << "\n";
+    g_sync_notifier.schedule(db._storage, db.txn()->txn_id,
+                             g_commit_origin_client_id);
   }
 };
 
@@ -164,10 +169,9 @@ using ServerStorage = MapStorage_<ServerReplicatingMapTraits>;
 
 static void remove_client(int id) {
   std::lock_guard<std::mutex> lock(g_clients_mutex);
-  g_clients.erase(
-      std::remove_if(g_clients.begin(), g_clients.end(),
-                     [id](const auto& c) { return c->id == id; }),
-      g_clients.end());
+  g_clients.erase(std::remove_if(g_clients.begin(), g_clients.end(),
+                                 [id](const auto& c) { return c->id == id; }),
+                  g_clients.end());
 }
 
 // ── Replication events (no-op for demo) ─────────────────────────
@@ -175,11 +179,15 @@ static void remove_client(int id) {
 struct DemoEvents : ReplicationEvents {
   bool completed = false;
   bool errored = false;
-  void on_complete(uint64_t, size_t n) override {
+  void on_complete(uint64_t session_id, size_t n) override {
+    std::cerr << "[server] on_complete session=" << session_id << " n=" << n
+              << "\n";
     completed = true;
   }
-  void on_error(uint64_t, ReplicationError, const char* r) override {
-    std::cerr << "[server] repl error: " << r << "\n";
+  void on_error(uint64_t session_id, ReplicationError err,
+                const char* r) override {
+    std::cerr << "[server] on_error session=" << session_id
+              << " err=" << static_cast<int>(err) << " msg=" << r << "\n";
     errored = true;
   }
   void on_progress(uint64_t, size_t, size_t) override {}
@@ -187,9 +195,8 @@ struct DemoEvents : ReplicationEvents {
 
 // ── Handle one client ───────────────────────────────────────────
 
-static void handle_client(
-    std::shared_ptr<ClientSession> session,
-  ServerStorage::storage_ptr storage) {
+static void handle_client(std::shared_ptr<ClientSession> session,
+                          ServerStorage::storage_ptr storage) {
   auto& wss = *session->wss;
   int client_id = session->id;
 
@@ -210,48 +217,12 @@ static void handle_client(
       auto msg = beast::buffers_to_string(buf.cdata());
       buf.consume(buf.size());
 
-      if (msg != "SYNC") {
-        continue;
-      }
+      if (msg == "PUSH") {
+        // Client has local changes, pushes them to us
+        std::cerr << "[server] client " << client_id << " push start\n";
+        std::lock_guard<std::mutex> db_lock(g_db_mutex);
+        auto db = storage->open<_ReplicationDB>("main");
 
-      std::cerr << "[server] client " << client_id << " sync start\n";
-
-      // Lock DB for exclusive replication access
-      std::lock_guard<std::mutex> db_lock(g_db_mutex);
-
-      auto db = storage->open<_ReplicationDB>("main");
-
-      // Phase 1: Server → Client (we send)
-      {
-        DemoEvents events;
-        BeastWsTransport transport(wss, session->write_mutex);
-        ReplicationSender<ServerStorage> sender(db);
-        sender.begin(&transport, &events);
-
-        while (sender.state() == ReplicationState::ACTIVE) {
-          wss.read(buf);
-          auto d = buf.cdata();
-          sender.on_message_received(
-              static_cast<const uint8_t*>(d.data()), d.size());
-          buf.consume(buf.size());
-        }
-
-        if (events.errored) {
-          std::cerr << "[server] client " << client_id
-                    << " send phase failed\n";
-          continue;
-        }
-      }
-
-      // Send "PULL" to signal client should now send
-      {
-        std::lock_guard<std::mutex> lock(session->write_mutex);
-        wss.text(true);
-        wss.write(net::buffer(std::string("PULL")));
-      }
-
-      // Phase 2: Client → Server (we receive)
-      {
         ServerCommitScope commit_scope(client_id);
         DemoEvents events;
         BeastWsTransport transport(wss, session->write_mutex);
@@ -260,13 +231,6 @@ static void handle_client(
 
         while (receiver.state() == ReplicationState::ACTIVE) {
           wss.read(buf);
-
-          if (wss.got_text()) {
-            // Unexpected text during receive phase — skip
-            buf.consume(buf.size());
-            continue;
-          }
-
           auto d = buf.cdata();
           auto& rb = receiver.receive_buffer();
           auto* src = static_cast<const uint8_t*>(d.data());
@@ -281,24 +245,68 @@ static void handle_client(
             off += chunk;
             receiver.on_data_received();
           }
-
           buf.consume(buf.size());
         }
 
-        if (events.errored) {
+        if (!events.errored) {
           std::cerr << "[server] client " << client_id
-                    << " receive phase failed\n";
+                    << " push done: nodes=" << receiver.nodes_transferred()
+                    << " bytes=" << receiver.bytes_transferred() << "\n";
+          // Broadcast SYNC notification to other clients
+          g_sync_notifier.schedule(storage->thread_pool(), db.txn()->txn_id,
+                                   client_id);
+        } else {
+          std::cerr << "[server] client " << client_id << " push failed\n";
         }
+
+        // Tell client we're done
+        {
+          std::lock_guard<std::mutex> lock(session->write_mutex);
+          wss.text(true);
+          wss.write(net::buffer(std::string("DONE")));
+        }
+
+      } else if (msg == "PULL") {
+        // Client wants our data, we send to them
+        std::cerr << "[server] client " << client_id << " pull start\n";
+        std::lock_guard<std::mutex> db_lock(g_db_mutex);
+        auto db = storage->open<_ReplicationDB>("main");
+
+        DemoEvents events;
+        BeastWsTransport transport(wss, session->write_mutex);
+        ReplicationSender<ServerStorage> sender(db);
+        sender.begin(&transport, &events);
+
+        while (sender.state() == ReplicationState::ACTIVE) {
+          wss.read(buf);
+          auto d = buf.cdata();
+          sender.on_message_received(static_cast<const uint8_t*>(d.data()),
+                                     d.size());
+          buf.consume(buf.size());
+        }
+
+        if (!events.errored) {
+          std::cerr << "[server] client " << client_id
+                    << " pull done: nodes=" << sender.nodes_transferred()
+                    << " bytes=" << sender.bytes_transferred() << "\n";
+        } else {
+          std::cerr << "[server] client " << client_id << " pull failed\n";
+        }
+
+        // Tell client we're done
+        {
+          std::lock_guard<std::mutex> lock(session->write_mutex);
+          wss.text(true);
+          wss.write(net::buffer(std::string("DONE")));
+        }
+
+      } else {
+        std::cerr << "[server] client " << client_id
+                  << " ignoring text: " << msg << "\n";
+        continue;
       }
 
-      // Send "DONE" to signal sync complete
-      {
-        std::lock_guard<std::mutex> lock(session->write_mutex);
-        wss.text(true);
-        wss.write(net::buffer(std::string("DONE")));
-      }
-
-      std::cerr << "[server] client " << client_id << " sync done\n";
+      std::cerr << "[server] client " << client_id << " done\n";
     }
   } catch (beast::system_error const& se) {
     if (se.code() != ws::error::closed) {
@@ -306,8 +314,8 @@ static void handle_client(
                 << " error: " << se.code().message() << "\n";
     }
   } catch (std::exception const& e) {
-    std::cerr << "[server] client " << client_id
-              << " exception: " << e.what() << "\n";
+    std::cerr << "[server] client " << client_id << " exception: " << e.what()
+              << "\n";
   }
 
   session->alive = false;
@@ -329,7 +337,9 @@ int main(int argc, char* argv[]) {
   // Create storage
   auto storage = ServerStorage::create(path);
   // Ensure DB "main" exists
-  { auto db = storage->open<_ReplicationDB>("main"); }
+  {
+    auto db = storage->open<_ReplicationDB>("main");
+  }
 
   std::cerr << "[server] storage opened: " << path << "\n";
 

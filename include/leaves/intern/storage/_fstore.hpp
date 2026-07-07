@@ -184,7 +184,7 @@ struct _FileOperations : _CacheBase {
 #endif
   }
 
-  void write(offset_t offset, const void* ptr, size_t size) const {
+  void _write_raw(offset_t offset, const void* ptr, size_t size) const {
     if (size == 0) return;
     auto* src = static_cast<const char*>(ptr);
     uint64_t file_offset = static_cast<uint64_t>(offset);
@@ -214,6 +214,11 @@ struct _FileOperations : _CacheBase {
 #endif
       written += n;
     }
+  }
+
+  // Compatibility wrapper for callers that still use direct store writes.
+  void write(offset_t offset, const void* ptr, size_t size) const {
+    _write_raw(offset, ptr, size);
   }
 
   void read(offset_t offset, void* ptr, size_t size) const {
@@ -295,7 +300,7 @@ struct _FileOperations : _CacheBase {
 
       if (batch_end == i) {
         // No contiguous blocks found, write the single block
-        write(start_offset, start_area, start_area->size());
+        _write_raw(start_offset, start_area, start_area->size());
         i++;
       } else {
         // We have contiguous blocks, allocate a temporary buffer and copy data
@@ -310,7 +315,7 @@ struct _FileOperations : _CacheBase {
         }
 
         // Write the entire batch at once
-        write(start_offset, buffer.data(), current_size);
+        _write_raw(start_offset, buffer.data(), current_size);
 
         // Move to the next non-contiguous block
         i = batch_end + 1;
@@ -318,12 +323,12 @@ struct _FileOperations : _CacheBase {
     }
 
     if (write_header) {
-      write(0, _header, calc_header_size());
+      _write_raw(0, _header, calc_header_size());
     }
   }
 
   // No-op: native pwrite/WriteFile calls are synchronous
-  void sync_writes() {}
+  void wait_for_writes() {}
   bool has_pending_writes() const { return false; }
 
   const char* filename() const { return _filepath.c_str(); }
@@ -358,8 +363,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
       this->_header->file_size =
           leaves::padding(header_size, Traits_::AREA_SIZE);
       this->resize(this->_header->file_size);
-      // Write header
-      this->write(0, buffer.get(), header_size);
+      this->make_header_dirty();
+      this->flush(true, true);
     } else {
       _FileOperations::open(path);
       this->read(0, buffer.get(), header_size);
@@ -384,6 +389,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     if (std::filesystem::file_size(this->filename()) !=
         this->_header->file_size)
       std::filesystem::resize_file(this->filename(), this->_header->file_size);
+    this->make_header_dirty();
+    this->flush(true, true);
   }
 
   // Rebuild the free area pool by scanning the file.
@@ -403,8 +410,38 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
           self->read(pos, buf, size);
         },
         [self](uint64_t pos, const void* buf, size_t size) {
-          self->write(pos, buf, size);
+          if (size == 0) return;
+          LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                              "_FileStore::recover_areas direct write pos=%llu size=%zu\n",
+                              (unsigned long long)pos,
+                              size);
+          self->write(static_cast<offset_t>(pos), buf, size);
+        },
+        [self](auto&& mark_occupied_range) {
+          struct DirectoryPageHeader {
+            uint16_t count;
+            offset_t next;
+          };
+
+          offset_t next = self->_header->db_next_page;
+          const uint64_t max_pages =
+              self->_header->file_size / Traits_::AREA_SIZE + 1;
+          uint64_t visited_pages = 0;
+          while (next && visited_pages++ < max_pages) {
+            const uint64_t area_pos = (uint64_t)next - sizeof(Area);
+            mark_occupied_range(area_pos, Traits_::AREA_SIZE);
+            DirectoryPageHeader page_header{};
+            self->read((uint64_t)next, &page_header, sizeof(page_header));
+            next = page_header.next;
+          }
+
+          if (next) {
+            LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR,
+                                "_FileStore::recover_areas stopping overflow-page occupancy scan due to cycle/overflow guard\n");
+          }
         });
+    this->flush(true, true);
+    this->reset_cache_state();
   }
 
   // Compatibility method for tests

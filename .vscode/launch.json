@@ -8,7 +8,7 @@
             "name": "(gdb) Attach",
             "type": "cppdbg",
             "request": "attach",
-            "program": "enter program name, for example ${workspaceFolder}/a.out",
+            "program": "${workspaceFolder}/examples/kv_browser/build/kv_demo_server",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -24,36 +24,25 @@
             ]
         },
         {
-            "name": "(gdb) Launch",
+            "name": "(gdb) Launch benchmark",
             "type": "cppdbg",
             "request": "launch",
-            "_program": "${workspaceFolder}/build/db_bench_leaves",
-            "_program": "${workspaceFolder}/build/test_memory",
-            "program": "${workspaceFolder}/build/test_cursor",
+            "program": "${workspaceFolder}/build/db_bench_leaves",
             "args": [
-                "-t",
-                "insert_bigkeys"
-            ],
-            "_args": [
-                "-t",
-                "test_strings"
-            ],
-            "_args": [
-                "-t",
-                "test_big_area_revolve"
-            ],
-            "_args": [
-                "--benchmarks=fillrand100K"
-            ],
-            "_args": [
-                "--benchmarks=fillseq"
-            ],
-            "_args": [
-                "--benchmarks=fillrandsync,fillrandom"
+                "--use_wal=1",
+                "--benchmarks=fillrandom",
+                "--batch_size=1",
+                "--num=10000",
+                "--batch_size=100000"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -85,7 +74,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -117,7 +111,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -149,7 +148,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -175,13 +179,15 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_db",
-            "args": [
-                "-t",
-                "test_sanitize_uncommitted_areas"
-            ],
+            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -213,7 +219,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -290,10 +301,17 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
-            "logging": { "engineLogging": true },
+            "logging": {
+                "engineLogging": true
+            },
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -323,7 +341,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -355,7 +378,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -377,20 +405,24 @@
             ]
         },
         {
-            "name": "(gdb) ycsb-debug",
+            "name": "(gdb) test_multiprocess",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/ycsb-debug",
+            "program": "${workspaceFolder}/build/test_multiprocess",
             "args": [
-                "tests/ycsb-bug/ycsb.lvs",
-                "tests/ycsb-bug/leaves_debug-1.log"
+                "-t",
+                "test_mp_sanitize_recover_lost_areas"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
-            "preLaunchTask": "Copy YCSB backup for debug",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -401,6 +433,16 @@
                     "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
                     "ignoreFailures": true
+                },
+                {
+                    "description": "Follow child on fork (debug child process)",
+                    "text": "-gdb-set follow-fork-mode child",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "Keep parent attached as an inferior (switch via 'inferior 1')",
+                    "text": "-gdb-set detach-on-fork off",
+                    "ignoreFailures": false
                 },
                 {
                     "description": "Disable debuginfod symbol server (prevents hang)",
@@ -417,7 +459,12 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -453,7 +500,12 @@
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -482,7 +534,12 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -504,78 +561,21 @@
             ]
         },
         {
-            "name": "test_fractional_replication",
+            "name": "test_single_key_replication",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/test_replication_fsm",
             "args": [
-                "--run_test=ReplicationFSMTests/test_fractional_replication_differential"
+                "--run_test=ReplicationFSMTests/test_single_key_replication"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
+            "environment": [
                 {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set Disassembly Flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Disable debuginfod symbol server (prevents hang)",
-                    "text": "-gdb-set debuginfod enabled off",
-                    "ignoreFailures": true
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
                 }
-            ]
-        },
-        {
-            "name": "test_cross_buffer_subtrie",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/test_replication_fsm",
-            "args": [
-                "--run_test=ReplicationFSMTests/test_cross_buffer_subtrie"
             ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set Disassembly Flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Disable debuginfod symbol server (prevents hang)",
-                    "text": "-gdb-set debuginfod enabled off",
-                    "ignoreFailures": true
-                }
-            ]
-        },
-        {
-            "name": "(gdb) test_replication_fsm_mem_pool_bug",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/test_replication_fsm",
-            "args": [
-                "--run_test=ReplicationFSMTests/test_fractional_replication_differential"
-            ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -637,78 +637,21 @@
             ]
         },
         {
-            "name": "(gdb) parallel_long_key_prefix",
+            "name": "gdb p2p",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/test_hash_updater",
+            "program": "${workspaceFolder}/examples/p2p_kv/build/p2p_kv",
             "args": [
-                "--run_test=parallel_long_key_prefix"
+                "--port", "9001", "--db", "./peer1.lvs"
             ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
+            "cwd": "${workspaceFolder}/examples/p2p_kv/build",
+            "environment": [
                 {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set Disassembly Flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Disable debuginfod symbol server (prevents hang)",
-                    "text": "-gdb-set debuginfod enabled off",
-                    "ignoreFailures": true
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
                 }
-            ]
-        },
-        {
-            "name": "(gdb) test_triburary",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/test_tributary",
-            "args": [
-                "--run_test=test_tributary_writing_state_not_sanitized"
             ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set Disassembly Flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Disable debuginfod symbol server (prevents hang)",
-                    "text": "-gdb-set debuginfod enabled off",
-                    "ignoreFailures": true
-                }
-            ]
-        },
-        {
-            "name": "(gdb) test_wal",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/test_wal",
-            "args": [
-                "--run_test=wal_background_checkpoint_truncates"
-            ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
-            "environment": [{"name": "DEBUGINFOD_URLS", "value": ""}],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [

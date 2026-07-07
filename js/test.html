@@ -11,61 +11,136 @@ async function runReplicationTest(log, check) {
     log('\n=== Replication Test ===');
 
     const Module = await createModule();
-    const store1 = await Module.LeavesStore.createReplicationDB('repl_db1_' + Date.now(), 10 * 1024 * 1024);
-    const c1 = await store1.createCursor();
+
+    // Create a storage (IndexedDB store name = 'repl_storage1_...')
+    log('Creating store 1');
+    const store1 = await Module.LeavesStore.create('repl_storage1_' + Date.now(), 10 * 1024 * 1024);
+    log('Store 1 created');
+
+    // Open a replication DB within this store
+    const replDb1 = await store1.openReplication('repl_db');
+    const c1 = await replDb1.createCursor();
     await c1.find('key1');
     await c1.setValue('value1');
     await c1.commit(false);
     log('Store 1 created and data added');
 
-    const store2 = await Module.LeavesStore.createReplicationDB('repl_db2_' + Date.now(), 10 * 1024 * 1024);
+    const store2 = await Module.LeavesStore.create('repl_storage2_' + Date.now(), 10 * 1024 * 1024);
+    console.log('Store 2 created');
+    const replDb2 = await store2.openReplication('repl_db');
     log('Store 2 created');
 
-    const sender = new LeavesReplicationSender(store1, Module);
-    const receiver = new LeavesReplicationReceiver(store2, Module);
+    const sender = new LeavesReplicationSender(replDb1, Module);
+    const receiver = new LeavesReplicationReceiver(replDb2, Module);
 
-    let onCompleteCalled = false;
-    const events = {
-        onComplete: () => {
-            log('Replication complete');
-            onCompleteCalled = true;
+    // Use separate events objects so sender's onComplete doesn't mask
+    // the receiver still needing to process the COMPLETE message.
+    let receiverComplete = false;
+    let receivedError = null;
+    let senderComplete = false;
+
+    const receiverEvents = {
+        onComplete: (sid, nodes) => {
+            log('Receiver onComplete: sid=' + sid + ' nodes=' + nodes);
+            receiverComplete = true;
         },
-        onError: (msg) => {
-            log('Replication error: ' + msg);
+        onError: (sid, msg) => {
+            log('Receiver error: ' + msg);
+            receivedError = msg;
         }
     };
+
+    const senderEvents = {
+        onComplete: (sid, nodes) => {
+            log('Sender onComplete: sid=' + sid + ' nodes=' + nodes);
+            senderComplete = true;
+        },
+        onError: (sid, msg) => {
+            log('Sender error: ' + msg);
+            receivedError = msg;
+        }
+    };
+
+    // Message queues for poll-loop pattern (avoids overlapping async C++ calls)
+    let toReceiver = [];
+    let toSender = [];
 
     const transport1 = {
         send: (data) => {
             log('t1 -> t2');
-            setTimeout(() => receiver.onMessageReceived(data), 0);
+            toReceiver.push(data);
         }
     };
 
     const transport2 = {
         send: (data) => {
             log('t2 -> t1');
-            setTimeout(() => sender.onMessageReceived(data), 0);
+            toSender.push(data);
         }
     };
 
-    sender.begin(transport1, events);
-    receiver.begin(transport2, events);
+    // Start receiver first so it's ready to receive messages
+    log('Calling receiver.begin()...');
+    await receiver.begin(transport2, receiverEvents);
+    log('receiver.begin() returned, state=' + receiver.state());
 
-    // wait for completion
-    for (let i = 0; i < 100 && !onCompleteCalled; ++i) {
-        await new Promise(resolve => setTimeout(resolve, 10));
+    // Then start sender — it will send the first message into toReceiver queue
+    log('Calling sender.begin()...');
+    await sender.begin(transport1, senderEvents);
+    log('sender.begin() returned, state=' + sender.state());
+
+    // Poll loop: feed messages between sender and receiver one at a time.
+    // This ensures only one C++ async operation is in flight at any time.
+    // Continue until the receiver completes (processes COMPLETE and merges data).
+    for (let i = 0; i < 200; ++i) {
+        let didWork = false;
+
+        // Feed one message from sender to receiver
+        if (toReceiver.length > 0) {
+            const msg = toReceiver.shift();
+            log('Feeding message to receiver (' + msg.length + ' bytes)');
+            await receiver.onMessageReceived(msg);
+            didWork = true;
+        }
+
+        // Feed one message from receiver to sender
+        if (toSender.length > 0) {
+            const msg = toSender.shift();
+            log('Feeding message to sender (' + msg.length + ' bytes)');
+            await sender.onMessageReceived(msg);
+            didWork = true;
+        }
+
+        // Check state after processing messages but before yielding
+        const rstate = receiver.state();
+        const sstate = sender.state();
+        if (rstate === 'idle') {
+            log('Receiver state=idle, all data merged and committed');
+            break;
+        }
+        if (rstate === 'error' || sstate === 'error') {
+            log('Error state reached, aborting poll loop');
+            break;
+        }
+
+        if (!didWork) {
+            // No messages to process — yield to event loop
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
     }
 
-    check('onComplete called', onCompleteCalled, true);
+    check('receiver completed', receiverComplete, true);
+    check('receiver state idle', receiver.state(), 'idle');
 
-    const c2 = await store2.createCursor();
+    const c2 = await replDb2.createCursor();
     await c2.find('key1');
     check('replicated data isValid', c2.isValid(), true);
     check('replicated data value', await c2.getValue(), 'value1');
 
     c1.delete();
     c2.delete();
+    replDb1.delete();
+    replDb2.delete();
     await store1.close();
     await store2.close();
     store1.delete();
@@ -92,13 +167,16 @@ async function runTest() {
     }
 
     const Module = await createModule();
-    var store = await Module.LeavesStore.create('test_api_' + Date.now(), 10 * 1024 * 1024);
+
+    // Create a storage with a storage name. The storage is the IndexedDB database.
+    var store = await Module.LeavesStore.create('test_storage_' + Date.now(), 10 * 1024 * 1024);
     log('Store created');
 
-    // --- String key/value ---
-    var db = await store.db('mydb');
+    // Open a database within this store with a database name.
+    var db = await store.open('mydb');
     var c = await db.createCursor();
 
+    // --- String key/value ---
     await c.find('aaa');
     await c.setValue('val_a');
     await c.find('bbb');
@@ -189,9 +267,124 @@ async function runTest() {
       log('\n=== SOME TESTS FAILED ===');
     }
 
+    // ── Aspect test ─────────────────────────────────────────────
+    async function runAspectTest(log, check) {
+        log('\n=== Aspect Test ===');
+
+        const Module = await createModule();
+        var aspectStoreName = 'test_aspect_' + Date.now();
+        var store = await Module.LeavesStore.create(aspectStoreName, 10 * 1024 * 1024);
+        log('Aspect store created');
+
+        var db = await store.open('mydb');
+
+        // Per-cursor state tracking
+        var cursorCounters = {};
+
+        // Set aspect callbacks with value transformation
+        db.setAspectCallbacks({
+            initCursorContext: () => {
+                var ctx = { writeCount: 0, readCount: 0, deleteCount: 0 };
+                return ctx;
+            },
+            onWrite: (key, value, ctx) => {
+                ctx.writeCount++;
+                // Prepend "TAG:" to the value
+                var tag = new Uint8Array([0x54, 0x41, 0x47, 0x3a]); // "TAG:"
+                var result = new Uint8Array(tag.length + value.length);
+                result.set(tag);
+                result.set(value, tag.length);
+                return result;
+            },
+            onRead: (key, data, bigMeta, ctx) => {
+                ctx.readCount++;
+                // Strip "TAG:" prefix if present
+                if (data.length >= 4 && data[0] === 0x54 && data[1] === 0x41 &&
+                    data[2] === 0x47 && data[3] === 0x3a) {
+                    return data.slice(4);
+                }
+                return data;
+            },
+            mayDelete: (key, value, ctx) => {
+                ctx.deleteCount++;
+                // Reject deletion of keys starting with "protected_"
+                var keyStr = new TextDecoder().decode(key);
+                return keyStr.indexOf('protected_') !== 0;
+            },
+            onCommit: (origin, ctx) => {
+                // Just observe, no return value expected
+            }
+        });
+
+        var c = db.createCursor();
+
+        // Test onWrite/onRead transformation
+        await c.find('test_key');
+        await c.setValue('hello_world');
+        await c.commit(false);
+        log('Wrote test_key with value hello_world');
+
+        await c.find('test_key');
+        check('aspect isValid after write', c.isValid(), true);
+        var val = await c.getValue();
+        check('aspect onRead strips TAG:', val, 'hello_world');
+        check('aspect onWrite counter', c.aspectContext().writeCount >= 1, true);
+        check('aspect onRead counter', c.aspectContext().readCount >= 1, true);
+        log('onWrite/onRead transformation works');
+
+        // Test mayDelete reject
+        await c.find('protected_secret');
+        await c.setValue('precious');
+        await c.commit(false);
+
+        await c.find('protected_secret');
+        check('protected key exists before delete', c.isValid(), true);
+        try {
+            await c.remove();
+            check('remove should have thrown', false, true);
+        } catch (e) {
+            log('remove rejected as expected: ' + e.message);
+        }
+        await c.rollback();
+
+        // Key should still exist
+        await c.find('protected_secret');
+        check('protected key survives', c.isValid(), true);
+        val = await c.getValue();
+        check('protected key value intact', val, 'precious');
+        log('mayDelete rejection works');
+
+        // Test that normal keys can be deleted
+        await c.find('normal_key');
+        await c.setValue('byebye');
+        await c.commit(false);
+
+        await c.find('normal_key');
+        check('normal key exists before delete', c.isValid(), true);
+        await c.remove();
+        await c.commit(false);
+
+        await c.find('normal_key');
+        check('normal key deleted', c.isValid(), false);
+        log('normal key deletion works');
+
+        // Test per-cursor context isolation
+        var c2 = db.createCursor();
+        check('c2 fresh context writeCount', c2.aspectContext().writeCount, 0);
+        check('c2 fresh context readCount', c2.aspectContext().readCount, 0);
+        check('c2 fresh context deleteCount', c2.aspectContext().deleteCount, 0);
+        log('per-cursor context isolation works');
+
+        // Cleanup
+        await store.close();
+        await Module.LeavesStore.deleteStorage(aspectStoreName);
+        log('Aspect test complete');
+    }
+
     if (window.runReplicationTest) {
         await window.runReplicationTest(log, check);
     }
+    await runAspectTest(log, check);
 
   } catch (e) {
     log('ERROR: ' + e.message + '\n' + e.stack);

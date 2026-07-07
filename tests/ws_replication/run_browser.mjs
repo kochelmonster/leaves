@@ -13,8 +13,8 @@
  *
  * Requirements:
  *   - Native server built:      cmake --build build -j --target ws_replication_server
- *   - WASM client built:        cmake --build build-wasm -j --target ws_replication_client
- *   - Chrome 128+ or Firefox with JSPI (origin trial)
+ *   - Leaves JS library built:  cmake --build build-wasm -j --target leaves_js_output
+ *   - Browser with SharedArrayBuffer support (Chrome 92+, Firefox 90+, Safari 15.2+)
  */
 
 import { spawn, execSync } from "node:child_process";
@@ -36,7 +36,7 @@ function argVal(name, fallback) {
 }
 
 const SERVER_BIN = argVal("--server", join(ROOT, "build", "ws_replication_server"));
-const WASM_DIR   = argVal("--wasm-dir", join(ROOT, "build-wasm"));
+const WASM_DIR   = argVal("--wasm-dir", join(ROOT, "js"));
 const WS_PORT    = parseInt(argVal("--ws-port", "19876"), 10);
 const HTTP_PORT  = parseInt(argVal("--http-port", "8080"), 10);
 
@@ -66,8 +66,14 @@ function startHttpServer() {
       // Serve test.html and the HTML from this directory
       if (url.pathname === "/" || url.pathname === "/test.html") {
         filePath = join(__dirname, "test.html");
+      } else if (url.pathname === "/leaves.js") {
+        filePath = join(WASM_DIR, "leaves.js");
+      } else if (url.pathname === "/leaves.wasm") {
+        filePath = join(WASM_DIR, "leaves.wasm");
+      } else if (url.pathname === "/leaves_replication.js") {
+        filePath = join(WASM_DIR, "leaves_replication.js");
       } else {
-        // Serve WASM artifacts from build-wasm/
+        // Try WASM dir for other assets
         filePath = join(WASM_DIR, url.pathname.slice(1));
       }
 
@@ -78,6 +84,9 @@ function startHttpServer() {
           "Content-Type": MIME[ext] || "application/octet-stream",
           "Cross-Origin-Opener-Policy": "same-origin",
           "Cross-Origin-Embedder-Policy": "require-corp",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0",
         });
         res.end(data);
       } catch {

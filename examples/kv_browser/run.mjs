@@ -12,7 +12,7 @@
  *
  * Requirements:
  *   - cmake --build build -j --target kv_demo_server
- *   - cmake --build build-wasm -j --target kv_demo_client
+ *   - The `leaves` JS API must be built (see `js/README.md`)
  *   - Chrome 128+ (or any browser with JSPI support)
  */
 
@@ -35,7 +35,7 @@ function argVal(name, fallback) {
 }
 
 const SERVER_BIN = argVal("--server", join(ROOT, "build", "kv_demo_server"));
-const WASM_DIR   = argVal("--wasm-dir", join(ROOT, "build-wasm"));
+const WASM_DIR   = argVal("--wasm-dir", join(ROOT, "..", "..", "js"));
 const WS_PORT    = parseInt(argVal("--ws-port", "19876"), 10);
 const HTTP_PORT  = parseInt(argVal("--http-port", "8080"), 10);
 
@@ -66,11 +66,12 @@ function startHttpServer() {
       // Serve index.html from this directory
       if (url.pathname === "/" || url.pathname === "/index.html") {
         filePath = join(__dirname, "index.html");
-      } else if (url.pathname === "/kv_demo.js") {
-        // WASM JS glue — renamed from kv_demo_client.js
-        filePath = join(WASM_DIR, "kv_demo_client.js");
-      } else if (url.pathname === "/kv_demo.wasm") {
-        filePath = join(WASM_DIR, "kv_demo_client.wasm");
+      } else if (url.pathname === "/leaves.js") {
+        filePath = join(WASM_DIR, "leaves.js");
+      } else if (url.pathname === "/leaves.wasm") {
+        filePath = join(WASM_DIR, "leaves.wasm");
+      } else if (url.pathname === "/leaves_replication.js") {
+        filePath = join(WASM_DIR, "leaves_replication.js");
       } else {
         // Try WASM dir for other assets
         filePath = join(WASM_DIR, url.pathname.slice(1));

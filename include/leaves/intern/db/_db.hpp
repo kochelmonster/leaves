@@ -112,41 +112,83 @@ struct _DBHeader {
   // Extra offset for storing additional user-defined data beyond the header.
   // Defaults to 0 (no extra data).
   offset_t extra_offset{0};
+
+  WalState wal;
 };
 
+// ---------------------------------------------------------------------------
 // Write-Ahead Log mixin for _DB — provides WAL open/recover/begin/put/delete/
 // prepare/commit/abort operations via CRTP. The derived type (_DB) must expose
 // _storage, _name, and create_cursor().
+//
+// Under Emscripten (browser / WSM mode) there are no WAL files, so the mixin
+// is a no-op stub — all methods inline to nothing and no members are added.
+// ---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+
+template <typename Derived_>
+struct _WalDbMixin {
+  using Derived = Derived_;
+
+  bool wal_enabled() const { return false; }
+  std::string wal_base_path() const { return std::string(); }
+  void open_wal() {}
+  void wal_recover() {}
+  void wal_begin(uint32_t /*txn_id*/) {}
+  void wal_put(const Slice& /*key*/, const Slice& /*val*/) {}
+  void wal_delete(const Slice& /*key*/) {}
+  void wal_prepare(bool /*skip_sync*/ = false) {}
+  void set_wal_flush_threshold(uint64_t /*bytes*/) {}
+  void wal_commit(uint32_t /*txn_id*/) {}
+  void wal_abort() {}
+  void wal_close() {}
+
+  Derived& _derived() { return *static_cast<Derived*>(this); }
+  const Derived& _derived() const { return *static_cast<const Derived*>(this); }
+};
+
+#else  // !__EMSCRIPTEN__
+
 template <typename Derived_>
 struct _WalDbMixin {
   using Derived = Derived_;
 
   SpinLock _flush_lock;  // avoid DB is destroyed during a flush
   _WalWriter _wal;
-  bool _wal_open{false};
   uint64_t _wal_flush_threshold{100 * 1024 * 1024};  // 1 MB default
 
 
-  bool wal_enabled() const { return _wal_open; }
+  bool wal_enabled() const { return _wal.is_open(); }
 
   std::string wal_base_path() const {
     return std::string(_derived()._storage.filename()) + "." + _derived()._name;
   }
 
   void open_wal() {
-    if (_wal_open) return;
-    if (!_wal.open(wal_base_path()))
+    if (_wal.is_open()) return;
+    // Serialise WAL open across processes so that only one process initialises
+    // the WAL state in the DB Header.
+    std::scoped_lock lock(_derived()._storage.file_lock());
+    if (_wal.is_open()) return;  // double-check after acquiring lock
+    if (!_wal.open(wal_base_path(), &_derived()._header->wal))
       throw std::runtime_error("failed to open WAL files");
-    _wal_open = true;
   }
 
   void wal_recover() {
+    _WalTxn dangling;
     std::vector<_WalTxn> all;
-    _wal.parse(wal_base_path(), all);
+    _wal.parse(wal_base_path(), all, &dangling);
 
+    tid_t read_txn_id = _derived().txn()->txn_id;
+
+    // Replay committed transactions that are newer than the read transaction.
+    // Any transaction whose txn_id <= read_txn_id was already applied.
+    bool have_committed = false;
     if (!all.empty()) {
       auto cursor = _derived().create_cursor();
       for (const _WalTxn& t : all) {
+        if (tid_t(t.txn_id) <= read_txn_id) continue;
+        have_committed = true;
         cursor->start_transaction();
         for (const _WalOpRecord& op : t.ops) {
           cursor->find(Slice(op.key));
@@ -160,7 +202,34 @@ struct _WalDbMixin {
       }
     }
 
-    _wal.reset();
+    // Handle the dangling (prepared but not committed) transaction.
+    // Apply its operations and leave it as prepared_txn so that sanitize()
+    // can restore it as the active write transaction.
+    if (dangling.txn_id != 0 && tid_t(dangling.txn_id) > read_txn_id) {
+      auto cursor = _derived().create_cursor();
+      cursor->start_transaction();
+      for (const _WalOpRecord& op : dangling.ops) {
+        cursor->find(Slice(op.key));
+        if (op.is_delete) {
+          if (cursor->is_valid()) cursor->remove();
+        } else {
+          cursor->value(Slice(op.val));
+        }
+      }
+      // prepare_commit via cursor uses cursor's own _id (which matches
+      // txn_cursor_id set by start_transaction).  This sets prepared_txn
+      // but does NOT advance read_txn — the transaction stays "prepared"
+      // so sanitize() can restore it as the active write transaction.
+      cursor->prepare_commit(false);
+      _derived().end_transaction();
+      have_committed = true;
+    }
+
+    // Flush replayed data to storage before removing WAL files so crash
+    // after this point does not lose recovered state.
+    if (have_committed)
+      _derived().flush(true, true);
+    _wal.reset(wal_base_path());
   }
 
   void wal_begin(uint32_t txn_id) { _wal.begin(txn_id); }
@@ -182,16 +251,17 @@ struct _WalDbMixin {
   void wal_abort() { _wal.abort(); }
 
   void wal_close() {
-    if (_wal_open) {
+    if (_wal.is_open()) {
       std::lock_guard<SpinLock> lock(_flush_lock);
       _wal.close();
-      _wal_open = false;
     }
   }
 
   Derived& _derived() { return *static_cast<Derived*>(this); }
   const Derived& _derived() const { return *static_cast<const Derived*>(this); }
 };
+
+#endif  // __EMSCRIPTEN__
 
 // Make _DB accept Transaction and Header as template parameters
 // Self_ enables CRTP: derived classes pass themselves so _DB can
@@ -261,6 +331,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _name(name) {
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::ctor offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu cursor id=%llu address=%p\n",
+                       (unsigned long long)header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->txn_cursor_id, (char*)_header);
     if (_header->prepared_txn != _header->read_txn) {
       _active_txn = resolve<Transaction>(&_header->prepared_txn);
     }
@@ -281,6 +353,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::init offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u\n",
+               (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID);
     new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
 
@@ -313,6 +387,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header->next_txn_page = resolve(next);
     _active_txn.reset();
 
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::init / end offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu prepared_txn=%llu next_txn_page=%llu\n",
+               (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->prepared_txn, (unsigned long long)_header->next_txn_page);
     make_dirty(_header);
     flush();
   }
@@ -862,6 +938,14 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
     _header->txn_cursor_id.store(0);
+
+    // Reset _active_txn before wal_recover(), which needs to start its own
+    // transactions to replay WAL entries.  The constructor may have set
+    // _active_txn from prepared_txn (e.g. after a two-phase prepare crash
+    // or a WAL prepare crash); wal_recover() requires a clean slate.  The
+    // post-recovery check below re-establishes _active_txn if needed.
+    _active_txn.reset();
+
     iter_transactions([this](txn_ptr txn) -> bool {
       txn->refs.store(0);
       txn->mem_manager.reinit_locks();
@@ -879,7 +963,9 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       make_dirty(next);
     } else {
       txn_ptr read_txn = resolve<Transaction>(&_header->read_txn);
+      assert(_header->read_txn != 0);
       _active_txn = read_txn;
+
       auto next = read_txn->clone(*this);
       _header->next_txn_page = resolve(next);
       _active_txn.reset();
@@ -887,9 +973,113 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
 
     this->wal_recover();
 
+    // If wal_recover left a dangling (prepared but not committed) transaction,
+    // restore it as the active write transaction so the caller can commit or
+    // rollback.  This happens when the last WAL transaction was prepared but
+    // never committed before a crash.
+    if (_header->prepared_txn != _header->read_txn) {
+      _header->txn_lock.lock();
+      _active_txn = resolve<Transaction>(&_header->prepared_txn);
+    }
+
     make_dirty(_header);
     flush();
     _aspect.on_sanitize(self());
+  }
+
+  // Recursively check trie health starting from the given offset.
+  // Returns true if the entire subtree is structurally valid.
+  // Does not modify any state — purely a read-only validation.
+  bool _check_trie_health(offset_e offset) const {
+    if (!offset) return true;  // null/empty root is healthy
+
+    using PageHeader = typename Traits::PageHeader;
+    typedef _TrieNode<Traits> TrieNode;
+    typedef _LeafNode<Traits> LeafNode;
+    using trie_ptr = typename Traits::template Pointer<TrieNode>;
+    using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
+
+    if (offset.type() == TRIE) {
+      trie_ptr node = resolve<TrieNode>(&offset);
+      auto* hdr =
+          reinterpret_cast<const PageHeader*>((const char*)&*node - sizeof(PageHeader));
+
+      // Page-level checks
+      if (hdr->slot_id >= PAGE_SIZES_COUNT) return false;
+      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id]) return false;
+
+      // Trie node structural checks
+      if (node->len() > 255) return false;
+      int cnt = node->count();
+      if (cnt < 1 || cnt > TrieNode::MAX_BRANCH_COUNT) return false;
+
+      // Verify internal layout consistency
+      if (node->lower_start() != node->calc_lower_start()) return false;
+      if (node->array_start() != node->calc_array_start()) return false;
+
+      // Verify total node size fits within used page space
+      if (node->size() > hdr->used) return false;
+
+      // Recurse into children
+      offset_e* arr = node->array();
+      for (int i = 0; i < cnt; i++) {
+        if (!arr[i]) return false;
+        NodeTypes t = arr[i].type();
+        if (t != TRIE && t != LEAF) return false;
+        if (!_check_trie_health(arr[i])) return false;
+      }
+      return true;
+    }
+
+    if (offset.type() == LEAF) {
+      leaf_ptr leaf = resolve<LeafNode>(&offset);
+      auto* hdr =
+          reinterpret_cast<const PageHeader*>((const char*)&*leaf - sizeof(PageHeader));
+
+      // Page-level checks
+      if (hdr->slot_id >= PAGE_SIZES_COUNT) return false;
+      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id]) return false;
+
+      // Leaf node structural checks
+      if (leaf->key_size > 255) return false;
+      if (leaf->size() != hdr->used) return false;
+
+      return true;
+    }
+
+    // Unknown node type
+    return false;
+  }
+
+  // Repair the database by walking the trie of the current transaction and
+  // checking if the nodes are structurally healthy. If an unhealthy node is
+  // found, repair unwinds the transaction chain and takes the next older
+  // transaction until a healthy transaction is found.  This restores the
+  // database to a known-good state, potentially losing the most recent
+  // transaction's data.  Precondition: no active write transaction.
+  void repair() {
+    if (is_active()) throw TransactionActive();
+
+    offset_t last_healthy = 0;
+
+    // Iterate transactions from oldest to newest.
+    // Track the most recent healthy transaction.
+    // If we find an unhealthy one, stop and use the last healthy one before it.
+    iter_transactions([this, &last_healthy](txn_ptr txn) -> bool {
+      if (_check_trie_health(txn->root)) {
+        last_healthy = resolve(txn);
+        return false;  // continue checking
+      }
+      return true;  // unhealthy found, stop iterating
+    });
+
+    // If the last healthy transaction is not the current read_txn, switch to it.
+    if (last_healthy && last_healthy != _header->read_txn) {
+      _header->read_txn = last_healthy;
+      _header->prepared_txn = last_healthy;
+      make_dirty(_header);
+      flush();
+    }
   }
 };
 

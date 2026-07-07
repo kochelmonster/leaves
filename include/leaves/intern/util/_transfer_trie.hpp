@@ -58,6 +58,11 @@ struct _TransferTrie {
       using Traits = DBTraits;
       using offset_e = typename Traits::offset_e;
 
+      // _Dumper compatibility
+      using db_type = DB;
+      const DB* _internal() const { return this; }
+      using Cursor = DB;
+
       // Resolve offset to node pointer using relative addressing
       template <typename T>
       typename Traits::template Pointer<T> resolve(const offset_e* offset) const {

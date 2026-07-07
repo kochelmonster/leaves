@@ -91,7 +91,8 @@
 
 <h1>Leaves — Key-Value Browser Demo</h1>
 <p class="subtitle">
-  Bidirectional replication via WebSocket. Open multiple tabs to see live sync.
+  Unidirectional replication via WebSocket. Open multiple tabs to see live sync.
+  Uses aspects to defer push on commit, and replication events to update the table.
 </p>
 
 <div id="status">
@@ -107,7 +108,8 @@
 </div>
 
 <div class="toolbar">
-  <button id="sync-btn" onclick="manualSync()" disabled>Sync Now</button>
+  <button id="pull-btn" onclick="doPull()" disabled>Pull</button>
+  <button id="refresh-btn" onclick="refresh()" disabled>Refresh</button>
   <button id="clear-btn" class="danger" onclick="clearAll()" disabled>Clear All</button>
 </div>
 
@@ -126,28 +128,42 @@
   </tbody>
 </table>
 
-<script>
+<script type="module">
+import createModule from './leaves.js';
+import { LeavesReplicationSender, LeavesReplicationReceiver } from './leaves_replication.js';
+
 // ── State ───────────────────────────────────────────────────────
 
 const params = new URLSearchParams(location.search);
 const PORT = params.get("port") || "19876";
 let ready = false;
 let syncing = false;
+let store, repldb, cursor, Module, ws;
+let textQueue = [];
+let binQueue = [];
+let notificationPending = false;
 
-// ── Module setup ────────────────────────────────────────────────
+// ── Deferred synchronization (aspect-driven) ────────────────────
 
-var Module = {
-  onRuntimeInitialized: function() {
-    init();
-  },
-  print: function(t) { console.log(t); },
-  printErr: function(t) { console.warn(t); },
-};
-</script>
-<script src="kv_demo.js"></script>
-<script>
+let _syncTimer = null;
+
+/** Schedule a deferred push (debounced at 300ms). */
+function schedulePush() {
+  if (_syncTimer) clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(() => {
+    _syncTimer = null;
+    if (!syncing) {
+      doPush();
+    }
+  }, 300);
+}
 
 // ── UI helpers ──────────────────────────────────────────────────
+
+window.addKV = addKV;
+window.removeKV = removeKV;
+window.clearAll = clearAll;
+window.refresh = refresh;
 
 function setStatus(text, color) {
   document.getElementById("status-text").textContent = text;
@@ -157,7 +173,8 @@ function setStatus(text, color) {
 
 function setButtons(enabled) {
   document.getElementById("add-btn").disabled = !enabled;
-  document.getElementById("sync-btn").disabled = !enabled;
+  document.getElementById("pull-btn").disabled = !enabled;
+  document.getElementById("refresh-btn").disabled = !enabled;
   document.getElementById("clear-btn").disabled = !enabled;
 }
 
@@ -174,7 +191,6 @@ function renderTable(rows) {
   countEl.textContent = rows.length + " entr" + (rows.length === 1 ? "y" : "ies");
 
   tbody.innerHTML = rows.map(function(row) {
-    // Escape HTML to prevent XSS
     const ek = escapeHtml(row.key);
     const ev = escapeHtml(row.value);
     return '<tr>'
@@ -203,33 +219,107 @@ function updateSyncTime() {
 // ── Core operations ─────────────────────────────────────────────
 
 async function refresh() {
-  const rows = await Module.kvGetAll();
-  // Convert val proxy to plain array
-  const arr = [];
-  for (let i = 0; i < rows.length; i++) {
-    arr.push({ key: rows[i].key, value: rows[i].value });
+  const rows = [];
+  console.log('[client] refresh: fetching all key-value pairs');
+  await cursor.update();
+  await cursor.first();
+  while (cursor.isValid()) {
+    rows.push({ key: cursor.key(), value: await cursor.getValue() });
+    await cursor.next();
   }
-  renderTable(arr);
+  renderTable(rows);
 }
 
-async function doSync() {
-  if (syncing) return;
-  syncing = true;
-  setStatus("Syncing...", "yellow");
-  try {
-    const ok = await Module.kvSync();
-    if (ok) {
-      await refresh();
-      setStatus("Connected", "green");
-      updateSyncTime();
-    } else {
-      setStatus("Sync failed", "red");
-    }
-  } catch (e) {
-    console.error("sync error:", e);
-    setStatus("Sync error", "red");
+// Push local changes to server
+async function doPush() {
+  console.log('[client] doPush enter');
+  if (syncing) {
+    console.log('[client] doPush: already syncing, returning');
+    return;
   }
-  syncing = false;
+  syncing = true;
+  setStatus("Pushing...", "yellow");
+
+  try {
+    console.log('[client] sending PUSH request');
+    ws.send("PUSH");
+
+    const sender = new LeavesReplicationSender(repldb, Module);
+
+    await sender.begin({ send: data => ws.send(data) }, {
+        onComplete: async (sid, n) => {
+            console.log('[client] push completed, refreshing table via event');
+            await cursor.update();
+            await refresh();
+            updateSyncTime();
+        },
+        onError: (sid, err, msg) => console.error('Sender error:', msg || err)
+    });
+
+    while (sender.state() === 'active') {
+        const msg = await nextBinMessage();
+        if (msg === null) throw new Error("WebSocket closed during push");
+        await sender.onMessageReceived(msg);
+    }
+
+    // Wait for DONE
+    const done = await nextTextMessage();
+    if (done !== 'DONE') throw new Error('Expected DONE after push, got ' + done);
+
+    setStatus("Connected", "green");
+
+  } catch (e) {
+    console.error("push error:", e);
+    setStatus("Push error: " + e.message, "red");
+  } finally {
+    syncing = false;
+  }
+}
+
+// Pull server data to client
+async function doPull() {
+  console.log('[client] doPull enter');
+  if (syncing) {
+    console.log('[client] doPull: already syncing, returning');
+    return;
+  }
+  syncing = true;
+  setStatus("Pulling...", "yellow");
+
+  try {
+    console.log('[client] sending PULL request');
+    ws.send("PULL");
+
+    const receiver = new LeavesReplicationReceiver(repldb, Module);
+
+    await receiver.begin({ send: data => ws.send(data) }, {
+        onComplete: async (sid, n) => {
+            console.log('[client] pull completed, refreshing table via event');
+            await cursor.update();
+            await refresh();
+            updateSyncTime();
+        },
+        onError: (sid, err, msg) => console.error('Receiver error:', msg || err)
+    });
+
+    while (receiver.state() === 'active') {
+        const msg = await nextBinMessage();
+        if (msg === null) throw new Error("WebSocket closed during pull");
+        await receiver.onMessageReceived(msg);
+    }
+
+    // Wait for DONE
+    const done = await nextTextMessage();
+    if (done !== 'DONE') throw new Error('Expected DONE after pull, got ' + done);
+
+    setStatus("Connected", "green");
+
+  } catch (e) {
+    console.error("pull error:", e);
+    setStatus("Pull error: " + e.message, "red");
+  } finally {
+    syncing = false;
+  }
 }
 
 // ── User actions ────────────────────────────────────────────────
@@ -242,49 +332,103 @@ async function addKV() {
   if (!key) { keyEl.focus(); return; }
 
   setButtons(false);
-  await Module.kvPut(key, value);
+  console.log('[client] adding key:', key, 'value:', value, cursor.isTransactionActive());
+  await cursor.find(key);
+  console.log('[client] cursor find result:', cursor.isValid() ? 'found' : 'not found');
+  await cursor.setValue(value);
+  console.log('[client] cursor setValue done');
+  await cursor.commit(true);
   keyEl.value = "";
   valEl.value = "";
   keyEl.focus();
+
+  // Immediate local refresh for responsiveness
   await refresh();
-  await doSync();
+  // Aspect onCommit will schedule the deferred sync automatically
+
   setButtons(true);
 }
 
 async function removeKV(key) {
   setButtons(false);
-  await Module.kvRemove(key);
+  await cursor.find(key);
+  if (cursor.isValid()) {
+      await cursor.remove();
+      await cursor.commit(true);
+  }
+  // Immediate local refresh for responsiveness
   await refresh();
-  await doSync();
+  // Aspect onCommit will schedule the deferred sync automatically
   setButtons(true);
 }
 
 async function clearAll() {
-  const rows = await Module.kvGetAll();
   setButtons(false);
-  for (let i = 0; i < rows.length; i++) {
-    await Module.kvRemove(rows[i].key);
+  await cursor.first();
+  while (cursor.isValid()) {
+    await cursor.remove();
+    await cursor.next();
   }
+  await cursor.commit(true);
+  // Immediate local refresh for responsiveness
   await refresh();
-  await doSync();
+  // Aspect onCommit will schedule the deferred sync automatically
   setButtons(true);
 }
 
-async function manualSync() {
-  setButtons(false);
-  await doSync();
-  setButtons(true);
+
+// ── WebSocket and notification handling ─────────────────────────
+
+function connectWs() {
+    return new Promise((resolve, reject) => {
+        const url = "ws://" + location.hostname + ":" + PORT;
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => resolve(true);
+        ws.onclose = () => { ready = false; setStatus("Disconnected", "red"); };
+        ws.onerror = (e) => { console.error("ws error", e); reject(e); };
+
+        ws.onmessage = (ev) => {
+            if (typeof ev.data === "string") {
+                if (ev.data === 'SYNC') {
+                    console.log('[client] received SYNC notification');
+                    notificationPending = true;
+                } else {
+                    console.log('[client] received text:', ev.data);
+                    textQueue.push(ev.data);
+                }
+            } else {
+                const arr = new Uint8Array(ev.data);
+                console.log('[client] received binary:', arr.length, 'bytes');
+                binQueue.push(arr);
+            }
+        };
+    });
 }
 
-// ── Notification polling ────────────────────────────────────────
+function nextMessage(queue) {
+    if (queue.length > 0) return Promise.resolve(queue.shift());
+    return new Promise(resolve => {
+        const check = () => {
+            if (queue.length > 0) resolve(queue.shift());
+            else if (!ws || ws.readyState !== WebSocket.OPEN) resolve(null);
+            else setTimeout(check, 10);
+        };
+        check();
+    });
+}
+
+function nextTextMessage() { return nextMessage(textQueue); }
+function nextBinMessage() { return nextMessage(binQueue); }
 
 async function pollNotifications() {
   if (!ready || syncing) return;
-  try {
-    if (!Module.kvHasNotification()) return;
-    await doSync();
-  } catch (e) {
-    console.error("poll error:", e);
+  if (notificationPending) {
+    notificationPending = false;
+    if (!syncing) {
+      doPull();
+    }
   }
 }
 
@@ -301,34 +445,96 @@ document.addEventListener("keydown", function(e) {
 
 // ── Init ────────────────────────────────────────────────────────
 
+const STORAGE_KEY = 'leaves_kv_db_name';
+
 async function init() {
-  document.getElementById("loading").textContent = "Connecting...";
-
   try {
-    const dbName = "kv_demo_" + location.port;
-    await Module.kvCreate(dbName);
+    document.getElementById("loading").textContent = "Loading WASM...";
+    Module = await createModule();
 
-    const url = "ws://" + location.hostname + ":" + PORT;
-    await Module.kvConnect(url);
-
-    if (!Module.kvIsConnected()) {
-      setStatus("Connection failed", "red");
-      document.getElementById("loading").classList.add("hidden");
-      return;
+    if (typeof Module.supportsJSPI === 'function' && !Module.supportsJSPI()) {
+      throw new Error("This browser does not support JavaScript Promise Integration (JSPI). Please use Chrome 128+ or enable the #enable-jspi flag in chrome://flags.");
     }
+
+    document.getElementById("loading").textContent = "Connecting...";
+    // Use a previously-saved DB name, or fall back to the default.
+    // This avoids the stale-IDB TypeMismatch on reload: once a fresh
+    // name has been stored we never touch the old (stale) database again.
+    const dbName = localStorage.getItem(STORAGE_KEY) || "kv_demo_" + (location.port || 'default');
+    try {
+      store = await Module.LeavesStore.create(dbName, 10 * 1024 * 1024);
+      // ── Diagnostic: list all databases in this store before opening replication ──
+      const allDbs = store.listDbs();
+      console.log('[diag] storage name:', dbName);
+      console.log('[diag] existing databases:', JSON.stringify(allDbs));
+      console.log('[diag] about to openReplication("kv_repl") — expects type_id=1 (_ReplicationDB)');
+      repldb = await store.openReplication("kv_repl");
+
+      // ── Aspect callbacks: onCommit triggers deferred sync ──────────
+      repldb.setAspectCallbacks({
+        onCommit: function(origin, ctx) {
+          if (origin === 'user') {
+            console.log('[aspect] onCommit("user") — scheduling deferred push');
+            schedulePush();
+          } else {
+            console.log('[aspect] onCommit("' + origin + '") — ignoring (not user)');
+          }
+        }
+      });
+
+    } catch (e) {
+      // Diagnostic: inspect the storage state after a failure
+      const allDbs = store ? store.listDbs() : [];
+      console.error('[diag] openReplication("kv_repl") FAILED');
+      console.error('[diag] storage name:', dbName);
+      console.error('[diag] existing databases:', JSON.stringify(allDbs));
+      console.error('[diag] caught error:', e);
+      if (e instanceof Error) {
+        console.error('[diag] error message:', e.message);
+        console.error('[diag] error stack:', e.stack);
+      } else {
+        // WebAssembly exceptions may be plain objects or numbers
+        console.error('[diag] error type:', typeof e, Object.prototype.toString.call(e));
+      }
+
+      // WebAssembly exceptions don't expose a string .message.
+      // Fall back to a fresh name (the WASM module holds an open
+      // IDB connection from the failed open, so deleteDatabase on
+      // the old name would be permanently blocked).
+      console.warn('[diag] creating fresh storage with timestamped name');
+      const freshName = "kv_demo_" + (location.port || 'default');
+      store = await Module.LeavesStore.create(freshName, 10 * 1024 * 1024);
+      const freshDbs = store.listDbs();
+      console.log('[diag] fresh storage name:', freshName);
+      console.log('[diag] fresh storage databases:', JSON.stringify(freshDbs));
+      repldb = await store.openReplication("kv_repl");
+
+      // ── Aspect callbacks on the fresh DB ───────────────────────────
+      repldb.setAspectCallbacks({
+        onCommit: function(origin, ctx) {
+          if (origin === 'user') {
+            console.log('[aspect] onCommit("user") — scheduling deferred push');
+            schedulePush();
+          }
+        }
+      });
+
+      localStorage.setItem(STORAGE_KEY, freshName);
+    }
+    cursor = await repldb.createCursor();
+
+    await connectWs();
 
     setStatus("Connected — initial sync...", "yellow");
     document.getElementById("loading").classList.add("hidden");
 
-    // Initial sync
-    await doSync();
+    // Initial pull from server to populate local DB
+    doPull();
 
     ready = true;
     setButtons(true);
     setStatus("Connected", "green");
 
-    // Poll the local WebSocket notification queue.
-    // This is cheap and lets server-pushed SYNC hints trigger promptly.
     setInterval(pollNotifications, 250);
 
   } catch (e) {
@@ -337,6 +543,9 @@ async function init() {
     document.getElementById("loading").classList.add("hidden");
   }
 }
+
+init();
+
 </script>
 
 </body>
