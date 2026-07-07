@@ -2405,7 +2405,9 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
   auto sender_db = sender_storage->open<_ReplicationDB>("test");
   auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
-  const size_t BIG_VALUE_SIZE = 8 * 1024;
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+  const size_t BIG_VALUE_SIZE = sender_impl->AREA_SIZE + 4096;
 
   // Insert big values on sender
   {
@@ -2419,9 +2421,6 @@ BOOST_FIXTURE_TEST_CASE(test_slot_lifecycle_after_big_value_replication,
     }
     cursor.commit();
   }
-
-  auto* sender_impl = sender_db._internal();
-  auto* receiver_impl = receiver_db._internal();
 
   // Wait for background hashing to complete before starting replication
   wait_for_hashing(sender_impl);
@@ -2499,7 +2498,9 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
   auto sender_db = sender_storage->open<_ReplicationDB>("test");
   auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
-  const size_t BIG_VALUE_SIZE = 8 * 1024;
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+  const size_t BIG_VALUE_SIZE = sender_impl->AREA_SIZE + 4096;
 
   // Insert big values on sender
   {
@@ -2513,9 +2514,6 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
     }
     cursor.commit();
   }
-
-  auto* sender_impl = sender_db._internal();
-  auto* receiver_impl = receiver_db._internal();
 
   // Wait for background hashing to complete before starting replication
   wait_for_hashing(sender_impl);
@@ -2717,7 +2715,9 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
   auto sender_db = sender_storage->open<_ReplicationDB>("test");
   auto receiver_db = receiver_storage->open<_ReplicationDB>("test");
 
-  const size_t BIG_VALUE_SIZE = 8 * 1024;
+  auto* sender_impl = sender_db._internal();
+  auto* receiver_impl = receiver_db._internal();
+  const size_t BIG_VALUE_SIZE = sender_impl->AREA_SIZE + 4096;
 
   // Insert a big value on sender so replication triggers BIG_VALUE_START
   {
@@ -2728,9 +2728,6 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
     cursor.value(Slice(value.data(), value.size()));
     cursor.commit();
   }
-
-  auto* sender_impl = sender_db._internal();
-  auto* receiver_impl = receiver_db._internal();
 
   // Wait for background hashing to complete before starting replication
   wait_for_hashing(sender_impl);

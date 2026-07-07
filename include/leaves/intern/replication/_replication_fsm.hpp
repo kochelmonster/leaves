@@ -689,11 +689,19 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   using CursorTraits_ = typename DstDB::CursorTraits;
   using BigMemory = _BigMemory<InternalCursor>;
   using BigValue = typename BigMemory::BigValue;
+  struct ChunkData {
+    char data;
+  };
   using Aspect = typename DstDB::Aspect;
   using CursorContext = typename Aspect::CursorContext;
 
-  // Big value mapping: wire_offset -> offset_t in persistent storage
+  // Big value mapping: wire_offset -> offset_t.
+  // In persistent mode the offset is a destination chunk offset.
+  // In tmp mode the offset is a byte offset relative to tmp_area start.
   const std::unordered_map<uint64_t, offset_t>* big_value_offsets = nullptr;
+  bool big_value_tmp_mode = false;
+  const uint8_t* big_value_tmp_area = nullptr;
+  size_t big_value_tmp_area_size = 0;
   DstDB* db = nullptr;
 
   // Internal cursor pointing at main trie root — set during deletion phase
@@ -714,9 +722,14 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   [[no_unique_address]] CursorContext _merge_context;
 
   // Set the big value mapping (called before merge)
-  void set_big_value_storage(
-      const std::unordered_map<uint64_t, offset_t>* offsets, DstDB* dst_db) {
+  void set_big_value_storage(const std::unordered_map<uint64_t, offset_t>* offsets,
+                             DstDB* dst_db, bool tmp_mode = false,
+                             const uint8_t* tmp_area = nullptr,
+                             size_t tmp_area_size = 0) {
     big_value_offsets = offsets;
+    big_value_tmp_mode = tmp_mode;
+    big_value_tmp_area = tmp_area;
+    big_value_tmp_area_size = tmp_area_size;
     db = dst_db;
   }
 
@@ -804,10 +817,39 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
       return {Slice(), false};
     }
 
-    // Fill the inline _BigValue with pre-allocated destination offset.
-    // The data was already copied during _handle_big_value_data
-    _big_value_storage.chunk_offset = (uint64_t)it->second;
-    _big_value_storage.value_size = value_size;
+    if (big_value_tmp_mode) {
+      if constexpr (requires(DstCursor& c) {
+                      c.get_bigmemory();
+                      c._db;
+                    }) {
+        if (!big_value_tmp_area) {
+          return {Slice(), false};
+        }
+
+        uint64_t tmp_data_offset = (uint64_t)it->second;
+        if (tmp_data_offset > big_value_tmp_area_size ||
+            value_size > big_value_tmp_area_size - tmp_data_offset) {
+          return {Slice(), false};
+        }
+
+        const char* src_data =
+            reinterpret_cast<const char*>(big_value_tmp_area) + tmp_data_offset;
+        BigValue* dst_bvalue = &_big_value_storage;
+        dst_cursor.get_bigmemory().alloc(value_size, dst_bvalue);
+
+        offset_t dst_offset(dst_bvalue->chunk_offset);
+        auto dst_data =
+            dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
+        optimized_memcpy((char*)dst_data, src_data, value_size);
+      } else {
+        return {Slice(), false};
+      }
+    } else {
+      // Fill the inline _BigValue with pre-allocated destination offset.
+      // The data was already copied during _handle_big_value_data.
+      _big_value_storage.chunk_offset = (uint64_t)it->second;
+      _big_value_storage.value_size = value_size;
+    }
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }
@@ -1726,7 +1768,10 @@ struct ReplicationReceiverFSM {
       _merge_policy.main_cursor = nullptr;
       _merge_policy.bigmemory = nullptr;
     } else {
-      _merge_policy.set_big_value_storage(&_big_value._offsets, _db);
+      _merge_policy.set_big_value_storage(&_big_value._offsets, _db,
+                                          _big_value.using_tmp_area(),
+                                          _big_value.tmp_area_data(),
+                                          _big_value.area_size());
       _Merger<LocalCursor, WireCursor, MergePolicy> merger(
           *_cursor, _wire_cursor, _merge_policy);
       merger.exec();
