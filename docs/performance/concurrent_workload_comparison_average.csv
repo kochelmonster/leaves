@@ -1,3 +1,0 @@
-workload_label,badger,leaves,redis,rocksdb,sqlite,wiredtiger
-Concurrent Session (8T),108185.0,1686230.0,186867.0,705582.0,157880.0,229309.0
-Concurrent Write (8T),81466.1,1225000.0,92228.0,428876.0,101389.0,78079.6

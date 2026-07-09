@@ -16,9 +16,11 @@ The result challenges common assumptions: even LMDB is consistently outperformed
 
 ## Results
 
-![Workload Comparison](workload_comparison_average.png)
-![ACID Comparison](acid_workload_comparison_average.png)
-![Concurrent Comparison](concurrent_workload_comparison_average.png)
+![Workload Comparison](workload_comparison.png)
+![ACID Comparison](acid_workload_comparison.png)
+![Concurrent Comparison](concurrent_workload_comparison.png)
+![Batch Update Scaling](batch_update_scaling.png)
+![Batch Insert Scaling](batch_insert_scaling.png)
 
 Across all workloads, a clear performance hierarchy emerges. LMDB is consistently several times faster than traditional embedded competitors and reaches up to approximately **6× higher throughput** than WiredTiger and SQLite in read-heavy workloads, and about **2–4× faster** than LevelDB and RocksDB in single-threaded scenarios. Despite its reputation, RocksDB shows lower throughput than LevelDB in these single-threaded scenarios and only demonstrates its strengths under concurrent workloads, where it scales more effectively and narrows the gap. WiredTiger is consistently limited by internal overhead, while Redis is dominated by network round-trip costs rather than storage performance.
 
@@ -242,13 +244,14 @@ Models user session storage with frequent reads and updates.
 **Configuration:**  
 Uses `readproportion=0.50` and `updateproportion=0.50` with batching and binary keys enabled. RocksDB and LevelDB use 1 GB cache. WiredTiger operates in B-tree mode.
 
-- Dataset: 1,000,000 records
-- Operations: 1,000,000
+- Dataset: 5,000,000 records
+- Operations: 5,000,000
 - Key size: 8 B (binary)
 - Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Mixed workload; combines effects described in **Analytics Read** and **Ingest**.
+To be compareable with the **Concurrent Session** scenatrio, it has the same total number of operations, but is executed single-threaded.
 
 ---
 
@@ -285,6 +288,24 @@ Uses `transactionmode=multikey_acid` with strict durability settings.
 
 **Explanation:**  
 Same durability and coordination costs as **ACID A/C/I**, with additional multi-key overhead.
+
+---
+
+### ACID RMW
+
+**Scenario:**  
+This workload models batched atomic read-modify-write transactions across multiple keys. Each transaction performs 8 read-modify-write pairs in one commit, exercising multi-key atomicity and rollback behavior under strict durability guarantees. It approximates real-world patterns such as fund transfers across accounts, coordinated inventory adjustments across SKUs, or multi-document patching in one transaction.
+
+**Configuration:**  
+Uses `readmodifywriteproportion=1.0` with `batch_size=8`, zipfian key access (`requestdistribution=zipfian`), and hashed key insertion (`insertorder=hashed`, `hashalgo=sha256`). RocksDB and LevelDB are configured with 1 GB cache (`rocksdb.cache_size`, `leveldb.cache_size`) to cover the working set. WiredTiger is forced to B-tree mode by disabling LSM parameters.
+
+- Dataset: 1,000,000 records
+- Operations: 10,000
+- Key size: 8 B (binary)
+- Value size: 1 KB (10×100 B)
+
+**Explanation:**  
+Each transaction contains 8 RMW pairs (8 reads + 8 writes, 16 DB calls total), so 10,000 operations correspond to 1,250 transactions. Throughput is primarily determined by durability and transaction coordination cost: each commit must synchronize persistent state while preserving all-or-nothing semantics across multiple keys. Compared to non-transactional RMW, this adds commit and rollback overhead on top of the read-before-write path.
 
 ---
 
@@ -328,13 +349,83 @@ Write scalability depends on contention. LSM engines scale via buffering but sti
 
 ### Benchmark framework
 
-Benchmarks are executed using a modified YCSB-cpp:  
-https://github.com/kochelmonster/YCSB-cpp  
+Benchmarks are executed using a modified YCSB-cpp:
+[https://github.com/kochelmonster/YCSB-cpp](https://github.com/kochelmonster/YCSB-cpp)
 
 Supports:
+
 - scenario matrix (batch, ACID, concurrent)  
 - per-database tuning  
 - reproducibility  
+
+
+
+
+#### 1. Raw throughput extraction (per run)
+
+For each `(database, scenario, workload, repeat)` tuple, the runner executes a load phase and a run phase. The plotted metric comes from the run phase log line:
+
+`Run throughput(ops/sec): <value>`
+
+Only this run-phase throughput value is used for the matrix and graphs.
+
+#### 2. Repeat aggregation (single value per tuple)
+
+If `BENCHMARK_REPEATS=1`, that single run throughput is used directly.
+
+If `BENCHMARK_REPEATS>1`, all repeat throughput values for the tuple are sorted and aggregated with the median:
+
+- Odd count: middle value
+- Even count: average of the two middle values
+
+This aggregated value becomes `run_throughput_ops_sec` for that tuple.
+
+#### 3. Matrix CSV semantics
+
+The runner writes `throughput_matrix_<timestamp>.csv` with one row per tuple:
+
+`scenario,batch_size,workload,database,run_throughput_ops_sec`
+
+So each row already represents a single aggregated throughput value (single run or median across repeats).
+
+#### 4. Chart aggregation from the matrix
+
+`create_benchmark_graphs.py` reads the matrix CSV and builds pivots with `aggfunc=max` (or equivalent `groupby(...).max()`):
+
+- Baseline comparison chart:
+  - filter `scenario == baseline`
+  - pivot by `(workload_label, database)`
+  - cell value = max throughput for that pair
+- Batch scaling charts:
+  - filter `scenario` matching `batch_insert_*` or `batch_update_*`
+  - pivot by `(batch_size, database)`
+  - cell value = max throughput
+- Value-size scaling chart:
+  - filter `scenario` matching `value_size_*`
+  - pivot by `(value_size, database)`
+  - cell value = max throughput
+- ACID and Concurrent comparison charts:
+  - filter by workload label groups
+  - group by `(workload_label, database)`
+  - cell value = max throughput across included scenarios
+
+#### 5. Normalization used in plotted y-values
+
+When possible, chart values are normalized row-wise to a reference database:
+
+`normalized_value = throughput(database) / throughput(reference_db)`
+
+Reference selection order in code is:
+
+1. `lmdb`
+2. `sqlite`
+
+If neither is present, charts use absolute `ops/sec` values.
+
+#### 6. Raw vs normalized outputs
+
+- The PNG graphs may show normalized ratios (for example `1.75x`).
+- The sidecar CSV files written next to each graph store the raw pivot values before normalization.
 
 ---
 
