@@ -66,6 +66,7 @@ endif()
 
 add_library(core INTERFACE)
 target_include_directories(core INTERFACE ../../include)
+target_compile_definitions(core INTERFACE $<$<CONFIG:Debug>:LEAVES_LOG>)
 
 add_library(leaves_replication INTERFACE)
 target_include_directories(leaves_replication INTERFACE ../../include)

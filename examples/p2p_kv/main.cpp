@@ -7,10 +7,10 @@
  * continuously synchronise their databases using LVRP replication.
  *
  * Terminal commands:
- *   add <key> <value>   Insert or update a key
- *   get <key>           Read a key's value
+ *   add <key> <value>   Insert or update a key (stores UTC timestamp)
+ *   get <key>           Read payload and UTC timestamp
  *   del <key>           Remove a key
- *   list                List all keys
+ *   list                List all keys (payload + UTC timestamp)
  *   peers               Show connected peers
  *   help                This help
  *   quit                Exit
@@ -27,6 +27,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <deque>
+#include <limits>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -60,6 +62,7 @@ static constexpr auto     SYNC_DEBOUNCE     = std::chrono::milliseconds(100);
 static constexpr uint32_t FRAME_BINARY      = 0;
 static constexpr uint32_t FRAME_TEXT        = 1;
 static constexpr size_t   FRAME_HDR         = 8;  // 4+4 header
+static constexpr auto     SYNC_IDLE_TIMEOUT = std::chrono::seconds(10);
 
 // ── Forward declarations ──────────────────────────────────────────────────
 
@@ -67,6 +70,7 @@ class PeerSession;
 struct P2pMapTraits;
 struct P2pSyncNotifier;
 using P2pStorage = MapStorage_<P2pMapTraits>;
+static void connect_to_peer_async(const std::string& host, uint16_t port);
 
 // ── Globals ────────────────────────────────────────────────────────────────
 
@@ -76,11 +80,75 @@ static std::mutex                           g_peers_mutex;
 static std::vector<std::shared_ptr<PeerSession>> g_peers;
 static std::shared_ptr<P2pStorage>          g_storage;
 static P2pSyncNotifier*                     g_notifier = nullptr;
+static std::atomic<int>                     g_next_manual_peer_id{10000};
 
 // Thread-local commit origin.  Set to >0 before a remote-triggered commit so
 // the Aspect knows which peer originated the change (and avoids echoing SYNC
 // back to that peer).  Set to -1 for local user-originated commits.
 thread_local int g_commit_origin_peer_id = -1;
+
+// ── Value encoding helpers ────────────────────────────────────────────────
+
+// Stored value format used by this demo: <utc_epoch_ms>|<payload>
+static uint64_t utc_epoch_ms_now() {
+  using namespace std::chrono;
+  return static_cast<uint64_t>(
+      duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+          .count());
+}
+
+static bool decode_timestamped_value(const Slice& encoded, uint64_t* out_ts,
+                                     Slice* out_payload = nullptr) {
+  const char* data = encoded.data();
+  size_t size = encoded.size();
+  size_t sep = size;
+
+  for (size_t i = 0; i < size; ++i) {
+    if (data[i] == '|') {
+      sep = i;
+      break;
+    }
+  }
+
+  if (sep == 0 || sep == size) {
+    return false;
+  }
+
+  uint64_t ts = 0;
+  for (size_t i = 0; i < sep; ++i) {
+    unsigned char ch = static_cast<unsigned char>(data[i]);
+    if (ch < '0' || ch > '9') {
+      return false;
+    }
+    uint64_t digit = static_cast<uint64_t>(ch - '0');
+    if (ts > (std::numeric_limits<uint64_t>::max() - digit) / 10) {
+      return false;
+    }
+    ts = ts * 10 + digit;
+  }
+
+  if (out_ts) {
+    *out_ts = ts;
+  }
+  if (out_payload) {
+    *out_payload = Slice(data + sep + 1, size - (sep + 1));
+  }
+  return true;
+}
+
+static std::string encode_timestamped_value(uint64_t ts,
+                                            const std::string& payload) {
+  return std::to_string(ts) + "|" + payload;
+}
+
+static std::string format_value_for_display(const Slice& encoded) {
+  uint64_t ts = 0;
+  Slice payload;
+  if (decode_timestamped_value(encoded, &ts, &payload)) {
+    return payload.string() + " (utc_ms=" + std::to_string(ts) + ")";
+  }
+  return encoded.string() + " (raw)";
+}
 
 // ── Scoped commit origin ───────────────────────────────────────────────────
 
@@ -197,6 +265,28 @@ struct P2pSyncNotifier {
 // ── Aspect ─────────────────────────────────────────────────────────────────
 
 struct P2pAspect : public DefaultAspect {
+  // Last-write-wins during replication merge based on UTC timestamp in value.
+  // Value format: <utc_epoch_ms>|<payload>
+  bool may_merge_overwrite(const Slice&, const Slice& dst, bool,
+                           const Slice& src, bool, CursorContext&) {
+    uint64_t dst_ts = 0;
+    uint64_t src_ts = 0;
+    bool dst_ok = decode_timestamped_value(dst, &dst_ts);
+    bool src_ok = decode_timestamped_value(src, &src_ts);
+
+    if (dst_ok && src_ok) {
+      // Younger (larger UTC epoch ms) value wins.
+      return src_ts > dst_ts;
+    }
+    if (dst_ok != src_ok) {
+      // Validly encoded timestamped value wins over malformed value.
+      return src_ok;
+    }
+
+    // Legacy fallback keeps previous behaviour when neither side is encoded.
+    return true;
+  }
+
   template <typename DB, typename Ctx>
   void on_commit(DB& db, TransactionOrigin, Ctx&) {
     int origin = g_commit_origin_peer_id;
@@ -259,21 +349,21 @@ public:
 
   /// Initiate a full sync cycle after connecting.
   void initiate_sync() {
-    sync_role_ = SyncRole::INITIATOR;
-    try {
-      send_text("SYNC");
-    } catch (...) {
-      alive_ = false;
-      return;
-    }
-    std::thread([self = shared_from_this()] { self->run_sync_as_initiator(); })
-        .detach();
+    request_pull_async("initial");
   }
 
 private:
   // ── State ────────────────────────────────────────────────────────────
-  enum class SyncRole { NONE, INITIATOR, RESPONDER };
-  SyncRole sync_role_ = SyncRole::NONE;
+  std::mutex sync_mutex_;
+  bool pull_inflight_ = false;
+  bool pull_pending_  = false;
+  bool serving_pull_  = false;
+  bool awaiting_done_ = false;
+  bool done_received_ = false;
+  std::deque<std::vector<char>> pending_binary_frames_;
+  size_t pending_binary_bytes_ = 0;
+  static constexpr size_t MAX_PENDING_BINARY_FRAMES = 1024;
+  static constexpr size_t MAX_PENDING_BINARY_BYTES = 8 * 1024 * 1024;
 
   std::vector<char> read_buf_;
   uint32_t read_type_ = 0;
@@ -284,6 +374,105 @@ private:
   std::unique_ptr<ReplicationSender<P2pStorage>>   active_sender_;
   std::unique_ptr<ReplicationReceiver<P2pStorage>> active_receiver_;
   std::unique_ptr<TcpTransport>                     active_transport_;
+
+  void enqueue_pending_binary_frame(const std::vector<char>& data) {
+    if (pending_binary_frames_.size() >= MAX_PENDING_BINARY_FRAMES) {
+      std::cerr << "[p2p] peer " << id_ << " dropping queued frame (count limit)\n";
+      return;
+    }
+    if (pending_binary_bytes_ + data.size() > MAX_PENDING_BINARY_BYTES) {
+      std::cerr << "[p2p] peer " << id_ << " dropping queued frame (byte limit)\n";
+      return;
+    }
+    pending_binary_bytes_ += data.size();
+    pending_binary_frames_.push_back(data);
+  }
+
+  void drain_pending_binary_frames_locked() {
+    while (!pending_binary_frames_.empty() && alive_) {
+      auto data = std::move(pending_binary_frames_.front());
+      pending_binary_bytes_ -= data.size();
+      pending_binary_frames_.pop_front();
+      feed_fsm(data);
+    }
+  }
+
+  bool wait_for_receiver_idle_or_error(SyncEvents& events,
+                                       const char* phase) {
+    auto start = std::chrono::steady_clock::now();
+    while (alive_) {
+      ReplicationState state = ReplicationState::IDLE;
+      auto now = std::chrono::steady_clock::now();
+      auto inactive_for = std::chrono::steady_clock::duration::zero();
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        if (!active_receiver_) return !events.errored;
+        state = active_receiver_->state();
+        inactive_for = now - active_receiver_->last_activity();
+      }
+      if (state != ReplicationState::ACTIVE) break;
+      if ((now - start) > SYNC_IDLE_TIMEOUT || inactive_for > SYNC_IDLE_TIMEOUT) {
+        events.errored = true;
+        events.msg = "receiver timeout";
+        std::cerr << "[p2p] peer " << id_ << " sync timeout in " << phase << "\n";
+        alive_ = false;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return !events.errored && alive_;
+  }
+
+  bool wait_for_done_or_error(const char* phase) {
+    auto start = std::chrono::steady_clock::now();
+    while (alive_) {
+      bool done = false;
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        done = done_received_;
+      }
+      if (done) {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        done_received_ = false;
+        awaiting_done_ = false;
+        return true;
+      }
+      auto now = std::chrono::steady_clock::now();
+      if ((now - start) > SYNC_IDLE_TIMEOUT) {
+        std::cerr << "[p2p] peer " << id_ << " sync timeout in " << phase << "\n";
+        alive_ = false;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+  }
+
+  bool wait_for_sender_idle_or_error(SyncEvents& events,
+                                     const char* phase) {
+    auto start = std::chrono::steady_clock::now();
+    while (alive_) {
+      ReplicationState state = ReplicationState::IDLE;
+      auto now = std::chrono::steady_clock::now();
+      auto inactive_for = std::chrono::steady_clock::duration::zero();
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        if (!active_sender_) return !events.errored;
+        state = active_sender_->state();
+        inactive_for = now - active_sender_->last_activity();
+      }
+      if (state != ReplicationState::ACTIVE) break;
+      if ((now - start) > SYNC_IDLE_TIMEOUT || inactive_for > SYNC_IDLE_TIMEOUT) {
+        events.errored = true;
+        events.msg = "sender timeout";
+        std::cerr << "[p2p] peer " << id_ << " sync timeout in " << phase << "\n";
+        alive_ = false;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return !events.errored && alive_;
+  }
 
   // ── Async read chain ─────────────────────────────────────────────────
 
@@ -346,7 +535,11 @@ private:
 
   void dispatch_frame(Frame f) {
     if (f.type == FRAME_BINARY) {
-      if (sync_role_ == SyncRole::NONE) return;
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      if (!active_receiver_ && !active_sender_) {
+        enqueue_pending_binary_frame(f.payload);
+        return;
+      }
       feed_fsm(f.payload);
       return;
     }
@@ -355,19 +548,19 @@ private:
     std::cerr << "[p2p] peer " << id_ << " text: " << msg << "\n";
 
     if (msg == "SYNC") {
-      if (sync_role_ != SyncRole::NONE) return;
-      sync_role_ = SyncRole::RESPONDER;
-      std::thread([self = shared_from_this()] { self->run_sync_as_responder(); })
-          .detach();
+      request_pull_async("sync hint");
     } else if (msg == "PULL") {
-      // Responder in phase 2 — data will arrive as binary frames.
+      serve_pull_async();
     } else if (msg == "DONE") {
-      sync_role_ = SyncRole::NONE;
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      if (awaiting_done_) done_received_ = true;
     }
   }
 
   void feed_fsm(const std::vector<char>& data) {
+    std::lock_guard<std::mutex> db_lock(g_db_mutex);
     if (active_receiver_) {
+      PeerCommitScope scope(id_);
       auto& rb = active_receiver_->receive_buffer();
       auto* src = reinterpret_cast<const uint8_t*>(data.data());
       size_t todo = data.size();
@@ -387,102 +580,163 @@ private:
     }
   }
 
-  // ── Sync protocol (runs on background threads, holds g_db_mutex) ────
+  // ── Command-driven sync operations (runs on background threads) ──────
 
-  void run_sync_as_initiator() {
-    std::lock_guard<std::mutex> lock(g_db_mutex);
-    auto storage = g_storage;
-    if (!storage) { sync_role_ = SyncRole::NONE; return; }
-    auto db = storage->template open<_ReplicationDB>("main");
-
-    SyncEvents events;
-
-    // Phase 1: Remote sends, we receive
+  void request_pull_async(const char* reason) {
+    bool should_start = false;
     {
-      active_receiver_ = std::make_unique<ReplicationReceiver<P2pStorage>>(db);
-      active_transport_ = std::make_unique<TcpTransport>(socket_);
-      active_receiver_->begin(active_transport_.get(), &events);
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      if (!alive_) return;
+      if (pull_inflight_) {
+        pull_pending_ = true;
+        std::cerr << "[p2p] peer " << id_ << " coalescing pull (" << reason
+                  << ")\n";
+        return;
+      }
+      pull_inflight_ = true;
+      pull_pending_ = false;
+      awaiting_done_ = false;
+      done_received_ = false;
+      should_start = true;
+    }
+    if (!should_start) return;
+    std::thread([self = shared_from_this(), reason_str = std::string(reason)] {
+      self->run_pull_from_peer(reason_str.c_str());
+    }).detach();
+  }
 
-      while (active_receiver_->state() == ReplicationState::ACTIVE && alive_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      if (events.errored || !alive_) {
-        active_receiver_.reset(); active_transport_.reset();
-        sync_role_ = SyncRole::NONE; return;
-      }
+  void serve_pull_async() {
+    bool should_start = false;
+    {
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      if (!alive_) return;
+      if (serving_pull_) return;
+      serving_pull_ = true;
+      should_start = true;
+    }
+    if (!should_start) return;
+    std::thread([self = shared_from_this()] { self->run_serve_pull_to_peer(); })
+        .detach();
+  }
+
+  void finish_pull_cycle(bool success) {
+    bool rerun = false;
+    {
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      rerun = pull_pending_;
+      pull_pending_ = false;
+      pull_inflight_ = false;
+      awaiting_done_ = false;
+      done_received_ = false;
       active_receiver_.reset();
+      if (!active_sender_) active_transport_.reset();
+      if (!success) {
+        pending_binary_frames_.clear();
+        pending_binary_bytes_ = 0;
+      }
     }
+    if (rerun && alive_) request_pull_async("coalesced");
+  }
 
-    send_text("PULL");
+  void run_pull_from_peer(const char* reason) {
+    auto storage = g_storage;
+    if (!storage) {
+      finish_pull_cycle(false);
+      return;
+    }
+    auto db = storage->template open<_ReplicationDB>("main");
+    SyncEvents events;
+    std::cerr << "[p2p] peer " << id_ << " start pull (" << reason << ")\n";
 
-    // Phase 2: We send, remote receives
     {
-      events = SyncEvents{};
-      active_sender_ = std::make_unique<ReplicationSender<P2pStorage>>(db);
-      active_transport_ = std::make_unique<TcpTransport>(socket_);
-      active_sender_->begin(active_transport_.get(), &events);
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        awaiting_done_ = false;
+        done_received_ = false;
+        active_receiver_ = std::make_unique<ReplicationReceiver<P2pStorage>>(db);
+        active_transport_ = std::make_unique<TcpTransport>(socket_);
+        {
+          std::lock_guard<std::mutex> db_lock(g_db_mutex);
+          active_receiver_->begin(active_transport_.get(), &events);
+        }
+        drain_pending_binary_frames_locked();
+      }
 
-      while (active_sender_->state() == ReplicationState::ACTIVE && alive_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      try {
+        send_text("PULL");
+      } catch (...) {
+        alive_ = false;
       }
-      if (events.errored || !alive_) {
-        active_sender_.reset(); active_transport_.reset();
-        sync_role_ = SyncRole::NONE; return;
+
+      if (!alive_) {
+        finish_pull_cycle(false);
+        return;
       }
-      active_sender_.reset();
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        awaiting_done_ = true;
+      }
+
+      if (!wait_for_receiver_idle_or_error(events, "pull/receive")) {
+        finish_pull_cycle(false);
+        return;
+      }
+
+      if (!wait_for_done_or_error("pull/done")) {
+        finish_pull_cycle(false);
+        return;
+      }
     }
 
-    send_text("DONE");
-    active_transport_.reset();
-    sync_role_ = SyncRole::NONE;
+    finish_pull_cycle(true);
     std::cerr << "[p2p] sync with peer " << id_ << " complete\n";
   }
 
-  void run_sync_as_responder() {
-    std::lock_guard<std::mutex> lock(g_db_mutex);
+  void run_serve_pull_to_peer() {
     auto storage = g_storage;
-    if (!storage) { sync_role_ = SyncRole::NONE; return; }
+    if (!storage) {
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      serving_pull_ = false;
+      return;
+    }
     auto db = storage->template open<_ReplicationDB>("main");
-
     SyncEvents events;
-
-    // Phase 1: We send, remote receives
     {
-      active_sender_ = std::make_unique<ReplicationSender<P2pStorage>>(db);
-      active_transport_ = std::make_unique<TcpTransport>(socket_);
-      active_sender_->begin(active_transport_.get(), &events);
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        active_sender_ = std::make_unique<ReplicationSender<P2pStorage>>(db);
+        active_transport_ = std::make_unique<TcpTransport>(socket_);
+        {
+          std::lock_guard<std::mutex> db_lock(g_db_mutex);
+          active_sender_->begin(active_transport_.get(), &events);
+        }
+        drain_pending_binary_frames_locked();
+      }
 
-      while (active_sender_->state() == ReplicationState::ACTIVE && alive_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      if (!wait_for_sender_idle_or_error(events, "serve-pull/send")) {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        active_sender_.reset();
+        if (!active_receiver_) active_transport_.reset();
+        serving_pull_ = false;
+        return;
       }
-      if (events.errored || !alive_) {
-        active_sender_.reset(); active_transport_.reset();
-        sync_role_ = SyncRole::NONE; return;
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        active_sender_.reset();
+        if (!active_receiver_) active_transport_.reset();
       }
-      active_sender_.reset();
     }
 
-    // Phase 2: Remote sends, we receive (with commit scope)
-    {
-      PeerCommitScope scope(id_);
-      events = SyncEvents{};
-      active_receiver_ = std::make_unique<ReplicationReceiver<P2pStorage>>(db);
-      active_transport_ = std::make_unique<TcpTransport>(socket_);
-      active_receiver_->begin(active_transport_.get(), &events);
-
-      while (active_receiver_->state() == ReplicationState::ACTIVE && alive_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      if (events.errored || !alive_) {
-        active_receiver_.reset(); active_transport_.reset();
-        sync_role_ = SyncRole::NONE; return;
-      }
-      active_receiver_.reset();
+    try {
+      send_text("DONE");
+    } catch (...) {
+      alive_ = false;
     }
 
-    active_transport_.reset();
-    sync_role_ = SyncRole::NONE;
-    std::cerr << "[p2p] sync with peer " << id_ << " complete\n";
+    {
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      serving_pull_ = false;
+    }
   }
 
   void send_text(const std::string& msg) {
@@ -495,6 +749,54 @@ private:
     boost::asio::write(socket_, boost::asio::buffer(wire), ec);
   }
 };
+
+static void connect_to_peer_async(const std::string& host, uint16_t port) {
+  if (!g_io) return;
+
+  net::post(*g_io, [host, port] {
+    {
+      std::lock_guard<std::mutex> lock(g_peers_mutex);
+      for (auto& p : g_peers) {
+        if (p && p->alive_.load() && p->remote_host_ == host &&
+            p->remote_port_ == port)
+          return;
+      }
+    }
+
+    auto resolver = std::make_shared<tcp::resolver>(*g_io);
+    resolver->async_resolve(
+        host, std::to_string(port),
+        [resolver, host, port](boost::system::error_code ec,
+                               tcp::resolver::results_type endpoints) {
+          if (ec) {
+            std::cerr << "[p2p] manual connect resolve failed " << host << ":"
+                      << port << " : " << ec.message() << "\n";
+            return;
+          }
+
+          auto session = std::make_shared<PeerSession>(
+              *g_io, g_next_manual_peer_id.fetch_add(1));
+          boost::asio::async_connect(
+              session->socket_, endpoints,
+              [session, host, port](boost::system::error_code ec,
+                                    tcp::endpoint) {
+                if (ec) {
+                  std::cerr << "[p2p] manual connect failed " << host << ":"
+                            << port << " : " << ec.message() << "\n";
+                  return;
+                }
+                {
+                  std::lock_guard<std::mutex> lock(g_peers_mutex);
+                  g_peers.push_back(session);
+                }
+                std::cerr << "[p2p] manually connected to " << host << ":"
+                          << port << "\n";
+                session->start_read_loop();
+                session->initiate_sync();
+              });
+        });
+  });
+}
 
 // ── Broadcast SYNC to all peers (excluding specified IDs) ──────────────────
 
@@ -519,6 +821,8 @@ public:
       : io_(io), socket_(io), timer_(io), tcp_port_(tcp_port),
         instance_id_(uint32_t(std::random_device{}())) {
     socket_.open(udp::v4());
+    socket_.set_option(boost::asio::ip::multicast::enable_loopback(true));
+    socket_.set_option(boost::asio::ip::multicast::hops(1));
     socket_.set_option(udp::socket::reuse_address(true));
     socket_.bind(udp::endpoint(udp::v4(), MULTICAST_PORT));
     boost::asio::ip::multicast::join_group join(MULTICAST_ADDR);
@@ -662,11 +966,12 @@ private:
 static void print_help() {
   std::cout <<
     "Commands:\n"
-    "  add <key> <value>   Insert or update a key\n"
-    "  get <key>           Read a key's value\n"
+    "  add <key> <value>   Insert or update (stores UTC timestamp)\n"
+    "  get <key>           Read payload and UTC timestamp\n"
     "  del <key>           Delete a key\n"
-    "  list                List all keys\n"
+    "  list                List keys with payload and UTC timestamp\n"
     "  peers               Show connected peers\n"
+    "  connect <h> <p>     Manually connect to peer host/port\n"
     "  help                Show this help\n"
     "  quit                Exit\n";
 }
@@ -689,11 +994,14 @@ static bool handle_command(const std::string& line) {
     std::lock_guard<std::mutex> lock(g_db_mutex);
     auto db = g_storage->template open<_ReplicationDB>("main");
     auto c = db.cursor();
+    uint64_t ts = utc_epoch_ms_now();
+    std::string encoded = encode_timestamped_value(ts, value);
     c.start_transaction();
     c.find(Slice(key));
-    c.value(Slice(value));
+    c.value(Slice(encoded));
     c.commit();
-    std::cout << "added: " << key << " = " << value << "\n";
+    std::cout << "added: " << key << " = " << value
+              << " (utc_ms=" << ts << ")\n";
     return true;
   }
 
@@ -706,7 +1014,8 @@ static bool handle_command(const std::string& line) {
     auto c = db.cursor();
     c.find(Slice(key));
     if (c.is_valid())
-      std::cout << key << " = " << c.value().string() << "\n";
+      std::cout << key << " = " << format_value_for_display(c.value())
+                << "\n";
     else
       std::cout << key << " not found\n";
     return true;
@@ -742,7 +1051,8 @@ static bool handle_command(const std::string& line) {
     }
     int n = 0;
     do {
-      std::cout << c.key().string() << " = " << c.value().string() << "\n";
+      std::cout << c.key().string() << " = "
+                << format_value_for_display(c.value()) << "\n";
       ++n;
       c.next();
     } while (c.is_valid());
@@ -759,6 +1069,19 @@ static bool handle_command(const std::string& line) {
     std::cout << "Connected peers:\n";
     for (auto& p : g_peers)
       std::cout << "  " << p->id_ << ": " << p->label() << "\n";
+    return true;
+  }
+
+  if (cmd == "connect") {
+    std::string host;
+    int port = 0;
+    iss >> host >> port;
+    if (host.empty() || port <= 0 || port > 65535) {
+      std::cout << "Usage: connect <host> <port>\n";
+      return true;
+    }
+    connect_to_peer_async(host, static_cast<uint16_t>(port));
+    std::cout << "connecting to " << host << ":" << port << "...\n";
     return true;
   }
 

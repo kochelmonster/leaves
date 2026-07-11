@@ -77,6 +77,15 @@ establish a TCP connection. An initial bidirectional sync transfers
 all data. After that, any change on one peer is automatically
 propagated to the other.
 
+If multicast discovery is blocked in your environment (VPN/container/firewall),
+manually bootstrap a connection from one peer terminal:
+
+```text
+connect 127.0.0.1 9002
+```
+
+Once one TCP session is established, replication works normally.
+
 ## Commands
 
 | Command               | Description              |
@@ -86,24 +95,61 @@ propagated to the other.
 | `del <key>`           | Delete a key             |
 | `list`                | List all keys            |
 | `peers`               | Show connected peers     |
+| `connect <h> <p>`     | Manual peer bootstrap via TCP |
 | `help`                | Show help                |
 | `quit`                | Exit                     |
 
+`add` stores values in this demo format:
+
+`<utc_epoch_ms>|<payload>`
+
+The terminal output for `get` and `list` decodes this format and shows both
+payload and timestamp.
+
+## Conflict Resolution Demo
+
+This example demonstrates conflict resolution via the Aspect merge pointcut
+`may_merge_overwrite`.
+
+- The value contains a UTC timestamp (Unix epoch milliseconds).
+- During replication merge, `may_merge_overwrite` compares destination and
+	source timestamps.
+- The value with the younger timestamp (larger UTC epoch ms) wins.
+- If timestamps are equal, the existing destination value is kept.
+
+### Quick two-peer walkthrough
+
+1. Start two peers on different ports and DB files.
+2. On peer A: `add k old_from_a`
+3. Very shortly after, on peer B: `add k new_from_b`
+4. Let sync complete.
+5. On both peers: `get k`
+
+Expected: both peers converge to the payload with the newer UTC timestamp.
+
 ## Protocol
 
-After connection, an initial bidirectional sync runs:
+The control plane is command-driven (similar to the browser demo):
+
+- `SYNC` is only a notification hint.
+- Receiver of `SYNC` starts a pull from that peer.
+- `PULL` means "send me your current trie snapshot".
+- Sender streams binary replication frames and then sends `DONE`.
+
+Initial connection triggers an outbound `PULL` so the new peer converges
+to current state quickly.
+
+Typical flow after a local commit:
 
 ```
-Peer A ── "SYNC" ────────────────────────────────────→ Peer B
-Peer A ←─ Phase 1: B sends trie, A receives ────────── Peer B
-Peer A ── "PULL" ────────────────────────────────────→ Peer B
-Peer A ── Phase 2: A sends trie, B receives ─────────→ Peer B
-Peer A ── "DONE" ────────────────────────────────────→ Peer B
+Peer A (committer) ── "SYNC" ───────────────────────→ Peer B
+Peer B ─────────────── "PULL" ───────────────────────→ Peer A
+Peer A ── binary trie frames (ReplicationSender) ───→ Peer B
+Peer A ── "DONE" ───────────────────────────────────→ Peer B
 ```
 
-After any local commit, the committer debounces 100ms then sends
-a text "SYNC" notification to all connected peers (except the one
-that originated the change), which triggers a fresh sync cycle.
+Commits still use a 100ms debounce and origin-peer exclusion, so a peer
+does not immediately echo notifications back to the source peer.
 
 ## Requirements
 
