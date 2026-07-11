@@ -36,24 +36,7 @@ Leaves consistently leads across workloads, with the largest gains in read-heavy
 
 All systems were configured for maximum throughput using recommended settings where available. This includes cache sizing, batching, and binary keys. ACID workloads are evaluated separately with full durability enabled.
 
-The goal is not to compare default configurations, but to measure the achievable performance of each system under comparable conditions.
-
----
-
-## Why tries were not used in storage engines
-
-Trie-based data structures have been known for decades, but have not been used in general-purpose storage engines due to their memory overhead.
-
-A naive trie node with a fanout of 256 stores a pointer for every possible child. In sparse trees, most of these pointers are unused. For example, a node with only two children still requires 256 pointers, wasting significant memory (e.g. 254 × 8 bytes per node).
-
-Leaves avoids this problem by using a sparse node representation:
-
-- Radix compression merges linear paths and reduces tree depth  
-- Bitfield indexing stores only pointers for existing children  
-
-This shifts node size from fixed fanout to data-dependent size, eliminating wasted pointers in sparse nodes and making trie-based indexing viable for high-performance storage engines.
-
-Unlike LSM trees, which trade read performance for write efficiency via multiple levels, the trie structure maintains a single searchable structure without read amplification.
+The goal is not to compare default configurations, but to measure the achievable performance of each system under comparable conditions. Once the settings are normalized, the remaining question is architectural: what lets some engines stay fast while others incur more lookup and update overhead?
 
 ---
 
@@ -69,6 +52,21 @@ Unlike LSM trees, which trade read performance for write efficiency via multiple
 | [BadgerDB](https://github.com/dgraph-io/badger) | Embedded | LSM + value log (Go via CGo) |
 | [Redis](https://redis.io/) | Client/Server | In-memory hash tables |
 | [Leaves](https://github.com/kochelmonster/leaves) | Embedded | Trie-based, memory-mapped, copy-on-write |
+
+## Why Leaves uses a trie
+
+Trie-based data structures have been known for decades, but they were historically uncommon in general-purpose storage engines because naive implementations waste memory on sparse nodes.
+
+A full trie node with fanout 256 stores a pointer for every possible child, even when only a few children exist. In sparse trees, most of those pointers are unused, so a node with only two children still pays for the full fanout.
+
+Leaves avoids that cost with a sparse node representation:
+
+- Radix compression merges linear paths and reduces tree depth  
+- Bitfield indexing stores only pointers for existing children  
+
+That makes node size data-dependent instead of fixed, which removes the wasted-pointer problem and keeps trie-based indexing practical for a storage engine.
+
+The architectural payoff shows up in the workloads below: lookup-heavy paths avoid comparator overhead, and mixed workloads benefit from a single searchable structure without the read amplification of multi-level designs.
 
 ---
 
@@ -90,6 +88,12 @@ The workload uses `readproportion=1.0` with a zipfian distribution over one mill
 **Explanation:**  
 Performance is dominated by lookup cost. LSM engines must consult multiple structures, while B-tree engines require logarithmic traversal with comparator overhead, resulting in a cost of O(k · log n). The trie-based structure used by Leaves performs lookups in O(k), depending only on key length and independent of dataset size. This removes both comparator overhead and dataset-dependent scaling, resulting in a simpler and faster lookup path. Leaves and LMDB therefore lead, with LSM engines following.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 176734.0 | 1988140.0 | 571788.0 | 929380.0 | 38020.3 | 362670.0 | 154385.0 | 204652.0 |
+
 ---
 
 ### Batch Insert
@@ -107,6 +111,15 @@ Uses `insertproportion=0.80`, `updateproportion=0.15`, `readproportion=0.05`, `i
 
 **Explanation:**  
 Batching amortizes commit and synchronization costs across multiple operations. LSM engines benefit from write buffering and sequential I/O, while B-tree engines must still locate the insertion position and perform structural updates for each insert. For copy-on-write engines such as LMDB and Leaves, batching reduces the number of copy-on-write operations by grouping multiple updates into a single transaction, significantly reducing data duplication and write amplification.
+
+Measured median run throughput (ops/sec) used in charts:
+
+| batch_size | badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 30320.8 | 652103.0 | 344169.0 | 395483.0 | 39230.4 | 204408.0 | 87304.5 | 61494.2 |
+| 8 | 70585.4 | 791149.0 | 410734.0 | 423584.0 | 77426.1 | 259998.0 | 157418.0 | 60181.2 |
+| 32 | 132682.0 | 809464.0 | 422211.0 | 416289.0 | 86037.2 | 258836.0 | 170060.0 | 59217.1 |
+| 64 | 90134.7 | 807846.0 | 413444.0 | 413224.0 | 86436.6 | 265556.0 | 163952.0 | 61670.9 |
 
 ---
 
@@ -126,6 +139,15 @@ Uses `updateproportion=0.80`, `readproportion=0.20`, zipfian distribution, batch
 **Explanation:**  
 Batching reduces commit overhead by grouping updates into fewer transactions. LSM engines still incur write amplification as updates propagate through levels, while B-tree engines must perform structural updates per operation. For copy-on-write engines such as LMDB and Leaves, batching reduces copy-on-write operations, allowing multiple updates to be applied within a single version of the data.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| batch_size | badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 21777.1 | 856156.0 | 240948.0 | 601852.0 | 43843.9 | 149570.0 | 108914.0 | 86050.3 |
+| 8 | 55622.8 | 1049320.0 | 262315.0 | 635657.0 | 88462.2 | 172850.0 | 197483.0 | 85305.5 |
+| 32 | 57138.3 | 1088360.0 | 257429.0 | 641154.0 | 110449.0 | 179215.0 | 218616.0 | 86734.4 |
+| 64 | 41328.4 | 1091440.0 | 268426.0 | 639766.0 | 113733.0 | 176215.0 | 220814.0 | 102588.0 |
+
 ---
 
 ### Cache (95% read / 5% update)
@@ -143,6 +165,12 @@ Uses `readproportion=0.95` with zipfian distribution. RocksDB and LevelDB use 1�
 
 **Explanation:**  
 Same lookup-dominated behavior as **Analytics Read**; see above for structural differences (LSM vs B-tree vs trie).
+
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 128954.0 | 1902220.0 | 444328.0 | 942268.0 | 37718.8 | 332166.0 | 160787.0 | 194076.0 |
 
 ---
 
@@ -162,6 +190,12 @@ Uses `insertproportion=0.70` with uniform distribution and `insertorder=hashed`.
 **Explanation:**  
 Write throughput dominates. LSM engines benefit from sequential write buffering, while B-tree engines must locate the insertion position and perform structural updates on each write. The trie-based structure used by Leaves finds the insertion position in O(k) time and avoids rebalancing or restructuring operations required by B-trees. This reduces the per-insert overhead and leads to consistently higher throughput.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 41023.3 | 698660.0 | 318906.0 | 402994.0 | 44773.5 | 195189.0 | 90822.6 | 63008.6 |
+
 ---
 
 ### Latest (95% read / 5% insert)
@@ -179,6 +213,12 @@ Uses `requestdistribution=latest`. RocksDB and LevelDB use 1 GB cache. WiredTi
 
 **Explanation:**  
 Same lookup/update trade-offs as **Ingest** and **Analytics Read**; locality helps LSM, but trie lookup still avoids comparator overhead.
+
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 172322.0 | 1727140.0 | 632776.0 | 940120.0 | 41149.4 | 475148.0 | 168543.0 | 234241.0 |
 
 ---
 
@@ -198,6 +238,12 @@ Uses `readproportion=0.50` and `readmodifywriteproportion=0.50`. RocksDB and Lev
 **Explanation:**  
 Combination of **Analytics Read** (lookup) and **Ingest** (write path); see those sections for details.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 44104.1 | 892198.0 | 282501.0 | 645856.0 | 31184.3 | 194754.0 | 70516.9 | 117794.0 |
+
 ---
 
 ### Range 10
@@ -215,6 +261,12 @@ Uses fixed scan length of 10 with zipfian distribution. RocksDB and LevelDB use 
 
 **Explanation:**  
 This workload is still largely dominated by the lookup cost of the starting key, as only a small number of subsequent entries are scanned. LSM engines incur additional overhead due to merging across levels during iteration, while B-tree engines benefit from ordered leaf traversal once the starting point is found. The trie-based structure used by Leaves provides faster lookup of the starting key, but offers less advantage during sequential traversal. As a result, performance reflects a balance between lookup efficiency and short-range scan cost.
+
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 24928.5 | 753185.0 | 360244.0 | 639335.0 | 42868.6 | 198695.0 | 79862.9 | 67675.1 |
 
 ---
 
@@ -234,6 +286,12 @@ Same as Range 10 but with scan length 100.
 **Explanation:**  
 As scan length increases, traversal cost and data locality become dominant factors. LSM engines incur additional overhead due to multi-level merging during scans. B-tree engines benefit from strong data locality, as records are stored in contiguous pages, allowing efficient sequential access once the scan begins. While the trie-based structure used by Leaves provides faster random access to the scan start, its layout is less optimized for long sequential scans. As a result, LMDB outperforms Leaves in this workload: for short ranges, the faster lookup compensates for scan cost, but for larger ranges, the data locality advantage of LMDB becomes dominant.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 7131.31 | 110990.0 | 94181.5 | 120646.0 | 41924.6 | 37441.4 | 13175.3 | 45866.7 |
+
 ---
 
 ### Session (50% read / 50% update)
@@ -251,7 +309,13 @@ Uses `readproportion=0.50` and `updateproportion=0.50` with batching and binary 
 
 **Explanation:**  
 Mixed workload; combines effects described in **Analytics Read** and **Ingest**.
-To be compareable with the **Concurrent Session** scenatrio, it has the same total number of operations, but is executed single-threaded.
+To be compareable with the **Concurrent Session** scenatrio, it has the same total number of operations, but is executed single-threaded.To be comparible with the **Concurrent Session** scenario, it has the same total number of operations.
+
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | leveldb | lmdb | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 24946.3 | 587502.0 | 214430.0 | 548180.0 | 47262.2 | 90445.7 | 56552.0 | 24886.7 |
 
 ---
 
@@ -271,6 +335,12 @@ Durability is enforced via database-specific settings: LMDB disables `nosync`, R
 **Explanation:**  
 Durability dominates; same fsync/logging effects as in **ACID Transactions**.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | lmdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- |
+| 2152.15 | 3876.7 | 2167.62 | 3644.49 | 2945.4 |
+
 ---
 
 ### ACID Transactions
@@ -288,6 +358,12 @@ Uses `transactionmode=multikey_acid` with strict durability settings.
 
 **Explanation:**  
 Same durability and coordination costs as **ACID A/C/I**, with additional multi-key overhead.
+
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | lmdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- |
+| 1921.85 | 6055.87 | 3152.23 | 2938.27 | 4311.26 |
 
 ---
 
@@ -307,6 +383,12 @@ Uses `readmodifywriteproportion=1.0` with `batch_size=8`, zipfian key access (`r
 **Explanation:**  
 Each transaction contains 8 RMW pairs (8 reads + 8 writes, 16 DB calls total), so 10,000 operations correspond to 1,250 transactions. Throughput is primarily determined by durability and transaction coordination cost: each commit must synchronize persistent state while preserving all-or-nothing semantics across multiple keys. Compared to non-transactional RMW, this adds commit and rollback overhead on top of the read-before-write path.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | lmdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- |
+| 5377.02 | 15850.0 | 6615.47 | 6614.92 | 6841.49 |
+
 ---
 
 ### Concurrent Session (8 threads)
@@ -325,6 +407,12 @@ Uses `threadcount=8`. Leaves uses `confluence` format. RocksDB uses 2 GB cache
 **Explanation:**  
 Concurrency introduces contention. LMDB serializes writes, limiting scalability. RocksDB benefits from concurrent write support. Leaves isolates writes per thread and merges asynchronously, achieving higher scalability.
 
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- |
+| 40782.2 | 2765700.0 | 100760.0 | 251112.0 | 93333.6 | 30614.8 |
+
 ---
 
 ### Concurrent Write (8 threads)
@@ -342,92 +430,30 @@ Uses `insertproportion=0.70` and `threadcount=8`. Leaves uses `confluence` forma
 
 **Explanation:**  
 Write scalability depends on contention. LSM engines scale via buffering but still share structures. B-tree engines are limited by centralized updates. Leaves distributes writes across threads and merges them asynchronously, resulting in superior scalability.
+Leaves shows a massive decline in throughput because of memory pressure in massive multithreaded writes.
+
+Measured median run throughput (ops/sec) used in charts:
+
+| badger | leaves | redis | rocksdb | sqlite | wiredtiger |
+| --- | --- | --- | --- | --- | --- |
+| 20776.0 | 27319.0 | 78876.2 | 64564.1 | 35602.0 | 9669.47 |
 
 ---
 
-## Benchmark
-
-### Benchmark framework
+## Benchmark 
 
 Benchmarks are executed using a modified YCSB-cpp:
 [https://github.com/kochelmonster/YCSB-cpp](https://github.com/kochelmonster/YCSB-cpp)
 
-Supports:
+Each scenario is repeated 8 times, the displayed throughput is the median of the 8 runs.
 
-- scenario matrix (batch, ACID, concurrent)  
-- per-database tuning  
-- reproducibility  
+The numbers can be reproduced by running
 
+```bash
+BENCHMARK_REPEATS=8 ./run_all_benchmarks.sh
+```
 
-
-
-#### 1. Raw throughput extraction (per run)
-
-For each `(database, scenario, workload, repeat)` tuple, the runner executes a load phase and a run phase. The plotted metric comes from the run phase log line:
-
-`Run throughput(ops/sec): <value>`
-
-Only this run-phase throughput value is used for the matrix and graphs.
-
-#### 2. Repeat aggregation (single value per tuple)
-
-If `BENCHMARK_REPEATS=1`, that single run throughput is used directly.
-
-If `BENCHMARK_REPEATS>1`, all repeat throughput values for the tuple are sorted and aggregated with the median:
-
-- Odd count: middle value
-- Even count: average of the two middle values
-
-This aggregated value becomes `run_throughput_ops_sec` for that tuple.
-
-#### 3. Matrix CSV semantics
-
-The runner writes `throughput_matrix_<timestamp>.csv` with one row per tuple:
-
-`scenario,batch_size,workload,database,run_throughput_ops_sec`
-
-So each row already represents a single aggregated throughput value (single run or median across repeats).
-
-#### 4. Chart aggregation from the matrix
-
-`create_benchmark_graphs.py` reads the matrix CSV and builds pivots with `aggfunc=max` (or equivalent `groupby(...).max()`):
-
-- Baseline comparison chart:
-  - filter `scenario == baseline`
-  - pivot by `(workload_label, database)`
-  - cell value = max throughput for that pair
-- Batch scaling charts:
-  - filter `scenario` matching `batch_insert_*` or `batch_update_*`
-  - pivot by `(batch_size, database)`
-  - cell value = max throughput
-- Value-size scaling chart:
-  - filter `scenario` matching `value_size_*`
-  - pivot by `(value_size, database)`
-  - cell value = max throughput
-- ACID and Concurrent comparison charts:
-  - filter by workload label groups
-  - group by `(workload_label, database)`
-  - cell value = max throughput across included scenarios
-
-#### 5. Normalization used in plotted y-values
-
-When possible, chart values are normalized row-wise to a reference database:
-
-`normalized_value = throughput(database) / throughput(reference_db)`
-
-Reference selection order in code is:
-
-1. `lmdb`
-2. `sqlite`
-
-If neither is present, charts use absolute `ops/sec` values.
-
-#### 6. Raw vs normalized outputs
-
-- The PNG graphs may show normalized ratios (for example `1.75x`).
-- The sidecar CSV files written next to each graph store the raw pivot values before normalization.
-
----
+in the benchmark directory.
 
 ### Benchmark overhead
 
