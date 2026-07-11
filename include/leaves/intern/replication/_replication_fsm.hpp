@@ -11,9 +11,9 @@
 #include <vector>
 
 #include "../db/_cursor.hpp"
-#include "_hash.hpp"
 #include "../util/_merger.hpp"
 #include "_big_value_receiver.hpp"
+#include "_hash.hpp"
 #include "_replication_protocol.hpp"
 #include "_replication_slot.hpp"
 #include "_transfer.hpp"
@@ -224,16 +224,15 @@ struct ReplicationSenderFSM {
   DbType _db_type;
 
   // Big value streaming state
-  size_t _bv_current_idx;     // Current big value index being sent
-  size_t _bv_current_offset;  // Offset within current big value's data
-  bool _bv_header_sent;       // Whether header for current value was sent
+  size_t _bv_current_idx;        // Current big value index being sent
+  size_t _bv_current_offset;     // Offset within current big value's data
+  bool _bv_header_sent;          // Whether header for current value was sent
   size_t _bv_header_bytes_sent;  // Bytes of header already sent (for partial)
 
   // Activity tracking for application-level timeouts
   std::chrono::steady_clock::time_point _last_activity;
 
-  ReplicationSenderFSM(DB* db,
-                       size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
+  ReplicationSenderFSM(DB* db, size_t buffer_size = Transfer::DEFAULT_MAX_SIZE)
       : _db(db),
         _txn(nullptr),
         _transport(nullptr),
@@ -275,8 +274,9 @@ struct ReplicationSenderFSM {
     _sender.begin(db_type);
     _session_id = _sender.session_id();
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender begin: session_id=%llu db_type=%d\n",
-                  (unsigned long long)_session_id, (int)db_type);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender begin: session_id=%llu db_type=%d\n",
+                        (unsigned long long)_session_id, (int)db_type);
 
     _send_next_buffer();
   }
@@ -302,8 +302,11 @@ struct ReplicationSenderFSM {
 
     auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender received message: type=%u session_id=%llu payload_size=%u state=%u\n",
-                (unsigned)msg_type, (unsigned long long)hdr->session_id, (unsigned)hdr->payload_size, (unsigned)_state);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender received message: type=%u session_id=%llu "
+                        "payload_size=%u state=%u\n",
+                        (unsigned)msg_type, (unsigned long long)hdr->session_id,
+                        (unsigned)hdr->payload_size, (unsigned)_state);
 
     switch (_state) {
       case State::AWAITING_RESPONSE:
@@ -312,7 +315,7 @@ struct ReplicationSenderFSM {
         _handle_response(msg_type, payload);
         break;
 
-      case State::SENDING:     // LCOV_EXCL_LINE
+      case State::SENDING:  // LCOV_EXCL_LINE
       case State::SENDING_BIG_VALUES:
         // Unexpected message while sending
         _transition_to_error(ReplicationError::INVALID_STATE,  // LCOV_EXCL_LINE
@@ -343,8 +346,10 @@ struct ReplicationSenderFSM {
   void _handle_response(ReplicationMsgType msg_type, const Slice& payload) {
     switch (msg_type) {
       case ReplicationMsgType::COMPLETE:
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender received COMPLETE: session_id=%llu total_nodes=%zu\n",
-                      (unsigned long long)_session_id, _total_nodes);
+        LEAVES_INTERNAL_LOG(
+            LEAVES_LOG_DEBUG,
+            "Sender received COMPLETE: session_id=%llu total_nodes=%zu\n",
+            (unsigned long long)_session_id, _total_nodes);
         _db->release_hash_trie(_txn);
         if (_events) {
           _events->on_complete(_session_id, _total_nodes);
@@ -361,8 +366,10 @@ struct ReplicationSenderFSM {
         break;
 
       case ReplicationMsgType::FRACTION_COMPLETE:
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender received FRACTION_COMPLETE: session_id=%llu restarting round\n",
-                      (unsigned long long)_session_id);
+        LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                            "Sender received FRACTION_COMPLETE: "
+                            "session_id=%llu restarting round\n",
+                            (unsigned long long)_session_id);
         // Receiver merged what it had and wants a fresh round.
         // Re-acquire hash trie so the sender reads an updated snapshot.
         _db->release_hash_trie(_txn);
@@ -374,9 +381,11 @@ struct ReplicationSenderFSM {
         break;
 
       case ReplicationMsgType::ERROR:
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR, "[dbg] Sender received ERROR: session_id=%llu error=%d\n",
-                      (unsigned long long)_session_id,
-                      payload.size() > 0 ? (int)payload.data()[0] : -1);
+        LEAVES_INTERNAL_LOG(
+            LEAVES_LOG_ERROR,
+            "[dbg] Sender received ERROR: session_id=%llu error=%d\n",
+            (unsigned long long)_session_id,
+            payload.size() > 0 ? (int)payload.data()[0] : -1);
         _state = State::ERROR;
         _error = payload.size() > 0
                      ? static_cast<ReplicationError>(payload.data()[0])
@@ -413,9 +422,12 @@ struct ReplicationSenderFSM {
       return;  // LCOV_EXCL_LINE
     }
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender SUBTRIE_ACK: session_id=%llu has_pending=%d has_pending_bv=%d\n",
-                  (unsigned long long)_session_id,
-                  (int)_sender.has_pending(), (int)_sender.has_pending_big_values());
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender SUBTRIE_ACK: session_id=%llu has_pending=%d "
+                        "has_pending_bv=%d\n",
+                        (unsigned long long)_session_id,
+                        (int)_sender.has_pending(),
+                        (int)_sender.has_pending_big_values());
 
     // Continue sending remaining nodes
     if (_sender.has_pending()) {
@@ -440,8 +452,10 @@ struct ReplicationSenderFSM {
     _total_nodes += node_count;
     _total_bytes += buffer.size();
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender sending buffer: session_id=%llu nodes=%zu bytes=%zu\n",
-                  (unsigned long long)_session_id, node_count, buffer.size());
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "Sender sending buffer: session_id=%llu nodes=%zu bytes=%zu\n",
+        (unsigned long long)_session_id, node_count, buffer.size());
 
     // Wrap in message envelope and send
     _msg_builder.begin(ReplicationMsgType::TRIE_DATA, _session_id);
@@ -478,9 +492,11 @@ struct ReplicationSenderFSM {
       total_aligned_size += padding(chunk_size, MAX_PAGE_SIZE);
     }
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender sending BIG_VALUE_START: session_id=%llu count=%zu total_aligned_size=%llu\n",
-                  (unsigned long long)_session_id, big_values.size(),
-                  (unsigned long long)total_aligned_size);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender sending BIG_VALUE_START: session_id=%llu "
+                        "count=%zu total_aligned_size=%llu\n",
+                        (unsigned long long)_session_id, big_values.size(),
+                        (unsigned long long)total_aligned_size);
 
     // Send BIG_VALUE_START message
     _msg_builder.begin(ReplicationMsgType::BIG_VALUE_START, _session_id);
@@ -502,9 +518,11 @@ struct ReplicationSenderFSM {
   void _handle_big_value_ack() {
     const auto& big_values = _sender.pending_big_values();
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender BIG_VALUE_ACK: session_id=%llu state=%u bv_current_idx=%zu total_bv=%zu\n",
-                  (unsigned long long)_session_id, (unsigned)_state,
-                  _bv_current_idx, big_values.size());
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender BIG_VALUE_ACK: session_id=%llu state=%u "
+                        "bv_current_idx=%zu total_bv=%zu\n",
+                        (unsigned long long)_session_id, (unsigned)_state,
+                        _bv_current_idx, big_values.size());
 
     if (_state == State::AWAITING_BIG_VALUE_START_ACK) {
       // START was ACKed, begin sending data in chunks
@@ -531,9 +549,9 @@ struct ReplicationSenderFSM {
     const auto& big_values = _sender.pending_big_values();
     if (_bv_current_idx >= big_values.size()) {  // LCOV_EXCL_LINE
       // All values sent
-      _sender.clear_pending_big_values();          // LCOV_EXCL_LINE
-      _send_complete();                             // LCOV_EXCL_LINE
-      return;                                       // LCOV_EXCL_LINE
+      _sender.clear_pending_big_values();  // LCOV_EXCL_LINE
+      _send_complete();                    // LCOV_EXCL_LINE
+      return;                              // LCOV_EXCL_LINE
     }
 
     _msg_builder.begin(ReplicationMsgType::BIG_VALUE_DATA, _session_id);
@@ -606,11 +624,12 @@ struct ReplicationSenderFSM {
 
     _transport->send(_msg_builder.data(), _msg_builder.size());
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender sent BIG_VALUE_DATA: session_id=%llu idx=%zu->%zu offset=%zu->%zu chunk_bytes=%zu\n",
-                  (unsigned long long)_session_id,
-                  start_idx, _bv_current_idx,
-                  start_offset_bv, _bv_current_offset,
-                  chunk_bytes);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender sent BIG_VALUE_DATA: session_id=%llu "
+                        "idx=%zu->%zu offset=%zu->%zu chunk_bytes=%zu\n",
+                        (unsigned long long)_session_id, start_idx,
+                        _bv_current_idx, start_offset_bv, _bv_current_offset,
+                        chunk_bytes);
 
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
@@ -625,9 +644,11 @@ struct ReplicationSenderFSM {
       if (_start_deletion_phase()) return;
     }
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender sending COMPLETE: session_id=%llu db_type=%d total_nodes=%zu total_bytes=%zu\n",
-                  (unsigned long long)_session_id, (int)_db_type,
-                  _total_nodes, _total_bytes);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Sender sending COMPLETE: session_id=%llu db_type=%d "
+                        "total_nodes=%zu total_bytes=%zu\n",
+                        (unsigned long long)_session_id, (int)_db_type,
+                        _total_nodes, _total_bytes);
 
     _msg_builder.begin(ReplicationMsgType::COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
@@ -644,8 +665,9 @@ struct ReplicationSenderFSM {
   bool _start_deletion_phase() {
     if constexpr (requires { _txn->deletion_root; }) {
       if (_txn->deletion_root) {
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Sender starting deletion phase: session_id=%llu\n",
-                      (unsigned long long)_session_id);
+        LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                            "Sender starting deletion phase: session_id=%llu\n",
+                            (unsigned long long)_session_id);
         _db_type = DbType::DB_DELETION;
         _sender.begin(_db_type);
         _state = State::SENDING;
@@ -657,8 +679,10 @@ struct ReplicationSenderFSM {
   }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR, "[dbg] Sender error: session_id=%llu error=%d reason=%s\n",
-                  (unsigned long long)_session_id, (int)error, reason ? reason : "");
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_ERROR,
+        "[dbg] Sender error: session_id=%llu error=%d reason=%s\n",
+        (unsigned long long)_session_id, (int)error, reason ? reason : "");
     _db->release_hash_trie(_txn);
     _state = State::ERROR;
     _error = error;
@@ -722,10 +746,10 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
   [[no_unique_address]] CursorContext _merge_context;
 
   // Set the big value mapping (called before merge)
-  void set_big_value_storage(const std::unordered_map<uint64_t, offset_t>* offsets,
-                             DstDB* dst_db, bool tmp_mode = false,
-                             const uint8_t* tmp_area = nullptr,
-                             size_t tmp_area_size = 0) {
+  void set_big_value_storage(
+      const std::unordered_map<uint64_t, offset_t>* offsets, DstDB* dst_db,
+      bool tmp_mode = false, const uint8_t* tmp_area = nullptr,
+      size_t tmp_area_size = 0) {
     big_value_offsets = offsets;
     big_value_tmp_mode = tmp_mode;
     big_value_tmp_area = tmp_area;
@@ -781,7 +805,8 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
         thread_local typename CursorTraits_::offset_e tl_root_slot{};
         thread_local std::unique_ptr<InternalCursor> tl_cursor;
 
-        if (!tl_cursor || tl_db != db || tl_cached_root != _deletion_root_snapshot) {
+        if (!tl_cursor || tl_db != db ||
+            tl_cached_root != _deletion_root_snapshot) {
           tl_root_slot = _deletion_root_snapshot;
           tl_cached_root = _deletion_root_snapshot;
           tl_db = db;
@@ -902,10 +927,10 @@ struct ReplicationReceiverFSM {
   ReplicationError _error;
   DbType _current_db_type;  // Tracks which trie we're currently receiving
   std::vector<std::pair<std::string, bool>>
-      _prune_paths;          // Paths where hashes match (tell sender to prune)
-                             // pair: (path, is_leaf) — leaf flag prevents the
-                             // sender from discarding pending trie continuations
-                             // stored at an identical path.
+      _prune_paths;  // Paths where hashes match (tell sender to prune)
+                     // pair: (path, is_leaf) — leaf flag prevents the
+                     // sender from discarding pending trie continuations
+                     // stored at an identical path.
   std::string _path_buffer;  // Reusable buffer for path construction
   size_t _pending_children;  // Count of 0 offsets not yet connected (receiver
                              // completion tracking)
@@ -937,8 +962,10 @@ struct ReplicationReceiverFSM {
   alignas(8)
       TempOffset _temp_root;  // Root offset of temp DB (first received subtrie)
   WireTempDB _wire_db;        // Stateless adapter for resolving wire offsets
-  WireCursor _wire_cursor;    // Reusable cursor for navigating temp DB (used by merger)
-  WireCursor _parent_cursor;  // Dedicated cursor for _find_temp_parent_offset (isolated from merger)
+  WireCursor
+      _wire_cursor;  // Reusable cursor for navigating temp DB (used by merger)
+  WireCursor _parent_cursor;  // Dedicated cursor for _find_temp_parent_offset
+                              // (isolated from merger)
 
   // Overwrite handler for merge conflicts
   MergePolicy _merge_policy;
@@ -953,7 +980,8 @@ struct ReplicationReceiverFSM {
   // When the DB supports a deletion trie, the main trie data is held
   // in memory (not merged) until COMPLETE arrives.  Then both
   // tries are merged in one short atomic transaction.
-  char* _pending_main_root;         // Pending main trie wire root (held for atomic merge)
+  char* _pending_main_root;  // Pending main trie wire root (held for atomic
+                             // merge)
   uint8_t _pending_main_root_type;  // Type of pending main root (TRIE or LEAF)
   std::vector<std::vector<uint8_t>>
       _pending_main_buffers;  // Keeps pending main wire data alive
@@ -1084,7 +1112,8 @@ struct ReplicationReceiverFSM {
     // Claim a replication slot for crash-safe area tracking
     _replication_slot.claim();
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver begin: awaiting first message\n");
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver begin: awaiting first message\n");
   }
 
   // Zero-Copy Receive Interface
@@ -1151,7 +1180,8 @@ struct ReplicationReceiverFSM {
     auto* hdr = (ReplicationMsgHeader*)_receive_buffer._data;
 
     // Validate header
-    if (!hdr->is_valid()) {  // LCOV_EXCL_LINE — caught earlier by parse_expected
+    if (!hdr->is_valid()) {  // LCOV_EXCL_LINE — caught earlier by
+                             // parse_expected
       _transition_to_error(ReplicationError::INVALID_MESSAGE,  // LCOV_EXCL_LINE
                            "Invalid message magic");
       return;  // LCOV_EXCL_LINE
@@ -1171,9 +1201,11 @@ struct ReplicationReceiverFSM {
     auto msg_type = static_cast<ReplicationMsgType>(hdr->msg_type);
     Slice payload = _receive_buffer.payload();
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver processing message: type=%u session_id=%llu payload_size=%zu state=%u\n",
-                  (unsigned)msg_type, (unsigned long long)_session_id,
-                  payload.size(), (unsigned)_state);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver processing message: type=%u session_id=%llu "
+                        "payload_size=%zu state=%u\n",
+                        (unsigned)msg_type, (unsigned long long)_session_id,
+                        payload.size(), (unsigned)_state);
 
     switch (_state) {
       case State::RECEIVING:
@@ -1218,8 +1250,10 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::COMPLETE:
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver COMPLETE: session_id=%llu merging all phases\n",
-                      (unsigned long long)_session_id);
+        LEAVES_INTERNAL_LOG(
+            LEAVES_LOG_DEBUG,
+            "Receiver COMPLETE: session_id=%llu merging all phases\n",
+            (unsigned long long)_session_id);
         // Sender indicates sync is complete — merge all pending main and
         // current temp data in one short atomic transaction.
         if (!_merge_all_phases()) break;  // error already reported
@@ -1234,9 +1268,10 @@ struct ReplicationReceiverFSM {
         break;
 
       case ReplicationMsgType::ERROR:
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR, "[dbg] Receiver ERROR: session_id=%llu error=%d\n",
-                      (unsigned long long)_session_id,
-                      payload.size() > 0 ? (int)payload.data()[0] : -1);
+        LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR,
+                            "[dbg] Receiver ERROR: session_id=%llu error=%d\n",
+                            (unsigned long long)_session_id,
+                            payload.size() > 0 ? (int)payload.data()[0] : -1);
         _db->release_hash_trie(_txn);
         _state = State::ERROR;
         _error = payload.size() > 0
@@ -1274,10 +1309,13 @@ struct ReplicationReceiverFSM {
     _total_bytes += payload.size();
     _total_nodes += hdr->node_count;
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver TRIE_DATA: session_id=%llu db_type=%d node_count=%u path='%.*s' pending_children=%zu new_leaves=%zu\n",
-                  (unsigned long long)_session_id, (int)_current_db_type,
-                  (unsigned)hdr->node_count, (int)subtrie_path.size(), subtrie_path.data(),
-                  _pending_children, _new_leaves);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "Receiver TRIE_DATA: session_id=%llu db_type=%d node_count=%u "
+        "path='%.*s' pending_children=%zu new_leaves=%zu\n",
+        (unsigned long long)_session_id, (int)_current_db_type,
+        (unsigned)hdr->node_count, (int)subtrie_path.size(),
+        subtrie_path.data(), _pending_children, _new_leaves);
 
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
@@ -1293,8 +1331,9 @@ struct ReplicationReceiverFSM {
       _transition_to_error(err.code, err.message);
       return;
     }
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver BIG_VALUE_START: session_id=%llu\n",
-                  (unsigned long long)_session_id);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver BIG_VALUE_START: session_id=%llu\n",
+                        (unsigned long long)_session_id);
     _state = State::AWAITING_BIG_VALUES;
     _send_big_value_ack();
   }
@@ -1310,8 +1349,11 @@ struct ReplicationReceiverFSM {
     _total_bytes += bytes_delta;
     _state = State::RECEIVING_BIG_VALUES;
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver BIG_VALUE_DATA: session_id=%llu bytes_delta=%zu all_received=%d\n",
-                  (unsigned long long)_session_id, bytes_delta, (int)all_received);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver BIG_VALUE_DATA: session_id=%llu "
+                        "bytes_delta=%zu all_received=%d\n",
+                        (unsigned long long)_session_id, bytes_delta,
+                        (int)all_received);
 
     if (_events) {
       _events->on_progress(_session_id, _total_bytes, _total_nodes);
@@ -1327,8 +1369,9 @@ struct ReplicationReceiverFSM {
   }
 
   void _send_big_value_ack() {
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver sending BIG_VALUE_ACK: session_id=%llu\n",
-                  (unsigned long long)_session_id);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver sending BIG_VALUE_ACK: session_id=%llu\n",
+                        (unsigned long long)_session_id);
     _msg_builder.begin(ReplicationMsgType::BIG_VALUE_ACK, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());
   }
@@ -1345,9 +1388,10 @@ struct ReplicationReceiverFSM {
     // Get pointer to root node in wire buffer (no copy)
     // Note: cast to non-const since we may need to modify offsets in temp DB
     const TransferTrieHeader* transfer_hdr = Transfer::parse_header(payload);
-    if (!transfer_hdr || hdr.node_count == 0) {  // LCOV_EXCL_LINE — already validated
-      _send_prune_ack();                          // LCOV_EXCL_LINE
-      return;                                      // LCOV_EXCL_LINE
+    if (!transfer_hdr ||
+        hdr.node_count == 0) {  // LCOV_EXCL_LINE — already validated
+      _send_prune_ack();        // LCOV_EXCL_LINE
+      return;                   // LCOV_EXCL_LINE
     }
 
     // Beginning of a new round — refresh cursor to latest committed
@@ -1373,8 +1417,8 @@ struct ReplicationReceiverFSM {
 
     const char* payload_start = payload.data();
     const char* payload_end = payload_start + payload.size();
-    if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root, payload_start,
-                                  payload_end, _path_buffer)) {
+    if (!_compare_wire_with_local((TempOffset*)&transfer_hdr->root,
+                                  payload_start, payload_end, _path_buffer)) {
       _transition_to_error(ReplicationError::INVALID_MESSAGE,
                            "Wire node offset out of bounds");
       return;
@@ -1400,9 +1444,11 @@ struct ReplicationReceiverFSM {
           auto key = leaf->key();
           _path_buffer.append(key.data(), key.size());
         }
-        _connect_subtrie_to_parent(Slice(_path_buffer), (TempOffset*)&transfer_hdr->root);
+        _connect_subtrie_to_parent(Slice(_path_buffer),
+                                   (TempOffset*)&transfer_hdr->root);
         _path_buffer.resize(parent_len);
-        if (_state == State::ERROR) return;  // temp buffers freed; path is dangling
+        if (_state == State::ERROR)
+          return;  // temp buffers freed; path is dangling
       }
     }
 
@@ -1531,7 +1577,8 @@ struct ReplicationReceiverFSM {
     path.resize(path_len);
     ++_new_leaves;
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "New leaf: %s (size=%u)\n", path.c_str(), leaf->vsize());
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "New leaf: %s (size=%u)\n",
+                        path.c_str(), leaf->vsize());
 
     if (leaf->is_big()) {
       // Bounds-check the BigValueDataHeader within the leaf's value data
@@ -1590,11 +1637,12 @@ struct ReplicationReceiverFSM {
     int count = trie->count();
 
     // Bounds-check the trie's child array against the buffer
-    if ((char*)(wire_array + count) > buffer_end) {  // LCOV_EXCL_LINE — same as size() check
+    if ((char*)(wire_array + count) >
+        buffer_end) {  // LCOV_EXCL_LINE — same as size() check
       // Array extends past buffer — prune the whole trie node
-      *wire_node = 0;           // LCOV_EXCL_LINE
-      path.resize(path_len);    // LCOV_EXCL_LINE
-      return true;              // LCOV_EXCL_LINE
+      *wire_node = 0;         // LCOV_EXCL_LINE
+      path.resize(path_len);  // LCOV_EXCL_LINE
+      return true;            // LCOV_EXCL_LINE
     }
 
     // All children start as pending; decrement as each is handled
@@ -1662,9 +1710,11 @@ struct ReplicationReceiverFSM {
   // Defers any pending temp data from the previous phase (no merge, no
   // transaction).
   void _transition_db_type(DbType new_db_type) {
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver db_type transition: %d -> %d (session=%llu)\n",
-                  (int)_current_db_type, (int)new_db_type,
-                  (unsigned long long)_session_id);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "Receiver db_type transition: %d -> %d (session=%llu)\n",
+        (int)_current_db_type, (int)new_db_type,
+        (unsigned long long)_session_id);
     // Hold main trie data pending merge — no transaction is started,
     // data stays in memory until COMPLETE.
     _hold_pending_main();
@@ -1679,9 +1729,8 @@ struct ReplicationReceiverFSM {
 
     // Point hash lookup at the correct hash trie root for the new db type
     auto& hc = _db->_header->hash_control;
-    auto* root = (new_db_type == DbType::DB_DELETION)
-                     ? &hc.deletion_hash_root
-                     : &hc.hash_root;
+    auto* root = (new_db_type == DbType::DB_DELETION) ? &hc.deletion_hash_root
+                                                      : &hc.hash_root;
     _hash_lookup.set_root(root);
   }
 
@@ -1719,8 +1768,10 @@ struct ReplicationReceiverFSM {
     assert(_pending_main_root == nullptr &&
            "double hold: only one pending main root is supported");
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver hold_pending_main: session_id=%llu new_leaves=%zu\n",
-                  (unsigned long long)_session_id, _new_leaves);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "Receiver hold_pending_main: session_id=%llu new_leaves=%zu\n",
+        (unsigned long long)_session_id, _new_leaves);
 
     // Save the resolved root pointer and type before clearing _temp_root.
     // The pointer is into the temp buffer memory which we keep alive.
@@ -1743,8 +1794,10 @@ struct ReplicationReceiverFSM {
   // Otherwise performs a standard merge with big value storage.
   void _merge_phase(char* wire_root, uint8_t wire_root_type,
                     bool is_deletion_phase) {
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver merge_phase: session_id=%llu is_deletion=%d\n",
-                  (unsigned long long)_session_id, (int)is_deletion_phase);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "Receiver merge_phase: session_id=%llu is_deletion=%d\n",
+        (unsigned long long)_session_id, (int)is_deletion_phase);
     _temp_root.set_relative(wire_root);
     _temp_root.type((NodeTypes)wire_root_type);
     _wire_cursor.clear();
@@ -1768,95 +1821,96 @@ struct ReplicationReceiverFSM {
       _merge_policy.main_cursor = nullptr;
       _merge_policy.bigmemory = nullptr;
     } else {
-      _merge_policy.set_big_value_storage(&_big_value._offsets, _db,
-                                          _big_value.using_tmp_area(),
-                                          _big_value.tmp_area_data(),
-                                          _big_value.area_size());
+      _merge_policy.set_big_value_storage(
+          &_big_value._offsets, _db, _big_value.using_tmp_area(),
+          _big_value.tmp_area_data(), _big_value.area_size());
       _Merger<LocalCursor, WireCursor, MergePolicy> merger(
           *_cursor, _wire_cursor, _merge_policy);
       merger.exec();
     }
   }
 
-    // Clear merge-related state after a successful merge or when aborting
-    // a replication session.  Leaves _merge_policy intact for the next
-    // round.  Callers are responsible for freeing temp buffers and
-    // releasing the hash trie / replication slot.
-    void _clear_merge_state() {
-        LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver clear_merge_state: session_id=%llu\n",
-                    (unsigned long long)_session_id);
-      _temp_root = 0;
-      _pending_main_buffers.clear();
-      _big_value.clear();
-    }
+  // Clear merge-related state after a successful merge or when aborting
+  // a replication session.  Leaves _merge_policy intact for the next
+  // round.  Callers are responsible for freeing temp buffers and
+  // releasing the hash trie / replication slot.
+  void _clear_merge_state() {
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver clear_merge_state: session_id=%llu\n",
+                        (unsigned long long)_session_id);
+    _temp_root = 0;
+    _pending_main_buffers.clear();
+    _big_value.clear();
+  }
 
-    // Merge all phases (deletion trie + pending main trie) in one
-    // short atomic transaction.  Called at COMPLETE or fraction-complete.
-    //
-    // Deletion trie is merged FIRST so that any re-inserted keys are
-    // restored by the subsequent main trie merge (Phase 2).
-    // Returns true on success, false on error (already reported via
-    // _transition_to_error).  Callers must check and skip post-merge work.
-    bool _merge_all_phases() {
-      bool has_pending_main = (_pending_main_root != nullptr);
-      bool has_current = (_temp_root != 0);
+  // Merge all phases (deletion trie + pending main trie) in one
+  // short atomic transaction.  Called at COMPLETE or fraction-complete.
+  //
+  // Deletion trie is merged FIRST so that any re-inserted keys are
+  // restored by the subsequent main trie merge (Phase 2).
+  // Returns true on success, false on error (already reported via
+  // _transition_to_error).  Callers must check and skip post-merge work.
+  bool _merge_all_phases() {
+    bool has_pending_main = (_pending_main_root != nullptr);
+    bool has_current = (_temp_root != 0);
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Merging phases: pending_main=%d, current=%d\n",
-             has_pending_main, has_current);
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Merging phases: pending_main=%d, current=%d\n",
+                        has_pending_main, has_current);
 
-      if (!has_pending_main && !has_current) return true;
-      
-      try {
-        _cursor->start_transaction(false, false, TransactionOrigin::merge);
-        // Link pre-allocated big value multi-area to this transaction
-        // (must happen before any merge phase that references big values)
-        _big_value.link_area(_db, _replication_slot);
+    if (!has_pending_main && !has_current) return true;
 
-        // Snapshot the local deletion trie root so may_add_leaf() can reject
-        // re-delivery of locally deleted keys during main trie merge.
-        if constexpr (requires {
-                        std::declval<typename DB::Transaction>().deletion_root;
-                      }) {
-          using Transaction = typename DB::Transaction;
-          auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
-          _merge_policy._deletion_root_snapshot = txn->deletion_root;
-        }
+    try {
+      _cursor->start_transaction(false, false, TransactionOrigin::merge);
+      // Link pre-allocated big value multi-area to this transaction
+      // (must happen before any merge phase that references big values)
+      _big_value.link_area(_db, _replication_slot);
 
-        // Phase 1: Merge current wire data (deletion trie or main trie)
-        if (has_current) {
-          // Switch cursor root to deletion trie within the same transaction
-          _ensure_cursor_root();
-          _merge_phase(_temp_root.template resolve<char>(), _temp_root.type(),
-                       _current_db_type == DbType::DB_DELETION);
-        }
-
-        // Phase 2: Merge pending main trie data
-        if (has_pending_main) {
-          // If Phase 1 switched cursor to deletion trie, switch back to main
-          if (has_current) {
-            using Transaction = typename DB::Transaction;
-            auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
-            _cursor->set_root(&txn->root);
-          }
-
-          _merge_phase(_pending_main_root, _pending_main_root_type, false);
-          _pending_main_root = nullptr;
-          _pending_main_root_type = 0;
-        }
-
-        _merge_policy._deletion_root_snapshot = {};
-        _cursor->commit(false, TransactionOrigin::merge);
-      } catch (const std::exception& e) {
-        _merge_policy._deletion_root_snapshot = {};
-        _cursor->rollback(TransactionOrigin::merge);
-        _temp_root = 0;
-        _big_value.clear();
-        _transition_to_error(ReplicationError::INTERNAL_ERROR, e.what());
-        return false;
+      // Snapshot the local deletion trie root so may_add_leaf() can reject
+      // re-delivery of locally deleted keys during main trie merge.
+      if constexpr (requires {
+                      std::declval<typename DB::Transaction>().deletion_root;
+                    }) {
+        using Transaction = typename DB::Transaction;
+        auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
+        _merge_policy._deletion_root_snapshot = txn->deletion_root;
       }
 
-      return true;
+      // Phase 1: Merge current wire data (deletion trie or main trie)
+      if (has_current) {
+        // Switch cursor root to deletion trie within the same transaction
+        _ensure_cursor_root();
+        _merge_phase(_temp_root.template resolve<char>(), _temp_root.type(),
+                     _current_db_type == DbType::DB_DELETION);
+      }
+
+      // Phase 2: Merge pending main trie data
+      if (has_pending_main) {
+        // If Phase 1 switched cursor to deletion trie, switch back to main
+        if (has_current) {
+          using Transaction = typename DB::Transaction;
+          auto* txn = static_cast<Transaction*>(&*_cursor->_txn);
+          _cursor->set_root(&txn->root);
+        }
+
+        _merge_phase(_pending_main_root, _pending_main_root_type, false);
+        _pending_main_root = nullptr;
+        _pending_main_root_type = 0;
+      }
+
+      _merge_policy._deletion_root_snapshot = {};
+      _cursor->commit(false, TransactionOrigin::merge);
+    } catch (const std::exception& e) {
+      _merge_policy._deletion_root_snapshot = {};
+      _cursor->rollback(TransactionOrigin::merge);
+      _temp_root = 0;
+      _big_value.clear();
+      _transition_to_error(ReplicationError::INTERNAL_ERROR, e.what());
+      return false;
     }
+
+    return true;
+  }
 
   // Send ACK with prune paths (where hashes matched)
   // Sender will respond with next subtrie or COMPLETE
@@ -1868,8 +1922,10 @@ struct ReplicationReceiverFSM {
       _request_builder.add_path(path, is_leaf);
     }
 
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver sending SUBTRIE_ACK: session_id=%llu prune_paths=%zu\n",
-                  (unsigned long long)_session_id, _prune_paths.size());
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "Receiver sending SUBTRIE_ACK: session_id=%llu prune_paths=%zu\n",
+        (unsigned long long)_session_id, _prune_paths.size());
 
     _prune_paths.clear();
 
@@ -1878,36 +1934,40 @@ struct ReplicationReceiverFSM {
     _transport->send(_msg_builder.data(), _msg_builder.size());
   }
 
-    // Merge current fraction, commit so next round sees updated hashes,
-    // reset temp state, and tell sender to restart from root.
-    // Always commits — the next round needs to see the merged state.
-    void _send_fraction_complete() {
-        LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "Receiver sending FRACTION_COMPLETE: session_id=%llu (memory budget exceeded)\n",
-                    (unsigned long long)_session_id);
-      // Merge all accumulated data (pending main + current) in one transaction.
-      if (!_merge_all_phases()) return;  // error already reported
-      _clear_merge_state();
+  // Merge current fraction, commit so next round sees updated hashes,
+  // reset temp state, and tell sender to restart from root.
+  // Always commits — the next round needs to see the merged state.
+  void _send_fraction_complete() {
+    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
+                        "Receiver sending FRACTION_COMPLETE: session_id=%llu "
+                        "(memory budget exceeded)\n",
+                        (unsigned long long)_session_id);
+    // Merge all accumulated data (pending main + current) in one transaction.
+    if (!_merge_all_phases()) return;  // error already reported
+    _clear_merge_state();
 
-      // Re-acquire hash trie so next round sees the freshly merged state.
-      _db->release_hash_trie(_txn);
-      _txn = _db->acquire_hash_trie();
+    // Re-acquire hash trie so next round sees the freshly merged state.
+    _db->release_hash_trie(_txn);
+    _txn = _db->acquire_hash_trie();
 
-      // Reset hash lookup cursor — the old hash trie pages may have been
-      // freed/reused, so the cursor's keep_stack() cache is stale.
-      _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
+    // Reset hash lookup cursor — the old hash trie pages may have been
+    // freed/reused, so the cursor's keep_stack() cache is stale.
+    _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
 
-      // Reset temp DB for the next fraction
-      _free_temp_buffers();
-      _pending_children = 0;
-      _new_leaves = 0;
-      _prune_paths.clear();
-      _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
-      _transport->send(_msg_builder.data(), _msg_builder.size());
-    }
+    // Reset temp DB for the next fraction
+    _free_temp_buffers();
+    _pending_children = 0;
+    _new_leaves = 0;
+    _prune_paths.clear();
+    _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
+    _transport->send(_msg_builder.data(), _msg_builder.size());
+  }
 
   void _transition_to_error(ReplicationError error, const char* reason) {
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR, "[dbg] Receiver error: session_id=%llu error=%d reason=%s\n",
-                  (unsigned long long)_session_id, (int)error, reason ? reason : "");
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_ERROR,
+        "[dbg] Receiver error: session_id=%llu error=%d reason=%s\n",
+        (unsigned long long)_session_id, (int)error, reason ? reason : "");
     _db->release_hash_trie(_txn);
     _state = State::ERROR;
     _error = error;
