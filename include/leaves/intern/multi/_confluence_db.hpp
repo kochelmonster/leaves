@@ -1,3 +1,6 @@
+/*
+Confluence database internals for coordinating multi-writer operation.
+*/
 #ifndef _LEAVES_CONFLUENCE_DB_HPP
 #define _LEAVES_CONFLUENCE_DB_HPP
 

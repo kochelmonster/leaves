@@ -1,3 +1,6 @@
+/*
+Database invariant and integrity checks used by the internal implementation.
+*/
 #ifndef _LEAVES__CHECK_HPP
 #define _LEAVES__CHECK_HPP
 

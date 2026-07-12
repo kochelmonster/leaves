@@ -1,4 +1,6 @@
-// Trie Nodes
+/*
+Trie node layout and node-level metadata for the internal key/value tree.
+*/
 #ifndef _LEAVES__NODE_HPP
 #define _LEAVES__NODE_HPP
 

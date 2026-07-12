@@ -1,34 +1,17 @@
 /*
-Memory management for transactional systems.
+Memory management primitives for transactional storage.
 
-This module provides memory allocation and garbage collection for database
-systems that support transactions and crash recovery. The design uses atomic
-operations and careful ordering to ensure consistency across transaction
-boundaries.
+This header defines the page-recycling and area-allocation machinery used by
+the transactional storage backends. It includes:
+- _PageContainer for freed-page metadata grouped by size class
+- _GarbageSlot for transaction-aware recycling queues
+- _MemManager and _MemManagerPool for size-based page allocation
+- Area, AreaList, and AreaPool for reusable AREA_SIZE regions
+- _recover_areas for rebuilding free-area state during recovery
 
-Key Components:
-- AreaPool: Manages allocation of memory areas from the underlying storage
-- _MemManager: Handles page allocation/deallocation with size-based slots
-- _GarbageSlot: Maintains queues of freed pages per transaction
-- _PageContainer: 4K structures that store freed page metadata
-
-Transaction Safety:
-The system ensures that memory operations are atomic and crash-safe through:
-1. Double-buffered pointers in AreaList for atomic list updates
-2. Transaction-aware recycling in GarbageSlot (may_recycle checks)
-3. Proper dirty marking to ensure persistence before pointer updates
-
-Memory Layout:
-- Areas are allocated in AREA_SIZE chunks from the underlying resolver
-- Pages within areas are managed by size classes defined in PAGE_SIZES
-- Freed pages are queued per transaction and recycled when safe
-- Block containers themselves use the largest size class slot
-
-Crash Recovery:
-- All pointer updates are atomic single-byte or pointer-sized writes
-- State is recoverable because freed blocks remain accessible until
-  transactions commit and recycling conditions are met
-- Area splitting preserves consistency by updating size before linking
+The implementation relies on resolver-mediated pointer updates, dirty marking,
+and recycling checks so allocation state stays consistent across transactions
+and crash recovery.
 */
 
 #ifndef _LEAVES__MEMORY_HPP
@@ -736,10 +719,8 @@ struct AreaPool {
 // void(uint64_t pos, const void* buf, size_t size) ForEachDBFn:
 // void(Fn) where Fn is void(offset_t db_offset) — calls Fn for each active DB
 template <typename DBHeader, size_t AREA_SIZE, typename ReadFn,
-          typename WriteFn, typename ForEachDBFn,
-          typename MarkExtraOccupiedFn>
-void _recover_areas(AreaPool& pool,
-                    ForEachDBFn for_each_db, uint64_t file_size,
+          typename WriteFn, typename ForEachDBFn, typename MarkExtraOccupiedFn>
+void _recover_areas(AreaPool& pool, ForEachDBFn for_each_db, uint64_t file_size,
                     uint64_t first_area_pos, ReadFn read_bytes,
                     WriteFn write_bytes,
                     MarkExtraOccupiedFn mark_extra_occupied) {
@@ -778,8 +759,8 @@ void _recover_areas(AreaPool& pool,
         // Restore _offset on owned areas — CAS avoids write if already correct
         {
           uint64_t expected = (uint64_t)head;
-          if (!area_hdr._offset.compare_exchange_strong(expected, expected,
-                                                        std::memory_order_relaxed)) {
+          if (!area_hdr._offset.compare_exchange_strong(
+                  expected, expected, std::memory_order_relaxed)) {
             area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
             write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
           }

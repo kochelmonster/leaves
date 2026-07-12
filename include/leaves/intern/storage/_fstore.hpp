@@ -1,3 +1,6 @@
+/*
+File-backed storage backend and its internal persistence helpers.
+*/
 #ifndef _LEAVES__FSTORE_HPP
 #define _LEAVES__FSTORE_HPP
 

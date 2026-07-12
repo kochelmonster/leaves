@@ -1,3 +1,6 @@
+/*
+Cached file-backed storage helpers for page reuse and persistence access.
+*/
 #ifndef _LEAVES__CACHESTORE_HPP
 #define _LEAVES__CACHESTORE_HPP
 
