@@ -1,3 +1,6 @@
+/*
+Internal delete-path logic for removing trie entries transactionally.
+*/
 #ifndef _LEAVES_DELETER_HPP
 #define _LEAVES_DELETER_HPP
 

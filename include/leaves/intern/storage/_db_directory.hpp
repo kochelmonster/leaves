@@ -1,3 +1,6 @@
+/*
+Database directory helpers for locating and organizing on-disk database files.
+*/
 #ifndef _LEAVES__DB_DIRECTORY_HPP
 #define _LEAVES__DB_DIRECTORY_HPP
 

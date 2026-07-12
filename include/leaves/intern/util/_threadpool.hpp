@@ -1,3 +1,6 @@
+/*
+Internal worker-thread pool and task queue primitives.
+*/
 #ifndef _LEAVES_THREADPOOL_HPP
 #define _LEAVES_THREADPOOL_HPP
 

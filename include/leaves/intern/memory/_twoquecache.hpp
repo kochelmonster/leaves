@@ -1,3 +1,6 @@
+/*
+Two-queue cache helpers for reuse-heavy memory management paths.
+*/
 #ifndef _LEAVES__TWOQUECACHE_HPP
 #define _LEAVES__TWOQUECACHE_HPP
 

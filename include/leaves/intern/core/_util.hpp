@@ -1,3 +1,6 @@
+/*
+Shared internal utility helpers, constants, and small support primitives.
+*/
 #ifndef _LEAVES__UTIL_HPP
 #define _LEAVES__UTIL_HPP
 

@@ -1,3 +1,6 @@
+/*
+Write-ahead log support for durable storage updates and recovery replay.
+*/
 #ifndef _LEAVES__WAL_HPP
 #define _LEAVES__WAL_HPP
 #ifndef __EMSCRIPTEN__

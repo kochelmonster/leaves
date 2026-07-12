@@ -1,3 +1,6 @@
+/*
+Internal bit-manipulation helpers and small compile-time constants.
+*/
 #ifndef _LEAVES__BIT_HPP
 #define _LEAVES__BIT_HPP
 

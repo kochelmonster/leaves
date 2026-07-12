@@ -1,3 +1,6 @@
+/*
+Aspect hooks and extension points for database behavior customization.
+*/
 #ifndef _LEAVES_ASPECT_HPP
 #define _LEAVES_ASPECT_HPP
 
