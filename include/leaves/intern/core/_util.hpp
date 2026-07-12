@@ -243,19 +243,24 @@ class Slice {
   const char* _data;
 
  public:
+  // Constructs a view over an arbitrary byte range.
   Slice(const void* data, size_t size)
       : _size(size), _data((const char*)data) {}
 
+  // Constructs a view over a null-terminated string.
   Slice(const char* str) : _size(std::strlen(str)), _data(str) {}
 
+  // Constructs a non-owning view over src's internal buffer.
   Slice(const std::string& src) : _size(src.size()), _data(src.data()) {}
 
+  // Constructs an empty view.
   Slice() : _size(0), _data(NULL) {}
 
   Slice(const Slice& other) : _size(other._size), _data(other._data) {}
 
   Slice slice(size_t len) const { return Slice(data(), len); }
 
+  // Returns a copied std::string from the view.
   std::string string() const { return std::string(data(), _size); }
 
   const Slice& operator=(const Slice& src) {
@@ -280,8 +285,10 @@ class Slice {
 
   unsigned char operator[](size_t index) const { return data()[index]; }
 
+  // Returns a pointer to the first byte.
   const char* data() const { return _data; }
 
+  // Returns the byte length of the view.
   size_t size() const { return _size; }
 
   Slice advance(size_t size) const {

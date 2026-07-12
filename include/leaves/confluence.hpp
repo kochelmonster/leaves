@@ -4,6 +4,7 @@
 #include <cassert>
 #include <memory>
 #include <utility>
+#include <string_view>
 
 #include "intern/multi/_confluence_db.hpp"
 #include "mmap.hpp"
@@ -47,49 +48,68 @@ class ConfluenceCursor {
 
   // --- Write path ---
 
+  // Starts a write transaction on this cursor's tributary.
+  // Returns false if the slot cannot be claimed, another transaction is
+  // already active, or the tributary cannot open a write transaction.
   bool start_transaction(bool non_blocking = false) {
     return _cursor->start_transaction(non_blocking);
   }
+
+  // Commits the active transaction.
+  // Returns false if no transaction is active or commit fails.
   bool commit(bool sync = false) { return _cursor->commit(sync); }
+
+  // Rolls back the active transaction.
+  // Returns false if no transaction is active or rollback fails.
   bool rollback() { return _cursor->rollback(); }
+
+  // Returns true while a transaction is active.
   bool is_transaction_active() const {
     return _cursor->is_transaction_active();
   }
 
-  // Position the cursor on key before calling value() or remove().
-  // The same find()/is_valid() are used for reads and to position writes —
-  // during a write transaction, find() searches the snapshot taken at
-  // start_transaction() including the writer's own uncommitted state.
+  // Inserts or updates value at the current position.
   void value(const Slice& v) { _cursor->value(v); }
+
+  // Deletes the current record.
   void remove() { _cursor->remove(); }
 
   // --- Point reads ---
 
-  // Position the cursor on key. Use is_valid() / value() after this call.
-  // During a write txn, also positions the write cursor for value()/remove().
+  // Seeks to key.
   void find(const Slice& key) { _cursor->find(key); }
 
   // --- Ordered iteration ---
 
+  // Moves to first key and returns validity.
   bool first() {
     _cursor->first();
     return _cursor->is_valid();
   }
+
+  // Moves to next key and returns validity.
   bool next() {
     _cursor->next();
     return _cursor->is_valid();
   }
+
+  // Moves to last key and returns validity.
   bool last() {
     _cursor->last();
     return _cursor->is_valid();
   }
+
+  // Moves to previous key and returns validity.
   bool prev() {
     _cursor->prev();
     return _cursor->is_valid();
   }
 
+  // Returns current cursor validity.
   bool is_valid() const { return _cursor->is_valid(); }
+  // Returns current key.
   Slice key() const { return _cursor->key(); }
+  // Returns current value.
   Slice value() const { return _cursor->value(); }
 
  private:
@@ -152,9 +172,9 @@ class ConfluenceDB {
     return *this;
   }
 
-  // Opens (or creates) the named confluence database on the given storage.
-  // Background merging runs automatically on the storage thread pool.
-  ConfluenceDB(storage_ptr storage, const char* name)
+  // Opens or creates the named confluence database and manages main plus
+  // tributary databases.
+  ConfluenceDB(storage_ptr storage, std::string_view name)
       : _storage(std::move(storage)),
         _main_tdb(_storage, name),
         _impl(new ConcreteDBImpl(*_main_tdb._internal())) {}
@@ -165,7 +185,7 @@ class ConfluenceDB {
     return _impl != nullptr;
   }
 
-  // Create a cursor for reading and writing.
+  // Returns a ConfluenceCursor bound to this database.
   Cursor cursor() {
     _assert_initialized();
     return Cursor(_storage, _impl->create_cursor());
@@ -173,13 +193,12 @@ class ConfluenceDB {
 
   // --- Configuration (can be called at any time) ---
 
-  // Merge a tributary into the main DB once this many writes have accumulated.
+  // Sets the tributary write-count threshold for merge eligibility.
   void set_merge_write_threshold(uint32_t n) {
     _assert_initialized();
     _impl->set_merge_write_threshold(n);
   }
-  // Merge a tributary once it has been attached this many milliseconds since
-  // its last write.
+  // Sets the max attach age before a tributary becomes merge-eligible.
   void set_max_attached_age_ms(uint64_t ms) {
     _assert_initialized();
     _impl->set_max_attached_age_ms(ms);
@@ -187,30 +206,27 @@ class ConfluenceDB {
 
   // --- Lifecycle ---
 
-  // Crash recovery: merge all unclaimed tributaries left by a previous crash.
+  // Runs startup crash-recovery merge of unclaimed tributaries.
   void sanitize() {
     _assert_initialized();
     _impl->sanitize();
   }
+  // Merges tributaries that currently meet merge criteria.
   void merge_eligible_tributaries() {
     _assert_initialized();
     _impl->merge_eligible_tributaries();
   }
-  // Merge all threshold/idle-eligible tributaries synchronously.
+  // Performs synchronous merge of threshold- or idle-eligible tributaries.
   void merge_now() {
     _assert_initialized();
     _impl->merge_now();
   }
-  // Merge ALL free tributaries regardless of threshold/idle — use after a
-  // write phase completes so reads see a clean single-source state.
+  // Forces merge of all free tributaries.
   void merge_all_now() {
     _assert_initialized();
     _impl->merge_all_now();
   }
-  // Access the underlying implementation (for advanced / test use).
-  // Returns the stored async merge error (if any) and clears it.
-  // One-shot: first-error-wins (subsequent errors are silently dropped).
-  // Returns nullptr if no error.  Safe to call from any thread.
+  // Returns and clears the last asynchronous merge error.
   std::exception_ptr get_merge_error() {
     _assert_initialized();
     return _impl->get_merge_error();

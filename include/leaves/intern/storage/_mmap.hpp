@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <string_view>
 #include <type_traits>
 
 #include "../core/_exception.hpp"
@@ -474,19 +475,20 @@ struct _MemoryMapFile
   // Open or create a DB of the given type. Additional args are forwarded
   // to the DB constructor (e.g. hash_threads for _ReplicationDB).
   template <template <typename> class DBClass = _DB, typename... Args>
-  DBClass<MemoryMapFile>* open(const char* name, Args&&... args) {
+  DBClass<MemoryMapFile>* open(std::string_view name, Args&&... args) {
     using DB = DBClass<MemoryMapFile>;
-    if (strlen(name) >= sizeof(DBEntry::name)) throw KeyTooBig();
+    if (name.size() >= sizeof(DBEntry::name)) throw KeyTooBig();
+    const std::string db_name(name);
 
     std::scoped_lock flock_guard(file_lock());
 
     // 1. Check cache
-    auto it = _dbs.find(name);
+    auto it = _dbs.find(db_name);
     if (it != _dbs.end()) {
       if (it->second.type_id != DB::DB_TYPE_ID)
         throw TypeMismatch(std::format(
             "Type mismatch while opening DB '{}': expected '{}' got '{}'",
-            name, DB::DB_TYPE_ID, it->second.type_id));
+            db_name, DB::DB_TYPE_ID, it->second.type_id));
       return static_cast<DB*>(it->second.db);
     }
 
@@ -496,7 +498,7 @@ struct _MemoryMapFile
     _for_each_db_entry([&](DBEntry& entry) {
       assert(!found);
       if (entry.offset) {
-        if (!strcmp(entry.name, name)) {
+        if (std::string_view(entry.name) == name) {
           found = &entry;
           return false;  // stop iteration
         }
@@ -510,19 +512,19 @@ struct _MemoryMapFile
       // Verify type before constructing
       auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
           (char*)_memory + (uint64_t)found->offset);
-      if (base_header->db_type_id != DB::DB_TYPE_ID) 
+      if (base_header->db_type_id != DB::DB_TYPE_ID)
         throw TypeMismatch(std::format(
             "Type mismatch while opening DB '{}': expected '{}' got '{}'",
-            name, DB::DB_TYPE_ID, base_header->db_type_id));
+            db_name, DB::DB_TYPE_ID, base_header->db_type_id));
 
-      auto* db = new DB(_self(), found->offset, std::string_view(name),
-                        std::forward<Args>(args)...);
+      auto* db =
+          new DB(_self(), found->offset, name, std::forward<Args>(args)...);
       // Sanitize if this DB hasn't been sanitized for the current generation
       if (db->_header->sanitize_generation != _memory->sanitize_generation) {
         db->sanitize();
         db->_header->sanitize_generation = _memory->sanitize_generation;
       }
-      _dbs[name] = _DBSlot::make(db);
+      _dbs[db_name] = _DBSlot::make(db);
       return db;
     }
 
@@ -539,26 +541,27 @@ struct _MemoryMapFile
       }
     }
 
-    std::strncpy(free_slot->name, name, sizeof(DBEntry::name) - 1);
+    std::strncpy(free_slot->name, db_name.c_str(), sizeof(DBEntry::name) - 1);
     free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
-    auto* db = new DB(_self(), &free_slot->offset, std::string_view(name),
-                      std::forward<Args>(args)...);
+    auto* db =
+        new DB(_self(), &free_slot->offset, name, std::forward<Args>(args)...);
     db->_header->sanitize_generation = _memory->sanitize_generation;
-    _dbs[name] = _DBSlot::make(db);
+    _dbs[db_name] = _DBSlot::make(db);
     return db;
   }
 
   template <template <typename> class DBClass = _DB>
-  void remove(const char* name) {
+  void remove(std::string_view name) {
     using DB = DBClass<MemoryMapFile>;
+    const std::string db_name(name);
     std::scoped_lock flock_guard(file_lock());
 
-    auto it = _dbs.find(name);
+    auto it = _dbs.find(db_name);
     if (it != _dbs.end()) {
-      if (it->second.type_id != DB::DB_TYPE_ID) 
+      if (it->second.type_id != DB::DB_TYPE_ID)
         throw TypeMismatch(std::format(
             "Type mismatch while removing DB '{}': expected '{}' got '{}'",
-            name, DB::DB_TYPE_ID, it->second.type_id));
+            db_name, DB::DB_TYPE_ID, it->second.type_id));
       if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
         throw TransactionActive();
     }
@@ -566,19 +569,19 @@ struct _MemoryMapFile
     bool found = false;
     _for_each_db_entry([&](DBEntry& entry) {
       assert(!found);
-      if (entry.offset && !strcmp(entry.name, name)) {
+      if (entry.offset && std::string_view(entry.name) == name) {
         // Return areas via cached slot or typed DB
-        auto dit = _dbs.find(name);
+        auto dit = _dbs.find(db_name);
         if (dit != _dbs.end() && dit->second.db) {
           static_cast<DB*>(dit->second.db)->return_areas();
         } else {
           auto* base_header = reinterpret_cast<_DBHeader<MemoryMapFile>*>(
               (char*)_memory + (uint64_t)entry.offset);
-          if (base_header->db_type_id != DB::DB_TYPE_ID) 
+          if (base_header->db_type_id != DB::DB_TYPE_ID)
             throw TypeMismatch(std::format(
                 "Type mismatch while removing DB '{}': expected '{}' got '{}'",
-                name, DB::DB_TYPE_ID, base_header->db_type_id));
-          DB tmp(_self(), entry.offset, std::string_view(name));
+                db_name, DB::DB_TYPE_ID, base_header->db_type_id));
+          DB tmp(_self(), entry.offset, name);
           tmp.return_areas();
         }
         entry.offset = 0;
@@ -588,7 +591,7 @@ struct _MemoryMapFile
       return true;
     });
     if (!found) throw WrongValue("database does not exist.");
-    _dbs.erase(name);
+    _dbs.erase(db_name);
     flush();
   }
 

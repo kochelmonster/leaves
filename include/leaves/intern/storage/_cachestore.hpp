@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>  // for std::memcpy
 #include <memory>
+#include <string_view>
 #include <thread>
 
 #include "../core/_exception.hpp"
@@ -343,7 +344,8 @@ struct _CacheStore : public Opers_,
         // Avoid re-enqueueing the same offset while a prior async write for it
         // is still in-flight; keep only the latest dirty pointer to flush after
         // the queue drains.
-        if (has_inflight_writes && _dirty_inflight.find(entry.first) != _dirty_inflight.end()) {
+        if (has_inflight_writes &&
+            _dirty_inflight.find(entry.first) != _dirty_inflight.end()) {
           deferred_committed[entry.first] = entry.second;
           continue;
         }
@@ -357,7 +359,8 @@ struct _CacheStore : public Opers_,
         _header_dirty.exchange(false, std::memory_order_acq_rel);
 
     // If only header is dirty while async writes are still in flight, defer
-    // writing the header once to avoid spinning on duplicate async header writes.
+    // writing the header once to avoid spinning on duplicate async header
+    // writes.
     if (has_inflight_writes && blocks_to_write.empty() && header_dirty) {
       _header_dirty.store(true, std::memory_order_release);
       header_dirty = false;
@@ -376,26 +379,25 @@ struct _CacheStore : public Opers_,
   // Open or create a DB of the given type. Additional args are forwarded
   // to the DB constructor (e.g. hash_threads for _ReplicationDB).
   template <template <typename> class DBClass = _DB, typename... Args>
-  DBClass<CacheStore>* open(const char* name, Args&&... args) {
+  DBClass<CacheStore>* open(std::string_view name, Args&&... args) {
     using DB = DBClass<CacheStore>;
-    if (strlen(name) >= sizeof(_CacheBase::DBEntry::name)) {
+    if (name.size() >= sizeof(_CacheBase::DBEntry::name)) {
       throw std::runtime_error("Database name too long");
     }
+    const std::string db_name(name);
 
     std::scoped_lock flock_guard(this->_self().file_lock());
 
-    _for_each_db_entry([&](DBEntry& entry) {
-      return true;
-    });
+    _for_each_db_entry([&](DBEntry& entry) { return true; });
 
     // 1. Check in-memory cache
-    auto it = _dbs.find(name);
+    auto it = _dbs.find(db_name);
     if (it != _dbs.end()) {
       if (it->second.type_id != DB::DB_TYPE_ID)
         throw TypeMismatch(
             std::format("Wrong database type while opening from cache {} "
                         "expected {} got {}",
-                        name, DB::DB_TYPE_ID, it->second.type_id));
+                        db_name, DB::DB_TYPE_ID, it->second.type_id));
       return static_cast<DB*>(it->second.db);
     }
 
@@ -407,7 +409,7 @@ struct _CacheStore : public Opers_,
     for (uint16_t i = 0; i < hwm; i++) {
       auto& entry = _header->dbs[i];
       if (entry.offset) {
-        if (!strcmp(entry.name, name))
+        if (std::string_view(entry.name) == name)
           return _open_existing<DBClass>(name, entry.offset,
                                          std::forward<Args>(args)...);
       } else if (!free_slot) {
@@ -423,13 +425,14 @@ struct _CacheStore : public Opers_,
 
     // 4. Create new DB — prefer a free slot in first page
     if (free_slot) {
-      std::strncpy(free_slot->name, name, sizeof(free_slot->name) - 1);
+      std::strncpy(free_slot->name, db_name.c_str(),
+                   sizeof(free_slot->name) - 1);
       free_slot->name[sizeof(free_slot->name) - 1] = '\0';
-      auto* db = new DB(_self(), &free_slot->offset, std::string_view(name),
+      auto* db = new DB(_self(), &free_slot->offset, name,
                         std::forward<Args>(args)...);
       db->_header->sanitize_generation = _header->sanitize_generation;
       make_header_dirty();
-      _dbs[name] = _DBSlot::make(db);
+      _dbs[db_name] = _DBSlot::make(db);
       return db;
     }
 
@@ -437,13 +440,13 @@ struct _CacheStore : public Opers_,
     if (hwm < cap) {
       auto& slot = _header->dbs[hwm];
       _header->db_entry_count = hwm + 1;
-      std::strncpy(slot.name, name, sizeof(slot.name) - 1);
+      std::strncpy(slot.name, db_name.c_str(), sizeof(slot.name) - 1);
       slot.name[sizeof(slot.name) - 1] = '\0';
-      auto* db = new DB(_self(), &slot.offset, std::string_view(name),
-                        std::forward<Args>(args)...);
+      auto* db =
+          new DB(_self(), &slot.offset, name, std::forward<Args>(args)...);
       db->_header->sanitize_generation = _header->sanitize_generation;
       make_header_dirty();
-      _dbs[name] = _DBSlot::make(db);
+      _dbs[db_name] = _DBSlot::make(db);
       return db;
     }
 
@@ -452,14 +455,15 @@ struct _CacheStore : public Opers_,
   }
 
   template <template <typename> class DBClass = _DB>
-  void remove(const char* name) {
+  void remove(std::string_view name) {
     using DB = DBClass<CacheStore>;
+    const std::string db_name(name);
     std::scoped_lock flock_guard(this->_self().file_lock());
-    auto it = _dbs.find(name);
+    auto it = _dbs.find(db_name);
     if (it != _dbs.end()) {
       if (it->second.type_id != DB::DB_TYPE_ID)
         throw TypeMismatch(std::format(
-            "Wrong database type while removing {} expected {} got {}", name,
+            "Wrong database type while removing {} expected {} got {}", db_name,
             DB::DB_TYPE_ID, it->second.type_id));
       if (it->second.db && static_cast<DB*>(it->second.db)->is_active())
         throw TransactionActive();
@@ -470,10 +474,10 @@ struct _CacheStore : public Opers_,
     uint16_t hwm = std::min(_header->db_entry_count, cap);
     for (uint16_t i = 0; i < hwm; i++) {
       auto& entry = _header->dbs[i];
-      if (entry.offset && !strcmp(entry.name, name)) {
+      if (entry.offset && std::string_view(entry.name) == name) {
         _return_areas_at<DBClass>(entry.offset, name);
         entry.offset = 0;
-        _dbs.erase(name);
+        _dbs.erase(db_name);
         make_header_dirty();
         flush(true, true);
         return;
@@ -482,7 +486,7 @@ struct _CacheStore : public Opers_,
 
     // Check overflow pages
     if (_remove_from_overflow_pages<DBClass>(name)) {
-      _dbs.erase(name);
+      _dbs.erase(db_name);
       flush(true, true);
       return;
     }
@@ -518,20 +522,22 @@ struct _CacheStore : public Opers_,
 
     // Overflow pages
     offset_t next = _header->db_next_page;
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_for_each_db_entry db_next_page=%llu count=%u cap=%u\n",
-                       (unsigned long long)(uint64_t)_header->db_next_page,
-                       (unsigned)_header->db_entry_count,
-                       (unsigned)cap);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "_for_each_db_entry db_next_page=%llu count=%u cap=%u\n",
+        (unsigned long long)(uint64_t)_header->db_next_page,
+        (unsigned)_header->db_entry_count, (unsigned)cap);
     while (next) {
       page_ptr page_block = resolve(&next, READ);
-      auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(page_block));
+      auto* page =
+          reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(page_block));
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
-      LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_for_each_db_entry page=%llu count=%u pcount=%u next=%llu\n",
-                         (unsigned long long)(uint64_t)next,
-                         (unsigned)page->count,
-                         (unsigned)pcount,
-                         (unsigned long long)(uint64_t)page->next);
+      LEAVES_INTERNAL_LOG(
+          LEAVES_LOG_DEBUG,
+          "_for_each_db_entry page=%llu count=%u pcount=%u next=%llu\n",
+          (unsigned long long)(uint64_t)next, (unsigned)page->count,
+          (unsigned)pcount, (unsigned long long)(uint64_t)page->next);
       for (uint16_t i = 0; i < pcount; i++) {
         if (!fn(page->entries[i])) return;
       }
@@ -540,15 +546,17 @@ struct _CacheStore : public Opers_,
   }
 
   // Search overflow pages for an existing DB by name; return its offset or 0.
-  offset_t _find_in_overflow_pages(const char* name) {
+  offset_t _find_in_overflow_pages(std::string_view name) {
     offset_t next = _header->db_next_page;
     while (next) {
       page_ptr page_block = resolve(&next, READ);
-      auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(page_block));
+      auto* page =
+          reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(page_block));
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
-        if (page->entries[i].offset && !strcmp(page->entries[i].name, name))
+        if (page->entries[i].offset &&
+            std::string_view(page->entries[i].name) == name)
           return page->entries[i].offset;
       }
       next = page->next;
@@ -559,31 +567,34 @@ struct _CacheStore : public Opers_,
   // Create a new DB in an overflow page via read-modify-write.
   // Returns the DB pointer (already cached in _dbs).
   template <template <typename> class DBClass, typename... Args>
-  DBClass<CacheStore>* _create_in_overflow(const char* name, Args&&... args) {
+  DBClass<CacheStore>* _create_in_overflow(std::string_view name,
+                                           Args&&... args) {
     using DB = DBClass<CacheStore>;
+    const std::string db_name(name);
     offset_t prev_offset = 0;
     offset_t cur = _header->db_next_page;
 
     while (cur) {
       page_ptr cur_block = resolve(&cur, WRITE);
-      auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(cur_block));
+      auto* page =
+          reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(cur_block));
       uint16_t pcap = _overflow_page_capacity();
 
       // Re-use a free slot (zeroed offset) in existing entries
       for (uint16_t i = 0; i < page->count; i++) {
         if (!page->entries[i].offset) {
           offset_t tmp_offset = 0;
-          auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
-                            std::forward<Args>(args)...);
+          auto* db =
+              new DB(_self(), &tmp_offset, name, std::forward<Args>(args)...);
           db->_header->sanitize_generation = _header->sanitize_generation;
-          std::strncpy(page->entries[i].name, name,
+          std::strncpy(page->entries[i].name, db_name.c_str(),
                        sizeof(page->entries[i].name) - 1);
           page->entries[i].name[sizeof(page->entries[i].name) - 1] = '\0';
           page->entries[i].offset = tmp_offset;
           make_dirty(cur_block);
           make_header_dirty();
           flush();
-          _dbs[name] = _DBSlot::make(db);
+          _dbs[db_name] = _DBSlot::make(db);
           return db;
         }
       }
@@ -591,18 +602,18 @@ struct _CacheStore : public Opers_,
       // Expand high-water mark if room
       if (page->count < pcap) {
         offset_t tmp_offset = 0;
-        auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
-                          std::forward<Args>(args)...);
+        auto* db =
+            new DB(_self(), &tmp_offset, name, std::forward<Args>(args)...);
         db->_header->sanitize_generation = _header->sanitize_generation;
         auto& slot = page->entries[page->count];
-        std::strncpy(slot.name, name, sizeof(slot.name) - 1);
+        std::strncpy(slot.name, db_name.c_str(), sizeof(slot.name) - 1);
         slot.name[sizeof(slot.name) - 1] = '\0';
         slot.offset = tmp_offset;
         page->count++;
         make_dirty(cur_block);
         make_header_dirty();
         flush();
-        _dbs[name] = _DBSlot::make(db);
+        _dbs[db_name] = _DBSlot::make(db);
         return db;
       }
 
@@ -617,14 +628,14 @@ struct _CacheStore : public Opers_,
     offset_t new_off = new_page_area->content_offset();
 
     page_ptr new_page_block = resolve(&new_off, WRITE);
-    auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(new_page_block));
+    auto* page =
+        reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(new_page_block));
     std::memset((void*)page, 0, _overflow_page_bytes());
 
     offset_t tmp_offset = 0;
-    auto* db = new DB(_self(), &tmp_offset, std::string_view(name),
-                      std::forward<Args>(args)...);
+    auto* db = new DB(_self(), &tmp_offset, name, std::forward<Args>(args)...);
     db->_header->sanitize_generation = _header->sanitize_generation;
-    std::strncpy(page->entries[0].name, name,
+    std::strncpy(page->entries[0].name, db_name.c_str(),
                  sizeof(page->entries[0].name) - 1);
     page->entries[0].name[sizeof(page->entries[0].name) - 1] = '\0';
     page->entries[0].offset = tmp_offset;
@@ -636,7 +647,8 @@ struct _CacheStore : public Opers_,
     // Link from predecessor
     if (prev_offset) {
       page_ptr prev_page_block = resolve(&prev_offset, WRITE);
-      auto* prev = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(prev_page_block));
+      auto* prev = reinterpret_cast<_DBDirectoryPage*>(
+          static_cast<char*>(prev_page_block));
       prev->next = new_off;
       make_dirty(prev_page_block);
     } else {
@@ -644,54 +656,62 @@ struct _CacheStore : public Opers_,
     }
     make_header_dirty();
     flush();
-    _dbs[name] = _DBSlot::make(db);
+    _dbs[db_name] = _DBSlot::make(db);
     return db;
   }
 
   // Open an existing DB from a known offset — verifies type, sanitizes if
   // needed.
   template <template <typename> class DBClass, typename... Args>
-  DBClass<CacheStore>* _open_existing(const char* name, offset_t offset,
+  DBClass<CacheStore>* _open_existing(std::string_view name, offset_t offset,
                                       Args&&... args) {
     using DB = DBClass<CacheStore>;
+    const std::string db_name(name);
     // Verify db_type_id before constructing (prevents reading garbage
     // if the actual header is a different DB subtype).
     _DBHeader<CacheStore> base_header;
     read((uint64_t)offset, &base_header, sizeof(base_header));
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_open_existing '%s' offset=%llu read db_type_id=%u expecting=%u read_txn=%llu\n",
-               name, (unsigned long long)offset, (unsigned)base_header.db_type_id, (unsigned)DB::DB_TYPE_ID, (unsigned long long)base_header.read_txn);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "_open_existing '%s' offset=%llu read db_type_id=%u expecting=%u "
+        "read_txn=%llu\n",
+        db_name, (unsigned long long)offset, (unsigned)base_header.db_type_id,
+        (unsigned)DB::DB_TYPE_ID, (unsigned long long)base_header.read_txn);
     if (base_header.db_type_id != DB::DB_TYPE_ID) {
       throw TypeMismatch(
           std::format("Wrong database type while opening {} expected {} got {}",
-                      name, DB::DB_TYPE_ID, base_header.db_type_id));
+                      db_name, DB::DB_TYPE_ID, base_header.db_type_id));
     }
 
-    auto* db = new DB(_self(), offset, std::string_view(name),
-                      std::forward<Args>(args)...);
+    auto* db = new DB(_self(), offset, name, std::forward<Args>(args)...);
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "sanitize db '%s' sanitize_generation=%llu current_generation=%llu\n",
-               name, (unsigned long long)db->_header->sanitize_generation, (unsigned long long)_header->sanitize_generation);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "sanitize db '%s' sanitize_generation=%llu current_generation=%llu\n",
+        db_name, (unsigned long long)db->_header->sanitize_generation,
+        (unsigned long long)_header->sanitize_generation);
 
     // Sanitize if this DB hasn't been sanitized for the current generation
     if (db->_header->sanitize_generation != _header->sanitize_generation) {
       db->sanitize();
       db->_header->sanitize_generation = _header->sanitize_generation;
     }
-    _dbs[name] = _DBSlot::make(db);
+    _dbs[db_name] = _DBSlot::make(db);
     return db;
   }
 
   // Return all areas owned by a DB at the given offset.
   template <template <typename> class DBClass = _DB>
-  void _return_areas_at(offset_t offset, const char* name) {
+  void _return_areas_at(offset_t offset, std::string_view name) {
     using DB = DBClass<CacheStore>;
+    const std::string db_name(name);
     // If DB is cached, use it directly
-    auto it = _dbs.find(name);
+    auto it = _dbs.find(db_name);
     if (it != _dbs.end() && it->second.db) {
       if (it->second.type_id != DB::DB_TYPE_ID)
         throw TypeMismatch(std::format(
-            "Wrong database type in return_areas {} expected {} got {}", name,
-            DB::DB_TYPE_ID, it->second.type_id));
+            "Wrong database type in return_areas {} expected {} got {}",
+            db_name, DB::DB_TYPE_ID, it->second.type_id));
       static_cast<DB*>(it->second.db)->return_areas();
       return;
     }
@@ -700,24 +720,26 @@ struct _CacheStore : public Opers_,
     read((uint64_t)offset, &base_header, sizeof(base_header));
     if (base_header.db_type_id != DB::DB_TYPE_ID)
       throw TypeMismatch(std::format(
-          "Wrong database type in return_areas {} expected {} got {}", name,
+          "Wrong database type in return_areas {} expected {} got {}", db_name,
           DB::DB_TYPE_ID, base_header.db_type_id));
-    DB tmp(_self(), offset, std::string_view(name));
+    DB tmp(_self(), offset, name);
     tmp.return_areas();
   }
 
   // Remove a DB from overflow pages via read-modify-write. Returns true if
   // found.
   template <template <typename> class DBClass = _DB>
-  bool _remove_from_overflow_pages(const char* name) {
+  bool _remove_from_overflow_pages(std::string_view name) {
     offset_t next = _header->db_next_page;
     while (next) {
       page_ptr next_block = resolve(&next, WRITE);
-      auto* page = reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(next_block));
+      auto* page =
+          reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(next_block));
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
-        if (page->entries[i].offset && !strcmp(page->entries[i].name, name)) {
+        if (page->entries[i].offset &&
+            std::string_view(page->entries[i].name) == name) {
           _return_areas_at<DBClass>(page->entries[i].offset, name);
           page->entries[i].offset = 0;
           make_dirty(next_block);

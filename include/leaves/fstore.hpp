@@ -2,6 +2,7 @@
 #define _LEAVES_FSTORE_HPP
 
 #include <memory>
+#include <string_view>
 
 #include "db.hpp"
 #include "intern/storage/_fstore.hpp"
@@ -22,13 +23,13 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
             std::make_unique<StorageImpl>(path, cache_capacity)) {}
 
   template <template <typename> class DBClass = _DB, typename... Args>
-  TDB<FileStorage_, DBClass> open(const char* name, Args&&... args) {
+  TDB<FileStorage_, DBClass> open(std::string_view name, Args&&... args) {
     return TDB<FileStorage_, DBClass>(
         this->shared_from_this(), name, std::forward<Args>(args)...);
   }
 
   template <template <typename> class DBClass = _DB>
-  void remove(const char* name) { _storage->template remove<DBClass>(name); }
+  void remove(std::string_view name) { _storage->template remove<DBClass>(name); }
 
   void list_dbs(std::vector<std::string>& result) {
     return _storage->list_dbs(result);

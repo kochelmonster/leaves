@@ -10,7 +10,10 @@
 
 namespace leaves {
 
-// Simplified replication state for public API
+// ReplicationState values:
+// IDLE means not started or completed,
+// ACTIVE means session in progress,
+// ERROR means session failure.
 enum class ReplicationState {
   IDLE,    // Not started, or finished successfully
   ACTIVE,  // Replication in progress
@@ -54,15 +57,14 @@ class ReplicationSender {
 
   explicit ReplicationSender(DB& db) : _fsm(db._internal()) {}
 
-  // Start sending replication data.
-  // transport: user-provided transport for sending data to the receiver.
-  // events: optional callbacks for completion/error/progress notifications.
+  // Starts replication using transport and optional events, with selected
+  // database type.
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
              DbType db_type = DbType::DB_MAIN) {
     _fsm.begin(transport, events, db_type);
   }
 
-  // Feed a response message from the receiver.
+  // Feeds receiver responses into the sender FSM.
   void on_message_received(const uint8_t* data, size_t size) {
     _fsm.on_message_received(data, size);
   }
@@ -78,11 +80,16 @@ class ReplicationSender {
     }
   }
 
+  // Returns current session identifier.
   uint64_t session_id() const { return _fsm.session_id(); }
+  // Returns the last replication error code.
   ReplicationError error() const { return _fsm.error(); }
+  // Returns transferred bytes in the current session.
   size_t bytes_transferred() const { return _fsm._total_bytes; }
+  // Returns transferred node count in the current session.
   size_t nodes_transferred() const { return _fsm._total_nodes; }
 
+  // Returns timestamp of last FSM activity.
   std::chrono::steady_clock::time_point last_activity() const {
     return _fsm.last_activity();
   }
@@ -113,20 +120,16 @@ class ReplicationReceiver {
 
   explicit ReplicationReceiver(DB& db) : _fsm(db._internal()) {}
 
-  // Start receiving replication data.
-  // transport: user-provided transport for sending responses to the sender.
-  // events: optional callbacks for completion/error/progress notifications.
+  // Starts a receiver session with transport and optional event callbacks.
   void begin(ReplicationTransport* transport, ReplicationEvents* events) {
     _fsm.begin(transport, events);
   }
 
-  // Get the receive buffer for zero-copy data reception.
-  // Write incoming data to receive_buffer().write_ptr(), then call
-  // receive_buffer().advance(bytes_written), then call on_data_received().
+  // Returns mutable internal receive buffer for zero-copy ingest.
   ReceiveBuffer& receive_buffer() { return _fsm.receive_buffer(); }
 
-  // Notify that data has been written to the receive buffer.
-  // Returns true if the message was complete and processed.
+  // Processes newly received buffer data and returns true if a full message
+  // was handled.
   bool on_data_received() { return _fsm.on_data_received(); }
 
   ReplicationState state() const {
@@ -140,11 +143,16 @@ class ReplicationReceiver {
     }
   }
 
+  // Returns current session identifier.
   uint64_t session_id() const { return _fsm.session_id(); }
+  // Returns the last replication error code.
   ReplicationError error() const { return _fsm.error(); }
+  // Returns transferred bytes in the current session.
   size_t bytes_transferred() const { return _fsm._total_bytes; }
+  // Returns transferred node count in the current session.
   size_t nodes_transferred() const { return _fsm._total_nodes; }
 
+  // Returns timestamp of last FSM activity.
   std::chrono::steady_clock::time_point last_activity() const {
     return _fsm.last_activity();
   }
@@ -153,10 +161,8 @@ class ReplicationReceiver {
   ReceiverFSM _fsm;
 };
 
-// ============================================================================
-// Free function: run a complete replication protocol between sender and
-// receiver using in-process transports (useful for testing and local sync).
-// ============================================================================
+// Runs an in-process replication loop until both sides finish, no progress
+// remains, or max_rounds is reached.
 
 template <typename Sender, typename Receiver, typename Transport>
 void run_replication(Sender& sender, Receiver& receiver,
