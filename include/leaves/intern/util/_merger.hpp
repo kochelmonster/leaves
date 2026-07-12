@@ -1,3 +1,6 @@
+/*
+Ordered merge helpers for combining sorted trie and cursor streams.
+*/
 #ifndef _LEAVES_MERGER_HPP
 #define _LEAVES_MERGER_HPP
 

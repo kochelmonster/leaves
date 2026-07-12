@@ -1,3 +1,6 @@
+/*
+Large-value chunk storage and allocation helpers for big payload handling.
+*/
 #ifndef _LEAVES_BIGMEMORY_HPP
 #define _LEAVES_BIGMEMORY_HPP
 

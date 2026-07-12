@@ -1,3 +1,6 @@
+/*
+Browser storage backend built on browser persistence and async execution.
+*/
 #ifndef _LEAVES__BROWSERSTORE_HPP
 #define _LEAVES__BROWSERSTORE_HPP
 

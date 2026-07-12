@@ -1,3 +1,6 @@
+/*
+Replication sender and receiver state machines plus session coordination.
+*/
 #ifndef _LEAVES__REPLICATION_FSM_HPP
 #define _LEAVES__REPLICATION_FSM_HPP
 

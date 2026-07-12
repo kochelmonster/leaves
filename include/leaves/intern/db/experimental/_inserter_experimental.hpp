@@ -1,3 +1,6 @@
+/*
+Experimental inserter variant used for insertion strategy experiments.
+*/
 #ifndef _LEAVES_INSERTER_EXPERIMENTAL_HPP
 #define _LEAVES_INSERTER_EXPERIMENTAL_HPP
 

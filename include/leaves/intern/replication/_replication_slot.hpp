@@ -1,3 +1,7 @@
+/*
+Replication slot bookkeeping for crash-safe tracking and reclamation of
+pre-merge multi-areas.
+*/
 #ifndef _LEAVES__REPLICATION_SLOT_HPP
 #define _LEAVES__REPLICATION_SLOT_HPP
 

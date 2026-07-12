@@ -1,3 +1,6 @@
+/*
+Database wrapper and wiring for replication-capable Leaves instances.
+*/
 #ifndef _LEAVES__REPLICATION_DB_HPP
 #define _LEAVES__REPLICATION_DB_HPP
 

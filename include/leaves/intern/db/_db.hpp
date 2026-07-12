@@ -1,3 +1,6 @@
+/*
+Core database internals, including transaction wiring and cursor ownership.
+*/
 #ifndef _LEAVES__DB_HPP
 #define _LEAVES__DB_HPP
 

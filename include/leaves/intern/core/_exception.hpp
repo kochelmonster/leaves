@@ -1,3 +1,6 @@
+/*
+Internal exception and assertion helpers used by the Leaves runtime.
+*/
 #ifndef _LEAVES__EXCEPTIONS_HPP
 #define _LEAVES__EXCEPTIONS_HPP
 

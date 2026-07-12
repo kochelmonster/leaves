@@ -1,3 +1,6 @@
+/*
+Page history tracking and lightweight metrics for allocator behavior.
+*/
 #ifndef _LEAVES__PAGE_HIST_HPP
 #define _LEAVES__PAGE_HIST_HPP
 

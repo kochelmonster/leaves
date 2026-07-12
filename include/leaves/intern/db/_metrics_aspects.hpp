@@ -1,3 +1,6 @@
+/*
+Metric-gathering aspect implementations for database instrumentation.
+*/
 #ifndef _LEAVES_METRICS_ASPECTS_HPP
 #define _LEAVES_METRICS_ASPECTS_HPP
 

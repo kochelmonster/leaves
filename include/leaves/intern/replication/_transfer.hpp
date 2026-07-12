@@ -1,3 +1,6 @@
+/*
+Transfer buffer helpers for serializing and moving replication payloads.
+*/
 #ifndef _LEAVES__TRANSFER_HPP
 #define _LEAVES__TRANSFER_HPP
 

@@ -1,3 +1,6 @@
+/*
+Internal insert-path logic for adding and updating trie entries.
+*/
 #ifndef _LEAVES_INSERTER_HPP
 #define _LEAVES_INSERTER_HPP
 

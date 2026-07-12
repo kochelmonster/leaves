@@ -1,3 +1,11 @@
+/*
+RFC 1982-style serial number arithmetic with wraparound ordering and a
+zero sentinel for uninitialized values.
+
+Provides serial number types and aliases used for transaction and protocol
+IDs, including overflow-aware comparison, wraparound addition, and explicit
+handling of zero-valued sentinels.
+*/
 #ifndef _LEAVES_SERIAL_HPP
 #define _LEAVES_SERIAL_HPP
 
@@ -9,8 +17,8 @@ namespace leaves {
 /**
  * @brief Revolving serial number type with overflow-aware ordering (RFC 1982)
  * 
- * This implements serial number arithmetic as described in RFC 1982, commonly
- * used for TCP sequence numbers, DNS serial numbers, and transaction IDs.
+ * This implements RFC 1982-style serial number arithmetic with a reserved
+ * zero sentinel for uninitialized values.
  * 
  * Properties:
  * - All valid values are != 0 (0 is reserved for "uninitialized")

@@ -1,3 +1,6 @@
+/*
+Memory-mapped storage backend and low-level mapped-file helpers.
+*/
 #ifndef _LEAVES__IMMAP_HPP
 #define _LEAVES__IMMAP_HPP
 

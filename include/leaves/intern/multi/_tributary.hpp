@@ -1,3 +1,6 @@
+/*
+Tributary helpers that support confluence database routing and coordination.
+*/
 #ifndef _LEAVES_TRIBUTARY_HPP
 #define _LEAVES_TRIBUTARY_HPP
 

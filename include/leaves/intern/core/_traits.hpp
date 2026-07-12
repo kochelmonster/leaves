@@ -1,3 +1,6 @@
+/*
+Common trait definitions that connect storage, pointer, and resolver types.
+*/
 #ifndef _LEAVES__TRAITS_HPP
 #define _LEAVES__TRAITS_HPP
 

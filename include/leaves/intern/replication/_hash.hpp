@@ -1,3 +1,6 @@
+/*
+Hash helpers used by the replication protocol and transfer comparison logic.
+*/
 #ifndef _LEAVES__HASH_HPP
 #define _LEAVES__HASH_HPP
 

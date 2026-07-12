@@ -1,3 +1,6 @@
+/*
+Browser-oriented threadpool helpers for asynchronous task execution.
+*/
 #ifndef _LEAVES_BROWSER_THREADPOOL_HPP
 #define _LEAVES_BROWSER_THREADPOOL_HPP
 

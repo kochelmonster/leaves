@@ -1,3 +1,6 @@
+/*
+Platform portability macros and compiler-specific compatibility helpers.
+*/
 #ifndef _LEAVES___PORT_HPP
 #define _LEAVES___PORT_HPP
 

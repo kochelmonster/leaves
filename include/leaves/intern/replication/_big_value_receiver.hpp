@@ -1,3 +1,6 @@
+/*
+Replication-side receiver for large value chunks and deferred payloads.
+*/
 #ifndef _LEAVES__BIG_VALUE_RECEIVER_HPP
 #define _LEAVES__BIG_VALUE_RECEIVER_HPP
 

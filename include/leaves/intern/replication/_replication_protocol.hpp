@@ -1,3 +1,6 @@
+/*
+Replication protocol message definitions, framing, and wire-level helpers.
+*/
 #ifndef _LEAVES__REPLICATION_PROTOCOL_HPP
 #define _LEAVES__REPLICATION_PROTOCOL_HPP
 

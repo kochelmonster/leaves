@@ -1,3 +1,6 @@
+/*
+In-memory storage backend used for ephemeral and test-oriented databases.
+*/
 #ifndef _LEAVES__MEMSTORE_HPP
 #define _LEAVES__MEMSTORE_HPP
 

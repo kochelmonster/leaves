@@ -1,3 +1,6 @@
+/*
+Transfer-trie helpers for serializing and traversing replication payloads.
+*/
 #ifndef _LEAVES__TRANSFER_TRIE_HPP
 #define _LEAVES__TRANSFER_TRIE_HPP
 

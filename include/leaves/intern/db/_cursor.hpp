@@ -1,3 +1,6 @@
+/*
+Transactional cursor internals for traversing and mutating trie data.
+*/
 #ifndef _LEAVES_ICURSOR_HPP
 #define _LEAVES_ICURSOR_HPP
 
