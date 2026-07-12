@@ -55,6 +55,11 @@ jobs:
             Write-Error "Expected vendored Blake3 at BLAKE3/c but it was not found."
           }
 
+      - name: Install Boost headers (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install boost
+
       - name: Configure (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
