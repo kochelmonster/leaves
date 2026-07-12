@@ -8,11 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../BLAKE3/c
                  ${CMAKE_CURRENT_BINARY_DIR}/blake3)
 
+find_package(Boost 1.80 REQUIRED)
+
 add_executable(leaves_cross_platform_smoke
     main.cpp)
 
 target_include_directories(leaves_cross_platform_smoke PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/../../include)
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${Boost_INCLUDE_DIRS})
 
 target_link_libraries(leaves_cross_platform_smoke PRIVATE BLAKE3::blake3)
 
