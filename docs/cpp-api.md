@@ -221,29 +221,31 @@ storage->remove<leaves::MapStorage::ConfluenceDB>("events");
 storage->remove<leaves::MapStorage::ConfluenceReplicationDB>("events_repl");
 ```
 
-Custom conflict policy example:
+Conflict resolution in Confluence uses the database Aspect hooks, the same as
+replication. Override merge hooks in your `Traits::Aspect`:
 
 ```cpp
-struct MyPolicy {
-  struct _Candidate {
-    tid_t txn_id;
-    Slice value;
-    bool is_deleted;
-  };
+struct MyAspect : leaves::DefaultAspect {
+  bool may_merge_overwrite(const Slice& key, const Slice& dst, bool dst_is_big,
+                           const Slice& src, bool src_is_big, CursorContext&) {
+    // Example: keep lexicographically greater value
+    return src.string() > dst.string();
+  }
 
-  int resolve(const Slice&, const std::vector<_Candidate>& candidates) const {
-    return candidates.empty() ? -1 : 0;
+  bool may_merge_delete(const Slice&, const Slice&, CursorContext&) {
+    return true;
   }
 };
 
-auto custom = storage->open<leaves::MapStorage::ConfluenceDB_<MyPolicy>>(
-  "events_custom");
+struct MyTraits : leaves::MapTraits {
+  using Aspect = MyAspect;
+};
+
+auto storage = leaves::MapStorage_<MyTraits>::create("data.lvs");
+auto cdb = storage->open<leaves::MapStorage_<MyTraits>::ConfluenceDB>("events");
 ```
 
 ### `MapStorage::ConfluenceDB`
-
-- `MapStorage::ConfluenceDB()`
-  Opens or creates the named confluence database and manages main plus tributary databases.
 
 - `ConfluenceCursor cursor()`
   Returns a `ConfluenceCursor` bound to this database.
@@ -253,9 +255,6 @@ auto custom = storage->open<leaves::MapStorage::ConfluenceDB_<MyPolicy>>(
 
 - `void set_max_attached_age_ms(uint64_t ms)`
   Sets the max attach age before a tributary becomes merge-eligible. If a tributary has not been merged for `ms` milliseconds, it is merged to the main db.
-
-- `void merge_eligible_tributaries()`
-  Merges tributaries that currently meet merge criteria.
 
 - `void merge_now()`
   Performs synchronous merge of threshold- or idle-eligible tributaries.
