@@ -69,6 +69,28 @@ inline void compare_graph(const char* input, T& storage) {
   compare_graph(input, storage, &storage._internal()->txn()->root);
 }
 
+inline void normalize_fixture_name(std::string& name) {
+  std::replace(name.begin(), name.end(), ' ', '_');
+  std::replace_if(name.begin(), name.end(),
+                  [](char ch) {
+                    switch (ch) {
+                      case '<':
+                      case '>':
+                      case ':':
+                      case '"':
+                      case '/':
+                      case '\\':
+                      case '|':
+                      case '?':
+                      case '*':
+                        return true;
+                      default:
+                        return false;
+                    }
+                  },
+                  '_');
+}
+
 
 template <typename T>
 inline void check_graph(const char* name, T& storage, const char* dbname = "test") {
@@ -76,10 +98,10 @@ inline void check_graph(const char* name, T& storage, const char* dbname = "test
   if (truncated_name.length() > 32) {
     truncated_name = truncated_name.substr(0, 32);
   }
+  normalize_fixture_name(truncated_name);
   std::string path(CMPFILES);
   path.append(truncated_name);
   path.append(".yaml");
-  std::replace(path.begin(), path.end(), ' ', '_');
 
   auto db = storage->open(dbname);
 #ifdef GENERATE
@@ -96,10 +118,10 @@ inline void check_graph(const char* name, T& storage, offset_t* root_offset) {
   if (truncated_name.length() > 32) {
     truncated_name = truncated_name.substr(0, 32);
   }
+  normalize_fixture_name(truncated_name);
   std::string path(CMPFILES);
   path.append(truncated_name);
   path.append(".yaml");
-  std::replace(path.begin(), path.end(), ' ', '_');
 
 #ifdef GENERATE
   std::cout << "generate graph " << name << std::endl;
