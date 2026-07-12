@@ -65,6 +65,17 @@ jobs:
         shell: bash
         run: brew install boost
 
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install boost-msvc-14.3 -y --no-progress
+          $boostDir = Get-ChildItem "C:\local" -Filter "boost_*" -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if ($boostDir) {
+            "BOOST_ROOT=$boostDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
       - name: Configure (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
