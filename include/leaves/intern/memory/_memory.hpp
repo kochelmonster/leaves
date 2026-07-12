@@ -57,7 +57,7 @@ struct _PageContainer : public Traits::PageHeader {
   static constexpr auto& PAGE_SIZES = Traits::PAGE_SIZES;
   static constexpr uint16_t SIZE = Traits::PAGE_CONTAINER_SIZE;
   static constexpr uint16_t SLOT_ID = binary_search(
-      &PAGE_SIZES[0], &PAGE_SIZES[Traits::PAGE_SIZES_COUNT], SIZE);
+      PAGE_SIZES.data(), PAGE_SIZES.data() + Traits::PAGE_SIZES_COUNT, SIZE);
   typedef typename Traits::PageHeader Base;
   typedef typename Traits::template Pointer<_PageContainer> ptr;
 
@@ -243,7 +243,7 @@ struct _MemManager {
 
   static constexpr int assign_slot(uint16_t size) {
     assert(size > 0);
-    return binary_search(&PAGE_SIZES[0], &PAGE_SIZES[COUNT], size);
+    return binary_search(PAGE_SIZES.data(), PAGE_SIZES.data() + COUNT, size);
   }
 
   template <typename Resolver>
