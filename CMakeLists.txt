@@ -277,6 +277,10 @@ else()
     target_include_directories(leaves INTERFACE ${Boost_INCLUDE_DIRS})
 endif()
 
+if (TARGET Boost::process)
+    target_link_libraries(leaves INTERFACE Boost::process)
+endif()
+
 if (LEAVES_SINGLE_PROCESS)
     target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
 endif()

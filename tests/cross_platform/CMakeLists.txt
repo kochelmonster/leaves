@@ -23,5 +23,9 @@ target_include_directories(leaves_cross_platform_smoke PRIVATE
 
 target_link_libraries(leaves_cross_platform_smoke PRIVATE BLAKE3::blake3)
 
+if (TARGET Boost::process)
+  target_link_libraries(leaves_cross_platform_smoke PRIVATE Boost::process)
+endif()
+
 enable_testing()
 add_test(NAME leaves_cross_platform_smoke COMMAND leaves_cross_platform_smoke)
