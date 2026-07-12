@@ -206,11 +206,6 @@ class ConfluenceDB {
 
   // --- Lifecycle ---
 
-  // Runs startup crash-recovery merge of unclaimed tributaries.
-  void sanitize() {
-    _assert_initialized();
-    _impl->sanitize();
-  }
   // Merges tributaries that currently meet merge criteria.
   void merge_eligible_tributaries() {
     _assert_initialized();

@@ -165,12 +165,11 @@ cmake --build build-debug -j
 ```
 
 ## Documentation index
-- C++ API: [docs/cpp-api/cpp-api.md](docs/cpp-api/cpp-api.md)
-- Browser storage: [docs/browser-storage/browser-storage.md](docs/browser-storage/browser-storage.md)
-- Internet architecture: [docs/internet-architecture/internet-architecture.md](docs/internet-architecture/internet-architecture.md)
+- C++ API: [docs/cpp-api.md](docs/cpp-api.md)
+- JavaScript/Browser API: [docs/js-api.md](docs/js-api.md)
 - Architecture: [docs/architecture/architecture.md](docs/architecture/architecture.md)
+- Replication: [docs/replication/replication.md](docs/replication/replication.md)
 - Lessons learned: [docs/lessons-learned/lessons-learned.md](docs/lessons-learned/lessons-learned.md)
-- Design decisions: [docs/design-decisions/design-decisions.md](docs/design-decisions/design-decisions.md)
 - Performance: [docs/performance/performance.md](docs/performance/performance.md)
 
 

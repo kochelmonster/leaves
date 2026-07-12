@@ -2,9 +2,7 @@
 
 Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and cursor). Add `<leaves/confluence.hpp>` when using confluence, and `<leaves/replication.hpp>` for replication.
 
-For architecture and policy discussions see:
-- [docs/replication/replication.md](../replication/replication.md)
-- [docs/architecture/architecture.md](../architecture/architecture.md)
+For an architectural overview see [docs/architecture/architecture.md](../architecture/architecture.md)
 
 ## Quick start
 
@@ -39,7 +37,7 @@ int main() {
 
 ## `Slice`
 
-`Slice` is a non-owning view over a contiguous byte range. It is the fundamental type for passing keys and values through the API.
+`Slice` is a non-owning view over a contiguous byte range. It is the fundamental type for passing keys and values through the API. `Slice` is available by including `mmap.hpp`.
 
 - `Slice()`
   Constructs an empty view.
@@ -66,7 +64,7 @@ int main() {
 
 ## `MapStorage` / `MapStorage_<Traits>`
 
-`MapStorage` (an alias for `MapStorage_<MapTraits>`) manages a memory-mapped `.lvs` file and owns all databases inside it.
+`MapStorage` (an alias for `MapStorage_<MapTraits>`) manages a memory-mapped `.lvs` file and owns all databases inside it. MapStorage is multi-thread and multi-process safe (multiple processes can open the same `.lvs` file concurrently). `MapStorage` is avalable by including `mmap.hpp`.
 
 - `static storage_ptr create(const char* path, size_t map_size = 4 * G)`
   Creates and initializes storage backed by `path`. `map_size` is the virtual-address reservation limit.
@@ -74,10 +72,10 @@ int main() {
 - `MapStorage_(const char* path, size_t map_size = 4 * G)`
   Direct constructor variant; prefer `create()` for shared-pointer ownership.
 
-- `template <template <typename> class DBClass = DB, typename... Args> TDB<MapStorage_, DBClass> open(const char* name, Args&&... args)`
+- `template <template <typename> class DBClass = DB, typename... Args> TDB<MapStorage_, DBClass> open(std::string_view name, Args&&... args)`
   Opens or creates a named database. `DBClass` selects the backend and `args` are forwarded to that DB class.
 
-- `template <template <typename> class DBClass = DB> void remove(const char* name)`
+- `template <template <typename> class DBClass = DB> void remove(std::string_view name)`
   Removes the named database from storage.
 
 - `void list_dbs(std::vector<std::string>& result)`
@@ -94,21 +92,18 @@ int main() {
 
 ---
 
-## `TDB<Storage, DBClass>`
+## `MapStorage::DB`
 
-A lightweight handle that represents one named database inside a storage file. Obtain one via `storage->open(...)`.
+A lightweight handle that represents one named database inside a storage file. Obtain one via `storage->open(...)`. DB is thread-safe and can be shared across threads, but each thread should use its own `Cursor` for read/write operations. `MapStorage::DB` is available by including `mmap.hpp`.
 
 - `Cursor cursor()`
-  Returns a new `TCursor` bound to this database.
+  Returns a new `Cursor` bound to this database.
 
 - `Slice name() const`
   Returns the database name.
 
 - `storage_ptr storage() const`
   Returns the owning storage shared pointer.
-
-- `db_type* _internal() const`
-  Returns the raw implementation pointer for advanced usage.
 
 - `auto& aspect()`
   Returns mutable access to the database aspect object.
@@ -123,10 +118,10 @@ A lightweight handle that represents one named database inside a storage file. O
   Returns the active transaction id used for crash-recovery tracking.
 
 - `bool commit(bool sync = true)`
-  Commits current database transaction state. Set `sync = false` to skip `fsync`.
+  Commits current database transaction state and returns `false` if no transaction is active, the commit is vetoed by an aspect hook, or the underlying transaction commit fails. Set `sync = false` to skip `fsync`.
 
 - `bool rollback()`
-  Discards changes made since the last commit.
+  Discards changes made since the last commit and returns `false` if no transaction is active or the rollback is vetoed by an aspect hook.
 
 - `void defrag()`
   Performs in-place compaction to reclaim fragmented storage.
@@ -136,9 +131,9 @@ A lightweight handle that represents one named database inside a storage file. O
 
 ---
 
-## `TCursor<Storage, DBClass>`
+## `Cursor`
 
-The cursor is the workhorse of the API. Every read and write goes through a cursor. Cursors are copyable and movable; a default-constructed cursor is empty.
+The cursor is the workhorse of the API. Every read and write goes through a cursor. Cursors are copyable and movable; a default-constructed cursor is empty. A cursor must be used in a single thread. `Cursor` is available by including `mmap.hpp`.
 
 - `void find(const Slice& key)`
   Seeks to `key` or to the insertion position for that key.
@@ -176,26 +171,20 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
 - `void update()`
   Refreshes cursor view after out-of-band mutation.
 
-### Transactions
-
-By default each `value()` / `remove()` call is immediately committed as an implicit single-operation transaction. For multi-operation atomicity, manage transactions explicitly:
-
 - `bool start_transaction(bool non_blocking = false, bool use_wal = false)`
-  Opens a write transaction. Set `non_blocking = true` to fail instead of waiting, and `use_wal = true` for WAL semantics.
+  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting, and `use_wal = true` for WAL semantics. By default each `value()` / `remove()` call is starts a transaction if none is active. Use `start_transaction()` to group multiple operations into a single transaction.
 
 - `tid_t prepare_commit(bool sync = false)`
-  Moves the transaction to prepared state and returns the prepared transaction id.
+  Moves the transaction to prepared state and returns the prepared transaction id, or `0` if no transaction is active for this cursor.
 
 - `bool commit(bool sync = false)`
-  Finalizes the active transaction and returns `true` on success.
+  Finalizes the active transaction and returns `false` if no transaction is active, a commit hook rejects the operation, or the underlying commit fails.
 
 - `bool rollback()`
-  Discards all changes since `start_transaction()`.
+  Discards all changes since `start_transaction()` and returns `false` if no transaction is active or a rollback hook rejects the operation.
 
 - `bool is_transaction_active() const`
   Returns `true` while a transaction is active.
-
-### Other
 
 - `tid_t txn_id() const`
   Returns the transaction id associated with the cursor read snapshot.
@@ -208,34 +197,10 @@ By default each `value()` / `remove()` call is immediately committed as an impli
 
 ---
 
-## `ConfluenceDB<Storage, ConflictPolicy, DBClass>` and `ConfluenceCursor`
+## Confluence API
 
-Confluence is the multi-writer layer. It maintains a main database alongside a pool of per-writer tributary databases that are merged back automatically. For `MapStorage`, the public convenience types are nested on the storage type:
+Confluence is a multi-writer layer. Every `ConfluenceCursor` writes to its own tributary database, which is merged to the main database automatically if certain thresholds are met. Confluence is available by including `confluence.hpp`. See [examples/confluence_multithread](../../examples/confluence_multithread) for a complete multi-threaded demo.
 
-```cpp
-using DefaultConfluenceDB = leaves::MapStorage::ConfluenceDB;
-using DefaultConfluenceCursor = leaves::MapStorage::ConfluenceDB::Cursor;
-template <typename ConflictPolicy>
-using CustomConfluenceDB = leaves::MapStorage::ConfluenceDB_<ConflictPolicy>;
-template <typename ConflictPolicy>
-using CustomConfluenceCursor =
-  typename leaves::MapStorage::ConfluenceDB_<ConflictPolicy>::Cursor;
-```
-
-For replication support use:
-
-```cpp
-using DefaultReplicationConfluenceDB =
-  leaves::MapStorage::ConfluenceReplicationDB;
-using DefaultReplicationConfluenceCursor =
-  leaves::MapStorage::ConfluenceReplicationDB::Cursor;
-template <typename ConflictPolicy>
-using CustomReplicationConfluenceDB =
-  leaves::MapStorage::ConfluenceReplicationDB_<ConflictPolicy>;
-template <typename ConflictPolicy>
-using CustomReplicationConfluenceCursor =
-  typename leaves::MapStorage::ConfluenceReplicationDB_<ConflictPolicy>::Cursor;
-```
 
 #### Opening and removing a Confluence database
 
@@ -275,22 +240,19 @@ auto custom = storage->open<leaves::MapStorage::ConfluenceDB_<MyPolicy>>(
   "events_custom");
 ```
 
-### `ConfluenceDB`
+### `MapStorage::ConfluenceDB`
 
-- `ConfluenceDB(storage_ptr storage, const char* name)`
+- `MapStorage::ConfluenceDB()`
   Opens or creates the named confluence database and manages main plus tributary databases.
 
-- `Cursor cursor()`
+- `ConfluenceCursor cursor()`
   Returns a `ConfluenceCursor` bound to this database.
 
 - `void set_merge_write_threshold(uint32_t n)`
-  Sets the tributary write-count threshold for merge eligibility.
+  Sets the tributary write-count threshold for merge eligibility. The tributary is merged to the main db when its write count exceeds this threshold.  
 
 - `void set_max_attached_age_ms(uint64_t ms)`
-  Sets the max attach age before a tributary becomes merge-eligible.
-
-- `void sanitize()`
-  Runs startup crash-recovery merge of unclaimed tributaries.
+  Sets the max attach age before a tributary becomes merge-eligible. If a tributary has not been merged for `ms` milliseconds, it is merged to the main db.
 
 - `void merge_eligible_tributaries()`
   Merges tributaries that currently meet merge criteria.
@@ -304,22 +266,22 @@ auto custom = storage->open<leaves::MapStorage::ConfluenceDB_<MyPolicy>>(
 - `std::exception_ptr get_merge_error()`
   Returns and clears the last asynchronous merge error.
 
-- `DBImpl* _internal() const`
-  Returns low-level implementation pointer.
-
-- `MainTDB& _internal_main()`
-  Returns direct access to the main database handle.
-
 ### `ConfluenceCursor`
 
+Multiple ConfluenceCursors can write simultaneously to the database. But each cursor must be used in one thread.
+
 - `bool start_transaction(bool non_blocking = false)`
-  Starts a write transaction on this cursor's tributary.
+  Starts a write transaction on this cursor's tributary and returns `false` if
+  the slot cannot be claimed, another transaction is already active, or the
+  tributary cannot open a write transaction.
 
 - `bool commit(bool sync = false)`
-  Commits the active transaction.
+  Commits the active transaction and returns `false` if no transaction is
+  active or the tributary commit fails.
 
 - `bool rollback()`
-  Rolls back the active transaction.
+  Rolls back the active transaction and returns `false` if no transaction is
+  active or the tributary rollback fails.
 
 - `bool is_transaction_active() const`
   Returns `true` while a transaction is active.
@@ -358,7 +320,8 @@ auto custom = storage->open<leaves::MapStorage::ConfluenceDB_<MyPolicy>>(
 
 ## Replication API
 
-Include `<leaves/replication.hpp>`. Databases must be opened with `ReplicationDB` as the `DBClass` template argument.
+Include `<leaves/replication.hpp>`. An explicit example how to use the Replication API is provided in the folder `examples/p2p_kv`.
+For a high-level overview see [docs/replication/replication.md](../replication/replication.md)
 
 ### Opening and removing a ReplicationDB database
 
@@ -366,10 +329,10 @@ Include `<leaves/replication.hpp>`. Databases must be opened with `ReplicationDB
 auto storage = leaves::MapStorage::create("data.lvs");
 
 // Open or create replication-enabled database "repl".
-auto rdb = storage->open<leaves::ReplicationDB>("repl");
+auto rdb = storage->open<leaves::MapStore::ReplicationDB>("repl");
 
 // Remove replication-enabled database "repl".
-storage->remove<leaves::ReplicationDB>("repl");
+storage->remove<leaves::MapStore::ReplicationDB>("repl");
 ```
 
 ### `ReplicationState`
