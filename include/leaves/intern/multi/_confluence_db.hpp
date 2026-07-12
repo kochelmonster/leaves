@@ -51,62 +51,30 @@ struct _TxnPinGuard {
   }
 };
 
-// _DefaultConflictPolicy: highest txn_id wins
-// resolve() is given a list of candidates for the same key gathered from
-// the main DB and all active tributaries.  Returns the index of the winner
-// (or -1 if the winner is a deletion tombstone → key not found).
-
-struct _DefaultConflictPolicy {
-  struct _Candidate {
-    tid_t txn_id;
-    Slice value;
-    bool is_deleted;
-  };
-
-  // Returns index of winner, or -1 if the winning candidate is a tombstone.
-  int resolve(const Slice& /*key*/,
-              const std::vector<_Candidate>& candidates) const {
-    int winner = -1;
-    tid_t best{0};
-    for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
-      if (candidates[i].txn_id > best) {
-        best = candidates[i].txn_id;
-        winner = i;
-      }
-    }
-    if (winner < 0) return -1;
-    return candidates[winner].is_deleted ? -1 : winner;
-  }
-};
-
 // Forward declarations
 template <typename ConfluenceDB_>
 struct _ConfluenceCursor;
 
-// _TributaryMergePolicy: bridges _Merger's may_overwrite() with ConflictPolicy
-// Used in _ConfluenceDB::_do_merge to apply the conflict policy when a key
-// exists in both the tributary (src) and the main DB (dst).
+template <typename MainDB_>
+struct _ConfluenceAspectMergePolicy : public StandardMergePolicy {
+  using Aspect = typename MainDB_::Aspect;
+  using CursorContext = typename Aspect::CursorContext;
 
-template <typename ConflictPolicy>
-struct _TributaryMergePolicy : public StandardMergePolicy {
-  using Candidate = typename ConflictPolicy::_Candidate;
+  Aspect* _aspect = nullptr;
+  [[no_unique_address]] CursorContext _merge_context;
 
-  const ConflictPolicy& _policy;
-  tid_t _main_txn_id;
-  tid_t _trib_txn_id;
-
-  _TributaryMergePolicy(const ConflictPolicy& policy, tid_t main_txn_id,
-                        tid_t trib_txn_id)
-      : _policy(policy), _main_txn_id(main_txn_id), _trib_txn_id(trib_txn_id) {}
+  explicit _ConfluenceAspectMergePolicy(MainDB_* db) : _aspect(&db->aspect()) {
+    _aspect->init_cursor_context(_merge_context);
+  }
 
   bool may_overwrite(const std::string& key, const Slice& dst, const Slice& src,
-                     bool /*dst_is_big*/, bool /*src_is_big*/) {
-    // index 0 = main DB (dst), index 1 = tributary (src)
-    std::vector<Candidate> cands = {
-        {_main_txn_id, dst, false},
-        {_trib_txn_id, src, false},
-    };
-    return _policy.resolve(key, cands) == 1;
+                     bool dst_is_big, bool src_is_big) {
+    return _aspect->may_merge_overwrite(Slice(key), dst, dst_is_big, src,
+                                        src_is_big, _merge_context);
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice& src, bool is_big) {
+    return _aspect->may_merge_add(Slice(key), src, is_big, _merge_context);
   }
 };
 
@@ -151,12 +119,13 @@ struct _ConfluenceMeta {
 //   or attached for longer than max_attached_age_seconds.
 // - Reads merge-scan the main DB + all live tributaries.
 
-template <typename MainDB_, typename ConflictPolicy_ = _DefaultConflictPolicy>
+template <typename MainDB_>
 struct _ConfluenceDB {
   using MainDB = MainDB_;
   using Storage = typename MainDB_::Storage;
   using Traits = typename Storage::Traits;
-  using ConflictPolicy = ConflictPolicy_;
+  using Aspect = typename MainDB_::Aspect;
+  using CursorContext = typename Aspect::CursorContext;
   using TributaryDB = _TributaryDB<Storage>;
   using Slot = _TributaryHeader<Storage>;
   using slot_ptr = typename Traits::template Pointer<Slot>;
@@ -169,7 +138,7 @@ struct _ConfluenceDB {
     typedef MainDB_ DB;
   };
 
-  typedef _ConfluenceCursor<_ConfluenceDB<MainDB_, ConflictPolicy_>> Cursor;
+  typedef _ConfluenceCursor<_ConfluenceDB<MainDB_>> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
   std::atomic<uint32_t> _merge_write_threshold{50000};
@@ -208,8 +177,6 @@ struct _ConfluenceDB {
   std::atomic<uint64_t> _age_sweep_job_id{
       0};                       // pending age-sweep job id (0 = none)
   std::mutex _age_sweep_mutex;  // serializes age-sweep arming
-  ConflictPolicy_ _conflict_policy;
-
   // Hard cap on tributary slots, both per-process and cross-process.  The
   // persistent slot table in _ConfluenceMeta has this exact size; the
   // allocator scans the array for the first un-claimed entry via CAS.
@@ -366,7 +333,6 @@ struct _ConfluenceDB {
   }
 
   // Merge ALL free tributaries (ATTACHED+MERGING) regardless of threshold/idle.
-  // Same path as merge_now(), then flushes main.
   void merge_all_now() {
     _request_drain_and_wait(/*force=*/true);
     _main_db.flush();
@@ -652,12 +618,6 @@ struct _ConfluenceDB {
     _main_db.flush();
   }
 
-  // Drain primitive: schedule a pass and block until one that observes this
-  // request completes.  Equivalent to merge_now().
-  void merge_eligible_tributaries() {
-    _request_drain_and_wait(/*force=*/false);
-  }
-
   // Schedule a drain pass and block until a pass that observes this request
   // completes.  force=true drains ALL ATTACHED+MERGING slots; force=false
   // applies the normal MERGING/idle policy.
@@ -916,12 +876,12 @@ struct _ConfluenceDB {
     using TxnType = typename TributaryDB::Transaction;
     using TribCursorTraits = typename TributaryDB::CursorTraits;
 
-    tid_t main_txn_id = _main_db.txn()->txn_id;
     auto main_cursor = _main_db.create_cursor();
     main_cursor->start_transaction();
 
     _TxnPinGuard<typename TributaryDB::txn_ptr> trib_pin(trib->txn_ref());
-    tid_t trib_txn_id = trib->txn()->txn_id;
+    CursorContext merge_ctx;
+    _main_db.aspect().init_cursor_context(merge_ctx);
 
     try {
       // Pass 1: apply deletions
@@ -931,6 +891,11 @@ struct _ConfluenceDB {
         _Cursor<TribCursorTraits> del_cursor(trib, &ttxn->delete_root);
         del_cursor.first();
         while (del_cursor.is_valid()) {
+          if (!_main_db.aspect().may_merge_delete(Slice(del_cursor.current_key),
+                                                  Slice(), merge_ctx)) {
+            del_cursor.next();
+            continue;
+          }
           main_cursor->find(Slice(del_cursor.current_key));
           if (main_cursor->is_valid() &&
               main_cursor->current_key == del_cursor.current_key)
@@ -942,10 +907,9 @@ struct _ConfluenceDB {
       // Pass 2: merge tributary data trie into main DB
       _Cursor<TribCursorTraits> src(trib, &trib->txn()->root);
       src.clear();
-      _TributaryMergePolicy<ConflictPolicy_> policy(_conflict_policy,
-                                                    main_txn_id, trib_txn_id);
+            _ConfluenceAspectMergePolicy<MainDB_> policy(&_main_db);
       _Merger<typename MainDB_::Cursor, _Cursor<TribCursorTraits>,
-              _TributaryMergePolicy<ConflictPolicy_>>(*main_cursor, src, policy)
+              _ConfluenceAspectMergePolicy<MainDB_>>(*main_cursor, src, policy)
           .exec();
 
       main_cursor->commit();
@@ -1137,17 +1101,24 @@ struct _ConfluenceCursor {
   using Traits = typename ConfluenceDB_::Traits;
   using Slot = typename ConfluenceDB_::Slot;
   using slot_ptr = typename ConfluenceDB_::slot_ptr;
-  using ConflictPolicy = typename ConfluenceDB_::ConflictPolicy;
+  using Aspect = typename ConfluenceDB_::Aspect;
+  using CursorContext = typename ConfluenceDB_::CursorContext;
   using TribCursorTraits = typename TributaryDB::CursorTraits;
   using TribCursor = _TributaryCursor<TribCursorTraits>;
   using MainCursorTraits = typename ConfluenceDB_::MainCursorTraits;
   using TxnType = typename TributaryDB::Transaction;
-  using Candidate = typename ConflictPolicy::_Candidate;
   using PinnedSource = _PinnedSource<ConfluenceDB_>;
   using MainTxnPtr = typename ConfluenceDB_::txn_ptr;
 
+  struct Candidate {
+    tid_t txn_id;
+    Slice value;
+    bool is_deleted;
+    bool is_big;
+  };
+
   ConfluenceDB_* _cdb;
-  ConflictPolicy _policy;
+  [[no_unique_address]] CursorContext _merge_context;
 
   // Sticky write slot: held across transactions until threshold/idle/destroy.
   // When _in_transaction is true, _write_source._trib_cursor is in an active
@@ -1182,6 +1153,7 @@ struct _ConfluenceCursor {
     _main_txn = _cdb->txn_ref();
     _main_cursor = std::make_unique<_Cursor<MainCursorTraits>>(
         &_cdb->_main_db, &_main_txn->root);
+    _cdb->_main_db.aspect().init_cursor_context(_merge_context);
   }
 
   ~_ConfluenceCursor() {
@@ -1490,6 +1462,62 @@ struct _ConfluenceCursor {
     if (now_merging) _cdb->_schedule_merge();  // W2: wake a merge for it
   }
 
+  template <typename CursorT>
+  static bool _cursor_is_big(CursorT* cursor, const Slice& key) {
+    if (!cursor || !cursor->is_valid() || key != cursor->current_key)
+      return false;
+    const auto& back = cursor->stack.back();
+    return back.cmp == 0 && back.is_leaf() && back.leaf()->is_big();
+  }
+
+  int _resolve_candidates_for_key(const Slice& key) {
+    if (_candidates.empty()) return -1;
+
+    std::stable_sort(_candidates.begin(), _candidates.end(),
+                     [](const Candidate& a, const Candidate& b) {
+                       return a.txn_id < b.txn_id;
+                     });
+
+    bool has_value = false;
+    Slice chosen;
+    bool chosen_is_big = false;
+    int winner = -1;
+
+    for (int i = 0; i < static_cast<int>(_candidates.size()); ++i) {
+      const auto& c = _candidates[i];
+      if (c.is_deleted) {
+        if (_cdb->_main_db.aspect().may_merge_delete(key, Slice(),
+                                                     _merge_context)) {
+          has_value = false;
+          chosen = Slice();
+          chosen_is_big = false;
+          winner = -1;
+        }
+        continue;
+      }
+
+      if (!has_value) {
+        if (_cdb->_main_db.aspect().may_merge_add(key, c.value, c.is_big,
+                                                  _merge_context)) {
+          has_value = true;
+          chosen = c.value;
+          chosen_is_big = c.is_big;
+          winner = i;
+        }
+        continue;
+      }
+
+      if (_cdb->_main_db.aspect().may_merge_overwrite(
+              key, chosen, chosen_is_big, c.value, c.is_big, _merge_context)) {
+        chosen = c.value;
+        chosen_is_big = c.is_big;
+        winner = i;
+      }
+    }
+
+    return winner;
+  }
+
   bool _resolve_key(const Slice& key, Slice& value_out) {
     _ensure_sources();
 
@@ -1509,7 +1537,8 @@ struct _ConfluenceCursor {
     _main_cursor->find(key);
 
     if (_main_cursor->is_valid() && key == _main_cursor->current_key)
-      _candidates.push_back({_main_txn->txn_id, _main_cursor->value(), false});
+      _candidates.push_back({_main_txn->txn_id, _main_cursor->value(), false,
+                             _cursor_is_big(_main_cursor.get(), key)});
 
     for (size_t _si = 0; _si < _sources_n; ++_si) {
       auto& src = _sources[_si];
@@ -1523,7 +1552,10 @@ struct _ConfluenceCursor {
       if (found || deleted) {
         _candidates.push_back({src._trib_cursor->_txn->txn_id,
                                found ? src._trib_cursor->value() : Slice(),
-                               deleted});
+                               deleted,
+                               found ? _cursor_is_big(src._trib_cursor.get(),
+                                                     key)
+                                     : false});
       }
     }
     if (_in_transaction) {
@@ -1537,12 +1569,14 @@ struct _ConfluenceCursor {
       if (found || deleted) {
         _candidates.push_back(
             {_write_source._trib_cursor->_txn->txn_id,
-             found ? _write_source._trib_cursor->value() : Slice(), deleted});
+             found ? _write_source._trib_cursor->value() : Slice(), deleted,
+             found ? _cursor_is_big(_write_source._trib_cursor.get(), key)
+                   : false});
       }
     }
 
     if (_candidates.empty()) return false;
-    int winner = _policy.resolve(key, _candidates);
+    int winner = _resolve_candidates_for_key(key);
     if (winner < 0) return false;
     value_out = _candidates[winner].value;
     return true;
@@ -1671,7 +1705,8 @@ struct _ConfluenceCursor {
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
         _candidates.push_back(
-            {_main_txn->txn_id, _main_cursor->value(), false});
+            {_main_txn->txn_id, _main_cursor->value(), false,
+             _cursor_is_big(_main_cursor.get(), Slice(_iter_key))});
 
       for (size_t i = 0; i < _sources_n; ++i) {
         auto& src = _sources[i];
@@ -1684,7 +1719,9 @@ struct _ConfluenceCursor {
                     src._del_cursor->current_key == _iter_key;
         }
         _candidates.push_back({src._trib_cursor->_txn->txn_id,
-                               src._trib_cursor->value(), deleted});
+                               src._trib_cursor->value(), deleted,
+                               _cursor_is_big(src._trib_cursor.get(),
+                                              Slice(_iter_key))});
       }
       if (_in_transaction && _write_source._trib_cursor->is_valid() &&
           _write_source._trib_cursor->current_key == _iter_key) {
@@ -1695,7 +1732,9 @@ struct _ConfluenceCursor {
                     _write_source._del_cursor->current_key == _iter_key;
         }
         _candidates.push_back({_write_source._trib_cursor->_txn->txn_id,
-                               _write_source._trib_cursor->value(), deleted});
+                               _write_source._trib_cursor->value(), deleted,
+                               _cursor_is_big(_write_source._trib_cursor.get(),
+                                              Slice(_iter_key))});
       }
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
@@ -1710,7 +1749,7 @@ struct _ConfluenceCursor {
           _write_source._trib_cursor->current_key == _iter_key)
         _write_source._trib_cursor->next();
 
-      int winner = _policy.resolve(Slice(_iter_key), _candidates);
+      int winner = _resolve_candidates_for_key(Slice(_iter_key));
       if (winner >= 0) {
         _search_key = Slice(_iter_key);
         _value_storage = _candidates[winner].value;
@@ -1746,7 +1785,8 @@ struct _ConfluenceCursor {
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
         _candidates.push_back(
-            {_main_txn->txn_id, _main_cursor->value(), false});
+            {_main_txn->txn_id, _main_cursor->value(), false,
+             _cursor_is_big(_main_cursor.get(), Slice(_iter_key))});
 
       for (size_t i = 0; i < _sources_n; ++i) {
         auto& src = _sources[i];
@@ -1759,7 +1799,9 @@ struct _ConfluenceCursor {
                     src._del_cursor->current_key == _iter_key;
         }
         _candidates.push_back({src._trib_cursor->_txn->txn_id,
-                               src._trib_cursor->value(), deleted});
+                               src._trib_cursor->value(), deleted,
+                               _cursor_is_big(src._trib_cursor.get(),
+                                              Slice(_iter_key))});
       }
       if (_in_transaction && _write_source._trib_cursor->is_valid() &&
           _write_source._trib_cursor->current_key == _iter_key) {
@@ -1770,7 +1812,9 @@ struct _ConfluenceCursor {
                     _write_source._del_cursor->current_key == _iter_key;
         }
         _candidates.push_back({_write_source._trib_cursor->_txn->txn_id,
-                               _write_source._trib_cursor->value(), deleted});
+                               _write_source._trib_cursor->value(), deleted,
+                               _cursor_is_big(_write_source._trib_cursor.get(),
+                                              Slice(_iter_key))});
       }
 
       if (_main_cursor->is_valid() && _main_cursor->current_key == _iter_key)
@@ -1785,7 +1829,7 @@ struct _ConfluenceCursor {
           _write_source._trib_cursor->current_key == _iter_key)
         _write_source._trib_cursor->prev();
 
-      int winner = _policy.resolve(Slice(_iter_key), _candidates);
+      int winner = _resolve_candidates_for_key(Slice(_iter_key));
       if (winner >= 0) {
         _search_key = Slice(_iter_key);
         _value_storage = _candidates[winner].value;

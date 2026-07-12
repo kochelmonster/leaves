@@ -12,37 +12,37 @@ namespace leaves {
 // =============================================================================
 
 struct OperationSnapshot {
-  uint64_t writes       = 0;
+  uint64_t writes = 0;
   uint64_t bytes_written = 0;
-  uint64_t reads        = 0;
-  uint64_t bytes_read   = 0;
-  uint64_t deletes      = 0;
+  uint64_t reads = 0;
+  uint64_t bytes_read = 0;
+  uint64_t deletes = 0;
 };
 
 struct TransactionSnapshot {
-  uint64_t user_txns_started      = 0;
-  uint64_t user_txns_committed    = 0;
-  uint64_t merge_txns_committed   = 0;
-  uint64_t defrag_txns_committed  = 0;
-  uint64_t user_txns_rolled_back  = 0;
+  uint64_t user_txns_started = 0;
+  uint64_t user_txns_committed = 0;
+  uint64_t merge_txns_committed = 0;
+  uint64_t defrag_txns_committed = 0;
+  uint64_t user_txns_rolled_back = 0;
 };
 
 struct NavigationSnapshot {
-  uint64_t finds       = 0;
-  uint64_t finds_hit   = 0;
+  uint64_t finds = 0;
+  uint64_t finds_hit = 0;
   uint64_t navigations = 0;
 };
 
 struct MaintenanceSnapshot {
   uint64_t sanitize_count = 0;
-  uint64_t defrag_count   = 0;
-  uint64_t reset_count    = 0;
+  uint64_t defrag_count = 0;
+  uint64_t reset_count = 0;
 };
 
 struct MergeSnapshot {
   uint64_t merge_overwrites = 0;
-  uint64_t merge_adds       = 0;
-  uint64_t merge_deletes    = 0;
+  uint64_t merge_adds = 0;
+  uint64_t merge_deletes = 0;
 };
 
 // =============================================================================
@@ -69,8 +69,8 @@ struct _OperationAspect : Base {
     return result;
   }
 
-  Slice on_read(const Slice& key, const Slice& data,
-                const Slice& big_meta, CursorContext& ctx) {
+  Slice on_read(const Slice& key, const Slice& data, const Slice& big_meta,
+                CursorContext& ctx) {
     Slice result = Base::on_read(key, data, big_meta, ctx);
     reads.fetch_add(1, std::memory_order_relaxed);
     bytes_read.fetch_add(result.size(), std::memory_order_relaxed);
@@ -85,11 +85,11 @@ struct _OperationAspect : Base {
 
   OperationSnapshot ops_snapshot() const {
     return {
-      writes.load(std::memory_order_relaxed),
-      bytes_written.load(std::memory_order_relaxed),
-      reads.load(std::memory_order_relaxed),
-      bytes_read.load(std::memory_order_relaxed),
-      deletes.load(std::memory_order_relaxed),
+        writes.load(std::memory_order_relaxed),
+        bytes_written.load(std::memory_order_relaxed),
+        reads.load(std::memory_order_relaxed),
+        bytes_read.load(std::memory_order_relaxed),
+        deletes.load(std::memory_order_relaxed),
     };
   }
 };
@@ -111,28 +111,33 @@ struct _TransactionAspect : Base {
   std::atomic<uint64_t> defrag_txns_committed{0};
   std::atomic<uint64_t> user_txns_rolled_back{0};
 
-  template <typename DB, typename Ctx>
-  void on_start_transaction(DB& db, tid_t tid, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  void on_start_transaction(DB& db, tid_t tid, TransactionOrigin origin,
+                            CursorContext& ctx) {
     Base::on_start_transaction(db, tid, origin, ctx);
     if (origin == TransactionOrigin::user)
       user_txns_started.fetch_add(1, std::memory_order_relaxed);
   }
 
-  template <typename DB, typename Ctx>
-  void on_commit(DB& db, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  void on_commit(DB& db, TransactionOrigin origin, CursorContext& ctx) {
     Base::on_commit(db, origin, ctx);
     switch (origin) {
       case TransactionOrigin::user:
-        user_txns_committed.fetch_add(1, std::memory_order_relaxed); break;
+        user_txns_committed.fetch_add(1, std::memory_order_relaxed);
+        break;
       case TransactionOrigin::merge:
-        merge_txns_committed.fetch_add(1, std::memory_order_relaxed); break;
+        merge_txns_committed.fetch_add(1, std::memory_order_relaxed);
+        break;
       case TransactionOrigin::defrag:
-        defrag_txns_committed.fetch_add(1, std::memory_order_relaxed); break;
+        defrag_txns_committed.fetch_add(1, std::memory_order_relaxed);
+        break;
     }
   }
 
-  template <typename DB, typename Ctx>
-  void on_rollback(DB& db, tid_t tid, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  void on_rollback(DB& db, tid_t tid, TransactionOrigin origin,
+                   CursorContext& ctx) {
     Base::on_rollback(db, tid, origin, ctx);
     if (origin == TransactionOrigin::user)
       user_txns_rolled_back.fetch_add(1, std::memory_order_relaxed);
@@ -140,11 +145,11 @@ struct _TransactionAspect : Base {
 
   TransactionSnapshot txn_snapshot() const {
     return {
-      user_txns_started.load(std::memory_order_relaxed),
-      user_txns_committed.load(std::memory_order_relaxed),
-      merge_txns_committed.load(std::memory_order_relaxed),
-      defrag_txns_committed.load(std::memory_order_relaxed),
-      user_txns_rolled_back.load(std::memory_order_relaxed),
+        user_txns_started.load(std::memory_order_relaxed),
+        user_txns_committed.load(std::memory_order_relaxed),
+        merge_txns_committed.load(std::memory_order_relaxed),
+        defrag_txns_committed.load(std::memory_order_relaxed),
+        user_txns_rolled_back.load(std::memory_order_relaxed),
     };
   }
 };
@@ -164,30 +169,27 @@ struct _NavigationAspect : Base {
   std::atomic<uint64_t> finds_hit{0};
   std::atomic<uint64_t> navigations{0};
 
-  template <typename Ctx>
-  void on_find(const Slice& key, bool found, Ctx& ctx) {
+  void on_find(const Slice& key, bool found, CursorContext& ctx) {
     Base::on_find(key, found, ctx);
     finds.fetch_add(1, std::memory_order_relaxed);
     if (found) finds_hit.fetch_add(1, std::memory_order_relaxed);
   }
 
-  template <typename Ctx>
-  void on_next(bool has_next, Ctx& ctx) {
+  void on_next(bool has_next, CursorContext& ctx) {
     Base::on_next(has_next, ctx);
     navigations.fetch_add(1, std::memory_order_relaxed);
   }
 
-  template <typename Ctx>
-  void on_prev(bool has_prev, Ctx& ctx) {
+  void on_prev(bool has_prev, CursorContext& ctx) {
     Base::on_prev(has_prev, ctx);
     navigations.fetch_add(1, std::memory_order_relaxed);
   }
 
   NavigationSnapshot nav_snapshot() const {
     return {
-      finds.load(std::memory_order_relaxed),
-      finds_hit.load(std::memory_order_relaxed),
-      navigations.load(std::memory_order_relaxed),
+        finds.load(std::memory_order_relaxed),
+        finds_hit.load(std::memory_order_relaxed),
+        navigations.load(std::memory_order_relaxed),
     };
   }
 };
@@ -227,9 +229,9 @@ struct _MaintenanceAspect : Base {
 
   MaintenanceSnapshot maintenance_snapshot() const {
     return {
-      sanitize_count.load(std::memory_order_relaxed),
-      defrag_count.load(std::memory_order_relaxed),
-      reset_count.load(std::memory_order_relaxed),
+        sanitize_count.load(std::memory_order_relaxed),
+        defrag_count.load(std::memory_order_relaxed),
+        reset_count.load(std::memory_order_relaxed),
     };
   }
 };
@@ -274,9 +276,9 @@ struct _MergeAspect : Base {
 
   MergeSnapshot merge_snapshot() const {
     return {
-      merge_overwrites.load(std::memory_order_relaxed),
-      merge_adds.load(std::memory_order_relaxed),
-      merge_deletes.load(std::memory_order_relaxed),
+        merge_overwrites.load(std::memory_order_relaxed),
+        merge_adds.load(std::memory_order_relaxed),
+        merge_deletes.load(std::memory_order_relaxed),
     };
   }
 };
@@ -295,9 +297,8 @@ struct _MergeAspect : Base {
 // =============================================================================
 
 template <typename Base = DefaultAspect>
-using _AllMetricsAspect =
-    _TransactionAspect<_OperationAspect<_NavigationAspect<
-        _MaintenanceAspect<_MergeAspect<Base>>>>>;
+using _AllMetricsAspect = _TransactionAspect<_OperationAspect<
+    _NavigationAspect<_MaintenanceAspect<_MergeAspect<Base>>>>>;
 
 }  // namespace leaves
 

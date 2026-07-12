@@ -287,8 +287,8 @@ struct P2pAspect : public DefaultAspect {
     return true;
   }
 
-  template <typename DB, typename Ctx>
-  void on_commit(DB& db, TransactionOrigin, Ctx&) {
+  template <typename DB>
+  void on_commit(DB& db, TransactionOrigin, CursorContext&) {
     int origin = g_commit_origin_peer_id;
     if (g_notifier) g_notifier->schedule(db, origin);
   }

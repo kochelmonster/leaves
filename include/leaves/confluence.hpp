@@ -31,14 +31,13 @@ namespace leaves {
 //     use cursor.key(), cursor.value();
 //   }
 
-template <typename Storage_, typename ConflictPolicy_ = _DefaultConflictPolicy,
-          template <typename> class DBClass_ = _DB>
+template <typename Storage_, template <typename> class DBClass_ = _DB>
 class ConfluenceCursor {
  public:
   using storage_ptr = typename Storage_::storage_ptr;
   using StorageImpl = typename Storage_::StorageImpl;
   using MainDBImpl = DBClass_<StorageImpl>;
-  using DBImpl = _ConfluenceDB<MainDBImpl, ConflictPolicy_>;
+  using DBImpl = _ConfluenceDB<MainDBImpl>;
   using CursorImpl = _ConfluenceCursor<DBImpl>;
   using cursor_ptr = std::shared_ptr<CursorImpl>;
 
@@ -132,18 +131,17 @@ class ConfluenceCursor {
 //   cursor.value(Slice("value"));
 //   cursor.commit();
 
-template <typename Storage_, typename ConflictPolicy_,
-          template <typename> class DBClass_>
+template <typename Storage_, template <typename> class DBClass_>
 class ConfluenceDB {
  public:
   using storage_ptr = typename Storage_::storage_ptr;
   using StorageImpl = typename Storage_::StorageImpl;
   using MainDBImpl = DBClass_<StorageImpl>;
   using MainTDB = TDB<Storage_, DBClass_>;
-  using ConcreteDBImpl = _ConfluenceDB<MainDBImpl, ConflictPolicy_>;
-  using Cursor = ConfluenceCursor<Storage_, ConflictPolicy_, DBClass_>;
+  using ConcreteDBImpl = _ConfluenceDB<MainDBImpl>;
+  using Cursor = ConfluenceCursor<Storage_, DBClass_>;
   template <typename AnyStorage>
-  using DBWrapper = ConfluenceDB<AnyStorage, ConflictPolicy_, DBClass_>;
+  using DBWrapper = ConfluenceDB<AnyStorage, DBClass_>;
   template <typename AnyStorageImpl>
   using DBImpl = DBClass_<AnyStorageImpl>;
 
@@ -206,11 +204,6 @@ class ConfluenceDB {
 
   // --- Lifecycle ---
 
-  // Merges tributaries that currently meet merge criteria.
-  void merge_eligible_tributaries() {
-    _assert_initialized();
-    _impl->merge_eligible_tributaries();
-  }
   // Performs synchronous merge of threshold- or idle-eligible tributaries.
   void merge_now() {
     _assert_initialized();
@@ -249,38 +242,15 @@ class ConfluenceDB {
 
 template <typename Traits>
 class MapStorage_<Traits>::ConfluenceDB
-    : public ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                    _DefaultConflictPolicy,
-                                    ::leaves::_DB> {
+    : public ::leaves::ConfluenceDB<MapStorage_<Traits>, ::leaves::_DB> {
  public:
-  using Base = ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                      _DefaultConflictPolicy,
-                                      ::leaves::_DB>;
+  using Base = ::leaves::ConfluenceDB<MapStorage_<Traits>, ::leaves::_DB>;
   template <typename AnyStorage>
   using DBWrapper = typename AnyStorage::ConfluenceDB;
   template <typename AnyStorageImpl>
   using DBImpl = ::leaves::_DB<AnyStorageImpl>;
 
   ConfluenceDB() = default;
-  using Base::Base;
-};
-
-template <typename Traits>
-template <typename ConflictPolicy_>
-class MapStorage_<Traits>::ConfluenceDB_
-    : public ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                    ConflictPolicy_,
-                                    ::leaves::_DB> {
- public:
-  using Base = ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                      ConflictPolicy_,
-                                      ::leaves::_DB>;
-  template <typename AnyStorage>
-  using DBWrapper = typename AnyStorage::template ConfluenceDB_<ConflictPolicy_>;
-  template <typename AnyStorageImpl>
-  using DBImpl = ::leaves::_DB<AnyStorageImpl>;
-
-  ConfluenceDB_() = default;
   using Base::Base;
 };
 

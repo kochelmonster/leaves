@@ -7,10 +7,8 @@
 namespace leaves {
 
 struct ConfluenceReplicationDB {
-  template <typename Storage_,
-            typename ConflictPolicy_ = _DefaultConflictPolicy>
-  using DBWrapper =
-      ConfluenceDB<Storage_, ConflictPolicy_, _ReplicationDB>;
+  template <typename Storage_>
+  using DBWrapper = ConfluenceDB<Storage_, _ReplicationDB>;
 
   template <typename StorageImpl_>
   using DBImpl = _ReplicationDB<StorageImpl_>;
@@ -18,12 +16,10 @@ struct ConfluenceReplicationDB {
 
 template <typename Traits>
 class MapStorage_<Traits>::ConfluenceReplicationDB
-    : public ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                    _DefaultConflictPolicy,
-                                    ::leaves::_ReplicationDB> {
+  : public ::leaves::ConfluenceDB<MapStorage_<Traits>,
+                  ::leaves::_ReplicationDB> {
  public:
   using Base = ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                      _DefaultConflictPolicy,
                                       ::leaves::_ReplicationDB>;
   template <typename AnyStorage>
   using DBWrapper = typename AnyStorage::ConfluenceReplicationDB;
@@ -31,26 +27,6 @@ class MapStorage_<Traits>::ConfluenceReplicationDB
   using DBImpl = ::leaves::_ReplicationDB<AnyStorageImpl>;
 
   ConfluenceReplicationDB() = default;
-  using Base::Base;
-};
-
-template <typename Traits>
-template <typename ConflictPolicy_>
-class MapStorage_<Traits>::ConfluenceReplicationDB_
-    : public ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                    ConflictPolicy_,
-                                    ::leaves::_ReplicationDB> {
- public:
-  using Base = ::leaves::ConfluenceDB<MapStorage_<Traits>,
-                                      ConflictPolicy_,
-                                      ::leaves::_ReplicationDB>;
-  template <typename AnyStorage>
-    using DBWrapper =
-      typename AnyStorage::template ConfluenceReplicationDB_<ConflictPolicy_>;
-  template <typename AnyStorageImpl>
-  using DBImpl = ::leaves::_ReplicationDB<AnyStorageImpl>;
-
-  ConfluenceReplicationDB_() = default;
   using Base::Base;
 };
 

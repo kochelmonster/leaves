@@ -445,7 +445,7 @@ struct _ReplicationDB
       std::lock_guard<SpinLock> guard(this->_header->txn_ref_lock);
       uint64_t htxn_off = hc.hashed_txn_offset.load(std::memory_order_acquire);
       if (htxn_off) {
-        offset_t off(htxn_off);
+        offset_t off(htxn_off & ~offset_t::RELATIVE_FLAG);
         pinned = this->template resolve<Transaction>(&off);
         pinned->refs.fetch_add(1);
       }

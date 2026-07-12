@@ -25,7 +25,7 @@ namespace leaves {
 struct JSAspect : public DefaultAspect {
   static constexpr size_t big_meta_size = 0;
 
-  struct CursorContext {
+  struct CursorContext : DefaultAspect::CursorContext {
     emscripten::val js_context{emscripten::val::undefined()};
     std::string write_buf;  // scratch buffer for value transformation
   };
@@ -61,7 +61,8 @@ struct JSAspect : public DefaultAspect {
       auto js_val = emscripten::val(emscripten::typed_memory_view(
           value.size(), reinterpret_cast<const uint8_t*>(value.data())));
       auto js_ctx = ctx.js_context;
-      auto result = _callbacks.call<emscripten::val>("onWrite", js_key, js_val, js_ctx);
+      auto result =
+          _callbacks.call<emscripten::val>("onWrite", js_key, js_val, js_ctx);
       if (result.as<bool>()) {
         std::string r = result.as<std::string>();
         ctx.write_buf = std::move(r);
@@ -71,8 +72,8 @@ struct JSAspect : public DefaultAspect {
     return value;
   }
 
-  Slice on_read(const Slice& key, const Slice& data,
-                const Slice& big_meta, CursorContext& ctx) {
+  Slice on_read(const Slice& key, const Slice& data, const Slice& big_meta,
+                CursorContext& ctx) {
     if (_has("onRead")) {
       auto js_key = emscripten::val(emscripten::typed_memory_view(
           key.size(), reinterpret_cast<const uint8_t*>(key.data())));
@@ -81,7 +82,8 @@ struct JSAspect : public DefaultAspect {
       auto js_meta = emscripten::val(emscripten::typed_memory_view(
           big_meta.size(), reinterpret_cast<const uint8_t*>(big_meta.data())));
       auto js_ctx = ctx.js_context;
-      auto result = _callbacks.call<emscripten::val>("onRead", js_key, js_data, js_meta, js_ctx);
+      auto result = _callbacks.call<emscripten::val>("onRead", js_key, js_data,
+                                                     js_meta, js_ctx);
       if (result.as<bool>()) {
         std::string r = result.as<std::string>();
         ctx.write_buf = std::move(r);
@@ -108,7 +110,8 @@ struct JSAspect : public DefaultAspect {
       auto js_key = emscripten::val(emscripten::typed_memory_view(
           key.size(), reinterpret_cast<const uint8_t*>(key.data())));
       auto js_ctx = ctx.js_context;
-      auto result = _callbacks.call<emscripten::val>("initBigMeta", js_key, js_ctx);
+      auto result =
+          _callbacks.call<emscripten::val>("initBigMeta", js_key, js_ctx);
       if (result.as<bool>()) {
         std::string r = result.as<std::string>();
         size_t n = std::min(r.size(), size_t(8));
@@ -121,36 +124,43 @@ struct JSAspect : public DefaultAspect {
   // Cursor-level transaction join points
   // -----------------------------------------------------------------
 
-  template <typename DB, typename Ctx>
-  bool before_start_transaction(DB&, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  bool before_start_transaction(DB&, TransactionOrigin origin,
+                                CursorContext& ctx) {
     if (_has("beforeStartTransaction")) {
       auto js_origin = emscripten::val(_origin_str(origin));
-      return _callbacks.call<bool>("beforeStartTransaction", js_origin, _js_ctx(ctx));
+      return _callbacks.call<bool>("beforeStartTransaction", js_origin,
+                                   _js_ctx(ctx));
     }
     return true;
   }
 
-  template <typename DB, typename Ctx>
-  void on_start_transaction(DB&, tid_t tid, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  void on_start_transaction(DB&, tid_t tid, TransactionOrigin origin,
+                            CursorContext& ctx) {
     if (_has("onStartTransaction")) {
       auto js_origin = emscripten::val(_origin_str(origin));
-      _callbacks.call<void>("onStartTransaction", emscripten::val(uint64_t(tid)),
-                            js_origin, _js_ctx(ctx));
+      _callbacks.call<void>("onStartTransaction",
+                            emscripten::val(uint64_t(tid)), js_origin,
+                            _js_ctx(ctx));
     }
   }
 
-  template <typename DB, typename Ctx>
-  bool before_rollback(DB&, tid_t tid, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  bool before_rollback(DB&, tid_t tid, TransactionOrigin origin,
+                       CursorContext& ctx) {
     if (_has("beforeRollback")) {
       auto js_origin = emscripten::val(_origin_str(origin));
-      return _callbacks.call<bool>("beforeRollback", emscripten::val(uint64_t(tid)),
-                                    js_origin, _js_ctx(ctx));
+      return _callbacks.call<bool>("beforeRollback",
+                                   emscripten::val(uint64_t(tid)), js_origin,
+                                   _js_ctx(ctx));
     }
     return true;
   }
 
-  template <typename DB, typename Ctx>
-  void on_rollback(DB&, tid_t tid, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  void on_rollback(DB&, tid_t tid, TransactionOrigin origin,
+                   CursorContext& ctx) {
     if (_has("onRollback")) {
       auto js_origin = emscripten::val(_origin_str(origin));
       _callbacks.call<void>("onRollback", emscripten::val(uint64_t(tid)),
@@ -158,8 +168,8 @@ struct JSAspect : public DefaultAspect {
     }
   }
 
-  template <typename DB, typename Ctx>
-  bool before_commit(DB&, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  bool before_commit(DB&, TransactionOrigin origin, CursorContext& ctx) {
     if (_has("beforeCommit")) {
       auto js_origin = emscripten::val(_origin_str(origin));
       return _callbacks.call<bool>("beforeCommit", js_origin, _js_ctx(ctx));
@@ -167,8 +177,8 @@ struct JSAspect : public DefaultAspect {
     return true;
   }
 
-  template <typename DB, typename Ctx>
-  void on_commit(DB&, TransactionOrigin origin, Ctx& ctx) {
+  template <typename DB>
+  void on_commit(DB&, TransactionOrigin origin, CursorContext& ctx) {
     if (_has("onCommit")) {
       auto js_origin = emscripten::val(_origin_str(origin));
       _callbacks.call<void>("onCommit", js_origin, _js_ctx(ctx));
@@ -179,8 +189,7 @@ struct JSAspect : public DefaultAspect {
   // Cursor navigation join points
   // -----------------------------------------------------------------
 
-  template <typename Ctx>
-  bool before_find(const Slice& key, Ctx& ctx) {
+  bool before_find(const Slice& key, CursorContext& ctx) {
     if (_has("beforeFind")) {
       auto js_key = emscripten::val(emscripten::typed_memory_view(
           key.size(), reinterpret_cast<const uint8_t*>(key.data())));
@@ -189,8 +198,7 @@ struct JSAspect : public DefaultAspect {
     return true;
   }
 
-  template <typename Ctx>
-  void on_find(const Slice& key, bool found, Ctx& ctx) {
+  void on_find(const Slice& key, bool found, CursorContext& ctx) {
     if (_has("onFind")) {
       auto js_key = emscripten::val(emscripten::typed_memory_view(
           key.size(), reinterpret_cast<const uint8_t*>(key.data())));
@@ -198,15 +206,13 @@ struct JSAspect : public DefaultAspect {
     }
   }
 
-  template <typename Ctx>
-  void on_next(bool has_next, Ctx& ctx) {
+  void on_next(bool has_next, CursorContext& ctx) {
     if (_has("onNext")) {
       _callbacks.call<void>("onNext", has_next, _js_ctx(ctx));
     }
   }
 
-  template <typename Ctx>
-  void on_prev(bool has_prev, Ctx& ctx) {
+  void on_prev(bool has_prev, CursorContext& ctx) {
     if (_has("onPrev")) {
       _callbacks.call<void>("onPrev", has_prev, _js_ctx(ctx));
     }
@@ -267,8 +273,9 @@ struct JSAspect : public DefaultAspect {
           dst.size(), reinterpret_cast<const uint8_t*>(dst.data())));
       auto js_src = emscripten::val(emscripten::typed_memory_view(
           src.size(), reinterpret_cast<const uint8_t*>(src.data())));
-      return _callbacks.call<bool>("mayMergeOverwrite", js_key, js_dst, dst_is_big,
-                                    js_src, src_is_big, _js_ctx(ctx));
+      return _callbacks.call<bool>("mayMergeOverwrite", js_key, js_dst,
+                                   dst_is_big, js_src, src_is_big,
+                                   _js_ctx(ctx));
     }
     return true;
   }
@@ -280,7 +287,8 @@ struct JSAspect : public DefaultAspect {
           key.size(), reinterpret_cast<const uint8_t*>(key.data())));
       auto js_val = emscripten::val(emscripten::typed_memory_view(
           value.size(), reinterpret_cast<const uint8_t*>(value.data())));
-      return _callbacks.call<bool>("mayMergeAdd", js_key, js_val, is_big, _js_ctx(ctx));
+      return _callbacks.call<bool>("mayMergeAdd", js_key, js_val, is_big,
+                                   _js_ctx(ctx));
     }
     return true;
   }
@@ -292,7 +300,8 @@ struct JSAspect : public DefaultAspect {
           key.size(), reinterpret_cast<const uint8_t*>(key.data())));
       auto js_meta = emscripten::val(emscripten::typed_memory_view(
           meta.size(), reinterpret_cast<const uint8_t*>(meta.data())));
-      return _callbacks.call<bool>("mayMergeDelete", js_key, js_meta, _js_ctx(ctx));
+      return _callbacks.call<bool>("mayMergeDelete", js_key, js_meta,
+                                   _js_ctx(ctx));
     }
     return true;
   }
@@ -300,23 +309,18 @@ struct JSAspect : public DefaultAspect {
  private:
   static const char* _origin_str(TransactionOrigin o) {
     switch (o) {
-      case TransactionOrigin::user: return "user";
-      case TransactionOrigin::merge: return "merge";
-      case TransactionOrigin::defrag: return "defrag";
+      case TransactionOrigin::user:
+        return "user";
+      case TransactionOrigin::merge:
+        return "merge";
+      case TransactionOrigin::defrag:
+        return "defrag";
     }
     return "unknown";
   }
 
-  // Extract the JS context from either CursorContext or another context type.
-  // For non-CursorContext types (used by DB-level hooks), we return undefined.
-  static emscripten::val _js_ctx(CursorContext& ctx) {
-    return ctx.js_context;
-  }
-
-  template <typename Ctx>
-  static emscripten::val _js_ctx(Ctx&) {
-    return emscripten::val::undefined();
-  }
+  // Extract the JS context from CursorContext.
+  static emscripten::val _js_ctx(CursorContext& ctx) { return ctx.js_context; }
 };
 
 }  // namespace leaves

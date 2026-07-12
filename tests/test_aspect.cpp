@@ -14,11 +14,10 @@
 
 #include <blake3.h>
 
-#include "leaves/mmap.hpp"
-#include "leaves/mmap.hpp"
-#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
+#include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/replication/_replication_fsm.hpp"
+#include "leaves/mmap.hpp"
 
 using namespace leaves;
 
@@ -48,7 +47,7 @@ void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
 struct TestAspect : public DefaultAspect {
   static constexpr size_t big_meta_size = 0;
 
-  struct CursorContext {
+  struct CursorContext : DefaultAspect::CursorContext {
     int write_count = 0;   // counts on_write calls
     int read_count = 0;    // counts on_read calls
     int delete_count = 0;  // counts may_delete calls
@@ -63,7 +62,7 @@ struct TestAspect : public DefaultAspect {
     bool reject_commit = false;
     bool reject_rollback = false;
     bool reject_find = false;
-    std::string write_buf; // scratch buffer for value transformation
+    std::string write_buf;  // scratch buffer for value transformation
   };
 
   void init_cursor_context(CursorContext& ctx) {
@@ -91,8 +90,8 @@ struct TestAspect : public DefaultAspect {
     return Slice(ctx.write_buf);
   }
 
-  Slice on_read(const Slice& key, const Slice& data,
-                const Slice& big_meta, CursorContext& ctx) {
+  Slice on_read(const Slice& key, const Slice& data, const Slice& big_meta,
+                CursorContext& ctx) {
     ctx.read_count++;
     // Strip the TAG: prefix if present
     if (data.size() >= 4 && std::memcmp(data.data(), "TAG:", 4) == 0) {
@@ -112,8 +111,7 @@ struct TestAspect : public DefaultAspect {
 
   // --- Merge join points ---
   bool may_merge_overwrite(const Slice& key, const Slice& dst, bool dst_is_big,
-                           const Slice& src, bool src_is_big,
-                           CursorContext&) {
+                           const Slice& src, bool src_is_big, CursorContext&) {
     std::string k(key.data(), key.size());
     return k.find("locked_") != 0;
   }
@@ -124,8 +122,7 @@ struct TestAspect : public DefaultAspect {
     return k.find("blocked_") != 0;
   }
 
-  bool may_merge_delete(const Slice& key, const Slice& meta,
-                        CursorContext&) {
+  bool may_merge_delete(const Slice& key, const Slice& meta, CursorContext&) {
     std::string k(key.data(), key.size());
     return k.find("pinned_") != 0;
   }
@@ -143,7 +140,8 @@ struct TestAspect : public DefaultAspect {
   }
 
   template <typename DB>
-  void on_start_transaction(DB&, tid_t, TransactionOrigin origin, CursorContext& ctx) {
+  void on_start_transaction(DB&, tid_t, TransactionOrigin origin,
+                            CursorContext& ctx) {
     ctx.start_txn_count++;
     ctx.last_origin = origin;
   }
@@ -173,13 +171,9 @@ struct TestAspect : public DefaultAspect {
     ctx.find_count++;
   }
 
-  void on_next(bool has_next, CursorContext& ctx) {
-    ctx.next_count++;
-  }
+  void on_next(bool has_next, CursorContext& ctx) { ctx.next_count++; }
 
-  void on_prev(bool has_prev, CursorContext& ctx) {
-    ctx.prev_count++;
-  }
+  void on_prev(bool has_prev, CursorContext& ctx) { ctx.prev_count++; }
 };
 
 // =============================================================================
@@ -189,7 +183,7 @@ struct TestAspect : public DefaultAspect {
 struct BigMetaAspect : public DefaultAspect {
   static constexpr size_t big_meta_size = 8;
 
-  struct CursorContext {
+  struct CursorContext : DefaultAspect::CursorContext {
     std::string write_buf;
   };
 
@@ -199,8 +193,8 @@ struct BigMetaAspect : public DefaultAspect {
     return value;
   }
 
-  Slice on_read(const Slice& key, const Slice& data,
-                const Slice& big_meta, CursorContext& ctx) {
+  Slice on_read(const Slice& key, const Slice& data, const Slice& big_meta,
+                CursorContext& ctx) {
     // If big_meta present, prepend it to the returned value so tests
     // can verify the metadata was stored.
     if (big_meta.size() > 0) {
@@ -219,10 +213,16 @@ struct BigMetaAspect : public DefaultAspect {
     std::memcpy(meta_ptr, "BMETA!!!", 8);
   }
 
-  bool may_merge_overwrite(const Slice&, const Slice&, bool,
-                           const Slice&, bool, CursorContext&) { return true; }
-  bool may_merge_add(const Slice&, const Slice&, bool, CursorContext&) { return true; }
-  bool may_merge_delete(const Slice&, const Slice&, CursorContext&) { return true; }
+  bool may_merge_overwrite(const Slice&, const Slice&, bool, const Slice&, bool,
+                           CursorContext&) {
+    return true;
+  }
+  bool may_merge_add(const Slice&, const Slice&, bool, CursorContext&) {
+    return true;
+  }
+  bool may_merge_delete(const Slice&, const Slice&, CursorContext&) {
+    return true;
+  }
 };
 
 // =============================================================================
@@ -240,8 +240,7 @@ struct _BigMetaTraits : public _MemoryMapTraits {
 };
 
 // For replication tests — uses plain _MemoryMapTraits (no hash on data nodes)
-struct _ReplicationAspectTraits
-    : public _MemoryMapTraits {
+struct _ReplicationAspectTraits : public _MemoryMapTraits {
   typedef TestAspect Aspect;
 };
 
@@ -258,10 +257,8 @@ using BigMetaMMap = _MemoryMapFile<_BigMetaTraits>;
 // Replication storage with TestAspect
 template <typename Traits_>
 struct _AspectReplicationMMapFile
-    : public _MemoryMapFile<Traits_,
-                            _AspectReplicationMMapFile<Traits_>> {
-  using Base = _MemoryMapFile<Traits_,
-                              _AspectReplicationMMapFile<Traits_>>;
+    : public _MemoryMapFile<Traits_, _AspectReplicationMMapFile<Traits_>> {
+  using Base = _MemoryMapFile<Traits_, _AspectReplicationMMapFile<Traits_>>;
   using DB = _ReplicationDB<_AspectReplicationMMapFile>;
 
   _AspectReplicationMMapFile(const char* path, size_t map_size = 2 * G)
@@ -271,13 +268,15 @@ struct _AspectReplicationMMapFile
     // _dbs.clear() and stop_pool() handled by ~_MemoryMapFile
   }
 
-  template <template <typename> class DBClass = _ReplicationDB, typename... Args>
+  template <template <typename> class DBClass = _ReplicationDB,
+            typename... Args>
   DBClass<_AspectReplicationMMapFile>* open(const char* name, Args&&... args) {
     return Base::template open<DBClass>(name, std::forward<Args>(args)...);
   }
 };
 
-using AspectReplicationMMap = _AspectReplicationMMapFile<_ReplicationAspectTraits>;
+using AspectReplicationMMap =
+    _AspectReplicationMMapFile<_ReplicationAspectTraits>;
 
 // =============================================================================
 // Test helpers
@@ -333,9 +332,8 @@ struct TestEvents : ReplicationEvents {
 };
 
 template <typename Sender, typename Receiver>
-static void run_protocol(Sender& sender, Receiver& receiver,
-                         TestTransport& st, TestTransport& rt,
-                         int max_rounds = 100) {
+static void run_protocol(Sender& sender, Receiver& receiver, TestTransport& st,
+                         TestTransport& rt, int max_rounds = 100) {
   for (int i = 0; i < max_rounds; i++) {
     bool activity = false;
     while (rt.has_message()) {
@@ -682,8 +680,7 @@ BOOST_AUTO_TEST_CASE(test_big_value_has_inline_meta) {
   BOOST_REQUIRE_GE(val.size(), 8u);
   BOOST_CHECK_EQUAL(std::string(val.data(), 8), "BMETA!!!");
   BOOST_CHECK_EQUAL(val.size(), 8 + big_val.size());
-  BOOST_CHECK_EQUAL(
-      std::string(val.data() + 8, big_val.size()), big_val);
+  BOOST_CHECK_EQUAL(std::string(val.data() + 8, big_val.size()), big_val);
 }
 
 BOOST_AUTO_TEST_CASE(test_small_value_no_big_meta) {

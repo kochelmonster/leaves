@@ -22,33 +22,14 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   using DB = TDB<MapStorage_, _DB>;
   class ReplicationDB;
   class ConfluenceDB;
-  template <typename ConflictPolicy_>
-  class ConfluenceDB_;
   class ConfluenceReplicationDB;
-  template <typename ConflictPolicy_>
-  class ConfluenceReplicationDB_;
-
-  template <typename T>
-  struct _is_confluence_db : std::false_type {};
-
-  template <typename ConflictPolicy_>
-  struct _is_confluence_db<ConfluenceDB_<ConflictPolicy_>> : std::true_type {};
-
-  template <typename T>
-  struct _is_confluence_replication_db : std::false_type {};
-
-  template <typename ConflictPolicy_>
-  struct _is_confluence_replication_db<
-      ConfluenceReplicationDB_<ConflictPolicy_>> : std::true_type {};
 
   template <typename T>
   struct _is_allowed_dbclass
       : std::bool_constant<std::is_same_v<T, DB> ||
                            std::is_same_v<T, ReplicationDB> ||
                            std::is_same_v<T, ConfluenceDB> ||
-                           std::is_same_v<T, ConfluenceReplicationDB> ||
-                           _is_confluence_db<T>::value ||
-                           _is_confluence_replication_db<T>::value> {};
+                 std::is_same_v<T, ConfluenceReplicationDB>> {};
 
   // Direct constructor variant; prefer create() for shared-pointer ownership.
   // map_size is the virtual-address reservation limit.
@@ -65,9 +46,7 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
         _is_allowed_dbclass<DBClass>::value,
         "MapStorage::open only accepts MapStorage facade types: "
         "MapStorage::DB, MapStorage::ReplicationDB, MapStorage::ConfluenceDB, "
-        "MapStorage::ConfluenceDB_<Policy>, "
-        "MapStorage::ConfluenceReplicationDB, "
-        "MapStorage::ConfluenceReplicationDB_<Policy>.");
+        "MapStorage::ConfluenceReplicationDB.");
     using Wrapper = typename DBClass::template DBWrapper<SelfStorage>;
     return Wrapper(this->shared_from_this(), name, std::forward<Args>(args)...);
   }
@@ -79,9 +58,7 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
         _is_allowed_dbclass<DBClass>::value,
         "MapStorage::remove only accepts MapStorage facade types: "
         "MapStorage::DB, MapStorage::ReplicationDB, MapStorage::ConfluenceDB, "
-        "MapStorage::ConfluenceDB_<Policy>, "
-        "MapStorage::ConfluenceReplicationDB, "
-        "MapStorage::ConfluenceReplicationDB_<Policy>.");
+        "MapStorage::ConfluenceReplicationDB.");
     _storage->template remove<DBClass::template DBImpl>(name);
   }
 

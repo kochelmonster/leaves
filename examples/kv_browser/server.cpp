@@ -147,8 +147,8 @@ struct ServerSyncNotifier {
 static ServerSyncNotifier g_sync_notifier;
 
 struct ServerAspect : public DefaultAspect {
-  template <typename DB, typename Ctx>
-  void on_commit(DB& db, TransactionOrigin, Ctx&) {
+  template <typename DB>
+  void on_commit(DB& db, TransactionOrigin, CursorContext&) {
     if (g_commit_origin_client_id <= 0) {
       std::cerr << "[server] on_commit skipped (origin="
                 << g_commit_origin_client_id << ")\n";

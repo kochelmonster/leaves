@@ -164,7 +164,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_merge_into_main) {
 
   // Force merge all tributaries (set max age=0 so any written slot qualifies)
   cdb->set_max_attached_age_ms(0);
-  cdb->merge_eligible_tributaries();
+  cdb->merge_now();
 
   // After merge the data should be in the main DB
   auto cursor = cdb->create_cursor();
@@ -341,7 +341,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_delete_then_merge) {
 
   // Force merge — deletion should propagate to main DB
   cdb->set_max_attached_age_ms(0);
-  cdb->merge_eligible_tributaries();
+  cdb->merge_now();
 
   auto cursor = cdb->create_cursor();
   cursor->find(Slice("k"));
@@ -512,7 +512,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_header_area_not_freed) {
       write_kv(*cdb, "k" + std::to_string(cycle * 5 + i),
                std::string(200, 'x'));
     }
-    cdb->merge_eligible_tributaries();
+    cdb->merge_now();
     check_pool_integrity(cycle);
   }
 }
@@ -610,7 +610,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
       if (!kEnableMerger) return;
       while (!stop.load(std::memory_order_relaxed)) {
         try {
-          cdb.merge_eligible_tributaries();
+          cdb.merge_now();
         } catch (...) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -693,7 +693,13 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
             "-ex 'print _lock' "
             "-ex detach 2>&1 | tee /tmp/leaves_deadlock_stacks.txt",
             (int)getpid());
-        std::system(cmd);
+        auto result = std::system(cmd);
+        if (result != 0) {
+          std::fprintf(stderr, "gdb failed with exit code %d\n", result);
+        } else {
+          std::fprintf(stderr,
+              "Deadlock stacks dumped to /tmp/leaves_deadlock_stacks.txt\n");
+        }
       }
       const char* abrt = std::getenv("LEAVES_DEADLOCK_ABORT");
       if (abrt && *abrt && *abrt != '0') std::abort();
