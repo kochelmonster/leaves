@@ -55,6 +55,11 @@ jobs:
             Write-Error "Expected vendored Blake3 at BLAKE3/c but it was not found."
           }
 
+      - name: Install Boost headers (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y libboost-dev
+
       - name: Install Boost headers (macOS)
         if: runner.os == 'macOS'
         shell: bash
