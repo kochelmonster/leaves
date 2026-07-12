@@ -64,7 +64,7 @@ int main() {
 
 ## `MapStorage` / `MapStorage_<Traits>`
 
-`MapStorage` (an alias for `MapStorage_<MapTraits>`) manages a memory-mapped `.lvs` file and owns all databases inside it. MapStorage is multi-thread and multi-process safe (multiple processes can open the same `.lvs` file concurrently). `MapStorage` is avalable by including `mmap.hpp`.
+`MapStorage` (an alias for `MapStorage_<MapTraits>`) manages a memory-mapped `.lvs` file and owns all databases inside it. MapStorage is multi-thread and multi-process safe (multiple processes can open the same `.lvs` file concurrently). `MapStorage` is available by including `mmap.hpp`.
 
 - `static storage_ptr create(const char* path, size_t map_size = 4 * G)`
   Creates and initializes storage backed by `path`. `map_size` is the virtual-address reservation limit.
@@ -106,10 +106,10 @@ A lightweight handle that represents one named database inside a storage file. O
   Returns the owning storage shared pointer.
 
 - `auto& aspect()`
-  Returns mutable access to the database aspect object.
+  Returns mutable access to the database aspect object (see [Aspects](#aspects)).
 
 - `const auto& aspect() const`
-  Returns read-only access to the database aspect object.
+  Returns read-only access to the database aspect object (see [Aspects](#aspects)).
 
 - `auto txn() const`
   Returns the current transaction descriptor.
@@ -172,7 +172,7 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
   Refreshes cursor view after out-of-band mutation.
 
 - `bool start_transaction(bool non_blocking = false, bool use_wal = false)`
-  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting, and `use_wal = true` for WAL semantics. By default each `value()` / `remove()` call is starts a transaction if none is active. Use `start_transaction()` to group multiple operations into a single transaction.
+  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting, and `use_wal = true` for WAL semantics. By default each `value()` / `remove()` call starts a transaction if none is active. Use `start_transaction()` to group multiple operations into a single transaction.
 
 - `tid_t prepare_commit(bool sync = false)`
   Moves the transaction to prepared state and returns the prepared transaction id, or `0` if no transaction is active for this cursor.
@@ -190,10 +190,156 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
   Returns the transaction id associated with the cursor read snapshot.
 
 - `auto& aspect_context()`
-  Returns mutable cursor-level aspect context.
+  Returns mutable cursor-level aspect context (see [Aspects](#aspects)).
 
 - `const auto& aspect_context() const`
-  Returns read-only cursor-level aspect context.
+  Returns read-only cursor-level aspect context (see [Aspects](#aspects)).
+
+---
+
+## Aspects
+
+Aspects are Leaves extension points for cross-cutting behavior such as value
+transformation, validation, transaction policy, merge policy, and metrics.
+They are configured through storage traits and are enabled for all cursors and
+operations in a database.
+
+### Ownership and lifecycle
+
+- One aspect instance exists per database object.
+- One cursor context (`Aspect::CursorContext`) exists per cursor.
+- `db.aspect()` gives access to the shared database aspect object.
+- `cursor.aspect_context()` gives access to that cursor's per-cursor context.
+- `DefaultAspect` is the no-op baseline implementation.
+
+### Configure a custom Aspect
+
+```cpp
+#include <cstring>
+#include <string>
+#include <leaves/mmap.hpp>
+
+struct MyAspect : leaves::DefaultAspect {
+  struct CursorContext : DefaultAspect::CursorContext {
+    std::string scratch;
+  };
+
+  void init_cursor_context(CursorContext& ctx) {
+    ctx.scratch.clear();
+  }
+
+  leaves::Slice on_write(const leaves::Slice&, const leaves::Slice& value,
+                         CursorContext& ctx) {
+    // Example transform: prefix stored payload.
+    ctx.scratch.assign("ENC:");
+    ctx.scratch.append(value.data(), value.size());
+    return leaves::Slice(ctx.scratch);
+  }
+
+  leaves::Slice on_read(const leaves::Slice&, const leaves::Slice& data,
+                        const leaves::Slice&, CursorContext&) {
+    if (data.size() >= 4 && std::memcmp(data.data(), "ENC:", 4) == 0) {
+      return leaves::Slice(data.data() + 4, data.size() - 4);
+    }
+    return data;
+  }
+
+  bool may_delete(const leaves::Slice& key, const leaves::Slice&,
+                  CursorContext&) {
+    return key.string() != "protected";
+  }
+};
+
+struct MyTraits : leaves::MapTraits {
+  using Aspect = MyAspect;
+};
+
+int main() {
+  auto storage = leaves::MapStorage_<MyTraits>::create("data.lvs");
+  auto db = storage->open("main");
+  auto cursor = db.cursor();
+
+  cursor.find(leaves::Slice("k"));
+  cursor.value(leaves::Slice("v"));
+  cursor.commit();
+
+  // Shared DB-level aspect object.
+  auto& db_aspect = db.aspect();
+  (void)db_aspect;
+
+  // Per-cursor mutable context.
+  auto& ctx = cursor.aspect_context();
+  (void)ctx;
+}
+```
+
+### Hook categories
+
+All custom aspects should derive from `leaves::DefaultAspect` and override only
+the hooks they need.
+
+- Cursor read/write/delete hooks
+  - `Slice on_write(const Slice& key, const Slice& value, CursorContext& ctx)`:
+    transform outbound value bytes before storage.
+  - `Slice on_read(const Slice& key, const Slice& data, const Slice& big_meta, CursorContext& ctx)`:
+    transform inbound bytes after read.
+  - `bool may_delete(const Slice& key, const Slice& value, CursorContext& ctx)`:
+    return `false` to veto `remove()`.
+  - `void init_big_meta(const Slice& key, char* meta_ptr, CursorContext& ctx)`:
+    initialize inline metadata for big values.
+
+- Cursor transaction hooks
+  - `template <typename DB> constexpr bool before_start_transaction(DB& db, TransactionOrigin origin, CursorContext& ctx)`:
+    return `false` to veto transaction start.
+  - `template <typename DB> constexpr void on_start_transaction(DB& db, tid_t txn_id, TransactionOrigin origin, CursorContext& ctx)`:
+    post-start notification.
+  - `template <typename DB> constexpr bool before_commit(DB& db, TransactionOrigin origin, CursorContext& ctx)`:
+    return `false` to veto commit.
+  - `template <typename DB> constexpr void on_commit(DB& db, TransactionOrigin origin, CursorContext& ctx)`:
+    post-commit notification.
+  - `template <typename DB> constexpr bool before_rollback(DB& db, tid_t txn_id, TransactionOrigin origin, CursorContext& ctx)`:
+    return `false` to veto rollback.
+  - `template <typename DB> constexpr void on_rollback(DB& db, tid_t txn_id, TransactionOrigin origin, CursorContext& ctx)`:
+    post-rollback notification.
+
+- Cursor navigation hooks
+  - `constexpr bool before_find(const Slice& key, CursorContext& ctx)`:
+    can veto `find()`.
+  - `constexpr void on_find(const Slice& key, bool found, CursorContext& ctx)`:
+    notification after `find()`.
+  - `constexpr void on_next(bool has_next, CursorContext& ctx)`:
+    notification after `next()`.
+  - `constexpr void on_prev(bool has_prev, CursorContext& ctx)`:
+    notification after `prev()`.
+
+- DB maintenance hooks
+  - `template <typename DB> constexpr void on_sanitize(DB& db)`:
+    notification during sanitize.
+  - `template <typename DB> constexpr bool before_defrag(DB& db)`:
+    return `false` to veto defrag.
+  - `template <typename DB> constexpr void on_defrag(DB& db)`:
+    notification after defrag.
+  - `template <typename DB> constexpr bool before_reset(DB& db)`:
+    return `false` to veto reset.
+  - `template <typename DB> constexpr void on_reset(DB& db)`:
+    notification after reset.
+
+- Merge policy hooks
+  - `bool may_merge_overwrite(const Slice& key, const Slice& dst, bool dst_is_big, const Slice& src, bool src_is_big, CursorContext& ctx)`:
+    return `false` to reject overwrite merges.
+  - `bool may_merge_add(const Slice& key, const Slice& value, bool is_big, CursorContext& ctx)`:
+    return `false` to reject add merges.
+  - `bool may_merge_delete(const Slice& key, const Slice& meta, CursorContext& ctx)`:
+    return `false` to reject delete merges.
+
+### Hook semantics
+
+- `before_*` and `may_*` hooks are gatekeepers: returning `false` rejects the
+  operation.
+- `on_*` hooks are notifications called after the corresponding operation point.
+- For cursor-level transforms, return `Slice` values that reference memory with
+  a lifetime valid for the call (for example, data stored in
+  `CursorContext::scratch`).
 
 ---
 
@@ -222,7 +368,8 @@ storage->remove<leaves::MapStorage::ConfluenceReplicationDB>("events_repl");
 ```
 
 Conflict resolution in Confluence uses the database Aspect hooks, the same as
-replication. Override merge hooks in your `Traits::Aspect`:
+replication. Override merge hooks in your `Traits::Aspect` (see
+[Aspects](#aspects)):
 
 ```cpp
 struct MyAspect : leaves::DefaultAspect {
@@ -328,10 +475,10 @@ For a high-level overview see [docs/replication/replication.md](../replication/r
 auto storage = leaves::MapStorage::create("data.lvs");
 
 // Open or create replication-enabled database "repl".
-auto rdb = storage->open<leaves::MapStore::ReplicationDB>("repl");
+auto rdb = storage->open<leaves::MapStorage::ReplicationDB>("repl");
 
 // Remove replication-enabled database "repl".
-storage->remove<leaves::MapStore::ReplicationDB>("repl");
+storage->remove<leaves::MapStorage::ReplicationDB>("repl");
 ```
 
 ### `ReplicationState`
