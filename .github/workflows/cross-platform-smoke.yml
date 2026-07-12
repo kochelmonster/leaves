@@ -72,9 +72,11 @@ jobs:
           choco install boost-msvc-14.3 -y --no-progress
           $boostDir = Get-ChildItem "C:\local" -Filter "boost_*" -Directory |
             Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
-          if ($boostDir) {
-            "BOOST_ROOT=$boostDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (-not $boostDir) {
+            Write-Error "Could not locate a Boost installation under C:\local after choco install."
+            exit 1
           }
+          "BOOST_ROOT=$boostDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Configure (Linux/macOS)
         if: runner.os != 'Windows'
