@@ -315,7 +315,7 @@ struct _HashUpdater {
       // diverge_byte is the next byte in the hash prefix after common
       uint8_t diverge_byte = hash_prefix[common];
 
-      if (!data_trie->isset(diverge_byte)) {
+      if (!(data_trie->isset)(diverge_byte)) {
         // Data doesn't have a branch matching hash's next prefix byte
         // Hash is completely stale - replace entirely
         free_hash_subtree(*hash_offset_ptr);
@@ -393,7 +393,7 @@ struct _HashUpdater {
         }
       });
 
-      if (hash_trie->isset(next_byte)) {
+      if ((hash_trie->isset)(next_byte)) {
         // Sync data with hash's matching branch child.
         // Don't skip the branch byte on either side — the recursive call
         // will match it in the common prefix and append it to key_path.
@@ -494,7 +494,7 @@ struct _HashUpdater {
     // Hash-only branches are implicitly pruned (not in offsets_buf)
     // Free them
     hash_trie->for_each_branch([&](int k, auto* off) {
-      if (!data_trie->isset(k)) {
+      if (!(data_trie->isset)(k)) {
         free_hash_subtree(*off);
       }
     });
