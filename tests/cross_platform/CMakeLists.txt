@@ -12,7 +12,11 @@ endif()
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../BLAKE3/c
                  ${CMAKE_CURRENT_BINARY_DIR}/blake3)
 
-find_package(Boost 1.80 REQUIRED)
+if(APPLE)
+  find_package(Boost 1.80 REQUIRED COMPONENTS process)
+else()
+  find_package(Boost 1.80 REQUIRED)
+endif()
 
 add_executable(leaves_cross_platform_smoke
     main.cpp)
