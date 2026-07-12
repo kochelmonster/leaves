@@ -3196,7 +3196,8 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_shared_storage) {
 // runs on the test thread.
 //
 // Strategy:
-//   - Open a MapConfluenceDB.  merge_write_threshold is set to UINT32_MAX so
+//   - Open a MapStorage::ConfluenceDB. merge_write_threshold is set to
+//     UINT32_MAX so
 //     the writer's release_tributary path leaves finished tributaries ATTACHED
 //     and merges happen only via the explicit merge_all_now() calls below
 //     (which run merge_tributary -> _do_merge inline on the caller's thread).
@@ -3214,7 +3215,7 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_shared_storage) {
 BOOST_AUTO_TEST_CASE(test_merger_repro_bench_confluence_single_thread) {
   MergerPreparation p;
   auto storage = MapStorage::create(TEST_FILE);
-  MapConfluenceDB cdb(storage, "benchmark");
+  MapStorage::ConfluenceDB cdb(storage, "benchmark");
   // Push the threshold so high that release_tributary will always take the
   // FREE branch (no schedule_after) — merges happen only via merge_all_now().
   cdb.set_merge_write_threshold(UINT32_MAX);
@@ -3310,7 +3311,7 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_replay) {
 
   MergerPreparation p;
   auto storage = MapStorage::create(TEST_FILE);
-  MapConfluenceDB cdb(storage, "benchmark");
+  MapStorage::ConfluenceDB cdb(storage, "benchmark");
   cdb.set_merge_write_threshold(UINT32_MAX);
 
   const int BATCH = 1000;  // bench --batch_size=1000

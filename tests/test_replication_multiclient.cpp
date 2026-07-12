@@ -73,10 +73,10 @@ struct SyncResult { bool ok; std::string error; };
 
 static SyncResult sync_bidirectional(
     MapStorage::storage_ptr& server_storage,
-    TDB<MapStorage, _ReplicationDB>& client_db) {
+  MapStorage::ReplicationDB& client_db) {
   // Open fresh from the calling thread — TDB must be used from the thread
   // that creates it; server_storage is shared but opening a DB handle is safe.
-  auto server_db = server_storage->open<_ReplicationDB>("main");
+  auto server_db = server_storage->open<MapStorage::ReplicationDB>("main");
 
   struct Events : ReplicationEvents {
     bool completed = false;
@@ -207,7 +207,7 @@ BOOST_FIXTURE_TEST_CASE(test_three_clients_put_and_remove, Fixture) {
   std::vector<std::string> thread_errors(NUM_CLIENTS);
 
   auto worker = [&](int id) {
-    auto client_db = client_storages[id]->open<_ReplicationDB>("main");
+    auto client_db = client_storages[id]->open<MapStorage::ReplicationDB>("main");
 
     // Fixed seed per client — deterministic key/value sequence for replay
     std::mt19937 rng(static_cast<uint32_t>(0xdeadbeef ^ static_cast<uint32_t>(id)));
@@ -295,7 +295,7 @@ BOOST_FIXTURE_TEST_CASE(test_three_clients_put_and_remove, Fixture) {
 
   // ── Verify server state ───────────────────────────────────────────────────
   {
-    auto server_db = server_storage->open<_ReplicationDB>("main");
+    auto server_db = server_storage->open<MapStorage::ReplicationDB>("main");
     auto c = server_db.cursor();
     std::vector<std::string> server_keys;
     c.first();
@@ -315,7 +315,7 @@ BOOST_FIXTURE_TEST_CASE(test_three_clients_put_and_remove, Fixture) {
 
   // ── Final sync: each client converges to the full server state ────────────
   for (int i = 0; i < NUM_CLIENTS; i++) {
-    auto client_db = client_storages[i]->open<_ReplicationDB>("main");
+    auto client_db = client_storages[i]->open<MapStorage::ReplicationDB>("main");
     {
       std::lock_guard<std::mutex> lock(server_mutex);
       auto r = sync_bidirectional(server_storage, client_db);

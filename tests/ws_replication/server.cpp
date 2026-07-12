@@ -60,7 +60,7 @@ int main(int argc, char* argv[]) {
   {
     // Create source storage and populate with test data
     auto src_storage = MapStorage::create(path);
-    auto src_db = src_storage->open<_ReplicationDB>("testdb");
+    auto src_db = src_storage->open<MapStorage::ReplicationDB>("testdb");
     {
       auto c = src_db.cursor();
       c.start_transaction();

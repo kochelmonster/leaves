@@ -13,12 +13,14 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <type_traits>
 
 #include "leaves/fstore.hpp"
 #include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
-#include "leaves/leaves.hpp"
+#include "leaves/confluence.hpp"
 #include "leaves/mmap.hpp"
+#include "leaves/replication.hpp"
 #include "util/histogram.h"
 #include "util/random.h"
 #include "util/testutil.h"
@@ -203,7 +205,7 @@ class Benchmark {
   // Storage pointers - only one will be non-null based on configuration
   std::shared_ptr<leaves::FileStorage> file_storage_;
   std::shared_ptr<leaves::MapStorage> map_storage_;
-  std::unique_ptr<leaves::MapConfluenceDB> confluence_db_;
+  std::unique_ptr<leaves::MapStorage::ConfluenceDB> confluence_db_;
   bool using_file_storage_;
   bool using_replicating_;
   bool using_confluence_;
@@ -667,7 +669,9 @@ class Benchmark {
     }
 
     if (using_confluence_) {
-      confluence_db_ = std::make_unique<leaves::MapConfluenceDB>(map_storage_, "benchmark");
+      confluence_db_ =
+          std::make_unique<leaves::MapStorage::ConfluenceDB>(
+              map_storage_, "benchmark");
       if (FLAGS_merge_threshold)
         confluence_db_->set_merge_write_threshold(FLAGS_merge_threshold);
     }
@@ -723,8 +727,8 @@ class Benchmark {
                  int value_size, int entries_per_batch) {
     leaves::Slice mkey, mval;
 
-    auto cursor = storage.template open<DBClass>("benchmark").cursor();
-    auto db = storage.template open<DBClass>("benchmark");
+    auto db = open_bench_db<StorageType, DBClass>(storage);
+    auto cursor = db.cursor();
 
     // Write to database
     for (int i = 0; i < num_entries; i += entries_per_batch) {
@@ -773,7 +777,7 @@ class Benchmark {
 
 #ifdef STATISTICS
     {
-      auto db_for_stat = storage.template open<DBClass>("benchmark");
+  auto db_for_stat = open_bench_db<StorageType, DBClass>(storage);
       auto* db_internal = db_for_stat._internal();
       using DB_type = std::remove_pointer_t<decltype(db_internal)>;
       typename DB_type::Statistics db_stat;
@@ -882,7 +886,8 @@ class Benchmark {
   void ReadSequentialImpl(StorageType& storage) {
     leaves::Slice key, value;
 
-    auto cursor = storage.template open<DBClass>("benchmark").cursor();
+    auto db = open_bench_db<StorageType, DBClass>(storage);
+    auto cursor = db.cursor();
     for (cursor.first(); cursor.is_valid(); cursor.next()) {
       key = cursor.key();
       value = cursor.value();
@@ -930,13 +935,30 @@ class Benchmark {
   // Template method for random reading
   template <typename StorageType, template<typename> class DBClass = leaves::_DB>
   void ReadRandomImpl(StorageType& storage) {
-    auto cursor = storage.template open<DBClass>("benchmark").cursor();
+    auto db = open_bench_db<StorageType, DBClass>(storage);
+    auto cursor = db.cursor();
     for (int i = 0; i < reads_; i++) {
       cursor.find(bench_key(i));
       if (cursor.is_valid()) {
         bytes_ += cursor.key().size() + cursor.value().size();
       }
       FinishedSingleOp();
+    }
+  }
+
+  template <typename StorageType, template <typename> class DBClass>
+  auto open_bench_db(StorageType& storage) {
+    if constexpr (std::is_same_v<std::remove_cv_t<std::remove_reference_t<StorageType>>,
+                                 leaves::MapStorage>) {
+      if constexpr (std::is_same_v<
+                        DBClass<leaves::MapStorage::StorageImpl>,
+                        leaves::_ReplicationDB<leaves::MapStorage::StorageImpl>>) {
+        return storage.template open<leaves::MapStorage::ReplicationDB>("benchmark");
+      } else {
+        return storage.template open<leaves::MapStorage::DB>("benchmark");
+      }
+    } else {
+      return storage.template open<DBClass>("benchmark");
     }
   }
 

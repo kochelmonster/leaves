@@ -12,6 +12,7 @@
 #include <set>
 #include <filesystem>
 #include <chrono>
+#include "leaves/confluence.hpp"
 #include "leaves/fstore.hpp"
 #include "leaves/mmap.hpp"
 
@@ -255,4 +256,64 @@ BOOST_AUTO_TEST_CASE(test_map_storage_key_patterns) {
   test_key_pattern(prep.get_map_path() + "_short", short_keys, "Short keys");
   test_key_pattern(prep.get_map_path() + "_long", long_keys, "Long keys");
   test_key_pattern(prep.get_map_path() + "_numeric", numeric_keys, "Numeric keys");
+}
+
+BOOST_AUTO_TEST_CASE(test_map_storage_confluence_alias_open_remove) {
+  DirPreparation prep;
+  auto storage = MapStorage::create(prep.get_map_path().c_str());
+
+  {
+    auto cdb = storage->open<MapStorage::ConfluenceDB>("confluence_main");
+    auto c = cdb.cursor();
+    BOOST_REQUIRE(c.start_transaction());
+    c.find("k");
+    c.value("v");
+    BOOST_REQUIRE(c.commit());
+  }
+
+  storage->remove<MapStorage::ConfluenceDB>("confluence_main");
+
+  BOOST_CHECK_THROW(storage->remove<MapStorage::ConfluenceDB>("confluence_main"),
+                    WrongValue);
+}
+
+BOOST_AUTO_TEST_CASE(test_default_constructed_db_wrappers_member_assignment) {
+  struct Holder {
+    TDB<MapStorage> db;
+    MapStorage::ConfluenceDB cdb;
+  };
+
+  DirPreparation prep;
+  auto storage = MapStorage::create(prep.get_map_path().c_str());
+  Holder holder;
+
+  holder.db = storage->open("member_main");
+  {
+    auto cursor = holder.db.cursor();
+    cursor.find("key");
+    cursor.value("value");
+    cursor.commit();
+
+    cursor.find("key");
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), "value");
+  }
+
+  holder.cdb = storage->open<MapStorage::ConfluenceDB>("member_confluence");
+  {
+    auto cursor = holder.cdb.cursor();
+    BOOST_REQUIRE(cursor.start_transaction());
+    cursor.find("ckey");
+    cursor.value("cvalue");
+    BOOST_REQUIRE(cursor.commit());
+  }
+
+  holder.cdb.merge_all_now();
+
+  {
+    auto cursor = holder.cdb.cursor();
+    cursor.find("ckey");
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_REQUIRE_EQUAL(cursor.value().string(), "cvalue");
+  }
 }

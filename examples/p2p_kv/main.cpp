@@ -644,7 +644,7 @@ private:
       finish_pull_cycle(false);
       return;
     }
-    auto db = storage->template open<_ReplicationDB>("main");
+    auto db = storage->template open<P2pStorage::ReplicationDB>("main");
     SyncEvents events;
     std::cerr << "[p2p] peer " << id_ << " start pull (" << reason << ")\n";
 
@@ -699,7 +699,7 @@ private:
       serving_pull_ = false;
       return;
     }
-    auto db = storage->template open<_ReplicationDB>("main");
+    auto db = storage->template open<P2pStorage::ReplicationDB>("main");
     SyncEvents events;
     {
       {
@@ -992,7 +992,7 @@ static bool handle_command(const std::string& line) {
     if (!value.empty() && value[0] == ' ') value.erase(0, 1);
 
     std::lock_guard<std::mutex> lock(g_db_mutex);
-    auto db = g_storage->template open<_ReplicationDB>("main");
+    auto db = g_storage->template open<P2pStorage::ReplicationDB>("main");
     auto c = db.cursor();
     uint64_t ts = utc_epoch_ms_now();
     std::string encoded = encode_timestamped_value(ts, value);
@@ -1010,7 +1010,7 @@ static bool handle_command(const std::string& line) {
     iss >> key;
     if (key.empty()) { std::cout << "Usage: get <key>\n"; return true; }
     std::lock_guard<std::mutex> lock(g_db_mutex);
-    auto db = g_storage->template open<_ReplicationDB>("main");
+    auto db = g_storage->template open<P2pStorage::ReplicationDB>("main");
     auto c = db.cursor();
     c.find(Slice(key));
     if (c.is_valid())
@@ -1026,7 +1026,7 @@ static bool handle_command(const std::string& line) {
     iss >> key;
     if (key.empty()) { std::cout << "Usage: del <key>\n"; return true; }
     std::lock_guard<std::mutex> lock(g_db_mutex);
-    auto db = g_storage->template open<_ReplicationDB>("main");
+    auto db = g_storage->template open<P2pStorage::ReplicationDB>("main");
     auto c = db.cursor();
     c.start_transaction();
     c.find(Slice(key));
@@ -1042,7 +1042,7 @@ static bool handle_command(const std::string& line) {
 
   if (cmd == "list") {
     std::lock_guard<std::mutex> lock(g_db_mutex);
-    auto db = g_storage->template open<_ReplicationDB>("main");
+    auto db = g_storage->template open<P2pStorage::ReplicationDB>("main");
     auto c = db.cursor();
     c.first();
     if (!c.is_valid()) {
@@ -1109,7 +1109,7 @@ int main(int argc, char* argv[]) {
   }
 
   g_storage = P2pStorage::create(db_path.c_str());
-  { auto db = g_storage->template open<_ReplicationDB>("main"); (void)db; }
+  { auto db = g_storage->template open<P2pStorage::ReplicationDB>("main"); (void)db; }
   std::cerr << "[p2p] storage: " << db_path << "\n";
 
   net::io_context io(1);

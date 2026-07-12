@@ -1,7 +1,9 @@
 #ifndef _LEAVES_DB_HPP
 #define _LEAVES_DB_HPP
 
+#include <cassert>
 #include <memory>
+#include <utility>
 
 #include "cursor.hpp"
 #include "intern/db/_db.hpp"
@@ -13,9 +15,15 @@ class TDB {
  public:
   typedef typename Storage::storage_ptr storage_ptr;
   typedef typename Storage::StorageImpl StorageImpl;
-  typedef DBClass<StorageImpl> DBImpl;
-  typedef DBImpl db_type;
+  using db_impl_type = DBClass<StorageImpl>;
+  typedef db_impl_type db_type;
   typedef TCursor<Storage, DBClass> Cursor;
+  template <typename AnyStorage>
+  using DBWrapper = TDB<AnyStorage, DBClass>;
+  template <typename AnyStorageImpl>
+  using DBImpl = DBClass<AnyStorageImpl>;
+
+  TDB() = default;
 
   TDB(storage_ptr storage, const char* name)
       : _storage(storage),
@@ -27,31 +35,76 @@ class TDB {
         _db(storage->_storage->template open<DBClass>(
             name, std::forward<Args>(args)...)) {}
 
-  Cursor cursor() { return Cursor(_storage, _db); }
+  operator bool() const {
+    return _db != nullptr;
+  }
 
-  Slice name() const { return _db->name(); }
+  Cursor cursor() {
+    _assert_initialized();
+    return Cursor(_storage, _db);
+  }
 
-  db_type* _internal() const { return _db; }
+  Slice name() const {
+    _assert_initialized();
+    return _db->name();
+  }
 
-  storage_ptr storage() const { return _storage; }
+  db_type* _internal() const {
+    _assert_initialized();
+    return _db;
+  }
 
-  auto& aspect() { return _db->aspect(); }
-  const auto& aspect() const { return _db->aspect(); }
+  storage_ptr storage() const {
+    _assert_initialized();
+    return _storage;
+  }
 
-  auto txn() const { return _db->txn(); }
+  auto& aspect() {
+    _assert_initialized();
+    return _db->aspect();
+  }
+  const auto& aspect() const {
+    _assert_initialized();
+    return _db->aspect();
+  }
+
+  auto txn() const {
+    _assert_initialized();
+    return _db->txn();
+  }
 
   // Transaction management methods for crash recovery
-  tid_t transaction_active() const { return _db->transaction_active(); }
-  bool commit(bool sync = true) { return _db->commit(0, sync); }
-  bool rollback() { return _db->rollback(0); }
-  void defrag() { _db->defrag(); }
+  tid_t transaction_active() const {
+    _assert_initialized();
+    return _db->transaction_active();
+  }
+  bool commit(bool sync = true) {
+    _assert_initialized();
+    return _db->commit(0, sync);
+  }
+  bool rollback() {
+    _assert_initialized();
+    return _db->rollback(0);
+  }
+  void defrag() {
+    _assert_initialized();
+    _db->defrag();
+  }
 
   // Replication configuration (only available on replicating storages)
-  void set_retention(uint64_t seconds) { _db->set_retention(seconds); }
+  void set_retention(uint64_t seconds) {
+    _assert_initialized();
+    _db->set_retention(seconds);
+  }
 
  private:
+  void _assert_initialized() const {
+    assert(_storage);
+    assert(_db != nullptr);
+  }
+
   storage_ptr _storage;
-  DBImpl* _db;
+  db_impl_type* _db = nullptr;
 };
 
 }  // namespace leaves

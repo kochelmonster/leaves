@@ -77,7 +77,7 @@ Result run_round(const Flags& f) {
   Result r;
   {
     auto storage = MapStorage::create(path.c_str(), 16 * G);
-    MapConfluenceDB db(storage, "bench_merge");
+    MapStorage::ConfluenceDB db(storage, "bench_merge");
     // Suppress every auto-merge trigger so the only merges are ours.
     db.set_merge_write_threshold(UINT32_MAX);
     db.set_max_attached_age_ms(UINT64_MAX);
@@ -111,7 +111,7 @@ Result run_round(const Flags& f) {
     uint64_t done_tribs = 0;
     while (done_tribs < f.tribs) {
       uint64_t wave = std::min<uint64_t>(kMaxWave, f.tribs - done_tribs);
-      std::vector<MapConfluenceDB::Cursor> cursors;
+      std::vector<MapStorage::ConfluenceDB::Cursor> cursors;
       cursors.reserve(wave);
       for (uint64_t w = 0; w < wave; ++w) {
         uint64_t t = done_tribs + w;

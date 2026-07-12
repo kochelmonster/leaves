@@ -52,6 +52,8 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
   std::unique_ptr<StorageImpl> _storage;
 };
 
+// Development artifact only: FileStorage is used as an intermediate backend
+// for BrowserStorage bring-up and is not intended for production deployment.
 using FileStorage = FileStorage_<>;
 
 }  // namespace leaves

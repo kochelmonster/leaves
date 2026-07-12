@@ -6,6 +6,7 @@
 #include "db.hpp"
 #include "intern/replication/_replication_db.hpp"
 #include "intern/replication/_replication_fsm.hpp"
+#include "mmap.hpp"
 
 namespace leaves {
 
@@ -16,13 +17,27 @@ enum class ReplicationState {
   ERROR    // Error occurred
 };
 
+template <typename Traits>
+class MapStorage_<Traits>::ReplicationDB
+    : public TDB<MapStorage_<Traits>, ::leaves::_ReplicationDB> {
+ public:
+  using Base = TDB<MapStorage_<Traits>, ::leaves::_ReplicationDB>;
+  template <typename AnyStorageImpl>
+  using DBImpl = ::leaves::_ReplicationDB<AnyStorageImpl>;
+  template <typename AnyStorage>
+  using DBWrapper = typename AnyStorage::ReplicationDB;
+
+  ReplicationDB() = default;
+  using Base::Base;
+};
+
 // ============================================================================
 // ReplicationSender — wraps ReplicationSenderFSM for public use
 // ============================================================================
 //
 // Usage:
 //   auto storage = MapStorage::create("path.lvs");
-//   auto db = storage->open<_ReplicationDB>("mydb");
+//   auto db = storage->open<MapStorage::ReplicationDB>("mydb");
 //   // ... insert data, commit ...
 //
 //   ReplicationSender<MapStorage> sender(db);
@@ -82,7 +97,7 @@ class ReplicationSender {
 //
 // Usage:
 //   auto storage = MapStorage::create("path.lvs");
-//   auto db = storage->open<_ReplicationDB>("mydb");
+//   auto db = storage->open<MapStorage::ReplicationDB>("mydb");
 //
 //   ReplicationReceiver<MapStorage> receiver(db);
 //   receiver.begin(&transport, &events);

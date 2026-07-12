@@ -111,7 +111,7 @@ Uses `insertproportion=0.70` with uniform distribution and `insertorder=hashed`.
 - Value size: 1 KB (10×100 B)
 
 **Explanation:**  
-Write throughput dominates. LSM engines benefit from sequential write buffering, while B-tree engines must locate the insertion position and perform structural updates on each write. The trie-based structure used by Leaves finds the insertion position in O(k) time and avoids rebalancing or restructuring operations required by B-trees. This reduces the per-insert overhead and leads to consistently higher throughput.
+Write throughput dominates. LSM engines benefit from sequential write buffering, while B-tree engines must locate the insertion position and perform structural updates on each write. The trie-based structure used by Leaves finds the insertion position in O(k) time and avoids rebalancing or restructuring operations required by B-trees.
 
 Measured median run throughput (ops/sec) used in charts:
 

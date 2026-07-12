@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "leaves/mmap.hpp"
+#include "leaves/replication.hpp"
 #include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/replication/_hash.hpp"
 #include "leaves/intern/util/_threadpool.hpp"
@@ -271,7 +272,7 @@ int main(int argc, char** argv) {
   // --- Setup: populate data trie ---
   auto storage = RStorage::create(db_path);
   {
-  auto db = storage->open<_ReplicationDB>("bench");
+  auto db = storage->open<RStorage::ReplicationDB>("bench");
   populate(db, FLAGS_num, FLAGS_vsize);
 
   auto* rdb = db._internal();

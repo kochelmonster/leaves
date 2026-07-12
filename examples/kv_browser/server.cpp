@@ -221,7 +221,7 @@ static void handle_client(std::shared_ptr<ClientSession> session,
         // Client has local changes, pushes them to us
         std::cerr << "[server] client " << client_id << " push start\n";
         std::lock_guard<std::mutex> db_lock(g_db_mutex);
-        auto db = storage->open<_ReplicationDB>("main");
+        auto db = storage->open<ServerStorage::ReplicationDB>("main");
 
         ServerCommitScope commit_scope(client_id);
         DemoEvents events;
@@ -270,7 +270,7 @@ static void handle_client(std::shared_ptr<ClientSession> session,
         // Client wants our data, we send to them
         std::cerr << "[server] client " << client_id << " pull start\n";
         std::lock_guard<std::mutex> db_lock(g_db_mutex);
-        auto db = storage->open<_ReplicationDB>("main");
+        auto db = storage->open<ServerStorage::ReplicationDB>("main");
 
         DemoEvents events;
         BeastWsTransport transport(wss, session->write_mutex);
@@ -338,7 +338,7 @@ int main(int argc, char* argv[]) {
   auto storage = ServerStorage::create(path);
   // Ensure DB "main" exists
   {
-    auto db = storage->open<_ReplicationDB>("main");
+    auto db = storage->open<ServerStorage::ReplicationDB>("main");
   }
 
   std::cerr << "[server] storage opened: " << path << "\n";

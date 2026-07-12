@@ -165,11 +165,18 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-option(LEAVES_GCOV "Add gconv support for tests" ON)
-option(LEAVES_ASAN "Build tests with AddressSanitizer" ON)
-option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ON)
-option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ON)
+if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    set(LEAVES_REPOSITORY_OPTION_DEFAULT ON)
+else()
+    set(LEAVES_REPOSITORY_OPTION_DEFAULT OFF)
+endif()
+
+option(LEAVES_GCOV "Add gconv support for tests" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
+option(LEAVES_ASAN "Build tests with AddressSanitizer" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
+option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
+option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded)" OFF)
+option(LEAVES_LOG "Enable leaves logging macros for consumers" OFF)
 
 
 include(CheckCXXCompilerFlag)
@@ -245,7 +252,6 @@ add_library(leaves::replication ALIAS leaves_replication)
 set_target_properties(leaves_replication PROPERTIES EXPORT_NAME replication)
 
 target_sources(leaves INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/leaves.hpp>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/mmap.hpp>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/fstore.hpp>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/leaves/db.hpp>
@@ -273,6 +279,10 @@ endif()
 
 if (LEAVES_SINGLE_PROCESS)
     target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
+endif()
+
+if (LEAVES_LOG)
+    target_compile_definitions(leaves INTERFACE LEAVES_LOG)
 endif()
 
 target_include_directories(leaves
