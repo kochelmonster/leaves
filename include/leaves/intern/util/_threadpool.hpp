@@ -177,7 +177,7 @@ struct _ThreadPoolMixin {
   explicit _ThreadPoolMixin(size_t num_threads = 0) {
     if (num_threads == 0) {
 #ifndef __EMSCRIPTEN__
-      num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+      num_threads = (std::max)(1u, std::thread::hardware_concurrency() / 2);
 #else
       return;  // no threads in WASM
 #endif
@@ -528,7 +528,7 @@ struct _TaskGroup<Executor, false> {
   explicit _TaskGroup(Executor& exec, size_t cap = 0)
       : _executor(exec),
         _concurrency(cap > 0
-                         ? std::min(exec.pool_size(), cap)
+                         ? (std::min)(exec.pool_size(), cap)
                          : exec.pool_size()) {}
 
   _TaskGroup(const _TaskGroup&) = delete;
