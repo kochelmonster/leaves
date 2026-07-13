@@ -5,6 +5,12 @@ File-backed storage backend and its internal persistence helpers.
 #define _LEAVES__FSTORE_HPP
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -23,6 +29,7 @@ File-backed storage backend and its internal persistence helpers.
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -51,7 +58,7 @@ static const size_t FSTORE_SIGNATURE_SIZE =
 // definition of all headers and data types
 struct _StoreTraits {
   using Aspect = DefaultAspect;
-  typedef uint8_t hash_t[0];
+  typedef uint8_t hash_t[1];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;

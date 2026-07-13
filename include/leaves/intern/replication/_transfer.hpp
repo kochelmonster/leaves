@@ -390,7 +390,7 @@ class PathArena {
   std::string_view allocate(const std::string_view& str) {
     if (_used + str.size() > _blocks.back().size()) {
       // Current block is full — allocate a new one (old blocks stay intact)
-      _blocks.emplace_back(std::max(BLOCK_SIZE, str.size()));
+      _blocks.emplace_back((std::max)(BLOCK_SIZE, str.size()));
       _used = 0;
     }
     auto& block = _blocks.back();

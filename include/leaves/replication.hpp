@@ -177,7 +177,7 @@ void run_replication(Sender& sender, Receiver& receiver,
     while (receiver_transport.has_message()) {
       auto msg = receiver_transport.receive();
       auto& buf = receiver.receive_buffer();
-      size_t to_copy = std::min(msg.size(), buf.available());
+      size_t to_copy = (std::min)(msg.size(), buf.available());
       std::memcpy(buf.write_ptr(), msg.data(), to_copy);
       buf.advance(to_copy);
       receiver.on_data_received();

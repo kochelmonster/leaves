@@ -581,7 +581,7 @@ struct ReplicationSenderFSM {
         // How much of the header can we send?
         size_t header_remaining = sizeof(hdr) - _bv_header_bytes_sent;
         size_t header_space = BIG_VALUE_CHUNK_SIZE - chunk_bytes;
-        size_t header_to_send = std::min(header_remaining, header_space);
+        size_t header_to_send = (std::min)(header_remaining, header_space);
 
         _msg_builder.append_payload(
             (const uint8_t*)&hdr + _bv_header_bytes_sent, header_to_send);
@@ -603,7 +603,7 @@ struct ReplicationSenderFSM {
       auto [data_ptr, size] = _sender.resolve_big_value(bv);
       size_t data_remaining = size - _bv_current_offset;
       size_t data_space = BIG_VALUE_CHUNK_SIZE - chunk_bytes;
-      size_t data_to_send = std::min(data_remaining, data_space);
+      size_t data_to_send = (std::min)(data_remaining, data_space);
 
       if (data_to_send > 0) {
         _msg_builder.append_payload(data_ptr + _bv_current_offset,
