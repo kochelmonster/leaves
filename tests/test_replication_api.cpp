@@ -127,9 +127,9 @@ BOOST_FIXTURE_TEST_CASE(test_error_state, APIFixture) {
   receiver.on_data_received();
 
   // Receiver should be in ERROR state
-  BOOST_CHECK(receiver.state() == ReplicationState::ERROR ||
+  BOOST_CHECK(receiver.state() == ReplicationState::ERR ||
               receiver.state() == ReplicationState::IDLE);
-  if (receiver.state() == ReplicationState::ERROR) {
+  if (receiver.state() == ReplicationState::ERR) {
     BOOST_CHECK(receiver_events.errored);
   }
 
@@ -137,7 +137,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_state, APIFixture) {
   sender.begin(&sender_tx, &sender_events);
   sender.on_message_received(garbage, sizeof(garbage));
 
-  BOOST_CHECK(sender.state() == ReplicationState::ERROR ||
+  BOOST_CHECK(sender.state() == ReplicationState::ERR ||
               sender.state() == ReplicationState::ACTIVE);
 }
 

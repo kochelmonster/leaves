@@ -55,7 +55,7 @@ namespace leaves {
 enum class _WalOp : uint8_t {
   BEGIN = 0x01,
   PUT = 0x02,
-  DELETE = 0x03,
+  DEL = 0x03,
   PREPARE = 0x04,
   COMMIT = 0x05,
 };
@@ -272,7 +272,7 @@ inline void wal_parse(const std::string& path, std::vector<_WalTxn>& result,
       op.val.assign(reinterpret_cast<const char*>(&data[pos + 9 + ksz]), vsz);
       cur.ops.push_back(std::move(op));
       pos += 1 + 8 + ksz + vsz;
-    } else if (tag == static_cast<uint8_t>(_WalOp::DELETE)) {
+    } else if (tag == static_cast<uint8_t>(_WalOp::DEL)) {
       if (!in_txn || !need(1 + 4)) break;
       uint32_t ksz = _wal_read_u32(&data[pos + 1]);
       if (!need(1 + 4 + static_cast<size_t>(ksz))) break;
@@ -404,7 +404,7 @@ struct _WalWriter {
   }
 
   void del(const Slice& key) {
-    _buf.push_back(static_cast<uint8_t>(_WalOp::DELETE));
+    _buf.push_back(static_cast<uint8_t>(_WalOp::DEL));
     _wal_put_u32(_buf, static_cast<uint32_t>(key.size()));
     const uint8_t* kp = reinterpret_cast<const uint8_t*>(key.data());
     _buf.insert(_buf.end(), kp, kp + key.size());
