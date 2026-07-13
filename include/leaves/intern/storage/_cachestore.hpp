@@ -10,6 +10,7 @@ Cached file-backed storage helpers for page reuse and persistence access.
 #include <chrono>
 #include <cstdint>
 #include <cstring>  // for std::memcpy
+#include <format>
 #include <memory>
 #include <string_view>
 #include <thread>

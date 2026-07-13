@@ -186,7 +186,7 @@ struct _BigValueReceiver {
       if (_parsing_header) {
         size_t header_needed = sizeof(BigValueDataHeader) - _header_pos;
         size_t header_available = end - ptr;
-        size_t header_to_read = std::min(header_needed, header_available);
+        size_t header_to_read = (std::min)(header_needed, header_available);
 
         std::memcpy(_header_buf + _header_pos, ptr, header_to_read);
         _header_pos += header_to_read;
@@ -224,7 +224,7 @@ struct _BigValueReceiver {
 
       size_t data_needed = _current_size - _current_received;
       size_t data_available = end - ptr;
-      size_t data_to_read = std::min(data_needed, data_available);
+      size_t data_to_read = (std::min)(data_needed, data_available);
 
       if (data_to_read > 0) {
         char* chunk_ptr = base + _write_pos;

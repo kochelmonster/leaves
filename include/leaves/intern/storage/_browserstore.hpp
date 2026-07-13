@@ -35,6 +35,7 @@ Browser storage backend built on browser persistence and async execution.
 #include <exception>
 #include <cstdio>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -210,7 +211,7 @@ static inline const char* idb_key_format(char* buf, size_t buf_size,
 template <typename AspectType = DefaultAspect>
 struct _BrowserStoreTraits {
   using Aspect = AspectType;
-  typedef uint8_t hash_t[0];
+  typedef uint8_t hash_t[1];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;

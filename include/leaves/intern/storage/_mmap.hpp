@@ -19,6 +19,7 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <string_view>
@@ -59,7 +60,7 @@ static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 // definition of all headers and data types
 struct _MemoryMapTraits {
   using Aspect = DefaultAspect;
-  typedef uint8_t hash_t[0];
+  typedef uint8_t hash_t[1];
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
@@ -535,7 +536,7 @@ struct _MemoryMapFile
     // 3. Create new — find or allocate a slot
     if (!free_slot) {
       uint16_t cap = _first_page_capacity();
-      uint16_t hwm = std::min(_memory->db_entry_count, cap);
+      uint16_t hwm = (std::min)(_memory->db_entry_count, cap);
       if (hwm < cap) {
         free_slot = &_memory->dbs[hwm];
         _memory->db_entry_count = hwm + 1;
@@ -612,7 +613,7 @@ struct _MemoryMapFile
   template <typename Fn>
   void _for_each_db_entry(Fn fn) {
     uint16_t cap = _first_page_capacity();
-    uint16_t count = std::min(_memory->db_entry_count, cap);
+    uint16_t count = (std::min)(_memory->db_entry_count, cap);
     for (uint16_t i = 0; i < count; i++) {
       if (!fn(_memory->dbs[i])) return;
     }
@@ -622,7 +623,7 @@ struct _MemoryMapFile
       auto* page =
           reinterpret_cast<_DBDirectoryPage*>((char*)_memory + (uint64_t)next);
       uint16_t pcap = _overflow_page_capacity();
-      uint16_t pcount = std::min(page->count, pcap);
+      uint16_t pcount = (std::min)(page->count, pcap);
       for (uint16_t i = 0; i < pcount; i++) {
         if (!fn(page->entries[i])) return;
       }

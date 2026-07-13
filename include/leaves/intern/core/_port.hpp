@@ -38,6 +38,14 @@ Platform portability macros and compiler-specific compatibility helpers.
 #include <boost/endian/arithmetic.hpp>
 #endif
 
+// Windows headers may define min/max as macros and break std::min/std::max.
+#if defined(min)
+#undef min
+#endif
+#if defined(max)
+#undef max
+#endif
+
 namespace leaves {
 
 // Cross-platform prefetch function

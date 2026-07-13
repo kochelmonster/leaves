@@ -27,7 +27,7 @@ struct _TransferTrie {
   // Wire format traits for nodes in this TransferTrie
   // Uses explicit little-endian types for cross-platform compatibility
   struct Traits {
-    typedef uint8_t hash_t[WIRE_HASH_SIZE];
+    typedef uint8_t hash_t[(WIRE_HASH_SIZE > 0) ? WIRE_HASH_SIZE : 1];
     typedef _little_uint32_t uint32_e;
     typedef _little_uint16_t uint16_e;
     typedef _little_uint64_t uint64_e;
@@ -68,22 +68,22 @@ struct _TransferTrie {
 
       // Resolve offset to node pointer using relative addressing
       template <typename T>
-      typename Traits::template Pointer<T> resolve(const offset_e* offset) const {
+      typename Traits::template Pointer<T, TRIE> resolve(const offset_e* offset) const {
         if (*offset == 0) {
           return nullptr;  // Null pointer for zero offset
         }
-        return typename Traits::template Pointer<T>(offset->template resolve<char>());
+        return typename Traits::template Pointer<T, TRIE>(offset->template resolve<char>());
       }
 
       // Overload with Access parameter (ignored for temp DB)
       template <typename T>
-      typename Traits::template Pointer<T> resolve(const offset_e* offset, Access) const {
+      typename Traits::template Pointer<T, TRIE> resolve(const offset_e* offset, Access) const {
         return resolve<T>(offset);
       }
 
       // Resolve pointer to offset (for _Dumper compatibility)
       template <typename T>
-      offset_e resolve(typename Traits::template Pointer<T> ptr) const {
+      offset_e resolve(typename Traits::template Pointer<T, TRIE> ptr) const {
         return offset_e(reinterpret_cast<uint64_t>(static_cast<T*>(ptr)));
       }
 
