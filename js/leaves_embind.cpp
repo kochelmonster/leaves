@@ -441,7 +441,7 @@ struct ReplicationSenderJS {
         return "idle";
       case leaves::ReplicationState::ACTIVE:
         return "active";
-      case leaves::ReplicationState::ERROR:
+      case leaves::ReplicationState::ERR:
         return "error";
     }
     return "unknown";
@@ -494,7 +494,7 @@ struct ReplicationReceiverJS {
         return "idle";
       case leaves::ReplicationState::ACTIVE:
         return "active";
-      case leaves::ReplicationState::ERROR:
+      case leaves::ReplicationState::ERR:
         return "error";
     }
     return "unknown";
