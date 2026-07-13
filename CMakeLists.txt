@@ -184,6 +184,7 @@ include(CheckCXXSourceRuns)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 include(CTest)
+find_package(Threads REQUIRED)
 
 # Helper: check that the compiler supports a flag AND the CPU can execute the instructions.
 # check_cxx_compiler_flag only tests compilation, not runtime — using it alone causes
@@ -204,41 +205,43 @@ macro(check_cpu_feature FLAG TEST_SOURCE RESULT_VAR)
     endif()
 endmacro()
 
-check_cpu_feature("-mpopcnt"
-    "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
-    CPU_SUPPORTS_POPCNT)
-if (CPU_SUPPORTS_POPCNT)
-    add_compile_options(-mpopcnt)
-endif()
+if (NOT MSVC)
+    check_cpu_feature("-mpopcnt"
+        "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
+        CPU_SUPPORTS_POPCNT)
+    if (CPU_SUPPORTS_POPCNT)
+        add_compile_options(-mpopcnt)
+    endif()
 
-check_cpu_feature("-mbmi"
-    "#include <immintrin.h>\nint main() { return _tzcnt_u64(8) != 3; }"
-    CPU_SUPPORTS_BMI)
-if (CPU_SUPPORTS_BMI)
-    add_compile_options(-mbmi)
-endif()
+    check_cpu_feature("-mbmi"
+        "#include <immintrin.h>\nint main() { return _tzcnt_u64(8) != 3; }"
+        CPU_SUPPORTS_BMI)
+    if (CPU_SUPPORTS_BMI)
+        add_compile_options(-mbmi)
+    endif()
 
-check_cpu_feature("-mlzcnt"
-    "#include <immintrin.h>\nint main() { return _lzcnt_u64(1) != 63; }"
-    CPU_SUPPORTS_LZCNT)
-if (CPU_SUPPORTS_LZCNT)
-    add_compile_options(-mlzcnt)
-endif()
+    check_cpu_feature("-mlzcnt"
+        "#include <immintrin.h>\nint main() { return _lzcnt_u64(1) != 63; }"
+        CPU_SUPPORTS_LZCNT)
+    if (CPU_SUPPORTS_LZCNT)
+        add_compile_options(-mlzcnt)
+    endif()
 
-# Check for AVX2 support (32-byte SIMD operations)
-check_cpu_feature("-mavx2"
-    "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
-    CPU_SUPPORTS_AVX2)
-if (CPU_SUPPORTS_AVX2)
-    add_compile_options(-mavx2)
-endif()
+    # Check for AVX2 support (32-byte SIMD operations)
+    check_cpu_feature("-mavx2"
+        "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
+        CPU_SUPPORTS_AVX2)
+    if (CPU_SUPPORTS_AVX2)
+        add_compile_options(-mavx2)
+    endif()
 
-# Check for AVX-512 support (64-byte SIMD operations)
-check_cpu_feature("-mavx512bw"
-    "#include <immintrin.h>\nint main() { __m512i v = _mm512_set1_epi8(1); return (int)_mm512_reduce_add_epi32(_mm512_setzero_si512()); }"
-    CPU_SUPPORTS_AVX512BW)
-if (CPU_SUPPORTS_AVX512BW)
-    add_compile_options(-mavx512bw)
+    # Check for AVX-512 support (64-byte SIMD operations)
+    check_cpu_feature("-mavx512bw"
+        "#include <immintrin.h>\nint main() { __m512i v = _mm512_set1_epi8(1); return (int)_mm512_reduce_add_epi32(_mm512_setzero_si512()); }"
+        CPU_SUPPORTS_AVX512BW)
+    if (CPU_SUPPORTS_AVX512BW)
+        add_compile_options(-mavx512bw)
+    endif()
 endif()
 
 
@@ -328,7 +331,11 @@ target_include_directories(leaves_test_support
                            )
 target_include_directories(leaves_test_support INTERFACE src)
 target_link_libraries(leaves_test_support INTERFACE core)
-target_compile_options(leaves_test_support INTERFACE -g)
+if (MSVC)
+    target_compile_options(leaves_test_support INTERFACE /Zi)
+else()
+    target_compile_options(leaves_test_support INTERFACE -g)
+endif()
 target_compile_definitions(leaves_test_support INTERFACE 
     DEBUG 
     LEAVES_LOG
@@ -338,17 +345,25 @@ target_sources(leaves_test_support INTERFACE
     tests/test.hpp)
 
 if (LEAVES_GCOV)
+if (NOT MSVC)
 target_compile_options(leaves_test_support INTERFACE -g --coverage)
 target_compile_definitions(leaves_test_support INTERFACE DEBUG LEAVES_LOG GCOV_ENABLED)
 target_link_options(leaves_test_support INTERFACE --coverage)
+endif()
 else (LEAVES_GCOV)
+if (MSVC)
+target_compile_options(leaves_test_support INTERFACE /Zi)
+else()
 target_compile_options(leaves_test_support INTERFACE -g)
+endif()
 target_compile_definitions(leaves_test_support INTERFACE DEBUG LEAVES_LOG)
 endif (LEAVES_GCOV)
 
 if (LEAVES_ASAN AND NOT LEAVES_GCOV)
+if (NOT MSVC)
 target_compile_options(leaves_test_support INTERFACE -fsanitize=address -fno-omit-frame-pointer)
 target_link_options(leaves_test_support INTERFACE -fsanitize=address)
+endif()
 endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 
 add_executable(test_mmap tests/test_mmap.cpp)
@@ -369,7 +384,7 @@ add_executable(test_replication_multiclient tests/test_replication_multiclient.c
 target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_support blake3)
 
 add_executable(ws_replication_server tests/ws_replication/server.cpp)
-target_link_libraries(ws_replication_server PUBLIC core blake3 pthread)
+target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
@@ -425,7 +440,7 @@ add_executable(test_tributary tests/test_tributary.cpp)
 target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
-target_link_libraries(test_multiprocess PUBLIC core leaves_test_support pthread)
+target_link_libraries(test_multiprocess PUBLIC core leaves_test_support Threads::Threads)
 
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
@@ -441,10 +456,10 @@ add_executable(test_twoquecache tests/test_twoquecache.cpp)
 target_link_libraries(test_twoquecache PUBLIC leaves_test_support)
 
 add_executable(test_multithread tests/test_multithread.cpp)
-target_link_libraries(test_multithread PUBLIC core leaves_test_support pthread)
+target_link_libraries(test_multithread PUBLIC core leaves_test_support Threads::Threads)
 
 add_executable(test_executor tests/test_executor.cpp)
-target_link_libraries(test_executor PUBLIC core leaves_test_support pthread)
+target_link_libraries(test_executor PUBLIC core leaves_test_support Threads::Threads)
 
 add_executable(test_aspect tests/test_aspect.cpp)
 target_link_libraries(test_aspect PUBLIC core leaves_test_support blake3)
@@ -568,45 +583,59 @@ target_sources(lbench INTERFACE
     "leveldb/util/testutil.h")
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
-target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb pthread blake3)
+target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb Threads::Threads blake3)
 
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
-target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb pthread)
+target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb Threads::Threads)
+if (NOT MSVC)
 target_compile_options(db_bench_mdb PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+endif()
 target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
-target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb pthread)
+target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb Threads::Threads)
 
 add_executable(bench_hash_updater benchmarks/bench_hash_updater.cpp)
-target_link_libraries(bench_hash_updater PUBLIC core pthread blake3)
+target_link_libraries(bench_hash_updater PUBLIC core Threads::Threads blake3)
 
 add_executable(bench_page_sizes benchmarks/bench_page_sizes.cpp)
-target_link_libraries(bench_page_sizes PUBLIC core pthread)
+target_link_libraries(bench_page_sizes PUBLIC core Threads::Threads)
 
 add_executable(bench_merge benchmarks/bench_merge.cpp)
-target_link_libraries(bench_merge PUBLIC core pthread blake3)
+target_link_libraries(bench_merge PUBLIC core Threads::Threads blake3)
+if (NOT MSVC)
 target_compile_options(bench_merge PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+endif()
 target_compile_definitions(bench_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
 
 add_executable(bench_overwrite_vs_merge benchmarks/bench_overwrite_vs_merge.cpp)
-target_link_libraries(bench_overwrite_vs_merge PUBLIC core pthread blake3)
+target_link_libraries(bench_overwrite_vs_merge PUBLIC core Threads::Threads blake3)
+if (NOT MSVC)
 target_compile_options(bench_overwrite_vs_merge PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+endif()
 target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
 
 if (DEBUG_BENCHMARKS)
+    if (MSVC)
+    target_compile_options(db_bench_leaves PRIVATE /Zi /Od)
+    target_compile_options(db_bench_memory PUBLIC /Zi /Od)
+    target_compile_options(bench_hash_updater PRIVATE /Zi /Od)
+    else()
     target_compile_options(db_bench_leaves PRIVATE -g -O0)
     target_compile_definitions(db_bench_leaves PRIVATE DEBUG)
     target_compile_options(db_bench_memory PUBLIC  -g -O0)
     target_compile_definitions(db_bench_memory PRIVATE DEBUG)
     target_compile_options(bench_hash_updater PRIVATE -g -O0)
+    endif()
     target_compile_definitions(bench_hash_updater PRIVATE DEBUG)
 else()
+    if (NOT MSVC)
     target_compile_options(db_bench_leaves PRIVATE -O3 -march=native -funroll-loops -flto=auto)
     target_compile_definitions(db_bench_leaves PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
     target_compile_options(db_bench_memory PUBLIC -march=native -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
     target_compile_options(bench_hash_updater PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    endif()
     target_compile_definitions(bench_hash_updater PRIVATE NDEBUG)
 endif()
 
@@ -626,8 +655,10 @@ if(ROCKSDB_INCLUDE_DIR)
         
         add_executable(db_bench_rocksdb benchmarks/db_bench_rocksdb.cpp)
         target_compile_definitions(db_bench_rocksdb PUBLIC NDEBUG)
-        target_link_libraries(db_bench_rocksdb PUBLIC ${ROCKSDB_LIBRARY} rocksdb_histogram pthread)
+        target_link_libraries(db_bench_rocksdb PUBLIC ${ROCKSDB_LIBRARY} rocksdb_histogram Threads::Threads)
+        if (NOT MSVC)
         target_compile_options(db_bench_rocksdb PUBLIC -march=native -O3 -g -flto=auto -funroll-loops -ffast-math)
+        endif()
         target_include_directories(db_bench_rocksdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/leveldb)
     else()
         message(STATUS "RocksDB headers found but library not found")

@@ -13,7 +13,7 @@ using namespace leaves;
 using namespace leaves::bits;
 
 struct TestTraits {
-  typedef uint8_t hash_t[0];
+  using hash_t = _NoHash;
   typedef offset_t offset_e;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
@@ -28,7 +28,11 @@ struct TestTraits {
 };
 
 typedef _TrieNode<TestTraits> TrieNode;
+typedef _LeafNode<TestTraits> LeafNode;
 static const int OOR = TrieNode::OUT_OF_RANGE;
+
+static_assert(sizeof(TrieNode) == 7);
+static_assert(sizeof(LeafNode) == 3);
 
 const uint16_t AREA_SIZE = 4 * 1024;
 
@@ -529,7 +533,7 @@ BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
 }
 
 // Test insert_branch with shift > 0 (array_start moves when lower[] crosses
-// an 8-byte alignment boundary).  With compressed_len=1 and hash_t[0],
+// an 8-byte alignment boundary).  With compressed_len=1 and an empty hash,
 // lower_start=8.  old_bcount=0 → old_as=align(8)=8, new_as=align(12)=16 →
 // shift=8.
 BOOST_AUTO_TEST_CASE(test_insert_branch_shift_positive) {
