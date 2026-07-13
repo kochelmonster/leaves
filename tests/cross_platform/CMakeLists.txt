@@ -12,7 +12,7 @@ endif()
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../BLAKE3/c
                  ${CMAKE_CURRENT_BINARY_DIR}/blake3)
 
-if(APPLE)
+if(APPLE OR WIN32)
   find_package(Boost 1.80 REQUIRED COMPONENTS process)
 else()
   find_package(Boost 1.80 REQUIRED)
