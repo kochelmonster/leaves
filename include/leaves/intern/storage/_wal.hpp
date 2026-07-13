@@ -96,7 +96,7 @@ struct WalState {
 // ---------------------------------------------------------------------------
 #ifdef _WIN32
 using _wal_fd_t = HANDLE;
-static constexpr _wal_fd_t WAL_INVALID_FD = INVALID_HANDLE_VALUE;
+static const _wal_fd_t WAL_INVALID_FD = INVALID_HANDLE_VALUE;
 
 inline _wal_fd_t _wal_open(const std::string& path) {
   return CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
