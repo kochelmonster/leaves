@@ -4,15 +4,15 @@ leaves is a trie-based embedded key-value database.
 
 ## Key features
 
-- Extremely fast (see [benchmarks](docs/performance/performance.md))
-- Header-only C++20 core with cursor-first API
-- Cursor-based read, write, delete, and iteration workflow
-- ACID transactions and Two-Phase Commit support
+- Extremely fast, see [benchmarks](docs/performance/performance.md)
+- Header-only C++20 core with a cursor-first API
+- Cursor-based workflow for reading, writing, deleting, and iterating
+- ACID transactions with Two-Phase Commit support
 - Copy-on-write snapshots with lock-free readers
-- Deterministic replication framework with transport abstraction
-- Extensibility through Aspects and merge/handler policies
+- Deterministic replication framework with a transport abstraction
+- Extensible through Aspects
 - Multi-database and multi-writer support
-- Cross-platform native support plus WebAssembly/browser targets
+- Native cross-platform support, including WebAssembly and browser targets
 
 ## Getting started
 ```cpp
@@ -80,9 +80,6 @@ Alternatively, add Leaves as a Git submodule and integrate it directly into your
    When embedding Leaves into another project, the repository's tests and benchmarks are typically not needed.
 
    ```cmake
-   set(LEAVES_BUILD_TESTS OFF)
-   set(LEAVES_BUILD_BENCHMARKS OFF)
-
    add_subdirectory(extern/leaves)
    ```
 

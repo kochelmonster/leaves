@@ -29,26 +29,42 @@ parent node) This makes the implmentation of many operations easier.
 */
 #pragma pack(push, 1)
 template <typename Traits>
-struct _TrieNode {
-  typedef _TrieNode<Traits> TrieNode;
+struct _TrieNodeHeader {
   using hash_t = typename Traits::hash_t;
-  using uint32_e = typename Traits::uint32_e;
   using uint16_e = typename Traits::uint16_e;
-  using offset_e = typename Traits::offset_e;
-  static constexpr uint16_t MAX_BRANCH_COUNT = 257;  // 256 (chars) + 1 (NULL)
+
   [[no_unique_address]] hash_t hash;
-  uint16_e _array_len;  // < MAX_BRANCH_COUNT
+  uint16_e _array_len;
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;
   uint8_t _array_offset;
   uint8_t _compressed_data[1];
+};
+
+template <typename Traits>
+struct _TrieNode : _TrieNodeHeader<Traits> {
+  typedef _TrieNode<Traits> TrieNode;
+  using hash_t = typename Traits::hash_t;
+  using uint32_e = typename Traits::uint32_e;
+  using uint16_e = typename Traits::uint16_e;
+  using offset_e = typename Traits::offset_e;
+  using Header = _TrieNodeHeader<Traits>;
+  using Header::hash;
+  using Header::_array_len;
+  using Header::_upper;
+  using Header::_compressed_len;
+  using Header::_lower_offset;
+  using Header::_array_offset;
+  using Header::_compressed_data;
+  static constexpr uint16_t MAX_BRANCH_COUNT = 257;  // 256 (chars) + 1 (NULL)
 
   static constexpr uint16_t NULL_MASK = uint16_t(1) << 15;
   constexpr static int NONE = -1;
   constexpr static int OUT_OF_RANGE = -2;
+  static constexpr uint16_t HEADER_SIZE = sizeof(Header);
   constexpr static uint16_t MAX_SIZE =
-      align(padding(sizeof(TrieNode) + 255, sizeof(uint32_e)) +
+      align(padding(HEADER_SIZE + 255, sizeof(uint32_e)) +
             8 * sizeof(uint32_e)) +
       MAX_BRANCH_COUNT * sizeof(offset_e);
   constexpr static uint8_t LOWER_MASK = 0b00011111;
@@ -72,14 +88,14 @@ struct _TrieNode {
   static uint32_t lbit(uint8_t val) { return (val & LOWER_MASK); }
   uint16_t size() const { return array_end(); }
   uint16_t changed_len(uint8_t new_compressed_len) const {
-    uint16_t prefix_size =
-        padding(sizeof(TrieNode) + new_compressed_len, sizeof(uint32_e));
+    uint16_t prefix_size = padding(HEADER_SIZE + new_compressed_len,
+                                   sizeof(uint32_e));
     return align(prefix_size + lower_size() + array_size());
   }
 
   uint16_t increment_size(int key) const {
     uint16_t prefix_size =
-        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+        padding(HEADER_SIZE + _compressed_len, sizeof(uint32_e));
     uint16_t lower_size_ = lower_size();
     if (key != NONE && !(_upper & (1u << ubit(key)))) {
       lower_size_ += sizeof(uint32_e);
@@ -90,7 +106,7 @@ struct _TrieNode {
 
   uint16_t decrement_size(int key) const {
     uint16_t prefix_size =
-        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+        padding(HEADER_SIZE + _compressed_len, sizeof(uint32_e));
     uint16_t lower_size_ = lower_size();
     if (key != NONE && (_upper & (1u << ubit(key)))) {
       // Only decrement lower_size if this key is the only one in its lower
@@ -105,7 +121,7 @@ struct _TrieNode {
   }
 
   uint16_t calc_lower_start() const {
-    return padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+    return padding(HEADER_SIZE + _compressed_len, sizeof(uint32_e));
   }
 
   uint16_t calc_array_start() const {
@@ -114,7 +130,7 @@ struct _TrieNode {
 
   static constexpr uint16_t size(uint8_t prefix, int key1, int key2) {
     assert(key1 != key2);
-    uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
+    uint16_t prefix_size = padding(HEADER_SIZE + prefix, sizeof(uint32_e));
     uint16_t lower_size;
     if (key1 == NONE || key2 == NONE) {
       lower_size = sizeof(uint32_e);  // only key2's upper bit
@@ -131,7 +147,7 @@ struct _TrieNode {
   // This is an upper-bound estimate used for allocation - actual size may be smaller
   // due to bitmap compression of sparse branch arrays.
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
-    uint16_t prefix_size = padding(sizeof(TrieNode) + prefix, sizeof(uint32_e));
+    uint16_t prefix_size = padding(HEADER_SIZE + prefix, sizeof(uint32_e));
     uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
     uint16_t array_size = branches * sizeof(offset_e);
     return align(prefix_size + lower_size + array_size);
@@ -195,8 +211,8 @@ struct _TrieNode {
 
     _array_len = 1;
     uint16_t array_start_,
-        lower_start_ =
-            padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+        lower_start_ = padding(HEADER_SIZE + _compressed_len,
+                               sizeof(uint32_e));
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     if (key != NONE) {
@@ -231,9 +247,8 @@ struct _TrieNode {
     _upper = src._upper;
 
     uint16_t bcount = bits::count(_upper);
-    _lower_offset =
-        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e)) /
-        sizeof(uint32_e);
+    _lower_offset = padding(HEADER_SIZE + _compressed_len, sizeof(uint32_e)) /
+            sizeof(uint32_e);
     _array_offset =
         align(lower_start() + bcount * sizeof(uint32_e)) / sizeof(offset_e);
 
@@ -261,7 +276,7 @@ struct _TrieNode {
     memcpy(_compressed_data, src.compressed(), _compressed_len);
 
     uint16_t lower_start_ =
-        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+      padding(HEADER_SIZE + _compressed_len, sizeof(uint32_e));
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     _array_len = src._array_len + 1;
@@ -318,7 +333,7 @@ struct _TrieNode {
     memcpy(_compressed_data, src.compressed(), _compressed_len);
 
     uint16_t lower_start_ =
-        padding(sizeof(TrieNode) + _compressed_len, sizeof(uint32_e));
+      padding(HEADER_SIZE + _compressed_len, sizeof(uint32_e));
     uint32_e* lower_ = (uint32_e*)((char*)this + lower_start_);
 
     _array_len = src._array_len - 1;
@@ -659,7 +674,17 @@ void for_each_branch(Fn fn) const {
 
 #pragma pack(push, 1)
 template <typename Traits>
-struct _LeafNode {
+struct _LeafNodeHeader {
+  using hash_t = typename Traits::hash_t;
+  using uint16_e = typename Traits::uint16_e;
+
+  uint16_e value_size;
+  uint8_t key_size;
+  [[no_unique_address]] hash_t hash;
+};
+
+template <typename Traits>
+struct _LeafNode : _LeafNodeHeader<Traits> {
   typedef _LeafNode<Traits> LeafNode;
 
   using hash_t = typename Traits::hash_t;
@@ -667,19 +692,21 @@ struct _LeafNode {
   using uint32_e = typename Traits::uint32_e;
   using uint64_e = typename Traits::uint64_e;
   using offset_e = typename Traits::offset_e;
+  using Header = _LeafNodeHeader<Traits>;
+  using Header::value_size;
+  using Header::key_size;
+  using Header::hash;
+  static constexpr uint16_t HEADER_SIZE = sizeof(Header);
   static constexpr uint16_t MAX_SIZE = Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
   static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
-  uint16_e value_size;
-  uint8_t key_size;
-  [[no_unique_address]] hash_t hash;
   uint8_t data[];
   uint8_t* vdata() { return data + key_size; }
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }
   Slice value() const { return Slice(data + key_size, vsize()); }
   uint16_t vsize() const { return value_size & ~BIG_VALUE_FLAG; }
-  uint16_t size() const { return sizeof(LeafNode) + key_size + vsize(); }
+  uint16_t size() const { return HEADER_SIZE + key_size + vsize(); }
 
   void set_big() { value_size |= BIG_VALUE_FLAG; }
   void clear_big() { value_size &= ~BIG_VALUE_FLAG; }
@@ -698,8 +725,8 @@ struct _LeafNode {
   }
 
   static uint16_t size(uint16_t key, size_t value) {
-    assert(sizeof(LeafNode) + key + value <= MAX_SIZE);
-    return sizeof(LeafNode) + key + value;
+    assert(HEADER_SIZE + key + value <= MAX_SIZE);
+    return HEADER_SIZE + key + value;
   }
 
   static uint16_t size(const Slice& key, const Slice& value) {
