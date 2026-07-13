@@ -83,6 +83,10 @@ jobs:
         shell: bash
         run: cmake -S tests/cross_platform -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
