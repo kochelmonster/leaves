@@ -90,7 +90,7 @@ jobs:
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cmake -S tests/cross_platform -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S tests/cross_platform -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEAVES_LOG=ON
 
       - name: Build (Linux/macOS)
         if: runner.os != 'Windows'
@@ -110,4 +110,4 @@ jobs:
       - name: Test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -V

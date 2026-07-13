@@ -4,6 +4,7 @@ project(leaves_cross_platform_smoke LANGUAGES C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(LEAVES_LOG "Enable leaves logging in smoke binary" OFF)
 
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 OLD)
@@ -32,6 +33,10 @@ if(WIN32)
   # Chocolatey's boost-msvc-14.3 uses MSVC naming (no "lib" prefix) but
   # Boost's auto-link can generate names with "lib" prefix, causing LNK1104.
   target_compile_definitions(leaves_cross_platform_smoke PRIVATE BOOST_ALL_NO_LIB)
+endif()
+
+if (LEAVES_LOG)
+  target_compile_definitions(leaves_cross_platform_smoke PRIVATE LEAVES_LOG)
 endif()
 
 if (TARGET Boost::process)
