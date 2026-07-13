@@ -58,7 +58,7 @@ static const size_t FSTORE_SIGNATURE_SIZE =
 // definition of all headers and data types
 struct _StoreTraits {
   using Aspect = DefaultAspect;
-  typedef uint8_t hash_t[1];
+  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;

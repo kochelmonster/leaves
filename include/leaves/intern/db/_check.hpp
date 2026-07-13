@@ -8,6 +8,7 @@ Database invariant and integrity checks used by the internal implementation.
 #include <set>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 #include "../core/_node.hpp"
 
@@ -68,15 +69,13 @@ template <typename T>
 struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
 };
 
-// Helper to detect if Traits has a hash array (vs scalar hash)
-// Hash trie nodes use hash_t = uint8_t[32] (BLAKE3)
-// Base DB nodes use hash_t = uint8_t (1 byte placeholder)
+// Helper to detect whether Traits uses a real hash buffer or the empty marker.
 template <typename T, typename = void>
 struct is_hash_trie_traits : std::false_type {};
 
 template <typename T>
 struct is_hash_trie_traits<T, std::void_t<typename T::hash_t>>
-    : std::integral_constant<bool, (sizeof(typename T::hash_t) > 1)> {};
+    : std::bool_constant<!std::is_same_v<typename T::hash_t, _NoHash>> {};
 
 // Output hash in hex (used when dump_hash_trie is true)
 template <typename Traits>

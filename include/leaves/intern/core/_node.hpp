@@ -17,6 +17,11 @@ namespace leaves {
 // dummy structure for all node pointers
 struct _Node {};
 
+// Empty hash marker used by traits that do not store a hash inline.
+// Combined with [[no_unique_address]] in the node layout, this keeps the
+// member from consuming storage on all supported compilers.
+struct _NoHash {};
+
 /*
 A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
 Every node has at least one char in the compressed data (the branch_key of the
@@ -31,7 +36,7 @@ struct _TrieNode {
   using uint16_e = typename Traits::uint16_e;
   using offset_e = typename Traits::offset_e;
   static constexpr uint16_t MAX_BRANCH_COUNT = 257;  // 256 (chars) + 1 (NULL)
-  hash_t hash;
+  [[no_unique_address]] hash_t hash;
   uint16_e _array_len;  // < MAX_BRANCH_COUNT
   uint8_t _upper;
   uint8_t _compressed_len;
@@ -667,7 +672,7 @@ struct _LeafNode {
 
   uint16_e value_size;
   uint8_t key_size;
-  hash_t hash;
+  [[no_unique_address]] hash_t hash;
   uint8_t data[];
   uint8_t* vdata() { return data + key_size; }
   const uint8_t* vdata() const { return data + key_size; }
