@@ -419,7 +419,8 @@ struct _MemoryMapFile
     // Geometric growth: grow by at least 25% of current size or 10*AREA_SIZE
     constexpr uint64_t MIN_GROWTH = 10 * AREA_SIZE;
     uint64_t geometric_growth = _memory->file_size / 4;  // 25% growth
-    uint64_t total_growth = std::max({size, MIN_GROWTH, geometric_growth});
+    uint64_t total_growth =
+        (std::max)((std::max)(size, MIN_GROWTH), geometric_growth);
     total_growth = padding(total_growth, AREA_SIZE);
 
     if (_memory->file_size + total_growth > _region.get_size()) {
