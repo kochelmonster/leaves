@@ -178,9 +178,9 @@ struct ReplicationFixture {
 
       // Check if both are done
       if ((sender.state() == Sender::State::IDLE ||
-           sender.state() == Sender::State::ERROR) &&
+           sender.state() == Sender::State::ERR) &&
           (receiver.state() == Receiver::State::IDLE ||
-           receiver.state() == Receiver::State::ERROR)) {
+           receiver.state() == Receiver::State::ERR)) {
         break;
       }
 
@@ -427,7 +427,7 @@ BOOST_FIXTURE_TEST_CASE(test_session_id_mismatch, ReplicationFixture) {
   bad_msg.begin(ReplicationMsgType::COMPLETE, 0xBADBADBADBADBAD);
   sender.on_message_received(bad_msg.data(), bad_msg.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(sender.error() == ReplicationError::SESSION_MISMATCH);
   BOOST_CHECK(sender_events.errored);
 }
@@ -1667,7 +1667,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_garbage, ReplicationFixture) {
   uint8_t garbage[] = {0xFF, 0xFE, 0xFD, 0xFC, 0x00};
   sender.on_message_received(garbage, sizeof(garbage));
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
   BOOST_CHECK(events.errored);
 }
@@ -1709,7 +1709,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_wrong_state_message, ReplicationFixture) {
                            nullptr, 0);
   sender.on_message_received(bad.data(), bad.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -1749,7 +1749,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_bad_subtrie_ack_payload,
                            garbage_payload, sizeof(garbage_payload));
   sender.on_message_received(bad.data(), bad.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -1781,7 +1781,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_magic, ReplicationFixture) {
 
   feed_receiver(receiver, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
   BOOST_CHECK(events.errored);
 }
@@ -1829,7 +1829,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
     buf.advance(msg.size());
     receiver.on_data_received();
   }
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 
   // Now inject a message with a different session ID
   uint64_t wrong_session = sender.session_id() ^ 0xFFFFFFFF;
@@ -1837,7 +1837,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_session_mismatch, ReplicationFixture) {
       build_raw_msg(ReplicationMsgType::COMPLETE, wrong_session, nullptr, 0);
   feed_receiver(receiver, bad.data(), bad.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::SESSION_MISMATCH);
 }
 
@@ -1872,7 +1872,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_payload_too_large, ReplicationFixture) {
 
   feed_receiver(receiver, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::PAYLOAD_TOO_LARGE);
   BOOST_CHECK(events.errored);
 }
@@ -1927,7 +1927,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_unexpected_msg_type, ReplicationFixture) {
   // Session is 0 initially, first message sets it; use that property
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -1956,7 +1956,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_header,
                            sizeof(tiny_payload));
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -1984,7 +1984,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_bad_trie_data_magic, ReplicationFixture) {
                            fake_tth.size());
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -2014,7 +2014,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_subtrie_path_overflow,
                            payload.size());
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -2087,7 +2087,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
   }
 
   // Must transition to ERROR with INVALID_MESSAGE, not crash
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
   BOOST_CHECK(events.errored);
 }
@@ -2117,7 +2117,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_truncated,
       build_raw_msg(ReplicationMsgType::BIG_VALUE_START, 1, tiny, sizeof(tiny));
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -2148,7 +2148,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_too_large,
                            reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::RESOURCE_LIMIT);
 }
 
@@ -2176,7 +2176,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_start_integer_overflow,
                            reinterpret_cast<const uint8_t*>(&bvh), sizeof(bvh));
   feed_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   // Either RESOURCE_LIMIT (size exceeds limit) or RESOURCE_LIMIT (overflow)
   BOOST_CHECK(receiver.error() == ReplicationError::RESOURCE_LIMIT);
 }
@@ -2227,7 +2227,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
     auto msg = receiver_transport.receive();
     feed_receiver(receiver, msg.data(), msg.size());
   }
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 
   // Drain any ACK/COMPLETE sent back to sender (side-effect of first message)
   size_t msgs_before = 0;
@@ -2242,7 +2242,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
                            big_payload.data(), big_payload.size());
   feed_receiver(receiver, bad.data(), bad.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::PAYLOAD_TOO_LARGE);
   BOOST_CHECK(receiver_events.errored);
 
@@ -2254,7 +2254,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_propagates_to_sender, ReplicationFixture) {
       parse_replication_msg(error_msg.data(), error_msg.size(), &error_payload);
   BOOST_REQUIRE(hdr != nullptr);
   BOOST_CHECK(static_cast<ReplicationMsgType>(hdr->msg_type) ==
-              ReplicationMsgType::ERROR);
+              ReplicationMsgType::ERR);
   BOOST_REQUIRE(error_payload.size() >= 1);
   BOOST_CHECK(static_cast<ReplicationError>(error_payload.data()[0]) ==
               ReplicationError::PAYLOAD_TOO_LARGE);
@@ -2342,7 +2342,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_session_mismatch_on_ack,
       reinterpret_cast<const uint8_t*>(rcb.finalize().data()), rcb.size());
   sender.on_message_received(bad.data(), bad.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(sender.error() == ReplicationError::SESSION_MISMATCH);
 }
 
@@ -2570,9 +2570,9 @@ BOOST_FIXTURE_TEST_CASE(test_slot_crash_recovery_via_sanitize,
       }
 
       if (sender.state() == SenderFSM::State::IDLE ||
-          sender.state() == SenderFSM::State::ERROR ||
+          sender.state() == SenderFSM::State::ERR ||
           receiver.state() == ReceiverFSM::State::IDLE ||
-          receiver.state() == ReceiverFSM::State::ERROR)
+          receiver.state() == ReceiverFSM::State::ERR)
         break;
     }
 
@@ -2775,9 +2775,9 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
       }
 
       if (sender.state() == SenderFSM::State::IDLE ||
-          sender.state() == SenderFSM::State::ERROR ||
+          sender.state() == SenderFSM::State::ERR ||
           receiver.state() == ReceiverFSM::State::IDLE ||
-          receiver.state() == ReceiverFSM::State::ERROR)
+          receiver.state() == ReceiverFSM::State::ERR)
         break;
     }
 
@@ -2800,7 +2800,7 @@ BOOST_FIXTURE_TEST_CASE(test_error_returns_big_value_area, ReplicationFixture) {
     receiver.on_data_received();
 
     // Receiver should now be in ERROR state
-    BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::ERROR);
+    BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::ERR);
     BOOST_CHECK(receiver.error() == ReplicationError::INVALID_MESSAGE);
 
     // _transition_to_error should have called _release_slot(), which
@@ -3181,7 +3181,7 @@ BOOST_FIXTURE_TEST_CASE(test_multithreaded_replication, ReplicationFixture) {
   // Run sender on a separate thread
   std::thread sender_thread([&] {
     while (sender.state() != SenderFSM::State::IDLE &&
-           sender.state() != SenderFSM::State::ERROR) {
+           sender.state() != SenderFSM::State::ERR) {
       std::vector<uint8_t> msg;
       if (sender_tsq.try_receive(msg, std::chrono::milliseconds(100))) {
         sender.on_message_received(msg.data(), msg.size());
@@ -3193,7 +3193,7 @@ BOOST_FIXTURE_TEST_CASE(test_multithreaded_replication, ReplicationFixture) {
 
   // Run receiver on this thread
   while (receiver.state() != ReceiverFSM::State::IDLE &&
-         receiver.state() != ReceiverFSM::State::ERROR) {
+         receiver.state() != ReceiverFSM::State::ERR) {
     std::vector<uint8_t> msg;
     if (receiver_tsq.try_receive(msg, std::chrono::milliseconds(100))) {
       auto& buf = receiver.receive_buffer();
@@ -4697,12 +4697,12 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_error, ReplicationFixture) {
 
   // Craft an ERROR message with error code payload
   ReplicationMsgBuilder builder;
-  builder.begin(ReplicationMsgType::ERROR, sender.session_id());
+  builder.begin(ReplicationMsgType::ERR, sender.session_id());
   uint8_t err_byte = static_cast<uint8_t>(ReplicationError::INTERNAL_ERROR);
   builder.append_payload(&err_byte, 1);
   sender.on_message_received(builder.data(), builder.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(se.errored);
 }
 
@@ -4733,10 +4733,10 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_error_empty_payload,
   BOOST_REQUIRE(sender.state() == SenderFSM::State::AWAITING_RESPONSE);
 
   ReplicationMsgBuilder builder;
-  builder.begin(ReplicationMsgType::ERROR, sender.session_id());
+  builder.begin(ReplicationMsgType::ERR, sender.session_id());
   sender.on_message_received(builder.data(), builder.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(se.errored);
 }
 
@@ -4769,7 +4769,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_receives_unexpected_msg_type,
   builder.begin(ReplicationMsgType::TRIE_DATA, sender.session_id());
   sender.on_message_received(builder.data(), builder.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(se.errored);
 }
 
@@ -4808,16 +4808,16 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_message, ReplicationFixture) {
     auto msg = r2s.receive();
     feed_message_to_receiver(receiver, msg.data(), msg.size());
   }
-  BOOST_REQUIRE(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_REQUIRE(receiver.state() != ReceiverFSM::State::ERR);
   uint64_t sid = receiver.session_id();
 
   ReplicationMsgBuilder builder;
-  builder.begin(ReplicationMsgType::ERROR, sid);
+  builder.begin(ReplicationMsgType::ERR, sid);
   uint8_t err_byte = static_cast<uint8_t>(ReplicationError::INTERNAL_ERROR);
   builder.append_payload(&err_byte, 1);
   feed_message_to_receiver(receiver, builder.data(), builder.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(re.errored);
   BOOST_CHECK(re.error == ReplicationError::INTERNAL_ERROR);
 }
@@ -4861,10 +4861,10 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_gets_error_empty_payload,
   uint64_t sid = receiver.session_id();
 
   ReplicationMsgBuilder builder;
-  builder.begin(ReplicationMsgType::ERROR, sid);
+  builder.begin(ReplicationMsgType::ERR, sid);
   feed_message_to_receiver(receiver, builder.data(), builder.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(re.errored);
   BOOST_CHECK(re.error == ReplicationError::INTERNAL_ERROR);
 }
@@ -4898,7 +4898,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_parse_expected_invalid,
   buf.advance(sizeof(raw));
   receiver.on_data_received();
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(re.error == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -5001,13 +5001,13 @@ BOOST_FIXTURE_TEST_CASE(test_sender_msg_after_error, ReplicationFixture) {
   // Cause an error first
   uint8_t garbage[] = {0xFF, 0xFE};
   sender.on_message_received(garbage, sizeof(garbage));
-  BOOST_REQUIRE(sender.state() == SenderFSM::State::ERROR);
+  BOOST_REQUIRE(sender.state() == SenderFSM::State::ERR);
 
   // Now send a valid message — should hit default case
   auto msg = build_raw_msg(ReplicationMsgType::COMPLETE, sender.session_id(),
                            nullptr, 0);
   sender.on_message_received(msg.data(), msg.size());
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
 }
 
 // Lines 410-412: Malformed SUBTRIE_ACK with iterator error
@@ -5041,7 +5041,7 @@ BOOST_FIXTURE_TEST_CASE(test_sender_subtrie_ack_iterator_error,
                            bad_ack, sizeof(bad_ack));
   sender.on_message_received(msg.data(), msg.size());
 
-  BOOST_CHECK(sender.state() == SenderFSM::State::ERROR);
+  BOOST_CHECK(sender.state() == SenderFSM::State::ERR);
   BOOST_CHECK(sender.error() == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -5111,7 +5111,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_corrupt_after_grow,
   buf.advance(4);
   receiver.on_data_received();
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(re.error == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -5137,7 +5137,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_after_error, ReplicationFixture) {
   raw.msg_type = static_cast<uint8_t>(ReplicationMsgType::COMPLETE);
   std::memset(raw.reserved, 0, sizeof(raw.reserved));
   feed_receiver(receiver, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
-  BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_REQUIRE(receiver.state() == ReceiverFSM::State::ERR);
 
   // Reset error tracking
   re.reset();
@@ -5147,7 +5147,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_msg_after_error, ReplicationFixture) {
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // Should stay in ERROR and fire another error event
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
 }
 
 // =============================================================================
@@ -5207,7 +5207,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_zero_root, ReplicationFixture) {
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // Should not error — zero root means nothing to compare, sends prune ACK
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // Line 1538, 1550: _compare_wire_with_local with root pointing outside buffer
@@ -5250,7 +5250,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_bad_root_offset,
                            payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(re.error == ReplicationError::INVALID_MESSAGE);
 }
 
@@ -5300,7 +5300,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_leaf,
 
   // The leaf bounds check should prune the node (set wire_node=0, return true)
   // and the receiver continues normally (no error)
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // Lines 1464-1470: Trie bounds check — trie node extends past buffer end
@@ -5344,7 +5344,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_data_truncated_trie,
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // Trie bounds check prunes the bad node (return true), no error
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // =============================================================================
@@ -5477,7 +5477,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_storage_full_during_merge,
     run_protocol(sender, receiver, s2r, r2s, 5000);
 
     // If the FSM caught it, check the error state
-    if (receiver.state() == ReceiverFSM::State::ERROR) {
+    if (receiver.state() == ReceiverFSM::State::ERR) {
       BOOST_CHECK(re.error == ReplicationError::INTERNAL_ERROR);
     }
   } catch (const StorageFull&) {
@@ -5556,7 +5556,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_leaf_size_exceeds_buffer,
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
   // Bounds check prunes the node (return true), no error
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // Lines 1469-1470: Trie header fits but trie->size() exceeds buffer
@@ -5603,7 +5603,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer,
                            payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // Lines 1438-1439: Big value leaf with vsize < sizeof(BigValueDataHeader)
@@ -5656,7 +5656,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small,
 
   BOOST_TEST_MESSAGE("State after: " << static_cast<int>(receiver.state()));
   // vsize too small prunes the node (return true), no error
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // Lines 1444-1445: Big value leaf with bv_hdr->value_size > max
@@ -5710,7 +5710,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large,
                            payload.size());
   feed_message_to_receiver(receiver, msg.data(), msg.size());
 
-  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() != ReceiverFSM::State::ERR);
 }
 
 // Lines 1494-1496: Trie child array extends past buffer
@@ -6012,7 +6012,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_overflow,
                                (const uint8_t*)&bvd_hdr, sizeof(bvd_hdr));
   feed_message_to_receiver(receiver, bvd_msg.data(), bvd_msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
 }
 
 // =============================================================================
@@ -6169,7 +6169,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_data_area_overflow,
                                 sizeof(data_hdr));
   feed_receiver(receiver, data_msg.data(), data_msg.size());
 
-  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERROR);
+  BOOST_CHECK(receiver.state() == ReceiverFSM::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
   BOOST_CHECK(events.errored);
 }
@@ -6213,7 +6213,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_storage_full,
   sender.begin(&s2r, &se);
   run_protocol(sender, receiver, s2r, r2s, 200);
 
-  BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERROR);
+  BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
 }
 
@@ -6256,7 +6256,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_merge_catches_std_exception,
   sender.begin(&s2r, &se);
   run_protocol(sender, receiver, s2r, r2s, 200);
 
-  BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERROR);
+  BOOST_CHECK(receiver.state() == ThrowReceiver::State::ERR);
   BOOST_CHECK(receiver.error() == ReplicationError::INTERNAL_ERROR);
 }
 

@@ -351,9 +351,9 @@ static void run_protocol(Sender& sender, Receiver& receiver, TestTransport& st,
       activity = true;
     }
     if ((sender.state() == Sender::State::IDLE ||
-         sender.state() == Sender::State::ERROR) &&
+         sender.state() == Sender::State::ERR) &&
         (receiver.state() == Receiver::State::IDLE ||
-         receiver.state() == Receiver::State::ERROR))
+         receiver.state() == Receiver::State::ERR))
       break;
     if (!activity) break;
   }

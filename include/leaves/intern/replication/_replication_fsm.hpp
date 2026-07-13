@@ -207,7 +207,7 @@ struct ReplicationSenderFSM {
     SENDING_BIG_VALUES,            // Sending big value data
     AWAITING_BIG_VALUE_ACK,        // Waiting for BIG_VALUE_ACK
     COMPLETE,                      // Replication finished
-    ERROR                          // Error occurred
+    ERR                            // Error occurred
   };
 
   // Constants for big value streaming
@@ -383,13 +383,13 @@ struct ReplicationSenderFSM {
         _send_next_buffer();
         break;
 
-      case ReplicationMsgType::ERROR:
+      case ReplicationMsgType::ERR:
         LEAVES_INTERNAL_LOG(
             LEAVES_LOG_ERROR,
             "[dbg] Sender received ERROR: session_id=%llu error=%d\n",
             (unsigned long long)_session_id,
             payload.size() > 0 ? (int)payload.data()[0] : -1);
-        _state = State::ERROR;
+        _state = State::ERR;
         _error = payload.size() > 0
                      ? static_cast<ReplicationError>(payload.data()[0])
                      : ReplicationError::INTERNAL_ERROR;
@@ -687,11 +687,11 @@ struct ReplicationSenderFSM {
         "[dbg] Sender error: session_id=%llu error=%d reason=%s\n",
         (unsigned long long)_session_id, (int)error, reason ? reason : "");
     _db->release_hash_trie(_txn);
-    _state = State::ERROR;
+    _state = State::ERR;
     _error = error;
 
     // Send error to remote
-    _msg_builder.begin(ReplicationMsgType::ERROR, _session_id);
+    _msg_builder.begin(ReplicationMsgType::ERR, _session_id);
     uint8_t err_byte = static_cast<uint8_t>(error);
     _msg_builder.append_payload(&err_byte, 1);
     _transport->send(_msg_builder.data(), _msg_builder.size());
@@ -913,7 +913,7 @@ struct ReplicationReceiverFSM {
     AWAITING_BIG_VALUES,   // Received BIG_VALUE_START, awaiting data
     RECEIVING_BIG_VALUES,  // Receiving big value data
     COMPLETE,              // Replication finished
-    ERROR                  // Error occurred
+    ERR                    // Error occurred
   };
 
   DB* _db;
@@ -1270,13 +1270,13 @@ struct ReplicationReceiverFSM {
         _state = State::IDLE;
         break;
 
-      case ReplicationMsgType::ERROR:
+      case ReplicationMsgType::ERR:
         LEAVES_INTERNAL_LOG(LEAVES_LOG_ERROR,
                             "[dbg] Receiver ERROR: session_id=%llu error=%d\n",
                             (unsigned long long)_session_id,
                             payload.size() > 0 ? (int)payload.data()[0] : -1);
         _db->release_hash_trie(_txn);
-        _state = State::ERROR;
+        _state = State::ERR;
         _error = payload.size() > 0
                      ? static_cast<ReplicationError>(payload.data()[0])
                      : ReplicationError::INTERNAL_ERROR;
@@ -1450,7 +1450,7 @@ struct ReplicationReceiverFSM {
         _connect_subtrie_to_parent(Slice(_path_buffer),
                                    (TempOffset*)&transfer_hdr->root);
         _path_buffer.resize(parent_len);
-        if (_state == State::ERROR)
+        if (_state == State::ERR)
           return;  // temp buffers freed; path is dangling
       }
     }
@@ -1972,7 +1972,7 @@ struct ReplicationReceiverFSM {
         "[dbg] Receiver error: session_id=%llu error=%d reason=%s\n",
         (unsigned long long)_session_id, (int)error, reason ? reason : "");
     _db->release_hash_trie(_txn);
-    _state = State::ERROR;
+    _state = State::ERR;
     _error = error;
 
     // Discard pending main data
@@ -1990,7 +1990,7 @@ struct ReplicationReceiverFSM {
     _free_temp_buffers();
 
     if (_session_id != 0) {
-      _msg_builder.begin(ReplicationMsgType::ERROR, _session_id);
+      _msg_builder.begin(ReplicationMsgType::ERR, _session_id);
       uint8_t err_byte = static_cast<uint8_t>(error);
       _msg_builder.append_payload(&err_byte, 1);
       _transport->send(_msg_builder.data(), _msg_builder.size());

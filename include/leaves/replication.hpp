@@ -17,7 +17,7 @@ namespace leaves {
 enum class ReplicationState {
   IDLE,    // Not started, or finished successfully
   ACTIVE,  // Replication in progress
-  ERROR    // Error occurred
+  ERR      // Error occurred
 };
 
 template <typename Traits>
@@ -71,8 +71,8 @@ class ReplicationSender {
 
   ReplicationState state() const {
     switch (_fsm.state()) {
-      case SenderFSM::State::ERROR:
-        return ReplicationState::ERROR;
+      case SenderFSM::State::ERR:
+        return ReplicationState::ERR;
       case SenderFSM::State::IDLE:
         return ReplicationState::IDLE;
       default:
@@ -134,8 +134,8 @@ class ReplicationReceiver {
 
   ReplicationState state() const {
     switch (_fsm.state()) {
-      case ReceiverFSM::State::ERROR:
-        return ReplicationState::ERROR;
+      case ReceiverFSM::State::ERR:
+        return ReplicationState::ERR;
       case ReceiverFSM::State::IDLE:
         return ReplicationState::IDLE;
       default:

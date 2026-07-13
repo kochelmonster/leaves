@@ -18,7 +18,7 @@ enum class ReplicationMsgType : uint8_t {
   SUBTRIE_ACK =
       0x02,  // ACK subtries at paths - sender can skip (receiver → sender)
   COMPLETE = 0x03,           // Replication complete (either side)
-  ERROR = 0x04,              // Error occurred (either side)
+  ERR = 0x04,                // Error occurred (either side)
   FRACTION_COMPLETE = 0x05,  // Fraction merged, restart from root
                              // (receiver → sender)
   BIG_VALUE_DATA = 0x06,     // Big value data transfer (sender → receiver)
