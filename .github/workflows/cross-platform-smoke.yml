@@ -105,9 +105,23 @@ jobs:
       - name: Test (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 120 --no-tests=error
 
-      - name: Test (Windows)
+      - name: Test (Windows direct)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ctest --test-dir build --output-on-failure -V
+        run: |
+          $exe = Join-Path (Resolve-Path build) "leaves_cross_platform_smoke.exe"
+          if (-not (Test-Path -Path $exe -PathType Leaf)) {
+            Write-Error "Smoke executable not found: $exe"
+            exit 1
+          }
+          $proc = Start-Process -FilePath $exe -NoNewWindow -PassThru
+          if (-not (Wait-Process -InputObject $proc -Timeout 120 -ErrorAction SilentlyContinue)) {
+            Write-Error "Smoke executable timed out after 120s"
+            Stop-Process -InputObject $proc -Force
+            exit 1
+          }
+          if ($proc.ExitCode -ne 0) {
+            exit $proc.ExitCode
+          }
