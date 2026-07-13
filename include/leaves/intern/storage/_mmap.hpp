@@ -60,7 +60,7 @@ static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 // definition of all headers and data types
 struct _MemoryMapTraits {
   using Aspect = DefaultAspect;
-  typedef uint8_t hash_t[1];
+  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
