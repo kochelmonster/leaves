@@ -1812,7 +1812,7 @@ struct ReplicationReceiverFSM {
       using CursorTraits_ = typename DB::CursorTraits;
       _Cursor<CursorTraits_> main_cursor(_db, &txn->root);
       using BigMemoryType = _BigMemory<_Cursor<CursorTraits_>>;
-      BigMemoryType bigmem(_db, &txn->free_bigmem_root);
+      BigMemoryType bigmem(_db, &txn->bigmem);
       _merge_policy.main_cursor = &main_cursor;
       _merge_policy.bigmemory = &bigmem;
 

@@ -32,8 +32,20 @@ struct _TransactionBase : public Traits_::PageHeader {
   // pointer to the active offset memory manager root
   offset_e offset_root;
 
-  // pointer to the active bigmem freelist trie root
-  offset_e free_bigmem_root;
+  struct _Bigmem {
+    offset_e root;
+    offset_e hot_offset;
+    uint64_t hot_size;
+    bool hot_successor;
+    void reset() {
+      hot_offset = 0;
+      hot_size = 0;
+      hot_successor = false;
+    }
+  };
+
+  // big memory state: free chunk trie root + hot-path chunk cache
+  _Bigmem bigmem;
 
   // pointer to the oldest transaction
   offset_e start_txn;
@@ -160,7 +172,6 @@ struct _WalDbMixin {
   _WalWriter _wal;
   uint64_t _wal_flush_threshold{100 * 1024 * 1024};  // 1 MB default
 
-
   bool wal_enabled() const { return _wal.is_open(); }
 
   std::string wal_base_path() const {
@@ -230,8 +241,7 @@ struct _WalDbMixin {
 
     // Flush replayed data to storage before removing WAL files so crash
     // after this point does not lose recovered state.
-    if (have_committed)
-      _derived().flush(true, true);
+    if (have_committed) _derived().flush(true, true);
     _wal.reset(wal_base_path());
   }
 
@@ -334,8 +344,13 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       : _storage(storage),
         _header(storage.resolve(&header, READ)),
         _name(name) {
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::ctor offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu cursor id=%llu address=%p\n",
-                       (unsigned long long)header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->txn_cursor_id, (char*)_header);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "_DB::ctor offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu "
+        "cursor id=%llu address=%p\n",
+        (unsigned long long)header, (unsigned)_header->db_type_id,
+        (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn,
+        (unsigned long long)_header->txn_cursor_id, (char*)_header);
     if (_header->prepared_txn != _header->read_txn) {
       _active_txn = resolve<Transaction>(&_header->prepared_txn);
     }
@@ -356,8 +371,11 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header = _storage.resolve(header, READ);
     memset((char*)_header, 0, sizeof(Header));
     _header->db_type_id = Self::DB_TYPE_ID;
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::init offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u\n",
-               (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "_DB::init offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u\n",
+        (unsigned long long)*header, (unsigned)_header->db_type_id,
+        (unsigned)Self::DB_TYPE_ID);
     new (&_header->txn_lock) SpinLock();
     new (&_header->txn_ref_lock) SpinLock();
 
@@ -373,7 +391,9 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     txn->slot_id = Transaction::SLOT_ID;
     txn->used = sizeof(Transaction);
     txn->txn_id = tid_t(1);
-    txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+    txn->root = txn->offset_root = 0;
+    txn->bigmem.root = 0;
+    txn->bigmem.reset();
     txn->next_txn = 0;
     txn->refs.store(0);
     txn->start_txn = _header->read_txn;
@@ -390,8 +410,14 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header->next_txn_page = resolve(next);
     _active_txn.reset();
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_DB::init / end offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u read_txn=%llu prepared_txn=%llu next_txn_page=%llu\n",
-               (unsigned long long)*header, (unsigned)_header->db_type_id, (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn, (unsigned long long)_header->prepared_txn, (unsigned long long)_header->next_txn_page);
+    LEAVES_INTERNAL_LOG(
+        LEAVES_LOG_DEBUG,
+        "_DB::init / end offset=%llu db_type_id=%u Self::DB_TYPE_ID=%u "
+        "read_txn=%llu prepared_txn=%llu next_txn_page=%llu\n",
+        (unsigned long long)*header, (unsigned)_header->db_type_id,
+        (unsigned)Self::DB_TYPE_ID, (unsigned long long)_header->read_txn,
+        (unsigned long long)_header->prepared_txn,
+        (unsigned long long)_header->next_txn_page);
     make_dirty(_header);
     flush();
   }
@@ -472,7 +498,11 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       txn->slot_id = Transaction::SLOT_ID;
       txn->used = sizeof(Transaction);
       txn->txn_id = tid_t(1);
-      txn->root = txn->offset_root = txn->free_bigmem_root = 0;
+      txn->root = txn->offset_root = 0;
+      txn->bigmem.root = 0;
+      txn->bigmem.hot_offset = 0;
+      txn->bigmem.hot_size = 0;
+      txn->bigmem.hot_successor = false;
       txn->next_txn = 0;
       txn->refs.store(0);
       txn->start_txn = _header->read_txn;
@@ -889,17 +919,17 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
         start_transaction(defrag_cursor_id, false, TransactionOrigin::defrag);
     assert(txn);
 
-    if (!txn->free_bigmem_root) {
+    if (!txn->bigmem.root) {
       rollback(defrag_cursor_id, TransactionOrigin::defrag);
       return;  // No big memory allocated yet
     }
 
     // Use the non-transactional cursor type for the free-bigmem trie.
     // _TransactionalCursor rewires its root to txn->root in update(), which
-    // would ignore &txn->free_bigmem_root and prevent defrag from working.
+    // would ignore &txn->bigmem.root and prevent defrag from working.
     using RawCursor = _Cursor<CursorTraits>;
     using BigMemory = _BigMemory<RawCursor>;
-    BigMemory big_mem(this, &txn->free_bigmem_root);
+    BigMemory big_mem(this, &txn->bigmem);
     big_mem.defrag(txn);
     flush();
     commit(defrag_cursor_id, false, TransactionOrigin::defrag);
@@ -1004,12 +1034,13 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
 
     if (offset.type() == TRIE) {
       trie_ptr node = resolve<TrieNode>(&offset);
-      auto* hdr =
-          reinterpret_cast<const PageHeader*>((const char*)&*node - sizeof(PageHeader));
+      auto* hdr = reinterpret_cast<const PageHeader*>((const char*)&*node -
+                                                      sizeof(PageHeader));
 
       // Page-level checks
       if (hdr->slot_id >= PAGE_SIZES_COUNT) return false;
-      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id]) return false;
+      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id])
+        return false;
 
       // Trie node structural checks
       if (node->len() > 255) return false;
@@ -1036,12 +1067,13 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
 
     if (offset.type() == LEAF) {
       leaf_ptr leaf = resolve<LeafNode>(&offset);
-      auto* hdr =
-          reinterpret_cast<const PageHeader*>((const char*)&*leaf - sizeof(PageHeader));
+      auto* hdr = reinterpret_cast<const PageHeader*>((const char*)&*leaf -
+                                                      sizeof(PageHeader));
 
       // Page-level checks
       if (hdr->slot_id >= PAGE_SIZES_COUNT) return false;
-      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id]) return false;
+      if (hdr->used + sizeof(PageHeader) > PAGE_SIZES[hdr->slot_id])
+        return false;
 
       // Leaf node structural checks
       if (leaf->key_size > 255) return false;
@@ -1076,7 +1108,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       return true;  // unhealthy found, stop iterating
     });
 
-    // If the last healthy transaction is not the current read_txn, switch to it.
+    // If the last healthy transaction is not the current read_txn, switch to
+    // it.
     if (last_healthy && last_healthy != _header->read_txn) {
       _header->read_txn = last_healthy;
       _header->prepared_txn = last_healthy;

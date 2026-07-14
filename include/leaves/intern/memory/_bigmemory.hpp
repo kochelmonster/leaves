@@ -37,6 +37,7 @@ struct _BigMemory {
   using offset_e = typename Traits::offset_e;
   using uint64_e = typename Traits::uint64_e;
   using chunk_ptr = typename Traits::template Pointer<Chunk>;
+  using Bigmem = typename DB::Transaction::TransactionBase::_Bigmem;
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;
   static constexpr auto MAX_PAGE_SIZE =
@@ -50,30 +51,30 @@ struct _BigMemory {
     tid_t txn_id;
   };
 
-  struct CursorTraits : public Traits {
-  };
+  struct CursorTraits : public Traits {};
 
   DB* _db;
   TCursor _free_cursor;
+  Bigmem* _bigmem;
 
-  _BigMemory(DB* db, offset_e* free_bigmem_root)
-      : _db(db), _free_cursor(db, free_bigmem_root) {}
+  _BigMemory(DB* db, Bigmem* bigmem)
+      : _db(db), _free_cursor(db, &bigmem->root), _bigmem(bigmem) {}
 
   template <typename LeafNode>
   static uint16_t modify_size(uint16_t key, uint64_t size,
                               size_t big_inline_size = sizeof(BigValue)) {
     key &= 0xff;
-    if (sizeof(LeafNode) + size + key > MAX_PAGE_SIZE)
-      return big_inline_size;
+    if (sizeof(LeafNode) + size + key > MAX_PAGE_SIZE) return big_inline_size;
     return size;
   }
 
-  void _add_chunk(offset_t offset, size_t size, bool has_successor, bool freed) {
+  void _add_chunk(offset_t offset, size_t size, bool has_successor,
+                  bool freed) {
     uint64_t offset_val = offset._offset & ~uint64_t(1);
     if (has_successor) {
       offset_val |= 1;
     }
-    
+
     FreeKey fkey{size, offset_val};
     _free_cursor.find(Slice(&fkey, sizeof(fkey)));
     assert(!_free_cursor.is_valid());
@@ -84,8 +85,9 @@ struct _BigMemory {
     _free_cursor.value(vblock_slice);
   }
 
-  void reset(offset_e* free_bigmem_root) {
-    _free_cursor.set_root(free_bigmem_root);
+  void reset(Bigmem* bigmem) {
+    _bigmem = bigmem;
+    _free_cursor.set_root(&bigmem->root);
   }
 
   void alloc(uint64_t size, BigValue* result) {
@@ -94,6 +96,31 @@ struct _BigMemory {
     uint64_t found_size;
     offset_t found_offset;
     bool has_successor = false;
+
+    if (_bigmem->hot_size >= padded_size) {
+      found_offset = _bigmem->hot_offset;
+      found_size = padded_size;
+
+      _bigmem->hot_offset += padded_size;
+      _bigmem->hot_size -= padded_size;
+      if (_bigmem->hot_size == 0) {
+        has_successor = _bigmem->hot_successor;
+        _bigmem->reset();
+      }
+      else {
+        has_successor = true;
+      }
+
+      _db->prefetch(&found_offset, WRITE);
+      auto header_ptr =
+          (FreeKey*)(char*)_db->template resolve<Chunk>(&found_offset, WRITE);
+      header_ptr->size = found_size;
+      header_ptr->offset = found_offset | (has_successor ? 1 : 0);
+
+      result->chunk_offset = found_offset + sizeof(FreeKey);
+      result->value_size = size;
+      return;
+    }
 
     FreeKey fkey;
     fkey.size = padded_size;
@@ -129,12 +156,19 @@ struct _BigMemory {
 
     uint64_t delta = found_size - padded_size;
     if (delta >= MAX_PAGE_SIZE) {
-      _add_chunk(found_offset + padded_size, delta, has_successor, false);
+      if (_bigmem->hot_size > 0) {
+        _add_chunk(offset_t(_bigmem->hot_offset), _bigmem->hot_size,
+                   _bigmem->hot_successor, false);
+      }
+      _bigmem->hot_offset = found_offset + padded_size;
+      _bigmem->hot_size = delta;
+      _bigmem->hot_successor = has_successor;
       found_size = padded_size;
       has_successor = true;
     }
 
-    auto header_ptr = (FreeKey*)(char*)_db->template resolve<Chunk>(&found_offset, WRITE);
+    auto header_ptr =
+        (FreeKey*)(char*)_db->template resolve<Chunk>(&found_offset, WRITE);
     header_ptr->size = found_size;
     header_ptr->offset = found_offset | (has_successor ? 1 : 0);
 
@@ -155,11 +189,17 @@ struct _BigMemory {
 
   template <typename txn_ptr>
   void defrag(txn_ptr txn) {
-    TCursor iter_cursor(_db, &txn->free_bigmem_root);
-    TCursor lookup_cursor(_db, &txn->free_bigmem_root);
-    
+    if (_bigmem->hot_size > 0) {
+      _add_chunk(offset_t(_bigmem->hot_offset), _bigmem->hot_size,
+                  _bigmem->hot_successor, false);
+      _bigmem->reset();
+    }
+
+    TCursor iter_cursor(_db, &txn->bigmem.root);
+    TCursor lookup_cursor(_db, &txn->bigmem.root);
+
     iter_cursor.first();
-    
+
     while (iter_cursor.is_valid()) {
       ValueBlock* vblock = (ValueBlock*)iter_cursor.value().data();
       if (!_db->may_recycle(*vblock)) {
@@ -177,40 +217,41 @@ struct _BigMemory {
 
       uint64_t total_size = current_size;
       bool found_mergeable = false;
-      
+
       while (has_successor) {
         uint64_t next_offset = current_offset + total_size;
         offset_t next_offset_t(next_offset);
         auto next_header = _db->template resolve<FreeKey>(&next_offset_t, READ);
         FreeKey next_key = *next_header;
-        
+
         lookup_cursor.find(Slice((char*)next_header, sizeof(FreeKey)));
         if (!lookup_cursor.is_valid()) {
           break;
         }
-        
+
         ValueBlock* next_vblock = (ValueBlock*)lookup_cursor.value().data();
         if (!_db->may_recycle(*next_vblock)) {
           break;
         }
-        
+
         lookup_cursor.remove();
         total_size += next_header->size;
         has_successor = (next_header->offset & 1) != 0;
         found_mergeable = true;
       }
-      
+
       if (found_mergeable) {
         // Update the header of the merged chunk
         offset_t current_offset_t(current_offset);
-        auto merged_header = _db->template resolve<FreeKey>(&current_offset_t, WRITE);
+        auto merged_header =
+            _db->template resolve<FreeKey>(&current_offset_t, WRITE);
         merged_header->size = total_size;
         uint64_t offset_val = current_offset & ~uint64_t(1);
         if (has_successor) {
           offset_val |= 1;
         }
         merged_header->offset = offset_val;
-        
+
         // Remove old entry and add merged entry using the lookup cursor.
         // (Avoids relying on iter_cursor's internal stack after mutations.)
         lookup_cursor.find(Slice(&current_key, sizeof(current_key)));

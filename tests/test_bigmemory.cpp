@@ -338,7 +338,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
     h1->offset = (off1_raw & ~uint64_t(1));  // last chunk
 
     // Insert both chunks into the free-bigmem trie, marking them recyclable.
-    BigMemory bm(cursor->_db, &cursor->_txn->free_bigmem_root);
+    BigMemory bm(cursor->_db, &cursor->_txn->bigmem);
     bm._add_chunk(base, CHUNK0_SIZE, true, true);
     bm._add_chunk(off1, CHUNK1_SIZE, false, true);
 
@@ -359,7 +359,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
   {
     auto pre = db->create_cursor();
     pre->start_transaction();
-    BigMemory bm(pre->_db, &pre->_txn->free_bigmem_root);
+    BigMemory bm(pre->_db, &pre->_txn->bigmem);
 
     const uint64_t base_raw = (uint64_t)base._offset;
     const uint64_t off1_raw = (uint64_t)off1._offset;
@@ -395,7 +395,7 @@ BOOST_AUTO_TEST_CASE(test_big_area_defrag_merges_adjacent_free_chunks) {
   // Verify: two chunks were replaced by a single merged chunk.
   auto check = db->create_cursor();
   check->start_transaction();
-  BigMemory bm(check->_db, &check->_txn->free_bigmem_root);
+  BigMemory bm(check->_db, &check->_txn->bigmem);
 
   const uint64_t base_raw = (uint64_t)base._offset;
   const uint64_t off1_raw = (uint64_t)off1._offset;

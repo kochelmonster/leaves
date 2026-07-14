@@ -690,8 +690,7 @@ struct _TransactionalCursor
 
   BigMemory& get_bigmemory() {
     if (!_bigmemory) {
-      _bigmemory =
-          std::make_unique<BigMemory>(this->_db, &this->_txn->free_bigmem_root);
+      _bigmemory = std::make_unique<BigMemory>(this->_db, &this->_txn->bigmem);
     }
     return *_bigmemory;
   }
@@ -848,7 +847,7 @@ struct _TransactionalCursor
       auto read_txn = this->_db->txn_ref();
       this->_txn = read_txn;
       this->_root = &this->_txn->root;
-      if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
+      if (_bigmemory) _bigmemory->reset(&this->_txn->bigmem);
       this->stack.clear();
       _refind_buffer = this->current_key;
       this->find(_refind_buffer);
@@ -904,7 +903,7 @@ struct _TransactionalCursor
     this->_txn->refs.fetch_add(1);
     this->_root = &this->_txn->root;
     this->stack.front().offset = this->_root;
-    if (_bigmemory) _bigmemory->reset(&this->_txn->free_bigmem_root);
+    if (_bigmemory) _bigmemory->reset(&this->_txn->bigmem);
     if ((this->current_key.size() || this->rest_key.size()) &&
         old_root_val != *this->_root) {
       // adjust to new root
