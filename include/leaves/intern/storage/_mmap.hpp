@@ -79,7 +79,7 @@ struct _MemoryMapTraits {
   };
 
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
-  static constexpr size_t AREA_SIZE = 512 * K;
+  static constexpr size_t AREA_SIZE = 2 * M;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
 #ifdef LEAVES_SINGLE_PROCESS
   static constexpr uint16_t MAX_PROCESSES = 1;

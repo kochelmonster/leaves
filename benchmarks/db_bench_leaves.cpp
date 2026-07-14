@@ -73,6 +73,9 @@ static int FLAGS_batch_size = 1000;
 // Use writable MMAP
 static bool FLAGS_writemap = false;
 
+// MapStorage mmap size in GiB. Keep default behavior at 64 GiB.
+static int FLAGS_map_size_gb = 64;
+
 // don't explicitly sync meta data
 static bool FLAGS_metasync = false;
 
@@ -660,12 +663,14 @@ class Benchmark {
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
 
+    const uint64_t map_size_bytes = static_cast<uint64_t>(FLAGS_map_size_gb) * leaves::G;
+
     if (using_replicating_) {
-      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), 64 * leaves::G);
+      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), map_size_bytes);
     } else if (using_file_storage_) {
       file_storage_ = leaves::FileStorage::create(test_fname.c_str());
     } else {
-      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), 64 * leaves::G);
+      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), map_size_bytes);
     }
 
     if (using_confluence_) {
@@ -751,16 +756,16 @@ class Benchmark {
         auto txn = db_internal->_wtxn;
 
         std::cout << "Iter " << iter
-                  << ": free_bigmem_root=" << txn->free_bigmem_root._offset
+                  << ": free_bigmem_root=" << txn->bigmem.root._offset
                   << std::endl;
 
         if (iter >= 0 && iter < 240) {
-          if (txn->free_bigmem_root) {
+          if (txn->bigmem.root) {
             char filename[256];
             snprintf(filename, sizeof(filename), "errors/dump_bigmen_%06d.yaml",
                      iter);
             std::ofstream of(filename);
-            leaves::_Dumper(db, txn->free_bigmem_root, false).dump(of);
+            leaves::_Dumper(db, txn->bigmem.root, false).dump(of);
           }
           if (txn->root) {
             char filename[256];
@@ -1013,6 +1018,8 @@ int main(int argc, char** argv) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {
       FLAGS_page_size = n;
+    } else if (sscanf(argv[i], "--map_size_gb=%d%c", &n, &junk) == 1 && n > 0) {
+      FLAGS_map_size_gb = n;
     } else if (sscanf(argv[i], "--use_file_storage=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_use_file_storage = (n == 1) ? true : false;
