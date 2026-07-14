@@ -55,6 +55,26 @@ To use Leaves, you need:
 
 Simply integrate it into your project using one of the following methods.
 
+### Windows with vcpkg manifest mode
+
+On Windows, Leaves supports vcpkg manifest mode out of the box through the repository `vcpkg.json`.
+
+```powershell
+git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\\vcpkg"
+& "$env:USERPROFILE\\vcpkg\\bootstrap-vcpkg.bat"
+
+cmake -S . -B build -G Ninja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_TOOLCHAIN_FILE="$env:USERPROFILE\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" `
+    -DVCPKG_MANIFEST_MODE=ON `
+    -DVCPKG_TARGET_TRIPLET=x64-windows
+
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
+```
+
+To build examples with the same dependency setup, pass the same toolchain and manifest flags when configuring an example directory.
+
 ### Include the headers directly
 
 Add the `include/` directory to your project's include path.

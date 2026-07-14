@@ -1,0 +1,12 @@
+{
+  "name": "leaves",
+  "version-string": "3.0.0",
+  "dependencies": [
+    "boost-endian",
+    "boost-filesystem",
+    "boost-interprocess",
+    "boost-multi-index",
+    "boost-process",
+    "boost-test"
+  ]
+}
