@@ -8,6 +8,7 @@ set(BLAKE3_SIMD_TYPE "none" CACHE STRING "" FORCE)
 add_subdirectory(../../BLAKE3/c ${CMAKE_BINARY_DIR}/blake3)
 
 find_package(Boost 1.80 REQUIRED)
+find_package(Threads REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS})
 
 include(CheckCXXCompilerFlag)
@@ -73,4 +74,4 @@ target_include_directories(leaves_replication INTERFACE ../../include)
 target_link_libraries(leaves_replication INTERFACE core)
 
 add_executable(p2p_kv main.cpp)
-target_link_libraries(p2p_kv PUBLIC core leaves_replication blake3 pthread)
+target_link_libraries(p2p_kv PUBLIC core leaves_replication blake3 Threads::Threads)
