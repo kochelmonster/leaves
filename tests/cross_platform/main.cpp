@@ -15,8 +15,12 @@ using namespace leaves;
 
 namespace {
 
+void log_progress(const std::string& message) {
+  std::cerr << message << std::endl;
+}
+
 int fail(const char* message) {
-  std::cerr << message << '\n';
+  std::cerr << "[FAIL] " << message << std::endl;
   return 1;
 }
 
@@ -273,21 +277,33 @@ int exercise_confluence(const fs::path& path) {
 int main() {
   const fs::path temp_dir = fs::temp_directory_path();
 
+  log_progress("[INFO] leaves_cross_platform_smoke starting");
+  log_progress("[INFO] temp_directory_path=" + temp_dir.string());
+
+  log_progress("[INFO] phase=MapStorage baseline start");
+
   if (int rc = exercise_map_storage_base(
           temp_dir / "leaves-cross-platform-map-base.lvs")) {
     return rc;
   }
+  log_progress("[INFO] phase=MapStorage baseline done");
+
+  log_progress("[INFO] phase=Replication start");
 
   if (int rc = exercise_replication(
           temp_dir / "leaves-cross-platform-map-repl-src.lvs",
           temp_dir / "leaves-cross-platform-map-repl-dst.lvs")) {
     return rc;
   }
+  log_progress("[INFO] phase=Replication done");
+
+  log_progress("[INFO] phase=Confluence start");
 
   if (int rc = exercise_confluence(
           temp_dir / "leaves-cross-platform-map-confluence.lvs")) {
     return rc;
   }
+  log_progress("[INFO] phase=Confluence done");
 
   std::cout << "cross-platform smoke tests passed (MapStorage + Replication + Confluence)\n";
   return 0;
