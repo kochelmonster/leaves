@@ -16,7 +16,6 @@ Hash helpers used by the replication protocol and transfer comparison logic.
 
 #include "../core/_node.hpp"
 #include "../core/_util.hpp"
-#include "../util/_threadpool.hpp"
 
 namespace leaves {
 
@@ -102,12 +101,12 @@ struct HashTrieTraits : BaseTraits {
       sizeof(_LeafNode<HashTrieTraits>);  // NONE-branch minimum
 };
 
-// Hash Updater — parallel data/hash trie sync
+// Hash Updater — data/hash trie sync
 
 /**
  * @brief Updates a separate hash trie to mirror a data trie.
  *
- * Algorithm: Parallel recursive walk of data and hash tries.
+ * Algorithm: Recursive walk of data and hash tries.
  * - Compare txn_id first: if equal, skip (COW guarantee - subtree unchanged)
  * - Handle prefix alignment by walking into branches as needed
  * - At matching positions: prune hash-only branches, add data-only branches,
@@ -117,7 +116,7 @@ struct HashTrieTraits : BaseTraits {
  * @tparam DataDB The data database type (with data trie nodes)
  * @tparam HashDB The hash database type (with hash trie nodes)
  */
-template <typename DataDB, typename HashDB, typename Executor = _InlineExecutor>
+template <typename DataDB, typename HashDB>
 struct _HashUpdater {
   using DataTraits = typename DataDB::Traits;
   using DataCursorTraits = typename DataDB::CursorTraits;
@@ -145,13 +144,12 @@ struct _HashUpdater {
 
   DataDB* _data_db;
   HashDB* _hash_db;
-  _TaskGroup<Executor>* _tg;
 #ifdef __EMSCRIPTEN__
   uint32_t _yield_counter = 0;
 #endif
 
   _HashUpdater(DataDB* data_db, HashDB* hash_db)
-      : _data_db(data_db), _hash_db(hash_db), _tg(nullptr) {}
+      : _data_db(data_db), _hash_db(hash_db) {}
 
   // ── txn_id helpers ─────────────────────────────────────────────────────
 
@@ -184,7 +182,7 @@ struct _HashUpdater {
   /**
    * @brief Sync hash node to match data node.
    *
-   * Main entry point for parallel walk. Handles all cases:
+  * Main entry point for recursive walk. Handles all cases:
    * - Both empty, one empty, both present
    * - txn_id comparison to skip unchanged subtrees
    *
@@ -472,24 +470,10 @@ struct _HashUpdater {
         }
         offsets_buf[k] = hash_child;
       };
-
-      if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-        do_branch(key_path);
-      }
-#if LEAVES_HAS_THREADS
-      else if (_in_worker) {
-        do_branch(key_path);
-      } else {
-        _tg->spawn([do_branch, key = key_path]() mutable { do_branch(key); });
-      }
-#endif
+      do_branch(key_path);
       branch_count++;
       if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
     });
-
-    if constexpr (!std::is_same_v<Executor, _InlineExecutor>) {
-      _tg->wait();
-    }
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
     // Free them
@@ -551,24 +535,10 @@ struct _HashUpdater {
           deep_copy_data_to_hash(kp, data_child, &result);
           offsets_buf[k] = result;
         };
-
-        if constexpr (std::is_same_v<Executor, _InlineExecutor>) {
-          do_branch(key_path);
-        }
-#if LEAVES_HAS_THREADS
-        else if (_in_worker) {
-          do_branch(key_path);
-        } else {
-          _tg->spawn([do_branch, key = key_path]() mutable { do_branch(key); });
-        }
-#endif
+        do_branch(key_path);
         branch_count++;
         if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
       });
-
-      if constexpr (!std::is_same_v<Executor, _InlineExecutor>) {
-        _tg->wait();
-      }
 
       // Create hash trie
       Slice prefix((const char*)data_trie->compressed(), data_trie->len());
@@ -714,19 +684,6 @@ void update_hash_trie(DataDB* data_db, HashDB* hash_db,
   std::string key_path;
   key_path.reserve(255);
   _HashUpdater<DataDB, HashDB> updater(data_db, hash_db);
-  updater.sync_nodes(key_path, data_root, hash_root_ptr);
-}
-
-template <typename Executor, typename DataDB, typename HashDB>
-void update_hash_trie(Executor& executor, DataDB* data_db, HashDB* hash_db,
-                      typename DataDB::offset_e data_root,
-                      typename HashDB::offset_e* hash_root_ptr,
-                      size_t concurrency_cap = 0) {
-  std::string key_path;
-  key_path.reserve(255);
-  _HashUpdater<DataDB, HashDB, Executor> updater(data_db, hash_db);
-  _TaskGroup<Executor> tg(executor, concurrency_cap);
-  updater._tg = &tg;
   updater.sync_nodes(key_path, data_root, hash_root_ptr);
 }
 

@@ -22,7 +22,7 @@ namespace leaves {
 // - replication_slots: Fixed-size slot array for crash-safe big-value anchoring
 //
 // The hash trie uses its own memory manager so hash updates don't interfere
-// with data trie transactions. This allows background hash computation.
+// with data trie transactions.
 //
 // MAX_REPLICATION_SLOTS is read from Storage_::Traits if available,
 // defaulting to 8 (= 64 bytes of offset_t).
@@ -266,22 +266,17 @@ struct _ReplicationDB
   using txn_ptr = typename Base::txn_ptr;
   using offset_e = typename CursorTraits::offset_e;
 
-  // --- Hash trie configuration ---
-  size_t _hash_threads = 4;  // max threads for parallel hash trie updates
-
   // Construct from existing DB (open)
   _ReplicationDB(typename Base::Storage& storage, offset_t header,
-                 std::string_view name, size_t hash_threads = 4,
-                 bool auto_purge = true)
-      : Base(storage, header, name), _hash_threads(hash_threads) {
+                 std::string_view name, bool auto_purge = true)
+      : Base(storage, header, name) {
     if (auto_purge) start_purge();
   }
 
   // Construct new DB (create)
   _ReplicationDB(typename Base::Storage& storage, offset_t* header,
-                 std::string_view name, size_t hash_threads = 4,
-                 bool auto_purge = true)
-      : Base(storage, header, name), _hash_threads(hash_threads) {
+                 std::string_view name, bool auto_purge = true)
+      : Base(storage, header, name) {
     if (auto_purge) start_purge();
   }
 
@@ -417,18 +412,9 @@ struct _ReplicationDB
         if (needs_update) {
           auto hdb = this->hash_db();
           auto* rtxn = static_cast<Transaction*>(&*first_fsm_txn);
-#if LEAVES_HAS_THREADS
-          hc.hash_mem_manager.set_single_thread(false);
-          update_hash_trie(this->_storage, this, &hdb, first_fsm_txn->root,
-                           &hc.hash_root, _hash_threads);
-          update_hash_trie(this->_storage, this, &hdb, rtxn->deletion_root,
-                           &hc.deletion_hash_root, _hash_threads);
-          hc.hash_mem_manager.set_single_thread(true);
-#else
           update_hash_trie(this, &hdb, first_fsm_txn->root, &hc.hash_root);
           update_hash_trie(this, &hdb, rtxn->deletion_root,
                            &hc.deletion_hash_root);
-#endif
           hc.hashed_txn_offset.store((uint64_t)this->resolve(first_fsm_txn),
                                      std::memory_order_release);
         }
