@@ -7,11 +7,26 @@ Shared internal utility helpers, constants, and small support primitives.
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <string>
+#include <vector>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 // Compiler detection for builtin memcpy
 #if defined(__GNUC__) || defined(__clang__)
@@ -204,6 +219,177 @@ inline void* optimized_memcpy(void* dest, const void* src, size_t n) {
   
   // Default path for medium sizes and unsupported platforms
   return memcpy(dest, src, n);
+}
+
+static constexpr uint32_t DEFAULT_COPY_WRITE_PIVOT_BYTES = 64 * 1024;
+static constexpr uint32_t COPY_WRITE_PIVOT_DISABLED =
+    std::numeric_limits<uint32_t>::max();
+
+inline bool write_fd_at_offset(int fd, uint64_t offset, const void* src,
+                               size_t n) {
+  const char* p = static_cast<const char*>(src);
+  size_t remaining = n;
+
+#ifdef _WIN32
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) return false;
+  HANDLE handle = reinterpret_cast<HANDLE>(os_handle);
+
+  while (remaining > 0) {
+    OVERLAPPED ov{};
+    ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFFULL);
+    ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
+
+    DWORD chunk = static_cast<DWORD>((std::min)(remaining, size_t(MAXDWORD)));
+    DWORD written = 0;
+    if (!WriteFile(handle, p, chunk, &written, &ov) || written == 0)
+      return false;
+
+    p += written;
+    remaining -= static_cast<size_t>(written);
+    offset += static_cast<uint64_t>(written);
+  }
+  return true;
+#else
+  uint64_t off = offset;
+  while (remaining > 0) {
+    ssize_t written = ::pwrite(fd, p, remaining, static_cast<off_t>(off));
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    if (written == 0) return false;
+    p += written;
+    remaining -= static_cast<size_t>(written);
+    off += static_cast<uint64_t>(written);
+  }
+  return true;
+#endif
+}
+
+inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
+  static constexpr size_t CHUNKS[] = {512,  1024, 2048, 4096, 8192,
+                                      16384, 32768, 65536, 131072};
+  static constexpr size_t TARGET_BYTES = 32 * 1024 * 1024;
+  static constexpr size_t WINDOW_BYTES = 32 * 1024 * 1024;
+  static constexpr size_t WARMUP_ITERS = 8;
+  static constexpr size_t TRIALS = 5;
+
+  const size_t max_chunk = CHUNKS[sizeof(CHUNKS) / sizeof(CHUNKS[0]) - 1];
+  const size_t bench_file_size = WINDOW_BYTES + max_chunk;
+
+  auto median_ns = [](std::vector<int64_t>& samples) -> int64_t {
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2];
+  };
+
+  std::error_code ec;
+  auto cleanup = [&]() {
+    std::filesystem::remove(calibration_file, ec);
+  };
+
+  try {
+    {
+      std::ofstream f(calibration_file,
+                      std::ios::out | std::ios::binary | std::ios::trunc);
+      f.put('\0');
+    }
+    std::filesystem::resize_file(calibration_file, bench_file_size);
+
+#ifdef _WIN32
+    int fd = _open(calibration_file, _O_RDWR | _O_BINARY);
+#else
+    int fd = ::open(calibration_file, O_RDWR);
+#endif
+    if (fd < 0) {
+      cleanup();
+      return DEFAULT_COPY_WRITE_PIVOT_BYTES;
+    }
+
+    std::vector<char> src(max_chunk, 'p');
+    std::vector<char> dst(bench_file_size, 0);
+
+    uint32_t pivot = DEFAULT_COPY_WRITE_PIVOT_BYTES;
+    bool found = false;
+
+    for (size_t chunk : CHUNKS) {
+      const size_t loops = (std::max)(size_t(64), TARGET_BYTES / chunk);
+      const size_t span = WINDOW_BYTES - chunk;
+
+      size_t off = 0;
+      for (size_t i = 0; i < WARMUP_ITERS; i++) {
+        optimized_memcpy(dst.data() + off, src.data(), chunk);
+        off += chunk;
+        if (off > span) off = 0;
+      }
+
+      std::vector<int64_t> memcpy_samples;
+      std::vector<int64_t> write_samples;
+      memcpy_samples.reserve(TRIALS);
+      write_samples.reserve(TRIALS);
+
+      for (size_t t = 0; t < TRIALS; t++) {
+        off = 0;
+        auto t0 = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < loops; i++) {
+          optimized_memcpy(dst.data() + off, src.data(), chunk);
+          off += chunk;
+          if (off > span) off = 0;
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        memcpy_samples.push_back(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0)
+                .count());
+
+        off = 0;
+        t0 = std::chrono::steady_clock::now();
+        bool write_ok = true;
+        for (size_t i = 0; i < loops; i++) {
+          if (!write_fd_at_offset(fd, off, src.data(), chunk)) {
+            write_ok = false;
+            break;
+          }
+          off += chunk;
+          if (off > span) off = 0;
+        }
+        t1 = std::chrono::steady_clock::now();
+        if (!write_ok) {
+          memcpy_samples.clear();
+          write_samples.clear();
+          break;
+        }
+        write_samples.push_back(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0)
+                .count());
+      }
+
+      if (memcpy_samples.empty() || write_samples.empty()) continue;
+
+      const int64_t memcpy_median = median_ns(memcpy_samples);
+      const int64_t write_median = median_ns(write_samples);
+      // Require 7% win to avoid noisy threshold flips.
+      if (write_median * 100 <= memcpy_median * 93) {
+        pivot = static_cast<uint32_t>(chunk);
+        found = true;
+        break;
+      }
+    }
+
+#ifdef _WIN32
+    _close(fd);
+#else
+    ::close(fd);
+#endif
+    cleanup();
+
+    if (!found) {
+      return DEFAULT_COPY_WRITE_PIVOT_BYTES;
+    }
+    return pivot;
+  } catch (...) {
+    cleanup();
+    return DEFAULT_COPY_WRITE_PIVOT_BYTES;
+  }
 }
 
 typedef tid_serial tid_t;

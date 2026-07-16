@@ -524,7 +524,7 @@ struct _ICursor : public _CursorBase<Traits_, Derived> {
   void value(const Slice& value) {
     void* space = reserve(value.size());
     assert(space);
-    optimized_memcpy(space, value.data(), value.size());
+    this->_db->copy(space, value.data(), value.size());
     this->_db->flush();
   }
 
@@ -766,7 +766,7 @@ struct _TransactionalCursor
   void value(const Slice& value) {
     Slice transformed = _aspect().on_write(this->key(), value, _aspect_context);
     void* space = reserve(transformed.size());
-    optimized_memcpy(space, transformed.data(), transformed.size());
+    this->_db->copy(space, transformed.data(), transformed.size());
     this->_wal_log_put(this->key(), value);
     this->_db->flush();
   }

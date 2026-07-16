@@ -83,7 +83,7 @@ struct StandardMergePolicy {
     offset_t dst_offset(dst_bvalue->chunk_offset);
     auto dst_data =
         dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
-    optimized_memcpy((char*)dst_data, (char*)src_data, value_size);
+    dst_cursor._db->copy((char*)dst_data, (char*)src_data, value_size);
 
     return {Slice((uint8_t*)&_big_value_storage, sizeof(_BigValue)), true};
   }

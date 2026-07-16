@@ -6,6 +6,7 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
@@ -21,9 +22,19 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <type_traits>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "../core/_exception.hpp"
 #include "../core/_node.hpp"
@@ -158,6 +169,7 @@ struct _MemoryMapFile
     uint32_t sanitize_generation;  // incremented when first process opens file
     uint32_t
         clean_close;  // 1 = last close was clean, 0 = dirty (open or crashed)
+    uint32_t copy_write_pivot_bytes;  // write-vs-memcpy pivot for mmap copy
     uint16_t db_entry_count;  // entries used in first directory page
     offset_t db_next_page;    // link to overflow directory page (0 = none)
     DBEntry dbs[];            // flexible array fills to 4K boundary
@@ -171,6 +183,7 @@ struct _MemoryMapFile
           last_cursor_id(0),
           sanitize_generation(0),
           clean_close(0),
+          copy_write_pivot_bytes(leaves::DEFAULT_COPY_WRITE_PIVOT_BYTES),
           db_entry_count(0),
           db_next_page(0) {
       // Set signature and initialize pools/arrays
@@ -186,17 +199,23 @@ struct _MemoryMapFile
   mapped_region _region;
   FileHeader* _memory;
   pid_type _pid;
+  int _write_fd;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
+#ifdef TESTING
+  std::atomic<uint64_t> _copy_write_path_hits{0};
+  std::atomic<uint64_t> _copy_write_sync_hits{0};
+#endif
 
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
-                 size_t pool_threads = SIZE_MAX)
-      : PoolMixin(_lazy_pool) {
+                 size_t pool_threads = SIZE_MAX,
+                 uint32_t copy_write_pivot = 0)
+      : PoolMixin(_lazy_pool), _write_fd(-1) {
 #ifndef LEAVES_SINGLE_PROCESS
     _pid = current_pid();
 #else
     _pid = 1;
 #endif
-    init_dbfile(path, map_size);
+    init_dbfile(path, map_size, copy_write_pivot);
     if (pool_threads != SIZE_MAX) {
       size_t n = pool_threads;
       if (n == 0)
@@ -213,6 +232,7 @@ struct _MemoryMapFile
       _memory->clean_close = 1;
       _region.flush(0, _memory->file_size, false);
     }
+    close_write_fd();
   }
 
   const char* filename() const { return _file.get_name(); }
@@ -225,7 +245,7 @@ struct _MemoryMapFile
 
   uint32_t sanitize_generation() { return _memory->sanitize_generation; }
 
-  void init_dbfile(const char* path, size_t map_size) {
+  void init_dbfile(const char* path, size_t map_size, uint32_t copy_write_pivot = 0) {
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
@@ -237,6 +257,15 @@ struct _MemoryMapFile
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
       _memory->file_size = fsize;
+      if (copy_write_pivot) {
+        _memory->copy_write_pivot_bytes = copy_write_pivot;
+      } else {
+        std::filesystem::path calibration_file(path);
+        calibration_file += ".pivot-calibration.tmp";
+        _memory->copy_write_pivot_bytes =
+            leaves::calibrate_copy_write_pivot_file(
+                calibration_file.string().c_str());
+      }
       _region.flush();
     } else {
       std::ifstream fin(path);
@@ -252,10 +281,54 @@ struct _MemoryMapFile
       _memory = (FileHeader*)_region.get_address();
       if (_memory->max_processes != MAX_PROCESSES)
         throw WrongValue("max_processes does not match.");
+      if (copy_write_pivot) {
+        _memory->copy_write_pivot_bytes = copy_write_pivot;
+      }
     }
 
     assert(((uint64_t)_memory & 7) == 0);
     sanitize();
+    open_write_fd(path);
+  }
+
+  bool open_write_fd(const char* path) {
+    close_write_fd();
+#ifdef _WIN32
+    _write_fd = _open(path, _O_RDWR | _O_BINARY);
+#else
+    _write_fd = ::open(path, O_RDWR);
+#endif
+    return _write_fd >= 0;
+  }
+
+  void close_write_fd() {
+    if (_write_fd < 0) return;
+#ifdef _WIN32
+    _close(_write_fd);
+#else
+    ::close(_write_fd);
+#endif
+    _write_fd = -1;
+  }
+
+  bool is_mmap_destination(const void* dest, size_t n,
+                           uint64_t* file_offset = nullptr) const {
+    if (!_memory) return false;
+    uintptr_t base = reinterpret_cast<uintptr_t>(_memory);
+    uintptr_t start = reinterpret_cast<uintptr_t>(dest);
+    if (start < base) return false;
+
+    uint64_t offset = static_cast<uint64_t>(start - base);
+    if (offset > _memory->file_size) return false;
+    if (n > _memory->file_size - offset) return false;
+
+    if (file_offset) *file_offset = offset;
+    return true;
+  }
+
+  bool write_to_file_at(uint64_t offset, const void* src, size_t n) {
+    if (_write_fd < 0) return false;
+    return leaves::write_fd_at_offset(_write_fd, offset, src, n);
   }
 
   void remove_pid() {
@@ -411,6 +484,51 @@ struct _MemoryMapFile
 
   void prefetch(void* mem, Access access = READ) const {
     leaves::prefetch(mem, access);
+  }
+
+  bool copy(void* dest, const void* src, size_t n) {
+    if (n == 0) return false;
+
+    uint64_t offset = 0;
+    uint32_t pivot = _memory->copy_write_pivot_bytes;
+    if (pivot != leaves::COPY_WRITE_PIVOT_DISABLED && n > pivot &&
+        is_mmap_destination(dest, n, &offset) && write_to_file_at(offset, src, n)) {
+#ifdef TESTING
+      _copy_write_path_hits.fetch_add(1, std::memory_order_relaxed);
+#endif
+      return true;
+    }
+        optimized_memcpy(dest, src, n);
+        return false;
+  }
+
+  void sync_fd_for_commit() {
+    if (_write_fd < 0) {
+      throw FileError("Failed to sync commit data: invalid file descriptor",
+                      EBADF);
+    }
+#ifdef _WIN32
+    if (_commit(_write_fd) != 0) {
+      throw FileError(
+          "Failed to sync commit data: " + std::string(std::strerror(errno)),
+          errno);
+    }
+#elif defined(__APPLE__)
+    if (::fsync(_write_fd) != 0) {
+      throw FileError(
+          "Failed to sync commit data: " + std::string(std::strerror(errno)),
+          errno);
+    }
+#else
+    if (::fdatasync(_write_fd) != 0) {
+      throw FileError(
+          "Failed to sync commit data: " + std::string(std::strerror(errno)),
+          errno);
+    }
+#endif
+#ifdef TESTING
+    _copy_write_sync_hits.fetch_add(1, std::memory_order_relaxed);
+#endif
   }
 
   area_ptr resize_file(uint64_t size) {

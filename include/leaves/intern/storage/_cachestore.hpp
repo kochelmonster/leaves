@@ -18,6 +18,7 @@ Cached file-backed storage helpers for page reuse and persistence access.
 #include "../core/_exception.hpp"
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"  // for NodeTypes, offset_t, tid_t, K, M, padding, Access
+#include "../core/_util.hpp"
 #include "../db/_db.hpp"
 #include "../memory/_memory.hpp"  // for AreaSlice, SmartPointer
 #include "../memory/_twoquecache.hpp"
@@ -259,6 +260,13 @@ struct _CacheStore : public Opers_,
   FORCE_INLINE void prefetch(void* mem, Access access = READ) const {
     leaves::prefetch(mem, access);
   }
+
+  bool copy(void* dest, const void* src, size_t n) {
+    optimized_memcpy(dest, src, n);
+    return false;
+  }
+
+  void sync_fd_for_commit() {}
 
   template <typename PtrType>
   void make_dirty(PtrType block_arg) {

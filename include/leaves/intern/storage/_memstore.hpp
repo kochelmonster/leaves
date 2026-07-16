@@ -13,6 +13,7 @@ In-memory storage backend used for ephemeral and test-oriented databases.
 #include "../core/_node.hpp"
 #include "../core/_port.hpp"
 #include "../core/_traits.hpp"
+#include "../core/_util.hpp"
 #include "../db/_db.hpp"
 #include "../memory/_memory.hpp"
 
@@ -180,6 +181,12 @@ struct _MemoryDB {
   template <typename PtrType>
   void make_dirty(PtrType /*block*/) {}
 
+  bool copy(void* dest, const void* src, size_t n) {
+    return _storage.copy(dest, src, n);
+  }
+
+  void sync_fd_for_commit() {}
+
   void prefetch(const offset_t& offset) const { prefetch(&offset); }
   void prefetch(const offset_t* /*offset_ptr*/,
                 Access /*access*/ = READ) const {}
@@ -241,6 +248,13 @@ struct _MemoryStorage {
 
   // Compatibility methods
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
+
+  bool copy(void* dest, const void* src, size_t n) {
+    optimized_memcpy(dest, src, n);
+    return false;
+  }
+
+  void sync_fd_for_commit() {}
 
   const char* filename() const { return "memory"; }
   size_t file_size() const { return _total_size; }
