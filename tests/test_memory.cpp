@@ -147,6 +147,7 @@ struct TestStorage {
   void make_dirty(PtrType /* block */) { }
 
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
+  void sync_fd_for_commit() {}
 };
 
 struct TestTraitsBig : public TestTraits {

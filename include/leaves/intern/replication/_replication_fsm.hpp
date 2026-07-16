@@ -868,7 +868,7 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
         offset_t dst_offset(dst_bvalue->chunk_offset);
         auto dst_data =
             dst_cursor._db->template resolve<ChunkData>(&dst_offset, WRITE);
-        optimized_memcpy((char*)dst_data, src_data, value_size);
+        dst_cursor._db->copy((char*)dst_data, src_data, value_size);
       } else {
         return {Slice(), false};
       }

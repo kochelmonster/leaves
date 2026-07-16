@@ -2,6 +2,8 @@
 #define BOOST_TEST_MODULE DBMMapTest
 
 #include <boost/test/included/unit_test.hpp>
+#include <vector>
+#include <cstring>
 
 #ifndef TESTING
 #error "TESTING must be defined"
@@ -9,6 +11,7 @@
 
 #include "leaves/intern/storage/_mmap.hpp"
 #include "leaves/intern/replication/_replication_db.hpp"
+#include "leaves/mmap.hpp"
 
 using namespace leaves;
 
@@ -31,6 +34,7 @@ void wrong_signature(const char* path) { DBMMap db(path); }
 BOOST_AUTO_TEST_CASE(test_init) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  uint32_t created_pivot = 0;
 
   {
     // Create a DBMMap instance and initialize it
@@ -44,10 +48,13 @@ BOOST_AUTO_TEST_CASE(test_init) {
     BOOST_REQUIRE_EQUAL(db._memory->file_size, DBMMap::AREA_SIZE);
     BOOST_REQUIRE_EQUAL(db._memory->db_version, 0);
     BOOST_REQUIRE_EQUAL(db._memory->signature, MMAP_SIGNATURE);
+    BOOST_REQUIRE_NE(db._memory->copy_write_pivot_bytes, 0U);
+    created_pivot = db._memory->copy_write_pivot_bytes;
   }
 
   {
     DBMMap db(dbFilePath.c_str());
+    BOOST_REQUIRE_EQUAL(db._memory->copy_write_pivot_bytes, created_pivot);
   }
 
   // Change the first byte of the file to 0
@@ -60,6 +67,85 @@ BOOST_AUTO_TEST_CASE(test_init) {
   }
 
   BOOST_CHECK_THROW(wrong_signature(dbFilePath.c_str()), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_copy_write_pivot_path) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "copy_pivot.lvs";
+
+  DBMMap db(dbFilePath.c_str());
+  db._memory->copy_write_pivot_bytes = 64;
+
+  char* mmap_dest = (char*)db._memory + 512 * K;
+  std::vector<char> large(1024, 'L');
+  std::vector<char> small(32, 'S');
+
+  uint64_t before = db._copy_write_path_hits.load(std::memory_order_relaxed);
+
+    bool wrote = db.copy(mmap_dest, large.data(), large.size());
+    BOOST_CHECK(wrote);
+  BOOST_REQUIRE_EQUAL(std::memcmp(mmap_dest, large.data(), large.size()), 0);
+  BOOST_CHECK_EQUAL(
+      db._copy_write_path_hits.load(std::memory_order_relaxed), before + 1);
+
+    wrote = db.copy(mmap_dest + 4096, small.data(), small.size());
+    BOOST_CHECK(!wrote);
+  BOOST_CHECK_EQUAL(
+      db._copy_write_path_hits.load(std::memory_order_relaxed), before + 1);
+
+  db._memory->copy_write_pivot_bytes = 0;
+  std::vector<char> heap_dest(large.size(), 0);
+    wrote = db.copy(heap_dest.data(), large.data(), large.size());
+    BOOST_CHECK(!wrote);
+  BOOST_REQUIRE_EQUAL(std::memcmp(heap_dest.data(), large.data(), large.size()),
+                      0);
+  BOOST_CHECK_EQUAL(
+      db._copy_write_path_hits.load(std::memory_order_relaxed), before + 1);
+
+    wrote = db.copy(mmap_dest, large.data(), 0);
+    BOOST_CHECK(!wrote);
+}
+
+BOOST_AUTO_TEST_CASE(test_commit_sync_triggers_fd_sync_after_direct_copy_write) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "copy_sync_commit.lvs";
+
+  DBMMap db(dbFilePath.c_str());
+  db._memory->copy_write_pivot_bytes = 64;
+
+  uint64_t before_copy = db._copy_write_path_hits.load(std::memory_order_relaxed);
+  uint64_t before_sync = db._copy_write_sync_hits.load(std::memory_order_relaxed);
+
+  auto* d = db.open("syncfd");
+  auto cursor = d->create_cursor();
+  cursor->find("k");
+  cursor->value(std::string(512, 'z'));
+  BOOST_CHECK(cursor->commit(true));
+
+  BOOST_CHECK_GT(db._copy_write_path_hits.load(std::memory_order_relaxed),
+                 before_copy);
+  BOOST_CHECK_EQUAL(db._copy_write_sync_hits.load(std::memory_order_relaxed),
+                    before_sync + 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_constructor_copy_pivot_override) {
+  DirPreparation prep;
+  std::filesystem::path dbFilePath = prep.tempDir / "pivot_override.lvs";
+
+  DBMMap db(dbFilePath.c_str(), 2 * G, SIZE_MAX, 12345);
+  BOOST_CHECK_EQUAL(db._memory->copy_write_pivot_bytes, 12345U);
+
+  DBMMap db_reopen(dbFilePath.c_str(), 2 * G, SIZE_MAX, 23456);
+  BOOST_CHECK_EQUAL(db_reopen._memory->copy_write_pivot_bytes, 23456U);
+}
+
+BOOST_AUTO_TEST_CASE(test_mmap_tool_calibration_function) {
+  DirPreparation prep;
+  std::filesystem::path calibration_file = prep.tempDir / "tool-calibration.tmp";
+
+  auto pivot = MapStorage::calibrate_copy_write_pivot(calibration_file.c_str());
+  BOOST_CHECK_GT(pivot, 0U);
+  BOOST_CHECK(!std::filesystem::exists(calibration_file));
 }
 
 BOOST_AUTO_TEST_CASE(test_double_open) {

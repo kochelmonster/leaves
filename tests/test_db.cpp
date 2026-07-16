@@ -452,6 +452,7 @@ struct TestStorage {
   }
 
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
+  void sync_fd_for_commit() {}
   void prefetch(offset_t /* offset */, Access /* access */ = READ) const {}
   void prefetch(void* /* mem */, Access /* access */ = READ) const {}
 };

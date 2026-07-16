@@ -35,8 +35,11 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   // map_size is the virtual-address reservation limit.
   // On mobile (iOS/Android), use a smaller value (e.g. 256*M) to avoid
   // jetsam/OOM kills.
-  MapStorage_(const char* path, size_t map_size = 4 * G)
-      : _storage(std::make_unique<StorageImpl>(path, map_size)) {}
+  // copy_write_pivot_override: 0 keeps persisted/calibrated pivot.
+  MapStorage_(const char* path, size_t map_size = 4 * G,
+              uint32_t copy_write_pivot_override = 0)
+      : _storage(std::make_unique<StorageImpl>(
+            path, map_size, SIZE_MAX, copy_write_pivot_override)) {}
 
   // Opens or creates a named database.
   // DBClass selects the backend and args are forwarded to that DB class.
@@ -76,10 +79,17 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   // Returns the current on-disk file size in bytes.
   size_t file_size() const { return _storage->file_size(); }
 
+  // Tool helper: run copy-write pivot calibration against a temp file path.
+  static uint32_t calibrate_copy_write_pivot(const char* calibration_file) {
+    return leaves::calibrate_copy_write_pivot_file(calibration_file);
+  }
+
   // Creates and initializes storage backed by path.
   // map_size is the virtual-address reservation limit.
-  static storage_ptr create(const char* path, size_t map_size = 4 * G) {
-    return std::make_shared<MapStorage_>(path, map_size);
+  static storage_ptr create(const char* path, size_t map_size = 4 * G,
+                            uint32_t copy_write_pivot_override = 0) {
+    return std::make_shared<MapStorage_>(path, map_size,
+                                         copy_write_pivot_override);
   }
 
  private:

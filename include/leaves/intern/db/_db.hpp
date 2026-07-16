@@ -339,6 +339,7 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
 
   // All Transactions with a tid >= _start_txn_id may not be recycled
   tid_t _start_txn_id{0};
+  bool _has_direct_file_write{false};
 
   _DB(Storage& storage, offset_t header, std::string_view name)
       : _storage(storage),
@@ -569,6 +570,12 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _storage.make_dirty(block);
   }
 
+  bool copy(void* dest, const void* src, size_t n) {
+    bool wrote_direct = _storage.copy(dest, src, n);
+    if (wrote_direct) _has_direct_file_write = true;
+    return wrote_direct;
+  }
+
   void flush(bool sync = false, bool force = false) {
     _storage.flush(sync, force);
   }
@@ -722,6 +729,7 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     assert(!_active_txn);
     assert(_header->txn_cursor_id.load() == 0);
     _header->txn_cursor_id.store(cursor_id);
+    _has_direct_file_write = false;
 
     txn_ptr last_txn = txn();
 
@@ -808,7 +816,13 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     make_dirty(active);
     make_dirty(_active_txn);
 
-    if (sync) flush(true, true);  // Only flush if explicitly requested
+    if (sync) {
+      flush(true, true);  // Only flush if explicitly requested
+      if (_has_direct_file_write) {
+        _storage.sync_fd_for_commit();
+        _has_direct_file_write = false;
+      }
+    }
     return _active_txn->txn_id;
   }
 
@@ -826,12 +840,16 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _header->read_txn = _header->prepared_txn;
     make_dirty(_header);
     flush(sync, true);
+    if (sync && _has_direct_file_write) {
+      _storage.sync_fd_for_commit();
+    }
     end_transaction();
     return true;
   }
 
   void end_transaction() {
     _header->txn_cursor_id.store(0);
+    _has_direct_file_write = false;
     _active_txn.reset();
     _header->txn_lock.unlock();
   }
