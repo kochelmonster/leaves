@@ -97,8 +97,6 @@ struct _MemoryMapTraits {
 #else
   static constexpr uint16_t MAX_PROCESSES = 100;
 #endif
-  static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 3;
-
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
       sizeof(PageHeader) +
           _TrieNode<_MemoryMapTraits>::size(1, 2),  // 2 branches

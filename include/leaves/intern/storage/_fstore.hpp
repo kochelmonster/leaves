@@ -79,7 +79,6 @@ struct _StoreTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t MEM_MANAGER_POOL_SIZE = 1;
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 2),  // 2 branches
       sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 3),  // 3 branches
