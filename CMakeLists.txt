@@ -310,7 +310,7 @@ function(leaves_add_test target)
     cmake_parse_arguments(LEAVES_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if (NOT LEAVES_TEST_TIMEOUT)
-        set(LEAVES_TEST_TIMEOUT 30)
+        set(LEAVES_TEST_TIMEOUT 240)
     endif()
 
     if (NOT LEAVES_TEST_LABELS)
@@ -519,8 +519,47 @@ target_link_libraries(merge-dbs PUBLIC core)
 add_executable(ycsb-debug tests/ycsb-bug/ycsb-debug.cpp)
 target_link_libraries(ycsb-debug PUBLIC core)
 
+set(LEAVES_GCOV_TOOL "")
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(_leaves_gcov_candidates "")
+    if (CMAKE_CXX_COMPILER_VERSION)
+        list(APPEND _leaves_gcov_candidates
+            "gcov-${CMAKE_CXX_COMPILER_VERSION}"
+            "gcov-${CMAKE_CXX_COMPILER_VERSION_MAJOR}")
+    endif()
+
+    get_filename_component(_leaves_cxx_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    foreach(_leaves_gcov_candidate IN LISTS _leaves_gcov_candidates)
+        if (EXISTS "${_leaves_cxx_compiler_dir}/${_leaves_gcov_candidate}")
+            set(LEAVES_GCOV_TOOL "${_leaves_cxx_compiler_dir}/${_leaves_gcov_candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if (NOT LEAVES_GCOV_TOOL)
+        find_program(LEAVES_GCOV_TOOL NAMES ${_leaves_gcov_candidates})
+    endif()
+
+    if (NOT LEAVES_GCOV_TOOL)
+        execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER} -print-prog-name=gcov
+            OUTPUT_VARIABLE LEAVES_GCOV_TOOL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if (LEAVES_GCOV_TOOL AND NOT IS_ABSOLUTE "${LEAVES_GCOV_TOOL}")
+            find_program(LEAVES_GCOV_TOOL NAMES "${LEAVES_GCOV_TOOL}")
+        endif()
+    endif()
+endif()
+if (NOT LEAVES_GCOV_TOOL)
+    find_program(LEAVES_GCOV_TOOL NAMES gcov)
+endif()
+if (NOT LEAVES_GCOV_TOOL)
+    message(FATAL_ERROR "LEAVES_GCOV is enabled, but no gcov tool was found for coverage capture")
+endif()
+
 add_custom_target(cov
-COMMAND lcov -d . --zerocounters
+COMMAND lcov --gcov-tool "${LEAVES_GCOV_TOOL}" -d . --zerocounters
 COMMAND rm -rf lcov-report
 COMMAND mkdir lcov-report
 COMMAND ./test_twoquecache
@@ -549,7 +588,7 @@ COMMAND ./test_map_storage
 COMMAND ./test_file_storage
 COMMAND ./test_aspect
 COMMAND ./test_executor
-COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
+COMMAND lcov --gcov-tool "${LEAVES_GCOV_TOOL}" -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
 DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect test_executor

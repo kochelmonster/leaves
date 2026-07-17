@@ -30,11 +30,9 @@ template <typename Storage_>
 struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
   using offset_e = typename Traits::offset_e;
-#if LEAVES_HAS_THREADS
-  using HashMemManager = _MemManagerPool<Traits>;
-#else
+  // Hash updates are serialized by HashTrieControl::update_lock, so the
+  // hash trie allocator intentionally uses a single manager.
   using HashMemManager = _MemManager<Traits>;
-#endif
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
   template <typename T, typename = void>
@@ -162,11 +160,8 @@ struct _ReplicationDB
   struct HashDB {
     using Traits = typename Storage_::Traits;
     using offset_e = typename Traits::offset_e;
-#if LEAVES_HAS_THREADS
-    using MemManager = _MemManagerPool<Traits>;
-#else
+    // Hash recomputation runs under HashTrieControl::update_lock.
     using MemManager = _MemManager<Traits>;
-#endif
     using PageHeader = typename Traits::PageHeader;
     using page_ptr = typename Traits::ptr;
 

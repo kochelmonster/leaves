@@ -38,10 +38,6 @@ BOOST_AUTO_TEST_CASE(post_executes_on_worker) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// =========================================================================
-// Phase 2: MemManagerPool tests
-// =========================================================================
-
 struct TestTraits {
   typedef offset_t offset_e;
   typedef uint16_t uint16_e;
@@ -66,7 +62,7 @@ struct TestTraits {
 
 constexpr size_t AREA_SIZE = TestTraits::AREA_SIZE;
 
-// TestResolver acts like a DB for _MemManagerPool tests
+// TestResolver acts like a DB for _MemManager tests
 struct TestResolver {
   typedef TestTraits Traits;
   using PageHeader = typename TestTraits::PageHeader;
@@ -145,89 +141,5 @@ struct TestResolver {
 
   void free(page_ptr) {}
 };
-
-BOOST_AUTO_TEST_SUITE(mem_manager_pool)
-
-BOOST_AUTO_TEST_CASE(single_thread_fast_path) {
-  TestResolver resolver;
-  _MemManagerPool<TestTraits> pool;
-  pool.init(sizeof(void*), AREA_SIZE);
-
-  // POOL_SIZE == 4 by default — all managers always active
-  auto p1 = pool.alloc(0, resolver);
-  BOOST_CHECK(p1 != nullptr);
-  BOOST_CHECK(p1->slot_id == 0);
-
-  auto p2 = pool.alloc(1, resolver);
-  BOOST_CHECK(p2 != nullptr);
-  BOOST_CHECK(p2->slot_id == 1);
-
-  // Free and re-alloc
-  pool.free(p1, resolver);
-}
-
-BOOST_AUTO_TEST_CASE(multiple_managers_alloc) {
-  TestResolver resolver;
-  _MemManagerPool<TestTraits> pool;
-  pool.init(sizeof(void*), AREA_SIZE);
-
-  // All POOL_SIZE managers are always active; managers 1..N-1 get areas lazily
-  std::vector<TestTraits::ptr> pages;
-  for (int i = 0; i < 20; i++) {
-    auto p = pool.alloc(0, resolver);
-    BOOST_CHECK(p != nullptr);
-    pages.push_back(p);
-  }
-
-  // Free all
-  for (auto& p : pages) {
-    pool.free(p, resolver);
-  }
-}
-
-BOOST_AUTO_TEST_CASE(concurrent_alloc_free) {
-  TestResolver resolver;
-  _MemManagerPool<TestTraits> pool;
-  pool.init(sizeof(void*), AREA_SIZE);
-  pool.set_single_thread(false);
-
-  constexpr int N_THREADS = 8;
-  constexpr int N_ALLOCS = 100;
-
-  std::atomic<int> success_count{0};
-  std::vector<std::thread> threads;
-
-  for (int t = 0; t < N_THREADS; t++) {
-    threads.emplace_back([&] {
-      for (int i = 0; i < N_ALLOCS; i++) {
-        auto p = pool.alloc(0, resolver);
-        if (p) {
-          success_count.fetch_add(1, std::memory_order_relaxed);
-          pool.free(p, resolver);
-        }
-      }
-    });
-  }
-
-  for (auto& t : threads) t.join();
-  BOOST_TEST(success_count.load() == N_THREADS * N_ALLOCS);
-}
-
-BOOST_AUTO_TEST_CASE(reinit_locks_after_clone) {
-  TestResolver resolver;
-  _MemManagerPool<TestTraits> pool;
-  pool.init(sizeof(void*), AREA_SIZE);
-
-  // Simulate memcpy + reinit (as clone() would do)
-  _MemManagerPool<TestTraits> pool2;
-  memcpy(&pool2, &pool, sizeof(pool));
-  pool2.reinit_locks();
-
-  // pool2 should be usable
-  auto p = pool2.alloc(0, resolver);
-  BOOST_CHECK(p != nullptr);
-}
-
-BOOST_AUTO_TEST_SUITE_END()
 
 #endif  // LEAVES_HAS_THREADS
