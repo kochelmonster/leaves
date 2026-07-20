@@ -512,7 +512,7 @@ struct _MemoryMapFile
     total_growth = padding(total_growth, AREA_SIZE);
 
     if (_memory->file_size + total_growth > _region.get_size()) {
-      throw StorageFull();
+      throw StorageFull(_region.get_size(), _memory->file_size + total_growth);
     }
 
     offset_t new_offset = _memory->file_size;

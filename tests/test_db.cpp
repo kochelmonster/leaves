@@ -1224,9 +1224,12 @@ BOOST_AUTO_TEST_CASE(test_internal_method) {
 
 BOOST_AUTO_TEST_CASE(test_storage_full_exception) {
   // Exercises core/_exception.hpp L36 — StorageFull::what()
-  StorageFull ex;
+  StorageFull ex(1024, 2048);
   BOOST_CHECK(ex.what() != nullptr);
-  BOOST_CHECK(std::string(ex.what()).find("storage full") != std::string::npos);
+  auto message = std::string(ex.what());
+  BOOST_CHECK(message.find("storage full") != std::string::npos);
+  BOOST_CHECK(message.find("map size=1024") != std::string::npos);
+  BOOST_CHECK(message.find("attempted file size=2048") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(test_type_mismatch_exception) {
