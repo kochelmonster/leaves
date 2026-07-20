@@ -4,6 +4,8 @@ Shared internal utility helpers, constants, and small support primitives.
 #ifndef _LEAVES__UTIL_HPP
 #define _LEAVES__UTIL_HPP
 
+#include "_port.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -17,50 +19,6 @@ Shared internal utility helpers, constants, and small support primitives.
 #include <limits>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#include <windows.h>
-#else
-#include <cerrno>
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-
-// Compiler detection for builtin memcpy
-#if defined(__GNUC__) || defined(__clang__)
-  #define LEAVES_HAS_BUILTIN_MEMCPY 1
-#endif
-
-// MSVC intrinsics for bit operations
-#if defined(_MSC_VER)
-  #include <intrin.h>
-#endif
-
-// Platform detection for SIMD optimizations
-#if defined(__x86_64__) || defined(_M_X64)
-  #define LEAVES_X86_64 1
-  #if defined(__AVX512BW__)
-    #include <immintrin.h>
-    #define LEAVES_HAS_AVX512 1
-    #define LEAVES_HAS_AVX2 1
-    #define LEAVES_HAS_SSE2 1
-  #elif defined(__AVX2__)
-    #include <immintrin.h>
-    #define LEAVES_HAS_AVX2 1
-    #define LEAVES_HAS_SSE2 1
-  #elif defined(__SSE2__) || (defined(_MSC_VER) && _M_X64)
-    #include <emmintrin.h>  // SSE2 for non-temporal stores
-    #define LEAVES_HAS_SSE2 1
-  #endif
-#elif defined(__aarch64__) || defined(_M_ARM64)
-  #define LEAVES_ARM64 1
-  #if defined(__ARM_NEON) || defined(_M_ARM64)
-    #include <arm_neon.h>
-    #define LEAVES_HAS_NEON 1
-  #endif
-#endif
 
 #include "_serial.hpp"
 
@@ -116,156 +74,9 @@ inline int default_log_call(LogSeverity severity, const char* fmt, ...) {
   #define LEAVES_INTERNAL_LOG(...) ((void)0)
 #endif
 
-// Optimized memcpy for database values
-inline void* optimized_memcpy(void* dest, const void* src, size_t n) {
-  // Fast path for small sizes (<= 32 bytes) - common for keys and small values
-  if (n <= 32) {
-    char* d = (char*)dest;
-    const char* s = (const char*)src;
-    
-#ifdef LEAVES_HAS_BUILTIN_MEMCPY
-    // Use compiler builtins when available (GCC/Clang)
-    if (n >= 16) {
-      __builtin_memcpy(d, s, 16);
-      __builtin_memcpy(d + n - 16, s + n - 16, 16);
-    } else if (n >= 8) {
-      __builtin_memcpy(d, s, 8);
-      __builtin_memcpy(d + n - 8, s + n - 8, 8);
-    } else if (n >= 4) {
-      __builtin_memcpy(d, s, 4);
-      __builtin_memcpy(d + n - 4, s + n - 4, 4);
-    } else {
-      for (size_t i = 0; i < n; i++) d[i] = s[i];
-    }
-#else
-    // Fallback for other compilers (MSVC, etc.)
-    if (n >= 16) {
-      memcpy(d, s, 16);
-      memcpy(d + n - 16, s + n - 16, 16);
-    } else if (n >= 8) {
-      memcpy(d, s, 8);
-      memcpy(d + n - 8, s + n - 8, 8);
-    } else {
-      memcpy(d, s, n);
-    }
-#endif
-    return dest;
-  }
-
-#if defined(LEAVES_HAS_SSE2)
-  // x86-64: Use non-temporal stores for large copies to avoid cache pollution
-  if (n >= 32768) {
-    char* d = (char*)dest;
-    const char* s = (const char*)src;
-    
-    // Align destination to 16-byte boundary
-    size_t align_bytes = (16 - ((uintptr_t)d & 15)) & 15;
-    if (align_bytes > 0 && align_bytes < n) {
-      memcpy(d, s, align_bytes);
-      d += align_bytes;
-      s += align_bytes;
-      n -= align_bytes;
-    }
-    
-    // Non-temporal stores for aligned 16-byte chunks
-    size_t chunks = n / 16;
-    for (size_t i = 0; i < chunks; i++) {
-      __m128i data = _mm_loadu_si128((const __m128i*)s);
-      _mm_stream_si128((__m128i*)d, data);
-      d += 16;
-      s += 16;
-    }
-    _mm_sfence();  // Ensure stores are visible
-    
-    // Copy remainder
-    size_t remainder = n & 15;
-    if (remainder > 0) {
-      memcpy(d, s, remainder);
-    }
-    return dest;
-  }
-#elif defined(LEAVES_HAS_NEON)
-  // ARM64: Use NEON non-temporal stores for large copies
-  if (n >= 32768) {
-    char* d = (char*)dest;
-    const char* s = (const char*)src;
-    
-    // Align destination to 16-byte boundary
-    size_t align_bytes = (16 - ((uintptr_t)d & 15)) & 15;
-    if (align_bytes > 0 && align_bytes < n) {
-      memcpy(d, s, align_bytes);
-      d += align_bytes;
-      s += align_bytes;
-      n -= align_bytes;
-    }
-    
-    // NEON stores for 16-byte chunks
-    size_t chunks = n / 16;
-    for (size_t i = 0; i < chunks; i++) {
-      uint8x16_t data = vld1q_u8((const uint8_t*)s);
-      vst1q_u8((uint8_t*)d, data);
-      d += 16;
-      s += 16;
-    }
-    
-    // Copy remainder
-    size_t remainder = n & 15;
-    if (remainder > 0) {
-      memcpy(d, s, remainder);
-    }
-    return dest;
-  }
-#endif
-  
-  // Default path for medium sizes and unsupported platforms
-  return memcpy(dest, src, n);
-}
-
 static constexpr uint32_t DEFAULT_COPY_WRITE_PIVOT_BYTES = 64 * 1024;
 static constexpr uint32_t COPY_WRITE_PIVOT_DISABLED =
     std::numeric_limits<uint32_t>::max();
-
-inline bool write_fd_at_offset(int fd, uint64_t offset, const void* src,
-                               size_t n) {
-  const char* p = static_cast<const char*>(src);
-  size_t remaining = n;
-
-#ifdef _WIN32
-  intptr_t os_handle = _get_osfhandle(fd);
-  if (os_handle == -1) return false;
-  HANDLE handle = reinterpret_cast<HANDLE>(os_handle);
-
-  while (remaining > 0) {
-    OVERLAPPED ov{};
-    ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFFULL);
-    ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
-
-    DWORD chunk = static_cast<DWORD>((std::min)(remaining, size_t(MAXDWORD)));
-    DWORD written = 0;
-    if (!WriteFile(handle, p, chunk, &written, &ov) || written == 0)
-      return false;
-
-    p += written;
-    remaining -= static_cast<size_t>(written);
-    offset += static_cast<uint64_t>(written);
-  }
-  return true;
-#else
-  uint64_t off = offset;
-  while (remaining > 0) {
-    ssize_t written = ::pwrite(fd, p, remaining, static_cast<off_t>(off));
-    if (written < 0) {
-      if (errno == EINTR) continue;
-      return false;
-    }
-    if (written == 0) return false;
-    p += written;
-    remaining -= static_cast<size_t>(written);
-    off += static_cast<uint64_t>(written);
-  }
-  return true;
-#endif
-}
 
 inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
   static constexpr size_t CHUNKS[] = {512,  1024, 2048, 4096, 8192,
@@ -296,11 +107,7 @@ inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
     }
     std::filesystem::resize_file(calibration_file, bench_file_size);
 
-#ifdef _WIN32
-    int fd = _open(calibration_file, _O_RDWR | _O_BINARY);
-#else
-    int fd = ::open(calibration_file, O_RDWR);
-#endif
+    int fd = open_rw_fd(calibration_file, false);
     if (fd < 0) {
       cleanup();
       return DEFAULT_COPY_WRITE_PIVOT_BYTES;
@@ -345,7 +152,7 @@ inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
         t0 = std::chrono::steady_clock::now();
         bool write_ok = true;
         for (size_t i = 0; i < loops; i++) {
-          if (!write_fd_at_offset(fd, off, src.data(), chunk)) {
+          if (!write_fd_all_at(fd, off, src.data(), chunk)) {
             write_ok = false;
             break;
           }
@@ -375,11 +182,7 @@ inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
       }
     }
 
-#ifdef _WIN32
-    _close(fd);
-#else
-    ::close(fd);
-#endif
+  close_fd(fd);
     cleanup();
 
     if (!found) {
@@ -394,7 +197,6 @@ inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
 
 typedef tid_serial tid_t;
 typedef enum { TRIE = 0, LEAF = 1 } NodeTypes;
-typedef enum { READ = 0, WRITE = 1 } Access;
 
 // CAS spinlock using TTAS (test-and-test-and-set) pattern.
 // Safe in shared memory (mmap) — uses only hardware atomics, no kernel state.
@@ -405,13 +207,7 @@ struct SpinLock {
     while (_flag.exchange(1, std::memory_order_acquire)) {
       // Spin on load (shared cache line) to reduce bus traffic
       while (_flag.load(std::memory_order_relaxed)) {
-#if defined(LEAVES_X86_64)
-        _mm_pause();
-#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
-        __yield();
-#elif defined(LEAVES_ARM64)
-        __asm__ __volatile__("yield");
-#endif
+        cpu_relax();
       }
     }
   }
@@ -673,102 +469,6 @@ struct AreaSlice {
   operator bool() const { return size(); }
   uint64_t end() const { return offset() + size(); }
 };
-
-// Portable bit manipulation helpers
-namespace detail {
-
-inline unsigned count_trailing_zeros_32(uint32_t x) {
-#if defined(_MSC_VER)
-  unsigned long index;
-  _BitScanForward(&index, x);
-  return index;
-#elif defined(__GNUC__) || defined(__clang__)
-  return static_cast<unsigned>(__builtin_ctz(x));
-#else
-  // Portable fallback using de Bruijn sequence
-  static const unsigned debruijn32[32] = {
-    0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
-    31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9
-  };
-  return debruijn32[((x & -x) * 0x077CB531U) >> 27];
-#endif
-}
-
-inline unsigned count_trailing_zeros_64(uint64_t x) {
-#if defined(_MSC_VER)
-  #if defined(_M_X64) || defined(_M_ARM64)
-  unsigned long index;
-  _BitScanForward64(&index, x);
-  return index;
-  #else
-  // 32-bit MSVC fallback
-  unsigned long index;
-  if (static_cast<uint32_t>(x) != 0) {
-    _BitScanForward(&index, static_cast<uint32_t>(x));
-    return index;
-  }
-  _BitScanForward(&index, static_cast<uint32_t>(x >> 32));
-  return index + 32;
-  #endif
-#elif defined(__GNUC__) || defined(__clang__)
-  return static_cast<unsigned>(__builtin_ctzll(x));
-#else
-  // Portable fallback
-  if (static_cast<uint32_t>(x) != 0) {
-    return count_trailing_zeros_32(static_cast<uint32_t>(x));
-  }
-  return 32 + count_trailing_zeros_32(static_cast<uint32_t>(x >> 32));
-#endif
-}
-
-inline unsigned count_leading_zeros_64(uint64_t x) {
-#if defined(_MSC_VER)
-  #if defined(_M_X64) || defined(_M_ARM64)
-  unsigned long index;
-  _BitScanReverse64(&index, x);
-  return 63 - index;
-  #else
-  // 32-bit MSVC fallback
-  unsigned long index;
-  if (static_cast<uint32_t>(x >> 32) != 0) {
-    _BitScanReverse(&index, static_cast<uint32_t>(x >> 32));
-    return 31 - index;
-  }
-  _BitScanReverse(&index, static_cast<uint32_t>(x));
-  return 63 - index;
-  #endif
-#elif defined(__GNUC__) || defined(__clang__)
-  return static_cast<unsigned>(__builtin_clzll(x));
-#else
-  // Portable fallback
-  unsigned n = 0;
-  if (x <= 0x00000000FFFFFFFFULL) { n += 32; x <<= 32; }
-  if (x <= 0x0000FFFFFFFFFFFFULL) { n += 16; x <<= 16; }
-  if (x <= 0x00FFFFFFFFFFFFFFULL) { n += 8;  x <<= 8; }
-  if (x <= 0x0FFFFFFFFFFFFFFFULL) { n += 4;  x <<= 4; }
-  if (x <= 0x3FFFFFFFFFFFFFFFULL) { n += 2;  x <<= 2; }
-  if (x <= 0x7FFFFFFFFFFFFFFFULL) { n += 1; }
-  return n;
-#endif
-}
-
-// Detect endianness at compile time
-inline bool is_little_endian() {
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
-  return __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
-#elif defined(_WIN32) || defined(__EMSCRIPTEN__) || defined(__x86_64__) || \
-      defined(_M_X64) || defined(__i386__) || defined(_M_IX86) || \
-      defined(__aarch64__) || defined(_M_ARM64) || defined(__arm__) || defined(_M_ARM)
-  // Most common platforms are little-endian
-  return true;
-#else
-  // Runtime check as last resort
-  const uint16_t test = 1;
-  return *reinterpret_cast<const uint8_t*>(&test) == 1;
-#endif
-}
-
-}  // namespace detail
 
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {

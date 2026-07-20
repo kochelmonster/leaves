@@ -6,10 +6,10 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
+#include <cerrno>
 #ifndef LEAVES_SINGLE_PROCESS
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
@@ -27,14 +27,6 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <mutex>
 #include <string_view>
 #include <type_traits>
-
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 
 #include "../core/_exception.hpp"
 #include "../core/_node.hpp"
@@ -168,9 +160,9 @@ struct _MemoryMapFile
     uint32_t
         clean_close;  // 1 = last close was clean, 0 = dirty (open or crashed)
     uint32_t copy_write_pivot_bytes;  // write-vs-memcpy pivot for mmap copy
-    uint16_t db_entry_count;  // entries used in first directory page
-    offset_t db_next_page;    // link to overflow directory page (0 = none)
-    DBEntry dbs[];            // flexible array fills to 4K boundary
+    uint16_t db_entry_count;          // entries used in first directory page
+    offset_t db_next_page;  // link to overflow directory page (0 = none)
+    DBEntry dbs[];          // flexible array fills to 4K boundary
 
     FileHeader()
         : db_version(0),
@@ -205,9 +197,8 @@ struct _MemoryMapFile
 #endif
 
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
-                 size_t pool_threads = SIZE_MAX,
-                 uint32_t copy_write_pivot = 0)
-      : PoolMixin(_lazy_pool), _write_fd(-1) {
+                 size_t pool_threads = SIZE_MAX, uint32_t copy_write_pivot = 0)
+      : PoolMixin(_lazy_pool), _write_fd(LEAVES_INVALID_FD) {
 #ifndef LEAVES_SINGLE_PROCESS
     _pid = current_pid();
 #else
@@ -243,7 +234,8 @@ struct _MemoryMapFile
 
   uint32_t sanitize_generation() { return _memory->sanitize_generation; }
 
-  void init_dbfile(const char* path, size_t map_size, uint32_t copy_write_pivot = 0) {
+  void init_dbfile(const char* path, size_t map_size,
+                   uint32_t copy_write_pivot = 0) {
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
@@ -291,22 +283,14 @@ struct _MemoryMapFile
 
   bool open_write_fd(const char* path) {
     close_write_fd();
-#ifdef _WIN32
-    _write_fd = _open(path, _O_RDWR | _O_BINARY);
-#else
-    _write_fd = ::open(path, O_RDWR);
-#endif
-    return _write_fd >= 0;
+    _write_fd = leaves::open_rw_fd(path, false);
+    return leaves::fd_valid(_write_fd);
   }
 
   void close_write_fd() {
-    if (_write_fd < 0) return;
-#ifdef _WIN32
-    _close(_write_fd);
-#else
-    ::close(_write_fd);
-#endif
-    _write_fd = -1;
+    if (!leaves::fd_valid(_write_fd)) return;
+    leaves::close_fd(_write_fd);
+    _write_fd = LEAVES_INVALID_FD;
   }
 
   bool is_mmap_destination(const void* dest, size_t n,
@@ -325,8 +309,8 @@ struct _MemoryMapFile
   }
 
   bool write_to_file_at(uint64_t offset, const void* src, size_t n) {
-    if (_write_fd < 0) return false;
-    return leaves::write_fd_at_offset(_write_fd, offset, src, n);
+    if (!leaves::fd_valid(_write_fd)) return false;
+    return leaves::write_fd_all_at(_write_fd, offset, src, n);
   }
 
   void remove_pid() {
@@ -490,40 +474,27 @@ struct _MemoryMapFile
     uint64_t offset = 0;
     uint32_t pivot = _memory->copy_write_pivot_bytes;
     if (pivot != leaves::COPY_WRITE_PIVOT_DISABLED && n > pivot &&
-        is_mmap_destination(dest, n, &offset) && write_to_file_at(offset, src, n)) {
+        is_mmap_destination(dest, n, &offset) &&
+        write_to_file_at(offset, src, n)) {
 #ifdef TESTING
       _copy_write_path_hits.fetch_add(1, std::memory_order_relaxed);
 #endif
       return true;
     }
-        optimized_memcpy(dest, src, n);
-        return false;
+    optimized_memcpy(dest, src, n);
+    return false;
   }
 
   void sync_fd_for_commit() {
-    if (_write_fd < 0) {
+    if (!leaves::fd_valid(_write_fd)) {
       throw FileError("Failed to sync commit data: invalid file descriptor",
                       EBADF);
     }
-#ifdef _WIN32
-    if (_commit(_write_fd) != 0) {
+    if (!leaves::sync_fd_data(_write_fd)) {
       throw FileError(
           "Failed to sync commit data: " + std::string(std::strerror(errno)),
           errno);
     }
-#elif defined(__APPLE__)
-    if (::fsync(_write_fd) != 0) {
-      throw FileError(
-          "Failed to sync commit data: " + std::string(std::strerror(errno)),
-          errno);
-    }
-#else
-    if (::fdatasync(_write_fd) != 0) {
-      throw FileError(
-          "Failed to sync commit data: " + std::string(std::strerror(errno)),
-          errno);
-    }
-#endif
 #ifdef TESTING
     _copy_write_sync_hits.fetch_add(1, std::memory_order_relaxed);
 #endif

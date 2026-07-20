@@ -15,10 +15,6 @@ Internal worker-thread pool and task queue primitives.
 #include <utility>
 #include <vector>
 
-#ifdef _MSC_VER
-#  include <intrin.h>
-#endif
-
 #include "../core/_port.hpp"
 
 namespace leaves {
@@ -93,18 +89,6 @@ struct _Task {
   void operator()() { _invoke(_buf); }
   explicit operator bool() const noexcept { return _invoke != nullptr; }
 };
-
-// One CPU-pipeline relaxation instruction to reduce contention during spin-waits.
-// Avoids saturating the memory bus and improves SMT partner throughput.
-static inline void _pool_cpu_relax() noexcept {
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
-  _mm_pause();
-#elif defined(__x86_64__) || defined(__i386__)
-  __asm__ volatile("pause" ::: "memory");
-#elif defined(__aarch64__) || defined(__arm__)
-  __asm__ volatile("yield" ::: "memory");
-#endif
-}
 
 /**
  * @brief Thread pool mixin for storage classes
@@ -390,7 +374,7 @@ struct _ThreadPoolMixin {
           }
         }
         if (_pool_shutdown.load()) return;
-        _pool_cpu_relax();
+        cpu_relax();
       }
       if (got) continue;
 
