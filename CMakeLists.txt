@@ -3,6 +3,11 @@ cmake_policy(SET CMP0076 NEW)
 
 project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/include/leaves/version.hpp"
+    @ONLY)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -295,6 +300,7 @@ endif()
 target_include_directories(leaves
                            INTERFACE
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 target_sources(leaves_replication INTERFACE
@@ -715,6 +721,8 @@ install(TARGETS leaves_replication EXPORT leavesReplicationTargets
     INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/leaves"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/leaves/version.hpp"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/leaves")
 
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/leaves-config.cmake.in"
