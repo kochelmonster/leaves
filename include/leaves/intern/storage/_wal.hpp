@@ -23,19 +23,6 @@ Write-ahead log support for durable storage updates and recovery replay.
 // A transaction is replayable on recovery only if it contains, in order,
 // BEGIN ... PREPARE COMMIT.  Any trailing unprepared transaction is discarded
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -50,8 +37,9 @@ Write-ahead log support for durable storage updates and recovery replay.
 #include <vector>
 
 #include "../core/_serial.hpp"
-#include "../core/_util.hpp"
 #include "../core/_exception.hpp"
+#include "../core/_port.hpp"
+#include "../core/_util.hpp"
 
 namespace leaves {
 
@@ -100,103 +88,25 @@ struct WalState {
 // ---------------------------------------------------------------------------
 // Cross-platform raw file helpers
 // ---------------------------------------------------------------------------
-#ifdef _WIN32
-using _wal_fd_t = HANDLE;
-static const _wal_fd_t WAL_INVALID_FD = INVALID_HANDLE_VALUE;
-
-inline _wal_fd_t _wal_open(const std::string& path) {
-  return CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
-                     FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
-                     FILE_ATTRIBUTE_NORMAL, nullptr);
-}
-inline void _wal_close(_wal_fd_t fd) {
-  if (fd != WAL_INVALID_FD) CloseHandle(fd);
-}
-inline uint64_t _wal_size(_wal_fd_t fd) {
-  LARGE_INTEGER sz;
-  if (!GetFileSizeEx(fd, &sz)) return 0;
-  return static_cast<uint64_t>(sz.QuadPart);
-}
-inline bool _wal_pwrite(_wal_fd_t fd, uint64_t off, const void* data,
-                        size_t size) {
-  OVERLAPPED ov{};
-  ov.Offset = static_cast<DWORD>(off & 0xFFFFFFFF);
-  ov.OffsetHigh = static_cast<DWORD>(off >> 32);
-  DWORD written = 0;
-  return WriteFile(fd, data, static_cast<DWORD>(size), &written, &ov) &&
-         written == size;
-}
-inline bool _wal_pread(_wal_fd_t fd, uint64_t off, void* data, size_t size) {
-  OVERLAPPED ov{};
-  ov.Offset = static_cast<DWORD>(off & 0xFFFFFFFF);
-  ov.OffsetHigh = static_cast<DWORD>(off >> 32);
-  DWORD got = 0;
-  return ReadFile(fd, data, static_cast<DWORD>(size), &got, &ov) &&
-         got == size;
-}
-inline void _wal_sync(_wal_fd_t fd) { FlushFileBuffers(fd); }
-inline void _wal_truncate(_wal_fd_t fd, uint64_t size) {
-  LARGE_INTEGER li;
-  li.QuadPart = static_cast<LONGLONG>(size);
-  SetFilePointerEx(fd, li, nullptr, FILE_BEGIN);
-  SetEndOfFile(fd);
-}
-#else
 using _wal_fd_t = int;
-static constexpr _wal_fd_t WAL_INVALID_FD = -1;
+static constexpr _wal_fd_t WAL_INVALID_FD = LEAVES_INVALID_FD;
 
 inline _wal_fd_t _wal_open(const std::string& path) {
-  return ::open(path.c_str(), O_RDWR | O_CREAT, 0644);
+  return leaves::open_rw_fd(path.c_str(), true);
 }
-inline void _wal_close(_wal_fd_t fd) {
-  if (fd != WAL_INVALID_FD) ::close(fd);
-}
-inline uint64_t _wal_size(_wal_fd_t fd) {
-  off_t end = ::lseek(fd, 0, SEEK_END);
-  return end < 0 ? 0 : static_cast<uint64_t>(end);
-}
+inline void _wal_close(_wal_fd_t fd) { leaves::close_fd(fd); }
+inline uint64_t _wal_size(_wal_fd_t fd) { return leaves::fd_size(fd); }
 inline bool _wal_pwrite(_wal_fd_t fd, uint64_t off, const void* data,
                         size_t size) {
-  const char* p = static_cast<const char*>(data);
-  while (size > 0) {
-    ssize_t n = ::pwrite(fd, p, size, static_cast<off_t>(off));
-    if (n <= 0) {
-      if (n < 0 && errno == EINTR) continue;
-      return false;
-    }
-    p += n;
-    off += static_cast<uint64_t>(n);
-    size -= static_cast<size_t>(n);
-  }
-  return true;
+  return leaves::write_fd_all_at(fd, off, data, size);
 }
 inline bool _wal_pread(_wal_fd_t fd, uint64_t off, void* data, size_t size) {
-  char* p = static_cast<char*>(data);
-  while (size > 0) {
-    ssize_t n = ::pread(fd, p, size, static_cast<off_t>(off));
-    if (n <= 0) {
-      if (n < 0 && errno == EINTR) continue;
-      return false;
-    }
-    p += n;
-    off += static_cast<uint64_t>(n);
-    size -= static_cast<size_t>(n);
-  }
-  return true;
+  return leaves::read_fd_all_at(fd, off, data, size);
 }
-inline void _wal_sync(_wal_fd_t fd) {
-#if defined(__APPLE__)
-  ::fsync(fd);
-#else
-  ::fdatasync(fd);
-#endif
-}
+inline void _wal_sync(_wal_fd_t fd) { (void)leaves::sync_fd_data(fd); }
 inline void _wal_truncate(_wal_fd_t fd, uint64_t size) {
-  if (::ftruncate(fd, static_cast<off_t>(size)) != 0) {
-    // best effort
-  }
+  (void)leaves::resize_fd(fd, size);  // best effort
 }
-#endif
 
 // ---------------------------------------------------------------------------
 // Little-endian serialization helpers

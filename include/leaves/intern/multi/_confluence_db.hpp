@@ -537,15 +537,7 @@ struct _ConfluenceDB {
 
       // Still none — back off and retry.
       if (spin < 16) {
-#if defined(LEAVES_X86_64)
-        _mm_pause();
-#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
-        __yield();
-#elif defined(LEAVES_ARM64)
-        __asm__ __volatile__("yield");
-#else
-        std::this_thread::yield();
-#endif
+        cpu_relax();
       } else if (spin < 64) {
         std::this_thread::yield();
       } else {
@@ -1234,15 +1226,7 @@ struct _ConfluenceCursor {
         trib = _cdb->_try_claim_or_alloc();
         if (trib) break;
         if (spin < 16) {
-#if defined(LEAVES_X86_64)
-          _mm_pause();
-#elif defined(LEAVES_ARM64) && defined(_MSC_VER)
-          __yield();
-#elif defined(LEAVES_ARM64)
-          __asm__ __volatile__("yield");
-#else
-          std::this_thread::yield();
-#endif
+          cpu_relax();
         } else if (spin < 64) {
           std::this_thread::yield();
         } else {

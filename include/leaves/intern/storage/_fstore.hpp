@@ -4,19 +4,6 @@ File-backed storage backend and its internal persistence helpers.
 #ifndef _LEAVES__FSTORE_HPP
 #define _LEAVES__FSTORE_HPP
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-
 #include <algorithm>
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/indexed_by.hpp>
@@ -144,11 +131,7 @@ struct _FileOperations : _CacheBase {
   };
 
   std::string _filepath;
-#ifdef _WIN32
-  HANDLE _fd = INVALID_HANDLE_VALUE;
-#else
-  int _fd = -1;
-#endif
+  int _fd = LEAVES_INVALID_FD;
   FileHeader* _header;
   // Real lock for area allocation serialization (returned by file_lock()).
   // Must be recursive: open() holds it while calling sanitize(), and sanitize()
@@ -161,67 +144,25 @@ struct _FileOperations : _CacheBase {
 
   void open(const char* path) {
     _filepath = path;
-#ifdef _WIN32
-    _fd = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
-                      FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
-                      FILE_ATTRIBUTE_NORMAL, NULL);
-    if (_fd == INVALID_HANDLE_VALUE) {
-      throw FileError(
-          "Failed to open file: error " + std::to_string(GetLastError()),
-          GetLastError());
-    }
-#else
-    _fd = ::open(path, O_RDWR | O_CREAT, 0644);
-    if (_fd < 0) {
+    _fd = leaves::open_rw_fd(path, true);
+    if (!leaves::fd_valid(_fd)) {
       throw FileError(
           "Failed to open file: " + std::string(std::strerror(errno)), errno);
     }
-#endif
   }
 
   void close() {
-#ifdef _WIN32
-    if (_fd != INVALID_HANDLE_VALUE) {
-      CloseHandle(_fd);
-      _fd = INVALID_HANDLE_VALUE;
+    if (leaves::fd_valid(_fd)) {
+      leaves::close_fd(_fd);
+      _fd = LEAVES_INVALID_FD;
     }
-#else
-    if (_fd >= 0) {
-      ::close(_fd);
-      _fd = -1;
-    }
-#endif
   }
 
   void _write_raw(offset_t offset, const void* ptr, size_t size) const {
     if (size == 0) return;
-    auto* src = static_cast<const char*>(ptr);
-    uint64_t file_offset = static_cast<uint64_t>(offset);
-    size_t written = 0;
-    while (written < size) {
-#ifdef _WIN32
-      OVERLAPPED ov = {};
-      uint64_t pos = file_offset + written;
-      ov.Offset = static_cast<DWORD>(pos);
-      ov.OffsetHigh = static_cast<DWORD>(pos >> 32);
-      DWORD n = 0;
-      DWORD to_write =
-          static_cast<DWORD>(std::min<size_t>(size - written, MAXDWORD));
-      if (!WriteFile(_fd, src + written, to_write, &n, &ov) || n == 0) {
-        throw FileError(
-            "Failed to write data: error " + std::to_string(GetLastError()),
-            GetLastError());
-      }
-#else
-      ssize_t n = ::pwrite(_fd, src + written, size - written,
-                           static_cast<off_t>(file_offset + written));
-      if (n <= 0) {
-        throw FileError(
-            "Failed to write data: " + std::string(std::strerror(errno)),
-            errno);
-      }
-#endif
-      written += n;
+    if (!leaves::write_fd_all_at(_fd, static_cast<uint64_t>(offset), ptr, size)) {
+      throw FileError(
+          "Failed to write data: " + std::string(std::strerror(errno)), errno);
     }
   }
 
@@ -231,50 +172,17 @@ struct _FileOperations : _CacheBase {
   }
 
   void read(offset_t offset, void* ptr, size_t size) const {
-    auto* dst = static_cast<char*>(ptr);
-    uint64_t file_offset = static_cast<uint64_t>(offset);
-    size_t total = 0;
-    while (total < size) {
-#ifdef _WIN32
-      OVERLAPPED ov = {};
-      uint64_t pos = file_offset + total;
-      ov.Offset = static_cast<DWORD>(pos);
-      ov.OffsetHigh = static_cast<DWORD>(pos >> 32);
-      DWORD n = 0;
-      DWORD to_read =
-          static_cast<DWORD>(std::min<size_t>(size - total, MAXDWORD));
-      if (!ReadFile(_fd, dst + total, to_read, &n, &ov) || n == 0) {
-        throw FileError(
-            "Failed to read data: error " + std::to_string(GetLastError()),
-            GetLastError());
-      }
-#else
-      ssize_t n = ::pread(_fd, dst + total, size - total,
-                          static_cast<off_t>(file_offset + total));
-      if (n <= 0) {
-        throw FileError(
-            "Failed to read data: " + std::string(std::strerror(errno)), errno);
-      }
-#endif
-      total += n;
+    if (!leaves::read_fd_all_at(_fd, static_cast<uint64_t>(offset), ptr, size)) {
+      throw FileError(
+          "Failed to read data: " + std::string(std::strerror(errno)), errno);
     }
   }
 
   void resize(size_t new_size) const {
-#ifdef _WIN32
-    LARGE_INTEGER li;
-    li.QuadPart = static_cast<LONGLONG>(new_size);
-    if (!SetFilePointerEx(_fd, li, NULL, FILE_BEGIN) || !SetEndOfFile(_fd)) {
-      throw FileError(
-          "Failed to resize file: error " + std::to_string(GetLastError()),
-          GetLastError());
-    }
-#else
-    if (::ftruncate(_fd, static_cast<off_t>(new_size)) != 0) {
+    if (!leaves::resize_fd(_fd, static_cast<uint64_t>(new_size))) {
       throw FileError(
           "Failed to resize file: " + std::string(std::strerror(errno)), errno);
     }
-#endif
   }
 
   template <typename BlockVector>
