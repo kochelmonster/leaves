@@ -49,6 +49,11 @@ class StorageFull : public LeavesException {
   StorageFull(
       const char* msg = "storage full: file size would exceed mapped region")
       : LeavesException(msg) {}
+  StorageFull(uint64_t map_size, uint64_t file_size)
+      : LeavesException("storage full: file size would exceed mapped region"
+                        " (map size=" + std::to_string(map_size) +
+                        ", attempted file size=" +
+                        std::to_string(file_size) + ")") {}
 };
 
 class WrongValue : public LeavesException {
