@@ -197,14 +197,15 @@ struct _MemoryMapFile
 #endif
 
   _MemoryMapFile(const char* path, size_t map_size = 2 * G,
-                 size_t pool_threads = SIZE_MAX, uint32_t copy_write_pivot = 0)
+                 size_t pool_threads = SIZE_MAX,
+                 uint32_t copy_write_threshold = 0)
       : PoolMixin(_lazy_pool), _write_fd(LEAVES_INVALID_FD) {
 #ifndef LEAVES_SINGLE_PROCESS
     _pid = current_pid();
 #else
     _pid = 1;
 #endif
-    init_dbfile(path, map_size, copy_write_pivot);
+    init_dbfile(path, map_size, copy_write_threshold);
     if (pool_threads != SIZE_MAX) {
       size_t n = pool_threads;
       if (n == 0)
@@ -235,7 +236,7 @@ struct _MemoryMapFile
   uint32_t sanitize_generation() { return _memory->sanitize_generation; }
 
   void init_dbfile(const char* path, size_t map_size,
-                   uint32_t copy_write_pivot = 0) {
+                   uint32_t copy_write_threshold = 0) {
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
@@ -247,8 +248,8 @@ struct _MemoryMapFile
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
       _memory->file_size = fsize;
-      if (copy_write_pivot) {
-        _memory->copy_write_pivot_bytes = copy_write_pivot;
+      if (copy_write_threshold) {
+        _memory->copy_write_pivot_bytes = copy_write_threshold;
       } else {
         std::filesystem::path calibration_file(path);
         calibration_file += ".pivot-calibration.tmp";
@@ -271,8 +272,8 @@ struct _MemoryMapFile
       _memory = (FileHeader*)_region.get_address();
       if (_memory->max_processes != MAX_PROCESSES)
         throw WrongValue("max_processes does not match.");
-      if (copy_write_pivot) {
-        _memory->copy_write_pivot_bytes = copy_write_pivot;
+      if (copy_write_threshold) {
+        _memory->copy_write_pivot_bytes = copy_write_threshold;
       }
     }
 
