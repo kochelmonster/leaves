@@ -275,7 +275,7 @@
             "cwd": "${workspaceFolder}/build",
             "args": [
                 "-t",
-                "remove_combine_trie"
+                "rollback_sees_committed_trie"
             ],
             "setupCommands": [
                 {
@@ -618,6 +618,43 @@
             "externalConsole": false,
             "MIMode": "gdb",
             "preLaunchTask": "Build leaves (CMake)",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server (prevents hang)",
+                    "text": "-gdb-set debuginfod enabled off",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) db_bench_leaves (build-debug, heap_writeback)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-debug/db_bench_leaves",
+            "args": [
+                "--benchmarks=fillrandom",
+                "--heap_writeback=1"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build-debug",
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
