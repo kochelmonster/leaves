@@ -247,9 +247,12 @@ async function runTest() {
     }
 
     // ── 6. Cleanup ───────────────────────────────────────────────
-    dbg("Step 6: Cleaning up (closing ws, closing store)...");
+    dbg("Step 6: Cleaning up (destroy receiver, then close store)...");
     ws.close();
+    receiver.delete();
+    repldb.delete();
     await store.close();
+    store.delete();
     dbg("Step 6b: Cleanup done");
 
     // ── 7. Delete storage ────────────────────────────────────────
@@ -262,6 +265,7 @@ async function runTest() {
       dbg("Step 7c: Failed to delete storage: " + e.message);
       check(false, "storage deleted: " + e.message);
     }
+    checkEq(Module.LeavesStore.pendingWrites(), 0, "pending writes drained");
     log("");
 
     log("");

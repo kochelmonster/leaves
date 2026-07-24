@@ -11,27 +11,38 @@ async function runReplicationTest(log, check) {
     log('\n=== Replication Test ===');
 
     const Module = await createModule();
+    const store1Name = 'repl_storage1_' + Date.now();
+    const store2Name = 'repl_storage2_' + Date.now();
+    let store1 = null;
+    let store2 = null;
+    let replDb1 = null;
+    let replDb2 = null;
+    let c1 = null;
+    let c2 = null;
+    let sender = null;
+    let receiver = null;
 
-    // Create a storage (IndexedDB store name = 'repl_storage1_...')
-    log('Creating store 1');
-    const store1 = await Module.LeavesStore.create('repl_storage1_' + Date.now(), 10 * 1024 * 1024);
-    log('Store 1 created');
+    try {
+        // Create a storage (IndexedDB store name = 'repl_storage1_...')
+        log('Creating store 1');
+        store1 = await Module.LeavesStore.create(store1Name, 10 * 1024 * 1024);
+        log('Store 1 created');
 
-    // Open a replication DB within this store
-    const replDb1 = await store1.openReplication('repl_db');
-    const c1 = await replDb1.createCursor();
-    await c1.find('key1');
-    await c1.setValue('value1');
-    await c1.commit(false);
-    log('Store 1 created and data added');
+        // Open a replication DB within this store
+        replDb1 = await store1.openReplication('repl_db');
+        c1 = await replDb1.createCursor();
+        await c1.find('key1');
+        await c1.setValue('value1');
+        await c1.commit(false);
+        log('Store 1 created and data added');
 
-    const store2 = await Module.LeavesStore.create('repl_storage2_' + Date.now(), 10 * 1024 * 1024);
-    console.log('Store 2 created');
-    const replDb2 = await store2.openReplication('repl_db');
-    log('Store 2 created');
+        store2 = await Module.LeavesStore.create(store2Name, 10 * 1024 * 1024);
+        console.log('Store 2 created');
+        replDb2 = await store2.openReplication('repl_db');
+        log('Store 2 created');
 
-    const sender = new LeavesReplicationSender(replDb1, Module);
-    const receiver = new LeavesReplicationReceiver(replDb2, Module);
+        sender = new LeavesReplicationSender(replDb1, Module);
+        receiver = new LeavesReplicationReceiver(replDb2, Module);
 
     // Use separate events objects so sender's onComplete doesn't mask
     // the receiver still needing to process the COMPLETE message.
@@ -132,19 +143,50 @@ async function runReplicationTest(log, check) {
     check('receiver completed', receiverComplete, true);
     check('receiver state idle', receiver.state(), 'idle');
 
-    const c2 = await replDb2.createCursor();
-    await c2.find('key1');
-    check('replicated data isValid', c2.isValid(), true);
-    check('replicated data value', await c2.getValue(), 'value1');
+        c2 = await replDb2.createCursor();
+        await c2.find('key1');
+        check('replicated data isValid', c2.isValid(), true);
+        check('replicated data value', await c2.getValue(), 'value1');
+    } finally {
+        // Destroy replication state machines before DB/store teardown.
+        sender.delete();
+        receiver.delete();
+        c1.delete();
+        c2.delete();
+        replDb1.delete();
+        replDb2.delete();
 
-    c1.delete();
-    c2.delete();
-    replDb1.delete();
-    replDb2.delete();
-    await store1.close();
-    await store2.close();
-    store1.delete();
-    store2.delete();
+        if (store1) {
+            try {
+                await store1.close();
+                store1.delete();
+            } catch (e) {
+                log('WARN: store1.delete failed: ' + e.message);
+            }
+        }
+        if (store2) {
+            try {
+                await store2.close();
+                store2.delete();
+            } catch (e) {
+                log('WARN: store2.delete failed: ' + e.message);
+            }
+        }
+
+        try {
+            await Module.LeavesStore.deleteStorage(store1Name);
+        } catch (e) {
+            log('WARN: deleteStorage(store1) failed: ' + e.message);
+        }
+        try {
+            await Module.LeavesStore.deleteStorage(store2Name);
+        } catch (e) {
+            log('WARN: deleteStorage(store2) failed: ' + e.message);
+        }
+
+        check('replication cleanup pending writes', Module.LeavesStore.pendingWrites(), 0);
+        log('Replication cleanup complete');
+    }
 }
 
 window.runReplicationTest = runReplicationTest;
@@ -169,7 +211,8 @@ async function runTest() {
     const Module = await createModule();
 
     // Create a storage with a storage name. The storage is the IndexedDB database.
-    var store = await Module.LeavesStore.create('test_storage_' + Date.now(), 10 * 1024 * 1024);
+    var storeName = 'test_storage_' + Date.now();
+    var store = await Module.LeavesStore.create(storeName, 10 * 1024 * 1024);
     log('Store created');
 
     // Open a database within this store with a database name.
@@ -258,8 +301,11 @@ async function runTest() {
 
     // Cleanup
     c.delete();
+    db.delete();
     await store.close();
     store.delete();
+    await Module.LeavesStore.deleteStorage(storeName);
+    log('Main cleanup complete');
 
     if (ok) {
       log('\n=== ALL TESTS PASSED ===');
@@ -376,7 +422,11 @@ async function runTest() {
         log('per-cursor context isolation works');
 
         // Cleanup
+        c.delete();
+        c2.delete();
+        db.delete();
         await store.close();
+        store.delete();
         await Module.LeavesStore.deleteStorage(aspectStoreName);
         log('Aspect test complete');
     }

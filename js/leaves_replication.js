@@ -25,6 +25,13 @@ export class LeavesReplicationSender {
     state() {
         return this._impl.state();
     }
+
+    delete() {
+        if (this._impl) {
+            this._impl.delete();
+            this._impl = null;
+        }
+    }
 }
 
 export class LeavesReplicationReceiver {
@@ -42,5 +49,12 @@ export class LeavesReplicationReceiver {
 
     state() {
         return this._impl.state();
+    }
+
+    delete() {
+        if (this._impl) {
+            this._impl.delete();
+            this._impl = null;
+        }
     }
 }

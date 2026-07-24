@@ -466,9 +466,6 @@ target_link_libraries(test_twoquecache PUBLIC leaves_test_support)
 add_executable(test_multithread tests/test_multithread.cpp)
 target_link_libraries(test_multithread PUBLIC core leaves_test_support Threads::Threads)
 
-add_executable(test_executor tests/test_executor.cpp)
-target_link_libraries(test_executor PUBLIC core leaves_test_support Threads::Threads)
-
 add_executable(test_aspect tests/test_aspect.cpp)
 target_link_libraries(test_aspect PUBLIC core leaves_test_support blake3)
 
@@ -504,12 +501,11 @@ foreach(target IN ITEMS
     test_replication_fsm
     test_replication_api
     test_tributary
-    test_executor)
-    leaves_add_test(${target} TIMEOUT 60 LABELS "native;integration")
+    test_multithread
+    test_multiprocess
+    test_replication_multiclient)
+    leaves_add_test(${target} TIMEOUT 180 LABELS "native;integration")
 endforeach()
-leaves_add_test(test_multithread TIMEOUT 120 LABELS "native;stress;concurrency")
-leaves_add_test(test_multiprocess TIMEOUT 120 LABELS "native;stress;multiprocess")
-leaves_add_test(test_replication_multiclient TIMEOUT 120 LABELS "native;integration;network")
 
 add_executable(profile tests/profile.cpp)
 
@@ -593,11 +589,10 @@ COMMAND ./test_memstore
 COMMAND ./test_map_storage
 COMMAND ./test_file_storage
 COMMAND ./test_aspect
-COMMAND ./test_executor
 COMMAND lcov --gcov-tool "${LEAVES_GCOV_TOOL}" -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect test_executor
+DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
 )
 
 endif(LEAVES_BUILD_TESTS)

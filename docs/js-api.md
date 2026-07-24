@@ -1,26 +1,20 @@
 # Leaves JavaScript API
 
-The JavaScript API exposes Leaves database functionality in browser environments via Emscripten/embind WebAssembly bindings backed by IndexedDB.
+The JavaScript API exposes Leaves database functionality in browser environments through Emscripten/embind bindings over IndexedDB-backed storage.
 
-## Architecture
+The JS API follows the C++ cursor-first model (storage -> database -> cursor), with browser-specific behavior for async I/O.
 
-```
-┌───────────────────────────────────────┐
-│             JS Application             │
-├───────────────────────────────────────┤
-│      const Module = await createModule│
-│           (leaves.js WASM)             │
-│                   │                    │
-│                   ▼                    │
-│          Module.LeavesStore            │
-│                   │                    │
-│                   ▼                    │
-│       _BrowserStore                    │
-│     (IndexedDB backed)                 │
-└───────────────────────────────────────┘
-```
+Important scope note:
+- JavaScript exposes regular DB and replication DB APIs.
 
-The module is loaded by calling the default export from `leaves.js` (an Emscripten WASM factory function). Once loaded, the module provides `LeavesStore` and related classes.
+
+## Async Model (JSPI vs ASYNCIFY)
+
+The wasm build supports two async backends:
+- `JSPI` (default): many methods return Promises.
+- `ASYNCIFY`: methods may be synchronous (blocking style from JS perspective).
+
+Use `await` consistently in application code. It works for both backends.
 
 ## Getting Started
 
@@ -32,155 +26,172 @@ const Module = await createModule();
 // Create storage (IndexedDB database)
 const store = await Module.LeavesStore.create('my_storage', 10 * 1024 * 1024);
 
-// Open a database within the storage
-const db = await store.open('mydb');
+// Open a database inside the storage
+const db = await store.open('main');
 
 // Create a cursor
 const c = db.createCursor();
 
-// Write data
-await c.find('key1');
-await c.setValue('value1');
+// Write
+await c.find('hello');
+await c.setValue('world');
 await c.commit(false);
 
-// Read data back
-await c.find('key1');
-console.log('key:', c.key());
-console.log('value:', await c.getValue());
+// Read
+await c.find('hello');
+if (c.isValid()) {
+    console.log(c.key(), await c.getValue());
+}
 
-// Cleanup
 c.delete();
 await store.close();
 await Module.LeavesStore.deleteStorage('my_storage');
 ```
 
-## LeavesStore
+## API Overview
+
+### LeavesStore
 
 Created via `Module.LeavesStore.create(name, capacity)`.
 
 ```typescript
 class LeavesStore {
-    // Create a new IndexedDB-backed storage.
-    static async create(
-        name: string,     // IndexedDB database name
-        capacity: number  // Cache capacity in bytes
-    ): Promise<LeavesStore>;
+    static create(name: string, capacity: number): Promise<LeavesStore>;
 
-    // Open a database within this storage
-    async open(name: string): Promise<LeavesDB>;
+    open(name: string): Promise<LeavesDB>;
+    openReplication(name: string): Promise<ReplicationDB>;
 
-    // Open a replication-capable database
-    async openReplication(name: string): Promise<ReplicationDB>;
-
-    // List all database names in this storage.
-    // Returns a C++ std::vector<string> wrapped by embind.
-    // Iterate with .size() and .get(index), then .delete().
+    // C++ std::vector<string> wrapper from embind.
+    // Iterate with .size() and .get(i), then call .delete().
     listDbs(): VectorString;
 
-    // Export all data to a Uint8Array buffer
-    exportToBuffer(): Promise<Uint8Array>;
+    // Export current storage content as a copied Uint8Array.
+    exportToBuffer(): Uint8Array;
 
-    // Import data from a buffer
+    // Import raw bytes into storage.
     importFromBuffer(data: string | Uint8Array): Promise<void>;
 
-    // Delete an IndexedDB storage by name. The storage does not need to be open.
-    static async deleteStorage(name: string): Promise<void>;
-
-    // Close the storage (flush pending writes)
+    // Flush/close storage
     close(): Promise<void>;
 
-    // Number of pending IndexedDB write operations (static, global)
-    static pendingWrites(): number;
+    static deleteStorage(name: string): Promise<void>;
 
-    // Whether browser diagnostics were enabled at build time
+    static pendingWrites(): number;
     static debugEnabled(): boolean;
 }
 ```
 
-## LeavesDB
+### LeavesDB
 
 Returned by `store.open(name)`.
 
 ```typescript
 class LeavesDB {
-    // Set aspect callbacks (see Aspect API section)
-    setAspectCallbacks(callbacks: object): void;
-
-    // Create a cursor for database operations
+    setAspectCallbacks(callbacks: AspectCallbacks): void;
     createCursor(): LeavesCursor;
 }
 ```
 
-## LeavesCursor
+### ReplicationDB
 
-The primary data access object. Obtained from `db.createCursor()`.
+Returned by `store.openReplication(name)`.
+
+```typescript
+class ReplicationDB {
+    setAspectCallbacks(callbacks: AspectCallbacks): void;
+    createCursor(): LeavesReplicationDBCursor;
+}
+```
+
+### LeavesCursor
+
+Returned by `db.createCursor()`.
 
 ```typescript
 class LeavesCursor {
-    // Start a transaction on the cursor.
-    // nonBlocking: if true, returns false instead of blocking on conflict.
-    //
-    // ⚠️ The `use_wal` parameter from the C++ TCursor::start_transaction()
-    //    is NOT exposed. The embind wrapper hardcodes it to false because
-    //    IndexedDB provides its own write durability, making WAL unnecessary.
-    async startTransaction(nonBlocking?: boolean): Promise<boolean>;
+    startTransaction(nonBlocking?: boolean): Promise<boolean>;
 
-    // Navigation
-    async find(key: string): Promise<void>;
-    async first(): Promise<void>;
-    async last(): Promise<void>;
-    async next(): Promise<void>;
-    async prev(): Promise<void>;
+    find(key: string): Promise<void>;
+    first(): Promise<void>;
+    last(): Promise<void>;
+    next(): Promise<void>;
+    prev(): Promise<void>;
 
-    // State
     isValid(): boolean;
 
-    // Read current key (synchronous — reads from cursor position)
     key(): string;
     keyBytes(): Uint8Array;
 
-    // Read/write value at current cursor position
-    async getValue(): Promise<string>;
-    async reserve(size: number): Promise<number>;
-    async reserveBytes(size: number): Promise<Uint8Array>;
-    async setValue(value: string): Promise<void>;
-    async getValueBytes(): Promise<Uint8Array>;
-    async setValueBytes(value: Uint8Array): Promise<void>;
+    getValue(): Promise<string>;
+    getValueBytes(): Promise<Uint8Array>;
 
-    // Delete the entry at current cursor position
-    async remove(): Promise<void>;
+    setValue(value: string): Promise<void>;
+    setValueBytes(value: Uint8Array): Promise<void>;
 
-    // Check if this cursor currently holds an active write transaction
-    // Returns true between a successful startTransaction() and the
-    // subsequent commit() or rollback().
+    // reserve returns a wasm heap pointer (number)
+    reserve(size: number): Promise<number>;
+
+    // reserveBytes returns a writable Uint8Array view into wasm memory
+    reserveBytes(size: number): Promise<Uint8Array>;
+
+    remove(): Promise<void>;
+
+    commit(sync?: boolean): Promise<boolean>;
+    rollback(): Promise<boolean>;
+
     isTransactionActive(): boolean;
 
-    // Commit or rollback pending changes
-    async commit(sync?: boolean): Promise<void>;
-    async rollback(): Promise<void>;
+    // Refresh cursor view after out-of-band mutation
+    update(): void;
 
-    // Aspect context (per-cursor JS object)
+    // Per-cursor JS context from aspect system
     aspectContext(): object;
 }
 ```
 
-`reserveBytes(size)` is the preferred low-copy write primitive. It returns a
-writable `Uint8Array` view into reserved value storage for the current key.
-Fill that view, then commit the cursor transaction.
+### LeavesReplicationDBCursor
 
-`reserve(size)` is a pointer-level variant. It returns a WASM heap pointer to
-writable value storage for the current key. Write bytes directly via
-`Module.HEAPU8`, then commit the cursor transaction.
+Returned by `replicationDb.createCursor()`.
 
-Both reserve methods expose WASM memory directly; views/pointers are valid only
-until memory grows or the underlying cursor/storage is otherwise mutated.
+Its API mirrors `LeavesCursor`.
 
-`setValue(value)` and `setValueBytes(value)` are convenience wrappers that
-perform full value writes without exposing pointers.
+```typescript
+class LeavesReplicationDBCursor {
+    startTransaction(nonBlocking?: boolean): Promise<boolean>;
+    find(key: string): Promise<void>;
+    first(): Promise<void>;
+    last(): Promise<void>;
+    next(): Promise<void>;
+    prev(): Promise<void>;
+    isValid(): boolean;
+    key(): string;
+    keyBytes(): Uint8Array;
+    getValue(): Promise<string>;
+    getValueBytes(): Promise<Uint8Array>;
+    setValue(value: string): Promise<void>;
+    setValueBytes(value: Uint8Array): Promise<void>;
+    reserve(size: number): Promise<number>;
+    reserveBytes(size: number): Promise<Uint8Array>;
+    remove(): Promise<void>;
+    commit(sync?: boolean): Promise<boolean>;
+    rollback(): Promise<boolean>;
+    isTransactionActive(): boolean;
+    update(): void;
+    aspectContext(): object;
+}
+```
 
-### Usage Patterns
+## Notes on C++ Parity
 
-**Write entries:**
+The JS bindings intentionally differ from full C++ surface in a few places:
+- No ConfluenceDB binding in JS.
+- `prepare_commit()` is not exposed on JS cursors.
+- Cursor `startTransaction()` does not expose C++ `use_wal`; JS path always uses browser storage semantics.
+
+## Usage Patterns
+
+### Write entries
+
 ```javascript
 await c.find('key1');
 await c.setValue('value1');
@@ -189,7 +200,8 @@ await c.setValue('value2');
 await c.commit(false);
 ```
 
-**Read entries:**
+### Read entries
+
 ```javascript
 await c.find('key1');
 if (c.isValid()) {
@@ -197,7 +209,8 @@ if (c.isValid()) {
 }
 ```
 
-**Sequential forward iteration:**
+### Forward iteration
+
 ```javascript
 await c.first();
 while (c.isValid()) {
@@ -206,7 +219,8 @@ while (c.isValid()) {
 }
 ```
 
-**Reverse iteration:**
+### Reverse iteration
+
 ```javascript
 await c.last();
 while (c.isValid()) {
@@ -215,81 +229,58 @@ while (c.isValid()) {
 }
 ```
 
-**Delete an entry:**
-```javascript
-await c.find('key1');
-await c.remove();
-await c.commit(false);
-```
+### Binary value I/O
 
-**Rollback uncommitted changes:**
 ```javascript
-await c.find('temp_key');
-await c.setValue('temp_value');
-await c.rollback();
-```
-
-**Binary key/value:**
-```javascript
-const binData = new Uint8Array([0, 1, 2, 255, 128]);
-await c.find('bin_key');
-await c.setValueBytes(binData);
+const payload = new Uint8Array([0, 1, 2, 255]);
+await c.find('bin');
+await c.setValueBytes(payload);
 await c.commit(false);
 
-await c.find('bin_key');
+await c.find('bin');
 const got = new Uint8Array(await c.getValueBytes());
 ```
 
-**Low-copy write with reserveBytes:**
-```javascript
-const encoder = new TextEncoder();
-const text = 'value1';
-const bytes = encoder.encode(text);
+### Low-copy write with reserveBytes
 
-await c.find('key1');
-const view = await c.reserveBytes(bytes.byteLength);
+```javascript
+const bytes = new TextEncoder().encode('hello');
+await c.find('k');
+const view = await c.reserveBytes(bytes.length);
 view.set(bytes);
 await c.commit(false);
 ```
 
-**Compatibility fallback for older builds:**
+### Pointer-level fallback with reserve
+
 ```javascript
-const ptr = await c.reserve(bytes.byteLength);
+const bytes = new TextEncoder().encode('hello');
+const ptr = await c.reserve(bytes.length);
 Module.HEAPU8.set(bytes, ptr);
+await c.commit(false);
 ```
 
 ## Aspect API
 
-Aspect callbacks allow interception of read and write operations at the cursor level. All `LeavesStore` databases (both regular and replication) support aspect callbacks natively — no separate import needed.
+Aspect callbacks are available on both `LeavesDB` and `ReplicationDB` via `setAspectCallbacks(...)`.
 
 ```javascript
-// No separate import needed — aspects are built into LeavesDB
-const store = await Module.LeavesStore.create('my_storage', 10 * 1024 * 1024);
-const db = await store.open('mydb');
-
 db.setAspectCallbacks({
-    initCursorContext: () => ({ writeCount: 0, readCount: 0 }),
+    initCursorContext: () => ({ writes: 0, reads: 0 }),
     onWrite: (key, value, ctx) => {
-        ctx.writeCount++;
-        return value; // pass-through or transform
+        ctx.writes++;
+        return value;
     },
     onRead: (key, data, bigMeta, ctx) => {
-        ctx.readCount++;
+        ctx.reads++;
         return data;
     },
     mayDelete: (key, value, ctx) => true,
-    onCommit: (origin, ctx) => {},
+    onCommit: (origin, ctx) => {}
 });
-
-const cursor = db.createCursor();
-await cursor.find('hello');
-await cursor.setValue('world');
-await cursor.commit(false);
-console.log(cursor.aspectContext().writeCount); // per-cursor context
 ```
 
 ```typescript
-// Aspects are available directly on LeavesDB returned by store.open():
 type AspectCallbacks = {
     initCursorContext?: () => object;
     onWrite?: (key: Uint8Array, value: Uint8Array, ctx: object) => Uint8Array;
@@ -297,41 +288,45 @@ type AspectCallbacks = {
     mayDelete?: (key: Uint8Array, value: Uint8Array, ctx: object) => boolean;
     onCommit?: (origin: number, ctx: object) => void;
 };
-
-// LeavesDB:
-class LeavesDB {
-    setAspectCallbacks(callbacks: AspectCallbacks): void;
-    createCursor(): LeavesCursor;
-}
-
-// LeavesCursor includes:
-class LeavesCursor {
-    // ... all cursor methods ...
-    aspectContext(): object;  // per-cursor JS context object
-}
 ```
 
-## Replication API
+## Replication Wrappers (JS)
 
-Import from `leaves_replication.js`.
+Import wrappers from `js/leaves_replication.js`.
 
 ```javascript
 import { LeavesReplicationSender, LeavesReplicationReceiver } from './leaves_replication.js';
 ```
 
+Lifetime note:
+- `LeavesReplicationSender` and `LeavesReplicationReceiver` hold embind/native resources.
+- Delete both wrappers before deleting `ReplicationDB` and before closing/deleting `LeavesStore`.
+
+Recommended teardown order:
+
+```javascript
+receiver.delete();
+sender.delete();
+replDb.delete();
+await store.close();
+store.delete();
+```
+
 ```typescript
 class LeavesReplicationSender {
     constructor(replicationDB: ReplicationDB, Module: object);
-    begin(transport: ReplicationTransport, events: ReplicationEvents): void;
-    onMessageReceived(data: string): void;
+    begin(transport: ReplicationTransport, events: ReplicationEvents): Promise<void>;
+    onMessageReceived(data: string | Uint8Array): Promise<void>;
     state(): 'idle' | 'active' | 'error';
+    delete(): void;
 }
 
 class LeavesReplicationReceiver {
     constructor(replicationDB: ReplicationDB, Module: object);
-    begin(transport: ReplicationTransport, events: ReplicationEvents): void;
-    onMessageReceived(data: string): void;
+    begin(transport: ReplicationTransport, events: ReplicationEvents): Promise<void>;
+    onMessageReceived(data: string | Uint8Array): Promise<void>;
     state(): 'idle' | 'active' | 'error';
+    delete(): void;
 }
 
 type ReplicationTransport = { send: (data: Uint8Array) => void };
@@ -339,47 +334,152 @@ type ReplicationTransport = { send: (data: Uint8Array) => void };
 type ReplicationEvents = {
     onComplete?: (sessionId: number, nodesTransferred: number) => void;
     onError?: (sessionId: number, message: string) => void;
-    onProgress?: (sessionId: number, bytes: number, nodes: number) => void;
+    onProgress?: (sessionId: number, bytesTransferred: number, nodesTransferred: number) => void;
 };
 ```
 
-## Restrictions & Limitations
+## Build and Run (WASM Artifacts, Tests, Benchmark, Example)
 
-### 1. `use_wal` Not Supported
-The `use_wal` option exists in the C++ `TCursor::start_transaction()` but the embind wrapper hardcodes it to `false`. 
+All commands below are from repository root unless noted.
 
-### 2. Single-Threaded
-Browser JavaScript runs on a single thread. All IndexedDB operations use Emscripten Asyncify for synchronous-style code, which has stack size limitations.
+### 1) Build wasm artifacts (`js/leaves.js`, `js/leaves.wasm`)
 
-### 3. Asyncify Stack Limitations
-Emscripten Asyncify saves and restores the call stack around asynchronous IndexedDB calls. Deeply nested call stacks or large local variables may exceed the default Asyncify stack size.
-
-### 4. IndexedDB Storage Quotas
-IndexedDB is subject to browser-specific storage limits (typically ~50% of available disk). Use `navigator.storage.estimate()` to check usage.
-
-### 5. Manual Cleanup
-C++ objects allocated by embind must be freed explicitly with `.delete()`:
-```javascript
-c.delete();           // free cursor
-store.close();        // flush and close
-Module.LeavesStore.deleteStorage('my_storage'); // delete the entire IndexedDB storage
+```bash
+emcmake cmake -B build-wasm -G Ninja
+cmake --build build-wasm -j4 --target leaves_js_output
 ```
 
-### 6. C++ Vector Iteration
-`store.listDbs()` returns a C++ `std::vector<string>`. Use `.size()`, `.get(index)`, and call `.delete()` when done:
-```javascript
-const dbs = store.listDbs();
-for (let i = 0; i < dbs.size(); i++) {
-    console.log(dbs.get(i));
-}
-dbs.delete();
+This updates:
+- `js/leaves.js`
+- `js/leaves.wasm`
+
+### 2) Optional debug browser build
+
+Enable browser diagnostics/debug flags:
+
+```bash
+emcmake cmake -B build-wasm-debug -G Ninja -DLEAVES_BROWSER_DEBUG=ON
+cmake --build build-wasm-debug -j4 --target browser_test
 ```
+
+### 3) Build variant with ASYNCIFY backend (optional)
+
+Default backend is `JSPI`. To build with `ASYNCIFY`:
+
+```bash
+emcmake cmake -B build-wasm-asyncify -G Ninja -DLEAVES_ASYNC_BACKEND=ASYNCIFY
+cmake --build build-wasm-asyncify -j4 --target leaves_js_output
+```
+
+### 4) Run JavaScript API browser tests
+
+`js/test.html` expects `leaves.js` in the same directory.
+
+```bash
+python3 -m http.server -d js 8000
+```
+
+Open:
+
+```text
+http://localhost:8000/test.html
+```
+
+### 4a) Run `ws_replication` integration test (WebSocket)
+
+This test validates end-to-end replication over WebSocket between:
+- native sender (`tests/ws_replication/server.cpp`), and
+- JS receiver (`tests/ws_replication/client.mjs` or `tests/ws_replication/test.html`).
+
+What it checks:
+- receiver reaches completion/idle state,
+- replicated keys exist with expected values (`hello -> world`, `foo -> bar`, `count -> 12345`),
+- cursor reserve path works (`reserveBytes`/`reserve` smoke check),
+- cleanup drains pending writes.
+
+Node.js runner (fully automated):
+
+```bash
+cmake --build build -j4 --target ws_replication_server
+cmake --build build-wasm -j4 --target leaves_js_output
+cd tests/ws_replication
+npm install
+node run.mjs --server ../../build/ws_replication_server --wasm-dir ../../js
+```
+
+Browser runner (opens test page wired to native WS server):
+
+```bash
+cmake --build build -j4 --target ws_replication_server
+cmake --build build-wasm -j4 --target leaves_js_output
+cd tests/ws_replication
+npm install
+node run_browser.mjs --server ../../build/ws_replication_server --wasm-dir ../../js
+```
+
+When running via browser runner, open URL shown by the script (typically `http://localhost:8080/test.html?port=19876`).
+
+### 5) Run browser benchmark
+
+Build artifacts, then serve repository root:
+
+```bash
+emcmake cmake -B build-wasm -G Ninja
+cmake --build build-wasm -j4 --target leaves_js_output
+python3 -m http.server 8000
+```
+
+Open:
+
+```text
+http://localhost:8000/benchmarks/bench.html
+```
+
+### 6) Build and run browser example (`examples/kv_browser`)
+
+The example consumes `js/leaves.js` + `js/leaves.wasm`, and builds a native websocket server.
+
+```bash
+# Ensure wasm artifacts exist first
+emcmake cmake -B build-wasm -G Ninja
+cmake --build build-wasm -j4 --target leaves_js_output
+
+# Build example server
+cd examples/kv_browser
+cmake -B build -G Ninja
+cmake --build build -j4 --target kv_demo_server
+
+# Run full demo (starts ws server + http server)
+node run.mjs
+```
+
+## Restrictions and Limitations
+
+1. Browser environment only
+- This API is intended for Emscripten/browser use with IndexedDB-backed `_BrowserStore`.
+
+2. Manual lifetime management for embind objects
+- Call `.delete()` on embind-allocated objects such as cursors and vector wrappers.
+- Replication wrappers (`LeavesReplicationSender`, `LeavesReplicationReceiver`)
+    must be deleted before `ReplicationDB`/`LeavesStore` teardown.
+- For `LeavesStore`, use `await store.close()` to flush/close storage resources,
+  then call `store.delete()` to release the embind handle.
+
+3. IndexedDB quota and browser policy limits
+- Storage size and behavior depend on browser quota/persistence policy.
+
+4. WASM memory view lifetime
+- Buffers returned by `reserveBytes()` are direct wasm-memory views and can become invalid after memory growth or other mutations.
+
+5. `listDbs()` vector ownership
+- `listDbs()` returns an embind-wrapped C++ vector; iterate via `.size()` and `.get(i)`, then call `.delete()`.
 
 ## Cross-Reference
 
+- C++ API: `docs/cpp-api.md`
 - Browser storage internals: `docs/BROWSER_STORAGE.md`
-- Replication protocol: `docs/REPLICATION.md`
+- Replication docs: `docs/replication/replication.md`
 - Embind bindings: `js/leaves_embind.cpp`
-- Aspect API: built into `LeavesDB`/`LeavesCursor` via `setAspectCallbacks()` and `aspectContext()`
-- Replication wrappers: `js/leaves_replication.js`
-- Test file: `js/test.html`
+- Replication JS wrappers: `js/leaves_replication.js`
+- Browser API test page: `js/test.html`
+- Browser benchmark: `benchmarks/bench.html`

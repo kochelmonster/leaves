@@ -366,11 +366,17 @@ struct _BrowserOperations : _CacheBase {
   mutable void* _read_cache_data = nullptr;   // owned (malloc'd from emscripten_idb_load)
   mutable int _read_cache_size = 0;
 
-  ~_BrowserOperations() {
+  void _clear_read_cache() const {
     if (_read_cache_data) {
       free(_read_cache_data);
       _read_cache_data = nullptr;
     }
+    _read_cache_key = UINT64_MAX;
+    _read_cache_size = 0;
+  }
+
+  ~_BrowserOperations() {
+    _clear_read_cache();
   }
 
   size_t file_size() const { return _header->file_size; }
@@ -481,8 +487,12 @@ struct _BrowserOperations : _CacheBase {
   QueuedWrite _make_area_write(SmartPointer<Area>&& area) const {
     QueuedWrite write;
     uint64_t aligned_offset = area->offset();
-    assert((aligned_offset % AREA_ALIGNMENT) == 0);
-    assert(area->size() >= AREA_ALIGNMENT);
+    if ((aligned_offset % AREA_ALIGNMENT) != 0) {
+      throw LeavesException("_BrowserStore queued write has unaligned area offset");
+    }
+    if (area->size() < AREA_ALIGNMENT) {
+      throw LeavesException("_BrowserStore queued write area is smaller than alignment");
+    }
     write.store_key = aligned_offset;
     write.area_owner = std::move(area);
     return write;
@@ -549,7 +559,9 @@ struct _BrowserOperations : _CacheBase {
           owner_bytes + (is_header_write ? sizeof(Area) : 0));
       int write_size = static_cast<int>(next.area_owner->size());
       if (is_header_write) {
-        assert(next.area_owner->size() >= AREA_ALIGNMENT);
+        if (next.area_owner->size() < AREA_ALIGNMENT) {
+          throw LeavesException("_BrowserStore header write area is smaller than alignment");
+        }
       }
 
       LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
@@ -643,9 +655,7 @@ struct _BrowserOperations : _CacheBase {
     if (static_cast<size_t>(loaded_size) > sub_offset + size ||
         (static_cast<size_t>(loaded_size) > sub_offset && loaded_size > (int)size)) {
       // Free any previous cache entry before replacing
-      if (_read_cache_data) {
-        free(_read_cache_data);
-      }
+      _clear_read_cache();
       _read_cache_key = aligned_key;
       _read_cache_data = loaded_data;
       _read_cache_size = loaded_size;
@@ -694,8 +704,13 @@ struct _BrowserStore
   }
 
   ~_BrowserStore() {
-    this->destroy();
+    // Destructors run through embind's synchronous delete path. Avoid any
+    // teardown that can suspend (wait_for_writes -> emscripten_sleep) or
+    // throw; explicit close() performs the blocking flush path.
+    this->_dbs.clear();
+    this->reset_cache_state();
     delete[] reinterpret_cast<char*>(this->_header);
+    this->_header = nullptr;
   }
 
   void _init_browser_db(const char* store_name) {

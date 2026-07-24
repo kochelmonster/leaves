@@ -116,6 +116,8 @@ struct _CacheStore : public Opers_,
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_pending;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_committed;
   ankerl::unordered_dense::map<uint64_t, page_ptr> _dirty_inflight;
+  // 0 = not started, 1 = in progress, 2 = complete
+  std::atomic<uint8_t> _destroy_state{0};
   std::atomic<bool> _header_dirty{false};
   std::atomic<int64_t> _last_cursor_id{0};
   std::atomic<bool> _flush_pending{false};
@@ -130,13 +132,30 @@ struct _CacheStore : public Opers_,
 
   // must be called in the subclasses' destructor
   void destroy() {
-    // Wait for any pending flush tasks to complete
-    this->wait_idle();
+    uint8_t expected = 0;
+    if (!_destroy_state.compare_exchange_strong(expected, 1,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+      // Another caller is already tearing down, or teardown already completed.
+      while (_destroy_state.load(std::memory_order_acquire) == 1) {
+        std::this_thread::yield();
+      }
+      return;
+    }
 
-    // Final flush of any remaining dirty blocks
-    write_dirty_blocks();
-    this->wait_for_writes();
-    close();
+    // Wait for any pending flush tasks to complete
+    try {
+      this->wait_idle();
+
+      // Final flush of any remaining dirty blocks
+      write_dirty_blocks();
+      this->wait_for_writes();
+      close();
+      _destroy_state.store(2, std::memory_order_release);
+    } catch (...) {
+      _destroy_state.store(0, std::memory_order_release);
+      throw;
+    }
   }
 
   uint64_t new_cursor_id() {
