@@ -37,7 +37,7 @@ The public API is a facade over the internal types.  Public types are defined in
 
 - DB contains trie-manipulation and transactional database machinery, including _DB, _Cursor, _Inserter, _Deleter, and aspect integration via DefaultAspect.
 - Core contains low-level shared primitives used across subsystems, including _TrieNode and _LeafNode layouts, pointer/offset traits, and Slice/value utility types.
-- Memory contains allocation and reclamation infrastructure, including _BigMemory, _MemManager, _MemManagerPool, _GarbageSlot, Area, and AreaPool for page and big-value lifecycle management.
+- Memory contains allocation and reclamation infrastructure, including _BigMemory, _MemManager, _GarbageSlot, Area, and AreaPool for page and big-value lifecycle management.
 - Util contains reusable cross-cutting helpers such as _ThreadPoolMixin, _Merger, and _TransferTrie that support parallel work, merge flows, and transfer serialization.
 - Storage contains backend implementations and persistence adapters, including _MemoryMapFile, _CacheStore, and _BrowserStore, plus backend-specific helpers for DB directory and WAL integration.
 - Multi contains Confluence multi-writer internals, including _ConfluenceDB, _ConfluenceCursor, and _TributaryDB for tributary coordination and merge orchestration.
