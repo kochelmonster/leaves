@@ -128,9 +128,9 @@ BOOST_AUTO_TEST_CASE(test_commit_sync_triggers_fd_sync_after_direct_copy_write) 
                     before_sync + 1);
 }
 
-BOOST_AUTO_TEST_CASE(test_constructor_copy_pivot_override) {
+BOOST_AUTO_TEST_CASE(test_constructor_copy_write_threshold) {
   DirPreparation prep;
-  std::filesystem::path dbFilePath = prep.tempDir / "pivot_override.lvs";
+  std::filesystem::path dbFilePath = prep.tempDir / "copy_write_threshold.lvs";
 
   DBMMap db(dbFilePath.c_str(), 2 * G, SIZE_MAX, 12345);
   BOOST_CHECK_EQUAL(db._memory->copy_write_pivot_bytes, 12345U);
