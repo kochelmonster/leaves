@@ -6,7 +6,9 @@
 #include "db.hpp"
 #include "intern/replication/_replication_db.hpp"
 #include "intern/replication/_replication_fsm.hpp"
+#ifndef __EMSCRIPTEN__
 #include "mmap.hpp"
+#endif
 
 namespace leaves {
 
@@ -20,6 +22,7 @@ enum class ReplicationState {
   ERR      // Error occurred
 };
 
+#ifndef __EMSCRIPTEN__
 template <typename Traits>
 class MapStorage_<Traits>::ReplicationDB
     : public TDB<MapStorage_<Traits>, ::leaves::_ReplicationDB> {
@@ -33,6 +36,7 @@ class MapStorage_<Traits>::ReplicationDB
   ReplicationDB() = default;
   using Base::Base;
 };
+#endif
 
 // ============================================================================
 // ReplicationSender — wraps ReplicationSenderFSM for public use

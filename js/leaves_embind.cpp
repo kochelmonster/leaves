@@ -78,6 +78,7 @@ using replication_cursor_ptr = std::shared_ptr<ReplicationCursorImpl>;
 
 struct JSStore {
   BrowserStoreWrapper::storage_ptr _storage;
+  bool _closed{false};
 
   BrowserStoreWrapper::StorageImpl* operator->() {
     return _storage->_storage.get();
@@ -271,6 +272,14 @@ EM_ASYNC_JS(void, leaves_delete_database_async, (const char* name), {
     try {
       console.log('[leaves] Deleting IndexedDB database: ' + dbName);
       if (typeof IDBStore !== 'undefined' && IDBStore.dbs) {
+        const cachedDb = IDBStore.dbs[dbName];
+        if (cachedDb && typeof cachedDb.close === 'function') {
+          try {
+            cachedDb.close();
+          } catch (_) {
+            // best effort close before deleteDatabase
+          }
+        }
         delete IDBStore.dbs[dbName];
       }
 
@@ -300,7 +309,23 @@ static void store_delete_storage(const std::string& name) {
   leaves_delete_database_async(name.c_str());
 }
 
-static void store_close(JSStore& s) { s._storage->_storage->destroy(); }
+static void store_close(JSStore& s) {
+  if (s._closed) {
+    return;
+  }
+
+  if (!s._storage || !s._storage->_storage) {
+    s._closed = true;
+    return;
+  }
+
+  // close() is an explicit flush/close operation; embind handle deletion is
+  // responsible for final object destruction.
+  s._storage->_storage->flush(true, true);
+  s._storage->_storage->wait_for_writes();
+  s._storage->_storage->close();
+  s._closed = true;
+}
 
 // Number of IDB write operations still in flight (global counter)
 static int store_pending_writes() { return leaves_pending_writes(); }
@@ -317,6 +342,9 @@ static bool store_debug_enabled() {
 // ── Open databases from a store ──────────────────────────────────
 // Open a regular DB within this store.
 static JSDB store_open(JSStore& s, const std::string& name) {
+  if (s._closed) {
+    throw leaves::LeavesException("LeavesStore is closed");
+  }
   DB* db = s._storage->_storage->template open<leaves::_DB>(name.c_str());
   return JSDB{s._storage, db};
 }
@@ -324,6 +352,9 @@ static JSDB store_open(JSStore& s, const std::string& name) {
 // Open a replication DB within this store.
 static ReplicationDB* store_open_replication(JSStore& s,
                                              const std::string& name) {
+  if (s._closed) {
+    throw leaves::LeavesException("LeavesStore is closed");
+  }
   // return new ReplicationDB(s._storage, name.c_str());
   try {
     return new ReplicationDB(s._storage, name.c_str());
@@ -357,12 +388,18 @@ static ReplicationDBCursor replication_db_create_cursor(ReplicationDB& s) {
 }
 
 static std::vector<std::string> store_list_dbs(JSStore& s) {
+  if (s._closed) {
+    throw leaves::LeavesException("LeavesStore is closed");
+  }
   std::vector<std::string> result;
   s._storage->_storage->list_dbs(result);
   return result;
 }
 
 static val store_export(JSStore& s) {
+  if (s._closed) {
+    throw leaves::LeavesException("LeavesStore is closed");
+  }
   auto buf = s._storage->_storage->export_to_buffer();
   return val(typed_memory_view(buf.size(),
                                reinterpret_cast<const uint8_t*>(buf.data())))
@@ -370,6 +407,9 @@ static val store_export(JSStore& s) {
 }
 
 static void store_import(JSStore& s, const std::string& data) {
+  if (s._closed) {
+    throw leaves::LeavesException("LeavesStore is closed");
+  }
   std::vector<char> buf(data.begin(), data.end());
   s._storage->_storage->import_from_buffer(buf);
 }
