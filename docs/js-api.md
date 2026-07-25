@@ -43,8 +43,15 @@ if (c.isValid()) {
     console.log(c.key(), await c.getValue());
 }
 
+// Delete the record
+await c.remove();
+await c.commit(false);
+
+// Release embind handles
 c.delete();
+db.delete();
 await store.close();
+store.delete();
 await Module.LeavesStore.deleteStorage('my_storage');
 ```
 
@@ -185,6 +192,7 @@ class LeavesReplicationDBCursor {
 
 The JS bindings intentionally differ from full C++ surface in a few places:
 - No ConfluenceDB binding in JS.
+- No native `ReceiveBuffer` exposure; JS replication uses `onMessageReceived(...)` instead.
 - `prepare_commit()` is not exposed on JS cursors.
 - Cursor `startTransaction()` does not expose C++ `use_wal`; JS path always uses browser storage semantics.
 
@@ -290,7 +298,71 @@ type AspectCallbacks = {
 };
 ```
 
-## Replication Wrappers (JS)
+## Replication API (JS)
+
+Open a replication-capable database through `store.openReplication(name)`:
+
+```javascript
+const replDb = await store.openReplication('main');
+```
+
+### Raw embind replication classes
+
+The wasm module exports raw embind classes as `Module.ReplicationSender` and `Module.ReplicationReceiver`.
+
+```javascript
+const sender = new Module.ReplicationSender(replDb);
+const receiver = new Module.ReplicationReceiver(replDb);
+
+const transport = {
+    send(data) {
+        websocket.send(data);
+    }
+};
+
+const events = {
+    onComplete(sessionId, nodesTransferred) {
+        console.log('complete', sessionId, nodesTransferred);
+    },
+    onError(sessionId, message) {
+        console.error('replication error', sessionId, message);
+    },
+    onProgress(sessionId, bytesTransferred, nodesTransferred) {
+        console.log('progress', sessionId, bytesTransferred, nodesTransferred);
+    }
+};
+
+receiver.begin(transport, events);
+sender.begin(transport, events);
+
+websocket.addEventListener('message', async (event) => {
+    const bytes = new Uint8Array(await event.data.arrayBuffer());
+    await receiver.onMessageReceived(bytes);
+});
+
+console.log(sender.state());   // 'idle' | 'active' | 'error'
+console.log(receiver.state()); // 'idle' | 'active' | 'error'
+```
+
+The raw embind classes expose:
+
+```typescript
+class ReplicationSender {
+    constructor(replicationDB: ReplicationDB);
+    begin(transport: ReplicationTransport, events: ReplicationEvents): Promise<void>;
+    onMessageReceived(data: string | Uint8Array): Promise<void>;
+    state(): 'idle' | 'active' | 'error';
+}
+
+class ReplicationReceiver {
+    constructor(replicationDB: ReplicationDB);
+    begin(transport: ReplicationTransport, events: ReplicationEvents): Promise<void>;
+    onMessageReceived(data: string | Uint8Array): Promise<void>;
+    state(): 'idle' | 'active' | 'error';
+}
+```
+
+### Convenience wrappers
 
 Import wrappers from `js/leaves_replication.js`.
 
@@ -337,6 +409,8 @@ type ReplicationEvents = {
     onProgress?: (sessionId: number, bytesTransferred: number, nodesTransferred: number) => void;
 };
 ```
+
+Both the raw embind classes and the convenience wrappers use the same transport and event shapes. The wrappers are optional; they are thin adapters around `Module.ReplicationSender` and `Module.ReplicationReceiver`.
 
 ## Build and Run (WASM Artifacts, Tests, Benchmark, Example)
 
@@ -477,7 +551,6 @@ node run.mjs
 ## Cross-Reference
 
 - C++ API: `docs/cpp-api.md`
-- Browser storage internals: `docs/BROWSER_STORAGE.md`
 - Replication docs: `docs/replication/replication.md`
 - Embind bindings: `js/leaves_embind.cpp`
 - Replication JS wrappers: `js/leaves_replication.js`

@@ -123,11 +123,38 @@ Receiver apply is staged and then committed atomically.
 
 ## Fraction mode for large sessions
 
-Receiver temporary memory is bounded by a configurable threshold (`memory_budget`).
+Receiver temporary memory is bounded by an internal threshold (`memory_budget`).
 
 - If buffered temporary receive data exceeds that threshold and progress was   made, receiver sends `FRACTION_COMPLETE`.
 - Receiver then commits the current fraction and asks sender to restart from   root for the next fraction.
 - This is a normal continuation path for large transfers, not an error.
+
+## Tuning and configuration
+
+Replication throughput, memory footprint, and latency are shaped by retention,
+transfer sizing, and session driving strategy.
+
+### Public tuning knobs
+
+| Knob | Where | Effect | Trade-off |
+|---|---|---|---|
+| `set_retention(seconds)` | `ReplicationDB` | Controls how long deletion markers are retained before purge. | Larger values improve late-peer catch-up safety but increase deletion-trie footprint and purge work. Smaller values reduce footprint but shorten offline recovery windows. |
+| `db_type` in `sender.begin(...)` | `ReplicationSender` | Selects which logical trie family is synchronized in a session. | Narrower scope can reduce transfer size and duration. |
+| `max_rounds` in `run_replication(...)` | In-process replication helper | Bounds loop work before exit. | Higher values reduce premature exit on large sessions; lower values reduce worst-case loop time per call. |
+
+### Internal receiver limits (not exposed by public `ReplicationReceiver` wrapper)
+
+| Internal parameter | Default | Effect | Operational impact |
+|---|---|---|---|
+| `receive_buffer_size` | `64 KB` | Initial wire receive buffer size (grows as needed). | Larger initial size can reduce reallocations for larger frames; smaller size lowers baseline memory. |
+| `memory_budget` | `256 MB` | Max temporary receive-state memory before fraction commit. | Lower budget triggers `FRACTION_COMPLETE` more often (more partial commits/restarts, lower peak memory). Higher budget reduces fractioning but increases peak memory. |
+| `max_payload_size` | `64 MB` | Upper bound for accepted message payload size. | Lower values tighten safety bounds but may reject larger protocol frames. |
+| `max_big_value_size` | `256 MB` | Upper bound for a single streamed big value. | Lower values block very large values from replication; higher values allow larger values with higher memory-pressure risk. |
+
+Notes:
+- Fraction mode is a normal continuation path for large sessions, not an error.
+- Start receiver before sender and keep transport pumping to avoid idle stalls.
+- Choose retention according to worst-case peer offline duration.
 
 
 ## Synchronization model
@@ -195,8 +222,8 @@ struct AccountBalancePolicy {
 ### Example: transport binding sketch
 ```cpp
 struct WsTransport : ReplicationTransport {
-  bool send(leaves::Slice bytes) override {
-    return websocket_send(bytes.data(), bytes.size());
+  void send(const uint8_t* data, size_t size) override {
+    websocket_send(data, size);
   }
 };
 ```

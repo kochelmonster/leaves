@@ -4,7 +4,7 @@ Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and c
 
 `MapStorage::ReplicationDB` is available only on native targets (`__EMSCRIPTEN__` builds exclude it).
 
-For an architectural overview see [docs/architecture/architecture.md](../architecture/architecture.md)
+For an architectural overview see [docs/architecture/architecture.md](architecture/architecture.md)
 
 ## Quick start
 
@@ -91,6 +91,39 @@ int main() {
 
 - `static uint32_t calibrate_copy_write_pivot(const char* calibration_file)`
   Runs copy-write pivot calibration against a temporary calibration file.
+
+### Database facade types
+
+- `MapStorage::DB`
+  The default single-writer ACID database.
+
+- `MapStorage::ReplicationDB`
+  The default database plus replicated deletion tracking and compatibility with the replication sender/receiver API.
+
+- `MapStorage::ConfluenceDB`
+  A multi-writer database that lets multiple cursors commit concurrently through tributaries that are merged into the main database.
+
+- `MapStorage::ConfluenceReplicationDB`
+  A Confluence database backed by a replication-capable main database.
+
+## Thread and process safety matrix
+
+The matrix below summarizes intended concurrency usage for the public C++ API.
+
+| Surface | Concurrent use from multiple threads | Multi-process sharing | Notes |
+|---|---|---|---|
+| `MapStorage` | Yes | Yes (default build) | Multiple processes can open the same `.lvs` file. |
+| `MapStorage` with `LEAVES_SINGLE_PROCESS` | Yes | No | Single-process mode disables multi-process support. |
+| `MapStorage::DB` / `MapStorage::ReplicationDB` handles | Yes | Via owning `MapStorage` | Share DB handles across threads, but do not share one cursor instance. |
+| `Cursor` | No | No | Each cursor instance must be confined to one thread at a time. |
+| `MapStorage::ConfluenceDB` / `MapStorage::ConfluenceReplicationDB` handles | Yes | Via owning `MapStorage` | Concurrent writers use separate cursor instances (tributaries). |
+| `ConfluenceCursor` | No | No | Each cursor instance must be confined to one thread at a time. |
+| `ReplicationSender` / `ReplicationReceiver` | Single-threaded usage recommended | Depends on transport and process model | Drive each FSM instance from one thread/event loop, or externally serialize access. |
+
+Practical rule:
+- Share storage and DB handles.
+- Do not share cursor objects across threads.
+- Create one cursor per thread.
 
 ---
 
@@ -352,7 +385,7 @@ Confluence is a multi-writer layer. Every `ConfluenceCursor` writes to its own t
 - Include `<leaves/confluence.hpp>` for `MapStorage::ConfluenceDB`.
 - Include `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
 
-See [examples/confluence_multithread](../../examples/confluence_multithread) for a complete multi-threaded demo.
+See [examples/confluence_multithread](../examples/confluence_multithread) for a complete multi-threaded demo.
 
 
 #### Opening and removing a Confluence database
@@ -399,6 +432,25 @@ auto storage = leaves::MapStorage_<MyTraits>::create("data.lvs");
 auto cdb = storage->open<leaves::MapStorage_<MyTraits>::ConfluenceDB>("events");
 ```
 
+### Typical workflow
+
+```cpp
+auto storage = leaves::MapStorage::create("data.lvs");
+auto cdb = storage->open<leaves::MapStorage::ConfluenceDB>("events");
+
+cdb.set_merge_write_threshold(64);
+cdb.set_max_attached_age_ms(250);
+
+auto cursor = cdb.cursor();
+cursor.start_transaction();
+cursor.find(leaves::Slice("k"));
+cursor.value(leaves::Slice("v"));
+cursor.commit();
+
+// Trigger merges explicitly when needed.
+cdb.merge_now();
+```
+
 ### `MapStorage::ConfluenceDB`
 
 - `ConfluenceCursor cursor()`
@@ -418,6 +470,15 @@ auto cdb = storage->open<leaves::MapStorage_<MyTraits>::ConfluenceDB>("events");
 
 - `std::exception_ptr get_merge_error()`
   Returns and clears the last asynchronous merge error.
+
+### `MapStorage::ConfluenceReplicationDB`
+
+`MapStorage::ConfluenceReplicationDB` combines the Confluence multi-writer API with a replication-capable main database.
+
+- Open it with `storage->open<leaves::MapStorage::ConfluenceReplicationDB>(...)`.
+- Remove it with `storage->remove<leaves::MapStorage::ConfluenceReplicationDB>(...)`.
+- Use the same `ConfluenceDB` methods documented above.
+- Use it when you need concurrent writers locally and replication against peers.
 
 ### `ConfluenceCursor`
 
@@ -473,11 +534,11 @@ Multiple ConfluenceCursors can write simultaneously to the database. But each cu
 
 ## Replication API
 
-Include `<leaves/replication.hpp>`. An explicit example how to use the Replication API is provided in the folder `examples/p2p_kv`.
+Include `<leaves/replication.hpp>`. A complete peer-to-peer example is provided in `examples/p2p_kv`.
 
 `MapStorage::ReplicationDB` in this section is a native-only API (excluded when building with `__EMSCRIPTEN__`).
 
-For a high-level overview see [docs/replication/replication.md](../replication/replication.md)
+For a high-level overview see [docs/replication/replication.md](replication/replication.md)
 
 ### Opening and removing a ReplicationDB database
 
@@ -491,10 +552,26 @@ auto rdb = storage->open<leaves::MapStorage::ReplicationDB>("repl");
 storage->remove<leaves::MapStorage::ReplicationDB>("repl");
 ```
 
+`MapStorage::ReplicationDB` uses the same cursor and transaction API as `MapStorage::DB`. The additional public behavior is:
+
+- replication sender/receiver compatibility,
+- replicated deletion tracking,
+- retention control through `db.set_retention(seconds)`.
+
 ### `ReplicationState`
 
 - `enum class ReplicationState { IDLE, ACTIVE, ERR };`
   `IDLE` means not started or completed, `ACTIVE` means session in progress, and `ERR` means session failure.
+
+### Transport and events
+
+The replication wrappers operate on two public callback interfaces:
+
+- `ReplicationTransport`
+  Implement `void send(const uint8_t* data, size_t size)` to move protocol bytes to the peer.
+
+- `ReplicationEvents`
+  Override `on_complete(...)`, `on_error(...)`, and `on_progress(...)` to observe session lifecycle.
 
 ### `ReplicationSender<Storage, DBClass>`
 
@@ -556,6 +633,18 @@ storage->remove<leaves::MapStorage::ReplicationDB>("repl");
 
 - `std::chrono::steady_clock::time_point last_activity() const`
   Returns timestamp of last FSM activity.
+
+### Replication workflow
+
+The usual native control flow is:
+
+1. Open a `MapStorage::ReplicationDB` on each side.
+2. Construct `ReplicationSender` on the source side and `ReplicationReceiver` on the destination side.
+3. Provide a `ReplicationTransport` implementation that forwards protocol bytes.
+4. Start the receiver with `receiver.begin(...)`.
+5. Start the sender with `sender.begin(...)`.
+6. Feed peer responses back into the sender with `sender.on_message_received(...)`.
+7. Feed incoming sender data into `receiver.receive_buffer()` and call `receiver.on_data_received()`.
 
 ### `run_replication`
 
@@ -626,6 +715,14 @@ int main() {
   auto src_db = src_storage->open<leaves::MapStorage::ReplicationDB>("main");
   auto dst_db = dst_storage->open<leaves::MapStorage::ReplicationDB>("main");
 
+  {
+    auto cursor = src_db.cursor();
+    cursor.start_transaction();
+    cursor.find(leaves::Slice("hello"));
+    cursor.value(leaves::Slice("world"));
+    cursor.commit();
+  }
+
   LoopbackTransport sender_transport;
   LoopbackTransport receiver_transport;
   sender_transport.set_peer(&receiver_transport);
@@ -640,6 +737,12 @@ int main() {
   sender.begin(&sender_transport, &events, leaves::DbType::DB_MAIN);
 
   leaves::run_replication(sender, receiver, sender_transport, receiver_transport);
+
+  auto verify = dst_db.cursor();
+  verify.find(leaves::Slice("hello"));
+  if (verify.is_valid()) {
+    std::cout << verify.value().string() << "\n";
+  }
   return 0;
 }
 ```
