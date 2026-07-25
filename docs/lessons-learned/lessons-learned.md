@@ -3,46 +3,44 @@
 This document captures key engineering lessons that shaped the current Leaves architecture.
 
 ## Data Locality
-Several Attempts were made to get a better data locality for the trie nodes.
 
+Several approaches were explored to improve data locality for trie nodes.
 
 ### Simple Hint
 
-allocation hint for the memory pool. Try to find a block near to the parent node.
-Result: There was no change in performance measurable.
+Use allocation hints in the memory pool to place new blocks near the parent node.
+Result: No measurable performance improvement.
 
 ### Node Cluster
 
-When inserting a node cluster child nodes with their parent in a single memory block. 
-Result: the performance descreased significanlty the cluster operation (particularly the extra memcpy work) were more expansive than the benefit of better locality. 
+When inserting, cluster child nodes with their parent in a single memory block.
+Result: Performance decreased significantly. The clustering operation, especially the additional `memcpy` work, was more expensive than the locality benefit.
 
 ### Cluster Leaves
 
-Neighboring leaves are clustered together in a single memory block. 
-Result: Again the clustering operations were more expensive than the benefit of better locality. The performance descreased. Here especially page split with their extra memcpy work were the main reason.
+Cluster neighboring leaves into a single memory block.
+Result: Clustering overhead again outweighed locality gains, and performance decreased. Page splits in particular were costly due to extra `memcpy` work.
 
 ## Multithread Hash Updater
 
-removed because the performance gain did not justify the code complexity. (network transfer is the bottleneck)
+Removed because the performance gain did not justify the additional code complexity. Network transfer remained the bottleneck.
 
-## Big Values Write
+## Big Values in MMAP
 
-In mmap better to write big value than to memcpy it
+- When value size exceeds a certain threshold, writing directly to the mmap file is faster than copying into memory first.
+- This threshold is system-dependent and must be determined by benchmarking.
 
-## Memory Pressure
+## 256-ary Trie Node
 
-In multiwriter mode
+At the beginning of the project, multiple fanout sizes were tested (for example, 64). The space savings from smaller fanouts did not justify the additional complexity and performance cost of bit-conversion logic. A fanout of 256 provided the best balance between space usage and performance.
+
+### Branch Key Always in Compressed Prefixes
+
+Code complexity was reduced significantly by storing branch key segments directly in each child node’s compressed prefix, rather than reconstructing them from bit representations. To obtain a full key, concatenate the compressed segments along the node path.
 
 
-## Bigvalues in MMAP
+### Printing Trie Structures Eases Development
 
-- when the value size exceeds a certain threshold, it is faster to write the value directly to the mmap file instead of copying it into memory first. 
-- The threshold is for every system different and must be calculated by benchmarking. 
+A very helpful development tool was the dumper in `_check.hpp`, which prints trie structures in YAML format. The `graph.py` tool then visualizes those structures.
 
-## 256arry TrieNode
-### branch key always in compressed
-show exampe trie
-
-## development
-
-### printing trie structures eases development
+![Trie Graph](insert_compress_split_2_ab_def.svg)

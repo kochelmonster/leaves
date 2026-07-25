@@ -45,13 +45,27 @@ int main() {
 }
 ```
 
+## Which database type?
+
+- `DB`
+    The default embedded database. Use this when you want ACID transactions, a single-writer model, lock-free readers, and the smallest API surface.
+
+- `ReplicationDB`
+    Use this when you need the regular `DB` API plus deterministic replication. It tracks replicated deletions and is the database type used with `ReplicationSender` and `ReplicationReceiver`.
+
+- `ConfluenceDB`
+    Use this when multiple threads need to write concurrently to the same logical database. Each writer commits to its own tributary and Confluence merges those tributaries into the main database.
+
+- `ConfluenceReplicationDB`
+    Combines Confluence multi-writer behavior with replication support. Use it when you need both concurrent writers and replication in one database.
+
 ## Using leaves in your own project
 
 To use Leaves, you need:
 
 - A C++20 compiler
 - Boost 1.80 or newer
-- CMake 3.23 or newer when using the CMake integration or building the repository
+- CMake 3.9 or newer when using the CMake integration or building the repository
 
 Simply integrate it into your project using one of the following methods.
 
@@ -131,7 +145,7 @@ The core `leaves::leaves` target carries the public include paths and the requir
 
 The following CMake options configure either the repository build or library behavior for consumers.
 
-| Option | Default | Scope | Description |
+| Option | Top-level default | Scope | Description |
 |---|---|---|---|
 | `LEAVES_BROWSER_DEBUG` | `OFF` | Repository build only | Build browser WASM targets in debug mode with diagnostic output. |
 | `LEAVES_ASYNC_BACKEND` | `JSPI` | Repository build only | Select the async WASM backend: `JSPI` or `ASYNCIFY`. |
@@ -142,6 +156,11 @@ The following CMake options configure either the repository build or library beh
 | `LEAVES_SINGLE_PROCESS` | `OFF` | Repository build and library consumers | Disable multi-process support for constrained targets such as embedded or mobile environments. |
 | `LEAVES_LOG` | `OFF` | Repository build and library consumers | Enable Leaves logging macros. |
 
+Default semantics:
+- The "Top-level default" column reflects configuring Leaves as the root project.
+- When Leaves is consumed via `add_subdirectory`, `LEAVES_BUILD_TESTS`, `LEAVES_BUILD_BENCHMARKS`, `LEAVES_GCOV`, and `LEAVES_ASAN` default to `OFF` unless explicitly enabled by the parent project.
+- `LEAVES_SINGLE_PROCESS` and `LEAVES_LOG` remain explicit opt-in toggles for both root and consumer builds.
+
 
 ## Installing as CMake Package
 
@@ -149,7 +168,7 @@ The repository can export an installable CMake package for downstream consumers.
 
 ```bash
 cmake -B build -G Ninja 
-cmake --build build -j
+cmake --build build -j4
 cmake --install build --prefix "$PWD/install"
 ```
 
@@ -170,7 +189,7 @@ Building the repository is only required to run the included tests and benchmark
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+cmake --build build -j4
 ```
 
 For compiling in debug mode use:
@@ -178,7 +197,7 @@ For compiling in debug mode use:
 ```bash
 cmake -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
 
-cmake --build build-debug -j
+cmake --build build-debug -j4
 ```
 
 ## Documentation index
@@ -201,6 +220,6 @@ cmake --build build-debug -j
 
 
 ## License
-See [license.md](license.md) for the Leaves Community License 1.0.
+See [LICENSE.md](LICENSE.md) for the Leaves Community License 1.0.
 
 Third-party components include their own license files (for example in BLAKE3). If you plan to redistribute Leaves, add or confirm project-level licensing metadata for your distribution workflow.

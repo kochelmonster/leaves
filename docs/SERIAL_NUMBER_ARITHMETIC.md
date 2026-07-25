@@ -273,4 +273,4 @@ using tid_serial = serial32;               // Transaction ID type
 ## See Also
 
 - Tests: `tests/test_serial.cpp` - Comprehensive test suite
-- Implementation: `include/leaves/intern/_serial.hpp`
+- Implementation: `include/leaves/intern/core/_serial.hpp`
