@@ -1,6 +1,8 @@
 # Leaves C++ API
 
-Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and cursor). Add `<leaves/confluence.hpp>` when using confluence, and `<leaves/replication.hpp>` for replication.
+Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and cursor). Add `<leaves/confluence.hpp>` for Confluence, `<leaves/replication.hpp>` for replication, and `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
+
+`MapStorage::ReplicationDB` is available only on native targets (`__EMSCRIPTEN__` builds exclude it).
 
 For an architectural overview see [docs/architecture/architecture.md](../architecture/architecture.md)
 
@@ -66,17 +68,14 @@ int main() {
 
 `MapStorage` (an alias for `MapStorage_<MapTraits>`) manages a memory-mapped `.lvs` file and owns all databases inside it. MapStorage is multi-thread and multi-process safe (multiple processes can open the same `.lvs` file concurrently). `MapStorage` is available by including `mmap.hpp`.
 
-- `static storage_ptr create(const char* path, size_t map_size = 4 * G)`
-  Creates and initializes storage backed by `path`. `map_size` is the virtual-address reservation limit.
+- `static storage_ptr create(const char* path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)`
+  Creates and initializes storage backed by `path`. `map_size` is the virtual-address reservation limit. `copy_write_threshold` sets the value-size threshold for copy-write behavior: values at or above the threshold are written directly to the backing file instead of being copied into mmap, for speed. `copy_write_threshold = 0` automatically calibrates the threshold during creation.
 
-- `MapStorage_(const char* path, size_t map_size = 4 * G)`
-  Direct constructor variant; prefer `create()` for shared-pointer ownership.
+- `template <typename DBClass = DB, typename... Args> auto open(std::string_view name, Args&&... args)`
+  Opens or creates a named database. `DBClass` must be one of the facade tags (`MapStorage::DB`, `MapStorage::ReplicationDB`, `MapStorage::ConfluenceDB`, or `MapStorage::ConfluenceReplicationDB`). Additional `args` are forwarded to the DB wrapper.
 
-- `template <template <typename> class DBClass = DB, typename... Args> TDB<MapStorage_, DBClass> open(std::string_view name, Args&&... args)`
-  Opens or creates a named database. `DBClass` selects the backend and `args` are forwarded to that DB class.
-
-- `template <template <typename> class DBClass = DB> void remove(std::string_view name)`
-  Removes the named database from storage.
+- `template <typename DBClass = DB> void remove(std::string_view name)`
+  Removes the named database from storage using the selected DB facade tag.
 
 - `void list_dbs(std::vector<std::string>& result)`
   Appends all known database names to `result`.
@@ -89,6 +88,9 @@ int main() {
 
 - `size_t file_size() const`
   Returns the current on-disk file size in bytes.
+
+- `static uint32_t calibrate_copy_write_pivot(const char* calibration_file)`
+  Runs copy-write pivot calibration against a temporary calibration file.
 
 ---
 
@@ -345,7 +347,12 @@ the hooks they need.
 
 ## Confluence API
 
-Confluence is a multi-writer layer. Every `ConfluenceCursor` writes to its own tributary database, which is merged to the main database automatically if certain thresholds are met. Confluence is available by including `confluence.hpp`. See [examples/confluence_multithread](../../examples/confluence_multithread) for a complete multi-threaded demo.
+Confluence is a multi-writer layer. Every `ConfluenceCursor` writes to its own tributary database, which is merged to the main database automatically if certain thresholds are met.
+
+- Include `<leaves/confluence.hpp>` for `MapStorage::ConfluenceDB`.
+- Include `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
+
+See [examples/confluence_multithread](../../examples/confluence_multithread) for a complete multi-threaded demo.
 
 
 #### Opening and removing a Confluence database
@@ -467,6 +474,9 @@ Multiple ConfluenceCursors can write simultaneously to the database. But each cu
 ## Replication API
 
 Include `<leaves/replication.hpp>`. An explicit example how to use the Replication API is provided in the folder `examples/p2p_kv`.
+
+`MapStorage::ReplicationDB` in this section is a native-only API (excluded when building with `__EMSCRIPTEN__`).
+
 For a high-level overview see [docs/replication/replication.md](../replication/replication.md)
 
 ### Opening and removing a ReplicationDB database
@@ -483,8 +493,8 @@ storage->remove<leaves::MapStorage::ReplicationDB>("repl");
 
 ### `ReplicationState`
 
-- `enum class ReplicationState { IDLE, ACTIVE, ERROR };`
-  `IDLE` means not started or completed, `ACTIVE` means session in progress, and `ERROR` means session failure.
+- `enum class ReplicationState { IDLE, ACTIVE, ERR };`
+  `IDLE` means not started or completed, `ACTIVE` means session in progress, and `ERR` means session failure.
 
 ### `ReplicationSender<Storage, DBClass>`
 
@@ -555,37 +565,57 @@ storage->remove<leaves::MapStorage::ReplicationDB>("repl");
 ### Wiring example
 
 ```cpp
-#include <deque>
+#include <cstdint>
 #include <iostream>
+#include <queue>
 #include <vector>
 #include <leaves/mmap.hpp>
 #include <leaves/replication.hpp>
 
-struct QueueTransport : leaves::ReplicationTransport {
-  std::deque<std::vector<uint8_t>>* out;
+struct LoopbackTransport : leaves::ReplicationTransport {
+  std::queue<std::vector<uint8_t>> incoming;
+  LoopbackTransport* peer = nullptr;
 
-  explicit QueueTransport(std::deque<std::vector<uint8_t>>* q) : out(q) {}
+  void set_peer(LoopbackTransport* p) { peer = p; }
 
   void send(const uint8_t* data, size_t size) override {
-    out->emplace_back(data, data + size);
+    if (peer) {
+      peer->incoming.emplace(data, data + size);
+    }
+  }
+
+  bool has_message() const {
+    return !incoming.empty();
+  }
+
+  std::vector<uint8_t> receive() {
+    if (incoming.empty()) {
+      return {};
+    }
+    auto msg = std::move(incoming.front());
+    incoming.pop();
+    return msg;
   }
 };
 
 struct PrintEvents : leaves::ReplicationEvents {
-  void on_complete(uint64_t txn_id, size_t bytes) override {
-    std::cout << "replication complete: txn_id=" << txn_id
-              << ", bytes=" << bytes << "\n";
+  void on_complete(uint64_t session_id, size_t nodes) override {
+    std::cout << "replication complete: session_id=" << session_id
+              << ", nodes=" << nodes << "\n";
   }
 
-  void on_error(uint64_t txn_id, leaves::ReplicationError err, const char* msg) override {
-    std::cerr << "replication error: txn_id=" << txn_id
+  void on_error(uint64_t session_id, leaves::ReplicationError err,
+                const char* msg) override {
+    std::cerr << "replication error: session_id=" << session_id
               << ", code=" << static_cast<int>(err)
               << ", message=" << (msg ? msg : "") << "\n";
   }
 
-  void on_progress(uint64_t txn_id, size_t current, size_t total) override {
-    std::cout << "replication progress: txn_id=" << txn_id
-              << ", bytes=" << current << "/" << total << "\n";
+  void on_progress(uint64_t session_id, size_t bytes,
+                   size_t nodes) override {
+    std::cout << "replication progress: session_id=" << session_id
+              << ", bytes=" << bytes
+              << ", nodes=" << nodes << "\n";
   }
 };
 
@@ -593,20 +623,21 @@ int main() {
   auto src_storage = leaves::MapStorage::create("src.lvs");
   auto dst_storage = leaves::MapStorage::create("dst.lvs");
 
-  auto src_db = src_storage->open<leaves::ReplicationDB>("main");
-  auto dst_db = dst_storage->open<leaves::ReplicationDB>("main");
+  auto src_db = src_storage->open<leaves::MapStorage::ReplicationDB>("main");
+  auto dst_db = dst_storage->open<leaves::MapStorage::ReplicationDB>("main");
 
-  std::deque<std::vector<uint8_t>> to_receiver;
-  std::deque<std::vector<uint8_t>> to_sender;
-  QueueTransport sender_transport(&to_receiver);
-  QueueTransport receiver_transport(&to_sender);
+  LoopbackTransport sender_transport;
+  LoopbackTransport receiver_transport;
+  sender_transport.set_peer(&receiver_transport);
+  receiver_transport.set_peer(&sender_transport);
+
   PrintEvents events;
 
   leaves::ReplicationSender<leaves::MapStorage> sender(src_db);
   leaves::ReplicationReceiver<leaves::MapStorage> receiver(dst_db);
 
-  sender.begin(&sender_transport, &events, leaves::DbType::DB_MAIN);
   receiver.begin(&receiver_transport, &events);
+  sender.begin(&sender_transport, &events, leaves::DbType::DB_MAIN);
 
   leaves::run_replication(sender, receiver, sender_transport, receiver_transport);
   return 0;
