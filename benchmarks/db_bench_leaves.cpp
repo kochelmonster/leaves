@@ -527,11 +527,13 @@ class Benchmark {
       } else if (name == Slice("fillrandsync")) {
         is_write = true;
         write_sync = true;
-        Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size, 1);
+        Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size,
+              FLAGS_batch_size);
       } else if (name == Slice("fillseqsync")) {
         is_write = true;
         write_sync = true;
-        Write(write_sync, SEQUENTIAL, FRESH, num_ / 100, FLAGS_value_size, 1);
+        Write(write_sync, SEQUENTIAL, FRESH, num_ / 100, FLAGS_value_size,
+              FLAGS_batch_size);
       } else if (name == Slice("fillrand100K")) {
         is_write = true;
         Write(write_sync, RANDOM, FRESH, num_ / 1000, 100 * 1000, 1);
