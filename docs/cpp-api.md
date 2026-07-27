@@ -4,7 +4,7 @@ Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and c
 
 `MapStorage::ReplicationDB` is available only on native targets (`__EMSCRIPTEN__` builds exclude it).
 
-For an architectural overview see [docs/architecture/architecture.md](../architecture/architecture.md)
+For an architectural overview see [docs/architecture/architecture.md](/docs/architecture/architecture.md)
 
 ## Quick start
 
@@ -352,7 +352,7 @@ Confluence is a multi-writer layer. Every `ConfluenceCursor` writes to its own t
 - Include `<leaves/confluence.hpp>` for `MapStorage::ConfluenceDB`.
 - Include `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
 
-See [examples/confluence_multithread](../../examples/confluence_multithread) for a complete multi-threaded demo.
+See [examples/confluence_multithread](/examples/confluence_multithread) for a complete multi-threaded demo.
 
 
 #### Opening and removing a Confluence database
@@ -477,7 +477,7 @@ Include `<leaves/replication.hpp>`. An explicit example how to use the Replicati
 
 `MapStorage::ReplicationDB` in this section is a native-only API (excluded when building with `__EMSCRIPTEN__`).
 
-For a high-level overview see [docs/replication/replication.md](../replication/replication.md)
+For a high-level overview see [docs/replication/replication.md](/docs/replication/replication.md)
 
 ### Opening and removing a ReplicationDB database
 
