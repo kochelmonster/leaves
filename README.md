@@ -1,6 +1,6 @@
 # leaves
 
-leaves is a trie-based embedded key-value database.
+leaves is a trie-based embedded key-value database. It uses a sparse bitmap trie structure that brings the access advantages of a radix trie while saving memory by storing only necessary link pointers.
 
 ## Key features
 
@@ -15,6 +15,7 @@ leaves is a trie-based embedded key-value database.
 - Native cross-platform support, including WebAssembly and browser targets
 
 ## Getting started
+
 ```cpp
 #include <leaves/mmap.hpp>
 
@@ -109,7 +110,6 @@ Alternatively, add Leaves as a Git submodule and integrate it directly into your
    target_link_libraries(mytarget PRIVATE leaves::leaves)
    ```
 
-
 ### Consuming as installed package
 
 ```cmake
@@ -125,7 +125,6 @@ target_link_libraries(mytarget PRIVATE leaves::replication)
 ```
 
 The core `leaves::leaves` target carries the public include paths and the required Boost header dependency. `leaves::replication` is the optional target that adds the BLAKE3 dependency needed by `leaves/replication.hpp`.
-
 
 ## Configuration options
 
@@ -161,7 +160,6 @@ To create a redistributable archive from the current build tree:
 cmake --build build --target package
 ```
 
-
 ## Building the Tests and Benchmarks
 
 Building the repository is only required to run the included tests and benchmarks or to contribute to Leaves.
@@ -182,6 +180,7 @@ cmake --build build-debug -j
 ```
 
 ## Documentation index
+
 - C++ API: [docs/cpp-api.md](docs/cpp-api.md)
 - JavaScript/Browser API: [docs/js-api.md](docs/js-api.md)
 - Architecture: [docs/architecture/architecture.md](docs/architecture/architecture.md)
@@ -193,14 +192,16 @@ cmake --build build-debug -j
 ## Future Extensions
 
 ### Set Findings
+
 - Find all keys in a given range, returns a TransferTrie
 - Find all keys suiting a FSM (e.g. regular expression), returns a TransferTrie
 
 ### Set Operations
+
 - intersection of tries
 
-
 ## License
+
 See [license.md](license.md) for the Leaves Community License 1.0.
 
 Third-party components include their own license files (for example in BLAKE3). If you plan to redistribute Leaves, add or confirm project-level licensing metadata for your distribution workflow.
