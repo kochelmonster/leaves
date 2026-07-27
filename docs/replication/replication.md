@@ -3,7 +3,7 @@
 This document describes the replication framework in Leaves.
 
 For a complete runnable peer-to-peer example, see
-[examples/p2p_kv/README.md](../../examples/p2p_kv/README.md).
+[examples/p2p_kv/README.md](/examples/p2p_kv/README.md).
 
 ## What Leaves replication is and is not
 
@@ -41,11 +41,11 @@ Core components:
 - Merge and overwrite policy hooks
 
 Code anchors:
-- [include/leaves/replication.hpp](../../include/leaves/replication.hpp)
-- [include/leaves/intern/replication/_replication_fsm.hpp](../../include/leaves/intern/replication/_replication_fsm.hpp)
-- [include/leaves/intern/replication/_replication_protocol.hpp](../../include/leaves/intern/replication/_replication_protocol.hpp)
-- [include/leaves/intern/replication/_transfer.hpp](../../include/leaves/intern/replication/_transfer.hpp)
-- [include/leaves/intern/replication/_replication_db.hpp](../../include/leaves/intern/replication/_replication_db.hpp)
+- [include/leaves/replication.hpp](/include/leaves/replication.hpp)
+- [include/leaves/intern/replication/_replication_fsm.hpp](/include/leaves/intern/replication/_replication_fsm.hpp)
+- [include/leaves/intern/replication/_replication_protocol.hpp](/include/leaves/intern/replication/_replication_protocol.hpp)
+- [include/leaves/intern/replication/_transfer.hpp](/include/leaves/intern/replication/_transfer.hpp)
+- [include/leaves/intern/replication/_replication_db.hpp](/include/leaves/intern/replication/_replication_db.hpp)
 
 ## ReplicationDB data model
 
@@ -152,8 +152,8 @@ Extensibility points include:
 - Application-level conflict resolution policies
 
 Code anchors:
-- [include/leaves/intern/db/_aspect.hpp](../../include/leaves/intern/db/_aspect.hpp)
-- [include/leaves/intern/util/_merger.hpp](../../include/leaves/intern/util/_merger.hpp)
+- [include/leaves/intern/db/_aspect.hpp](/include/leaves/intern/db/_aspect.hpp)
+- [include/leaves/intern/util/_merger.hpp](/include/leaves/intern/util/_merger.hpp)
 
 ## Implementing conflict resolution strategy
 
@@ -202,8 +202,8 @@ struct WsTransport : ReplicationTransport {
 ```
 
 ## Related documents
-- [docs/architecture/architecture.md](../architecture/architecture.md)
-- [docs/cpp-api.md](../cpp-api.md)
-- [docs/js-api.md](../js-api.md)
-- [docs/lessons-learned/lessons-learned.md](../lessons-learned/lessons-learned.md)
-- [docs/performance/performance.md](../performance/performance.md)
+- [docs/architecture/architecture.md](/docs/architecture/architecture.md)
+- [docs/cpp-api.md](/docs/cpp-api.md)
+- [docs/js-api.md](/docs/js-api.md)
+- [docs/lessons-learned/lessons-learned.md](/docs/lessons-learned/lessons-learned.md)
+- [docs/performance/performance.md](/docs/performance/performance.md)
