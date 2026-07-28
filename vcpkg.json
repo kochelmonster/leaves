@@ -8,5 +8,6 @@
     "boost-multi-index",
     "boost-process",
     "boost-test"
-  ]
+  ],
+  "builtin-baseline": "b5229343b4b80264ed51e89c6a7dcd0cbe85e9cc"
 }

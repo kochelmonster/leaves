@@ -19,3 +19,8 @@ tests/ws_replication/node_modules
 *.gcov
 *.lvs*
 .cache
+vcpkg_installed
+CMakeFiles
+*.vcxproj*
+*.log
+*.sln*

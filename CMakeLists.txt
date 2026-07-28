@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.11)
 cmake_policy(SET CMP0076 NEW)
 
 project(leaves VERSION 3.0.0 LANGUAGES C CXX)
@@ -368,7 +368,7 @@ endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
-    include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/storage/_mmap.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC leaves_test_support blake3)
 
 add_executable(test_transfer tests/test_transfer.cpp)
@@ -388,22 +388,22 @@ target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
-    include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/storage/_fstore.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_fstore PUBLIC leaves_test_support blake3)
 
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
-    include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_memory PUBLIC leaves_test_support)
 
 add_executable(test_memstore tests/test_memstore.cpp)
 target_sources(test_memstore INTERFACE
-    include/leaves/intern/_memstore.hpp include/leaves/intern/_memory.hpp)
+    include/leaves/intern/storage/_memstore.hpp include/leaves/intern/memory/_memory.hpp)
 target_link_libraries(test_memstore PUBLIC core leaves_test_support)
 
 add_executable(test_bits tests/test_bits.cpp)
-target_sources(test_memory INTERFACE
-    include/intern/_bits.hpp)
+target_sources(test_bits INTERFACE
+    include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_bits PUBLIC leaves_test_support)
 
 add_executable(test_cursor tests/test_cursor.cpp)
@@ -423,15 +423,16 @@ target_link_libraries(test_bigmemory PUBLIC core leaves_test_support)
 
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
-    include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/mmap.hpp include/leaves/intern/storage/_mmap.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_map_storage PUBLIC core leaves_test_support)
 
 add_executable(test_file_storage tests/test_file_storage.cpp)
 target_sources(test_file_storage INTERFACE
-    include/fstore.hpp include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/fstore.hpp include/leaves/intern/storage/_fstore.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_file_storage PUBLIC core leaves_test_support blake3)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
+target_link_libraries(test_string_insert PUBLIC core leaves_test_support blake3)
 
 add_executable(test_merger tests/test_merger.cpp)
 target_link_libraries(test_merger PUBLIC core leaves_test_support)
@@ -504,6 +505,7 @@ leaves_add_test(test_multiprocess TIMEOUT 120 LABELS "native;stress;multiprocess
 leaves_add_test(test_replication_multiclient TIMEOUT 120 LABELS "native;integration;network")
 
 add_executable(profile tests/profile.cpp)
+target_link_libraries(profile PUBLIC core leaves_test_support)
 
 # Dumper tool
 add_executable(dump-leaves tools/dump-leaves.cpp)
@@ -549,7 +551,7 @@ COMMAND ./test_aspect
 COMMAND ./test_executor
 COMMAND lcov -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
 COMMAND genhtml -o lcov-report lcov-report/report.info
-COMMENT &quot;Generated Coverage Report Successfully!&quot;
+COMMENT "Generated Coverage Report Successfully!"
 DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect test_executor
 )
 
@@ -585,12 +587,18 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb Threads::Threads blake3)
 
-add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
-target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb Threads::Threads)
-if (NOT MSVC)
-target_compile_options(db_bench_mdb PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+find_library(LMDB_LIBRARY lmdb)
+if(LMDB_LIBRARY)
+    message(STATUS "Found LMDB: ${LMDB_LIBRARY}")
+    add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
+    target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb ${LMDB_LIBRARY} Threads::Threads)
+    if (NOT MSVC)
+    target_compile_options(db_bench_mdb PRIVATE -O3 -march=native -funroll-loops -flto=auto)
+    endif()
+    target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
+else()
+    message(STATUS "LMDB not found - skipping db_bench_mdb")
 endif()
-target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb Threads::Threads)

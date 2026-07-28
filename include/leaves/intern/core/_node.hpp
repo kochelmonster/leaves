@@ -148,7 +148,7 @@ struct _TrieNode : _TrieNodeHeader<Traits> {
   // due to bitmap compression of sparse branch arrays.
   static constexpr uint16_t size(uint8_t prefix, uint16_t branches) {
     uint16_t prefix_size = padding(HEADER_SIZE + prefix, sizeof(uint32_e));
-    uint16_t lower_size = std::min(branches, (uint16_t)8) * sizeof(uint32_e);
+    uint16_t lower_size = (std::min)(branches, (uint16_t)8) * sizeof(uint32_e);
     uint16_t array_size = branches * sizeof(offset_e);
     return align(prefix_size + lower_size + array_size);
   }

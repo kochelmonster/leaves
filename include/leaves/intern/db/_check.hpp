@@ -200,7 +200,7 @@ struct _Dumper {
       out << "valuesize: " << leaf->value_size << std::endl;
       out << "value: \"";
       int delta = leaf->key_size;
-      for (size_t i = 0, end = std::min((size_t)leaf->value_size, (size_t)30);
+      for (size_t i = 0, end = (std::min)((size_t)leaf->value_size, (size_t)30);
            i < end; i++) {
         // out << "[" << bitstr(leaf->data[i + delta]) << "]";
         out << bitstr(leaf->data[i + delta]);

@@ -45,6 +45,11 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
     return std::make_shared<FileStorage_>(path, cache_capacity);
   }
 
+  // Overload for std::filesystem::path (converts to UTF-8 on Windows)
+  static storage_ptr create(const std::filesystem::path& path, size_t cache_capacity = 500 * M) {
+    return std::make_shared<FileStorage_>(path.string().c_str(), cache_capacity);
+  }
+
   void debug_reset() { _storage->debug_reset(); }
   void debug_check_cache() const { _storage->debug_check_cache(); }
 

@@ -357,6 +357,11 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
     // Thread pool already started by base constructor
   }
 
+  // Overload for std::filesystem::path (converts to UTF-8 on Windows)
+  _FileStore(const std::filesystem::path& path, size_t capacity = 500 * M,
+             size_t pool_threads = 1)
+      : _FileStore(path.string().c_str(), capacity, pool_threads) {}
+
   ~_FileStore() {
     this->destroy();
     delete[] (char*)this->_header;

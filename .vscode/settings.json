@@ -141,5 +141,8 @@
         "./bench_hash_updater": true,
         "build/test_mmap": true,
         "build-sp/test_mmap": true
+    },
+    "cmake.configureSettings": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/vcpkg/scripts/buildsystems/vcpkg.cmake"
     }
 }

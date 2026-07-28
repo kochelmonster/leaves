@@ -4,6 +4,9 @@ Shared internal utility helpers, constants, and small support primitives.
 #ifndef _LEAVES__UTIL_HPP
 #define _LEAVES__UTIL_HPP
 
+// Disable Windows min/max macros to avoid conflicts with std::min/std::max
+#define NOMINMAX
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -587,7 +590,7 @@ inline bool is_little_endian() {
 inline size_t get_prefix(const char* str1, const char* str2, size_t size1,
                          size_t size2, int& cmp) {
   size_t i = 0;
-  const size_t min_size = std::min(size1, size2);
+  const size_t min_size = (std::min)(size1, size2);
 
   // Fast path for short prefixes (< 8 bytes): covers compressed trie nodes
   if (min_size < 8) {

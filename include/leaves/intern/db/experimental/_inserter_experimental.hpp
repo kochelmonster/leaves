@@ -132,7 +132,7 @@ struct _PageBuilder {
     slot.offset = 0;
     slot.size = aligned_size;
     slot.creator = std::forward<Creator>(creator);
-    _node_count = std::max((uint16_t)(slot_id + 1), _node_count);
+    _node_count = (std::max)((uint16_t)(slot_id + 1), _node_count);
   }
 
   NodeSlot& root() {

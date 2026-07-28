@@ -519,7 +519,7 @@ struct _CacheStore : public Opers_,
   void _for_each_db_entry(Fn fn) {
     // First page: entries embedded in FileHeader
     uint16_t cap = _first_page_capacity();
-    uint16_t count = std::min(_header->db_entry_count, cap);
+    uint16_t count = (std::min)(_header->db_entry_count, cap);
     for (uint16_t i = 0; i < count; i++) {
       if (!fn(_header->dbs[i])) return;
     }

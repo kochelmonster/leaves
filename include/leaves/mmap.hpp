@@ -82,6 +82,11 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
     return std::make_shared<MapStorage_>(path, map_size);
   }
 
+  // Overload for std::filesystem::path (converts to UTF-8 on Windows)
+  static storage_ptr create(const std::filesystem::path& path, size_t map_size = 4 * G) {
+    return std::make_shared<MapStorage_>(path.string().c_str(), map_size);
+  }
+
  private:
   template <typename, template <typename> class>
   friend class TDB;

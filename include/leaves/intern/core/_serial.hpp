@@ -9,6 +9,9 @@ handling of zero-valued sentinels.
 #ifndef _LEAVES_SERIAL_HPP
 #define _LEAVES_SERIAL_HPP
 
+// Disable Windows min/max macros to avoid conflicts with std::min/std::max
+#define NOMINMAX
+
 #include <cstdint>
 #include <limits>
 
@@ -38,7 +41,7 @@ namespace leaves {
 template<typename T = uint32_t>
 struct serial_number {
   using value_type = T;
-  static constexpr T MAX_VALUE = std::numeric_limits<T>::max();
+  static constexpr T MAX_VALUE = (std::numeric_limits<T>::max)();
   static constexpr T HALF_RANGE = T(1) << (sizeof(T) * 8 - 1);
   
   // Constructors

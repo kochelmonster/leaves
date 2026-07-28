@@ -205,6 +205,11 @@ struct _MemoryMapFile
     }
   }
 
+  // Overload for std::filesystem::path (converts to UTF-8 on Windows)
+  _MemoryMapFile(const std::filesystem::path& path, size_t map_size = 2 * G,
+                 size_t pool_threads = SIZE_MAX)
+      : _MemoryMapFile(path.string().c_str(), map_size, pool_threads) {}
+
   ~_MemoryMapFile() {
     _dbs.clear();       // destroy DBs first (cancels any scheduled jobs)
     this->stop_pool();  // stop worker threads before unmapping
