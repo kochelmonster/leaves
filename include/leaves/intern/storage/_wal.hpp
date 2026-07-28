@@ -238,6 +238,7 @@ struct _WalWriter {
   // active file is fixed for the whole transaction.
   std::vector<uint8_t> _buf;
 
+  bool _has_records{false};
   bool _prepared{false};
 
   bool is_open() const { return _state && _state->is_open.load(); }
@@ -304,12 +305,14 @@ struct _WalWriter {
     _state->last_commit[idx].store(txn_id);
     _state->active_log.store(idx);
     _buf.clear();
+    _has_records = false;
     _buf.push_back(static_cast<uint8_t>(_WalOp::BEGIN));
     _wal_put_u32(_buf, txn_id);
     _prepared = false;
   }
 
   void put(const Slice& key, const Slice& val) {
+    _has_records = true;
     _buf.push_back(static_cast<uint8_t>(_WalOp::PUT));
     _wal_put_u32(_buf, static_cast<uint32_t>(key.size()));
     _wal_put_u32(_buf, static_cast<uint32_t>(val.size()));
@@ -320,6 +323,7 @@ struct _WalWriter {
   }
 
   void del(const Slice& key) {
+    _has_records = true;
     _buf.push_back(static_cast<uint8_t>(_WalOp::DEL));
     _wal_put_u32(_buf, static_cast<uint32_t>(key.size()));
     const uint8_t* kp = reinterpret_cast<const uint8_t*>(key.data());
@@ -330,6 +334,11 @@ struct _WalWriter {
   // Throws leaves::WalError on I/O failure.
   void prepare(bool skip_sync = false) {
     if (_prepared) return;  // idempotent
+    if (!_has_records) {
+      _buf.clear();
+      _prepared = true;
+      return;
+    }
     _buf.push_back(static_cast<uint8_t>(_WalOp::PREPARE));
     int idx = _state->active_log.load();
     if (!_wal_pwrite(_fd[idx], _state->write_off[idx], _buf.data(), _buf.size()))
@@ -343,6 +352,10 @@ struct _WalWriter {
   // Append COMMIT, fdatasync, publish last_commit.
   // Throws leaves::WalError on I/O failure.
   void commit() {
+    if (!_has_records) {
+      _buf.clear();
+      return;
+    }
     int idx = _state->active_log.load();
     uint8_t rec = static_cast<uint8_t>(_WalOp::COMMIT);
     if (!_wal_pwrite(_fd[idx], _state->write_off[idx], &rec, 1))
@@ -353,7 +366,11 @@ struct _WalWriter {
 
   // Abort the current transaction (rollback): drop the in-memory buffer.
   // Nothing was written to disk yet (records are written at prepare()).
-  void abort() { _buf.clear(); }
+  void abort() {
+    _buf.clear();
+    _has_records = false;
+    _prepared = false;
+  }
 
   // Physically clear file[idx] back to just the magic header.
   void truncate(int idx) {
