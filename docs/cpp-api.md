@@ -174,7 +174,14 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
   Refreshes cursor view after out-of-band mutation.
 
 - `bool start_transaction(bool non_blocking = false, bool use_wal = false)`
-  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting, and `use_wal = true` for WAL semantics. By default each `value()` / `remove()` call starts a transaction if none is active. Use `start_transaction()` to group multiple operations into a single transaction.
+  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting. Set `use_wal = true` to enable WAL-based ACID durability for the transaction.
+
+  Leaves provides two durability options for write transactions:
+
+  1. Synchronous commit (`use_wal = false`): the transaction flushes the memory-mapped file to disk on commit, which provides strong durability but can significantly reduce write throughput.
+  2. WAL (`use_wal = true`): the transaction still writes the affected nodes into memory as usual, but the commit path triggers an asynchronous flush instead of waiting for a synchronous fsync. A write-ahead log is maintained as a crash-recovery backup: if the process crashes before the in-memory state is fully persisted, the WAL can be replayed to reconstruct the lost updates. This is the second durability option discussed in [WAL Semantics as a Second ACID Option](../lessons-learned/lessons-learned.md#wal-semantics-as-a-second-acid-option).
+
+  In practice, WAL can outperform synchronous commit for multi-write transactions because it avoids the latency of blocking on fsync, although the exact benefit depends on workload characteristics. By default each `value()` / `remove()` call starts a transaction if none is active. Use `start_transaction()` to group multiple opeations into a singrle transaction.
 
 - `tid_t prepare_commit(bool sync = false)`
   Moves the transaction to prepared state and returns the prepared transaction id, or `0` if no transaction is active for this cursor.

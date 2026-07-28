@@ -312,10 +312,10 @@ Measured median run throughput (ops/sec) used in charts:
 This workload models transactional update patterns under strict durability constraints. Each operation consists of a mix of reads, updates, and read-modify-write operations (25% reads, 35% updates, 40% RMW) executed with full synchronization guarantees. It approximates systems that require atomic updates to individual records while maintaining consistency and isolation.
 
 **Configuration:**  
-Durability is enforced via database-specific settings: LMDB disables `nosync`, RocksDB enables `sync`, WiredTiger enables transactional fsync, SQLite uses WAL and full sync, and Leaves enables WAL.
+Uses `batch_size=1` with a 25/35/40 read/update/RMW mix, zipfian key access, hashed inserts, and strict durability settings.
 
-- Dataset: 100,000 records
-- Operations: 400,000
+- Dataset: 1,000,000 records
+- Operations: 10,000
 - Key size: 8 B (binary)
 - Value size: 1 KB (10×100 B)
 
@@ -336,10 +336,10 @@ Measured median run throughput (ops/sec) used in charts:
 This workload models explicit multi-key transactions. Each operation executes a transaction that reads multiple keys and updates them atomically within a single commit. The workload therefore measures the cost of coordinating multi-key updates under strict durability and isolation guarantees, similar to financial transfers or strongly consistent state transitions.
 
 **Configuration:**  
-Uses `transactionmode=multikey_acid` with strict durability settings.
+Uses `batch_size=2` with a 50/50 read/update mix, zipfian key access, hashed inserts, and strict durability settings.
 
-- Dataset: 100,000 records
-- Operations: 200,000
+- Dataset: 1,000,000 records
+- Operations: 10,000
 - Key size: 8 B (binary)
 - Value size: 1 KB (10×100 B)
 
@@ -388,10 +388,10 @@ Measured median run throughput (ops/sec) used in charts:
 Represents multi-threaded web backends handling user sessions.
 
 **Configuration:**  
-Uses `threadcount=8`. Leaves uses `confluence` format. RocksDB uses 2 GB cache. WiredTiger uses 4 GB cache and B-tree mode.
+Uses `threadcount=8` with a 50/50 read/update mix and zipfian key access. Leaves uses `confluence` format with `merge_threshold=64`. RocksDB uses 2 GB cache. WiredTiger uses 4 GB cache and B-tree mode.
 
-- Dataset: 2,000,000 records
-- Operations: 2,000,000
+- Dataset: 5,000,000 records
+- Operations: 5,000,000
 - Key size: 8 B (binary)
 - Value size: 1 KB (10×100 B)
 
@@ -412,16 +412,15 @@ Measured median run throughput (ops/sec) used in charts:
 Represents high-throughput ingestion systems with many parallel writers.
 
 **Configuration:**  
-Uses `insertproportion=0.70` and `threadcount=8`. Leaves uses `confluence` format and large mapsize. RocksDB and WiredTiger increase cache sizes.
+Uses `insertproportion=0.70`, `threadcount=8`, and uniform key access. Leaves uses `confluence` format with a 256 GB mapsize, `merge_threshold=128000`, and `heap_writeback_bytes=8388608`. RocksDB and WiredTiger increase cache sizes.
 
-- Dataset: 2,000,000 records
-- Operations: 2,000,000
+- Dataset: 5,000,000 records
+- Operations: 5,000,000
 - Key size: 8 B (binary)
 - Value size: 1 KB (10×100 B)
 
 **Explanation:**  
 Write scalability depends on contention. LSM engines scale via buffering but still share structures. B-tree engines are limited by centralized updates. Leaves distributes writes across threads and merges them asynchronously, resulting in superior scalability.
-Leaves shows a massive decline in throughput because of memory pressure in massive multithreaded writes.
 
 Measured median run throughput (ops/sec) used in charts:
 
