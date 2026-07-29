@@ -85,6 +85,9 @@
         "expected": "cpp"
     },
     "cmake.configureOnOpen": true,
+    "cmake.useCMakePresets": "always",
+    "cmake.configurePreset": "windows-msvc",
+    "cmake.buildDirectory": "${workspaceFolder}/build/windows-msvc",
     "C_Cpp.default.compilerPath": "/usr/bin/g++",
     "chat.tools.terminal.autoApprove": {
         "./build/test_lsm": true,

@@ -26,7 +26,7 @@
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"args": [],
 			"isBackground": false,
 			"problemMatcher": [
@@ -37,7 +37,7 @@
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"problemMatcher": [
 				"$gcc"
@@ -47,7 +47,7 @@
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"problemMatcher": [
 				"$gcc"
@@ -57,7 +57,7 @@
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"problemMatcher": [
 				"$gcc"
@@ -67,63 +67,63 @@
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
 		{
 			"label": "Build leaves (CMake)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake --build build/windows-msvc -j",
 			"isBackground": false,
 			"group": "build"
 		},
