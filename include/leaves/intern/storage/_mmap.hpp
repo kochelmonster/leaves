@@ -189,6 +189,7 @@ struct _MemoryMapFile
   mapped_region _region;
   FileHeader* _memory;
   pid_type _pid;
+  // Duplicated from Boost mapping handle; owned/closed by close_write_fd().
   int _write_fd;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 #ifdef TESTING
@@ -279,12 +280,23 @@ struct _MemoryMapFile
 
     assert(((uint64_t)_memory & 7) == 0);
     sanitize();
-    open_write_fd(path);
+    if (!open_write_fd()) {
+      int err = errno ? errno : EBADF;
+      throw FileError(
+          "Failed to initialize write descriptor from mapped file handle",
+          err);
+    }
   }
 
-  bool open_write_fd(const char* path) {
+  bool open_write_fd() {
     close_write_fd();
-    _write_fd = leaves::open_rw_fd(path, false);
+
+    auto mapping_handle = _file.get_mapping_handle();
+    auto native_handle =
+        boost::interprocess::ipcdetail::file_handle_from_mapping_handle(
+            mapping_handle);
+
+    _write_fd = leaves::duplicate_fd_from_mapping_native_handle(native_handle);
     return leaves::fd_valid(_write_fd);
   }
 
@@ -292,6 +304,11 @@ struct _MemoryMapFile
     if (!leaves::fd_valid(_write_fd)) return;
     leaves::close_fd(_write_fd);
     _write_fd = LEAVES_INVALID_FD;
+  }
+
+  void resize_backing_file(uint64_t new_size) {
+    assert(leaves::fd_valid(_write_fd));
+    leaves::resize_fd(_write_fd, new_size);
   }
 
   bool is_mmap_destination(const void* dest, size_t n,
@@ -395,7 +412,7 @@ struct _MemoryMapFile
       if (!placed) throw NoProcess();
     }
     if (std::filesystem::file_size(filename()) != _memory->file_size)
-      std::filesystem::resize_file(filename(), _memory->file_size);
+      resize_backing_file(_memory->file_size);
 
     assert(_region.get_size() >= _memory->file_size);
   }
@@ -518,7 +535,7 @@ struct _MemoryMapFile
 
     offset_t new_offset = _memory->file_size;
     _memory->file_size = _memory->file_size + total_growth;
-    std::filesystem::resize_file(filename(), _memory->file_size);
+    resize_backing_file(_memory->file_size);
 
     // Create Area for the requested size
     auto area = area_ptr(resolve(&new_offset, WRITE));
