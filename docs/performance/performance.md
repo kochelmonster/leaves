@@ -1,16 +1,14 @@
-# The Fastest Key-Value Store? A Fair Fight Against LMDB
+# A Persistent-Trie Architecture for Embedded Key-Value Storage
 
-“The fastest key-value store” is a common claim in the database world.
+The database literature has long centered on a small set of storage architectures: B-trees, LSM trees, and their many variants. This article examines a different approach: a persistent trie design for embedded key-value storage.
 
-Yet most published benchmarks avoid a direct comparison with LMDB — even though it is widely regarded as one of the fastest embedded key-value stores available. Without including LMDB, it is unclear what “fast” actually means.
-
-This benchmark explicitly includes LMDB as the baseline and compares it against a range of modern engines.
+To make the comparison concrete, the evaluation includes LMDB as a widely used high-performance baseline. Most published benchmarks omit LMDB entirely, which makes it difficult to interpret what “fast” means in practice. This article therefore uses LMDB as a reference point and compares it against a range of widely used engines under comparable conditions.
 
 All databases are configured for their **maximum achievable performance** using comparable settings where possible. This includes batching, cache sizing, binary keys, and other engine-specific optimizations. ACID workloads are evaluated separately with strict durability enabled.
 
 The goal is simple: measure how these systems perform against a known high-performance reference.
 
-The result challenges common assumptions: even LMDB can be consistently outperformed.
+The results suggest that a persistent-trie design can be highly competitive, and in several scenarios it clearly outperforms the baseline and other tested systems.
 
 ---
 
@@ -18,9 +16,9 @@ The result challenges common assumptions: even LMDB can be consistently outperfo
 
 ![Workload Comparison](workload_comparison.png)
 
-Across all workloads, a clear performance hierarchy emerges. LMDB is consistently several times faster than traditional embedded competitors and reaches up to approximately **6× higher throughput** than WiredTiger and SQLite in read-heavy workloads, and about **2–4× faster** than LevelDB and RocksDB in single-threaded scenarios. Despite its reputation, RocksDB shows lower throughput than LevelDB in these single-threaded scenarios and only demonstrates its strengths under concurrent workloads, where it scales more effectively and narrows the gap. WiredTiger is consistently limited by internal overhead, while Redis is dominated by network round-trip costs rather than storage performance.
+Across the tested workloads, a clear performance pattern emerges. LMDB remains a strong baseline and is often faster than traditional embedded competitors, reaching up to approximately **6× higher throughput** than WiredTiger and SQLite in read-heavy workloads and roughly **1.3–3.5× higher throughput** than LevelDB and **2–6× higher throughput** than RocksDB across the single-threaded workloads. WiredTiger is often limited by internal overhead, while Redis is shaped strongly by network round-trip costs rather than storage performance.
 
-At the same time, a new competitor appears: Leaves. Using a persistent trie design with copy-on-write storage, it exceeds the performance of all other engines. Compared to LMDB, it achieves roughly **1.5–2× higher throughput** in most standard workloads and up to **2–3× in concurrent scenarios**, while in ACID workloads the difference becomes much larger, reaching over **two orders of magnitude** due to different durability strategies.
+The persistent-trie design represented by Leaves also shows a distinct profile. In several standard workloads it is roughly **1.5–2× faster** than LMDB, while the gap narrows or reverses on longer scans. Leaves is also the top performer in the concurrent table, and the ACID workloads show lower absolute throughput because durability costs dominate.
 
 ---
 
@@ -28,7 +26,7 @@ At the same time, a new competitor appears: Leaves. Using a persistent trie desi
 
 All systems were configured for maximum throughput using recommended settings where available. This includes cache sizing, batching, and binary keys. ACID workloads are evaluated separately with full durability enabled.
 
-The goal is not to compare default configurations, but to measure the achievable performance of each system under comparable conditions. Once the settings are normalized, the remaining question is architectural: what lets some engines stay fast while others incur more lookup and update overhead?
+The goal is not to compare default configurations, but to measure the achievable performance of each system under comparable conditions. Once the settings are normalized, the remaining question is architectural: how different storage designs influence lookup cost, write amplification, and scalability under the same workload patterns.
 
 ---
 
@@ -232,7 +230,7 @@ Uses `readproportion=0.50` and `updateproportion=0.50` with batching and binary 
 
 **Explanation:**  
 Mixed workload; combines effects described in **Analytics Read** and **Ingest**.
-To be compareable with the **Concurrent Session** scenatrio, it has the same total number of operations, but is executed single-threaded. To be comparible with the **Concurrent Session** scenario, it has the same total number of operations.
+To be comparable with the **Concurrent Session** scenario, it has the same total number of operations but is executed single-threaded.
 
 Measured median run throughput (ops/sec) used in charts:
 
@@ -298,13 +296,11 @@ Measured median run throughput (ops/sec) used in charts:
 | 32 | 57138.3 | 1088365.0 | 257429.0 | 641154.0 | 110449.0 | 179215.0 | 218616.5 | 88082.95 |
 | 64 | 41807.65 | 1078825.0 | 268426.5 | 639765.5 | 113733.0 | 176215.0 | 220814.0 | 95338.9 |
 
-
 ---
 
 ## ACID Workload Scenarios
 
 ![ACID Comparison](acid_workload_comparison.png)
-
 
 ### ACID A/C/I
 
@@ -326,7 +322,7 @@ Measured median run throughput (ops/sec) used in charts:
 
 | badger | leaves | lmdb | sqlite | wiredtiger |
 | --- | --- | --- | --- | --- |
-| 1736.99 | 3970.48 | 2167.63 | 3644.49 | 1122.04 |
+| 1736.985 | 3857.055 | 2167.625 | 3644.49 | 1122.04 |
 
 ---
 
@@ -350,11 +346,11 @@ Measured median run throughput (ops/sec) used in charts:
 
 | badger | leaves | lmdb | sqlite | wiredtiger |
 | --- | --- | --- | --- | --- |
-| 878.77 | 6055.87 | 3062.95 | 4714.75 | 4339.68 |
+| 878.774 | 5741.205 | 3062.945 | 4714.745 | 4339.68 |
 
 ---
 
-### ACID RMW
+### ACID Batch RMW
 
 **Scenario:**  
 This workload models batched atomic read-modify-write transactions across multiple keys. Each transaction performs 8 read-modify-write pairs in one commit, exercising multi-key atomicity and rollback behavior under strict durability guarantees. It approximates real-world patterns such as fund transfers across accounts, coordinated inventory adjustments across SKUs, or multi-document patching in one transaction.
@@ -374,7 +370,7 @@ Measured median run throughput (ops/sec) used in charts:
 
 | badger | leaves | lmdb | sqlite | wiredtiger |
 | --- | --- | --- | --- | --- |
-| 4380.15 | 13872.25 | 8746.6 | 7835.62 | 9809.04 |
+| 4380.145 | 15443.55 | 8746.595 | 7835.615 | 9809.035 |
 
 ---
 
@@ -430,7 +426,7 @@ Measured median run throughput (ops/sec) used in charts:
 
 ---
 
-## Benchmark 
+## Benchmark
 
 Benchmarks are executed using a modified YCSB-cpp:
 [https://github.com/kochelmonster/YCSB-cpp](https://github.com/kochelmonster/YCSB-cpp)
@@ -440,7 +436,6 @@ YCSB was used, because it is the undisputed leader in database benchmarks. But w
 - High framework overhead: a significant part of runtime was spent in benchmark code instead of database operations.
 - Incomplete transaction support: transaction handling was hardcoded and covered only a single scenario.
 - Poor run-to-run comparability: different benchmark runs used different datasets, making fair cross-run comparisons difficult.
-
 
 ### How measuring is done
 
@@ -513,6 +508,7 @@ All results in this article use the optimized benchmark to ensure measurements r
 - OS: Ubuntu 24.04.4
 - Filesystem: ext4 with default settings (barrier=1, journaling enabled)
 - Kernel: 6.8.0-31-generic
+
 ---
 
 ## About the new Competitor: Leaves
@@ -539,8 +535,6 @@ Leaves is based on a persistent trie structure combined with copy-on-write stora
 
 ## Conclusion
 
-LMDB remains a strong baseline for embedded databases.
+LMDB remains a strong baseline for embedded databases and a useful reference point for evaluating alternative designs.
 
-However, this benchmark shows that a fundamentally different design — a persistent trie — can outperform both B-tree and LSM-based systems across a wide range of workloads.
-
-This result follows directly from architectural differences in lookup, write path, and concurrency.
+The results in this article show that a persistent-trie architecture consistently outperforms the conventional B-tree and LSM-based systems with only one exception.

@@ -84,5 +84,5 @@
         "filesystem": "cpp",
         "expected": "cpp"
     },
-    "cmake.configureOnOpen": true,
+    "cmake.configureOnOpen": false
 }
