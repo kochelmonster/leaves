@@ -118,7 +118,6 @@ The following CMake options configure either the repository build or library beh
 | `LEAVES_BUILD_BENCHMARKS` | `ON` | Repository build only | Build the repository benchmark applications. |
 | `LEAVES_GCOV` | `ON` | Repository build only | Enable coverage instrumentation for repository builds. |
 | `LEAVES_ASAN` | `ON` | Repository build only | Enable AddressSanitizer when coverage is disabled. |
-| `LEAVES_SINGLE_PROCESS` | `OFF` | Repository build and library consumers | Disable multi-process support for constrained targets such as embedded or mobile environments. |
 | `LEAVES_LOG` | `OFF` | Repository build and library consumers | Enable Leaves logging macros. |
 
 

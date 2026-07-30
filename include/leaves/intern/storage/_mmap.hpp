@@ -10,13 +10,9 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <cerrno>
-#ifndef LEAVES_SINGLE_PROCESS
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/process/v2/pid.hpp>
-#else
-#include <mutex>
-#endif
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -47,13 +43,9 @@ using boost::interprocess::open_only;
 using boost::interprocess::open_only_t;
 using boost::interprocess::read_only;
 using boost::interprocess::read_write;
-#ifndef LEAVES_SINGLE_PROCESS
 using boost::process::v2::all_pids;
 using boost::process::v2::current_pid;
 using boost::process::v2::pid_type;
-#else
-typedef uint32_t pid_type;
-#endif
 
 namespace leaves {
 
@@ -84,11 +76,7 @@ struct _MemoryMapTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 2 * M;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
-#ifdef LEAVES_SINGLE_PROCESS
-  static constexpr uint16_t MAX_PROCESSES = 1;
-#else
   static constexpr uint16_t MAX_PROCESSES = 100;
-#endif
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
       sizeof(PageHeader) +
           _TrieNode<_MemoryMapTraits>::size(1, 2),  // 2 branches
@@ -139,11 +127,7 @@ struct _MemoryMapFile
   // _self() downcasts *this so references match DB's constructor.
   MemoryMapFile& _self() { return static_cast<MemoryMapFile&>(*this); }
 
-#ifdef LEAVES_SINGLE_PROCESS
-  using Mutex = std::recursive_mutex;
-#else
   using Mutex = boost::interprocess::interprocess_recursive_mutex;
-#endif
 
   using DBEntry = _DBDirectoryEntry;
 
@@ -201,11 +185,7 @@ struct _MemoryMapFile
                  size_t pool_threads = SIZE_MAX,
                  uint32_t copy_write_threshold = 0)
       : PoolMixin(_lazy_pool), _write_fd(LEAVES_INVALID_FD) {
-#ifndef LEAVES_SINGLE_PROCESS
     _pid = current_pid();
-#else
-    _pid = 1;
-#endif
     init_dbfile(path, map_size, copy_write_threshold);
     if (pool_threads != SIZE_MAX) {
       size_t n = pool_threads;
@@ -235,6 +215,22 @@ struct _MemoryMapFile
   size_t file_size() const { return _memory->file_size; }
 
   uint32_t sanitize_generation() { return _memory->sanitize_generation; }
+
+  std::string sanitize_lock_filename() const {
+    std::filesystem::path p(filename());
+    p += ".sanitize.lock";
+    return p.string();
+  }
+
+  void ensure_sanitize_lock_file(const std::string& lock_file) const {
+    std::ofstream f(lock_file, std::ios::out | std::ios::app | std::ios::binary);
+    if (!f.good()) {
+      int err = errno ? errno : EIO;
+      throw FileError(
+          std::format("Failed to open sanitize lock file '{}'", lock_file),
+          err);
+    }
+  }
 
   void init_dbfile(const char* path, size_t map_size,
                    uint32_t copy_write_threshold = 0) {
@@ -377,13 +373,11 @@ struct _MemoryMapFile
   void sanitize() {
     // Coordinate sanitization across processes with an OS file lock that is
     // automatically released if a process crashes.
-#ifdef LEAVES_SINGLE_PROCESS
-    std::scoped_lock flock_guard(file_lock());
-#else
-    boost::interprocess::file_lock flock(filename());
+    std::string lock_file = sanitize_lock_filename();
+    ensure_sanitize_lock_file(lock_file);
+    boost::interprocess::file_lock flock(lock_file.c_str());
     boost::interprocess::scoped_lock<boost::interprocess::file_lock>
         flock_guard(flock);
-#endif
 
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
@@ -400,25 +394,24 @@ struct _MemoryMapFile
     // Register our pid inside the same critical section so concurrent openers
     // are serialized: a later opener observes our pid and is NOT a first
     // opener.
-    if constexpr (MAX_PROCESSES > 1) {
-      bool placed = false;
-      for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (!_memory->processes[i]) {
-          _memory->processes[i] = _pid;
-          placed = true;
-          break;
-        }
+    bool placed = false;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+      if (!_memory->processes[i]) {
+        _memory->processes[i] = _pid;
+        placed = true;
+        break;
       }
-      if (!placed) throw NoProcess();
     }
+    if (!placed) throw NoProcess();
     if (std::filesystem::file_size(filename()) != _memory->file_size)
       resize_backing_file(_memory->file_size);
 
-    assert(_region.get_size() >= _memory->file_size);
+    if (_region.get_size() < _memory->file_size) {
+      throw StorageFull(_region.get_size(), _memory->file_size);
+    }
   }
 
   bool sanitize_processes() {
-#ifndef LEAVES_SINGLE_PROCESS
     auto ap = all_pids();
     std::sort(ap.begin(), ap.end());
 
@@ -433,11 +426,6 @@ struct _MemoryMapFile
         free_count++;
     }
     return free_count == MAX_PROCESSES;  // the first to open the db
-#else
-    // Single-process mode: clear all process slots and treat as first opener
-    for (int i = 0; i < MAX_PROCESSES; i++) _memory->processes[i] = 0;
-    return true;
-#endif
   }
 
   // Resolve offset - handles both absolute and relative offsets uniformly
