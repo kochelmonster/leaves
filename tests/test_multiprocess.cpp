@@ -22,14 +22,6 @@ using StorageImpl = MapStorage::StorageImpl;
 using MainDB = _DB<StorageImpl>;
 using CDB = _ConfluenceDB<MainDB>;
 
-#if defined(LEAVES_SINGLE_PROCESS)
-// Multiprocess tests require cross-process storage primitives; in single-process
-// builds the test is a no-op so the suite still reports success.
-BOOST_AUTO_TEST_CASE(test_multiprocess_skipped_single_process) {
-  BOOST_CHECK(true);
-}
-#else
-
 static constexpr const char* MP_FILE = "test_mp.lvs";
 
 static Slice mkkey(int i) {
@@ -810,4 +802,3 @@ BOOST_AUTO_TEST_CASE(test_mp_wal_crash_before_commit) {
   }
 }
 
-#endif  // LEAVES_SINGLE_PROCESS

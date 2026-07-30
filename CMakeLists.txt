@@ -62,7 +62,6 @@ if(EMSCRIPTEN)
         include/leaves/db.hpp
         include/leaves/cursor.hpp
     )
-    target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
     if(LEAVES_ASYNC_BACKEND STREQUAL "ASYNCIFY")
         target_compile_definitions(wasm_core INTERFACE LEAVES_ASYNCIFY)
     endif()
@@ -180,7 +179,6 @@ option(LEAVES_GCOV "Add gconv support for tests" ${LEAVES_REPOSITORY_OPTION_DEFA
 option(LEAVES_ASAN "Build tests with AddressSanitizer" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
-option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded)" OFF)
 option(LEAVES_LOG "Enable leaves logging macros for consumers" OFF)
 
 
@@ -287,10 +285,6 @@ endif()
 
 if (TARGET Boost::process)
     target_link_libraries(leaves INTERFACE Boost::process)
-endif()
-
-if (LEAVES_SINGLE_PROCESS)
-    target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
 endif()
 
 if (LEAVES_LOG)
@@ -447,8 +441,10 @@ target_link_libraries(test_merger PUBLIC core leaves_test_support)
 add_executable(test_tributary tests/test_tributary.cpp)
 target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
+if (UNIX)
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support Threads::Threads)
+endif()
 
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
@@ -502,10 +498,13 @@ foreach(target IN ITEMS
     test_replication_api
     test_tributary
     test_multithread
-    test_multiprocess
     test_replication_multiclient)
     leaves_add_test(${target} TIMEOUT 180 LABELS "native;integration")
 endforeach()
+
+if (UNIX)
+    leaves_add_test(test_multiprocess TIMEOUT 180 LABELS "native;integration")
+endif()
 
 add_executable(profile tests/profile.cpp)
 
@@ -651,14 +650,14 @@ target_link_libraries(bench_merge PUBLIC core Threads::Threads blake3)
 if (NOT MSVC)
 target_compile_options(bench_merge PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 endif()
-target_compile_definitions(bench_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+target_compile_definitions(bench_merge PRIVATE NDEBUG)
 
 add_executable(bench_overwrite_vs_merge benchmarks/bench_overwrite_vs_merge.cpp)
 target_link_libraries(bench_overwrite_vs_merge PUBLIC core Threads::Threads blake3)
 if (NOT MSVC)
 target_compile_options(bench_overwrite_vs_merge PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 endif()
-target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG)
 
 if (DEBUG_BENCHMARKS)
     if (MSVC)
@@ -673,7 +672,7 @@ if (DEBUG_BENCHMARKS)
 else()
     if (NOT MSVC)
     target_compile_options(db_bench_leaves PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
-    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
     target_compile_options(db_bench_memory PUBLIC ${LEAVES_BENCH_NATIVE_FLAG} -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
     endif()
