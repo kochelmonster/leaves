@@ -11,7 +11,9 @@ This document is for developers and contributors who need a system-level model o
 Leaves enforces a strict split between mechanism and policy:
 
 - Mechanisms are provided by Leaves: trie storage, transaction flow, replication FSMs, serialization, and merge plumbing.
+- Leaves provides mechanism-level atomicity and deterministic execution for commits, merges, and replication sessions.
 - Policies are provided by applications: consistency semantics, conflict resolution, merge behavior, and transport choices.
+- In practice, Leaves provides the durable machinery for storing and propagating state, but it does not impose a single global consistency model. Applications decide how concurrent updates are interpreted and resolved when writes collide.
 
 This separation is central to the architecture and appears in all subsystem interfaces.
 
