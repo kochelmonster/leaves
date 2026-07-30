@@ -10,6 +10,8 @@ Platform portability macros and compiler-specific compatibility helpers.
 #include <cstdint>
 #include <cstring>
 
+#include "_exception.hpp"
+
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
@@ -114,6 +116,41 @@ FORCE_INLINE void close_fd(int fd) {
   _close(fd);
 #else
   ::close(fd);
+#endif
+}
+
+template <typename NativeHandle>
+FORCE_INLINE int duplicate_fd_from_mapping_native_handle(
+    NativeHandle native_handle) {
+#ifdef _WIN32
+  HANDLE source = static_cast<HANDLE>(native_handle);
+  if (!source || source == INVALID_HANDLE_VALUE) {
+    errno = EBADF;
+    return LEAVES_INVALID_FD;
+  }
+
+  HANDLE duplicate = nullptr;
+  if (!::DuplicateHandle(::GetCurrentProcess(), source,
+                         ::GetCurrentProcess(), &duplicate, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS)) {
+    errno = EIO;
+    return LEAVES_INVALID_FD;
+  }
+
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(duplicate),
+                           _O_RDWR | _O_BINARY);
+  if (!fd_valid(fd)) {
+    ::CloseHandle(duplicate);
+    return LEAVES_INVALID_FD;
+  }
+  return fd;
+#else
+  int source = static_cast<int>(native_handle);
+  if (source < 0) {
+    errno = EBADF;
+    return LEAVES_INVALID_FD;
+  }
+  return ::dup(source);
 #endif
 }
 
@@ -319,12 +356,30 @@ FORCE_INLINE bool is_little_endian() {
 
 }  // namespace detail
 
-FORCE_INLINE bool resize_fd(int fd, uint64_t new_size) {
-  if (!fd_valid(fd)) return false;
+FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
+  if (!fd_valid(fd)) {
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) + " bytes: invalid file descriptor",
+        EBADF);
+  }
 #ifdef _WIN32
-  return _chsize_s(fd, new_size) == 0;
+  errno_t rc = _chsize_s(fd, new_size);
+  if (rc != 0) {
+    int err = static_cast<int>(rc);
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) + " bytes: " + std::strerror(err),
+        err);
+  }
 #else
-  return ::ftruncate(fd, static_cast<off_t>(new_size)) == 0;
+  if (::ftruncate(fd, static_cast<off_t>(new_size)) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) + " bytes: " + std::strerror(err),
+        err);
+  }
 #endif
 }
 

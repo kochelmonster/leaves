@@ -179,10 +179,7 @@ struct _FileOperations : _CacheBase {
   }
 
   void resize(size_t new_size) const {
-    if (!leaves::resize_fd(_fd, static_cast<uint64_t>(new_size))) {
-      throw FileError(
-          "Failed to resize file: " + std::string(std::strerror(errno)), errno);
-    }
+    leaves::resize_fd(_fd, static_cast<uint64_t>(new_size));
   }
 
   template <typename BlockVector>
