@@ -67,6 +67,524 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
+		},
+		{
+			"label": "Build test_mmap direct",
+			"type": "shell",
+			"command": "msbuild",
+			"args": [
+				"build\\test_mmap.vcxproj",
+				"/p:Configuration=Debug",
+				"/m"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc minimal tests",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 17 2022",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc minimal tests (VS18)",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 18 2026",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap windows-msvc",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Reconfigure and build test_mmap windows-msvc",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"Get-Process cmake,vcpkg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; cmake -S . -B build/windows-msvc -G 'Visual Studio 18 2026' -DLEAVES_BUILD_TESTS=ON -DLEAVES_BUILD_BENCHMARKS=OFF; cmake --build build/windows-msvc --target test_mmap --config Debug -j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap windows-msvc",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc clean",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Kill stale cmake vcpkg",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"Get-Process cmake,vcpkg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Output 'stale processes killed'"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc clean retry",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap windows-msvc retry",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc no-gcov",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF",
+				"-DLEAVES_GCOV=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc no-gcov retry2",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF",
+				"-DLEAVES_GCOV=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Configure windows-msvc final",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build/windows-msvc",
+				"-G",
+				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DLEAVES_BUILD_TESTS=ON",
+				"-DLEAVES_BUILD_BENCHMARKS=OFF",
+				"-DLEAVES_GCOV=OFF"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap final",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap final",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap after fixes",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap after macro fixes",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap after macro fixes",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap link-fix",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap link-fix",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap boost-link-direct",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap boost-link-direct",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap single-process",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap single-process",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap mmap-winfix",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap mmap-winfix",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap boost-target",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap boost-target",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap after sanitize fix",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap after sanitize fix",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap after windows growth fix",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap after windows growth fix",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_mmap final",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/windows-msvc",
+				"--target",
+				"test_mmap",
+				"--config",
+				"Debug",
+				"-j"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_mmap final",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build/windows-msvc",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_mmap$",
+				"--output-on-failure"
+			],
+			"isBackground": false
 		}
 	],
 	"version": "2.0.0"

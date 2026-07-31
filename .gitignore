@@ -19,3 +19,5 @@ tests/ws_replication/node_modules
 *.gcov
 *.lvs*
 .cache
+vcpkg_installed
+vcpkg-manifest-install.log
