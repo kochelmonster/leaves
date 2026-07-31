@@ -32,7 +32,8 @@ typedef _LeafNode<TestTraits> LeafNode;
 static const int OOR = TrieNode::OUT_OF_RANGE;
 
 static_assert(sizeof(TrieNode) == 7);
-static_assert(sizeof(LeafNode) == 3);
+static_assert(LeafNode::HEADER_SIZE == 3);
+static_assert(sizeof(LeafNode) == LeafNode::HEADER_SIZE + 1);
 
 const uint16_t AREA_SIZE = 4 * 1024;
 

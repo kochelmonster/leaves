@@ -120,7 +120,6 @@ The following CMake options configure either the repository build or library beh
 | `LEAVES_ASAN` | `ON` | Repository build only | Enable AddressSanitizer when coverage is disabled. |
 | `LEAVES_LOG` | `OFF` | Repository build and library consumers | Enable Leaves logging macros. |
 
-
 ## Installing as CMake Package
 
 The repository can export an installable CMake package for downstream consumers. This step is optional and only required if you want to consume Leaves through `find_package()` in other projects.
