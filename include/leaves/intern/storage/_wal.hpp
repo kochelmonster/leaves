@@ -103,7 +103,7 @@ inline bool _wal_pwrite(_wal_fd_t fd, uint64_t off, const void* data,
 inline bool _wal_pread(_wal_fd_t fd, uint64_t off, void* data, size_t size) {
   return leaves::read_fd_all_at(fd, off, data, size);
 }
-inline void _wal_sync(_wal_fd_t fd) { (void)leaves::sync_fd_data(fd); }
+inline void _wal_sync(_wal_fd_t fd) { leaves::sync_fd_data(fd); }
 inline void _wal_truncate(_wal_fd_t fd, uint64_t size) {
   try {
     leaves::resize_fd(fd, size);  // best effort
@@ -334,7 +334,8 @@ struct _WalWriter {
   }
 
   // Append PREPARE, flush the buffered records to the active file, fdatasync.
-  // Throws leaves::WalError on I/O failure.
+  // Throws leaves::WalError for write errors and leaves::FileError for sync
+  // errors.
   void prepare(bool skip_sync = false) {
     if (_prepared) return;  // idempotent
     if (!_has_records) {
@@ -353,7 +354,8 @@ struct _WalWriter {
   }
 
   // Append COMMIT, fdatasync, publish last_commit.
-  // Throws leaves::WalError on I/O failure.
+  // Throws leaves::WalError for write errors and leaves::FileError for sync
+  // errors.
   void commit() {
     if (!_has_records) {
       _buf.clear();
