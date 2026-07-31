@@ -8,6 +8,7 @@ Cached file-backed storage helpers for page reuse and persistence access.
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>  // for std::memcpy
 #include <format>
@@ -527,8 +528,8 @@ struct _CacheStore : public Opers_,
 
   // First-page capacity for DB entries
   uint16_t _first_page_capacity() const {
-    return _DBDirectoryPage::capacity_for(4 * K -
-                                          sizeof(typename Opers_::FileHeader));
+    return _DBDirectoryPage::capacity_for(
+        4 * K - offsetof(typename Opers_::FileHeader, dbs));
   }
 
   // Overflow area capacity: one directory page per whole area payload.

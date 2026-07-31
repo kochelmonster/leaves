@@ -13,6 +13,7 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/process/v2/pid.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -146,7 +147,7 @@ struct _MemoryMapFile
     uint32_t copy_write_pivot_bytes;  // write-vs-memcpy pivot for mmap copy
     uint16_t db_entry_count;          // entries used in first directory page
     offset_t db_next_page;  // link to overflow directory page (0 = none)
-    DBEntry dbs[];          // flexible array fills to 4K boundary
+    DBEntry dbs[1];         // trailing storage fills to 4K boundary
 
     FileHeader()
         : db_version(0),
@@ -164,7 +165,8 @@ struct _MemoryMapFile
       memset(signature, 0, sizeof(signature));
       strcpy(signature, MMAP_SIGNATURE);
       area_pool.init();
-      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      uint16_t cap =
+          _DBDirectoryPage::capacity_for(4 * K - offsetof(FileHeader, dbs));
       memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };
@@ -695,7 +697,7 @@ struct _MemoryMapFile
 
   // Directory page helpers (mmap: all data is memory-mapped, pointers stable)
   uint16_t _first_page_capacity() const {
-    return _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+    return _DBDirectoryPage::capacity_for(4 * K - offsetof(FileHeader, dbs));
   }
 
   static constexpr uint16_t _overflow_page_capacity() {
