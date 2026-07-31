@@ -208,6 +208,14 @@ macro(check_cpu_feature FLAG TEST_SOURCE RESULT_VAR)
     endif()
 endmacro()
 
+if (MSVC)
+    set(AVX2_FLAG "/arch:AVX2")
+    set(AVX512BW_FLAG "/arch:AVX512")
+else()
+    set(AVX2_FLAG "-mavx2")
+    set(AVX512BW_FLAG "-mavx512bw")
+endif()
+
 if (NOT MSVC)
     check_cpu_feature("-mpopcnt"
         "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
@@ -229,22 +237,22 @@ if (NOT MSVC)
     if (CPU_SUPPORTS_LZCNT)
         add_compile_options(-mlzcnt)
     endif()
+endif()
 
-    # Check for AVX2 support (32-byte SIMD operations)
-    check_cpu_feature("-mavx2"
-        "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
-        CPU_SUPPORTS_AVX2)
-    if (CPU_SUPPORTS_AVX2)
-        add_compile_options(-mavx2)
-    endif()
+# Check for AVX2 support (32-byte SIMD operations)
+check_cpu_feature("${AVX2_FLAG}"
+    "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
+    CPU_SUPPORTS_AVX2)
+if (CPU_SUPPORTS_AVX2)
+    add_compile_options(${AVX2_FLAG})
+endif()
 
-    # Check for AVX-512 support (64-byte SIMD operations)
-    check_cpu_feature("-mavx512bw"
-        "#include <immintrin.h>\nint main() { __m512i v = _mm512_set1_epi8(1); return (int)_mm512_reduce_add_epi32(_mm512_setzero_si512()); }"
-        CPU_SUPPORTS_AVX512BW)
-    if (CPU_SUPPORTS_AVX512BW)
-        add_compile_options(-mavx512bw)
-    endif()
+# Check for AVX-512 support (64-byte SIMD operations)
+check_cpu_feature("${AVX512BW_FLAG}"
+    "#include <immintrin.h>\nint main() { __m512i v = _mm512_setzero_si512(); return _mm512_cvtsi512_si32(v); }"
+    CPU_SUPPORTS_AVX512BW)
+if (CPU_SUPPORTS_AVX512BW)
+    add_compile_options(${AVX512BW_FLAG})
 endif()
 
 
@@ -441,9 +449,15 @@ target_link_libraries(test_merger PUBLIC core leaves_test_support)
 add_executable(test_tributary tests/test_tributary.cpp)
 target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
-if (UNIX)
+add_executable(test_multiprocess_helper tests/test_multiprocess_helper.cpp)
+target_link_libraries(test_multiprocess_helper PUBLIC core Threads::Threads)
+
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support Threads::Threads)
+target_compile_definitions(test_multiprocess PRIVATE
+    LEAVES_MP_HELPER_NAME="$<TARGET_FILE_NAME:test_multiprocess_helper>")
+if (TARGET Boost::process)
+    target_link_libraries(test_multiprocess PUBLIC Boost::process)
 endif()
 
 
@@ -502,9 +516,7 @@ foreach(target IN ITEMS
     leaves_add_test(${target} TIMEOUT 180 LABELS "native;integration")
 endforeach()
 
-if (UNIX)
-    leaves_add_test(test_multiprocess TIMEOUT 180 LABELS "native;integration")
-endif()
+leaves_add_test(test_multiprocess TIMEOUT 180 LABELS "native;integration")
 
 add_executable(profile tests/profile.cpp)
 

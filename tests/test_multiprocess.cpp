@@ -2,104 +2,88 @@
 #define BOOST_TEST_MODULE multiprocess
 #include <boost/test/included/unit_test.hpp>
 
-#include <csignal>
+#include <boost/process.hpp>
+
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
+#include <filesystem>
 #include <functional>
 #include <string>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <thread>
+#include <utility>
 #include <vector>
 
-#include "../include/leaves/intern/multi/_confluence_db.hpp"
-#include "../include/leaves/mmap.hpp"
 #include "test.hpp"
+#include "test_multiprocess_shared.hpp"
 
 using namespace leaves;
 
-using StorageImpl = MapStorage::StorageImpl;
-using MainDB = _DB<StorageImpl>;
-using CDB = _ConfluenceDB<MainDB>;
+using mp_test::CDB;
+using mp_test::MP_FILE;
+using mp_test::StorageImpl;
+using mp_test::create_db;
+using mp_test::kCrashExitCode;
+using mp_test::mkkey;
+using mp_test::mkval;
 
-static constexpr const char* MP_FILE = "test_mp.lvs";
+namespace bp = boost::process;
 
-static Slice mkkey(int i) {
-  static char b[32];
-  std::snprintf(b, sizeof b, "key%08d", i);
-  return Slice(b);
+static constexpr auto CHILD_TIMEOUT = std::chrono::seconds(30);
+
+#ifndef LEAVES_MP_HELPER_NAME
+#error LEAVES_MP_HELPER_NAME must be defined for test_multiprocess
+#endif
+
+struct SpawnedChild {
+  std::string description;
+  bp::child process;
+};
+
+static std::filesystem::path helper_executable_path() {
+  auto* argv0 = boost::unit_test::framework::master_test_suite().argv[0];
+  std::filesystem::path test_executable = std::filesystem::absolute(argv0);
+  return test_executable.parent_path() / LEAVES_MP_HELPER_NAME;
 }
-static Slice mkval(int i) {
-  static char b[32];
-  std::snprintf(b, sizeof b, "val%08d", i);
-  return Slice(b);
+
+static SpawnedChild spawn_child(std::string description,
+                                std::vector<std::string> args) {
+  return {std::move(description),
+          bp::child(helper_executable_path().string(), bp::args(args))};
 }
 
+static bool wait_for_exit(SpawnedChild& child, int expected_exit_code) {
+  auto deadline = std::chrono::steady_clock::now() + CHILD_TIMEOUT;
+  while (child.process.running()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      std::fprintf(stderr, "[parent] %s timed out\n", child.description.c_str());
+      child.process.terminate();
+      child.process.wait();
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  int exit_code = child.process.exit_code();
+  if (exit_code == expected_exit_code) return true;
+
+  std::fprintf(stderr, "[parent] %s exited %d (expected %d)\n",
+               child.description.c_str(), exit_code, expected_exit_code);
+  return false;
+}
+
+static bool wait_ok(SpawnedChild& child) {
+  return wait_for_exit(child, 0);
+}
+
+static bool wait_crash(SpawnedChild& child) {
+  return wait_for_exit(child, kCrashExitCode);
+}
 
 struct MpPrep {
   MpPrep() { std::remove(MP_FILE); }
   ~MpPrep() { std::remove(MP_FILE); }
 };
-
-// Create the DB file + confluence meta once, in the parent, before forking so
-// children only ever reopen (no first-creation race to debug here).
-static void create_db() {
-  auto storage = std::make_unique<StorageImpl>(MP_FILE);
-  auto* main_db = storage->template open<_DB>("main");
-  CDB cdb(*main_db);
-}
-
-// Fork and run `fn` in the child with a watchdog so a hang FAILS (the child is
-// killed by SIGALRM, the parent observes a non-zero exit) rather than blocking
-// the whole suite.  Returns the child pid.
-static pid_t fork_run(std::function<bool()> fn) {
-  std::fflush(nullptr);  // drain inherited stdio buffers so children don't replay them
-  pid_t pid = fork();
-  if (pid == 0) {
-    alarm(30);
-    bool ok = false;
-    try {
-      ok = fn();
-    } catch (...) {
-      ok = false;
-    }
-    _exit(ok ? 0 : 1);
-  }
-  return pid;
-}
-
-static bool wait_ok(pid_t pid) {
-  int st = 0;
-  if (waitpid(pid, &st, 0) != pid) return false;
-  if (WIFEXITED(st) && WEXITSTATUS(st) == 0) return true;
-  if (WIFSIGNALED(st))
-    std::fprintf(stderr, "[parent] child %d killed by signal %d\n", (int)pid, WTERMSIG(st));
-  else if (WIFEXITED(st))
-    std::fprintf(stderr, "[parent] child %d exited %d\n", (int)pid, WEXITSTATUS(st));
-  return false;
-}
-
-// Child body: open the shared DB, write keys [base, base+count) and merge them
-// into the main DB.
-static bool child_write_range(int base, int count, bool merge) {
-  try {
-    auto storage = std::make_unique<StorageImpl>(MP_FILE);
-    auto* main_db = storage->template open<_DB>("main");
-    CDB cdb(*main_db);
-    auto cursor = cdb.create_cursor();
-    if (!cursor->start_transaction()) return false;
-    for (int i = 0; i < count; ++i) {
-      cursor->find(Slice(mkkey(base + i)));
-      cursor->value(Slice(mkval(base + i)));
-    }
-    if (!cursor->commit()) return false;
-    cursor.reset();
-    if (merge) cdb.merge_all_now();
-    return true;
-  } catch (...) {
-    return false;
-  }
-}
 
 // Verify every key in [base, base+count) is present in the (reopened) DB with
 // the expected value.
@@ -121,11 +105,13 @@ BOOST_AUTO_TEST_CASE(test_mp_concurrent_writes) {
 
   constexpr int kProcs = 4;
   constexpr int kPer = 500;
-  std::vector<pid_t> pids;
+  std::vector<SpawnedChild> children;
   for (int c = 0; c < kProcs; ++c)
-    pids.push_back(fork_run([c] { return child_write_range(c * kPer, kPer, true); }));
+    children.push_back(spawn_child(
+        "concurrent-writer",
+        {"write-range", std::to_string(c * kPer), std::to_string(kPer), "1"}));
 
-  for (pid_t pid : pids) BOOST_CHECK(wait_ok(pid));
+  for (auto& child : children) BOOST_CHECK(wait_ok(child));
 
   auto storage = std::make_unique<StorageImpl>(MP_FILE);
   auto* main_db = storage->template open<_DB>("main");
@@ -143,40 +129,11 @@ BOOST_AUTO_TEST_CASE(test_mp_writer_and_merger) {
   create_db();
 
   constexpr int kKeys = 2000;
-  pid_t writer = fork_run([] {
-    try {
-      auto storage = std::make_unique<StorageImpl>(MP_FILE);
-      auto* main_db = storage->template open<_DB>("main");
-      CDB cdb(*main_db);
-      for (int batch = 0; batch < 4; ++batch) {
-        auto cursor = cdb.create_cursor();
-        if (!cursor->start_transaction()) return false;
-        for (int i = 0; i < kKeys / 4; ++i) {
-          int idx = batch * (kKeys / 4) + i;
-          cursor->find(Slice(mkkey(idx)));
-          cursor->value(Slice(mkval(idx)));
-        }
-        if (!cursor->commit()) return false;
-        cursor.reset();
-        cdb.merge_all_now();
-      }
-      return true;
-    } catch (...) {
-      return false;
-    }
-  });
+  auto writer = spawn_child("writer-batches",
+                            {"writer-batches", std::to_string(kKeys), "4"});
 
-  pid_t merger = fork_run([] {
-    try {
-      auto storage = std::make_unique<StorageImpl>(MP_FILE);
-      auto* main_db = storage->template open<_DB>("main");
-      CDB cdb(*main_db);
-      for (int i = 0; i < 200; ++i) cdb.merge_all_now();
-      return true;
-    } catch (...) {
-      return false;
-    }
-  });
+  auto merger = spawn_child("merger-loops",
+                            {"merger-loops", "200"});
 
   BOOST_CHECK(wait_ok(writer));
   BOOST_CHECK(wait_ok(merger));
@@ -197,34 +154,8 @@ BOOST_AUTO_TEST_CASE(test_mp_crash_during_merge) {
   create_db();
 
   constexpr int kKeys = 300;
-  pid_t crasher = fork_run([] {
-    auto storage = std::make_unique<StorageImpl>(MP_FILE);
-    auto* main_db = storage->template open<_DB>("main");
-    auto* cdb = new CDB(*main_db);  // deliberately never destroyed
-    auto cursor = cdb->create_cursor();
-    if (!cursor->start_transaction()) _exit(1);
-    for (int i = 0; i < kKeys; ++i) {
-      cursor->find(Slice(mkkey(i)));
-      cursor->value(Slice(mkval(i)));
-    }
-    if (!cursor->commit()) _exit(1);
-    // Force the slot that holds the just-committed data into MERGING,
-    // simulating a crash after publishing merge work but before the merge job
-    // drained it.
-    size_t n = cdb->_tributaries_count.load(std::memory_order_acquire);
-    bool stamped = false;
-    for (size_t i = 0; i < n; ++i) {
-      auto* t = cdb->_trib_at(i);
-      uint8_t st = t->_header->state.load(std::memory_order_acquire);
-      if (st == CDB::Slot::ATTACHED || st == CDB::Slot::WRITING) {
-        t->_header->state.store(CDB::Slot::MERGING, std::memory_order_release);
-        stamped = true;
-      }
-    }
-    // Crash hard: skip all destructors (no merge, no clean close).
-    _exit(stamped ? 0 : 1);
-    return true;  // unreachable; satisfies std::function<bool()>
-  });
+  auto crasher = spawn_child("crash-during-merge",
+                             {"crash-during-merge", std::to_string(kKeys)});
 
   BOOST_REQUIRE(wait_ok(crasher));
 
@@ -250,50 +181,12 @@ BOOST_AUTO_TEST_CASE(test_mp_sanitize_after_crash_during_transaction) {
   constexpr int kPreCrashKeys = 200;
   constexpr int kCrashKeys = 100;
 
-  pid_t child = fork();
-  if (child == 0) {
-    alarm(30);
-    try {
-      auto storage = std::make_unique<StorageImpl>(MP_FILE);
-      auto* main_db = storage->template open<_DB>("main");
-      CDB cdb(*main_db);
+  auto child = spawn_child("crash-during-transaction",
+                           {"crash-during-transaction",
+                            std::to_string(kPreCrashKeys),
+                            std::to_string(kCrashKeys)});
 
-      // Transaction 1: committed data that must survive.
-      {
-        auto cursor = cdb.create_cursor();
-        if (!cursor->start_transaction()) _exit(1);
-        for (int i = 0; i < kPreCrashKeys; ++i) {
-          cursor->find(Slice(mkkey(i)));
-          cursor->value(Slice(mkval(i)));
-        }
-        if (!cursor->commit()) _exit(1);
-      }
-
-      // Transaction 2: start writing but crash before commit.
-      {
-        auto cursor = cdb.create_cursor();
-        if (!cursor->start_transaction()) _exit(1);
-        for (int i = 0; i < kCrashKeys; ++i) {
-          cursor->find(Slice(mkkey(kPreCrashKeys + i)));
-          cursor->value(Slice(mkval(kPreCrashKeys + i)));
-        }
-        // Die mid-transaction — no commit, no rollback.
-        std::raise(SIGINT);
-      }
-      // Should never reach here.
-      _exit(1);
-    } catch (...) {
-      _exit(1);
-    }
-  }
-
-  // Parent: wait for the child to be killed by SIGINT.
-  int st = 0;
-  pid_t waited = waitpid(child, &st, 0);
-  BOOST_REQUIRE_EQUAL(waited, child);
-  BOOST_REQUIRE_MESSAGE(WIFSIGNALED(st),
-                        "child should have been killed by a signal");
-  BOOST_REQUIRE_EQUAL(WTERMSIG(st), SIGINT);
+  BOOST_REQUIRE(wait_crash(child));
 
   // Reopen: sanitize() must recover committed data and discard the
   // uncommitted transaction.
@@ -327,33 +220,15 @@ BOOST_AUTO_TEST_CASE(test_mp_contention_stress) {
   constexpr int kProcs = 6;
   constexpr int kBatches = 5;
   constexpr int kPer = 200;
-  std::vector<pid_t> pids;
+  std::vector<SpawnedChild> children;
   for (int c = 0; c < kProcs; ++c) {
-    pids.push_back(fork_run([c] {
-      try {
-        auto storage = std::make_unique<StorageImpl>(MP_FILE);
-        auto* main_db = storage->template open<_DB>("main");
-        CDB cdb(*main_db);
-        for (int b = 0; b < kBatches; ++b) {
-          auto cursor = cdb.create_cursor();
-          if (!cursor->start_transaction()) return false;
-          int base = (c * kBatches + b) * kPer;
-          for (int i = 0; i < kPer; ++i) {
-            cursor->find(Slice(mkkey(base + i)));
-            cursor->value(Slice(mkval(base + i)));
-          }
-          if (!cursor->commit()) return false;
-          cursor.reset();
-          cdb.merge_all_now();
-        }
-        return true;
-      } catch (...) {
-        return false;
-      }
-    }));
+    children.push_back(
+        spawn_child("contention-worker",
+                    {"contention-worker", std::to_string(c),
+                     std::to_string(kBatches), std::to_string(kPer)}));
   }
 
-  for (pid_t pid : pids) BOOST_CHECK(wait_ok(pid));
+  for (auto& child : children) BOOST_CHECK(wait_ok(child));
 
   auto storage = std::make_unique<StorageImpl>(MP_FILE);
   auto* main_db = storage->template open<_DB>("main");
@@ -388,84 +263,14 @@ BOOST_AUTO_TEST_CASE(test_mp_sanitize_recover_lost_areas) {
   // -----------------------------------------------------------------------
   //  Child
   // -----------------------------------------------------------------------
-  pid_t child = fork();
-  if (child == 0) {
-    alarm(30);
-    try {
-      auto storage = std::make_unique<StorageImpl>(MP_FILE);
-      auto* main_db = storage->template open<_DB>("main");
-
-      // Transaction 1: committed data that must survive.
-      {
-        auto cursor = main_db->create_cursor();
-        if (!cursor->start_transaction()) _exit(1);
-        for (int i = 0; i < kKeys; ++i) {
-          cursor->find(Slice(mkkey(i)));
-          cursor->value(Slice(mkval(i)));
-        }
-        if (!cursor->commit()) _exit(1);
-      }
-
-      // Allocate several areas directly from the storage pool (bypassing
-      // the DB cursor).  Their offsets are saved into the DB so the parent
-      // can later verify that recover_areas() re-initialised them.
-      offset_t corrupt_offsets[kCorrupt];
-      {
-        auto a1 = storage->alloc_single_area();                      // single
-        corrupt_offsets[0] = storage->resolve(a1);
-        auto a2 = storage->alloc_single_area();                      // single
-        corrupt_offsets[1] = storage->resolve(a2);
-        auto a3 = storage->alloc_multi_area(2 * StorageImpl::AREA_SIZE); // 2‑block
-        corrupt_offsets[2] = storage->resolve(a3);
-        auto a4 = storage->alloc_single_area();                      // single
-        corrupt_offsets[3] = storage->resolve(a4);
-        if (!a1 || !a2 || !a3 || !a4) _exit(1);
-      }
-
-      // Transaction 2: write the corrupt offsets into the DB so the parent
-      // can read them back and check that the Area headers were restored.
-      {
-        auto cursor = main_db->create_cursor();
-        if (!cursor->start_transaction()) _exit(1);
-        for (int i = 0; i < kCorrupt; ++i) {
-          char k[64], v[64];
-          std::snprintf(k, sizeof k, "cr_%d_off", i);
-          std::snprintf(v, sizeof v, "%llu",
-                        (unsigned long long)(uint64_t)corrupt_offsets[i]);
-          cursor->find(Slice(k));
-          cursor->value(Slice(v));
-        }
-        if (!cursor->commit()) _exit(1);
-      }
-
-      // Corrupt the area headers by zeroing them, then flush so the
-      // corrupted state is on disk.
-      for (int i = 0; i < kCorrupt; ++i) {
-        char* p = (char*)storage->_memory + (uint64_t)corrupt_offsets[i];
-        std::memset(p, 0, sizeof(Area));
-      }
-      storage->flush(true, true);
-
-      // Crash without clean close → sanitize() will see clean_close == 0
-      // and call recover_areas().
-      std::raise(SIGINT);
-      _exit(1);
-    } catch (...) {
-      _exit(1);
-    }
-  }
+  auto child = spawn_child("recover-lost-areas-crash",
+                           {"recover-lost-areas-crash", std::to_string(kKeys),
+                            std::to_string(kCorrupt)});
 
   // -----------------------------------------------------------------------
   //  Parent – wait for child
   // -----------------------------------------------------------------------
-  {
-    int st = 0;
-    pid_t waited = waitpid(child, &st, 0);
-    BOOST_REQUIRE_EQUAL(waited, child);
-    BOOST_REQUIRE_MESSAGE(WIFSIGNALED(st),
-                          "child should have been killed by a signal");
-    BOOST_REQUIRE_EQUAL(WTERMSIG(st), SIGINT);
-  }
+  BOOST_REQUIRE(wait_crash(child));
 
   // -----------------------------------------------------------------------
   //  Reopen – sanitize() → recover_areas() runs here
@@ -616,44 +421,13 @@ BOOST_AUTO_TEST_CASE(test_mp_two_phase_commit_crash_before_commit) {
   // -----------------------------------------------------------------------
   //  Child
   // -----------------------------------------------------------------------
-  pid_t child = fork();
-  if (child == 0) {
-    alarm(30);
-    try {
-      auto storage = std::make_unique<StorageImpl>(MP_FILE);
-      auto* main_db = storage->template open<_DB>("main");
-
-      auto cursor = main_db->create_cursor();
-      if (!cursor->start_transaction()) _exit(1);
-
-      for (int i = 0; i < kKeys; ++i) {
-        cursor->find(Slice(mkkey(i)));
-        cursor->value(Slice(mkval(i)));
-      }
-
-      // Two-phase prepare: sync-flush the prepared transaction to disk,
-      // then crash *before* the commit that would advance read_txn.
-      cursor->prepare_commit(true);
-
-      // Crash without finalising the commit.
-      std::raise(SIGINT);
-      _exit(1);
-    } catch (...) {
-      _exit(1);
-    }
-  }
+  auto child = spawn_child("two-phase-prepare-crash",
+                           {"two-phase-prepare-crash", std::to_string(kKeys)});
 
   // -----------------------------------------------------------------------
   //  Parent – wait for child
   // -----------------------------------------------------------------------
-  {
-    int st = 0;
-    pid_t waited = waitpid(child, &st, 0);
-    BOOST_REQUIRE_EQUAL(waited, child);
-    BOOST_REQUIRE_MESSAGE(WIFSIGNALED(st),
-                          "child should have been killed by a signal");
-    BOOST_REQUIRE_EQUAL(WTERMSIG(st), SIGINT);
-  }
+  BOOST_REQUIRE(wait_crash(child));
 
   // -----------------------------------------------------------------------
   //  Reopen – sanitize() restores the prepared transaction as active
@@ -723,45 +497,13 @@ BOOST_AUTO_TEST_CASE(test_mp_wal_crash_before_commit) {
   // -----------------------------------------------------------------------
   //  Child
   // -----------------------------------------------------------------------
-  pid_t child = fork();
-  if (child == 0) {
-    alarm(30);
-    try {
-      auto storage = std::make_unique<StorageImpl>(MP_FILE);
-      auto* main_db = storage->template open<_DB>("main");
-
-      auto cursor = main_db->create_cursor();
-      // use_wal=true — operations go through the write-ahead log.
-      if (!cursor->start_transaction(false, true)) _exit(1);
-
-      for (int i = 0; i < kKeys; ++i) {
-        cursor->find(Slice(mkkey(i)));
-        cursor->value(Slice(mkval(i)));
-      }
-
-      // WAL prepare: syncs the PREPARE record to the WAL file. The
-      // transaction is now prepared on disk but NOT yet committed.
-      cursor->prepare_commit();
-
-      // Crash before the WAL COMMIT record is written.
-      std::raise(SIGINT);
-      _exit(1);
-    } catch (...) {
-      _exit(1);
-    }
-  }
+  auto child = spawn_child("wal-prepare-crash",
+                           {"wal-prepare-crash", std::to_string(kKeys)});
 
   // -----------------------------------------------------------------------
   //  Parent – wait for child
   // -----------------------------------------------------------------------
-  {
-    int st = 0;
-    pid_t waited = waitpid(child, &st, 0);
-    BOOST_REQUIRE_EQUAL(waited, child);
-    BOOST_REQUIRE_MESSAGE(WIFSIGNALED(st),
-                          "child should have been killed by a signal");
-    BOOST_REQUIRE_EQUAL(WTERMSIG(st), SIGINT);
-  }
+  BOOST_REQUIRE(wait_crash(child));
 
   // -----------------------------------------------------------------------
   //  Reopen – sanitize() → wal_recover() replays the dangling WAL txn
