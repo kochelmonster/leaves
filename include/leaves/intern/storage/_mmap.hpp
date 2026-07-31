@@ -494,15 +494,8 @@ struct _MemoryMapFile
   }
 
   void sync_fd_for_commit() {
-    if (!leaves::fd_valid(_write_fd)) {
-      throw FileError("Failed to sync commit data: invalid file descriptor",
-                      EBADF);
-    }
-    if (!leaves::sync_fd_data(_write_fd)) {
-      throw FileError(
-          "Failed to sync commit data: " + std::string(std::strerror(errno)),
-          errno);
-    }
+    assert(leaves::fd_valid(_write_fd));
+    leaves::sync_fd_data(_write_fd);
 #ifdef TESTING
     _copy_write_sync_hits.fetch_add(1, std::memory_order_relaxed);
 #endif

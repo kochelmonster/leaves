@@ -372,12 +372,8 @@ FORCE_INLINE bool is_little_endian() {
 }  // namespace detail
 
 FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
-  if (!fd_valid(fd)) {
-    throw FileError(
-        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
-            std::to_string(new_size) + " bytes: invalid file descriptor",
-        EBADF);
-  }
+  assert(fd_valid(fd));
+  
 #ifdef _WIN32
   errno_t rc = _chsize_s(fd, new_size);
   if (rc != 0) {
@@ -398,14 +394,34 @@ FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
 #endif
 }
 
-FORCE_INLINE bool sync_fd_data(int fd) {
-  if (!fd_valid(fd)) return false;
+FORCE_INLINE void sync_fd_data(int fd) {
+  if (!fd_valid(fd)) {
+    int err = EBADF;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + std::strerror(err),
+                    err);
+  }
 #ifdef _WIN32
-  return _commit(fd) == 0;
+  if (_commit(fd) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + std::strerror(err),
+                    err);
+  }
 #elif defined(__APPLE__)
-  return ::fsync(fd) == 0;
+  if (::fsync(fd) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + std::strerror(err),
+                    err);
+  }
 #else
-  return ::fdatasync(fd) == 0;
+  if (::fdatasync(fd) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + std::strerror(err),
+                    err);
+  }
 #endif
 }
 
