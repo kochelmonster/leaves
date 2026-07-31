@@ -54,7 +54,7 @@ void make_key(std::string& out, uint64_t n, size_t key_size) {
 std::string temp_path(const char* tag) {
   auto dir = std::filesystem::temp_directory_path();
   auto p = dir / ("bench_ovm_" + std::string(tag) + "_" +
-                  std::to_string(::getpid()) + "_" +
+                  std::to_string(leaves::get_process_id()) + "_" +
                   std::to_string(std::chrono::steady_clock::now()
                                      .time_since_epoch()
                                      .count()) +

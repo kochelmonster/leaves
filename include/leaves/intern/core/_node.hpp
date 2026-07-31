@@ -700,7 +700,7 @@ struct _LeafNode : _LeafNodeHeader<Traits> {
   static constexpr uint16_t MAX_SIZE = Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
   static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
-  uint8_t data[];
+  uint8_t data[1];
   uint8_t* vdata() { return data + key_size; }
   const uint8_t* vdata() const { return data + key_size; }
   Slice key() { return Slice(data, key_size); }

@@ -30,39 +30,49 @@ macro(check_cpu_feature FLAG TEST_SOURCE RESULT_VAR)
     endif()
 endmacro()
 
-check_cpu_feature("-mpopcnt"
-    "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
-    CPU_SUPPORTS_POPCNT)
-if (CPU_SUPPORTS_POPCNT)
-    add_compile_options(-mpopcnt)
+if (MSVC)
+    set(AVX2_FLAG "/arch:AVX2")
+    set(AVX512BW_FLAG "/arch:AVX512")
+else()
+    set(AVX2_FLAG "-mavx2")
+    set(AVX512BW_FLAG "-mavx512bw")
 endif()
 
-check_cpu_feature("-mbmi"
-    "#include <immintrin.h>\nint main() { return _tzcnt_u64(8) != 3; }"
-    CPU_SUPPORTS_BMI)
-if (CPU_SUPPORTS_BMI)
-    add_compile_options(-mbmi)
+if (NOT MSVC)
+    check_cpu_feature("-mpopcnt"
+        "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
+        CPU_SUPPORTS_POPCNT)
+    if (CPU_SUPPORTS_POPCNT)
+        add_compile_options(-mpopcnt)
+    endif()
+
+    check_cpu_feature("-mbmi"
+        "#include <immintrin.h>\nint main() { return _tzcnt_u64(8) != 3; }"
+        CPU_SUPPORTS_BMI)
+    if (CPU_SUPPORTS_BMI)
+        add_compile_options(-mbmi)
+    endif()
+
+    check_cpu_feature("-mlzcnt"
+        "#include <immintrin.h>\nint main() { return _lzcnt_u64(1) != 63; }"
+        CPU_SUPPORTS_LZCNT)
+    if (CPU_SUPPORTS_LZCNT)
+        add_compile_options(-mlzcnt)
+    endif()
 endif()
 
-check_cpu_feature("-mlzcnt"
-    "#include <immintrin.h>\nint main() { return _lzcnt_u64(1) != 63; }"
-    CPU_SUPPORTS_LZCNT)
-if (CPU_SUPPORTS_LZCNT)
-    add_compile_options(-mlzcnt)
-endif()
-
-check_cpu_feature("-mavx2"
+check_cpu_feature("${AVX2_FLAG}"
     "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
     CPU_SUPPORTS_AVX2)
 if (CPU_SUPPORTS_AVX2)
-    add_compile_options(-mavx2)
+    add_compile_options(${AVX2_FLAG})
 endif()
 
-check_cpu_feature("-mavx512bw"
-    "#include <immintrin.h>\nint main() { __m512i v = _mm512_set1_epi8(1); return (int)_mm512_reduce_add_epi32(_mm512_setzero_si512()); }"
+check_cpu_feature("${AVX512BW_FLAG}"
+    "#include <immintrin.h>\nint main() { __m512i v = _mm512_setzero_si512(); return _mm512_cvtsi512_si32(v); }"
     CPU_SUPPORTS_AVX512BW)
 if (CPU_SUPPORTS_AVX512BW)
-    add_compile_options(-mavx512bw)
+    add_compile_options(${AVX512BW_FLAG})
 endif()
 
 add_library(core INTERFACE)
