@@ -6,6 +6,7 @@
 - Use `_MSC_VER` intrinsics alongside GCC/Clang builtins where needed
 - Never use compiler-specific builtins without providing alternatives for other compilers
 - cross-platform code shall be separated into functions in _port.hpp.
+- _BrowserStore will only compile with emscripten
 
 ## Project Conventions
 - C++ header-only trie database with CMake + Ninja build system
