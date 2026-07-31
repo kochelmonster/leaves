@@ -4,8 +4,6 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <random>
-#include <dirent.h>
-#include <unistd.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -3435,8 +3433,8 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_last_merge) {
 
   std::string dst_path = std::string(dir) + "/last_dst.bin";
   std::string src_path = std::string(dir) + "/last_src.bin";
-  if (::access(dst_path.c_str(), R_OK) != 0 ||
-      ::access(src_path.c_str(), R_OK) != 0) {
+  if (!file_is_readable(dst_path.c_str()) ||
+      !file_is_readable(src_path.c_str())) {
     std::cout << "test_merger_repro_bench_last_merge: SKIP (no dumps in "
               << dir << ")\n";
     return;
