@@ -30,6 +30,7 @@ Browser storage backend built on browser persistence and async execution.
 #include <emscripten/val.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -330,7 +331,7 @@ struct _BrowserOperations : _CacheBase {
     uint32_t sanitize_generation;  // incremented on each storage open
     uint16_t db_entry_count;       // entries used in first directory page
     offset_t db_next_page;         // link to overflow directory page (0 = none)
-    DBEntry dbs[];                 // flexible array fills to 4K boundary
+    DBEntry dbs[1];                // trailing storage fills to 4K boundary
 
     FileHeader()
         : signature{},
@@ -344,7 +345,7 @@ struct _BrowserOperations : _CacheBase {
       std::memset(signature, 0, sizeof(signature));
       std::strcpy(signature, BROWSERSTORE_SIGNATURE);
       area_pool.init();
-      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - offsetof(FileHeader, dbs));
       std::memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };

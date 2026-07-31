@@ -743,7 +743,7 @@ class Benchmark {
       rocksdb::Slice mkey;
       if (FLAGS_binary_key) {
         uint64_t bk = native_to_big((uint64_t)(uint32_t)k + (uint64_t)FLAGS_num);
-        __builtin_memcpy(key, &bk, sizeof(bk));
+        std::memcpy(key, &bk, sizeof(bk));
         mkey = rocksdb::Slice(key, sizeof(uint64_t));
       } else {
         std::snprintf(key, sizeof(key), "%016d.", k);
@@ -784,7 +784,7 @@ class Benchmark {
       rocksdb::Slice mkey;
       if (FLAGS_binary_key) {
         uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
-        __builtin_memcpy(key, &bk, sizeof(bk));
+        std::memcpy(key, &bk, sizeof(bk));
         mkey = rocksdb::Slice(key, sizeof(uint64_t));
       } else {
         std::snprintf(key, sizeof(key), "%016d", k);

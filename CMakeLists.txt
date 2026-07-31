@@ -62,7 +62,6 @@ if(EMSCRIPTEN)
         include/leaves/db.hpp
         include/leaves/cursor.hpp
     )
-    target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
     if(LEAVES_ASYNC_BACKEND STREQUAL "ASYNCIFY")
         target_compile_definitions(wasm_core INTERFACE LEAVES_ASYNCIFY)
     endif()
@@ -180,7 +179,6 @@ option(LEAVES_GCOV "Add gconv support for tests" ${LEAVES_REPOSITORY_OPTION_DEFA
 option(LEAVES_ASAN "Build tests with AddressSanitizer" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
-option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded)" OFF)
 option(LEAVES_LOG "Enable leaves logging macros for consumers" OFF)
 
 
@@ -210,6 +208,14 @@ macro(check_cpu_feature FLAG TEST_SOURCE RESULT_VAR)
     endif()
 endmacro()
 
+if (MSVC)
+    set(AVX2_FLAG "/arch:AVX2")
+    set(AVX512BW_FLAG "/arch:AVX512")
+else()
+    set(AVX2_FLAG "-mavx2")
+    set(AVX512BW_FLAG "-mavx512bw")
+endif()
+
 if (NOT MSVC)
     check_cpu_feature("-mpopcnt"
         "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
@@ -231,22 +237,22 @@ if (NOT MSVC)
     if (CPU_SUPPORTS_LZCNT)
         add_compile_options(-mlzcnt)
     endif()
+endif()
 
-    # Check for AVX2 support (32-byte SIMD operations)
-    check_cpu_feature("-mavx2"
-        "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
-        CPU_SUPPORTS_AVX2)
-    if (CPU_SUPPORTS_AVX2)
-        add_compile_options(-mavx2)
-    endif()
+# Check for AVX2 support (32-byte SIMD operations)
+check_cpu_feature("${AVX2_FLAG}"
+    "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
+    CPU_SUPPORTS_AVX2)
+if (CPU_SUPPORTS_AVX2)
+    add_compile_options(${AVX2_FLAG})
+endif()
 
-    # Check for AVX-512 support (64-byte SIMD operations)
-    check_cpu_feature("-mavx512bw"
-        "#include <immintrin.h>\nint main() { __m512i v = _mm512_set1_epi8(1); return (int)_mm512_reduce_add_epi32(_mm512_setzero_si512()); }"
-        CPU_SUPPORTS_AVX512BW)
-    if (CPU_SUPPORTS_AVX512BW)
-        add_compile_options(-mavx512bw)
-    endif()
+# Check for AVX-512 support (64-byte SIMD operations)
+check_cpu_feature("${AVX512BW_FLAG}"
+    "#include <immintrin.h>\nint main() { __m512i v = _mm512_setzero_si512(); return _mm512_cvtsi512_si32(v); }"
+    CPU_SUPPORTS_AVX512BW)
+if (CPU_SUPPORTS_AVX512BW)
+    add_compile_options(${AVX512BW_FLAG})
 endif()
 
 
@@ -287,10 +293,6 @@ endif()
 
 if (TARGET Boost::process)
     target_link_libraries(leaves INTERFACE Boost::process)
-endif()
-
-if (LEAVES_SINGLE_PROCESS)
-    target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
 endif()
 
 if (LEAVES_LOG)
@@ -447,8 +449,16 @@ target_link_libraries(test_merger PUBLIC core leaves_test_support)
 add_executable(test_tributary tests/test_tributary.cpp)
 target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
+add_executable(test_multiprocess_helper tests/test_multiprocess_helper.cpp)
+target_link_libraries(test_multiprocess_helper PUBLIC core Threads::Threads)
+
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support Threads::Threads)
+target_compile_definitions(test_multiprocess PRIVATE
+    LEAVES_MP_HELPER_NAME="$<TARGET_FILE_NAME:test_multiprocess_helper>")
+if (TARGET Boost::process)
+    target_link_libraries(test_multiprocess PUBLIC Boost::process)
+endif()
 
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
@@ -502,10 +512,11 @@ foreach(target IN ITEMS
     test_replication_api
     test_tributary
     test_multithread
-    test_multiprocess
     test_replication_multiclient)
     leaves_add_test(${target} TIMEOUT 180 LABELS "native;integration")
 endforeach()
+
+leaves_add_test(test_multiprocess TIMEOUT 180 LABELS "native;integration")
 
 add_executable(profile tests/profile.cpp)
 
@@ -651,14 +662,14 @@ target_link_libraries(bench_merge PUBLIC core Threads::Threads blake3)
 if (NOT MSVC)
 target_compile_options(bench_merge PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 endif()
-target_compile_definitions(bench_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+target_compile_definitions(bench_merge PRIVATE NDEBUG)
 
 add_executable(bench_overwrite_vs_merge benchmarks/bench_overwrite_vs_merge.cpp)
 target_link_libraries(bench_overwrite_vs_merge PUBLIC core Threads::Threads blake3)
 if (NOT MSVC)
 target_compile_options(bench_overwrite_vs_merge PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 endif()
-target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG)
 
 if (DEBUG_BENCHMARKS)
     if (MSVC)
@@ -673,7 +684,7 @@ if (DEBUG_BENCHMARKS)
 else()
     if (NOT MSVC)
     target_compile_options(db_bench_leaves PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
-    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
     target_compile_options(db_bench_memory PUBLIC ${LEAVES_BENCH_NATIVE_FLAG} -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
     endif()
