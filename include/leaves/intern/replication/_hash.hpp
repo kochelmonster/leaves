@@ -95,10 +95,10 @@ struct HashTrieTraits : BaseTraits {
   using hash_t = uint8_t[HASH_SIZE];
 
   // Minimum hash leaf size (NONE-branch: key_size=0, value_size=0).
-  // Non-NONE branch leaves have key_size=1 (data[0] = branch char) and are
-  // allocated as sizeof(HashLeafNode) + 1 bytes.
-  static constexpr uint16_t HASH_LEAF_SIZE =
-      sizeof(_LeafNode<HashTrieTraits>);  // NONE-branch minimum
+    // Non-NONE branch leaves have key_size=1 (data[0] = branch char) and are
+    // allocated as HASH_LEAF_SIZE + 1 bytes.
+    static constexpr uint16_t HASH_LEAF_SIZE =
+      _LeafNode<HashTrieTraits>::HEADER_SIZE;  // NONE-branch minimum
 };
 
 // Hash Updater — data/hash trie sync

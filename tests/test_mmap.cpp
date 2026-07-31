@@ -196,7 +196,6 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
     BOOST_FAIL("Expected NoProcess exception not thrown");
   }
 
-#ifndef LEAVES_SINGLE_PROCESS
   for(int i = 0; i < db.MAX_PROCESSES; i++) {
     if (!db._memory->processes[i])
       db._memory->processes[i] = db._pid;
@@ -211,7 +210,6 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
   catch(...) {
     BOOST_FAIL("Expected NoProcess exception not thrown");
   }
-#endif
 
   // Test max_processes mismatch detection
   db._memory->max_processes = db.MAX_PROCESSES + 1;

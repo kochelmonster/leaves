@@ -5,6 +5,8 @@
 - Use the `LEAVES_X86_64`, `LEAVES_ARM64` macros defined in `_util.hpp` for platform detection
 - Use `_MSC_VER` intrinsics alongside GCC/Clang builtins where needed
 - Never use compiler-specific builtins without providing alternatives for other compilers
+- cross-platform code shall be separated into functions in _port.hpp.
+- _BrowserStore will only compile with emscripten
 
 ## Project Conventions
 - C++ header-only trie database with CMake + Ninja build system

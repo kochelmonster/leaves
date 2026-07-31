@@ -105,7 +105,10 @@ inline bool _wal_pread(_wal_fd_t fd, uint64_t off, void* data, size_t size) {
 }
 inline void _wal_sync(_wal_fd_t fd) { (void)leaves::sync_fd_data(fd); }
 inline void _wal_truncate(_wal_fd_t fd, uint64_t size) {
-  (void)leaves::resize_fd(fd, size);  // best effort
+  try {
+    leaves::resize_fd(fd, size);  // best effort
+  } catch (const FileError&) {
+  }
 }
 
 // ---------------------------------------------------------------------------

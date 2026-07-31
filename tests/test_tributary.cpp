@@ -10,7 +10,6 @@
 #include <random>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 #include "../include/leaves/intern/multi/_confluence_db.hpp"
@@ -692,7 +691,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
             "-ex 'print/x *_lock' "
             "-ex 'print _lock' "
             "-ex detach 2>&1 | tee /tmp/leaves_deadlock_stacks.txt",
-            (int)getpid());
+          static_cast<int>(get_process_id()));
         auto result = std::system(cmd);
         if (result != 0) {
           std::fprintf(stderr, "gdb failed with exit code %d\n", result);
