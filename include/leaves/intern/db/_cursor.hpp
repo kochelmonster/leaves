@@ -699,10 +699,12 @@ struct _TransactionalCursor
     [[maybe_unused]] bool r = start_transaction();
     assert(r);
 
-    const Transition& back = this->stack.back();
-    if (this->is_valid() && back.leaf()->is_big()) {
-      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-      get_bigmemory().free(bvalue);
+    if (this->is_valid()) {
+      const Transition& back = this->stack.back();
+      if (back.leaf()->is_big()) {
+        BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+        get_bigmemory().free(bvalue);
+      }
     }
 
     // Account for inline aspect metadata alongside _BigValue
