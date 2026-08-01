@@ -236,13 +236,10 @@ struct _MemoryMapFile
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
       fhead.close();
-      uint64_t fsize =
-          AREA_SIZE;  // reserve first area for header + overflow dir pages
-  #ifdef _WIN32
-    leaves::ensure_file_size_at_least(path, map_size, true);
-  #else
-    std::filesystem::resize_file(path, fsize);
-  #endif
+      
+      // reserve first area for header + overflow dir pages
+      uint64_t fsize = AREA_SIZE;  
+      std::filesystem::resize_file(path, fsize);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
@@ -267,10 +264,6 @@ struct _MemoryMapFile
                         MMAP_SIGNATURE, signature));
 
       fin.close();
-    #ifdef _WIN32
-      leaves::ensure_file_size_at_least(path, map_size);
-    #endif
-
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();
@@ -573,7 +566,7 @@ struct _MemoryMapFile
   template <template <typename> class DBClass = _DB, typename... Args>
   DBClass<MemoryMapFile>* open(std::string_view name, Args&&... args) {
     using DB = DBClass<MemoryMapFile>;
-    if (name.size() >= sizeof(DBEntry::name)) throw KeyTooBig();
+    if (name.size() >= sizeof(DBEntry{}.name)) throw KeyTooBig();
     const std::string db_name(name);
 
     std::scoped_lock flock_guard(file_lock());
@@ -637,8 +630,8 @@ struct _MemoryMapFile
       }
     }
 
-    std::strncpy(free_slot->name, db_name.c_str(), sizeof(DBEntry::name) - 1);
-    free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
+    std::strncpy(free_slot->name, db_name.c_str(), sizeof(free_slot->name) - 1);
+    free_slot->name[sizeof(free_slot->name) - 1] = '\0';
     auto* db =
         new DB(_self(), &free_slot->offset, name, std::forward<Args>(args)...);
     db->_header->sanitize_generation = _memory->sanitize_generation;

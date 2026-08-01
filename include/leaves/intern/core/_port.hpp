@@ -305,31 +305,6 @@ FORCE_INLINE bool read_fd_all_at(int fd, uint64_t offset, void* dst, size_t n) {
 #endif
 }
 
-FORCE_INLINE void resize_fd(int fd, uint64_t new_size);
-
-FORCE_INLINE void ensure_file_size_at_least(const char* path, uint64_t min_size,
-                                           bool create = false) {
-  int fd = open_rw_fd(path, create);
-  if (!fd_valid(fd)) {
-    int err = errno ? errno : EIO;
-    throw FileError("Failed to open file '" + std::string(path) + "': " +
-                        errno_message(err),
-                    err);
-  }
-
-  uint64_t current_size = fd_size(fd);
-  if (current_size < min_size) {
-    try {
-      resize_fd(fd, min_size);
-    } catch (...) {
-      close_fd(fd);
-      throw;
-    }
-  }
-
-  close_fd(fd);
-}
-
 namespace detail {
 
 FORCE_INLINE unsigned count_trailing_zeros_32(uint32_t x) {
