@@ -6,9 +6,12 @@ Platform portability macros and compiler-specific compatibility helpers.
 
 #include <algorithm>
 #include <cerrno>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
+#include <limits>
 #include <string>
 
 #include "_exception.hpp"
@@ -17,6 +20,7 @@ Platform portability macros and compiler-specific compatibility helpers.
 #include <fcntl.h>
 #include <io.h>
 #include <share.h>
+#include <winioctl.h>
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -218,9 +222,74 @@ FORCE_INLINE uint64_t fd_size(int fd) {
 #endif
 }
 
+FORCE_INLINE bool mark_fd_sparse(int fd, unsigned long* win_error = nullptr) {
+  assert(win_error);
+#ifdef _WIN32
+  assert(fd_valid(fd));
+  *win_error = 0;
+
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) {
+    errno = EBADF;
+    *win_error = ERROR_INVALID_HANDLE;
+    return false;
+  }
+
+  HANDLE handle = reinterpret_cast<HANDLE>(os_handle);
+  DWORD bytes = 0;
+  if (!::DeviceIoControl(handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0,
+                         &bytes, nullptr)) {
+    *win_error = ::GetLastError();
+    errno = EIO;
+    return false;
+  }
+  return true;
+#else
+  *win_error = 0;
+  return true;
+#endif
+}
+
+FORCE_INLINE void resize_fd(int fd, uint64_t new_size);
+
+FORCE_INLINE void prepare_windows_sparse_mapping_file(const char* path,
+                                                      uint64_t target_size) {
+#ifdef _WIN32
+  int setup_fd = open_rw_fd(path, false);
+  if (!fd_valid(setup_fd)) {
+    int err = errno ? errno : EBADF;
+    throw FileError(std::format("Failed to open mmap file '{}' for setup",
+                                path),
+                    err);
+  }
+
+  struct _fd_guard {
+    int fd;
+    ~_fd_guard() { close_fd(fd); }
+  } fd_guard{setup_fd};
+
+  unsigned long win_error = 0;
+  if (!mark_fd_sparse(setup_fd, &win_error)) {
+    int err = errno ? errno : EIO;
+    throw FileError(
+        std::format("Failed to mark mmap file '{}' as sparse (winerr={})",
+                    path, win_error),
+        err);
+  }
+
+  uint64_t current_size = fd_size(setup_fd);
+  if (current_size < target_size) {
+    resize_fd(setup_fd, target_size);
+  }
+#else
+  (void)path;
+  (void)target_size;
+#endif
+}
+
 FORCE_INLINE bool write_fd_all_at(int fd, uint64_t offset, const void* src,
                                   size_t n) {
-  if (!fd_valid(fd)) return false;
+  assert(fd_valid(fd));
   const char* p = static_cast<const char*>(src);
   size_t remaining = n;
 
@@ -263,7 +332,7 @@ FORCE_INLINE bool write_fd_all_at(int fd, uint64_t offset, const void* src,
 }
 
 FORCE_INLINE bool read_fd_all_at(int fd, uint64_t offset, void* dst, size_t n) {
-  if (!fd_valid(fd)) return false;
+  assert(fd_valid(fd));
   char* p = static_cast<char*>(dst);
   size_t remaining = n;
 
@@ -413,12 +482,57 @@ FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
   assert(fd_valid(fd));
   
 #ifdef _WIN32
-  errno_t rc = _chsize_s(fd, new_size);
-  if (rc != 0) {
-    int err = static_cast<int>(rc);
+  if (new_size > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)())) {
+    int err = EINVAL;
+    errno = err;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) +
+            " bytes: size exceeds signed 64-bit Windows API limit",
+        err);
+  }
+
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) {
+    int err = errno ? errno : EBADF;
+    errno = err;
     throw FileError(
         "Failed to resize file descriptor " + std::to_string(fd) + " to " +
         std::to_string(new_size) + " bytes: " + errno_message(err),
+        err);
+  }
+
+  HANDLE handle = reinterpret_cast<HANDLE>(os_handle);
+  FILE_END_OF_FILE_INFO eof_info{};
+  eof_info.EndOfFile.QuadPart = static_cast<LONGLONG>(new_size);
+
+  if (!::SetFileInformationByHandle(handle, FileEndOfFileInfo, &eof_info,
+                                    sizeof(eof_info))) {
+    DWORD win_error = ::GetLastError();
+    int err = EIO;
+    switch (win_error) {
+      case ERROR_ACCESS_DENIED:
+        err = EACCES;
+        break;
+      case ERROR_INVALID_HANDLE:
+        err = EBADF;
+        break;
+      case ERROR_INVALID_PARAMETER:
+        err = EINVAL;
+        break;
+      case ERROR_DISK_FULL:
+      case ERROR_HANDLE_DISK_FULL:
+        err = ENOSPC;
+        break;
+      default:
+        break;
+    }
+    errno = err;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) + " bytes (winerr=" +
+            std::to_string(static_cast<unsigned long>(win_error)) +
+            "): " + errno_message(err),
         err);
   }
 #else
@@ -433,12 +547,7 @@ FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
 }
 
 FORCE_INLINE void sync_fd_data(int fd) {
-  if (!fd_valid(fd)) {
-    int err = EBADF;
-    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
-                        ": " + errno_message(err),
-                    err);
-  }
+  assert(fd_valid(fd));
 #ifdef _WIN32
   if (_commit(fd) != 0) {
     int err = errno ? errno : EIO;
