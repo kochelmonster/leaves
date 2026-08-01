@@ -179,6 +179,11 @@ option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ${LEAVES_REPOSITORY_OPTION_
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_LOG "Enable leaves logging macros for consumers" OFF)
 
+if (MSVC AND LEAVES_GCOV)
+    message(STATUS "LEAVES_GCOV is not supported with MSVC; disabling it")
+    set(LEAVES_GCOV OFF CACHE BOOL "Add gconv support for tests" FORCE)
+endif()
+
 
 include(CheckCXXCompilerFlag)
 include(CheckCXXSourceRuns)
@@ -207,6 +212,7 @@ macro(check_cpu_feature FLAG TEST_SOURCE RESULT_VAR)
 endmacro()
 
 if (MSVC)
+    add_compile_options(/wd4996)
     set(AVX2_FLAG "/arch:AVX2")
     set(AVX512BW_FLAG "/arch:AVX512")
 else()
@@ -334,7 +340,7 @@ target_include_directories(leaves_test_support
 target_include_directories(leaves_test_support INTERFACE src)
 target_link_libraries(leaves_test_support INTERFACE core)
 if (MSVC)
-    target_compile_options(leaves_test_support INTERFACE /Zi)
+    target_compile_options(leaves_test_support INTERFACE /Zi /wd4996)
 else()
     target_compile_options(leaves_test_support INTERFACE -g -O0)
 endif()
@@ -348,12 +354,10 @@ endif()
 
 target_sources(leaves_test_support INTERFACE tests/test.hpp)
 
-if (LEAVES_GCOV)
-if (NOT MSVC)
+if (LEAVES_GCOV AND NOT MSVC)
 target_compile_options(leaves_test_support INTERFACE -g --coverage)
 target_compile_definitions(leaves_test_support INTERFACE DEBUG GCOV_ENABLED)
 target_link_options(leaves_test_support INTERFACE --coverage)
-endif()
 else (LEAVES_GCOV)
 if (MSVC)
 target_compile_options(leaves_test_support INTERFACE /Zi)
@@ -532,6 +536,7 @@ add_executable(ycsb-debug tests/ycsb-bug/ycsb-debug.cpp)
 target_link_libraries(ycsb-debug PUBLIC core)
 
 set(LEAVES_GCOV_TOOL "")
+if (LEAVES_GCOV AND NOT MSVC)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(_leaves_gcov_candidates "")
     if (CMAKE_CXX_COMPILER_VERSION)
@@ -604,6 +609,7 @@ COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
 DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
 )
+endif()
 
 endif(LEAVES_BUILD_TESTS)
 
@@ -643,12 +649,19 @@ target_sources(lbench INTERFACE
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb Threads::Threads blake3)
 
+if(NOT MSVC)
+find_path(LEAVES_LMDB_INCLUDE_DIR NAMES lmdb.h)
+find_library(LEAVES_LMDB_LIBRARY NAMES lmdb liblmdb)
+if (LEAVES_LMDB_INCLUDE_DIR AND LEAVES_LMDB_LIBRARY)
 add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
-target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb Threads::Threads)
-if (NOT MSVC)
+target_include_directories(db_bench_mdb PRIVATE ${LEAVES_LMDB_INCLUDE_DIR})
+target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb ${LEAVES_LMDB_LIBRARY} Threads::Threads)
 target_compile_options(db_bench_mdb PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
-endif()
 target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
+else()
+message(STATUS "LMDB not found (lmdb.h + library), skipping db_bench_mdb")
+endif()
+endif() # NOT MSVC (lmdb)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb Threads::Threads)
@@ -691,6 +704,7 @@ endif()
 
 
 # Check for RocksDB and add benchmark if available
+if(NOT MSVC)
 find_path(ROCKSDB_INCLUDE_DIR rocksdb/db.h)
 if(ROCKSDB_INCLUDE_DIR)
     find_library(ROCKSDB_LIBRARY rocksdb)
@@ -706,9 +720,7 @@ if(ROCKSDB_INCLUDE_DIR)
         add_executable(db_bench_rocksdb benchmarks/db_bench_rocksdb.cpp)
         target_compile_definitions(db_bench_rocksdb PUBLIC NDEBUG)
         target_link_libraries(db_bench_rocksdb PUBLIC ${ROCKSDB_LIBRARY} rocksdb_histogram Threads::Threads)
-        if (NOT MSVC)
         target_compile_options(db_bench_rocksdb PUBLIC ${LEAVES_BENCH_NATIVE_FLAG} -O3 -g -flto=auto -funroll-loops -ffast-math)
-        endif()
         target_include_directories(db_bench_rocksdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/leveldb)
     else()
         message(STATUS "RocksDB headers found but library not found")
@@ -716,6 +728,7 @@ if(ROCKSDB_INCLUDE_DIR)
 else()
     message(STATUS "RocksDB not found - skipping db_bench_rocksdb")
 endif()
+endif() # NOT MSVC (rocksdb)
 
 
 endif (LEAVES_BUILD_BENCHMARKS) 
