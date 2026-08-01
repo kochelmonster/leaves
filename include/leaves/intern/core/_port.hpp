@@ -9,15 +9,18 @@ Platform portability macros and compiler-specific compatibility helpers.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "_exception.hpp"
 
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <share.h>
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #endif
 
@@ -103,6 +106,23 @@ FORCE_INLINE uint32_t get_process_id() {
 #endif
 }
 
+FORCE_INLINE bool process_is_alive(uint32_t pid) {
+  if (pid == 0) return false;
+#ifdef _WIN32
+  HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                 static_cast<DWORD>(pid));
+  if (process) {
+    ::CloseHandle(process);
+    return true;
+  }
+  // Access denied still means the process exists but we cannot query it.
+  return ::GetLastError() == ERROR_ACCESS_DENIED;
+#else
+  if (::kill(static_cast<pid_t>(pid), 0) == 0) return true;
+  return errno == EPERM;
+#endif
+}
+
 FORCE_INLINE bool file_is_readable(const char* path) {
 #ifdef _WIN32
   return _access(path, 4) == 0;
@@ -111,13 +131,31 @@ FORCE_INLINE bool file_is_readable(const char* path) {
 #endif
 }
 
+FORCE_INLINE std::string errno_message(int err) {
+#ifdef _WIN32
+  char buffer[128] = {};
+  if (::strerror_s(buffer, sizeof(buffer), err) == 0) {
+    return std::string(buffer);
+  }
+  return std::string("errno ") + std::to_string(err);
+#else
+  const char* msg = std::strerror(err);
+  if (msg) return std::string(msg);
+  return std::string("errno ") + std::to_string(err);
+#endif
+}
+
 FORCE_INLINE int open_rw_fd(const char* path, bool create = false) {
 #ifdef _WIN32
   int flags = _O_RDWR | _O_BINARY;
-  if (create) {
-    return _open(path, flags | _O_CREAT, _S_IREAD | _S_IWRITE);
+  if (create) flags |= _O_CREAT;
+  int fd = LEAVES_INVALID_FD;
+  errno_t rc = _sopen_s(&fd, path, flags, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+  if (rc != 0) {
+    errno = static_cast<int>(rc);
+    return LEAVES_INVALID_FD;
   }
-  return _open(path, flags);
+  return fd;
 #else
   int flags = O_RDWR;
   if (create) flags |= O_CREAT;
@@ -267,6 +305,31 @@ FORCE_INLINE bool read_fd_all_at(int fd, uint64_t offset, void* dst, size_t n) {
 #endif
 }
 
+FORCE_INLINE void resize_fd(int fd, uint64_t new_size);
+
+FORCE_INLINE void ensure_file_size_at_least(const char* path, uint64_t min_size,
+                                           bool create = false) {
+  int fd = open_rw_fd(path, create);
+  if (!fd_valid(fd)) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to open file '" + std::string(path) + "': " +
+                        errno_message(err),
+                    err);
+  }
+
+  uint64_t current_size = fd_size(fd);
+  if (current_size < min_size) {
+    try {
+      resize_fd(fd, min_size);
+    } catch (...) {
+      close_fd(fd);
+      throw;
+    }
+  }
+
+  close_fd(fd);
+}
+
 namespace detail {
 
 FORCE_INLINE unsigned count_trailing_zeros_32(uint32_t x) {
@@ -380,7 +443,7 @@ FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
     int err = static_cast<int>(rc);
     throw FileError(
         "Failed to resize file descriptor " + std::to_string(fd) + " to " +
-            std::to_string(new_size) + " bytes: " + std::strerror(err),
+        std::to_string(new_size) + " bytes: " + errno_message(err),
         err);
   }
 #else
@@ -388,7 +451,7 @@ FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
     int err = errno ? errno : EIO;
     throw FileError(
         "Failed to resize file descriptor " + std::to_string(fd) + " to " +
-            std::to_string(new_size) + " bytes: " + std::strerror(err),
+        std::to_string(new_size) + " bytes: " + errno_message(err),
         err);
   }
 #endif
@@ -398,28 +461,28 @@ FORCE_INLINE void sync_fd_data(int fd) {
   if (!fd_valid(fd)) {
     int err = EBADF;
     throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
-                        ": " + std::strerror(err),
+                        ": " + errno_message(err),
                     err);
   }
 #ifdef _WIN32
   if (_commit(fd) != 0) {
     int err = errno ? errno : EIO;
     throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
-                        ": " + std::strerror(err),
+                        ": " + errno_message(err),
                     err);
   }
 #elif defined(__APPLE__)
   if (::fsync(fd) != 0) {
     int err = errno ? errno : EIO;
     throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
-                        ": " + std::strerror(err),
+                        ": " + errno_message(err),
                     err);
   }
 #else
   if (::fdatasync(fd) != 0) {
     int err = errno ? errno : EIO;
     throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
-                        ": " + std::strerror(err),
+                        ": " + errno_message(err),
                     err);
   }
 #endif

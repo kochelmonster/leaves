@@ -1,5 +1,8 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.22)
 cmake_policy(SET CMP0076 NEW)
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
 
 project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 
@@ -153,11 +156,6 @@ endif()
 
 # ── Native build ───────────────────────────────────────────────
 find_package(Boost 1.80 REQUIRED)
-if (TARGET Boost::process)
-    set(HAVE_BOOST_PROCESS TRUE)
-else()
-    set(HAVE_BOOST_PROCESS FALSE)
-endif()
 
 if(Boost_FOUND)
     message(STATUS "Found Boost version ${Boost_VERSION}")
@@ -291,10 +289,6 @@ else()
     target_include_directories(leaves INTERFACE ${Boost_INCLUDE_DIRS})
 endif()
 
-if (TARGET Boost::process)
-    target_link_libraries(leaves INTERFACE Boost::process)
-endif()
-
 if (LEAVES_LOG)
     target_compile_definitions(leaves INTERFACE LEAVES_LOG)
 endif()
@@ -375,6 +369,11 @@ target_compile_options(leaves_test_support INTERFACE -fsanitize=address -fno-omi
 target_link_options(leaves_test_support INTERFACE -fsanitize=address)
 endif()
 endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
+
+find_package(Boost 1.80 REQUIRED COMPONENTS process)
+if (NOT TARGET Boost::process)
+    find_package(boost_process CONFIG REQUIRED)
+endif()
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE

@@ -12,7 +12,6 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <cerrno>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
-#include <boost/process/v2/pid.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -44,9 +43,6 @@ using boost::interprocess::open_only;
 using boost::interprocess::open_only_t;
 using boost::interprocess::read_only;
 using boost::interprocess::read_write;
-using boost::process::v2::all_pids;
-using boost::process::v2::current_pid;
-using boost::process::v2::pid_type;
 
 namespace leaves {
 
@@ -139,7 +135,7 @@ struct _MemoryMapFile
     size_t file_size;
     Mutex file_lock;
     AreaPool area_pool;  // pool for both single and multi areas
-    pid_type processes[MAX_PROCESSES];
+    uint32_t processes[MAX_PROCESSES];
     std::atomic<int64_t> last_cursor_id;
     uint32_t sanitize_generation;  // incremented when first process opens file
     uint32_t
@@ -174,7 +170,7 @@ struct _MemoryMapFile
   file_mapping _file;
   mapped_region _region;
   FileHeader* _memory;
-  pid_type _pid;
+  uint32_t _pid;
   // Duplicated from Boost mapping handle; owned/closed by close_write_fd().
   int _write_fd;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
@@ -187,7 +183,7 @@ struct _MemoryMapFile
                  size_t pool_threads = SIZE_MAX,
                  uint32_t copy_write_threshold = 0)
       : PoolMixin(_lazy_pool), _write_fd(LEAVES_INVALID_FD) {
-    _pid = current_pid();
+    _pid = get_process_id();
     init_dbfile(path, map_size, copy_write_threshold);
     if (pool_threads != SIZE_MAX) {
       size_t n = pool_threads;
@@ -242,7 +238,11 @@ struct _MemoryMapFile
       fhead.close();
       uint64_t fsize =
           AREA_SIZE;  // reserve first area for header + overflow dir pages
-      std::filesystem::resize_file(path, fsize);
+  #ifdef _WIN32
+    leaves::ensure_file_size_at_least(path, map_size, true);
+  #else
+    std::filesystem::resize_file(path, fsize);
+  #endif
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
@@ -258,13 +258,18 @@ struct _MemoryMapFile
       }
       _region.flush();
     } else {
-      std::ifstream fin(path);
+      std::ifstream fin(path, std::ios::binary);
       char signature[sizeof(MMAP_SIGNATURE)];
       fin.read(signature, sizeof(signature));
       if (strcmp(signature, MMAP_SIGNATURE))
         throw TypeMismatch(
             std::format("Invalid database signature: expected '{}' got '{}'",
                         MMAP_SIGNATURE, signature));
+
+      fin.close();
+    #ifdef _WIN32
+      leaves::ensure_file_size_at_least(path, map_size);
+    #endif
 
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
@@ -405,7 +410,7 @@ struct _MemoryMapFile
       }
     }
     if (!placed) throw NoProcess();
-    if (std::filesystem::file_size(filename()) != _memory->file_size)
+    if (std::filesystem::file_size(filename()) < _memory->file_size)
       resize_backing_file(_memory->file_size);
 
     if (_region.get_size() < _memory->file_size) {
@@ -414,13 +419,10 @@ struct _MemoryMapFile
   }
 
   bool sanitize_processes() {
-    auto ap = all_pids();
-    std::sort(ap.begin(), ap.end());
-
     int free_count = 0;
     for (int i = 0; i < MAX_PROCESSES; i++) {
       if (_memory->processes[i]) {
-        if (!std::binary_search(ap.begin(), ap.end(), _memory->processes[i])) {
+        if (!process_is_alive(_memory->processes[i])) {
           _memory->processes[i] = 0;
           free_count++;
         }
@@ -518,7 +520,8 @@ struct _MemoryMapFile
 
     offset_t new_offset = _memory->file_size;
     _memory->file_size = _memory->file_size + total_growth;
-    resize_backing_file(_memory->file_size);
+    if (std::filesystem::file_size(filename()) < _memory->file_size)
+      resize_backing_file(_memory->file_size);
 
     // Create Area for the requested size
     auto area = area_ptr(resolve(&new_offset, WRITE));
