@@ -246,6 +246,43 @@
             ]
         },
         {
+            "name": "(cppvsdbg) test_mmap commit-sync",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/test_mmap.exe",
+            "args": [
+                "--run_test=test_commit_sync_triggers_fd_sync_after_direct_copy_write"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false
+        },
+        {
+            "name": "(cppvsdbg) test_mmap commit-sync (windows-msvc)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/windows-msvc/Debug/test_mmap.exe",
+            "args": [
+                "--run_test=test_commit_sync_triggers_fd_sync_after_direct_copy_write"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/windows-msvc",
+            "environment": [],
+            "externalConsole": false
+        },
+        {
+            "name": "(cppvsdbg) test_map_storage (windows-msvc)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/windows-msvc/Debug/test_map_storage.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/windows-msvc",
+            "environment": [],
+            "externalConsole": false
+        },
+        {
             "name": "Attach to test_fstore",
             "type": "cppdbg",
             "request": "attach",

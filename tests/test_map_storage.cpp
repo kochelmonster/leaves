@@ -2,6 +2,7 @@
 #define BOOST_TEST_MODULE MapStorageTest
 
 #include <boost/test/included/unit_test.hpp>
+#include <atomic>
 
 #ifndef TESTING
 #error "TESTING must be defined"
@@ -20,13 +21,18 @@ using namespace leaves;
 
 struct DirPreparation {
   DirPreparation() {
-    tempDir = std::filesystem::temp_directory_path() / "test_storage";
-    std::filesystem::remove_all(tempDir);
-    std::filesystem::create_directory(tempDir);
+    static std::atomic_uint64_t counter{0};
+    tempDir = std::filesystem::temp_directory_path() /
+              ("test_storage_" +
+               std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
+    std::filesystem::create_directories(tempDir);
   }
 
-  ~DirPreparation() { 
-    std::filesystem::remove_all(tempDir); 
+  ~DirPreparation() {
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
   }
 
   std::filesystem::path tempDir;
@@ -40,8 +46,7 @@ struct DirPreparation {
 std::vector<std::string> generate_random_strings(size_t count, size_t min_length = 5, size_t max_length = 50) {
   std::vector<std::string> strings;
   strings.reserve(count);
-  
-  std::random_device rd;
+
   std::mt19937 gen(42); // Fixed seed for reproducible tests
   std::uniform_int_distribution<> length_dist(min_length, max_length);
   std::uniform_int_distribution<> char_dist(32, 126); // Printable ASCII characters
@@ -125,7 +130,6 @@ void test_map_storage_random_insert_and_read(const std::string& db_path, const c
     
     // Shuffle the test strings for random access pattern
     auto shuffled_strings = test_strings;
-    std::random_device rd;
     std::mt19937 gen(123); // Different seed for read order
     std::shuffle(shuffled_strings.begin(), shuffled_strings.end(), gen);
     

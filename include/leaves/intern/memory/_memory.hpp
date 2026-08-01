@@ -23,6 +23,7 @@ and crash recovery.
 #include <cstddef>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <unordered_set>
 
 #include "../core/_bits.hpp"
@@ -41,13 +42,13 @@ constexpr uint16_t binary_search(const uint16_t* first, const uint16_t* last,
   const uint16_t *mid = first, *start = first;
   while (first < last) {
     mid = first + (last - first) / 2;
-    if (*mid == value) return mid - start;
+    if (*mid == value) return static_cast<uint16_t>(mid - start);
     if (*mid < value)
       first = mid + 1;
     else
       last = mid;
   }
-  return first - start;
+  return static_cast<uint16_t>(first - start);
 }
 
 // A configurable Structure to register memory pages.
@@ -331,7 +332,8 @@ struct Area : public AreaSlice {
 
   void init(offset_t area_offset, size_t area_size, offset_t next_area = 0) {
     offset(area_offset);
-    size(area_size);
+    assert(area_size <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
+    size(static_cast<uint32_t>(area_size));
     // Don't modify reference count - it's managed separately
     next = next_area;
   }
