@@ -240,6 +240,7 @@ struct _MemoryMapFile
       // reserve first area for header + overflow dir pages
       uint64_t fsize = AREA_SIZE;  
       std::filesystem::resize_file(path, fsize);
+      leaves::prepare_windows_sparse_mapping_file(path, map_size);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
@@ -264,6 +265,7 @@ struct _MemoryMapFile
                         MMAP_SIGNATURE, signature));
 
       fin.close();
+                  leaves::prepare_windows_sparse_mapping_file(path, map_size);
       _file = file_mapping(path, read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();

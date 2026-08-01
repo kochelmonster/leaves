@@ -18,6 +18,7 @@
 using namespace leaves;
 
 typedef _MemoryMapFile<_MemoryMapTraits> DBMMap;
+constexpr uint64_t TEST_MAP_SIZE = 100 * M;
 
 struct DirPreparation {
   DirPreparation() {
@@ -98,28 +99,28 @@ BOOST_AUTO_TEST_CASE(test_copy_write_pivot_path) {
 
   uint64_t before = db._copy_write_path_hits.load(std::memory_order_relaxed);
 
-    bool wrote = db.copy(mmap_dest, large.data(), large.size());
-    BOOST_CHECK(wrote);
+  bool wrote = db.copy(mmap_dest, large.data(), large.size());
+  BOOST_CHECK(wrote);
   BOOST_REQUIRE_EQUAL(std::memcmp(mmap_dest, large.data(), large.size()), 0);
   BOOST_CHECK_EQUAL(
       db._copy_write_path_hits.load(std::memory_order_relaxed), before + 1);
 
-    wrote = db.copy(mmap_dest + 4096, small_bytes.data(), small_bytes.size());
-    BOOST_CHECK(!wrote);
+  wrote = db.copy(mmap_dest + 4096, small_bytes.data(), small_bytes.size());
+  BOOST_CHECK(!wrote);
   BOOST_CHECK_EQUAL(
       db._copy_write_path_hits.load(std::memory_order_relaxed), before + 1);
 
   db._memory->copy_write_pivot_bytes = 0;
   std::vector<char> heap_dest(large.size(), 0);
-    wrote = db.copy(heap_dest.data(), large.data(), large.size());
-    BOOST_CHECK(!wrote);
+  wrote = db.copy(heap_dest.data(), large.data(), large.size());
+  BOOST_CHECK(!wrote);
   BOOST_REQUIRE_EQUAL(std::memcmp(heap_dest.data(), large.data(), large.size()),
                       0);
   BOOST_CHECK_EQUAL(
       db._copy_write_path_hits.load(std::memory_order_relaxed), before + 1);
 
-    wrote = db.copy(mmap_dest, large.data(), 0);
-    BOOST_CHECK(!wrote);
+  wrote = db.copy(mmap_dest, large.data(), 0);
+  BOOST_CHECK(!wrote);
 }
 
 BOOST_AUTO_TEST_CASE(test_commit_sync_triggers_fd_sync_after_direct_copy_write) {
@@ -148,10 +149,10 @@ BOOST_AUTO_TEST_CASE(test_constructor_copy_write_threshold) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "copy_write_threshold.lvs";
 
-  DBMMap db(narrow_path(dbFilePath).c_str(), 2 * G, SIZE_MAX, 12345);
+  DBMMap db(narrow_path(dbFilePath).c_str(), TEST_MAP_SIZE, SIZE_MAX, 12345);
   BOOST_CHECK_EQUAL(db._memory->copy_write_pivot_bytes, 12345U);
 
-  DBMMap db_reopen(narrow_path(dbFilePath).c_str(), 2 * G, SIZE_MAX, 23456);
+  DBMMap db_reopen(narrow_path(dbFilePath).c_str(), TEST_MAP_SIZE, SIZE_MAX, 23456);
   BOOST_CHECK_EQUAL(db_reopen._memory->copy_write_pivot_bytes, 23456U);
 }
 
@@ -181,21 +182,26 @@ BOOST_AUTO_TEST_CASE(test_double_open) {
 using PageHeader = DBMMap::Traits::PageHeader;
 using page_ptr = DBMMap::page_ptr;
 
-
 BOOST_AUTO_TEST_CASE(test_sanitize) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  DBMMap db(narrow_path(dbFilePath).c_str());
-  if constexpr (DBMMap::MAX_PROCESSES > 1) {
-    db._memory->processes[2] = 0xFFFFFFFF;
-    auto first = db.sanitize_processes();
-    BOOST_CHECK(!first);
+  uint64_t logical_size = 0;
+
+  {
+    DBMMap db(narrow_path(dbFilePath).c_str());
+    logical_size = db._memory->file_size;
+    if constexpr (DBMMap::MAX_PROCESSES > 1) {
+      db._memory->processes[2] = 0xFFFFFFFF;
+      auto first = db.sanitize_processes();
+      BOOST_CHECK(!first);
+    }
   }
 
-  std::filesystem::resize_file(dbFilePath, db._memory->file_size + 20);
+  std::filesystem::resize_file(dbFilePath, logical_size + 20);
+
+  DBMMap db(narrow_path(dbFilePath).c_str());
   db.sanitize();
-  BOOST_CHECK_GE(std::filesystem::file_size(dbFilePath),
-                 db._memory->file_size);
+  BOOST_CHECK_GE(std::filesystem::file_size(dbFilePath), db._memory->file_size);
 }
 
 BOOST_AUTO_TEST_CASE(test_exceptions) {
@@ -541,7 +547,7 @@ BOOST_AUTO_TEST_CASE(test_pool_threads_zero) {
   std::filesystem::path dbFilePath = p.tempDir / "test_pool.lvs";
 
   // Constructor with pool_threads=0: auto-detect thread count
-  DBMMap storage(narrow_path(dbFilePath).c_str(), 4 * G, 0);
+  DBMMap storage(narrow_path(dbFilePath).c_str(), TEST_MAP_SIZE, 0);
   auto db = storage.open("test");
 
   // Basic operations should work
