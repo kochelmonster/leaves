@@ -25,7 +25,20 @@
 		{
 			"label": "Configure leaves (CMake, benchmarks ON)",
 			"type": "shell",
-			"command": "cmake -S . -B build -DLEAVES_BUILD_BENCHMARKS=ON",
+			"command": "cmake",
+			"args": [
+				"--fresh",
+				"-S",
+				".",
+				"-B",
+				"build",
+				"-G",
+				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
+				"-DLEAVES_BUILD_BENCHMARKS=ON"
+			],
 			"isBackground": false,
 			"problemMatcher": [
 				"$gcc"
@@ -80,44 +93,52 @@
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc minimal tests",
+			"label": "Configure build minimal tests",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build-vs17",
 				"-G",
 				"Visual Studio 17 2022",
+				"-A",
+				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF"
 			],
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc minimal tests (VS18)",
+			"label": "Configure build minimal tests (VS18)",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build",
 				"-G",
 				"Visual Studio 18 2026",
+				"-A",
+				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF"
 			],
 			"isBackground": false
 		},
 		{
-			"label": "Build test_mmap windows-msvc",
+			"label": "Build test_mmap build",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -127,23 +148,23 @@
 			"isBackground": false
 		},
 		{
-			"label": "Reconfigure and build test_mmap windows-msvc",
+			"label": "Reconfigure and build test_mmap build",
 			"type": "shell",
 			"command": "powershell",
 			"args": [
 				"-NoProfile",
 				"-Command",
-				"Get-Process cmake,vcpkg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; cmake -S . -B build/windows-msvc -G 'Visual Studio 18 2026' -DLEAVES_BUILD_TESTS=ON -DLEAVES_BUILD_BENCHMARKS=OFF; cmake --build build/windows-msvc --target test_mmap --config Debug -j"
+				"Get-Process cmake,vcpkg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; cmake --fresh -S . -B build -G 'Visual Studio 18 2026' -A x64 -DCMAKE_PREFIX_PATH='${workspaceFolder}\\vcpkg_installed\\x64-windows' -DLEAVES_BUILD_TESTS=ON -DLEAVES_BUILD_BENCHMARKS=OFF; cmake --build build --target test_mmap --config Debug -j"
 			],
 			"isBackground": false
 		},
 		{
-			"label": "Run test_mmap windows-msvc",
+			"label": "Run test_mmap build",
 			"type": "shell",
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -153,18 +174,20 @@
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc clean",
+			"label": "Configure build clean",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build",
 				"-G",
 				"Visual Studio 18 2026",
 				"-A",
 				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF"
 			],
@@ -182,30 +205,32 @@
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc clean retry",
+			"label": "Configure build clean retry",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build",
 				"-G",
 				"Visual Studio 18 2026",
 				"-A",
 				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF"
 			],
 			"isBackground": false
 		},
 		{
-			"label": "Build test_mmap windows-msvc retry",
+			"label": "Build test_mmap build retry",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -215,18 +240,20 @@
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc no-gcov",
+			"label": "Configure build no-gcov",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build",
 				"-G",
 				"Visual Studio 18 2026",
 				"-A",
 				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF",
 				"-DLEAVES_GCOV=OFF"
@@ -234,18 +261,20 @@
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc no-gcov retry2",
+			"label": "Configure build no-gcov retry2",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build",
 				"-G",
 				"Visual Studio 18 2026",
 				"-A",
 				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF",
 				"-DLEAVES_GCOV=OFF"
@@ -253,18 +282,20 @@
 			"isBackground": false
 		},
 		{
-			"label": "Configure windows-msvc final",
+			"label": "Configure build final",
 			"type": "shell",
 			"command": "cmake",
 			"args": [
+				"--fresh",
 				"-S",
 				".",
 				"-B",
-				"build/windows-msvc",
+				"build",
 				"-G",
 				"Visual Studio 18 2026",
 				"-A",
 				"x64",
+				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_TESTS=ON",
 				"-DLEAVES_BUILD_BENCHMARKS=OFF",
 				"-DLEAVES_GCOV=OFF"
@@ -277,7 +308,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -292,7 +323,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -307,7 +338,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -322,7 +353,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -337,7 +368,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -352,7 +383,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -367,7 +398,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -382,7 +413,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -397,7 +428,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -412,7 +443,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -427,7 +458,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -442,7 +473,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -457,7 +488,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -472,7 +503,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -487,7 +518,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -502,7 +533,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -517,7 +548,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -532,7 +563,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -547,7 +578,7 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
@@ -562,7 +593,7 @@
 			"command": "cmake",
 			"args": [
 				"--build",
-				"build/windows-msvc",
+				"build",
 				"--target",
 				"test_mmap",
 				"--config",
@@ -577,12 +608,72 @@
 			"command": "ctest",
 			"args": [
 				"--test-dir",
-				"build/windows-msvc",
+				"build",
 				"-C",
 				"Debug",
 				"-R",
 				"^test_mmap$",
 				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run test_map_storage direct",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build",
+				"-C",
+				"Debug",
+				"-R",
+				"^test_map_storage$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run selected tests direct",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build",
+				"-C",
+				"Debug",
+				"-R",
+				"^(test_fstore|test_memory|test_memstore|test_bits)$",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run selected tests direct (quoted regex)",
+			"type": "shell",
+			"command": "ctest",
+			"args": [
+				"--test-dir",
+				"build",
+				"-C",
+				"Debug",
+				"-R",
+				"'^(test_fstore|test_memory|test_memstore|test_bits)$'",
+				"--output-on-failure"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build test_fstore single target",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--target",
+				"test_fstore",
+				"--config",
+				"Debug",
+				"-j"
 			],
 			"isBackground": false
 		}

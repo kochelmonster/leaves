@@ -21,3 +21,4 @@ tests/ws_replication/node_modules
 .cache
 vcpkg_installed
 vcpkg-manifest-install.log
+error.yaml

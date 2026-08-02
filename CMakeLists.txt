@@ -381,7 +381,7 @@ endif()
 
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
-    include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/storage/_mmap.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC leaves_test_support blake3)
 
 add_executable(test_transfer tests/test_transfer.cpp)
@@ -401,22 +401,22 @@ target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
-    include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/storage/_fstore.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_fstore PUBLIC leaves_test_support blake3)
 
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
-    include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_memory PUBLIC leaves_test_support)
 
 add_executable(test_memstore tests/test_memstore.cpp)
 target_sources(test_memstore INTERFACE
-    include/leaves/intern/_memstore.hpp include/leaves/intern/_memory.hpp)
+    include/leaves/intern/storage/_memstore.hpp include/leaves/intern/memory/_memory.hpp)
 target_link_libraries(test_memstore PUBLIC core leaves_test_support)
 
 add_executable(test_bits tests/test_bits.cpp)
-target_sources(test_memory INTERFACE
-    include/intern/_bits.hpp)
+target_sources(test_bits INTERFACE
+    include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_bits PUBLIC leaves_test_support)
 
 add_executable(test_cursor tests/test_cursor.cpp)
@@ -436,12 +436,12 @@ target_link_libraries(test_bigmemory PUBLIC core leaves_test_support)
 
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
-    include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/mmap.hpp include/leaves/intern/storage/_mmap.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_map_storage PUBLIC core leaves_test_support)
 
 add_executable(test_file_storage tests/test_file_storage.cpp)
 target_sources(test_file_storage INTERFACE
-    include/fstore.hpp include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/fstore.hpp include/leaves/intern/storage/_fstore.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_file_storage PUBLIC core leaves_test_support blake3)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
