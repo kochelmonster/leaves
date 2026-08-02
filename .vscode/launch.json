@@ -251,36 +251,33 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/Debug/test_mmap.exe",
             "args": [
-                "--run_test=test_commit_sync_triggers_fd_sync_after_direct_copy_write"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],
-            "externalConsole": false
+            "console": "internalConsole"
         },
         {
-            "name": "(cppvsdbg) test_mmap commit-sync (windows-msvc)",
+            "name": "(cppvsdbg) test_fstore",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/windows-msvc/Debug/test_mmap.exe",
-            "args": [
-                "--run_test=test_commit_sync_triggers_fd_sync_after_direct_copy_write"
-            ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build/windows-msvc",
-            "environment": [],
-            "externalConsole": false
-        },
-        {
-            "name": "(cppvsdbg) test_map_storage (windows-msvc)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/windows-msvc/Debug/test_map_storage.exe",
+            "program": "${workspaceFolder}/build/Debug/test_fstore.exe",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build/windows-msvc",
+            "cwd": "${workspaceFolder}/build",
             "environment": [],
-            "externalConsole": false
+            "console": "internalConsole"
+        },
+        {
+            "name": "(cppvsdbg) test_map_storage",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/test_map_storage.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "console": "internalConsole"
         },
         {
             "name": "Attach to test_fstore",

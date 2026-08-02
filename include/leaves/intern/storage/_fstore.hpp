@@ -153,6 +153,8 @@ struct _FileOperations : _CacheBase {
     }
   }
 
+  ~_FileOperations() { close(); }
+
   void close() {
     if (leaves::fd_valid(_fd)) {
       leaves::close_fd(_fd);
@@ -256,10 +258,20 @@ template <typename Traits_ = _StoreTraits>
 struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
   typedef _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> base_t;
 
+  _FileStore(const std::filesystem::path& path, size_t capacity = 500 * M,
+             size_t pool_threads = 1)
+      : _FileStore(path.string().c_str(), capacity, pool_threads) {}
+
   _FileStore(const char* path, size_t capacity = 500 * M,
              size_t pool_threads = 1)
       : base_t(capacity, pool_threads, Traits_::AREA_SIZE) {
-    init_dbfile(path);
+    try {
+      init_dbfile(path);
+    } catch (...) {
+      // Ensure constructor failures do not leak an open file descriptor.
+      this->close();
+      throw;
+    }
     // Thread pool already started by base constructor
   }
 
