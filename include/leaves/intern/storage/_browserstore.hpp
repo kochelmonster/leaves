@@ -212,11 +212,15 @@ static inline const char* idb_key_format(char* buf, size_t buf_size,
 template <typename AspectType = DefaultAspect>
 struct _BrowserStoreTraits {
   using Aspect = AspectType;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<_BrowserStoreTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<_BrowserStoreTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   struct PageHeader {
     typedef PageHeader Base;

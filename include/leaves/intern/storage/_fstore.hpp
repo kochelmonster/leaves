@@ -46,11 +46,15 @@ static const size_t FSTORE_SIGNATURE_SIZE =
 // definition of all headers and data types
 struct _StoreTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<_StoreTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<_StoreTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   struct PageHeader {
     typedef PageHeader Base;
@@ -68,14 +72,14 @@ struct _StoreTraits {
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 2),  // 2 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 3),  // 3 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 4),  // 4 branches
+      sizeof(PageHeader) + TrieNode::size(1, 2),  // 2 branches
+      sizeof(PageHeader) + TrieNode::size(1, 3),  // 3 branches
+      sizeof(PageHeader) + TrieNode::size(1, 4),  // 4 branches
       sizeof(PageHeader) +
-          _TrieNode<_StoreTraits>::size(1, 10),  // 5-10 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 64),   // base64
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 256),  // binary
+        TrieNode::size(1, 10),  // 5-10 branches
+      sizeof(PageHeader) + TrieNode::size(1, 16),   // hex 0-9A-F
+      sizeof(PageHeader) + TrieNode::size(1, 64),   // base64
+      sizeof(PageHeader) + TrieNode::size(1, 256),  // binary
       sizeof(PageHeader) + 1024,
       sizeof(PageHeader) + 1024 + 512,
       4 * K};
