@@ -1,11 +1,20 @@
 #include <cassert>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iostream>
+#include <map>
+#include <set>
+#include <string>
 #include <vector>
 
 #ifndef TESTING
 #define TESTING
+#endif
+
+#ifndef CMPFILES
+#define CMPFILES "./"
 #endif
 
 #include "leaves/mmap.hpp"
@@ -25,6 +34,198 @@ using TrieNode = Traits::TrieNode;
 using LeafNode = Traits::LeafNode;
 using TransferBuffer = ReplicationTransferTrie<>;
 using Sender = TransferTrieSender<DBImpl>;
+using WireTransferTrie = _TransferTrie<HASH_SIZE>;
+using WireTrieNode = WireTransferTrie::TrieNode;
+using WireLeafNode = WireTransferTrie::LeafNode;
+using WireOffset = WireTransferTrie::Offset;
+
+std::vector<uint8_t> read_binary_file(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  assert(in.is_open());
+
+  in.seekg(0, std::ios::end);
+  std::streamsize size = in.tellg();
+  assert(size >= 0);
+  in.seekg(0, std::ios::beg);
+
+  std::vector<uint8_t> data((size_t)size);
+  if (size > 0) {
+    in.read(reinterpret_cast<char*>(data.data()), size);
+    assert(in.good() || in.eof());
+    assert(in.gcount() == size);
+  }
+  return data;
+}
+
+void write_binary_file(const std::filesystem::path& path,
+                       const std::vector<uint8_t>& data) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  assert(out.is_open());
+  if (!data.empty()) {
+    out.write(reinterpret_cast<const char*>(data.data()),
+              (std::streamsize)data.size());
+    assert(out.good());
+  }
+}
+
+std::vector<uint8_t> build_transfer_trie_compat_payload_v1() {
+  TransferBuffer transfer(2048);
+  transfer.begin(0x1122334455667788ULL, 0x8877665544332211ULL,
+                 DbType::DB_MAIN, Slice());
+
+  // Build a deterministic root trie with two branches: 'a' and 'b'.
+  const int key_a = static_cast<int>('a');
+  const int key_b = static_cast<int>('b');
+  std::vector<uint8_t> root_mem(WireTrieNode::size(0, key_a, key_b), 0);
+  auto* root_src = reinterpret_cast<WireTrieNode*>(root_mem.data());
+  auto root_slots = root_src->create(Slice(), key_a, key_b);
+  if constexpr (WireTrieNode::HAS_HASH) {
+    std::memset(root_src->hash, 0xA1, WireTrieNode::HASH_SIZE);
+  }
+
+  auto build_leaf = [](const char* key_suffix, const char* value,
+                       uint8_t hash_fill) {
+    std::string key(key_suffix);
+    std::string val(value);
+    std::vector<uint8_t> leaf_mem(WireLeafNode::size(key.size(), val.size()), 0);
+    auto* leaf = reinterpret_cast<WireLeafNode*>(leaf_mem.data());
+    leaf->set(Slice(key), val.size());
+    std::memcpy(leaf->vdata(), val.data(), val.size());
+    if constexpr (WireLeafNode::HAS_HASH) {
+      std::memset(leaf->hash, hash_fill, WireLeafNode::HASH_SIZE);
+    }
+    return leaf_mem;
+  };
+
+  // Suffixes reconstruct full keys via trie branch chars: a+lpha, b+eta.
+  std::vector<uint8_t> leaf_alpha_mem = build_leaf("lpha", "one", 0xB1);
+  std::vector<uint8_t> leaf_beta_mem = build_leaf("eta", "two", 0xC1);
+
+  auto* root_wire = transfer.add_trie_node(
+      reinterpret_cast<const WireTrieNode*>(root_mem.data()));
+  auto* leaf_alpha_wire = transfer.add_leaf_node(
+      reinterpret_cast<const WireLeafNode*>(leaf_alpha_mem.data()));
+  auto* leaf_beta_wire = transfer.add_leaf_node(
+      reinterpret_cast<const WireLeafNode*>(leaf_beta_mem.data()));
+
+  assert(root_wire != nullptr);
+  assert(leaf_alpha_wire != nullptr);
+  assert(leaf_beta_wire != nullptr);
+
+  WireOffset* root_array = root_wire->array();
+  root_array[root_slots.first].set_relative(leaf_alpha_wire);
+  root_array[root_slots.first].type(LEAF);
+  root_array[root_slots.second].set_relative(leaf_beta_wire);
+  root_array[root_slots.second].type(LEAF);
+
+  Slice payload = transfer.finalize();
+  assert(payload.data() != nullptr);
+  return std::vector<uint8_t>(
+      reinterpret_cast<const uint8_t*>(payload.data()),
+      reinterpret_cast<const uint8_t*>(payload.data()) + payload.size());
+}
+
+void validate_transfer_trie_payload(
+    const std::vector<uint8_t>& payload,
+    const std::map<std::string, std::string>& expected_kv) {
+  assert(!payload.empty());
+
+  Slice data(reinterpret_cast<const char*>(payload.data()), payload.size());
+  Slice subtrie_path;
+  const TransferTrieHeader* hdr = TransferBuffer::parse_header(data, &subtrie_path);
+  assert(hdr != nullptr);
+  assert(hdr->magic == TRANSFER_MAGIC);
+  assert(hdr->version == TRANSFER_VERSION);
+  assert(hdr->db_type == static_cast<uint8_t>(DbType::DB_MAIN));
+  assert(hdr->session_id == 0x1122334455667788ULL);
+  assert(hdr->snapshot_id == 0x8877665544332211ULL);
+  assert(hdr->total_size == payload.size());
+  assert(subtrie_path.empty());
+  assert(hdr->node_count > 0);
+
+  const uint8_t* begin = payload.data();
+  const uint8_t* nodes_begin = TransferBuffer::nodes_data(data, *hdr);
+  const uint8_t* end = begin + payload.size();
+  assert(nodes_begin >= begin);
+  assert(nodes_begin <= end);
+
+  auto ptr_in_nodes = [&](const uint8_t* ptr) {
+    return ptr >= nodes_begin && ptr < end;
+  };
+
+  std::set<const uint8_t*> visiting;
+  std::set<const uint8_t*> visited;
+  std::map<std::string, std::string> actual_kv;
+
+  std::function<void(const uint8_t*, NodeTypes, const std::string&)> walk =
+      [&](const uint8_t* node_ptr, NodeTypes type, const std::string& path) {
+        assert(ptr_in_nodes(node_ptr));
+        assert((((uintptr_t)node_ptr) & 7u) == 0u);
+        assert(visited.find(node_ptr) == visited.end());
+        assert(visiting.insert(node_ptr).second);
+
+        if (type == TRIE) {
+          auto* trie = reinterpret_cast<const WireTrieNode*>(node_ptr);
+          uint16_t trie_size = trie->size();
+          assert(trie_size >= WireTrieNode::HEADER_SIZE);
+          assert(node_ptr + trie_size <= end);
+          assert(trie->array_start() % sizeof(WireOffset) == 0);
+          assert(trie->lower_start() <= trie->lower_end());
+          assert(trie->lower_end() <= trie->array_start());
+          assert(trie->array_end() == trie_size);
+
+          const uint8_t* compressed = trie->compressed();
+          assert(compressed + trie->len() <= node_ptr + trie_size);
+
+          std::string next_path(path);
+          next_path.append(reinterpret_cast<const char*>(compressed), trie->len());
+
+          trie->for_each_branch([&](int key, WireOffset* child_off) {
+            assert(child_off != nullptr);
+            assert(*child_off != 0);
+            assert(child_off->is_relative());
+
+            NodeTypes child_type = child_off->type();
+            assert(child_type == TRIE || child_type == LEAF);
+
+            const uint8_t* child_ptr = child_off->template resolve<uint8_t>();
+            assert(ptr_in_nodes(child_ptr));
+
+            std::string child_path(next_path);
+            if (key != WireTrieNode::NONE) {
+              assert(key >= 0 && key <= 255);
+              child_path.push_back(static_cast<char>(key));
+            }
+            walk(child_ptr, child_type, child_path);
+          });
+        } else {
+          auto* leaf = reinterpret_cast<const WireLeafNode*>(node_ptr);
+          uint16_t leaf_size = leaf->size();
+          assert(leaf_size >= WireLeafNode::HEADER_SIZE);
+          assert(node_ptr + leaf_size <= end);
+          assert(leaf->data + leaf->key_size + leaf->vsize() <= node_ptr + leaf_size);
+
+          std::string key(path);
+          key.append(reinterpret_cast<const char*>(leaf->data), leaf->key_size);
+          std::string value(reinterpret_cast<const char*>(leaf->data + leaf->key_size),
+                            leaf->vsize());
+          assert(actual_kv.insert(std::make_pair(key, value)).second);
+        }
+
+        visiting.erase(node_ptr);
+        visited.insert(node_ptr);
+      };
+
+  assert(hdr->root.is_relative());
+  NodeTypes root_type = hdr->root.type();
+  assert(root_type == TRIE || root_type == LEAF);
+  const uint8_t* root_ptr = hdr->root.template resolve<uint8_t>();
+  walk(root_ptr, root_type, std::string());
+
+  assert(visiting.empty());
+  assert(visited.size() == hdr->node_count);
+  assert(actual_kv == expected_kv);
+}
 
 void test_header_size() {
   std::cout << "test_header_size... ";
@@ -587,6 +788,33 @@ void test_relative_offsets() {
   std::cout << "OK\n";
 }
 
+void test_transfer_trie_binary_compatibility_file_roundtrip() {
+  std::cout << "test_transfer_trie_binary_compatibility_file_roundtrip... ";
+
+  std::map<std::string, std::string> expected_kv = {
+      {"alpha", "one"},
+      {"beta", "two"},
+  };
+
+  std::vector<uint8_t> generated = build_transfer_trie_compat_payload_v1();
+
+  auto runtime_path = test_temp_dir / "transfer_trie_compat_runtime_v1.bin";
+  write_binary_file(runtime_path, generated);
+  std::vector<uint8_t> roundtrip = read_binary_file(runtime_path);
+  assert(roundtrip == generated);
+  validate_transfer_trie_payload(roundtrip, expected_kv);
+
+  std::filesystem::path fixture_path =
+      std::filesystem::path(CMPFILES) / "transfer_trie_compat_v1.bin";
+  assert(std::filesystem::exists(fixture_path));
+
+  std::vector<uint8_t> fixture = read_binary_file(fixture_path);
+  assert(fixture == generated);
+  validate_transfer_trie_payload(fixture, expected_kv);
+
+  std::cout << "OK\n";
+}
+
 int main() {
   std::cout << "=== TransferTrie Tests ===\n";
   
@@ -608,6 +836,7 @@ int main() {
   test_sender_buffer_overflow();
   test_sender_process_ack();
   test_relative_offsets();
+  test_transfer_trie_binary_compatibility_file_roundtrip();
   cleanup_temp_dir();
   
   std::cout << "\nAll tests passed!\n";
