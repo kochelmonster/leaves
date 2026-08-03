@@ -2,6 +2,7 @@
 #define BOOST_TEST_MODULE TrieNodeTest
 
 #include <boost/test/included/unit_test.hpp>
+#include <type_traits>
 
 #ifndef TESTING
 #error "TESTING must be defined"
@@ -13,11 +14,15 @@ using namespace leaves;
 using namespace leaves::bits;
 
 struct TestTraits {
-  using hash_t = _NoHash;
   typedef offset_t offset_e;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<TestTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<TestTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
   
   static constexpr uint16_t PAGE_SIZES[] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
   static constexpr uint16_t PAGE_SIZES_COUNT = sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
@@ -27,13 +32,51 @@ struct TestTraits {
   };
 };
 
-typedef _TrieNode<TestTraits> TrieNode;
-typedef _LeafNode<TestTraits> LeafNode;
+using TrieNode = TestTraits::TrieNode;
+using LeafNode = TestTraits::LeafNode;
+using TrieHeaderNoHash = _TrieNodeHeaderNoHash<TestTraits>;
+using TrieHeaderHash4 = _TrieNodeHeaderHash<TestTraits, 4>;
+using LeafHeaderNoHash = _LeafNodeHeaderNoHash<TestTraits>;
+using LeafHeaderHash4 = _LeafNodeHeaderHash<TestTraits, 4>;
 static const int OOR = TrieNode::OUT_OF_RANGE;
+
+static_assert(sizeof(_TrieNodeHeaderBase<TestTraits>) == 6);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _array_len) == 0);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _upper) == 2);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _compressed_len) == 3);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _lower_offset) == 4);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _array_offset) == 5);
+
+static_assert(std::is_base_of_v<_TrieNodeHeaderBase<TestTraits>, TrieHeaderNoHash>);
+static_assert(std::is_base_of_v<_TrieNodeHeaderBase<TestTraits>, TrieHeaderHash4>);
+static_assert(sizeof(TrieHeaderNoHash) == 7);
+static_assert(sizeof(TrieHeaderHash4) == 11);
+
+static_assert(sizeof(_LeafNodeHeaderBase<TestTraits>) == 3);
+static_assert(offsetof(_LeafNodeHeaderBase<TestTraits>, value_size) == 0);
+static_assert(offsetof(_LeafNodeHeaderBase<TestTraits>, key_size) == 2);
+
+static_assert(std::is_base_of_v<_LeafNodeHeaderBase<TestTraits>, LeafHeaderNoHash>);
+static_assert(std::is_base_of_v<_LeafNodeHeaderBase<TestTraits>, LeafHeaderHash4>);
+static_assert(sizeof(LeafHeaderNoHash) == 3);
+static_assert(sizeof(LeafHeaderHash4) == 7);
 
 static_assert(sizeof(TrieNode) == 7);
 static_assert(LeafNode::HEADER_SIZE == 3);
 static_assert(sizeof(LeafNode) == LeafNode::HEADER_SIZE + 1);
+
+BOOST_AUTO_TEST_CASE(test_hash_header_offsets) {
+  TrieHeaderHash4 trie{};
+  LeafHeaderHash4 leaf{};
+
+  const auto trie_hash_offset = reinterpret_cast<const uint8_t*>(trie.hash) - reinterpret_cast<const uint8_t*>(&trie);
+  const auto trie_data_offset = reinterpret_cast<const uint8_t*>(trie._compressed_data) - reinterpret_cast<const uint8_t*>(&trie);
+  const auto leaf_hash_offset = reinterpret_cast<const uint8_t*>(leaf.hash) - reinterpret_cast<const uint8_t*>(&leaf);
+
+  BOOST_CHECK_EQUAL(trie_hash_offset, sizeof(_TrieNodeHeaderBase<TestTraits>));
+  BOOST_CHECK_EQUAL(trie_data_offset, sizeof(_TrieNodeHeaderBase<TestTraits>) + TrieHeaderHash4::HASH_SIZE);
+  BOOST_CHECK_EQUAL(leaf_hash_offset, sizeof(_LeafNodeHeaderBase<TestTraits>));
+}
 
 const uint16_t AREA_SIZE = 4 * 1024;
 
@@ -484,7 +527,7 @@ BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
   // Test that the copy() function correctly copies LeafNode fields
   // LeafNode also inherits from PageHeader and has fields starting at offset 5
   
-  typedef _LeafNode<TestTraits> LeafNode;
+  typedef TestTraits::LeafNode LeafNode;
   
   char buffer1[AREA_SIZE], buffer2[AREA_SIZE];
   LeafNode& src = *(LeafNode*)buffer1;

@@ -2899,8 +2899,8 @@ template <typename DB>
 bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
                            const std::string& path) {
   using Traits = typename DB::Traits;
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using offset_e = typename Traits::offset_e;
   if (!link || !*link) return true;
   if (link->type() != TRIE) {

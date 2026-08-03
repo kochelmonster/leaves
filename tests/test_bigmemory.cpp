@@ -31,11 +31,15 @@ struct DirPreparation {
 
 struct TestTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<TestTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<TestTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 256;

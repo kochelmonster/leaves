@@ -21,8 +21,8 @@ using Storage = MapStorage;
 // Get traits from the internal DB type
 using DBImpl = _ReplicationDB<Storage::StorageImpl>;
 using Traits = DBImpl::Traits;
-using TrieNode = _TrieNode<Traits>;
-using LeafNode = _LeafNode<Traits>;
+using TrieNode = Traits::TrieNode;
+using LeafNode = Traits::LeafNode;
 using TransferBuffer = ReplicationTransferTrie<>;
 using Sender = TransferTrieSender<DBImpl>;
 

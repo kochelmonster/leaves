@@ -9,10 +9,10 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
-#include <cerrno>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/process/v2/pid.hpp>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -56,11 +56,15 @@ static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 // definition of all headers and data types
 struct _MemoryMapTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<_MemoryMapTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<_MemoryMapTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   struct PageHeader {
     typedef PageHeader Base;
@@ -78,19 +82,15 @@ struct _MemoryMapTraits {
   static constexpr size_t AREA_SIZE = 2 * M;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t MAX_PROCESSES = 100;
+
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 2),  // 2 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 3),  // 3 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 4),  // 4 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 10),  // 5-10 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 16),  // hex 0-9A-F
-      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
-      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
+      sizeof(PageHeader) + TrieNode::size(1, 2),   // 2 branches
+      sizeof(PageHeader) + TrieNode::size(1, 3),   // 3 branches
+      sizeof(PageHeader) + TrieNode::size(1, 4),   // 4 branches
+      sizeof(PageHeader) + TrieNode::size(1, 10),  // 5-10 branches
+      sizeof(PageHeader) + TrieNode::size(1, 16),  // hex 0-9A-F
+      sizeof(PageHeader) + TrieNode::size(1, 64),  // base64
+      sizeof(PageHeader) + TrieNode::size(1, 256),  // binary
       sizeof(PageHeader) + 1024,
       sizeof(PageHeader) + 1024 + 512,
       4 * K};
@@ -225,7 +225,8 @@ struct _MemoryMapFile
   }
 
   void ensure_sanitize_lock_file(const std::string& lock_file) const {
-    std::ofstream f(lock_file, std::ios::out | std::ios::app | std::ios::binary);
+    std::ofstream f(lock_file,
+                    std::ios::out | std::ios::app | std::ios::binary);
     if (!f.good()) {
       int err = errno ? errno : EIO;
       throw FileError(
@@ -281,8 +282,7 @@ struct _MemoryMapFile
     if (!open_write_fd()) {
       int err = errno ? errno : EBADF;
       throw FileError(
-          "Failed to initialize write descriptor from mapped file handle",
-          err);
+          "Failed to initialize write descriptor from mapped file handle", err);
     }
   }
 

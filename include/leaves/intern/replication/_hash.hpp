@@ -91,14 +91,16 @@ void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher,
  */
 template <typename BaseTraits>
 struct HashTrieTraits : BaseTraits {
-  // Enable hash storage in nodes
-  using hash_t = uint8_t[HASH_SIZE];
+  using TrieNodeHeader = _TrieNodeHeaderHash<HashTrieTraits, HASH_SIZE>;
+  using LeafNodeHeader = _LeafNodeHeaderHash<HashTrieTraits, HASH_SIZE>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   // Minimum hash leaf size (NONE-branch: key_size=0, value_size=0).
-    // Non-NONE branch leaves have key_size=1 (data[0] = branch char) and are
-    // allocated as HASH_LEAF_SIZE + 1 bytes.
-    static constexpr uint16_t HASH_LEAF_SIZE =
-      _LeafNode<HashTrieTraits>::HEADER_SIZE;  // NONE-branch minimum
+  // Non-NONE branch leaves have key_size=1 (data[0] = branch char) and are
+  // allocated as HASH_LEAF_SIZE + 1 bytes.
+  static constexpr uint16_t HASH_LEAF_SIZE =
+      LeafNode::HEADER_SIZE;  // NONE-branch minimum
 };
 
 // Hash Updater — data/hash trie sync
@@ -120,12 +122,15 @@ template <typename DataDB, typename HashDB>
 struct _HashUpdater {
   using DataTraits = typename DataDB::Traits;
   using DataCursorTraits = typename DataDB::CursorTraits;
-  using HashTraits = HashTrieTraits<typename HashDB::Traits>;
+  using RawHashTraits = typename HashDB::Traits;
+  using HashTraits = std::conditional_t<RawHashTraits::TrieNode::HAS_HASH,
+                                        RawHashTraits,
+                                        HashTrieTraits<RawHashTraits>>;
 
-  using DataTrieNode = _TrieNode<DataCursorTraits>;
-  using DataLeafNode = _LeafNode<DataCursorTraits>;
-  using HashTrieNode = _TrieNode<HashTraits>;
-  using HashLeafNode = _LeafNode<HashTraits>;
+  using DataTrieNode = typename DataCursorTraits::TrieNode;
+  using DataLeafNode = typename DataCursorTraits::LeafNode;
+  using HashTrieNode = typename HashTraits::TrieNode;
+  using HashLeafNode = typename HashTraits::LeafNode;
 
   using data_offset_e = typename DataTraits::offset_e;
   using hash_offset_e = typename HashTraits::offset_e;
