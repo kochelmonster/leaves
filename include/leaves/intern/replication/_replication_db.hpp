@@ -147,6 +147,8 @@ struct _ReplicationDB
   // This ensures cursor.commit() calls _ReplicationDB::commit()
   struct CursorTraits : public Base::CursorTraits {
     typedef _ReplicationDB<Storage_> DB;
+    using TrieNode = typename Base::CursorTraits::TrieNode;
+    using LeafNode = typename Base::CursorTraits::LeafNode;
   };
 
   // Override cursor types to use _ReplicationCursor
@@ -158,7 +160,7 @@ struct _ReplicationDB
   // Uses hash_mem_manager for allocation (independent of data transactions).
   // Uses the parent _ReplicationDB's storage for offset resolution.
   struct HashDB {
-    using Traits = typename Storage_::Traits;
+    using Traits = HashTrieTraits<typename Storage_::Traits>;
     using offset_e = typename Traits::offset_e;
     // Hash recomputation runs under HashTrieControl::update_lock.
     using MemManager = _MemManager<Traits>;

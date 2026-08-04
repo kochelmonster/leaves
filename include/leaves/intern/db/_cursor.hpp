@@ -21,8 +21,8 @@ struct _Transition {
   typedef Cursor_ Cursor;
   using Traits = typename Cursor::Traits;
   typedef _Transition<Cursor> Transition;
-  typedef _TrieNode<Traits> TrieNode;
-  typedef _LeafNode<Traits> LeafNode;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;

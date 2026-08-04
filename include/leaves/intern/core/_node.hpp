@@ -8,6 +8,7 @@ Trie node layout and node-level metadata for the internal key/value tree.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 #include "_bits.hpp"
 #include "_util.hpp"
@@ -17,10 +18,17 @@ namespace leaves {
 // dummy structure for all node pointers
 struct _Node {};
 
-// Empty hash marker used by traits that do not store a hash inline.
-// Combined with [[no_unique_address]] in the node layout, this keeps the
-// member from consuming storage on all supported compilers.
-struct _NoHash {};
+template <typename Traits>
+struct _TrieNodeHeaderNoHash;
+
+template <typename Traits, size_t HashSize>
+struct _TrieNodeHeaderHash;
+
+template <typename Traits>
+struct _LeafNodeHeaderNoHash;
+
+template <typename Traits, size_t HashSize>
+struct _LeafNodeHeaderHash;
 
 /*
 A compressed Trie node (https://www.geeksforgeeks.org/compressed-tries/)
@@ -29,28 +37,44 @@ parent node) This makes the implmentation of many operations easier.
 */
 #pragma pack(push, 1)
 template <typename Traits>
-struct _TrieNodeHeader {
-  using hash_t = typename Traits::hash_t;
+struct _TrieNodeHeaderBase {
+  using traits_t = Traits;
   using uint16_e = typename Traits::uint16_e;
 
-  [[no_unique_address]] hash_t hash;
   uint16_e _array_len;
   uint8_t _upper;
   uint8_t _compressed_len;
   uint8_t _lower_offset;
   uint8_t _array_offset;
-  uint8_t _compressed_data[1];
 };
 
 template <typename Traits>
-struct _TrieNode : _TrieNodeHeader<Traits> {
-  typedef _TrieNode<Traits> TrieNode;
-  using hash_t = typename Traits::hash_t;
-  using uint32_e = typename Traits::uint32_e;
-  using uint16_e = typename Traits::uint16_e;
-  using offset_e = typename Traits::offset_e;
-  using Header = _TrieNodeHeader<Traits>;
-  using Header::hash;
+struct _TrieNodeHeaderNoHash : _TrieNodeHeaderBase<Traits> {
+  static constexpr size_t HASH_SIZE = 0;
+
+  uint8_t _compressed_data[1];
+};
+
+template <typename Traits, size_t HashSize>
+struct _TrieNodeHeaderHash : _TrieNodeHeaderBase<Traits> {
+  static_assert(HashSize > 0, "HashSize must be greater than zero");
+
+  static constexpr size_t HASH_SIZE = HashSize;
+
+  uint8_t hash[HashSize];
+  uint8_t _compressed_data[1];
+};
+
+template <typename Header_>
+struct _TrieNode : Header_ {
+  typedef _TrieNode<Header_> TrieNode;
+  using Header = Header_;
+  using traits_t = typename Header::traits_t;
+  using uint32_e = typename traits_t::uint32_e;
+  using uint16_e = typename traits_t::uint16_e;
+  using offset_e = typename traits_t::offset_e;
+  static constexpr size_t HASH_SIZE = Header::HASH_SIZE;
+  static constexpr bool HAS_HASH = HASH_SIZE > 0;
   using Header::_array_len;
   using Header::_upper;
   using Header::_compressed_len;
@@ -674,30 +698,45 @@ void for_each_branch(Fn fn) const {
 
 #pragma pack(push, 1)
 template <typename Traits>
-struct _LeafNodeHeader {
-  using hash_t = typename Traits::hash_t;
+struct _LeafNodeHeaderBase {
+  using traits_t = Traits;
   using uint16_e = typename Traits::uint16_e;
 
   uint16_e value_size;
   uint8_t key_size;
-  [[no_unique_address]] hash_t hash;
 };
 
 template <typename Traits>
-struct _LeafNode : _LeafNodeHeader<Traits> {
-  typedef _LeafNode<Traits> LeafNode;
+struct _LeafNodeHeaderNoHash : _LeafNodeHeaderBase<Traits> {
+  static constexpr size_t HASH_SIZE = 0;
+};
 
-  using hash_t = typename Traits::hash_t;
-  using uint16_e = typename Traits::uint16_e;
-  using uint32_e = typename Traits::uint32_e;
-  using uint64_e = typename Traits::uint64_e;
-  using offset_e = typename Traits::offset_e;
-  using Header = _LeafNodeHeader<Traits>;
+template <typename Traits, size_t HashSize>
+struct _LeafNodeHeaderHash : _LeafNodeHeaderBase<Traits> {
+  static_assert(HashSize > 0, "HashSize must be greater than zero");
+
+  static constexpr size_t HASH_SIZE = HashSize;
+
+  uint8_t hash[HashSize];
+};
+
+template <typename Header_>
+struct _LeafNode : Header_ {
+  typedef _LeafNode<Header_> LeafNode;
+
+  using Header = Header_;
+  using traits_t = typename Header::traits_t;
+  using uint16_e = typename traits_t::uint16_e;
+  using uint32_e = typename traits_t::uint32_e;
+  using uint64_e = typename traits_t::uint64_e;
+  using offset_e = typename traits_t::offset_e;
+  static constexpr size_t HASH_SIZE = Header::HASH_SIZE;
+  static constexpr bool HAS_HASH = HASH_SIZE > 0;
   using Header::value_size;
   using Header::key_size;
-  using Header::hash;
   static constexpr uint16_t HEADER_SIZE = sizeof(Header);
-  static constexpr uint16_t MAX_SIZE = Traits::PAGE_SIZES[Traits::PAGE_SIZES_COUNT - 1];
+  static constexpr uint16_t MAX_SIZE =
+      traits_t::PAGE_SIZES[traits_t::PAGE_SIZES_COUNT - 1];
   static constexpr uint16_t BIG_VALUE_FLAG = uint16_t(1) << 15;
 
   uint8_t data[1];
