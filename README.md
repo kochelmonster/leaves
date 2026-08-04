@@ -142,25 +142,32 @@ cmake --build build --target package
 
 Building the repository is only required to run the included tests and benchmarks or to contribute to Leaves.
 
-### Windows with vcpkg manifest mode
+### Windows (out-of-box)
 
-On Windows, Leaves supports vcpkg manifest mode out of the box through the repository `vcpkg.json`.
+On Windows, the default configure path uses repository-local dependencies from `vcpkg_installed/x64-windows`.
+
+```powershell
+cmake --preset windows-vs18-x64 --fresh
+cmake --build --preset windows-vs18-x64-debug -j
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+If your clone does not include populated local dependencies, you can still use external vcpkg manifest mode:
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\\vcpkg"
 & "$env:USERPROFILE\\vcpkg\\bootstrap-vcpkg.bat"
 
-cmake -S . -B build -G Ninja `
-    -DCMAKE_BUILD_TYPE=Release `
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
     -DCMAKE_TOOLCHAIN_FILE="$env:USERPROFILE\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" `
     -DVCPKG_MANIFEST_MODE=ON `
     -DVCPKG_TARGET_TRIPLET=x64-windows
 
-cmake --build build -j4
-ctest --test-dir build --output-on-failure
+cmake --build build --config Debug -j
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
-To build examples with the same dependency setup, pass the same toolchain and manifest flags when configuring an example directory.
+To build examples with the same dependency setup, pass the same dependency arguments when configuring an example directory.
 
 ### Recommended local build
 

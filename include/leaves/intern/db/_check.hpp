@@ -4,6 +4,7 @@ Database invariant and integrity checks used by the internal implementation.
 #ifndef _LEAVES__CHECK_HPP
 #define _LEAVES__CHECK_HPP
 
+#include <cctype>
 #include <cstdio>
 #include <set>
 #include <sstream>
@@ -16,7 +17,9 @@ namespace leaves {
 
 inline std::string bitstr(char bit) {
   std::stringstream cstr;
-  if (isprint(bit) && bit != '"' && bit != '<' && bit != '>' && bit != ']' &&
+  unsigned char ubit = static_cast<unsigned char>(bit);
+  if (std::isprint(ubit) && bit != '"' && bit != '<' && bit != '>' &&
+      bit != ']' &&
       bit != '\\' && bit != '}' && bit != '{' && bit != '|') {
     cstr << bit;
   } else {

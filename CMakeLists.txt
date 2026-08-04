@@ -155,6 +155,17 @@ if(EMSCRIPTEN)
 endif()
 
 # ── Native build ───────────────────────────────────────────────
+if (WIN32)
+    set(LEAVES_LOCAL_VCPKG_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows")
+    if (EXISTS "${LEAVES_LOCAL_VCPKG_PREFIX}/share/boost/BoostConfig.cmake")
+        list(PREPEND CMAKE_PREFIX_PATH "${LEAVES_LOCAL_VCPKG_PREFIX}")
+        message(STATUS "Windows dependency prefix: ${LEAVES_LOCAL_VCPKG_PREFIX}")
+    else()
+        message(STATUS "Windows dependency prefix not found: ${LEAVES_LOCAL_VCPKG_PREFIX}")
+        message(STATUS "Hint: provide dependencies via ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows or set CMAKE_PREFIX_PATH manually")
+    endif()
+endif()
+
 find_package(Boost 1.80 REQUIRED)
 
 if(Boost_FOUND)

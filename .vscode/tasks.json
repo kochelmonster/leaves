@@ -32,11 +32,6 @@
 				".",
 				"-B",
 				"build",
-				"-G",
-				"Visual Studio 18 2026",
-				"-A",
-				"x64",
-				"-DCMAKE_PREFIX_PATH=${workspaceFolder}\\vcpkg_installed\\x64-windows",
 				"-DLEAVES_BUILD_BENCHMARKS=ON"
 			],
 			"isBackground": false,
@@ -47,7 +42,12 @@
 		{
 			"label": "Build leaves (CMake, F7 default)",
 			"type": "shell",
-			"command": "cmake --build build -j",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"-j"
+			],
 			"isBackground": false,
 			"dependsOn": [
 				"Configure leaves (CMake, benchmarks ON)"
