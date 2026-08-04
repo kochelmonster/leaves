@@ -69,21 +69,22 @@ template <typename T>
 struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
 };
 
-// Helper to detect whether Traits uses a real hash buffer or the empty marker.
-template <typename T, typename = void>
-struct is_hash_trie_traits : std::false_type {};
+// Helper to detect whether a node type has an inline hash member.
+template <typename Node, typename = void>
+struct has_hash_member : std::false_type {};
 
-template <typename T>
-struct is_hash_trie_traits<T, std::void_t<typename T::hash_t>>
-    : std::bool_constant<!std::is_same_v<typename T::hash_t, _NoHash>> {};
+template <typename Node>
+struct has_hash_member<Node, std::void_t<decltype(std::declval<Node&>().hash)>>
+    : std::true_type {};
 
 // Output hash in hex (used when dump_hash_trie is true)
-template <typename Traits>
-void dump_hash(std::ostream& out, const typename Traits::hash_t& hash) {
+template <typename Node,
+          std::enable_if_t<has_hash_member<Node>::value, int> = 0>
+void dump_hash(std::ostream& out, const Node& node) {
   out << "hash: \"";
-  const auto* bytes = reinterpret_cast<const uint8_t*>(&hash);
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&node.hash);
   char hex[3];
-  for (size_t i = 0; i < sizeof(typename Traits::hash_t); i++) {
+  for (size_t i = 0; i < sizeof(node.hash); i++) {
     snprintf(hex, sizeof(hex), "%02x", bytes[i]);
     out << hex;
   }
@@ -94,8 +95,8 @@ template <typename Container, bool with_headers = true,
           typename Traits = typename Container::db_type::Traits>
 struct _Dumper {
   using DB = typename Container::db_type;
-  typedef _TrieNode<Traits> TrieNode;
-  typedef _LeafNode<Traits> LeafNode;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using offset_e = typename Traits::offset_e;
   using uint16_e = typename Traits::uint16_e;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;
@@ -187,8 +188,8 @@ struct _Dumper {
       dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
     }
     // Output hash for hash trie nodes
-    if constexpr (is_hash_trie_traits<Traits>::value) {
-      dump_hash<Traits>(out, leaf->hash);
+    if constexpr (has_hash_member<LeafNode>::value) {
+      dump_hash(out, *leaf);
     }
     out << "keysize: " << (uint16_t)leaf->key_size << std::endl;
     out << "key: \"";
@@ -246,8 +247,8 @@ struct _Dumper {
       dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
     }
     // Output hash for hash trie nodes (BLAKE3 of compressed prefix + child hashes)
-    if constexpr (is_hash_trie_traits<Traits>::value) {
-      dump_hash<Traits>(out, trie->hash);
+    if constexpr (has_hash_member<TrieNode>::value) {
+      dump_hash(out, *trie);
     }
     out << "size: " << size << std::endl;
     out << "compressed: " << std::endl;
@@ -311,8 +312,8 @@ struct _MemoryChecker {
   using offset_e = typename Traits::offset_e;
   using txn_ptr = typename DB::txn_ptr;
   using page_ptr = typename Traits::ptr;
-  typedef _TrieNode<Traits> TrieNode;
-  typedef _LeafNode<Traits> LeafNode;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;
   using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
 

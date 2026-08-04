@@ -35,10 +35,10 @@ typedef _TransactionalCursor<CursorTraits> InternalCursor;
 
 // Hash trie types
 typedef HashTrieTraits<CursorTraits> HTraits;
-typedef _TrieNode<HTraits> HTrieNode;
-typedef _LeafNode<HTraits> HLeafNode;
-typedef _TrieNode<CursorTraits> DTrieNode;
-typedef _LeafNode<CursorTraits> DLeafNode;
+typedef HTraits::TrieNode HTrieNode;
+typedef HTraits::LeafNode HLeafNode;
+typedef CursorTraits::TrieNode DTrieNode;
+typedef CursorTraits::LeafNode DLeafNode;
 
 /**
  * Helper: run _HashUpdater within a transaction context.

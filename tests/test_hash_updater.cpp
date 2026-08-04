@@ -56,7 +56,7 @@ void run_hash_update(DB* internal_db, typename DB::offset_e data_root,
  */
 template <typename DB>
 int count_data_nodes(DB* db, typename DB::offset_e offset) {
-  using TrieNode = _TrieNode<CursorTraits>;
+  using TrieNode = CursorTraits::TrieNode;
 
   if (!offset) return 0;
 
@@ -78,7 +78,7 @@ int count_data_nodes(DB* db, typename DB::offset_e offset) {
 template <typename DB>
 int count_hash_nodes(DB* db, typename DB::offset_e offset) {
   using HashTraits = HashTrieTraits<CursorTraits>;
-  using TrieNode = _TrieNode<HashTraits>;
+  using TrieNode = HashTraits::TrieNode;
 
   if (!offset) return 0;
 
@@ -101,7 +101,7 @@ template <typename DB>
 void collect_hash_offsets(DB* db, typename DB::offset_e offset,
                           std::set<uint64_t>& offsets) {
   using HashTraits = HashTrieTraits<CursorTraits>;
-  using TrieNode = _TrieNode<HashTraits>;
+  using TrieNode = HashTraits::TrieNode;
 
   if (!offset) return;
 
@@ -136,12 +136,12 @@ template <typename DataDB, typename HashDB>
 bool verify_structure(DataDB* data_db, HashDB* hash_db,
                       typename DataDB::offset_e data_offset,
                       typename HashDB::offset_e hash_offset) {
-  using DataTrieNode = _TrieNode<typename DataDB::CursorTraits>;
-  using DataLeafNode = _LeafNode<typename DataDB::CursorTraits>;
+  using DataTrieNode = typename DataDB::CursorTraits::TrieNode;
+  using DataLeafNode = typename DataDB::CursorTraits::LeafNode;
   // Hash trie uses HashTrieTraits which includes 32-byte hash in nodes
   using HashTraits = HashTrieTraits<typename HashDB::CursorTraits>;
-  using HashTrieNode = _TrieNode<HashTraits>;
-  using HashLeafNode = _LeafNode<HashTraits>;
+  using HashTrieNode = typename HashTraits::TrieNode;
+  using HashLeafNode = typename HashTraits::LeafNode;
 
   if (!data_offset && !hash_offset) return true;
   if (!data_offset || !hash_offset) return false;
@@ -230,7 +230,7 @@ BOOST_AUTO_TEST_CASE(single_leaf) {
   BOOST_CHECK_EQUAL(hash_root.type(), LEAF);
 
   // Verify hash is non-zero - use HashTrieTraits to access 32-byte hash
-  using HashLeafNode = _LeafNode<HashTrieTraits<Traits>>;
+  using HashLeafNode = HashTrieTraits<Traits>::LeafNode;
   auto hash_leaf = internal_db->template resolve<HashLeafNode>(&hash_root);
   bool has_hash = false;
   for (size_t i = 0; i < HASH_SIZE; ++i) {
@@ -303,7 +303,7 @@ BOOST_AUTO_TEST_CASE(incremental_update) {
   BOOST_CHECK(verify_structure(internal_db, internal_db, txn1->root, hash_root));
 
   // Get hash of a known node before modification (use HashTrieTraits)
-  using HashTrieNode = _TrieNode<HashTrieTraits<Traits>>;
+  using HashTrieNode = HashTrieTraits<Traits>::TrieNode;
   uint8_t old_root_hash[HASH_SIZE];
   {
     auto hash_trie = internal_db->template resolve<HashTrieNode>(&hash_root);
@@ -343,7 +343,7 @@ BOOST_AUTO_TEST_CASE(incremental_update) {
 BOOST_AUTO_TEST_CASE(deterministic_hashes) {
   // Same data should produce same hashes
   std::remove(TEST_FILE);  // Clean slate for this test
-  using HashLeafNode = _LeafNode<HashTrieTraits<Traits>>;
+  using HashLeafNode = HashTrieTraits<Traits>::LeafNode;
   uint8_t hash1[HASH_SIZE];
   
   {
@@ -908,7 +908,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   auto* internal_db = db._internal();
 
   using HashTraits = HashTrieTraits<Traits>;
-  using HashTrieNode = _TrieNode<HashTraits>;
+  using HashTrieNode = HashTraits::TrieNode;
 
   // Step 1: Create initial structure with long common prefix
   {
@@ -925,7 +925,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   }
 
   // Get data leaf offsets BEFORE modification (to verify COW preserves them)
-  using DataTrieNode = _TrieNode<CursorTraits>;
+  using DataTrieNode = CursorTraits::TrieNode;
   auto txn_before = internal_db->txn();
   auto data_trie_before = internal_db->template resolve<DataTrieNode>(&txn_before->root);
   int data_branch1 = data_trie_before->first();

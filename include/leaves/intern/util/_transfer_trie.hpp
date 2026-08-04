@@ -6,6 +6,7 @@ Transfer-trie helpers for serializing and traversing replication payloads.
 
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 #include "../core/_node.hpp"
@@ -27,21 +28,37 @@ struct _TransferTrie {
   // Wire format traits for nodes in this TransferTrie
   // Uses explicit little-endian types for cross-platform compatibility
   struct Traits {
-    typedef uint8_t hash_t[(WIRE_HASH_SIZE > 0) ? WIRE_HASH_SIZE : 1];
     typedef _little_uint32_t uint32_e;
     typedef _little_uint16_t uint16_e;
     typedef _little_uint64_t uint64_e;
     typedef _Offset<_little_uint64_t> offset_e;
+    using TrieNodeHeader =
+        std::conditional_t<(WIRE_HASH_SIZE > 0),
+                           _TrieNodeHeaderHash<Traits, WIRE_HASH_SIZE>,
+                           _TrieNodeHeaderNoHash<Traits>>;
+    using LeafNodeHeader =
+        std::conditional_t<(WIRE_HASH_SIZE > 0),
+                           _LeafNodeHeaderHash<Traits, WIRE_HASH_SIZE>,
+                           _LeafNodeHeaderNoHash<Traits>>;
+    using TrieNode = _TrieNode<TrieNodeHeader>;
+    using LeafNode = _LeafNode<LeafNodeHeader>;
     // Wire nodes live in a flat buffer - use a large sentinel PAGE_SIZES
-    // so _LeafNode<Traits>::MAX_SIZE can hold any wire leaf.
+    // so LeafNode::MAX_SIZE can hold any wire leaf.
     static constexpr uint16_t PAGE_SIZES[] = {65534};
     static constexpr uint16_t PAGE_SIZES_COUNT = 1;
   };
 
   // Wire format node types
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using Offset = typename Traits::offset_e;
+
+  template <typename Node, typename = void>
+  struct has_hash_member : std::false_type {};
+
+  template <typename Node>
+  struct has_hash_member<Node, std::void_t<decltype(&Node::hash)>>
+      : std::true_type {};
 
   // DBTraits: Traits for navigating DB nodes with _Cursor
   struct DBTraits : public Traits {
@@ -136,8 +153,12 @@ struct _TransferTrie {
 
     // Copy or zero-init hash depending on size match
     if constexpr (WIRE_HASH_SIZE > 0) {
-      if constexpr (sizeof(src->hash) == WIRE_HASH_SIZE) {
-        std::memcpy(dest->hash, src->hash, WIRE_HASH_SIZE);
+      if constexpr (has_hash_member<SrcTrieNode>::value) {
+        if constexpr (sizeof(src->hash) == WIRE_HASH_SIZE) {
+          std::memcpy(dest->hash, src->hash, WIRE_HASH_SIZE);
+        } else {
+          std::memset(dest->hash, 0, WIRE_HASH_SIZE);
+        }
       } else {
         std::memset(dest->hash, 0, WIRE_HASH_SIZE);
       }
@@ -189,8 +210,12 @@ struct _TransferTrie {
 
     // Copy or zero-init hash depending on size match
     if constexpr (WIRE_HASH_SIZE > 0) {
-      if constexpr (sizeof(src->hash) == WIRE_HASH_SIZE) {
-        std::memcpy(dest->hash, src->hash, WIRE_HASH_SIZE);
+      if constexpr (has_hash_member<SrcLeafNode>::value) {
+        if constexpr (sizeof(src->hash) == WIRE_HASH_SIZE) {
+          std::memcpy(dest->hash, src->hash, WIRE_HASH_SIZE);
+        } else {
+          std::memset(dest->hash, 0, WIRE_HASH_SIZE);
+        }
       } else {
         std::memset(dest->hash, 0, WIRE_HASH_SIZE);
       }

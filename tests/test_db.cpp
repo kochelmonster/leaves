@@ -319,11 +319,15 @@ void dump(DB db, const char* prefix, int index) {
 
 struct TestTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<TestTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<TestTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   static constexpr bool TRANSACTIONAL = true;
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
@@ -1442,7 +1446,7 @@ BOOST_AUTO_TEST_CASE(test_repair_unhealthy_transaction) {
   // Corrupt a page in the current (unhealthy) transaction by modifying
   // a trie node's slot_id to an out-of-range value.
   {
-    using TrieNode = _TrieNode<DBMMap::Traits>;
+    using TrieNode = DBMMap::Traits::TrieNode;
 
     auto txn = db->txn();
     if (txn->root) {
@@ -1546,8 +1550,8 @@ using DBType = std::remove_pointer_t<decltype(std::declval<DBMMap>().open(""))>;
 using DBTraits = DBType::Traits;
 using TPageHeader = DBTraits::PageHeader;
 using TOffset = DBTraits::offset_e;
-using TTrieNode = _TrieNode<DBTraits>;
-using TLeafNode = _LeafNode<DBTraits>;
+using TTrieNode = DBTraits::TrieNode;
+using TLeafNode = DBTraits::LeafNode;
 using TTriePtr = typename DBTraits::template Pointer<TTrieNode>;
 using TLeafPtr = typename DBTraits::template Pointer<TLeafNode, LEAF>;
 using TPagePtr = typename DBTraits::ptr;
