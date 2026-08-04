@@ -20,8 +20,8 @@ Platform portability macros and compiler-specific compatibility helpers.
 #include <fcntl.h>
 #include <io.h>
 #include <share.h>
-#include <winioctl.h>
 #include <windows.h>
+#include <winioctl.h>
 #else
 #include <fcntl.h>
 #include <signal.h>

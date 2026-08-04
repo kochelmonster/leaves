@@ -1,0 +1,33 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-vs18-x64",
+      "displayName": "Windows VS18 x64",
+      "description": "Default Windows configure path with repository-local dependencies",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-vs18-x64-debug",
+      "configurePreset": "windows-vs18-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-vs18-x64-release",
+      "configurePreset": "windows-vs18-x64",
+      "configuration": "Release"
+    }
+  ]
+}
