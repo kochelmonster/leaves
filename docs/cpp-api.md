@@ -71,6 +71,14 @@ int main() {
 - `static storage_ptr create(const char* path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)`
   Creates and initializes storage backed by `path`. `map_size` is the virtual-address reservation limit. `copy_write_threshold` sets the value-size threshold for copy-write behavior: values at or above the threshold are written directly to the backing file instead of being copied into mmap, for speed. `copy_write_threshold = 0` automatically calibrates the threshold during creation.
 
+- `static storage_ptr create(const std::filesystem::path& path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)`
+  Creates and initializes storage using a filesystem-native path. This overload is the preferred cross-platform option for path inputs from `std::filesystem`.
+
+- `static storage_ptr create(const wchar_t* path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)` (Windows)
+  Windows compatibility overload for wide-character path pointers.
+
+`std::string_view` is intentionally used for database names, not filesystem paths. Filesystem paths may require platform-native character types (for example `wchar_t` on Windows), which `std::string_view` alone cannot represent.
+
 - `template <typename DBClass = DB, typename... Args> auto open(std::string_view name, Args&&... args)`
   Opens or creates a named database. `DBClass` must be one of the facade tags (`MapStorage::DB`, `MapStorage::ReplicationDB`, `MapStorage::ConfluenceDB`, or `MapStorage::ConfluenceReplicationDB`). Additional `args` are forwarded to the DB wrapper.
 

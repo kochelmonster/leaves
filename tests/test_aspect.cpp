@@ -261,8 +261,17 @@ struct _AspectReplicationMMapFile
   using Base = _MemoryMapFile<Traits_, _AspectReplicationMMapFile<Traits_>>;
   using DB = _ReplicationDB<_AspectReplicationMMapFile>;
 
-  _AspectReplicationMMapFile(const char* path, size_t map_size = 2 * G)
+  _AspectReplicationMMapFile(const std::filesystem::path& path,
+                             size_t map_size = 2 * G)
       : Base(path, map_size, 1) {}
+
+  _AspectReplicationMMapFile(const char* path, size_t map_size = 2 * G)
+      : _AspectReplicationMMapFile(std::filesystem::path(path), map_size) {}
+
+#ifdef _WIN32
+  _AspectReplicationMMapFile(const wchar_t* path, size_t map_size = 2 * G)
+      : _AspectReplicationMMapFile(std::filesystem::path(path), map_size) {}
+#endif
 
   ~_AspectReplicationMMapFile() {
     // _dbs.clear() and stop_pool() handled by ~_MemoryMapFile

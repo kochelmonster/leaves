@@ -20,6 +20,7 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -178,7 +179,7 @@ struct _MemoryMapFile
   std::atomic<uint64_t> _copy_write_sync_hits{0};
 #endif
 
-  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
+  _MemoryMapFile(const std::filesystem::path& path, size_t map_size = 2 * G,
                  size_t pool_threads = SIZE_MAX,
                  uint32_t copy_write_threshold = 0)
       : PoolMixin(_lazy_pool), _write_fd(LEAVES_INVALID_FD) {
@@ -191,6 +192,20 @@ struct _MemoryMapFile
       this->start_pool(n);
     }
   }
+
+  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
+                 size_t pool_threads = SIZE_MAX,
+                 uint32_t copy_write_threshold = 0)
+      : _MemoryMapFile(std::filesystem::path(path), map_size, pool_threads,
+                       copy_write_threshold) {}
+
+#ifdef _WIN32
+  _MemoryMapFile(const wchar_t* path, size_t map_size = 2 * G,
+                 size_t pool_threads = SIZE_MAX,
+                 uint32_t copy_write_threshold = 0)
+      : _MemoryMapFile(std::filesystem::path(path), map_size, pool_threads,
+                       copy_write_threshold) {}
+#endif
 
   ~_MemoryMapFile() {
     _dbs.clear();       // destroy DBs first (cancels any scheduled jobs)
@@ -230,8 +245,9 @@ struct _MemoryMapFile
     }
   }
 
-  void init_dbfile(const char* path, size_t map_size,
+  void init_dbfile(const std::filesystem::path& path, size_t map_size,
                    uint32_t copy_write_threshold = 0) {
+    const std::string path_string = path.string();
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
@@ -240,8 +256,9 @@ struct _MemoryMapFile
       // reserve first area for header + overflow dir pages
       uint64_t fsize = AREA_SIZE;  
       std::filesystem::resize_file(path, fsize);
-      leaves::prepare_windows_sparse_mapping_file(path, map_size);
-      _file = file_mapping(path, read_write);
+      leaves::prepare_windows_sparse_mapping_file(path_string.c_str(),
+                                                  map_size);
+      _file = file_mapping(path_string.c_str(), read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
       _memory->file_size = fsize;
@@ -265,8 +282,9 @@ struct _MemoryMapFile
                         MMAP_SIGNATURE, signature));
 
       fin.close();
-                  leaves::prepare_windows_sparse_mapping_file(path, map_size);
-      _file = file_mapping(path, read_write);
+      leaves::prepare_windows_sparse_mapping_file(path_string.c_str(),
+                                                  map_size);
+      _file = file_mapping(path_string.c_str(), read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();
       if (_memory->max_processes != MAX_PROCESSES)
