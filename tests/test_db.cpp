@@ -476,15 +476,15 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_crash_recovery) {
     
     // Start transaction and allocate some data
     BOOST_REQUIRE(db->start_transaction(0));
-    BOOST_CHECK_EQUAL(db->transaction_active(), 2);  // First user txn is 2
+    BOOST_CHECK_EQUAL(db->transaction_active(), tid_t(2));  // First user txn is 2
     
     auto block1 = db->alloc_page(512);
     memcpy((char*)block1, "test_data", 10);
     
     // Prepare the commit (makes it durable)
     prepared_tid = db->prepare_commit(0);
-    BOOST_CHECK_GT(prepared_tid, 0);
-    BOOST_CHECK_EQUAL(prepared_tid, 2);
+    BOOST_CHECK(prepared_tid > tid_t(0));
+    BOOST_CHECK_EQUAL(prepared_tid, tid_t(2));
     
     // Verify prepared state
     BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
@@ -552,7 +552,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_normal_path) {
     
     // Prepare should return transaction ID
     tid_t tid = db->prepare_commit(0);
-    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK(tid > tid_t(0));
     BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
     
     // Commit should succeed and finalize
@@ -584,7 +584,7 @@ BOOST_AUTO_TEST_CASE(test_two_phase_commit_rollback_after_prepare) {
     
     // Prepare the commit
     tid_t tid = db->prepare_commit(0);
-    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK(tid > tid_t(0));
     BOOST_CHECK_NE(db->_header->prepared_txn, db->_header->read_txn);
     
     // Now rollback even after prepare
@@ -620,7 +620,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_idempotency) {
     
     // First prepare
     tid_t tid1 = db->prepare_commit(0);
-    BOOST_CHECK_GT(tid1, 0);
+    BOOST_CHECK(tid1 > tid_t(0));
     
     // Second prepare should return same txn_id (idempotent)
     tid_t tid2 = db->prepare_commit(0);
@@ -662,7 +662,7 @@ BOOST_AUTO_TEST_CASE(test_prepare_commit_pending_areas) {
     
     // Prepare the transaction
     tid_t tid = db->prepare_commit(0);
-    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK(tid > tid_t(0));
     
     using Transaction = typename std::remove_pointer_t<decltype(db)>::Transaction;
 
@@ -719,7 +719,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_uncommitted_areas) {
     
     // Prepare but don't commit - simulate a crash
     tid_t tid = db->prepare_commit(0);
-    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK(tid > tid_t(0));
     
     // Don't call commit - simulate crash after prepare
     // Just end the transaction without committing
@@ -805,7 +805,7 @@ BOOST_AUTO_TEST_CASE(test_sanitize_with_multiple_area_chains) {
     
     // Prepare the transaction
     tid_t tid = db->prepare_commit(0);
-    BOOST_CHECK_GT(tid, 0);
+    BOOST_CHECK(tid > tid_t(0));
     
     // Simulate crash - don't commit
     db->end_transaction();

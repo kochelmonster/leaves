@@ -11,6 +11,9 @@ handling of zero-valued sentinels.
 
 #include <cstdint>
 #include <limits>
+#if defined(max)
+#undef max
+#endif
 
 namespace leaves {
 
@@ -38,7 +41,7 @@ namespace leaves {
 template<typename T = uint32_t>
 struct serial_number {
   using value_type = T;
-  static constexpr T MAX_VALUE = std::numeric_limits<T>::max();
+  static constexpr T MAX_VALUE = (std::numeric_limits<T>::max)();
   static constexpr T HALF_RANGE = T(1) << (sizeof(T) * 8 - 1);
   
   // Constructors

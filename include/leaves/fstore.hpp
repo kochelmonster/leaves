@@ -1,6 +1,7 @@
 #ifndef _LEAVES_FSTORE_HPP
 #define _LEAVES_FSTORE_HPP
 
+#include <filesystem>
 #include <memory>
 #include <string_view>
 
@@ -17,10 +18,19 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
   typedef _FileStore<Traits> StorageImpl;
   typedef std::shared_ptr<FileStorage_> storage_ptr;
 
+  FileStorage_(const std::filesystem::path& path,
+      size_t cache_capacity = 500 * M)
+    : _storage(std::make_unique<StorageImpl>(path, cache_capacity)) {}
+
   FileStorage_(const char* path,
               size_t cache_capacity = 500 * M)
-      : _storage(
-            std::make_unique<StorageImpl>(path, cache_capacity)) {}
+  : FileStorage_(std::filesystem::path(path), cache_capacity) {}
+
+#ifdef _WIN32
+  FileStorage_(const wchar_t* path,
+       size_t cache_capacity = 500 * M)
+  : FileStorage_(std::filesystem::path(path), cache_capacity) {}
+#endif
 
   template <template <typename> class DBClass = _DB, typename... Args>
   TDB<FileStorage_, DBClass> open(std::string_view name, Args&&... args) {
@@ -41,9 +51,23 @@ class FileStorage_ : public std::enable_shared_from_this<FileStorage_<Traits>> {
 
   size_t file_size() const { return _storage->file_size(); }
 
-  static storage_ptr create(const char* path, size_t cache_capacity = 500 * M) {
+  static storage_ptr create(const std::filesystem::path& path,
+                            size_t cache_capacity = 500 * M) {
     return std::make_shared<FileStorage_>(path, cache_capacity);
   }
+
+  static storage_ptr create(const char* path, size_t cache_capacity = 500 * M) {
+    return std::make_shared<FileStorage_>(std::filesystem::path(path),
+                                          cache_capacity);
+  }
+
+#ifdef _WIN32
+  static storage_ptr create(const wchar_t* path,
+                            size_t cache_capacity = 500 * M) {
+    return std::make_shared<FileStorage_>(std::filesystem::path(path),
+                                          cache_capacity);
+  }
+#endif
 
   void debug_reset() { _storage->debug_reset(); }
   void debug_check_cache() const { _storage->debug_check_cache(); }

@@ -400,15 +400,35 @@ target_link_libraries(test_transfer PUBLIC core leaves_test_support blake3)
 
 add_executable(test_replication_fsm tests/test_replication_fsm.cpp)
 target_link_libraries(test_replication_fsm PUBLIC core leaves_test_support blake3)
+if (MSVC)
+    target_compile_options(test_replication_fsm PRIVATE /bigobj)
+endif()
 
 add_executable(test_replication_api tests/test_replication_api.cpp)
 target_link_libraries(test_replication_api PUBLIC core leaves_test_support blake3)
+if (MSVC)
+    target_compile_options(test_replication_api PRIVATE /bigobj)
+endif()
 
 add_executable(test_replication_multiclient tests/test_replication_multiclient.cpp)
 target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_support blake3)
 
-add_executable(ws_replication_server tests/ws_replication/server.cpp)
-target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
+set(LEAVES_HAVE_BOOST_BEAST OFF)
+find_path(LEAVES_BOOST_BEAST_INCLUDE_DIR
+    NAMES boost/beast.hpp
+    HINTS ${Boost_INCLUDE_DIR} ${Boost_INCLUDE_DIRS}
+    NO_DEFAULT_PATH
+)
+if (LEAVES_BOOST_BEAST_INCLUDE_DIR)
+    set(LEAVES_HAVE_BOOST_BEAST ON)
+endif()
+
+if (LEAVES_HAVE_BOOST_BEAST)
+    add_executable(ws_replication_server tests/ws_replication/server.cpp)
+    target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
+else()
+    message(STATUS "Skipping ws_replication_server: boost/beast.hpp not found")
+endif()
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
@@ -492,6 +512,9 @@ target_link_libraries(test_multithread PUBLIC core leaves_test_support Threads::
 
 add_executable(test_aspect tests/test_aspect.cpp)
 target_link_libraries(test_aspect PUBLIC core leaves_test_support blake3)
+if (MSVC)
+    target_compile_options(test_aspect PRIVATE /bigobj)
+endif()
 
 add_executable(test_metrics_aspects tests/test_metrics_aspects.cpp)
 target_link_libraries(test_metrics_aspects PUBLIC core leaves_test_support)

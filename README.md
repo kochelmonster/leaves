@@ -66,6 +66,12 @@ target_include_directories(mytarget PRIVATE /path/to/leaves/include)
 
 If you use the optional replication API, also compile the bundled BLAKE3 sources from `BLAKE3/c/` and add that directory to your include path.
 
+On Windows with MSVC, replication builds may require the `/bigobj` compiler flag for some targets if you hit object-file size errors. In CMake, this can be enabled for an affected target with:
+
+```cmake
+target_compile_options(mytarget PRIVATE /bigobj)
+```
+
 ### Using `add_subdirectory`
 
 Alternatively, add Leaves as a Git submodule and integrate it directly into your CMake project.
