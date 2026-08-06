@@ -471,8 +471,9 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       if (_header->area_list_head_single) {
         area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
         offset_t second = first->next;
-        if (second && read_txn->area_list_tail_single &&
-            second != _header->area_list_head_single) {
+        assert(!second || second != _header->area_list_head_single);
+        if (second) {
+          assert(read_txn->area_list_tail_single);
           _storage.return_single_areas(second, read_txn->area_list_tail_single);
           first->next = 0;
           make_dirty(first);
