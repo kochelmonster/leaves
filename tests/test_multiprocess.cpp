@@ -17,9 +17,25 @@
 #endif
 
 #include <boost/test/included/unit_test.hpp>
+#include <boost/asio/system_executor.hpp>
+
+#if defined(__has_include)
+#if __has_include(<boost/process/v1/child.hpp>) && __has_include(<boost/process/v1/args.hpp>)
 #include <boost/process/v1/child.hpp>
 #include <boost/process/v1/args.hpp>
-#include <boost/asio/system_executor.hpp>
+namespace bp = boost::process::v1;
+#elif __has_include(<boost/process/child.hpp>) && __has_include(<boost/process/args.hpp>)
+#include <boost/process/child.hpp>
+#include <boost/process/args.hpp>
+namespace bp = boost::process;
+#else
+#error "Boost.Process headers not found. Expected boost/process/(v1/)?child.hpp and args.hpp."
+#endif
+#else
+#include <boost/process/child.hpp>
+#include <boost/process/args.hpp>
+namespace bp = boost::process;
+#endif
 
 #include <chrono>
 #include <cstdarg>
@@ -44,8 +60,6 @@ using mp_test::create_db;
 using mp_test::kCrashExitCode;
 using mp_test::mkkey;
 using mp_test::mkval;
-
-namespace bp = boost::process::v1;
 
 static constexpr auto CHILD_TIMEOUT = std::chrono::seconds(30);
 
