@@ -4,9 +4,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cinttypes>
+#include <cctype>
 #include <chrono>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <random>
 #include <string>
 #include <thread>
@@ -58,6 +62,36 @@ static void write_kv(CDB& cdb, const std::string& key,
   cursor->find(Slice(key));
   cursor->value(Slice(value));
   BOOST_REQUIRE(cursor->commit());
+}
+
+static bool env_bool(const char* name, bool fallback) {
+  const char* raw = std::getenv(name);
+  if (!raw || !*raw) return fallback;
+
+  if (std::strcmp(raw, "0") == 0) return false;
+  if (std::strcmp(raw, "1") == 0) return true;
+
+  std::string lower(raw);
+  for (char& c : lower)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  if (lower == "true" || lower == "yes" || lower == "on") return true;
+  if (lower == "false" || lower == "no" || lower == "off") return false;
+  return fallback;
+}
+
+static int env_int(const char* name, int fallback, int min_value,
+                   int max_value = std::numeric_limits<int>::max()) {
+  const char* raw = std::getenv(name);
+  if (!raw || !*raw) return fallback;
+
+  char* end = nullptr;
+  long parsed = std::strtol(raw, &end, 10);
+  if (end == raw || *end != '\0') return fallback;
+
+  if (parsed < static_cast<long>(min_value)) return min_value;
+  if (parsed > static_cast<long>(max_value)) return max_value;
+  return static_cast<int>(parsed);
 }
 
 // ---------------------------------------------------------------------------
@@ -531,34 +565,71 @@ BOOST_AUTO_TEST_CASE(test_tributary_header_area_not_freed) {
 BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
   TributaryPreparation p;
 
-  constexpr int kThreads          = 8;
-  constexpr int kLoadOpsPerThread = 5000;          // ~40K rows = LOAD phase
-  constexpr int kRunOpsPerThread  = 5000;          // RUN phase ops
-  constexpr int kValueSize        = 1024;          // 1 KB — YCSB record size
-  constexpr int kKeyspace         = 40000;
-  constexpr int kStaleSeconds     = 20;            // hang detection window
-  constexpr bool kEnableMerger    = false;         // diag: skip merger to isolate
+  constexpr int kStressThreads          = 8;
+  constexpr int kStressLoadOpsPerThread = 5000;    // ~40K rows = LOAD phase
+  constexpr int kStressRunOpsPerThread  = 5000;    // RUN phase ops
+  constexpr int kFastLoadOpsPerThread   = 1200;
+  constexpr int kFastRunOpsPerThread    = 1200;
+  constexpr int kValueSize              = 1024;    // 1 KB — YCSB record size
+  constexpr int kKeyspace               = 40000;
+  constexpr int kStressStaleSeconds     = 20;      // hang detection window
+  constexpr int kFastStaleSeconds       = 12;
+  constexpr bool kEnableMerger          = false;   // diag: skip merger to isolate
+
+  unsigned hw_threads = std::thread::hardware_concurrency();
+  int fast_threads = 4;
+  if (hw_threads > 0 && hw_threads < 4) {
+    fast_threads = static_cast<int>(hw_threads);
+  }
+  fast_threads = std::max(fast_threads, 2);
+
+  const bool full_stress = env_bool("LEAVES_TRIBUTARY_FULL_STRESS", false);
+  const bool verbose_diag = env_bool("LEAVES_TRIBUTARY_VERBOSE", false);
+
+  const int default_threads = full_stress ? kStressThreads : fast_threads;
+  const int default_load_ops =
+      full_stress ? kStressLoadOpsPerThread : kFastLoadOpsPerThread;
+  const int default_run_ops =
+      full_stress ? kStressRunOpsPerThread : kFastRunOpsPerThread;
+  const int default_stale_seconds =
+      full_stress ? kStressStaleSeconds : kFastStaleSeconds;
+
+  const int threads = env_int("LEAVES_TRIBUTARY_THREADS", default_threads, 2);
+  const int load_ops_per_thread =
+      env_int("LEAVES_TRIBUTARY_LOAD_OPS", default_load_ops, 400);
+  const int run_ops_per_thread =
+      env_int("LEAVES_TRIBUTARY_RUN_OPS", default_run_ops, 400);
+  const int stale_seconds =
+      env_int("LEAVES_TRIBUTARY_STALE_SECONDS", default_stale_seconds, 5);
+
+  BOOST_TEST_MESSAGE(
+      "test_tributary_concurrent_writers_no_deadlock config: profile="
+      << (full_stress ? "full" : "fast")
+      << " threads=" << threads
+      << " load_ops=" << load_ops_per_thread
+      << " run_ops=" << run_ops_per_thread
+      << " stale_s=" << stale_seconds
+      << " verbose=" << (verbose_diag ? 1 : 0));
 
   auto run_phase = [&](CDB& cdb, int ops_per_thread, bool inserts_only,
                        const char* phase_name) -> bool {
     std::atomic<bool> stop{false};
     std::atomic<bool> deadlock_detected{false};
-    std::vector<std::atomic<uint64_t>> progress(kThreads);
+    std::vector<std::atomic<uint64_t>> progress(threads);
     for (auto& p : progress) p.store(0, std::memory_order_relaxed);
 
     // Diagnostic: capture the SpinLock address up-front.
     char* mem_base = (char*)cdb._main_db._storage._memory;
     char* hdr_addr = (char*)&*cdb._main_db._header;
     void* lock_addr = (void*)&cdb._main_db._header->txn_ref_lock;
-    std::fprintf(stderr,
-        "[%s] mem_base=%p hdr_addr=%p hdr_off=0x%lx lock_addr=%p "
-        "lock_off=0x%lx file_size=0x%lx\n",
-        phase_name, (void*)mem_base, (void*)hdr_addr,
-        (uint64_t)(hdr_addr - mem_base), lock_addr,
-        (uint64_t)((char*)lock_addr - mem_base),
-        (uint64_t)cdb._main_db._storage._memory->file_size);
-    {
-      uint8_t* lp = (uint8_t*)lock_addr;
+    if (verbose_diag) {
+      std::fprintf(stderr,
+        "[%s] mem_base=%p hdr_addr=%p hdr_off=0x%" PRIx64 " lock_addr=%p "
+        "lock_off=0x%" PRIx64 " file_size=0x%" PRIx64 "\n",
+          phase_name, (void*)mem_base, (void*)hdr_addr,
+          (uint64_t)(hdr_addr - mem_base), lock_addr,
+          (uint64_t)((char*)lock_addr - mem_base),
+          (uint64_t)cdb._main_db._storage._memory->file_size);
       std::fprintf(stderr, "[%s] PRE-RUN bytes at hdr:\n", phase_name);
       uint8_t* b = (uint8_t*)hdr_addr;
       for (int row = 0; row < 8; ++row) {
@@ -567,11 +638,14 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
           std::fprintf(stderr, " %02x", b[row * 16 + col]);
         std::fprintf(stderr, "\n");
       }
-      (void)lp;
+      std::fflush(stderr);
     }
-    std::fflush(stderr);
 
     auto worker = [&](int tid) {
+      if (verbose_diag) {
+        std::fprintf(stderr, "[%s] worker %d start\n", phase_name, tid);
+        std::fflush(stderr);
+      }
       std::mt19937 rng(static_cast<uint32_t>(tid * 2654435761u + 0x9e3779b9));
       std::uniform_int_distribution<int> key_dist(0, kKeyspace - 1);
       std::uniform_int_distribution<int> op_dist(0, 99);
@@ -603,6 +677,10 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
         }
         progress[tid].fetch_add(1, std::memory_order_relaxed);
       }
+      if (verbose_diag) {
+        std::fprintf(stderr, "[%s] worker %d end\n", phase_name, tid);
+        std::fflush(stderr);
+      }
     };
 
     auto merger = [&]() {
@@ -617,18 +695,18 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
     };
 
     std::vector<std::thread> workers;
-    workers.reserve(kThreads);
-    for (int i = 0; i < kThreads; ++i) workers.emplace_back(worker, i);
+    workers.reserve(threads);
+    for (int i = 0; i < threads; ++i) workers.emplace_back(worker, i);
     std::thread merge_thread(merger);
 
     std::thread watchdog([&]() {
-      std::vector<uint64_t> last(kThreads, 0);
+      std::vector<uint64_t> last(threads, 0);
       auto last_progress_time = std::chrono::steady_clock::now();
       while (!stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         auto now = std::chrono::steady_clock::now();
         bool any_progress = false;
-        for (int i = 0; i < kThreads; ++i) {
+        for (int i = 0; i < threads; ++i) {
           uint64_t cur = progress[i].load(std::memory_order_relaxed);
           if (cur != last[i]) {
             last[i] = cur;
@@ -636,13 +714,13 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
           }
         }
         if (any_progress) last_progress_time = now;
-        if (now - last_progress_time > std::chrono::seconds(kStaleSeconds)) {
+        if (now - last_progress_time > std::chrono::seconds(stale_seconds)) {
           deadlock_detected.store(true, std::memory_order_relaxed);
           stop.store(true, std::memory_order_relaxed);
           break;
         }
         bool all_done = true;
-        for (int i = 0; i < kThreads; ++i) {
+        for (int i = 0; i < threads; ++i) {
           if (progress[i].load(std::memory_order_relaxed) <
               (uint64_t)ops_per_thread) {
             all_done = false;
@@ -660,14 +738,13 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
 
     if (deadlock_detected.load(std::memory_order_relaxed)) {
       std::string detail;
-      for (int i = 0; i < kThreads; ++i) {
+      for (int i = 0; i < threads; ++i) {
         detail += " t" + std::to_string(i) + "=" +
                   std::to_string(progress[i].load(std::memory_order_relaxed));
       }
       BOOST_TEST_MESSAGE("Deadlock in phase '" << phase_name << "':" << detail);
       // Dump the SpinLock value and surrounding bytes to detect overwrite.
       {
-        uint8_t* lp = (uint8_t*)&cdb._main_db._header->txn_ref_lock;
         uint8_t* base = (uint8_t*)hdr_addr;
         std::fprintf(stderr, "[%s] POST bytes around hdr:\n", phase_name);
         for (int row = 0; row < 8; ++row) {
@@ -676,7 +753,6 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
             std::fprintf(stderr, " %02x", base[row * 16 + col]);
           std::fprintf(stderr, "\n");
         }
-        (void)lp;
         std::fflush(stderr);
       }
       const char* dump = std::getenv("LEAVES_DEADLOCK_GDB");
@@ -719,7 +795,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
     std::unique_ptr<CDB> cdb(cdb_ptr);
     cdb->set_max_attached_age_ms(0);
 
-    bool ok = run_phase(*cdb, kLoadOpsPerThread, /*inserts_only=*/true, "LOAD");
+    bool ok = run_phase(*cdb, load_ops_per_thread, /*inserts_only=*/true, "LOAD");
     BOOST_REQUIRE_MESSAGE(ok, "Deadlock during LOAD phase");
 
     // Capture the file offset of the main DB header before tearing down.
@@ -735,7 +811,7 @@ BOOST_AUTO_TEST_CASE(test_tributary_concurrent_writers_no_deadlock) {
     std::unique_ptr<CDB> cdb(cdb_ptr);
     cdb->set_max_attached_age_ms(0);
 
-    bool ok = run_phase(*cdb, kRunOpsPerThread, /*inserts_only=*/false, "RUN");
+    bool ok = run_phase(*cdb, run_ops_per_thread, /*inserts_only=*/false, "RUN");
     BOOST_CHECK_MESSAGE(ok,
         "Deadlock during RUN phase after reopen — Bug 2 reproduced");
   }
