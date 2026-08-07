@@ -1,10 +1,28 @@
 #define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE multiprocess
-#include <boost/test/included/unit_test.hpp>
 
-#include <boost/process.hpp>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
+#ifndef BOOST_PROCESS_USE_STD_FS
+#define BOOST_PROCESS_USE_STD_FS
+#endif
+
+#include <boost/test/included/unit_test.hpp>
+#include <boost/process/v1/child.hpp>
+#include <boost/process/v1/args.hpp>
+#include <boost/asio/system_executor.hpp>
 
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -27,7 +45,7 @@ using mp_test::kCrashExitCode;
 using mp_test::mkkey;
 using mp_test::mkval;
 
-namespace bp = boost::process;
+namespace bp = boost::process::v1;
 
 static constexpr auto CHILD_TIMEOUT = std::chrono::seconds(30);
 
@@ -40,6 +58,16 @@ struct SpawnedChild {
   bp::child process;
 };
 
+static void diag(const char* fmt, ...) {
+  std::fprintf(stderr, "[diag][parent] ");
+  va_list args;
+  va_start(args, fmt);
+  std::vfprintf(stderr, fmt, args);
+  va_end(args);
+  std::fprintf(stderr, "\n");
+  std::fflush(stderr);
+}
+
 static std::filesystem::path helper_executable_path() {
   auto* argv0 = boost::unit_test::framework::master_test_suite().argv[0];
   std::filesystem::path test_executable = std::filesystem::absolute(argv0);
@@ -48,11 +76,14 @@ static std::filesystem::path helper_executable_path() {
 
 static SpawnedChild spawn_child(std::string description,
                                 std::vector<std::string> args) {
-  return {std::move(description),
-          bp::child(helper_executable_path().string(), bp::args(args))};
+  return {
+      std::move(description),
+      bp::child(helper_executable_path().string(), bp::args(args))};
 }
 
 static bool wait_for_exit(SpawnedChild& child, int expected_exit_code) {
+  diag("waiting for %s (expected exit %d)", child.description.c_str(),
+       expected_exit_code);
   auto deadline = std::chrono::steady_clock::now() + CHILD_TIMEOUT;
   while (child.process.running()) {
     if (std::chrono::steady_clock::now() >= deadline) {
@@ -65,6 +96,8 @@ static bool wait_for_exit(SpawnedChild& child, int expected_exit_code) {
   }
 
   int exit_code = child.process.exit_code();
+  diag("%s exited with code %d (expected %d)", child.description.c_str(),
+       exit_code, expected_exit_code);
   if (exit_code == expected_exit_code) return true;
 
   std::fprintf(stderr, "[parent] %s exited %d (expected %d)\n",
@@ -105,11 +138,17 @@ BOOST_AUTO_TEST_CASE(test_mp_concurrent_writes) {
 
   constexpr int kProcs = 4;
   constexpr int kPer = 500;
+#ifdef _WIN32
+  constexpr const char* kChildMerge = "0";
+#else
+  constexpr const char* kChildMerge = "1";
+#endif
   std::vector<SpawnedChild> children;
   for (int c = 0; c < kProcs; ++c)
     children.push_back(spawn_child(
         "concurrent-writer",
-        {"write-range", std::to_string(c * kPer), std::to_string(kPer), "1"}));
+        {"write-range", std::to_string(c * kPer), std::to_string(kPer),
+         kChildMerge}));
 
   for (auto& child : children) BOOST_CHECK(wait_ok(child));
 
@@ -154,10 +193,11 @@ BOOST_AUTO_TEST_CASE(test_mp_crash_during_merge) {
   create_db();
 
   constexpr int kKeys = 300;
-  auto crasher = spawn_child("crash-during-merge",
-                             {"crash-during-merge", std::to_string(kKeys)});
-
-  BOOST_REQUIRE(wait_ok(crasher));
+  {
+    auto crasher = spawn_child("crash-during-merge",
+                               {"crash-during-merge", std::to_string(kKeys)});
+    BOOST_REQUIRE(wait_ok(crasher));
+  }
 
   // Reopen: sanitize()/_merge_unclaimed_tributaries() must drain the orphaned
   // MERGING slot left by the dead process.
@@ -181,19 +221,26 @@ BOOST_AUTO_TEST_CASE(test_mp_sanitize_after_crash_during_transaction) {
   constexpr int kPreCrashKeys = 200;
   constexpr int kCrashKeys = 100;
 
-  auto child = spawn_child("crash-during-transaction",
-                           {"crash-during-transaction",
-                            std::to_string(kPreCrashKeys),
-                            std::to_string(kCrashKeys)});
+  diag("starting crash-during-transaction test");
+  {
+    auto child = spawn_child("crash-during-transaction",
+                             {"crash-during-transaction",
+                              std::to_string(kPreCrashKeys),
+                              std::to_string(kCrashKeys)});
 
-  BOOST_REQUIRE(wait_crash(child));
+    diag("waiting for child crash exit");
+    BOOST_REQUIRE(wait_crash(child));
+  }
+  diag("child crash exit observed; reopening storage");
 
   // Reopen: sanitize() must recover committed data and discard the
   // uncommitted transaction.
   auto storage = std::make_unique<StorageImpl>(MP_FILE);
   auto* main_db = storage->template open<_DB>("main");
   CDB cdb(*main_db);
+  diag("calling merge_all_now after reopen");
   cdb.merge_all_now();
+  diag("merge_all_now completed");
 
   // All pre-crash keys must be present.
   verify_range(cdb, 0, kPreCrashKeys);
@@ -263,14 +310,16 @@ BOOST_AUTO_TEST_CASE(test_mp_sanitize_recover_lost_areas) {
   // -----------------------------------------------------------------------
   //  Child
   // -----------------------------------------------------------------------
-  auto child = spawn_child("recover-lost-areas-crash",
-                           {"recover-lost-areas-crash", std::to_string(kKeys),
-                            std::to_string(kCorrupt)});
+  {
+    auto child = spawn_child("recover-lost-areas-crash",
+                             {"recover-lost-areas-crash", std::to_string(kKeys),
+                              std::to_string(kCorrupt)});
 
-  // -----------------------------------------------------------------------
-  //  Parent – wait for child
-  // -----------------------------------------------------------------------
-  BOOST_REQUIRE(wait_crash(child));
+    // -----------------------------------------------------------------------
+    //  Parent – wait for child
+    // -----------------------------------------------------------------------
+    BOOST_REQUIRE(wait_crash(child));
+  }
 
   // -----------------------------------------------------------------------
   //  Reopen – sanitize() → recover_areas() runs here
@@ -421,13 +470,15 @@ BOOST_AUTO_TEST_CASE(test_mp_two_phase_commit_crash_before_commit) {
   // -----------------------------------------------------------------------
   //  Child
   // -----------------------------------------------------------------------
-  auto child = spawn_child("two-phase-prepare-crash",
-                           {"two-phase-prepare-crash", std::to_string(kKeys)});
+  {
+    auto child = spawn_child("two-phase-prepare-crash",
+                             {"two-phase-prepare-crash", std::to_string(kKeys)});
 
-  // -----------------------------------------------------------------------
-  //  Parent – wait for child
-  // -----------------------------------------------------------------------
-  BOOST_REQUIRE(wait_crash(child));
+    // -----------------------------------------------------------------------
+    //  Parent – wait for child
+    // -----------------------------------------------------------------------
+    BOOST_REQUIRE(wait_crash(child));
+  }
 
   // -----------------------------------------------------------------------
   //  Reopen – sanitize() restores the prepared transaction as active
@@ -452,10 +503,10 @@ BOOST_AUTO_TEST_CASE(test_mp_two_phase_commit_crash_before_commit) {
   }
 
   // ----- 3. Commit the recovered prepared transaction --------------------
-  // DB::commit(0, true) uses cursor_id=0 which matches txn_cursor_id=0
-  // (set by sanitize).  prepare_commit sees prepared_txn != read_txn and
-  // returns the existing txn_id, then commit atomically advances read_txn.
-  BOOST_REQUIRE_MESSAGE(main_db->commit(0, true),
+  // Use whatever cursor id is currently bound to the recovered transaction
+  // state (0 after sanitize, or a recovered in-flight id on other paths).
+  uint64_t recovered_cursor_id = main_db->txn_cursor_id();
+  BOOST_REQUIRE_MESSAGE(main_db->commit(recovered_cursor_id, true),
                         "commit of the recovered prepared transaction failed");
 
   // ----- 5. After commit the data must be readable via normal cursors ----
@@ -497,13 +548,15 @@ BOOST_AUTO_TEST_CASE(test_mp_wal_crash_before_commit) {
   // -----------------------------------------------------------------------
   //  Child
   // -----------------------------------------------------------------------
-  auto child = spawn_child("wal-prepare-crash",
-                           {"wal-prepare-crash", std::to_string(kKeys)});
+  {
+    auto child = spawn_child("wal-prepare-crash",
+                             {"wal-prepare-crash", std::to_string(kKeys)});
 
-  // -----------------------------------------------------------------------
-  //  Parent – wait for child
-  // -----------------------------------------------------------------------
-  BOOST_REQUIRE(wait_crash(child));
+    // -----------------------------------------------------------------------
+    //  Parent – wait for child
+    // -----------------------------------------------------------------------
+    BOOST_REQUIRE(wait_crash(child));
+  }
 
   // -----------------------------------------------------------------------
   //  Reopen – sanitize() → wal_recover() replays the dangling WAL txn
@@ -528,10 +581,10 @@ BOOST_AUTO_TEST_CASE(test_mp_wal_crash_before_commit) {
   }
 
   // ----- 3. Commit the recovered prepared transaction --------------------
-  // DB::commit(0, true) uses cursor_id=0 which matches txn_cursor_id=0
-  // (set by sanitize).  prepare_commit sees prepared_txn != read_txn and
-  // returns the existing txn_id, then commit atomically advances read_txn.
-  BOOST_REQUIRE_MESSAGE(main_db->commit(0, true),
+  // Use whatever cursor id is currently bound to the recovered transaction
+  // state (0 after sanitize, or a recovered in-flight id on other paths).
+  uint64_t recovered_cursor_id = main_db->txn_cursor_id();
+  BOOST_REQUIRE_MESSAGE(main_db->commit(recovered_cursor_id, true),
                         "commit of the recovered prepared transaction failed");
 
   // ----- 4. After commit the data must be readable via normal cursors ----

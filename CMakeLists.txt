@@ -343,6 +343,17 @@ function(leaves_add_test target)
         LABELS "${LEAVES_TEST_LABELS}")
 endfunction()
 
+function(leaves_stage_runtime_dlls target)
+    if (WIN32)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                -DOUTPUT_DIR=$<TARGET_FILE_DIR:${target}>
+                -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
+                -DCONFIG=$<CONFIG>
+                -P ${CMAKE_SOURCE_DIR}/cmake/stage_runtime_dlls.cmake)
+    endif()
+endfunction()
+
 add_library(leaves_test_support INTERFACE)
 
 target_include_directories(leaves_test_support
@@ -485,6 +496,7 @@ target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
 add_executable(test_multiprocess_helper tests/test_multiprocess_helper.cpp)
 target_link_libraries(test_multiprocess_helper PUBLIC core Threads::Threads)
+leaves_stage_runtime_dlls(test_multiprocess_helper)
 
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support Threads::Threads)
@@ -493,6 +505,7 @@ target_compile_definitions(test_multiprocess PRIVATE
 if (TARGET Boost::process)
     target_link_libraries(test_multiprocess PUBLIC Boost::process)
 endif()
+leaves_stage_runtime_dlls(test_multiprocess)
 
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
@@ -549,11 +562,10 @@ foreach(target IN ITEMS
     test_replication_api
     test_tributary
     test_multithread
-    test_replication_multiclient)
-    leaves_add_test(${target} TIMEOUT 180 LABELS "native;integration")
+    test_replication_multiclient
+    test_multiprocess)
+    leaves_add_test(${target} TIMEOUT 900 LABELS "native;integration")
 endforeach()
-
-leaves_add_test(test_multiprocess TIMEOUT 180 LABELS "native;integration")
 
 add_executable(profile tests/profile.cpp)
 
@@ -682,6 +694,10 @@ target_sources(lbench INTERFACE
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb Threads::Threads blake3)
+if (MSVC)
+set_target_properties(db_bench_leaves PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_BINARY_DIR}")
+endif()
 
 if(NOT MSVC)
 find_path(LEAVES_LMDB_INCLUDE_DIR NAMES lmdb.h)

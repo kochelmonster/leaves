@@ -43,20 +43,42 @@ inline void create_db() {
 
 inline bool child_write_range(int base, int count, bool merge) {
   try {
+    std::fprintf(stderr, "[diag][helper] child_write_range begin base=%d count=%d merge=%d\n", base, count, merge ? 1 : 0);
+    std::fflush(stderr);
     auto storage = std::make_unique<StorageImpl>(MP_FILE);
     auto* main_db = storage->template open<_DB>("main");
     CDB cdb(*main_db);
     auto cursor = cdb.create_cursor();
-    if (!cursor->start_transaction()) return false;
+    std::fprintf(stderr, "[diag][helper] child_write_range opening txn\n");
+    std::fflush(stderr);
+    if (!cursor->start_transaction()) {
+      std::fprintf(stderr, "[diag][helper] child_write_range start_transaction failed\n");
+      std::fflush(stderr);
+      return false;
+    }
     for (int i = 0; i < count; ++i) {
       cursor->find(Slice(mkkey(base + i)));
       cursor->value(Slice(mkval(base + i)));
     }
-    if (!cursor->commit()) return false;
+    std::fprintf(stderr, "[diag][helper] child_write_range about to commit\n");
+    std::fflush(stderr);
+    if (!cursor->commit()) {
+      std::fprintf(stderr, "[diag][helper] child_write_range commit failed\n");
+      std::fflush(stderr);
+      return false;
+    }
     cursor.reset();
-    if (merge) cdb.merge_all_now();
+    if (merge) {
+      std::fprintf(stderr, "[diag][helper] child_write_range calling merge_all_now\n");
+      std::fflush(stderr);
+      cdb.merge_all_now();
+    }
+    std::fprintf(stderr, "[diag][helper] child_write_range success\n");
+    std::fflush(stderr);
     return true;
   } catch (...) {
+    std::fprintf(stderr, "[diag][helper] child_write_range threw exception\n");
+    std::fflush(stderr);
     return false;
   }
 }
@@ -147,6 +169,10 @@ inline void crash_during_merge(int key_count) {
 }
 
 inline void crash_during_transaction(int committed_keys, int interrupted_keys) {
+  std::fprintf(stderr,
+               "[diag][helper] crash_during_transaction begin committed=%d interrupted=%d\n",
+               committed_keys, interrupted_keys);
+  std::fflush(stderr);
   auto storage = std::make_unique<StorageImpl>(MP_FILE);
   auto* main_db = storage->template open<_DB>("main");
   CDB cdb(*main_db);
@@ -160,6 +186,8 @@ inline void crash_during_transaction(int committed_keys, int interrupted_keys) {
     }
     if (!cursor->commit()) abrupt_exit(1);
   }
+  std::fprintf(stderr, "[diag][helper] crash_during_transaction committed first batch\n");
+  std::fflush(stderr);
 
   auto cursor = cdb.create_cursor();
   if (!cursor->start_transaction()) abrupt_exit(1);
@@ -167,6 +195,8 @@ inline void crash_during_transaction(int committed_keys, int interrupted_keys) {
     cursor->find(Slice(mkkey(committed_keys + i)));
     cursor->value(Slice(mkval(committed_keys + i)));
   }
+  std::fprintf(stderr, "[diag][helper] crash_during_transaction about to crash\n");
+  std::fflush(stderr);
 
   abrupt_exit(kCrashExitCode);
 }

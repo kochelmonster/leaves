@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 
 #include <atomic>
+#include <filesystem>
 #include <thread>
 
 #include <boost/endian/conversion.hpp>
@@ -161,6 +162,48 @@ namespace leveldb {
 
 // Helper for quickly generating random data.
 namespace {
+namespace fs = std::filesystem;
+
+// Remove children in parent directory whose filename starts with prefix.
+// Works for files and directories and avoids shell-dependent wildcard cleanup.
+static bool RemoveChildrenWithPrefix(const fs::path& parent,
+                                     const std::string& prefix,
+                                     std::string* error_message = nullptr) {
+  std::error_code ec;
+  if (!fs::exists(parent, ec)) return true;
+  if (ec) {
+    if (error_message) *error_message = ec.message();
+    return false;
+  }
+
+  fs::directory_iterator it(parent, ec);
+  if (ec) {
+    if (error_message) *error_message = ec.message();
+    return false;
+  }
+
+  for (const auto& entry : it) {
+    const std::string name = entry.path().filename().string();
+    if (name.rfind(prefix, 0) != 0) continue;
+    fs::remove_all(entry.path(), ec);
+    if (ec) {
+      if (error_message) *error_message = ec.message();
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool RemovePathPrefix(const char* path_prefix,
+                             std::string* error_message = nullptr) {
+  if (path_prefix == nullptr || path_prefix[0] == '\0') return true;
+  fs::path p(path_prefix);
+  fs::path parent = p.parent_path();
+  if (parent.empty()) parent = fs::current_path();
+  return RemoveChildrenWithPrefix(parent, p.filename().string(),
+                                  error_message);
+}
+
 class RandomGenerator {
  private:
   std::vector<char> data_;
@@ -448,27 +491,21 @@ class Benchmark {
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
         bytes_(0),
         rand_(301) {
-    std::vector<std::string> files;
     std::string test_dir;
     leveldb::Env::Default()->GetTestDirectory(&test_dir);
-    leveldb::Env::Default()->GetChildren(test_dir.c_str(), &files);
     if (!FLAGS_use_existing_db) {
-      // Remove db directories from previous runs (they are directories, use rm -rf)
-      char cmd[200];
-      sprintf(cmd, "rm -rf %s/dbbench_mdb-*", test_dir.c_str());
-      int cleanup_status = std::system(cmd);
-      if (cleanup_status != 0) {
+      std::string cleanup_error;
+      if (!RemoveChildrenWithPrefix(fs::path(test_dir), "dbbench_mdb-",
+                                    &cleanup_error)) {
         std::fprintf(stderr,
-                     "warning: failed to remove previous benchmark directories: %s (status=%d)\n",
-                     cmd, cleanup_status);
+                     "warning: failed to remove previous benchmark directories in %s: %s\n",
+                     test_dir.c_str(), cleanup_error.c_str());
       }
-      for (int i = 0; i < files.size(); i++) {
-        if (leveldb::Slice(files[i]).starts_with("dbbench_leaves")) {
-          std::string file_name(test_dir);
-          file_name += "/";
-          file_name += files[i];
-          leveldb::Env::Default()->RemoveFile(file_name.c_str());
-        }
+      if (!RemoveChildrenWithPrefix(fs::path(test_dir), "dbbench_leaves",
+                                    &cleanup_error)) {
+        std::fprintf(stderr,
+                     "warning: failed to remove previous benchmark files in %s: %s\n",
+                     test_dir.c_str(), cleanup_error.c_str());
       }
     }
   }
@@ -655,15 +692,19 @@ class Benchmark {
     assert(file_storage_ == nullptr && map_storage_ == nullptr);
 
     // Initialize db_
-    char file_name[100], cmd[200];
+    char file_name[100];
     db_num_++;
     std::string test_dir;
     leveldb::Env::Default()->GetTestDirectory(&test_dir);
     std::snprintf(file_name, sizeof(file_name), "%s/dbbench_mdb-%d",
                   test_dir.c_str(), db_num_);
 
-    sprintf(cmd, "mkdir -p %s", file_name);
-    int r = system(cmd);
+    std::error_code ec;
+    fs::create_directories(fs::path(file_name), ec);
+    if (ec) {
+      throw std::runtime_error("failed to create benchmark directory: " +
+                               ec.message());
+    }
 
     std::string test_fname(file_name);
     test_fname.append("/bench.lvs");
@@ -834,14 +875,16 @@ class Benchmark {
 
       // Clean up existing storage if any
       if (file_storage_ || map_storage_) {
-        char cmd[200];
-        sprintf(cmd, "rm -rf %s*", FLAGS_db);
-
         confluence_db_.reset();  // cancel monitor before releasing storage
         file_storage_.reset();
         map_storage_.reset();
 
-        int r = system(cmd);
+        std::string cleanup_error;
+        if (!RemovePathPrefix(FLAGS_db, &cleanup_error)) {
+          std::fprintf(stderr,
+                       "warning: failed to remove benchmark paths for prefix '%s': %s\n",
+                       FLAGS_db ? FLAGS_db : "", cleanup_error.c_str());
+        }
       }
 
       Open(sync);

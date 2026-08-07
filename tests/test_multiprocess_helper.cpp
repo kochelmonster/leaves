@@ -1,5 +1,6 @@
 #include "test_multiprocess_shared.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -25,6 +26,10 @@ int main(int argc, char** argv) {
   std::string action = argv[1];
 
   try {
+    std::fprintf(stderr, "[diag][helper] action=%s\n", action.c_str());
+    std::fflush(stderr);
+    std::fprintf(stderr, "[diag][helper] argc=%d\n", argc);
+    std::fflush(stderr);
     if (action == "write-range" && argc == 5) {
       return mp_test::child_write_range(parse_int(argv[2]), parse_int(argv[3]),
                                         parse_int(argv[4]) != 0)
