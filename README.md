@@ -52,7 +52,8 @@ To use Leaves, you need:
 
 - A C++20 compiler
 - Boost 1.80 or newer
-- CMake 3.23 or newer when using the CMake integration or building the repository
+- CMake 3.25 or newer for preset workflow builds (`cmake --workflow --preset ...`)
+- CMake 3.22 or newer for manual configure/build invocations
 
 Simply integrate it into your project using one of the following methods.
 
@@ -147,6 +148,26 @@ cmake --build build --target package
 ## Building the Tests and Benchmarks
 
 Building the repository is only required to run the included tests and benchmarks or to contribute to Leaves.
+
+### Default profile: tests in Debug, benchmarks in Release
+
+Use the default workflow preset to configure once and build tests in Debug mode followed by benchmarks in Release mode.
+
+Linux:
+
+```bash
+cmake --workflow --preset default
+ctest --test-dir build-default -C Debug --output-on-failure
+```
+
+Windows:
+
+```powershell
+cmake --workflow --preset default-windows
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+The Linux default profile uses the `Ninja Multi-Config` generator to support Debug and Release builds from one configure step.
 
 ### Windows (out-of-box)
 

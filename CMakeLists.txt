@@ -396,9 +396,12 @@ target_link_options(leaves_test_support INTERFACE -fsanitize=address)
 endif()
 endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 
-find_package(Boost 1.80 REQUIRED COMPONENTS process)
+find_package(boost_process CONFIG QUIET)
+if (TARGET boost_process::boost_process AND NOT TARGET Boost::process)
+    add_library(Boost::process ALIAS boost_process::boost_process)
+endif()
 if (NOT TARGET Boost::process)
-    find_package(boost_process CONFIG REQUIRED)
+    message(STATUS "Boost::process CMake target not found; test_multiprocess will build without explicit Boost::process link target")
 endif()
 
 add_executable(test_mmap tests/test_mmap.cpp)
@@ -566,6 +569,37 @@ foreach(target IN ITEMS
     test_multiprocess)
     leaves_add_test(${target} TIMEOUT 900 LABELS "native;integration")
 endforeach()
+
+add_custom_target(leaves_tests)
+add_dependencies(leaves_tests
+    test_mmap
+    test_transfer
+    test_replication_fsm
+    test_replication_api
+    test_replication_multiclient
+    test_fstore
+    test_memory
+    test_memstore
+    test_bits
+    test_cursor
+    test_node
+    test_db
+    test_wal
+    test_bigmemory
+    test_map_storage
+    test_file_storage
+    test_string_insert
+    test_merger
+    test_tributary
+    test_multiprocess_helper
+    test_multiprocess
+    test_hash_updater
+    test_hash_lookup
+    test_serial
+    test_twoquecache
+    test_multithread
+    test_aspect
+    test_metrics_aspects)
 
 add_executable(profile tests/profile.cpp)
 
@@ -779,6 +813,21 @@ else()
     message(STATUS "RocksDB not found - skipping db_bench_rocksdb")
 endif()
 endif() # NOT MSVC (rocksdb)
+
+
+add_custom_target(leaves_benchmarks)
+add_dependencies(leaves_benchmarks
+    db_bench_leaves
+    db_bench_memory
+    bench_page_sizes
+    bench_merge
+    bench_overwrite_vs_merge)
+if (TARGET db_bench_mdb)
+    add_dependencies(leaves_benchmarks db_bench_mdb)
+endif()
+if (TARGET db_bench_rocksdb)
+    add_dependencies(leaves_benchmarks db_bench_rocksdb)
+endif()
 
 
 endif (LEAVES_BUILD_BENCHMARKS) 

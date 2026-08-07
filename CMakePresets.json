@@ -1,8 +1,8 @@
 {
-  "version": 4,
+  "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 22,
+    "minor": 25,
     "patch": 0
   },
   "configurePresets": [
@@ -16,6 +16,37 @@
       "cacheVariables": {
         "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows"
       }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "description": "Linux debug build with Ninja",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "description": "Linux release build with Ninja",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "default-linux",
+      "displayName": "Default Linux Multi-Config",
+      "description": "Default profile for Debug tests and Release benchmarks",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build-default",
+      "cacheVariables": {
+        "LEAVES_BUILD_TESTS": "ON",
+        "LEAVES_BUILD_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -28,6 +59,98 @@
       "name": "windows-vs18-x64-release",
       "configurePreset": "windows-vs18-x64",
       "configuration": "Release"
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "default-tests-debug",
+      "configurePreset": "default-linux",
+      "configuration": "Debug",
+      "targets": [
+        "leaves_tests"
+      ]
+    },
+    {
+      "name": "default-benchmarks-release",
+      "configurePreset": "default-linux",
+      "configuration": "Release",
+      "targets": [
+        "leaves_benchmarks"
+      ]
+    },
+    {
+      "name": "windows-vs18-x64-default-tests-debug",
+      "configurePreset": "windows-vs18-x64",
+      "configuration": "Debug",
+      "targets": [
+        "leaves_tests"
+      ]
+    },
+    {
+      "name": "windows-vs18-x64-default-benchmarks-release",
+      "configurePreset": "windows-vs18-x64",
+      "configuration": "Release",
+      "targets": [
+        "leaves_benchmarks"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "output": { "outputOnFailure": true }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "default",
+      "displayName": "Default",
+      "description": "Configure once, build tests in Debug, then benchmarks in Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "default-linux"
+        },
+        {
+          "type": "build",
+          "name": "default-tests-debug"
+        },
+        {
+          "type": "build",
+          "name": "default-benchmarks-release"
+        }
+      ]
+    },
+    {
+      "name": "default-windows",
+      "displayName": "Default Windows",
+      "description": "Configure once, build tests in Debug, then benchmarks in Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-vs18-x64"
+        },
+        {
+          "type": "build",
+          "name": "windows-vs18-x64-default-tests-debug"
+        },
+        {
+          "type": "build",
+          "name": "windows-vs18-x64-default-benchmarks-release"
+        }
+      ]
     }
   ]
 }
