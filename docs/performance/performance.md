@@ -4,7 +4,7 @@ The database literature has long centered on a small set of storage architecture
 
 To make the comparison concrete, the evaluation includes LMDB as a widely used high-performance baseline. Most published benchmarks omit LMDB entirely, which makes it difficult to interpret what “fast” means in practice. This article therefore uses LMDB as a reference point and compares it against a range of widely used engines under comparable conditions.
 
-All databases are configured for their **maximum achievable performance** using comparable settings where possible. This includes batching, cache sizing, binary keys, and other engine-specific optimizations. ACID workloads are evaluated separately with strict durability enabled.
+All databases are configured for high performance using recommended and engine-specific settings where applicable. This includes batching, cache sizing, binary keys, and other engine-specific optimizations. ACID workloads are evaluated separately with strict durability enabled.
 
 The goal is simple: measure how these systems perform against a known high-performance reference.
 
@@ -14,7 +14,7 @@ The results suggest that a persistent-trie design can be highly competitive, and
 
 ## Executive Results
 
-![Workload Comparison](workload_comparison.png)
+![Single-thread Comparison](workload_comparison.png)
 
 Across the tested workloads, a clear performance pattern emerges. LMDB remains a strong baseline and is often faster than traditional embedded competitors, reaching up to approximately **6× higher throughput** than WiredTiger and SQLite in read-heavy workloads and roughly **1.3–3.5× higher throughput** than LevelDB and **2–6× higher throughput** than RocksDB across the single-threaded workloads. WiredTiger is often limited by internal overhead, while Redis is shaped strongly by network round-trip costs rather than storage performance.
 
@@ -378,6 +378,8 @@ Measured median run throughput (ops/sec) used in charts:
 
 ![Concurrent Comparison](concurrent_workload_comparison.png)
 
+LMDB is not included in the concurrent workloads because LMDB supports only a single concurrent writer. The concurrent benchmarks therefore focus on engines that can execute the workload with multiple simultaneous writers.
+
 ### Concurrent Session (8 threads)
 
 **Scenario:**  
@@ -392,7 +394,7 @@ Uses `threadcount=8` with a 50/50 read/update mix and zipfian key access. Leaves
 - Value size: 1 KB (10×100 B)
 
 **Explanation:**  
-Concurrency introduces contention. LMDB serializes writes, limiting scalability. RocksDB benefits from concurrent write support. Leaves isolates writes per thread and merges asynchronously, achieving higher scalability.
+Concurrency introduces contention. RocksDB benefits from concurrent write support. Leaves isolates writes per thread and merges asynchronously, achieving higher scalability.
 
 Measured median run throughput (ops/sec) used in charts:
 
@@ -422,7 +424,7 @@ Measured median run throughput (ops/sec) used in charts:
 
 | badger | leaves | redis | rocksdb | sqlite | wiredtiger |
 | --- | --- | --- | --- | --- | --- |
-| 20776.0 | 27319.0 | 78876.2 | 67818.1 | 47858.8 | 9965.99 |
+| 20776.0 | 213240.5 | 78876.2 | 67818.1 | 47858.8 | 9965.99 |
 
 ---
 
@@ -431,7 +433,7 @@ Measured median run throughput (ops/sec) used in charts:
 Benchmarks are executed using a modified YCSB-cpp:
 [https://github.com/kochelmonster/YCSB-cpp](https://github.com/kochelmonster/YCSB-cpp)
 
-YCSB was used, because it is the undisputed leader in database benchmarks. But while starting benchmarking several flaws turned up in the original YCSB. That lead first to YCSB-cpp, and then to its modification. The main issues in the original benchmark framework were:
+YCSB was used as the starting point because it is a widely used benchmark framework for database systems. But while starting benchmarking several flaws turned up in the original YCSB. That led first to YCSB-cpp, and then to its modification. The main issues in the original benchmark framework were:
 
 - High framework overhead: a significant part of runtime was spent in benchmark code instead of database operations.
 - Incomplete transaction support: transaction handling was hardcoded and covered only a single scenario.
