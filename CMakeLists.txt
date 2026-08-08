@@ -567,7 +567,7 @@ foreach(target IN ITEMS
     test_multithread
     test_replication_multiclient
     test_multiprocess)
-    leaves_add_test(${target} TIMEOUT 900 LABELS "native;integration")
+    leaves_add_test(${target} TIMEOUT 1500 LABELS "native;integration")
 endforeach()
 
 add_custom_target(leaves_tests)

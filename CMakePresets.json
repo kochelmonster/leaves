@@ -47,6 +47,17 @@
         "LEAVES_BUILD_TESTS": "ON",
         "LEAVES_BUILD_BENCHMARKS": "ON"
       }
+    },
+    {
+      "name": "default-windows",
+      "displayName": "Default Windows Multi-Config",
+      "description": "Default profile for Debug tests and Release benchmarks",
+      "inherits": "windows-vs18-x64",
+      "binaryDir": "${sourceDir}/build-default",
+      "cacheVariables": {
+        "LEAVES_BUILD_TESTS": "ON",
+        "LEAVES_BUILD_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -99,6 +110,22 @@
       "targets": [
         "leaves_benchmarks"
       ]
+    },
+    {
+      "name": "default-windows-tests-debug",
+      "configurePreset": "default-windows",
+      "configuration": "Debug",
+      "targets": [
+        "leaves_tests"
+      ]
+    },
+    {
+      "name": "default-windows-benchmarks-release",
+      "configurePreset": "default-windows",
+      "configuration": "Release",
+      "targets": [
+        "leaves_benchmarks"
+      ]
     }
   ],
   "testPresets": [
@@ -140,15 +167,15 @@
       "steps": [
         {
           "type": "configure",
-          "name": "windows-vs18-x64"
+          "name": "default-windows"
         },
         {
           "type": "build",
-          "name": "windows-vs18-x64-default-tests-debug"
+          "name": "default-windows-tests-debug"
         },
         {
           "type": "build",
-          "name": "windows-vs18-x64-default-benchmarks-release"
+          "name": "default-windows-benchmarks-release"
         }
       ]
     }
