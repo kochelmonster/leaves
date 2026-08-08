@@ -1,4 +1,4 @@
-# A Persistent-Trie Architecture for Embedded Key-Value Storage
+# The Fastest Key-Value Store? A Fair Fight Against LMDB
 
 The database literature has long centered on a small set of storage architectures: B-trees, LSM trees, and their many variants. This article examines a different approach: a persistent trie design for embedded key-value storage.
 
