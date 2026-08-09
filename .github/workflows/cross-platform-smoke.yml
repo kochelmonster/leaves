@@ -77,7 +77,12 @@ jobs:
       - name: Configure (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: cmake -S tests/cross_platform -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DLEAVES_BUILD_BENCHMARKS=OFF
+          -DLEAVES_GCOV=OFF
+          -DLEAVES_ASAN=OFF
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -87,9 +92,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: >
-          cmake -S tests/cross_platform -B build -G Ninja
+          cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DLEAVES_LOG=ON
+          -DLEAVES_BUILD_BENCHMARKS=OFF
+          -DLEAVES_GCOV=OFF
+          -DLEAVES_ASAN=OFF
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_MANIFEST_MODE=ON
           -DVCPKG_MANIFEST_DIR="$env:GITHUB_WORKSPACE"
@@ -98,12 +106,12 @@ jobs:
       - name: Build (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: cmake --build build --parallel 4
+        run: cmake --build build --target leaves_tests --parallel 4
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cmake --build build --parallel 4
+        run: cmake --build build --target leaves_tests --parallel 4
 
       - name: Test (Linux/macOS)
         if: runner.os != 'Windows'
