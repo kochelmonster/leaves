@@ -223,8 +223,6 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
 }
 
-constexpr auto PAGE_SIZE = TestTraits::PAGE_SIZE;
-
 BOOST_AUTO_TEST_CASE(test_page_border) {
   TestStorage storage;
   constexpr auto& PAGE_SIZES = TestTraits::PAGE_SIZES;
