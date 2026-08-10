@@ -352,7 +352,7 @@ struct _TrieNode : Header_ {
 
   // create a new trie node without the branch of key
   void create_remove(const TrieNode& src, int key) {
-    assert(src.isset(key));
+    assert((src.isset)(key));
     _compressed_len = src._compressed_len;
     memcpy(_compressed_data, src.compressed(), _compressed_len);
 
@@ -427,7 +427,7 @@ struct _TrieNode : Header_ {
    */
   uint16_t insert_branch(int key) {
     assert(key != OUT_OF_RANGE);
-    assert(!isset(key));
+    assert(!(this->isset)(key));
     assert(count() < int(MAX_BRANCH_COUNT) - 1);
 
     uint16_t old_count = (uint16_t)count();

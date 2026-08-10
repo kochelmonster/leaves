@@ -270,7 +270,7 @@ struct _Transition {
 
       child.first();
       branch_key = current_key()[child.keypos];
-      assert(trie_.isset(branch_key));
+      assert((trie_.isset)(branch_key));
       return true;
     }
 
@@ -313,9 +313,9 @@ struct _Transition {
       child.last();
       if (child.keypos < current_key().size()) {
         branch_key = current_key()[child.keypos];
-        assert(trie_.isset(branch_key));
+        assert((trie_.isset)(branch_key));
       } else {
-        assert(trie_.isset(TrieNode::NONE));
+        assert((trie_.isset)(TrieNode::NONE));
       }
       return true;
     }
