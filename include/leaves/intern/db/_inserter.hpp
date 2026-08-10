@@ -131,8 +131,8 @@ struct _Inserter {
 
     back->link_idx = idxs.second;
     trie->array()[idxs.first] = resolve(child_trie);
-    assert(trie->isset(okey));
-    assert(trie->isset(key));
+    assert((trie->isset)(okey));
+    assert((trie->isset)(key));
 
     free_node(otrie);
     back->update_trie_offset();
@@ -210,7 +210,7 @@ struct _Inserter {
 
     back->trie() = new_trie;
     back->link_idx = new_trie->create(*otrie, key);
-    assert(new_trie->isset(key));
+    assert((new_trie->isset)(key));
 
     free_node(otrie);
     back->update_trie_offset();
@@ -248,8 +248,8 @@ struct _Inserter {
         alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, nkey));
     back->trie() = new_trie;
     auto idxs = new_trie->create(Slice(oleaf->data, back->prefix), okey, nkey);
-    assert(new_trie->isset(okey));
-    assert(new_trie->isset(nkey));
+    assert((new_trie->isset)(okey));
+    assert((new_trie->isset)(nkey));
 
     back->link_idx = idxs.second;
     new_trie->array()[idxs.first] = resolve(copy);
