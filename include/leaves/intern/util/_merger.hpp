@@ -416,7 +416,7 @@ struct _Merger {
     // the whole prefix of the src == dst.prefix
 
     auto src_trie = src.trie();
-    if (src_trie->isset(key1)) {
+    if ((src_trie->isset)(key1)) {
       // Src trie has a branch matching the dst child's key.
       // We need to merge that branch recursively, and selectively
       // copy all other src branches.
@@ -584,7 +584,7 @@ struct _Merger {
     // src-only. Count src-only survivors inline to avoid a second bitmap walk.
     uint8_t upper = dst_trie->_upper;
     src_trie->for_each_branch([&](int k, auto* src_off) {
-      if (dst_trie->isset(k)) {
+      if ((dst_trie->isset)(k)) {
         // Shared branch — merge recursively later (skip incomplete src)
         if (*src_off != 0) {
           shared[shared_count++] = {
@@ -668,7 +668,7 @@ struct _Merger {
     int branch_key = suffix_len ? (uint8_t)current_key[dst_cursor.current_key.size()]
                                 : TrieNode::NONE;
     assert(!(branch_key == TrieNode::NONE ? dst_trie->has_none()
-                                          : dst_trie->isset(branch_key)));
+                                          : (dst_trie->isset)(branch_key)));
     // otherwise find would have walked down
 
     trie_ptr new_trie =
