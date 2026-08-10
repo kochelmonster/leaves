@@ -9,6 +9,18 @@ Internal bit-manipulation helpers and small compile-time constants.
 #include <cstdint>
 #include <type_traits>
 
+#ifdef isset
+#undef isset
+#endif
+
+#ifdef index
+#undef index
+#endif
+
+#ifdef next
+#undef next
+#endif
+
 namespace leaves {
 
 using std::countl_zero;
