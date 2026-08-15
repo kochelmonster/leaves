@@ -4,8 +4,6 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <random>
-#include <dirent.h>
-#include <unistd.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -2901,8 +2899,8 @@ template <typename DB>
 bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
                            const std::string& path) {
   using Traits = typename DB::Traits;
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using offset_e = typename Traits::offset_e;
   if (!link || !*link) return true;
   if (link->type() != TRIE) {
@@ -3435,8 +3433,8 @@ BOOST_AUTO_TEST_CASE(test_merger_repro_bench_last_merge) {
 
   std::string dst_path = std::string(dir) + "/last_dst.bin";
   std::string src_path = std::string(dir) + "/last_src.bin";
-  if (::access(dst_path.c_str(), R_OK) != 0 ||
-      ::access(src_path.c_str(), R_OK) != 0) {
+  if (!file_is_readable(dst_path.c_str()) ||
+      !file_is_readable(src_path.c_str())) {
     std::cout << "test_merger_repro_bench_last_merge: SKIP (no dumps in "
               << dir << ")\n";
     return;

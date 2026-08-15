@@ -1,6 +1,7 @@
 #ifndef _LEAVES_MMAP_HPP
 #define _LEAVES_MMAP_HPP
 
+#include <filesystem>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -36,10 +37,22 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   // On mobile (iOS/Android), use a smaller value (e.g. 256*M) to avoid
   // jetsam/OOM kills.
   // copy_write_threshold: 0 keeps persisted/calibrated pivot.
-  MapStorage_(const char* path, size_t map_size = 4 * G,
+  MapStorage_(const std::filesystem::path& path, size_t map_size = 4 * G,
               uint32_t copy_write_threshold = 0)
       : _storage(std::make_unique<StorageImpl>(
             path, map_size, SIZE_MAX, copy_write_threshold)) {}
+
+  MapStorage_(const char* path, size_t map_size = 4 * G,
+              uint32_t copy_write_threshold = 0)
+      : MapStorage_(std::filesystem::path(path), map_size,
+                    copy_write_threshold) {}
+
+#ifdef _WIN32
+  MapStorage_(const wchar_t* path, size_t map_size = 4 * G,
+              uint32_t copy_write_threshold = 0)
+      : MapStorage_(std::filesystem::path(path), map_size,
+                    copy_write_threshold) {}
+#endif
 
   // Opens or creates a named database.
   // DBClass selects the backend and args are forwarded to that DB class.
@@ -86,11 +99,26 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
 
   // Creates and initializes storage backed by path.
   // map_size is the virtual-address reservation limit.
-  static storage_ptr create(const char* path, size_t map_size = 4 * G,
+  static storage_ptr create(const std::filesystem::path& path,
+                            size_t map_size = 4 * G,
                             uint32_t copy_write_threshold = 0) {
     return std::make_shared<MapStorage_>(path, map_size,
                                          copy_write_threshold);
   }
+
+  static storage_ptr create(const char* path, size_t map_size = 4 * G,
+                            uint32_t copy_write_threshold = 0) {
+    return std::make_shared<MapStorage_>(std::filesystem::path(path), map_size,
+                                         copy_write_threshold);
+  }
+
+#ifdef _WIN32
+  static storage_ptr create(const wchar_t* path, size_t map_size = 4 * G,
+                            uint32_t copy_write_threshold = 0) {
+    return std::make_shared<MapStorage_>(std::filesystem::path(path), map_size,
+                                         copy_write_threshold);
+  }
+#endif
 
  private:
   template <typename, template <typename> class>

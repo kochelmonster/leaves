@@ -455,12 +455,12 @@ struct TransferTrieSender {
   using hash_offset_e = typename HashTraits::offset_e;
 
   // Data trie node types (for cursor lookup)
-  using DataTrieNode = _TrieNode<DataCursorTraits>;
-  using DataLeafNode = _LeafNode<DataCursorTraits>;
+  using DataTrieNode = typename DataCursorTraits::TrieNode;
+  using DataLeafNode = typename DataCursorTraits::LeafNode;
 
   // Hash trie node types (for walking)
-  using HashTrieNode = _TrieNode<HashTraits>;
-  using HashLeafNode = _LeafNode<HashTraits>;
+  using HashTrieNode = typename HashTraits::TrieNode;
+  using HashLeafNode = typename HashTraits::LeafNode;
 
   using Transfer = ReplicationTransferTrie<Traits::MAX_KEY_SIZE>;
   using WireOffset = typename Transfer::Offset;

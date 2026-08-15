@@ -22,11 +22,15 @@ namespace leaves {
 // Memory storage traits - similar to _StoreTraits but simpler
 struct _MemoryTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<_MemoryTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<_MemoryTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   struct PageHeader {
     typedef PageHeader Base;
@@ -42,15 +46,14 @@ struct _MemoryTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 512 * K;  // Same as file store
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
-  static constexpr uint16_t PAGE_SIZES[] = {  // Page sizes (header + node)
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 2),  // 2 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 3),  // 3 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 4),  // 4 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryTraits>::size(1, 10),  // 5-10 branches
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 16),  // hex 0-9A-F
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 64),  // base64
-      sizeof(PageHeader) + _TrieNode<_MemoryTraits>::size(1, 256),  // binary
+  static constexpr uint16_t PAGE_SIZES[] = {       // Page sizes (header + node)
+      sizeof(PageHeader) + TrieNode::size(1, 2),   // 2 branches
+      sizeof(PageHeader) + TrieNode::size(1, 3),   // 3 branches
+      sizeof(PageHeader) + TrieNode::size(1, 4),   // 4 branches
+      sizeof(PageHeader) + TrieNode::size(1, 10),  // 5-10 branches
+      sizeof(PageHeader) + TrieNode::size(1, 16),  // hex 0-9A-F
+      sizeof(PageHeader) + TrieNode::size(1, 64),  // base64
+      sizeof(PageHeader) + TrieNode::size(1, 256),  // binary
       4 * K};
   static constexpr uint16_t PAGE_SIZES_COUNT =
       sizeof(PAGE_SIZES) / sizeof(PAGE_SIZES[0]);
@@ -74,6 +77,8 @@ struct _MemoryDB {
   // Value traits for non-transactional operations
   struct CursorTraits : public Storage::Traits {
     typedef db_type DB;
+    using TrieNode = typename Storage::Traits::TrieNode;
+    using LeafNode = typename Storage::Traits::LeafNode;
   };
 
   static constexpr auto AREA_SIZE = Traits::AREA_SIZE;

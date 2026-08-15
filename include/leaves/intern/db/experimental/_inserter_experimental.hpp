@@ -57,8 +57,8 @@ namespace leaves {
 template <typename Traits>
 struct _PageBuilder {
   using PageHeader = typename Traits::PageHeader;
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using page_ptr = typename Traits::ptr;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;
   using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
@@ -225,8 +225,8 @@ struct _PageBuilder {
 template <typename Transition>
 struct _LocalityInserter {
   using Traits = typename Transition::Traits;
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using page_ptr = typename Traits::ptr;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;
   using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;

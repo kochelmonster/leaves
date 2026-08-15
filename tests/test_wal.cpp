@@ -180,6 +180,35 @@ BOOST_AUTO_TEST_CASE(wal_writer_abort) {
 }
 
 // ---------------------------------------------------------------------------
+// An empty WAL transaction must not leave any transaction records behind.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(wal_writer_empty_transaction_skipped) {
+  DirPreparation dir;
+  std::string base = (dir.tempDir / "empty").string();
+
+  {
+    TestWal tw;
+    BOOST_REQUIRE(tw.open(base));
+
+    tw.w.begin(1);
+    tw.w.prepare();
+    tw.w.commit();
+
+    BOOST_CHECK_EQUAL(tw.state.write_off[0], WAL_HEADER_SIZE);
+    BOOST_CHECK_EQUAL(tw.state.write_off[1], WAL_HEADER_SIZE);
+
+    tw.w.close();
+  }
+
+  std::vector<_WalTxn> txns0;
+  std::vector<_WalTxn> txns1;
+  wal_parse(base + ".wal.0", txns0);
+  wal_parse(base + ".wal.1", txns1);
+  BOOST_CHECK(txns0.empty());
+  BOOST_CHECK(txns1.empty());
+}
+
+// ---------------------------------------------------------------------------
 // prepare() is idempotent (calling it twice is safe).
 // ---------------------------------------------------------------------------
 BOOST_AUTO_TEST_CASE(wal_writer_prepare_idempotent) {

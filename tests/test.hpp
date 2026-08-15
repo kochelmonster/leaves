@@ -42,22 +42,49 @@ inline void dump_graph(const char* output, T& storage) {
   dump_graph(output, storage, &storage._internal()->txn()->root);
 }
 
+inline std::string normalize_line_endings(std::string text) {
+  std::string normalized;
+  normalized.reserve(text.size());
+
+  for (size_t i = 0; i < text.size(); i++) {
+    if (text[i] == '\r') {
+      if (i + 1 < text.size() && text[i + 1] == '\n') {
+        i++;
+      }
+      normalized.push_back('\n');
+    } else {
+      normalized.push_back(text[i]);
+    }
+  }
+
+  return normalized;
+}
+
 template <typename T>
 inline void compare_graph(const char* input, T& storage, offset_t* root_offset) {
   std::stringstream cstr;
   _Dumper<T>(storage, root_offset, false).dump(cstr);
 
   std::ifstream in(input, std::ios_base::in | std::ios_base::binary);
+  if (!in.is_open()) {
+    std::cerr << "error cannot open fixture " << input << std::endl;
+    BOOST_REQUIRE(false);
+  }
+
   std::string cmp((std::istreambuf_iterator<char>(in)),
                   (std::istreambuf_iterator<char>()));
+  std::string dump = cstr.str();
+
+  std::string normalized_cmp = normalize_line_endings(cmp);
+  std::string normalized_dump = normalize_line_endings(dump);
 
   std::cout << "check graph " << input << std::endl;
-  if (cmp != cstr.str()) {
+  if (normalized_cmp != normalized_dump) {
     std::cerr << "error " << input << std::endl;
     std::cerr << "===========================" << std::endl;
     std::cerr << cmp << std::endl;
     std::cerr << "---------------------------" << std::endl;
-    std::cerr << cstr.str() << std::endl;
+    std::cerr << dump << std::endl;
     std::cerr << "===========================" << std::endl;
     dump_graph("error.yaml", storage);
     BOOST_REQUIRE(false);

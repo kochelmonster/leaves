@@ -70,7 +70,7 @@ struct _DBSlot {
 struct _DBDirectoryPage {
   uint16_t count;               // entries used in this page (high-water mark)
   offset_t next;                // link to next overflow page (0 = none)
-  _DBDirectoryEntry entries[];  // flexible array fills rest of page
+  _DBDirectoryEntry entries[1];  // trailing storage fills rest of page
 
   static constexpr uint16_t capacity_for(size_t available_bytes) {
     return static_cast<uint16_t>(available_bytes / sizeof(_DBDirectoryEntry));

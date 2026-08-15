@@ -1,6 +1,6 @@
 # leaves
 
-leaves is a trie-based embedded key-value database.
+leaves is a trie-based embedded key-value database. It uses a sparse bitmap trie structure that brings the access advantages of a radix trie while saving memory by storing only necessary link pointers.
 
 ## Key features
 
@@ -15,6 +15,7 @@ leaves is a trie-based embedded key-value database.
 - Native cross-platform support, including WebAssembly and browser targets
 
 ## Getting started
+
 ```cpp
 #include <leaves/mmap.hpp>
 
@@ -65,29 +66,10 @@ To use Leaves, you need:
 
 - A C++20 compiler
 - Boost 1.80 or newer
-- CMake 3.9 or newer when using the CMake integration or building the repository
+- CMake 3.25 or newer for preset workflow builds (`cmake --workflow --preset ...`)
+- CMake 3.22 or newer for manual configure/build invocations
 
 Simply integrate it into your project using one of the following methods.
-
-### Windows with vcpkg manifest mode
-
-On Windows, Leaves supports vcpkg manifest mode out of the box through the repository `vcpkg.json`.
-
-```powershell
-git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\\vcpkg"
-& "$env:USERPROFILE\\vcpkg\\bootstrap-vcpkg.bat"
-
-cmake -S . -B build -G Ninja `
-    -DCMAKE_BUILD_TYPE=Release `
-    -DCMAKE_TOOLCHAIN_FILE="$env:USERPROFILE\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" `
-    -DVCPKG_MANIFEST_MODE=ON `
-    -DVCPKG_TARGET_TRIPLET=x64-windows
-
-cmake --build build -j4
-ctest --test-dir build --output-on-failure
-```
-
-To build examples with the same dependency setup, pass the same toolchain and manifest flags when configuring an example directory.
 
 ### Include the headers directly
 
@@ -98,6 +80,12 @@ target_include_directories(mytarget PRIVATE /path/to/leaves/include)
 ```
 
 If you use the optional replication API, also compile the bundled BLAKE3 sources from `BLAKE3/c/` and add that directory to your include path.
+
+On Windows with MSVC, replication builds may require the `/bigobj` compiler flag for some targets if you hit object-file size errors. In CMake, this can be enabled for an affected target with:
+
+```cmake
+target_compile_options(mytarget PRIVATE /bigobj)
+```
 
 ### Using `add_subdirectory`
 
@@ -123,7 +111,6 @@ Alternatively, add Leaves as a Git submodule and integrate it directly into your
    target_link_libraries(mytarget PRIVATE leaves::leaves)
    ```
 
-
 ### Consuming as installed package
 
 ```cmake
@@ -140,7 +127,6 @@ target_link_libraries(mytarget PRIVATE leaves::replication)
 
 The core `leaves::leaves` target carries the public include paths and the required Boost header dependency. `leaves::replication` is the optional target that adds the BLAKE3 dependency needed by `leaves/replication.hpp`.
 
-
 ## Configuration options
 
 The following CMake options configure either the repository build or library behavior for consumers.
@@ -153,14 +139,7 @@ The following CMake options configure either the repository build or library beh
 | `LEAVES_BUILD_BENCHMARKS` | `ON` | Repository build only | Build the repository benchmark applications. |
 | `LEAVES_GCOV` | `ON` | Repository build only | Enable coverage instrumentation for repository builds. |
 | `LEAVES_ASAN` | `ON` | Repository build only | Enable AddressSanitizer when coverage is disabled. |
-| `LEAVES_SINGLE_PROCESS` | `OFF` | Repository build and library consumers | Disable multi-process support for constrained targets such as embedded or mobile environments. |
 | `LEAVES_LOG` | `OFF` | Repository build and library consumers | Enable Leaves logging macros. |
-
-Default semantics:
-- The "Top-level default" column reflects configuring Leaves as the root project.
-- When Leaves is consumed via `add_subdirectory`, `LEAVES_BUILD_TESTS`, `LEAVES_BUILD_BENCHMARKS`, `LEAVES_GCOV`, and `LEAVES_ASAN` default to `OFF` unless explicitly enabled by the parent project.
-- `LEAVES_SINGLE_PROCESS` and `LEAVES_LOG` remain explicit opt-in toggles for both root and consumer builds.
-
 
 ## Installing as CMake Package
 
@@ -180,10 +159,56 @@ To create a redistributable archive from the current build tree:
 cmake --build build --target package
 ```
 
-
 ## Building the Tests and Benchmarks
 
 Building the repository is only required to run the included tests and benchmarks or to contribute to Leaves.
+
+### Default profile: tests in Debug, benchmarks in Release
+
+Use the default workflow preset to configure once and build tests in Debug mode followed by benchmarks in Release mode.
+
+Linux:
+
+```bash
+cmake --workflow --preset default
+ctest --test-dir build-default -C Debug --output-on-failure
+```
+
+Windows:
+
+```powershell
+cmake --workflow --preset default-windows
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+The Linux default profile uses the `Ninja Multi-Config` generator to support Debug and Release builds from one configure step.
+
+### Windows (out-of-box)
+
+On Windows, the default configure path uses repository-local dependencies from `vcpkg_installed/x64-windows`.
+
+```powershell
+cmake --preset windows-vs18-x64 --fresh
+cmake --build --preset windows-vs18-x64-debug -j
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+If your clone does not include populated local dependencies, you can still use external vcpkg manifest mode:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\\vcpkg"
+& "$env:USERPROFILE\\vcpkg\\bootstrap-vcpkg.bat"
+
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
+    -DCMAKE_TOOLCHAIN_FILE="$env:USERPROFILE\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" `
+    -DVCPKG_MANIFEST_MODE=ON `
+    -DVCPKG_TARGET_TRIPLET=x64-windows
+
+cmake --build build --config Debug -j
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+To build examples with the same dependency setup, pass the same dependency arguments when configuring an example directory.
 
 ### Recommended local build
 
@@ -201,6 +226,7 @@ cmake --build build-debug -j4
 ```
 
 ## Documentation index
+
 - C++ API: [docs/cpp-api.md](docs/cpp-api.md)
 - JavaScript/Browser API: [docs/js-api.md](docs/js-api.md)
 - Architecture: [docs/architecture/architecture.md](docs/architecture/architecture.md)
@@ -212,12 +238,13 @@ cmake --build build-debug -j4
 ## Future Extensions
 
 ### Set Findings
+
 - Find all keys in a given range, returns a TransferTrie
 - Find all keys suiting a FSM (e.g. regular expression), returns a TransferTrie
 
 ### Set Operations
-- intersection of tries
 
+- intersection of tries
 
 ## License
 See [LICENSE.md](LICENSE.md) for the Leaves Community License 1.0.

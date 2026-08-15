@@ -303,6 +303,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
   struct CursorTraits : public Storage::Traits {
     typedef _DB<Storage_, Transaction_, Header_, Self_> DB;
     using tid_t = leaves::tid_t;
+    using TrieNode = typename Storage::Traits::TrieNode;
+    using LeafNode = typename Storage::Traits::LeafNode;
   };
 
   using Aspect = typename Traits::Aspect;
@@ -469,8 +471,9 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       if (_header->area_list_head_single) {
         area_ptr first = resolve<Area>(&_header->area_list_head_single, WRITE);
         offset_t second = first->next;
-        if (second && read_txn->area_list_tail_single &&
-            second != _header->area_list_head_single) {
+        assert(!second || second != _header->area_list_head_single);
+        if (second) {
+          assert(read_txn->area_list_tail_single);
           _storage.return_single_areas(second, read_txn->area_list_tail_single);
           first->next = 0;
           make_dirty(first);
@@ -886,8 +889,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
   }
 
   void _node_statistics(Statistics& stat, offset_t offset) {
-    typedef _TrieNode<Traits> TrieNode;
-    typedef _LeafNode<Traits> LeafNode;
+    using TrieNode = typename Traits::TrieNode;
+    using LeafNode = typename Traits::LeafNode;
     using PageHeader = typename Traits::PageHeader;
     using trie_ptr = typename Traits::template Pointer<TrieNode>;
     using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
@@ -1045,8 +1048,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     if (!offset) return true;  // null/empty root is healthy
 
     using PageHeader = typename Traits::PageHeader;
-    typedef _TrieNode<Traits> TrieNode;
-    typedef _LeafNode<Traits> LeafNode;
+    using TrieNode = typename Traits::TrieNode;
+    using LeafNode = typename Traits::LeafNode;
     using trie_ptr = typename Traits::template Pointer<TrieNode>;
     using leaf_ptr = typename Traits::template Pointer<LeafNode, LEAF>;
 

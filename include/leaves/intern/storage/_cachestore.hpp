@@ -8,6 +8,7 @@ Cached file-backed storage helpers for page reuse and persistence access.
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>  // for std::memcpy
 #include <format>
@@ -412,7 +413,7 @@ struct _CacheStore : public Opers_,
   template <template <typename> class DBClass = _DB, typename... Args>
   DBClass<CacheStore>* open(std::string_view name, Args&&... args) {
     using DB = DBClass<CacheStore>;
-    if (name.size() >= sizeof(_CacheBase::DBEntry::name)) {
+    if (name.size() >= sizeof(DBEntry{}.name)) {
       throw std::runtime_error("Database name too long");
     }
     const std::string db_name(name);
@@ -527,8 +528,8 @@ struct _CacheStore : public Opers_,
 
   // First-page capacity for DB entries
   uint16_t _first_page_capacity() const {
-    return _DBDirectoryPage::capacity_for(4 * K -
-                                          sizeof(typename Opers_::FileHeader));
+    return _DBDirectoryPage::capacity_for(
+        4 * K - offsetof(typename Opers_::FileHeader, dbs));
   }
 
   // Overflow area capacity: one directory page per whole area payload.

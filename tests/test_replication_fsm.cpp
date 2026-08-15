@@ -2038,7 +2038,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_subtrie_parent_not_found,
   receiver.begin(&transport, &events);
 
   using Transfer = TransferTrie<DBImpl::Traits>;
-  using LeafNode = _LeafNode<DBImpl::Traits>;
+  using LeafNode = DBImpl::Traits::LeafNode;
   uint64_t session_id = 42;
 
   // Step 1: Send a single-leaf root TRIE_DATA so _temp_root becomes a leaf.

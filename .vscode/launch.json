@@ -246,6 +246,40 @@
             ]
         },
         {
+            "name": "(cppvsdbg) test_mmap commit-sync",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/test_mmap.exe",
+            "args": [
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "console": "internalConsole"
+        },
+        {
+            "name": "(cppvsdbg) db_bench_leaves",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/db_bench_leaves.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "console": "internalConsole"
+        },
+        {
+            "name": "(cppvsdbg) test_multiprocess",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/test_multiprocess.exe",
+            "args": ["-t", "test_mp_sanitize_recover_lost_areas"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "console": "internalConsole"
+        },
+        {
             "name": "Attach to test_fstore",
             "type": "cppdbg",
             "request": "attach",

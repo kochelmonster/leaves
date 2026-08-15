@@ -64,7 +64,8 @@ struct _BigMemory {
   static uint16_t modify_size(uint16_t key, uint64_t size,
                               size_t big_inline_size = sizeof(BigValue)) {
     key &= 0xff;
-    if (sizeof(LeafNode) + size + key > MAX_PAGE_SIZE) return big_inline_size;
+    if (LeafNode::HEADER_SIZE + size + key > MAX_PAGE_SIZE)
+      return big_inline_size;
     return size;
   }
 

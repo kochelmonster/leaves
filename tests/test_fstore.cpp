@@ -31,10 +31,11 @@ void wrong_signature(const char* path) { DBFileStore db(path); }
 BOOST_AUTO_TEST_CASE(test_init) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
+  const auto dbFilePathStr = dbFilePath.string();
 
   {
     // Create a DBFileStore instance and initialize it
-    DBFileStore db(dbFilePath.c_str());
+    DBFileStore db(dbFilePathStr.c_str());
 
     // Check if the database file is created
     BOOST_REQUIRE(std::filesystem::exists(dbFilePath));
@@ -49,7 +50,7 @@ BOOST_AUTO_TEST_CASE(test_init) {
 
   {
     // Test reopening existing file
-    DBFileStore db(dbFilePath.c_str());
+    DBFileStore db(dbFilePathStr.c_str());
     BOOST_REQUIRE(db._header != nullptr);
     BOOST_REQUIRE_EQUAL(std::string(db._header->signature),
                         std::string(FSTORE_SIGNATURE));
@@ -64,13 +65,14 @@ BOOST_AUTO_TEST_CASE(test_init) {
     file.close();
   }
 
-  BOOST_CHECK_THROW(wrong_signature(dbFilePath.c_str()), std::runtime_error);
+  BOOST_CHECK_THROW(wrong_signature(dbFilePathStr.c_str()), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_CASE(test_file_operations) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  DBFileStore db(dbFilePath.c_str());
+  const auto dbFilePathStr = dbFilePath.string();
+  DBFileStore db(dbFilePathStr.c_str());
 
   // Test writing and reading data
   const char* test_data = "Hello, FileStore!";
@@ -90,7 +92,8 @@ BOOST_AUTO_TEST_CASE(test_file_operations) {
 BOOST_AUTO_TEST_CASE(test_sanitize) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  DBFileStore db(dbFilePath.c_str());
+  const auto dbFilePathStr = dbFilePath.string();
+  DBFileStore db(dbFilePathStr.c_str());
 
   // Artificially extend the file beyond what the header says
   uint64_t original_size = db._header->file_size;
@@ -115,7 +118,8 @@ BOOST_AUTO_TEST_CASE(test_signature_constants) {
 BOOST_AUTO_TEST_CASE(test_file_header_structure) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "test.lvs";
-  DBFileStore db(dbFilePath.c_str());
+  const auto dbFilePathStr = dbFilePath.string();
+  DBFileStore db(dbFilePathStr.c_str());
 
   // Verify FileHeader structure
   BOOST_CHECK_EQUAL(std::string(db._header->signature),

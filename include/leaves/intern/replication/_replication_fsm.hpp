@@ -889,22 +889,20 @@ struct ReplicationReceiverFSM {
   using Transfer = ReplicationTransferTrie<>;
   using WireTempTraits = typename Transfer::DBTraits;
   using WireTempDB = typename Transfer::DB;
-  using TrieNode = _TrieNode<Traits>;
-  using LeafNode = _LeafNode<Traits>;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using offset_e = typename Traits::offset_e;
   using offset_t = leaves::offset_t;
   using WireCursor = _Cursor<WireTempTraits>;
   using TempOffset =
       typename WireTempTraits::offset_e;  // Native offset type for temp DB
-  using TempTrieNode =
-      _TrieNode<WireTempTraits>;  // Temp DB trie node (native layout)
-  using TempLeafNode =
-      _LeafNode<WireTempTraits>;  // Temp DB leaf node (native layout)
+  using TempTrieNode = typename WireTempTraits::TrieNode;
+  using TempLeafNode = typename WireTempTraits::LeafNode;
   using LocalCursor = typename DB::Cursor;
   // Hash trie node types (hash stored outside data trie)
   using HashTraits_ = HashTrieTraits<Traits>;
-  using HashTrieNode_ = _TrieNode<HashTraits_>;
-  using HashLeafNode_ = _LeafNode<HashTraits_>;
+  using HashTrieNode_ = typename HashTraits_::TrieNode;
+  using HashLeafNode_ = typename HashTraits_::LeafNode;
   using BigValueRx = _BigValueReceiver<DB>;
 
   enum class State {
