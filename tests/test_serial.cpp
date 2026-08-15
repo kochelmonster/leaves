@@ -16,7 +16,7 @@ BOOST_AUTO_TEST_CASE(test_serial_initialization) {
   serial32 s2(1);
   BOOST_CHECK_EQUAL(s2.value(), 1u);
   BOOST_CHECK(s2.is_valid());
-  BOOST_CHECK(s2);
+  BOOST_CHECK(s2.is_valid());
   
   serial32 s3(0xFFFFFFFF);
   BOOST_CHECK_EQUAL(s3.value(), 0xFFFFFFFFu);
@@ -141,7 +141,7 @@ BOOST_AUTO_TEST_CASE(test_serial_equality) {
   
   BOOST_CHECK(s1 == s2);
   BOOST_CHECK(s1 != s3);
-  BOOST_CHECK_EQUAL(s1, s2);
+  BOOST_CHECK_EQUAL(s1.value(), s2.value());
   
   // Test with raw values
   BOOST_CHECK(s1 == 42u);

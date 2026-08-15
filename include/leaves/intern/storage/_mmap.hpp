@@ -9,14 +9,9 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <boost/interprocess/file_mapping.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 #include <boost/interprocess/mapped_region.hpp>
-#include <cerrno>
-#ifndef LEAVES_SINGLE_PROCESS
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
-#include <boost/process/v2/pid.hpp>
-#else
-#include <mutex>
-#endif
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -25,6 +20,7 @@ Memory-mapped storage backend and low-level mapped-file helpers.
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -47,13 +43,6 @@ using boost::interprocess::open_only;
 using boost::interprocess::open_only_t;
 using boost::interprocess::read_only;
 using boost::interprocess::read_write;
-#ifndef LEAVES_SINGLE_PROCESS
-using boost::process::v2::all_pids;
-using boost::process::v2::current_pid;
-using boost::process::v2::pid_type;
-#else
-typedef uint32_t pid_type;
-#endif
 
 namespace leaves {
 
@@ -63,11 +52,15 @@ static const size_t MMAP_SIGNATURE_SIZE = padding(sizeof(MMAP_SIGNATURE), 8);
 // definition of all headers and data types
 struct _MemoryMapTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<_MemoryMapTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<_MemoryMapTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   struct PageHeader {
     typedef PageHeader Base;
@@ -84,24 +77,16 @@ struct _MemoryMapTraits {
   static constexpr size_t MAX_KEY_SIZE = 1 * M;
   static constexpr size_t AREA_SIZE = 2 * M;
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
-#ifdef LEAVES_SINGLE_PROCESS
-  static constexpr uint16_t MAX_PROCESSES = 1;
-#else
   static constexpr uint16_t MAX_PROCESSES = 100;
-#endif
+
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 2),  // 2 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 3),  // 3 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 4),  // 4 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 10),  // 5-10 branches
-      sizeof(PageHeader) +
-          _TrieNode<_MemoryMapTraits>::size(1, 16),  // hex 0-9A-F
-      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 64),   // base64
-      sizeof(PageHeader) + _TrieNode<_MemoryMapTraits>::size(1, 256),  // binary
+      sizeof(PageHeader) + TrieNode::size(1, 2),   // 2 branches
+      sizeof(PageHeader) + TrieNode::size(1, 3),   // 3 branches
+      sizeof(PageHeader) + TrieNode::size(1, 4),   // 4 branches
+      sizeof(PageHeader) + TrieNode::size(1, 10),  // 5-10 branches
+      sizeof(PageHeader) + TrieNode::size(1, 16),  // hex 0-9A-F
+      sizeof(PageHeader) + TrieNode::size(1, 64),  // base64
+      sizeof(PageHeader) + TrieNode::size(1, 256),  // binary
       sizeof(PageHeader) + 1024,
       sizeof(PageHeader) + 1024 + 512,
       4 * K};
@@ -139,11 +124,7 @@ struct _MemoryMapFile
   // _self() downcasts *this so references match DB's constructor.
   MemoryMapFile& _self() { return static_cast<MemoryMapFile&>(*this); }
 
-#ifdef LEAVES_SINGLE_PROCESS
-  using Mutex = std::recursive_mutex;
-#else
   using Mutex = boost::interprocess::interprocess_recursive_mutex;
-#endif
 
   using DBEntry = _DBDirectoryEntry;
 
@@ -154,7 +135,7 @@ struct _MemoryMapFile
     size_t file_size;
     Mutex file_lock;
     AreaPool area_pool;  // pool for both single and multi areas
-    pid_type processes[MAX_PROCESSES];
+    uint32_t processes[MAX_PROCESSES];
     std::atomic<int64_t> last_cursor_id;
     uint32_t sanitize_generation;  // incremented when first process opens file
     uint32_t
@@ -162,7 +143,7 @@ struct _MemoryMapFile
     uint32_t copy_write_pivot_bytes;  // write-vs-memcpy pivot for mmap copy
     uint16_t db_entry_count;          // entries used in first directory page
     offset_t db_next_page;  // link to overflow directory page (0 = none)
-    DBEntry dbs[];          // flexible array fills to 4K boundary
+    DBEntry dbs[1];         // trailing storage fills to 4K boundary
 
     FileHeader()
         : db_version(0),
@@ -180,7 +161,8 @@ struct _MemoryMapFile
       memset(signature, 0, sizeof(signature));
       strcpy(signature, MMAP_SIGNATURE);
       area_pool.init();
-      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      uint16_t cap =
+          _DBDirectoryPage::capacity_for(4 * K - offsetof(FileHeader, dbs));
       memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };
@@ -188,7 +170,8 @@ struct _MemoryMapFile
   file_mapping _file;
   mapped_region _region;
   FileHeader* _memory;
-  pid_type _pid;
+  uint32_t _pid;
+  // Duplicated from Boost mapping handle; owned/closed by close_write_fd().
   int _write_fd;
   ankerl::unordered_dense::map<std::string, _DBSlot> _dbs;
 #ifdef TESTING
@@ -196,15 +179,11 @@ struct _MemoryMapFile
   std::atomic<uint64_t> _copy_write_sync_hits{0};
 #endif
 
-  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
+  _MemoryMapFile(const std::filesystem::path& path, size_t map_size = 2 * G,
                  size_t pool_threads = SIZE_MAX,
                  uint32_t copy_write_threshold = 0)
       : PoolMixin(_lazy_pool), _write_fd(LEAVES_INVALID_FD) {
-#ifndef LEAVES_SINGLE_PROCESS
-    _pid = current_pid();
-#else
-    _pid = 1;
-#endif
+    _pid = get_process_id();
     init_dbfile(path, map_size, copy_write_threshold);
     if (pool_threads != SIZE_MAX) {
       size_t n = pool_threads;
@@ -213,6 +192,20 @@ struct _MemoryMapFile
       this->start_pool(n);
     }
   }
+
+  _MemoryMapFile(const char* path, size_t map_size = 2 * G,
+                 size_t pool_threads = SIZE_MAX,
+                 uint32_t copy_write_threshold = 0)
+      : _MemoryMapFile(std::filesystem::path(path), map_size, pool_threads,
+                       copy_write_threshold) {}
+
+#ifdef _WIN32
+  _MemoryMapFile(const wchar_t* path, size_t map_size = 2 * G,
+                 size_t pool_threads = SIZE_MAX,
+                 uint32_t copy_write_threshold = 0)
+      : _MemoryMapFile(std::filesystem::path(path), map_size, pool_threads,
+                       copy_write_threshold) {}
+#endif
 
   ~_MemoryMapFile() {
     _dbs.clear();       // destroy DBs first (cancels any scheduled jobs)
@@ -235,16 +228,37 @@ struct _MemoryMapFile
 
   uint32_t sanitize_generation() { return _memory->sanitize_generation; }
 
-  void init_dbfile(const char* path, size_t map_size,
+  std::string sanitize_lock_filename() const {
+    std::filesystem::path p(filename());
+    p += ".sanitize.lock";
+    return p.string();
+  }
+
+  void ensure_sanitize_lock_file(const std::string& lock_file) const {
+    std::ofstream f(lock_file,
+                    std::ios::out | std::ios::app | std::ios::binary);
+    if (!f.good()) {
+      int err = errno ? errno : EIO;
+      throw FileError(
+          std::format("Failed to open sanitize lock file '{}'", lock_file),
+          err);
+    }
+  }
+
+  void init_dbfile(const std::filesystem::path& path, size_t map_size,
                    uint32_t copy_write_threshold = 0) {
+    const std::string path_string = path.string();
     if (!std::filesystem::is_regular_file(path)) {
       std::ofstream fhead(path, std::ios::out | std::ios::binary);
       fhead.put('l');
       fhead.close();
-      uint64_t fsize =
-          AREA_SIZE;  // reserve first area for header + overflow dir pages
+      
+      // reserve first area for header + overflow dir pages
+      uint64_t fsize = AREA_SIZE;  
       std::filesystem::resize_file(path, fsize);
-      _file = file_mapping(path, read_write);
+      leaves::prepare_windows_sparse_mapping_file(path_string.c_str(),
+                                                  map_size);
+      _file = file_mapping(path_string.c_str(), read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = new (_region.get_address()) FileHeader();
       _memory->file_size = fsize;
@@ -259,7 +273,7 @@ struct _MemoryMapFile
       }
       _region.flush();
     } else {
-      std::ifstream fin(path);
+      std::ifstream fin(path, std::ios::binary);
       char signature[sizeof(MMAP_SIGNATURE)];
       fin.read(signature, sizeof(signature));
       if (strcmp(signature, MMAP_SIGNATURE))
@@ -267,7 +281,10 @@ struct _MemoryMapFile
             std::format("Invalid database signature: expected '{}' got '{}'",
                         MMAP_SIGNATURE, signature));
 
-      _file = file_mapping(path, read_write);
+      fin.close();
+      leaves::prepare_windows_sparse_mapping_file(path_string.c_str(),
+                                                  map_size);
+      _file = file_mapping(path_string.c_str(), read_write);
       _region = mapped_region(_file, read_write, 0, map_size);
       _memory = (FileHeader*)_region.get_address();
       if (_memory->max_processes != MAX_PROCESSES)
@@ -279,12 +296,22 @@ struct _MemoryMapFile
 
     assert(((uint64_t)_memory & 7) == 0);
     sanitize();
-    open_write_fd(path);
+    if (!open_write_fd()) {
+      int err = errno ? errno : EBADF;
+      throw FileError(
+          "Failed to initialize write descriptor from mapped file handle", err);
+    }
   }
 
-  bool open_write_fd(const char* path) {
+  bool open_write_fd() {
     close_write_fd();
-    _write_fd = leaves::open_rw_fd(path, false);
+
+    auto mapping_handle = _file.get_mapping_handle();
+    auto native_handle =
+        boost::interprocess::ipcdetail::file_handle_from_mapping_handle(
+            mapping_handle);
+
+    _write_fd = leaves::duplicate_fd_from_mapping_native_handle(native_handle);
     return leaves::fd_valid(_write_fd);
   }
 
@@ -292,6 +319,11 @@ struct _MemoryMapFile
     if (!leaves::fd_valid(_write_fd)) return;
     leaves::close_fd(_write_fd);
     _write_fd = LEAVES_INVALID_FD;
+  }
+
+  void resize_backing_file(uint64_t new_size) {
+    assert(leaves::fd_valid(_write_fd));
+    leaves::resize_fd(_write_fd, new_size);
   }
 
   bool is_mmap_destination(const void* dest, size_t n,
@@ -360,13 +392,11 @@ struct _MemoryMapFile
   void sanitize() {
     // Coordinate sanitization across processes with an OS file lock that is
     // automatically released if a process crashes.
-#ifdef LEAVES_SINGLE_PROCESS
-    std::scoped_lock flock_guard(file_lock());
-#else
-    boost::interprocess::file_lock flock(filename());
+    std::string lock_file = sanitize_lock_filename();
+    ensure_sanitize_lock_file(lock_file);
+    boost::interprocess::file_lock flock(lock_file.c_str());
     boost::interprocess::scoped_lock<boost::interprocess::file_lock>
         flock_guard(flock);
-#endif
 
     if (sanitize_processes()) {
       new (&_memory->file_lock) Mutex();
@@ -383,32 +413,28 @@ struct _MemoryMapFile
     // Register our pid inside the same critical section so concurrent openers
     // are serialized: a later opener observes our pid and is NOT a first
     // opener.
-    if constexpr (MAX_PROCESSES > 1) {
-      bool placed = false;
-      for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (!_memory->processes[i]) {
-          _memory->processes[i] = _pid;
-          placed = true;
-          break;
-        }
+    bool placed = false;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+      if (!_memory->processes[i]) {
+        _memory->processes[i] = _pid;
+        placed = true;
+        break;
       }
-      if (!placed) throw NoProcess();
     }
-    if (std::filesystem::file_size(filename()) != _memory->file_size)
-      std::filesystem::resize_file(filename(), _memory->file_size);
+    if (!placed) throw NoProcess();
+    if (std::filesystem::file_size(filename()) < _memory->file_size)
+      resize_backing_file(_memory->file_size);
 
-    assert(_region.get_size() >= _memory->file_size);
+    if (_region.get_size() < _memory->file_size) {
+      throw StorageFull(_region.get_size(), _memory->file_size);
+    }
   }
 
   bool sanitize_processes() {
-#ifndef LEAVES_SINGLE_PROCESS
-    auto ap = all_pids();
-    std::sort(ap.begin(), ap.end());
-
     int free_count = 0;
     for (int i = 0; i < MAX_PROCESSES; i++) {
       if (_memory->processes[i]) {
-        if (!std::binary_search(ap.begin(), ap.end(), _memory->processes[i])) {
+        if (!process_is_alive(_memory->processes[i])) {
           _memory->processes[i] = 0;
           free_count++;
         }
@@ -416,11 +442,6 @@ struct _MemoryMapFile
         free_count++;
     }
     return free_count == MAX_PROCESSES;  // the first to open the db
-#else
-    // Single-process mode: clear all process slots and treat as first opener
-    for (int i = 0; i < MAX_PROCESSES; i++) _memory->processes[i] = 0;
-    return true;
-#endif
   }
 
   // Resolve offset - handles both absolute and relative offsets uniformly
@@ -487,15 +508,8 @@ struct _MemoryMapFile
   }
 
   void sync_fd_for_commit() {
-    if (!leaves::fd_valid(_write_fd)) {
-      throw FileError("Failed to sync commit data: invalid file descriptor",
-                      EBADF);
-    }
-    if (!leaves::sync_fd_data(_write_fd)) {
-      throw FileError(
-          "Failed to sync commit data: " + std::string(std::strerror(errno)),
-          errno);
-    }
+    assert(leaves::fd_valid(_write_fd));
+    leaves::sync_fd_data(_write_fd);
 #ifdef TESTING
     _copy_write_sync_hits.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -518,7 +532,8 @@ struct _MemoryMapFile
 
     offset_t new_offset = _memory->file_size;
     _memory->file_size = _memory->file_size + total_growth;
-    std::filesystem::resize_file(filename(), _memory->file_size);
+    if (std::filesystem::file_size(filename()) < _memory->file_size)
+      resize_backing_file(_memory->file_size);
 
     // Create Area for the requested size
     auto area = area_ptr(resolve(&new_offset, WRITE));
@@ -570,7 +585,7 @@ struct _MemoryMapFile
   template <template <typename> class DBClass = _DB, typename... Args>
   DBClass<MemoryMapFile>* open(std::string_view name, Args&&... args) {
     using DB = DBClass<MemoryMapFile>;
-    if (name.size() >= sizeof(DBEntry::name)) throw KeyTooBig();
+    if (name.size() >= sizeof(DBEntry{}.name)) throw KeyTooBig();
     const std::string db_name(name);
 
     std::scoped_lock flock_guard(file_lock());
@@ -634,8 +649,8 @@ struct _MemoryMapFile
       }
     }
 
-    std::strncpy(free_slot->name, db_name.c_str(), sizeof(DBEntry::name) - 1);
-    free_slot->name[sizeof(DBEntry::name) - 1] = '\0';
+    std::strncpy(free_slot->name, db_name.c_str(), sizeof(free_slot->name) - 1);
+    free_slot->name[sizeof(free_slot->name) - 1] = '\0';
     auto* db =
         new DB(_self(), &free_slot->offset, name, std::forward<Args>(args)...);
     db->_header->sanitize_generation = _memory->sanitize_generation;
@@ -690,7 +705,7 @@ struct _MemoryMapFile
 
   // Directory page helpers (mmap: all data is memory-mapped, pointers stable)
   uint16_t _first_page_capacity() const {
-    return _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+    return _DBDirectoryPage::capacity_for(4 * K - offsetof(FileHeader, dbs));
   }
 
   static constexpr uint16_t _overflow_page_capacity() {

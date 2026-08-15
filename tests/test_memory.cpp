@@ -58,7 +58,7 @@ struct TestStorage {
   TestStorage() {
     accept_tid = mark_tid = tid_t(0);
     memory.reserve(1024 * 1024);
-    memory.resize(AREA_SIZE);
+    memory.resize(10 * AREA_SIZE);
     single_areas.init();
     multi_areas.init();
     mm.init(sizeof(void*), AREA_SIZE);
@@ -222,8 +222,6 @@ BOOST_AUTO_TEST_CASE(test_free_overflow) {
   BOOST_CHECK_EQUAL(storage.mm.slots[BC].count, ccount + 1);
   BOOST_CHECK_EQUAL(storage.mm.slots[sid].count, 0);
 }
-
-constexpr auto PAGE_SIZE = TestTraits::PAGE_SIZE;
 
 BOOST_AUTO_TEST_CASE(test_page_border) {
   TestStorage storage;

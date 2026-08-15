@@ -103,9 +103,12 @@ inline bool _wal_pwrite(_wal_fd_t fd, uint64_t off, const void* data,
 inline bool _wal_pread(_wal_fd_t fd, uint64_t off, void* data, size_t size) {
   return leaves::read_fd_all_at(fd, off, data, size);
 }
-inline void _wal_sync(_wal_fd_t fd) { (void)leaves::sync_fd_data(fd); }
+inline void _wal_sync(_wal_fd_t fd) { leaves::sync_fd_data(fd); }
 inline void _wal_truncate(_wal_fd_t fd, uint64_t size) {
-  (void)leaves::resize_fd(fd, size);  // best effort
+  try {
+    leaves::resize_fd(fd, size);  // best effort
+  } catch (const FileError&) {
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +241,7 @@ struct _WalWriter {
   // active file is fixed for the whole transaction.
   std::vector<uint8_t> _buf;
 
+  bool _has_records{false};
   bool _prepared{false};
 
   bool is_open() const { return _state && _state->is_open.load(); }
@@ -304,12 +308,14 @@ struct _WalWriter {
     _state->last_commit[idx].store(txn_id);
     _state->active_log.store(idx);
     _buf.clear();
+    _has_records = false;
     _buf.push_back(static_cast<uint8_t>(_WalOp::BEGIN));
     _wal_put_u32(_buf, txn_id);
     _prepared = false;
   }
 
   void put(const Slice& key, const Slice& val) {
+    _has_records = true;
     _buf.push_back(static_cast<uint8_t>(_WalOp::PUT));
     _wal_put_u32(_buf, static_cast<uint32_t>(key.size()));
     _wal_put_u32(_buf, static_cast<uint32_t>(val.size()));
@@ -320,6 +326,7 @@ struct _WalWriter {
   }
 
   void del(const Slice& key) {
+    _has_records = true;
     _buf.push_back(static_cast<uint8_t>(_WalOp::DEL));
     _wal_put_u32(_buf, static_cast<uint32_t>(key.size()));
     const uint8_t* kp = reinterpret_cast<const uint8_t*>(key.data());
@@ -327,9 +334,15 @@ struct _WalWriter {
   }
 
   // Append PREPARE, flush the buffered records to the active file, fdatasync.
-  // Throws leaves::WalError on I/O failure.
+  // Throws leaves::WalError for write errors and leaves::FileError for sync
+  // errors.
   void prepare(bool skip_sync = false) {
     if (_prepared) return;  // idempotent
+    if (!_has_records) {
+      _buf.clear();
+      _prepared = true;
+      return;
+    }
     _buf.push_back(static_cast<uint8_t>(_WalOp::PREPARE));
     int idx = _state->active_log.load();
     if (!_wal_pwrite(_fd[idx], _state->write_off[idx], _buf.data(), _buf.size()))
@@ -341,8 +354,13 @@ struct _WalWriter {
   }
 
   // Append COMMIT, fdatasync, publish last_commit.
-  // Throws leaves::WalError on I/O failure.
+  // Throws leaves::WalError for write errors and leaves::FileError for sync
+  // errors.
   void commit() {
+    if (!_has_records) {
+      _buf.clear();
+      return;
+    }
     int idx = _state->active_log.load();
     uint8_t rec = static_cast<uint8_t>(_WalOp::COMMIT);
     if (!_wal_pwrite(_fd[idx], _state->write_off[idx], &rec, 1))
@@ -353,7 +371,11 @@ struct _WalWriter {
 
   // Abort the current transaction (rollback): drop the in-memory buffer.
   // Nothing was written to disk yet (records are written at prepare()).
-  void abort() { _buf.clear(); }
+  void abort() {
+    _buf.clear();
+    _has_records = false;
+    _prepared = false;
+  }
 
   // Physically clear file[idx] back to just the magic header.
   void truncate(int idx) {

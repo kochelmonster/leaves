@@ -1,5 +1,8 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.22)
 cmake_policy(SET CMP0076 NEW)
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
 
 project(leaves VERSION 3.0.0 LANGUAGES C CXX)
 
@@ -62,7 +65,6 @@ if(EMSCRIPTEN)
         include/leaves/db.hpp
         include/leaves/cursor.hpp
     )
-    target_compile_definitions(wasm_core INTERFACE LEAVES_SINGLE_PROCESS)
     if(LEAVES_ASYNC_BACKEND STREQUAL "ASYNCIFY")
         target_compile_definitions(wasm_core INTERFACE LEAVES_ASYNCIFY)
     endif()
@@ -153,12 +155,18 @@ if(EMSCRIPTEN)
 endif()
 
 # ── Native build ───────────────────────────────────────────────
-find_package(Boost 1.80 REQUIRED)
-if (TARGET Boost::process)
-    set(HAVE_BOOST_PROCESS TRUE)
-else()
-    set(HAVE_BOOST_PROCESS FALSE)
+if (WIN32)
+    set(LEAVES_LOCAL_VCPKG_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows")
+    if (EXISTS "${LEAVES_LOCAL_VCPKG_PREFIX}/share/boost/BoostConfig.cmake")
+        list(PREPEND CMAKE_PREFIX_PATH "${LEAVES_LOCAL_VCPKG_PREFIX}")
+        message(STATUS "Windows dependency prefix: ${LEAVES_LOCAL_VCPKG_PREFIX}")
+    else()
+        message(STATUS "Windows dependency prefix not found: ${LEAVES_LOCAL_VCPKG_PREFIX}")
+        message(STATUS "Hint: provide dependencies via ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows or set CMAKE_PREFIX_PATH manually")
+    endif()
 endif()
+
+find_package(Boost 1.80 REQUIRED)
 
 if(Boost_FOUND)
     message(STATUS "Found Boost version ${Boost_VERSION}")
@@ -180,8 +188,12 @@ option(LEAVES_GCOV "Add gconv support for tests" ${LEAVES_REPOSITORY_OPTION_DEFA
 option(LEAVES_ASAN "Build tests with AddressSanitizer" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
-option(LEAVES_SINGLE_PROCESS "Disable multi-process support (for mobile/embedded)" OFF)
 option(LEAVES_LOG "Enable leaves logging macros for consumers" OFF)
+
+if (MSVC AND LEAVES_GCOV)
+    message(STATUS "LEAVES_GCOV is not supported with MSVC; disabling it")
+    set(LEAVES_GCOV OFF CACHE BOOL "Add gconv support for tests" FORCE)
+endif()
 
 
 include(CheckCXXCompilerFlag)
@@ -210,6 +222,15 @@ macro(check_cpu_feature FLAG TEST_SOURCE RESULT_VAR)
     endif()
 endmacro()
 
+if (MSVC)
+    add_compile_options(/wd4996)
+    set(AVX2_FLAG "/arch:AVX2")
+    set(AVX512BW_FLAG "/arch:AVX512")
+else()
+    set(AVX2_FLAG "-mavx2")
+    set(AVX512BW_FLAG "-mavx512bw")
+endif()
+
 if (NOT MSVC)
     check_cpu_feature("-mpopcnt"
         "#include <nmmintrin.h>\nint main() { return _mm_popcnt_u64(0x1234) != 5; }"
@@ -231,22 +252,22 @@ if (NOT MSVC)
     if (CPU_SUPPORTS_LZCNT)
         add_compile_options(-mlzcnt)
     endif()
+endif()
 
-    # Check for AVX2 support (32-byte SIMD operations)
-    check_cpu_feature("-mavx2"
-        "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
-        CPU_SUPPORTS_AVX2)
-    if (CPU_SUPPORTS_AVX2)
-        add_compile_options(-mavx2)
-    endif()
+# Check for AVX2 support (32-byte SIMD operations)
+check_cpu_feature("${AVX2_FLAG}"
+    "#include <immintrin.h>\nint main() { __m256i v = _mm256_set1_epi32(1); return _mm256_extract_epi32(v,0) != 1; }"
+    CPU_SUPPORTS_AVX2)
+if (CPU_SUPPORTS_AVX2)
+    add_compile_options(${AVX2_FLAG})
+endif()
 
-    # Check for AVX-512 support (64-byte SIMD operations)
-    check_cpu_feature("-mavx512bw"
-        "#include <immintrin.h>\nint main() { __m512i v = _mm512_set1_epi8(1); return (int)_mm512_reduce_add_epi32(_mm512_setzero_si512()); }"
-        CPU_SUPPORTS_AVX512BW)
-    if (CPU_SUPPORTS_AVX512BW)
-        add_compile_options(-mavx512bw)
-    endif()
+# Check for AVX-512 support (64-byte SIMD operations)
+check_cpu_feature("${AVX512BW_FLAG}"
+    "#include <immintrin.h>\nint main() { __m512i v = _mm512_setzero_si512(); return _mm512_cvtsi512_si32(v); }"
+    CPU_SUPPORTS_AVX512BW)
+if (CPU_SUPPORTS_AVX512BW)
+    add_compile_options(${AVX512BW_FLAG})
 endif()
 
 
@@ -283,14 +304,6 @@ elseif (TARGET Boost::boost)
     target_link_libraries(leaves INTERFACE Boost::boost)
 else()
     target_include_directories(leaves INTERFACE ${Boost_INCLUDE_DIRS})
-endif()
-
-if (TARGET Boost::process)
-    target_link_libraries(leaves INTERFACE Boost::process)
-endif()
-
-if (LEAVES_SINGLE_PROCESS)
-    target_compile_definitions(leaves INTERFACE LEAVES_SINGLE_PROCESS)
 endif()
 
 if (LEAVES_LOG)
@@ -330,6 +343,17 @@ function(leaves_add_test target)
         LABELS "${LEAVES_TEST_LABELS}")
 endfunction()
 
+function(leaves_stage_runtime_dlls target)
+    if (WIN32)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                -DOUTPUT_DIR=$<TARGET_FILE_DIR:${target}>
+                -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
+                -DCONFIG=$<CONFIG>
+                -P ${CMAKE_SOURCE_DIR}/cmake/stage_runtime_dlls.cmake)
+    endif()
+endfunction()
+
 add_library(leaves_test_support INTERFACE)
 
 target_include_directories(leaves_test_support
@@ -338,7 +362,7 @@ target_include_directories(leaves_test_support
 target_include_directories(leaves_test_support INTERFACE src)
 target_link_libraries(leaves_test_support INTERFACE core)
 if (MSVC)
-    target_compile_options(leaves_test_support INTERFACE /Zi)
+    target_compile_options(leaves_test_support INTERFACE /Zi /wd4996)
 else()
     target_compile_options(leaves_test_support INTERFACE -g -O0)
 endif()
@@ -352,20 +376,18 @@ endif()
 
 target_sources(leaves_test_support INTERFACE tests/test.hpp)
 
-if (LEAVES_GCOV)
-if (NOT MSVC)
+if (LEAVES_GCOV AND NOT MSVC)
 target_compile_options(leaves_test_support INTERFACE -g --coverage)
 target_compile_definitions(leaves_test_support INTERFACE DEBUG GCOV_ENABLED)
 target_link_options(leaves_test_support INTERFACE --coverage)
-endif()
-else (LEAVES_GCOV)
+else ()
 if (MSVC)
 target_compile_options(leaves_test_support INTERFACE /Zi)
 else()
 target_compile_options(leaves_test_support INTERFACE -g)
 endif()
 target_compile_definitions(leaves_test_support INTERFACE DEBUG)
-endif (LEAVES_GCOV)
+endif ()
 
 if (LEAVES_ASAN AND NOT LEAVES_GCOV)
 if (NOT MSVC)
@@ -374,9 +396,17 @@ target_link_options(leaves_test_support INTERFACE -fsanitize=address)
 endif()
 endif (LEAVES_ASAN AND NOT LEAVES_GCOV)
 
+find_package(boost_process CONFIG QUIET)
+if (TARGET boost_process::boost_process AND NOT TARGET Boost::process)
+    add_library(Boost::process ALIAS boost_process::boost_process)
+endif()
+if (NOT TARGET Boost::process)
+    message(STATUS "Boost::process CMake target not found; test_multiprocess will build without explicit Boost::process link target")
+endif()
+
 add_executable(test_mmap tests/test_mmap.cpp)
 target_sources(test_mmap INTERFACE
-    include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/storage/_mmap.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_mmap PUBLIC leaves_test_support blake3)
 
 add_executable(test_transfer tests/test_transfer.cpp)
@@ -384,34 +414,54 @@ target_link_libraries(test_transfer PUBLIC core leaves_test_support blake3)
 
 add_executable(test_replication_fsm tests/test_replication_fsm.cpp)
 target_link_libraries(test_replication_fsm PUBLIC core leaves_test_support blake3)
+if (MSVC)
+    target_compile_options(test_replication_fsm PRIVATE /bigobj)
+endif()
 
 add_executable(test_replication_api tests/test_replication_api.cpp)
 target_link_libraries(test_replication_api PUBLIC core leaves_test_support blake3)
+if (MSVC)
+    target_compile_options(test_replication_api PRIVATE /bigobj)
+endif()
 
 add_executable(test_replication_multiclient tests/test_replication_multiclient.cpp)
 target_link_libraries(test_replication_multiclient PUBLIC core leaves_test_support blake3)
 
-add_executable(ws_replication_server tests/ws_replication/server.cpp)
-target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
+set(LEAVES_HAVE_BOOST_BEAST OFF)
+find_path(LEAVES_BOOST_BEAST_INCLUDE_DIR
+    NAMES boost/beast.hpp
+    HINTS ${Boost_INCLUDE_DIR} ${Boost_INCLUDE_DIRS}
+    NO_DEFAULT_PATH
+)
+if (LEAVES_BOOST_BEAST_INCLUDE_DIR)
+    set(LEAVES_HAVE_BOOST_BEAST ON)
+endif()
+
+if (LEAVES_HAVE_BOOST_BEAST)
+    add_executable(ws_replication_server tests/ws_replication/server.cpp)
+    target_link_libraries(ws_replication_server PUBLIC core blake3 Threads::Threads)
+else()
+    message(STATUS "Skipping ws_replication_server: boost/beast.hpp not found")
+endif()
 
 add_executable(test_fstore tests/test_fstore.cpp)
 target_sources(test_fstore INTERFACE
-    include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/storage/_fstore.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_fstore PUBLIC leaves_test_support blake3)
 
 add_executable(test_memory tests/test_memory.cpp)
 target_sources(test_memory INTERFACE
-    include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_memory PUBLIC leaves_test_support)
 
 add_executable(test_memstore tests/test_memstore.cpp)
 target_sources(test_memstore INTERFACE
-    include/leaves/intern/_memstore.hpp include/leaves/intern/_memory.hpp)
+    include/leaves/intern/storage/_memstore.hpp include/leaves/intern/memory/_memory.hpp)
 target_link_libraries(test_memstore PUBLIC core leaves_test_support)
 
 add_executable(test_bits tests/test_bits.cpp)
-target_sources(test_memory INTERFACE
-    include/intern/_bits.hpp)
+target_sources(test_bits INTERFACE
+    include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_bits PUBLIC leaves_test_support)
 
 add_executable(test_cursor tests/test_cursor.cpp)
@@ -431,12 +481,12 @@ target_link_libraries(test_bigmemory PUBLIC core leaves_test_support)
 
 add_executable(test_map_storage tests/test_map_storage.cpp)
 target_sources(test_map_storage INTERFACE
-    include/mmap.hpp include/intern/_mmap.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/mmap.hpp include/leaves/intern/storage/_mmap.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_map_storage PUBLIC core leaves_test_support)
 
 add_executable(test_file_storage tests/test_file_storage.cpp)
 target_sources(test_file_storage INTERFACE
-    include/fstore.hpp include/intern/_fstore.hpp include/intern/_memory.hpp include/intern/_bits.hpp)
+    include/leaves/fstore.hpp include/leaves/intern/storage/_fstore.hpp include/leaves/intern/memory/_memory.hpp include/leaves/intern/core/_bits.hpp)
 target_link_libraries(test_file_storage PUBLIC core leaves_test_support blake3)
 
 add_executable(test_string_insert tests/test_string_insert.cpp)
@@ -447,8 +497,18 @@ target_link_libraries(test_merger PUBLIC core leaves_test_support)
 add_executable(test_tributary tests/test_tributary.cpp)
 target_link_libraries(test_tributary PUBLIC core leaves_test_support)
 
+add_executable(test_multiprocess_helper tests/test_multiprocess_helper.cpp)
+target_link_libraries(test_multiprocess_helper PUBLIC core Threads::Threads)
+leaves_stage_runtime_dlls(test_multiprocess_helper)
+
 add_executable(test_multiprocess tests/test_multiprocess.cpp)
 target_link_libraries(test_multiprocess PUBLIC core leaves_test_support Threads::Threads)
+target_compile_definitions(test_multiprocess PRIVATE
+    LEAVES_MP_HELPER_NAME="$<TARGET_FILE_NAME:test_multiprocess_helper>")
+if (TARGET Boost::process)
+    target_link_libraries(test_multiprocess PUBLIC Boost::process)
+endif()
+leaves_stage_runtime_dlls(test_multiprocess)
 
 
 add_executable(test_hash_updater tests/test_hash_updater.cpp)
@@ -468,6 +528,9 @@ target_link_libraries(test_multithread PUBLIC core leaves_test_support Threads::
 
 add_executable(test_aspect tests/test_aspect.cpp)
 target_link_libraries(test_aspect PUBLIC core leaves_test_support blake3)
+if (MSVC)
+    target_compile_options(test_aspect PRIVATE /bigobj)
+endif()
 
 add_executable(test_metrics_aspects tests/test_metrics_aspects.cpp)
 target_link_libraries(test_metrics_aspects PUBLIC core leaves_test_support)
@@ -493,7 +556,11 @@ foreach(target IN ITEMS
     test_twoquecache
     test_aspect
     test_metrics_aspects)
-    leaves_add_test(${target} LABELS "native;unit")
+    if (target STREQUAL "test_merger")
+        leaves_add_test(${target} TIMEOUT 360 LABELS "native;unit")
+    else()
+        leaves_add_test(${target} LABELS "native;unit")
+    endif()
 endforeach()
 
 foreach(target IN ITEMS
@@ -502,10 +569,45 @@ foreach(target IN ITEMS
     test_replication_api
     test_tributary
     test_multithread
-    test_multiprocess
-    test_replication_multiclient)
-    leaves_add_test(${target} TIMEOUT 180 LABELS "native;integration")
+    test_replication_multiclient
+    test_multiprocess)
+    if (target STREQUAL "test_multiprocess")
+        leaves_add_test(${target} TIMEOUT 1800 LABELS "native;integration")
+    else()
+        leaves_add_test(${target} TIMEOUT 1500 LABELS "native;integration")
+    endif()
 endforeach()
+
+add_custom_target(leaves_tests)
+add_dependencies(leaves_tests
+    test_mmap
+    test_transfer
+    test_replication_fsm
+    test_replication_api
+    test_replication_multiclient
+    test_fstore
+    test_memory
+    test_memstore
+    test_bits
+    test_cursor
+    test_node
+    test_db
+    test_wal
+    test_bigmemory
+    test_map_storage
+    test_file_storage
+    test_string_insert
+    test_merger
+    test_tributary
+    test_multiprocess_helper
+    test_multiprocess
+    test_hash_updater
+    test_hash_lookup
+    test_serial
+    test_twoquecache
+    test_multithread
+    test_aspect
+    test_metrics_aspects)
 
 add_executable(profile tests/profile.cpp)
 
@@ -522,6 +624,7 @@ add_executable(ycsb-debug tests/ycsb-bug/ycsb-debug.cpp)
 target_link_libraries(ycsb-debug PUBLIC core)
 
 set(LEAVES_GCOV_TOOL "")
+if (LEAVES_GCOV AND NOT MSVC)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(_leaves_gcov_candidates "")
     if (CMAKE_CXX_COMPILER_VERSION)
@@ -594,6 +697,7 @@ COMMAND genhtml -o lcov-report lcov-report/report.info
 COMMENT &quot;Generated Coverage Report Successfully!&quot;
 DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
 )
+endif()
 
 endif(LEAVES_BUILD_TESTS)
 
@@ -632,13 +736,24 @@ target_sources(lbench INTERFACE
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb Threads::Threads blake3)
-
-add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
-target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb lmdb Threads::Threads)
-if (NOT MSVC)
-target_compile_options(db_bench_mdb PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
+if (MSVC)
+set_target_properties(db_bench_leaves PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_BINARY_DIR}")
 endif()
+
+if(NOT MSVC)
+find_path(LEAVES_LMDB_INCLUDE_DIR NAMES lmdb.h)
+find_library(LEAVES_LMDB_LIBRARY NAMES lmdb liblmdb)
+if (LEAVES_LMDB_INCLUDE_DIR AND LEAVES_LMDB_LIBRARY)
+add_executable(db_bench_mdb benchmarks/db_bench_mdb.cpp)
+target_include_directories(db_bench_mdb PRIVATE ${LEAVES_LMDB_INCLUDE_DIR})
+target_link_libraries(db_bench_mdb PUBLIC core lbench benchmark leveldb ${LEAVES_LMDB_LIBRARY} Threads::Threads)
+target_compile_options(db_bench_mdb PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 target_compile_definitions(db_bench_mdb PRIVATE NDEBUG)
+else()
+message(STATUS "LMDB not found (lmdb.h + library), skipping db_bench_mdb")
+endif()
+endif() # NOT MSVC (lmdb)
 
 add_executable(db_bench_memory benchmarks/db_bench_memory.cpp)
 target_link_libraries(db_bench_memory PUBLIC core lbench benchmark leveldb Threads::Threads)
@@ -651,14 +766,14 @@ target_link_libraries(bench_merge PUBLIC core Threads::Threads blake3)
 if (NOT MSVC)
 target_compile_options(bench_merge PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 endif()
-target_compile_definitions(bench_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+target_compile_definitions(bench_merge PRIVATE NDEBUG)
 
 add_executable(bench_overwrite_vs_merge benchmarks/bench_overwrite_vs_merge.cpp)
 target_link_libraries(bench_overwrite_vs_merge PUBLIC core Threads::Threads blake3)
 if (NOT MSVC)
 target_compile_options(bench_overwrite_vs_merge PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
 endif()
-target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG)
 
 if (DEBUG_BENCHMARKS)
     if (MSVC)
@@ -673,7 +788,7 @@ if (DEBUG_BENCHMARKS)
 else()
     if (NOT MSVC)
     target_compile_options(db_bench_leaves PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
-    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG LEAVES_SINGLE_PROCESS)
+    target_compile_definitions(db_bench_leaves PRIVATE NDEBUG)
     target_compile_options(db_bench_memory PUBLIC ${LEAVES_BENCH_NATIVE_FLAG} -O3 -g)
     target_compile_definitions(db_bench_memory PRIVATE NDEBUG)
     endif()
@@ -681,6 +796,7 @@ endif()
 
 
 # Check for RocksDB and add benchmark if available
+if(NOT MSVC)
 find_path(ROCKSDB_INCLUDE_DIR rocksdb/db.h)
 if(ROCKSDB_INCLUDE_DIR)
     find_library(ROCKSDB_LIBRARY rocksdb)
@@ -696,15 +812,29 @@ if(ROCKSDB_INCLUDE_DIR)
         add_executable(db_bench_rocksdb benchmarks/db_bench_rocksdb.cpp)
         target_compile_definitions(db_bench_rocksdb PUBLIC NDEBUG)
         target_link_libraries(db_bench_rocksdb PUBLIC ${ROCKSDB_LIBRARY} rocksdb_histogram Threads::Threads)
-        if (NOT MSVC)
         target_compile_options(db_bench_rocksdb PUBLIC ${LEAVES_BENCH_NATIVE_FLAG} -O3 -g -flto=auto -funroll-loops -ffast-math)
-        endif()
         target_include_directories(db_bench_rocksdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/leveldb)
     else()
         message(STATUS "RocksDB headers found but library not found")
     endif()
 else()
     message(STATUS "RocksDB not found - skipping db_bench_rocksdb")
+endif()
+endif() # NOT MSVC (rocksdb)
+
+
+add_custom_target(leaves_benchmarks)
+add_dependencies(leaves_benchmarks
+    db_bench_leaves
+    db_bench_memory
+    bench_page_sizes
+    bench_merge
+    bench_overwrite_vs_merge)
+if (TARGET db_bench_mdb)
+    add_dependencies(leaves_benchmarks db_bench_mdb)
+endif()
+if (TARGET db_bench_rocksdb)
+    add_dependencies(leaves_benchmarks db_bench_rocksdb)
 endif()
 
 

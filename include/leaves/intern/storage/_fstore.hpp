@@ -13,6 +13,7 @@ File-backed storage backend and its internal persistence helpers.
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -45,11 +46,15 @@ static const size_t FSTORE_SIGNATURE_SIZE =
 // definition of all headers and data types
 struct _StoreTraits {
   using Aspect = DefaultAspect;
-  using hash_t = _NoHash;
   typedef uint32_t uint32_e;
   typedef uint16_t uint16_e;
   typedef uint64_t uint64_e;
   typedef offset_t offset_e;
+
+  using TrieNodeHeader = _TrieNodeHeaderNoHash<_StoreTraits>;
+  using LeafNodeHeader = _LeafNodeHeaderNoHash<_StoreTraits>;
+  using TrieNode = _TrieNode<TrieNodeHeader>;
+  using LeafNode = _LeafNode<LeafNodeHeader>;
 
   struct PageHeader {
     typedef PageHeader Base;
@@ -67,14 +72,14 @@ struct _StoreTraits {
   static constexpr size_t AREA_SIZE = 128 * K;  // not OS AREA_SIZE
   static constexpr size_t PAGE_CONTAINER_SIZE = 4 * K;
   static constexpr uint16_t PAGE_SIZES_DECL[] = {  // Page sizes (header + node)
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 2),  // 2 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 3),  // 3 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 4),  // 4 branches
+      sizeof(PageHeader) + TrieNode::size(1, 2),  // 2 branches
+      sizeof(PageHeader) + TrieNode::size(1, 3),  // 3 branches
+      sizeof(PageHeader) + TrieNode::size(1, 4),  // 4 branches
       sizeof(PageHeader) +
-          _TrieNode<_StoreTraits>::size(1, 10),  // 5-10 branches
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 16),   // hex 0-9A-F
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 64),   // base64
-      sizeof(PageHeader) + _TrieNode<_StoreTraits>::size(1, 256),  // binary
+        TrieNode::size(1, 10),  // 5-10 branches
+      sizeof(PageHeader) + TrieNode::size(1, 16),   // hex 0-9A-F
+      sizeof(PageHeader) + TrieNode::size(1, 64),   // base64
+      sizeof(PageHeader) + TrieNode::size(1, 256),  // binary
       sizeof(PageHeader) + 1024,
       sizeof(PageHeader) + 1024 + 512,
       4 * K};
@@ -111,7 +116,7 @@ struct _FileOperations : _CacheBase {
     uint32_t sanitize_generation;  // incremented on each storage open
     uint16_t db_entry_count;       // entries used in first directory page
     offset_t db_next_page;         // link to overflow directory page (0 = none)
-    DBEntry dbs[];                 // flexible array fills to 4K boundary
+    DBEntry dbs[1];                // trailing storage fills to 4K boundary
 
     FileHeader()
         : signature{},
@@ -125,7 +130,8 @@ struct _FileOperations : _CacheBase {
       std::memset(signature, 0, sizeof(signature));
       std::strcpy(signature, FSTORE_SIGNATURE);
       area_pool.init();
-      uint16_t cap = _DBDirectoryPage::capacity_for(4 * K - sizeof(FileHeader));
+      uint16_t cap =
+          _DBDirectoryPage::capacity_for(4 * K - offsetof(FileHeader, dbs));
       std::memset((void*)dbs, 0, sizeof(DBEntry) * cap);
     }
   };
@@ -150,6 +156,8 @@ struct _FileOperations : _CacheBase {
           "Failed to open file: " + std::string(std::strerror(errno)), errno);
     }
   }
+
+  ~_FileOperations() { close(); }
 
   void close() {
     if (leaves::fd_valid(_fd)) {
@@ -179,10 +187,7 @@ struct _FileOperations : _CacheBase {
   }
 
   void resize(size_t new_size) const {
-    if (!leaves::resize_fd(_fd, static_cast<uint64_t>(new_size))) {
-      throw FileError(
-          "Failed to resize file: " + std::string(std::strerror(errno)), errno);
-    }
+    leaves::resize_fd(_fd, static_cast<uint64_t>(new_size));
   }
 
   template <typename BlockVector>
@@ -257,10 +262,20 @@ template <typename Traits_ = _StoreTraits>
 struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
   typedef _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> base_t;
 
+  _FileStore(const std::filesystem::path& path, size_t capacity = 500 * M,
+             size_t pool_threads = 1)
+      : _FileStore(path.string().c_str(), capacity, pool_threads) {}
+
   _FileStore(const char* path, size_t capacity = 500 * M,
              size_t pool_threads = 1)
       : base_t(capacity, pool_threads, Traits_::AREA_SIZE) {
-    init_dbfile(path);
+    try {
+      init_dbfile(path);
+    } catch (...) {
+      // Ensure constructor failures do not leak an open file descriptor.
+      this->close();
+      throw;
+    }
     // Thread pool already started by base constructor
   }
 

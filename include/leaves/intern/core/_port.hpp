@@ -6,16 +6,25 @@ Platform portability macros and compiler-specific compatibility helpers.
 
 #include <algorithm>
 #include <cerrno>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
+#include <limits>
+#include <string>
+
+#include "_exception.hpp"
 
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <share.h>
 #include <windows.h>
+#include <winioctl.h>
 #else
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #endif
 
@@ -40,7 +49,6 @@ Platform portability macros and compiler-specific compatibility helpers.
 #include <xmmintrin.h>  // For _mm_prefetch and _MM_HINT_T0 on MSVC
 #define FORCE_INLINE __forceinline
 #define NOINLINE __declspec(noinline)
-#define LEAVES_HAS_BUILTIN_MEMCPY 1
 #elif defined(__GNUC__) || defined(__clang__)
 #define FORCE_INLINE inline __attribute__((always_inline))
 #define NOINLINE __attribute__((noinline))
@@ -94,13 +102,64 @@ static constexpr int LEAVES_INVALID_FD = -1;
 
 FORCE_INLINE bool fd_valid(int fd) { return fd != LEAVES_INVALID_FD; }
 
+FORCE_INLINE uint32_t get_process_id() {
+#ifdef _WIN32
+  return static_cast<uint32_t>(::GetCurrentProcessId());
+#else
+  return static_cast<uint32_t>(::getpid());
+#endif
+}
+
+FORCE_INLINE bool process_is_alive(uint32_t pid) {
+  if (pid == 0) return false;
+#ifdef _WIN32
+  HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                 static_cast<DWORD>(pid));
+  if (process) {
+    ::CloseHandle(process);
+    return true;
+  }
+  // Access denied still means the process exists but we cannot query it.
+  return ::GetLastError() == ERROR_ACCESS_DENIED;
+#else
+  if (::kill(static_cast<pid_t>(pid), 0) == 0) return true;
+  return errno == EPERM;
+#endif
+}
+
+FORCE_INLINE bool file_is_readable(const char* path) {
+#ifdef _WIN32
+  return _access(path, 4) == 0;
+#else
+  return ::access(path, R_OK) == 0;
+#endif
+}
+
+FORCE_INLINE std::string errno_message(int err) {
+#ifdef _WIN32
+  char buffer[128] = {};
+  if (::strerror_s(buffer, sizeof(buffer), err) == 0) {
+    return std::string(buffer);
+  }
+  return std::string("errno ") + std::to_string(err);
+#else
+  const char* msg = std::strerror(err);
+  if (msg) return std::string(msg);
+  return std::string("errno ") + std::to_string(err);
+#endif
+}
+
 FORCE_INLINE int open_rw_fd(const char* path, bool create = false) {
 #ifdef _WIN32
   int flags = _O_RDWR | _O_BINARY;
-  if (create) {
-    return _open(path, flags | _O_CREAT, _S_IREAD | _S_IWRITE);
+  if (create) flags |= _O_CREAT;
+  int fd = LEAVES_INVALID_FD;
+  errno_t rc = _sopen_s(&fd, path, flags, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+  if (rc != 0) {
+    errno = static_cast<int>(rc);
+    return LEAVES_INVALID_FD;
   }
-  return _open(path, flags);
+  return fd;
 #else
   int flags = O_RDWR;
   if (create) flags |= O_CREAT;
@@ -117,6 +176,41 @@ FORCE_INLINE void close_fd(int fd) {
 #endif
 }
 
+template <typename NativeHandle>
+FORCE_INLINE int duplicate_fd_from_mapping_native_handle(
+    NativeHandle native_handle) {
+#ifdef _WIN32
+  HANDLE source = static_cast<HANDLE>(native_handle);
+  if (!source || source == INVALID_HANDLE_VALUE) {
+    errno = EBADF;
+    return LEAVES_INVALID_FD;
+  }
+
+  HANDLE duplicate = nullptr;
+  if (!::DuplicateHandle(::GetCurrentProcess(), source,
+                         ::GetCurrentProcess(), &duplicate, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS)) {
+    errno = EIO;
+    return LEAVES_INVALID_FD;
+  }
+
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(duplicate),
+                           _O_RDWR | _O_BINARY);
+  if (!fd_valid(fd)) {
+    ::CloseHandle(duplicate);
+    return LEAVES_INVALID_FD;
+  }
+  return fd;
+#else
+  int source = static_cast<int>(native_handle);
+  if (source < 0) {
+    errno = EBADF;
+    return LEAVES_INVALID_FD;
+  }
+  return ::dup(source);
+#endif
+}
+
 FORCE_INLINE uint64_t fd_size(int fd) {
   if (!fd_valid(fd)) return 0;
 #ifdef _WIN32
@@ -128,9 +222,74 @@ FORCE_INLINE uint64_t fd_size(int fd) {
 #endif
 }
 
+FORCE_INLINE bool mark_fd_sparse(int fd, unsigned long* win_error = nullptr) {
+  assert(win_error);
+#ifdef _WIN32
+  assert(fd_valid(fd));
+  *win_error = 0;
+
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) {
+    errno = EBADF;
+    *win_error = ERROR_INVALID_HANDLE;
+    return false;
+  }
+
+  HANDLE handle = reinterpret_cast<HANDLE>(os_handle);
+  DWORD bytes = 0;
+  if (!::DeviceIoControl(handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0,
+                         &bytes, nullptr)) {
+    *win_error = ::GetLastError();
+    errno = EIO;
+    return false;
+  }
+  return true;
+#else
+  *win_error = 0;
+  return true;
+#endif
+}
+
+FORCE_INLINE void resize_fd(int fd, uint64_t new_size);
+
+FORCE_INLINE void prepare_windows_sparse_mapping_file(const char* path,
+                                                      uint64_t target_size) {
+#ifdef _WIN32
+  int setup_fd = open_rw_fd(path, false);
+  if (!fd_valid(setup_fd)) {
+    int err = errno ? errno : EBADF;
+    throw FileError(std::format("Failed to open mmap file '{}' for setup",
+                                path),
+                    err);
+  }
+
+  struct _fd_guard {
+    int fd;
+    ~_fd_guard() { close_fd(fd); }
+  } fd_guard{setup_fd};
+
+  unsigned long win_error = 0;
+  if (!mark_fd_sparse(setup_fd, &win_error)) {
+    int err = errno ? errno : EIO;
+    throw FileError(
+        std::format("Failed to mark mmap file '{}' as sparse (winerr={})",
+                    path, win_error),
+        err);
+  }
+
+  uint64_t current_size = fd_size(setup_fd);
+  if (current_size < target_size) {
+    resize_fd(setup_fd, target_size);
+  }
+#else
+  (void)path;
+  (void)target_size;
+#endif
+}
+
 FORCE_INLINE bool write_fd_all_at(int fd, uint64_t offset, const void* src,
                                   size_t n) {
-  if (!fd_valid(fd)) return false;
+  assert(fd_valid(fd));
   const char* p = static_cast<const char*>(src);
   size_t remaining = n;
 
@@ -173,7 +332,7 @@ FORCE_INLINE bool write_fd_all_at(int fd, uint64_t offset, const void* src,
 }
 
 FORCE_INLINE bool read_fd_all_at(int fd, uint64_t offset, void* dst, size_t n) {
-  if (!fd_valid(fd)) return false;
+  assert(fd_valid(fd));
   char* p = static_cast<char*>(dst);
   size_t remaining = n;
 
@@ -319,23 +478,97 @@ FORCE_INLINE bool is_little_endian() {
 
 }  // namespace detail
 
-FORCE_INLINE bool resize_fd(int fd, uint64_t new_size) {
-  if (!fd_valid(fd)) return false;
+FORCE_INLINE void resize_fd(int fd, uint64_t new_size) {
+  assert(fd_valid(fd));
+  
 #ifdef _WIN32
-  return _chsize_s(fd, new_size) == 0;
+  if (new_size > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)())) {
+    int err = EINVAL;
+    errno = err;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) +
+            " bytes: size exceeds signed 64-bit Windows API limit",
+        err);
+  }
+
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) {
+    int err = errno ? errno : EBADF;
+    errno = err;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+        std::to_string(new_size) + " bytes: " + errno_message(err),
+        err);
+  }
+
+  HANDLE handle = reinterpret_cast<HANDLE>(os_handle);
+  FILE_END_OF_FILE_INFO eof_info{};
+  eof_info.EndOfFile.QuadPart = static_cast<LONGLONG>(new_size);
+
+  if (!::SetFileInformationByHandle(handle, FileEndOfFileInfo, &eof_info,
+                                    sizeof(eof_info))) {
+    DWORD win_error = ::GetLastError();
+    int err = EIO;
+    switch (win_error) {
+      case ERROR_ACCESS_DENIED:
+        err = EACCES;
+        break;
+      case ERROR_INVALID_HANDLE:
+        err = EBADF;
+        break;
+      case ERROR_INVALID_PARAMETER:
+        err = EINVAL;
+        break;
+      case ERROR_DISK_FULL:
+      case ERROR_HANDLE_DISK_FULL:
+        err = ENOSPC;
+        break;
+      default:
+        break;
+    }
+    errno = err;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+            std::to_string(new_size) + " bytes (winerr=" +
+            std::to_string(static_cast<unsigned long>(win_error)) +
+            "): " + errno_message(err),
+        err);
+  }
 #else
-  return ::ftruncate(fd, static_cast<off_t>(new_size)) == 0;
+  if (::ftruncate(fd, static_cast<off_t>(new_size)) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError(
+        "Failed to resize file descriptor " + std::to_string(fd) + " to " +
+        std::to_string(new_size) + " bytes: " + errno_message(err),
+        err);
+  }
 #endif
 }
 
-FORCE_INLINE bool sync_fd_data(int fd) {
-  if (!fd_valid(fd)) return false;
+FORCE_INLINE void sync_fd_data(int fd) {
+  assert(fd_valid(fd));
 #ifdef _WIN32
-  return _commit(fd) == 0;
+  if (_commit(fd) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + errno_message(err),
+                    err);
+  }
 #elif defined(__APPLE__)
-  return ::fsync(fd) == 0;
+  if (::fsync(fd) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + errno_message(err),
+                    err);
+  }
 #else
-  return ::fdatasync(fd) == 0;
+  if (::fdatasync(fd) != 0) {
+    int err = errno ? errno : EIO;
+    throw FileError("Failed to sync file descriptor " + std::to_string(fd) +
+                        ": " + errno_message(err),
+                    err);
+  }
 #endif
 }
 

@@ -4,7 +4,7 @@ Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and c
 
 `MapStorage::ReplicationDB` is available only on native targets (`__EMSCRIPTEN__` builds exclude it).
 
-For an architectural overview see [docs/architecture/architecture.md](architecture/architecture.md)
+For an architectural overview see [docs/architecture/architecture.md](/docs/architecture/architecture.md)
 
 ## Quick start
 
@@ -70,6 +70,14 @@ int main() {
 
 - `static storage_ptr create(const char* path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)`
   Creates and initializes storage backed by `path`. `map_size` is the virtual-address reservation limit. `copy_write_threshold` sets the value-size threshold for copy-write behavior: values at or above the threshold are written directly to the backing file instead of being copied into mmap, for speed. `copy_write_threshold = 0` automatically calibrates the threshold during creation.
+
+- `static storage_ptr create(const std::filesystem::path& path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)`
+  Creates and initializes storage using a filesystem-native path. This overload is the preferred cross-platform option for path inputs from `std::filesystem`.
+
+- `static storage_ptr create(const wchar_t* path, size_t map_size = 4 * G, uint32_t copy_write_threshold = 0)` (Windows)
+  Windows compatibility overload for wide-character path pointers.
+
+`std::string_view` is intentionally used for database names, not filesystem paths. Filesystem paths may require platform-native character types (for example `wchar_t` on Windows), which `std::string_view` alone cannot represent.
 
 - `template <typename DBClass = DB, typename... Args> auto open(std::string_view name, Args&&... args)`
   Opens or creates a named database. `DBClass` must be one of the facade tags (`MapStorage::DB`, `MapStorage::ReplicationDB`, `MapStorage::ConfluenceDB`, or `MapStorage::ConfluenceReplicationDB`). Additional `args` are forwarded to the DB wrapper.
@@ -207,7 +215,14 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
   Refreshes cursor view after out-of-band mutation.
 
 - `bool start_transaction(bool non_blocking = false, bool use_wal = false)`
-  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting, and `use_wal = true` for WAL semantics. By default each `value()` / `remove()` call starts a transaction if none is active. Use `start_transaction()` to group multiple operations into a single transaction.
+  Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting. Set `use_wal = true` to enable WAL-based ACID durability for the transaction.
+
+  Leaves provides two durability options for write transactions:
+
+  1. Synchronous commit (`use_wal = false`): the transaction flushes the memory-mapped file to disk on commit, which provides strong durability but can significantly reduce write throughput.
+  2. WAL (`use_wal = true`): the transaction still writes the affected nodes into memory as usual, but the commit path triggers an asynchronous flush instead of waiting for a synchronous fsync. A write-ahead log is maintained as a crash-recovery backup: if the process crashes before the in-memory state is fully persisted, the WAL can be replayed to reconstruct the lost updates. This is the second durability option discussed in [WAL Semantics as a Second ACID Option](../lessons-learned/lessons-learned.md#wal-semantics-as-a-second-acid-option).
+
+  In practice, WAL can outperform synchronous commit for multi-write transactions because it avoids the latency of blocking on fsync, although the exact benefit depends on workload characteristics. By default each `value()` / `remove()` call starts a transaction if none is active. Use `start_transaction()` to group multiple opeations into a singrle transaction.
 
 - `tid_t prepare_commit(bool sync = false)`
   Moves the transaction to prepared state and returns the prepared transaction id, or `0` if no transaction is active for this cursor.
@@ -385,7 +400,7 @@ Confluence is a multi-writer layer. Every `ConfluenceCursor` writes to its own t
 - Include `<leaves/confluence.hpp>` for `MapStorage::ConfluenceDB`.
 - Include `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
 
-See [examples/confluence_multithread](../examples/confluence_multithread) for a complete multi-threaded demo.
+See [examples/confluence_multithread](/examples/confluence_multithread) for a complete multi-threaded demo.
 
 
 #### Opening and removing a Confluence database
@@ -538,7 +553,7 @@ Include `<leaves/replication.hpp>`. A complete peer-to-peer example is provided 
 
 `MapStorage::ReplicationDB` in this section is a native-only API (excluded when building with `__EMSCRIPTEN__`).
 
-For a high-level overview see [docs/replication/replication.md](replication/replication.md)
+For a high-level overview see [docs/replication/replication.md](/docs/replication/replication.md)
 
 ### Opening and removing a ReplicationDB database
 

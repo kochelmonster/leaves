@@ -21,8 +21,8 @@ struct _Transition {
   typedef Cursor_ Cursor;
   using Traits = typename Cursor::Traits;
   typedef _Transition<Cursor> Transition;
-  typedef _TrieNode<Traits> TrieNode;
-  typedef _LeafNode<Traits> LeafNode;
+  using TrieNode = typename Traits::TrieNode;
+  using LeafNode = typename Traits::LeafNode;
   using page_ptr = typename Traits::ptr;
   using offset_e = typename Traits::offset_e;
   using trie_ptr = typename Traits::template Pointer<TrieNode>;
@@ -270,7 +270,7 @@ struct _Transition {
 
       child.first();
       branch_key = current_key()[child.keypos];
-      assert(trie_.isset(branch_key));
+      assert((trie_.isset)(branch_key));
       return true;
     }
 
@@ -313,9 +313,9 @@ struct _Transition {
       child.last();
       if (child.keypos < current_key().size()) {
         branch_key = current_key()[child.keypos];
-        assert(trie_.isset(branch_key));
+        assert((trie_.isset)(branch_key));
       } else {
-        assert(trie_.isset(TrieNode::NONE));
+        assert((trie_.isset)(TrieNode::NONE));
       }
       return true;
     }
@@ -699,10 +699,12 @@ struct _TransactionalCursor
     [[maybe_unused]] bool r = start_transaction();
     assert(r);
 
-    const Transition& back = this->stack.back();
-    if (this->is_valid() && back.leaf()->is_big()) {
-      BigValue* bvalue = (BigValue*)back.leaf()->vdata();
-      get_bigmemory().free(bvalue);
+    if (this->is_valid()) {
+      const Transition& back = this->stack.back();
+      if (back.leaf()->is_big()) {
+        BigValue* bvalue = (BigValue*)back.leaf()->vdata();
+        get_bigmemory().free(bvalue);
+      }
     }
 
     // Account for inline aspect metadata alongside _BigValue

@@ -247,7 +247,8 @@ static ScenarioResult run_scenario(const char* name,
   // Reset raw-size histogram so it only captures this scenario's allocations.
   _page_hist_reset();
 
-  auto storage = Storage::create(fpath.c_str());
+  auto fpath_str = fpath.string();
+  auto storage = Storage::create(fpath_str.c_str());
   auto db = storage->open("bench");
   auto cursor = db.cursor();
 
