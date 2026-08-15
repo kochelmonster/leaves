@@ -247,6 +247,7 @@ cmake --build build-debug -j4
 - intersection of tries
 
 ## License
+
 See [LICENSE.md](LICENSE.md) for the Leaves Community License 1.0.
 
 Third-party components include their own license files (for example in BLAKE3). If you plan to redistribute Leaves, add or confirm project-level licensing metadata for your distribution workflow.
