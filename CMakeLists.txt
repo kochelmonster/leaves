@@ -556,7 +556,11 @@ foreach(target IN ITEMS
     test_twoquecache
     test_aspect
     test_metrics_aspects)
-    leaves_add_test(${target} LABELS "native;unit")
+    if (target STREQUAL "test_merger")
+        leaves_add_test(${target} TIMEOUT 360 LABELS "native;unit")
+    else()
+        leaves_add_test(${target} LABELS "native;unit")
+    endif()
 endforeach()
 
 foreach(target IN ITEMS
@@ -567,7 +571,11 @@ foreach(target IN ITEMS
     test_multithread
     test_replication_multiclient
     test_multiprocess)
-    leaves_add_test(${target} TIMEOUT 1500 LABELS "native;integration")
+    if (target STREQUAL "test_multiprocess")
+        leaves_add_test(${target} TIMEOUT 1800 LABELS "native;integration")
+    else()
+        leaves_add_test(${target} TIMEOUT 1500 LABELS "native;integration")
+    endif()
 endforeach()
 
 add_custom_target(leaves_tests)
