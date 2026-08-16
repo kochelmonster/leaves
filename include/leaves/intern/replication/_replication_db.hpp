@@ -565,11 +565,6 @@ struct _ReplicationDB
         } else {
           if (oldest_ts == 0 || ts < oldest_ts) oldest_ts = ts;
         }
-      } else {
-        // Legacy entry with no timestamp — purge it
-        del_cursor.remove();
-        ++purged;
-        continue;
       }
       del_cursor.next();
     }
