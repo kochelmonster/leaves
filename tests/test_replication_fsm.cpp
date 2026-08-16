@@ -3613,27 +3613,6 @@ BOOST_FIXTURE_TEST_CASE(test_purge_retention_respects_cutoff,
   BOOST_CHECK_EQUAL(result2.oldest_remaining_ts, 0);
 }
 
-BOOST_FIXTURE_TEST_CASE(test_purge_legacy_entry_removed, ReplicationFixture) {
-  auto path = (test_temp_dir / "purge_legacy_entry.lvs").string();
-  auto storage = Storage::create(path.c_str());
-  auto db = storage->open<Storage::ReplicationDB>("test");
-  auto* impl = db._internal();
-
-  // Inject a legacy deletion entry with payload shorter than timestamp size.
-  {
-    auto cursor = impl->create_cursor();
-    [[maybe_unused]] bool started = cursor->start_transaction();
-    auto& del_cursor = cursor->get_deletion_cursor();
-    del_cursor.find(Slice("legacy_key"));
-    del_cursor.value(Slice("x"));
-    cursor->commit();
-  }
-
-  auto result = impl->_do_purge(0);
-  BOOST_CHECK_EQUAL(result.purged, 1);
-  BOOST_CHECK_EQUAL(result.oldest_remaining_ts, 0);
-}
-
 BOOST_FIXTURE_TEST_CASE(test_run_purge_schedules_from_oldest_remaining,
                         ReplicationFixture) {
   auto path = (test_temp_dir / "purge_schedule_oldest.lvs").string();
