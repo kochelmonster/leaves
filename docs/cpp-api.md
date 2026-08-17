@@ -373,6 +373,9 @@ the hooks they need.
     return `false` to veto reset.
   - `template <typename DB> constexpr void on_reset(DB& db)`:
     notification after reset.
+  - `template <typename DB> constexpr void on_purge(DB& db, size_t purged)`:
+    notification after each deletion marker is purged; `purged` is the total
+    number removed by the current purge operation.
 
 - Merge policy hooks
   - `bool may_merge_overwrite(const Slice& key, const Slice& dst, bool dst_is_big, const Slice& src, bool src_is_big, CursorContext& ctx)`:

@@ -31,7 +31,7 @@ enum class TransactionOrigin { user, merge, defrag };
 //   DB-level transaction — before/on_start_transaction, before/on_rollback,
 //                          on_prepare_commit, before/on_commit (no
 //                          CursorContext)
-//   Maintenance  — on_sanitize, before/on_defrag, before/on_reset
+//   Maintenance  — on_sanitize, before/on_defrag, before/on_reset, on_purge
 //   Merge-level  — may_merge_overwrite, may_merge_add, may_merge_delete
 //
 // Before hooks return bool: false prevents the operation.
@@ -152,6 +152,9 @@ struct DefaultAspect {
 
   template <typename DB>
   constexpr void on_reset(DB&) {}
+
+  template <typename DB>
+  constexpr void on_purge(DB&, size_t) {}
 
   // --- Merge join points --------------------------------------------------
   // These are called during replication merge.  The CursorContext belongs
