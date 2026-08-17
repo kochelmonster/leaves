@@ -561,6 +561,7 @@ struct _ReplicationDB
         if (ts <= older_than) {
           del_cursor.remove();
           ++purged;
+          this->_aspect.on_purge(*this, purged);
           continue;  // remove() advances to next position
         } else {
           if (oldest_ts == 0 || ts < oldest_ts) oldest_ts = ts;

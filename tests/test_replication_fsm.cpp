@@ -28,6 +28,31 @@
 
 using namespace leaves;
 
+struct PurgeTestAspect : public DefaultAspect {
+  std::mutex* mutex = nullptr;
+  std::condition_variable* condition = nullptr;
+  bool* first_entry_purged = nullptr;
+  bool* release_purge = nullptr;
+
+  template <typename DB>
+  void on_purge(DB&, size_t purged) {
+    if (purged != 1 || !mutex || !condition || !first_entry_purged ||
+        !release_purge)
+      return;
+    std::unique_lock lock(*mutex);
+    *first_entry_purged = true;
+    condition->notify_one();
+    condition->wait(lock, [&] { return *release_purge; });
+  }
+};
+
+struct PurgeTestMapTraits : public MapTraits {
+  using Aspect = PurgeTestAspect;
+};
+
+using PurgeTestStorage = MapStorage_<PurgeTestMapTraits>;
+using PurgeTestDBImpl = _ReplicationDB<PurgeTestStorage::StorageImpl>;
+
 // Use replicating map storage for testing
 using Storage = MapStorage;
 using DBImpl = _ReplicationDB<Storage::StorageImpl>;
@@ -3652,52 +3677,61 @@ BOOST_FIXTURE_TEST_CASE(test_run_purge_schedules_from_oldest_remaining,
 BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
                         ReplicationFixture) {
   auto path = (test_temp_dir / "purge_interrupt_hint.lvs").string();
-  auto storage = Storage::create(path.c_str());
-  auto db = storage->open<Storage::ReplicationDB>("test");
+  auto storage = PurgeTestStorage::create(path.c_str());
+  auto db = storage->open<PurgeTestStorage::ReplicationDB>("test", false);
   auto* impl = db._internal();
 
-  bool covered_interrupt_branch = false;
-  for (int attempt = 0; attempt < 20 && !covered_interrupt_branch; ++attempt) {
-    // Refill deletion trie with many purgeable entries so the interrupt can
-    // land mid-walk.
-    {
-      auto cursor = impl->create_cursor();
-      [[maybe_unused]] bool started = cursor->start_transaction();
-      auto& del_cursor = cursor->get_deletion_cursor();
-      _little_uint64_t ts_le = 1;
-      for (int i = 0; i < 5000; ++i) {
-        std::string key =
-            "intr_" + std::to_string(attempt) + "_" + std::to_string(i);
-        del_cursor.find(Slice(key));
-        del_cursor.value(Slice((uint8_t*)&ts_le, sizeof(ts_le)));
-      }
-      cursor->commit();
+  {
+    auto cursor = impl->create_cursor();
+    [[maybe_unused]] bool started = cursor->start_transaction();
+    auto& del_cursor = cursor->get_deletion_cursor();
+    _little_uint64_t ts_le = 1;
+    for (int i = 0; i < 5000; ++i) {
+      std::string key = "intr_" + std::to_string(i);
+      del_cursor.find(Slice(key));
+      del_cursor.value(Slice((uint8_t*)&ts_le, sizeof(ts_le)));
     }
-
-    std::atomic<bool> stop{false};
-    std::thread interrupter([&] {
-      std::this_thread::sleep_for(std::chrono::microseconds(100));
-      while (!stop.load(std::memory_order_relaxed)) {
-        impl->_purge_interrupt.store(true, std::memory_order_relaxed);
-        std::this_thread::yield();
-      }
-    });
-
-    const uint64_t older_than = 2;
-    auto result = impl->_do_purge(older_than);
-
-    stop.store(true, std::memory_order_relaxed);
-    interrupter.join();
-
-    // When interrupted after purging at least one entry and before seeing any
-    // survivor, _do_purge returns oldest_remaining_ts == older_than.
-    if (result.purged > 0 && result.oldest_remaining_ts == older_than) {
-      covered_interrupt_branch = true;
-    }
+    cursor->commit();
   }
 
-  BOOST_CHECK_MESSAGE(covered_interrupt_branch,
-                      "Failed to trigger purge interruption branch");
+  std::mutex hook_mutex;
+  std::condition_variable hook_cv;
+  bool first_entry_purged = false;
+  bool release_purge = false;
+  db.aspect().mutex = &hook_mutex;
+  db.aspect().condition = &hook_cv;
+  db.aspect().first_entry_purged = &first_entry_purged;
+  db.aspect().release_purge = &release_purge;
+
+  const uint64_t older_than = 2;
+  PurgeTestDBImpl::PurgeResult result{};
+  std::thread purge([&] { result = impl->_do_purge(older_than); });
+
+  bool hook_ready = false;
+  {
+    std::unique_lock lock(hook_mutex);
+    hook_ready = hook_cv.wait_for(lock, std::chrono::seconds(5),
+                                  [&] { return first_entry_purged; });
+  }
+  if (!hook_ready) {
+    {
+      std::lock_guard lock(hook_mutex);
+      release_purge = true;
+    }
+    hook_cv.notify_one();
+    purge.join();
+    BOOST_FAIL("Purge did not reach the deterministic interruption hook");
+  }
+  impl->_purge_interrupt.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard lock(hook_mutex);
+    release_purge = true;
+  }
+  hook_cv.notify_one();
+  purge.join();
+
+  BOOST_CHECK_EQUAL(result.purged, 1);
+  BOOST_CHECK_EQUAL(result.oldest_remaining_ts, older_than);
 }
 
 BOOST_FIXTURE_TEST_CASE(test_acquire_hash_trie_fallback_when_offset_missing,
