@@ -343,10 +343,6 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
         },
         [self](uint64_t pos, const void* buf, size_t size) {
           if (size == 0) return;
-          LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
-                              "_FileStore::recover_areas direct write pos=%llu size=%zu\n",
-                              (unsigned long long)pos,
-                              size);
           self->write(static_cast<offset_t>(pos), buf, size);
         },
         [self](auto&& mark_occupied_range) {
@@ -374,12 +370,6 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
         });
     this->flush(true, true);
     this->reset_cache_state();
-  }
-
-  // Compatibility method for tests
-  AreaSlice get_area(size_t size) {
-    auto area_ptr = this->alloc_multi_area(size);
-    return *area_ptr;  // Convert Area* to AreaSlice
   }
 
   uint32_t sanitize_generation() { return this->_header->sanitize_generation; }

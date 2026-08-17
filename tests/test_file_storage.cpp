@@ -281,10 +281,10 @@ BOOST_AUTO_TEST_CASE(test_file_storage_key_patterns) {
 }
 
 BOOST_AUTO_TEST_CASE(test_multi_area_big_values) {
-  // Regression test for CODE_REVIEW_4 Finding #3:
-  // CacheStore::resolve() must handle offsets that fall in the 2nd (or later)
-  // AREA_SIZE chunk of a multi-area allocation.
-  // FileStorage AREA_SIZE = 128 KB, so values >= ~128 KB trigger multi-area.
+  // Values larger than AREA_SIZE (128 KB for FileStorage) live in multi-area
+  // allocations; verify they survive a close/reopen.  Each value's chunk
+  // starts in the first AREA_SIZE block of its own area, so interior offsets
+  // of a multi-area are not covered here.
   DirPreparation prep;
   auto path = prep.get_file_path();
 
@@ -321,8 +321,8 @@ BOOST_AUTO_TEST_CASE(test_multi_area_big_values) {
     }
   }
 
-  // Re-open from disk — cache is cold, resolve() must read multi-areas
-  // from disk and handle offsets past the first AREA_SIZE chunk.
+  // Re-open from disk — cache is cold, so resolve() must pick up the
+  // multi-area size from the on-disk area header.
   {
     auto storage = FileStorage::create(path.c_str());
     auto db = storage->open("big");

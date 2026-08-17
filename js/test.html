@@ -431,10 +431,72 @@ async function runTest() {
         log('Aspect test complete');
     }
 
+    // ── Big value reopen test ───────────────────────────────────
+    // A ~300 KB value spans more than one 256 KB area, so the following
+    // ~100 KB value is carved from the remainder at an offset inside that
+    // multi-area — an offset that has no IndexedDB item of its own.
+    async function runBigValueReopenTest(log, check) {
+        log('\n=== Big Value Reopen Test ===');
+
+        const Module = await createModule();
+        var name = 'test_bigval_' + Date.now();
+        var big1 = new Uint8Array(300 * 1024).fill(65);  // 'A'
+        var big2 = new Uint8Array(100 * 1024).fill(66);  // 'B'
+
+        var store = await Module.LeavesStore.create(name, 64 * 1024 * 1024);
+        var db = await store.open('big');
+        var c = await db.createCursor();
+
+        await c.find('k1');
+        await c.setValueBytes(big1);
+        await c.find('k2');
+        await c.setValueBytes(big2);
+        await c.commit(false);
+
+        c.delete();
+        db.delete();
+        await store.close();
+        store.delete();
+        log('Wrote 300 KB + 100 KB and closed the store');
+
+        // Reopen the same storage in a fresh module — empty cache and heap
+        const Module2 = await createModule();
+        var store2 = await Module2.LeavesStore.create(name, 64 * 1024 * 1024);
+        var db2 = await store2.open('big');
+        var c2 = await db2.createCursor();
+
+        // k2 first: reading k1 would cache the owning area and hide the
+        // interior-offset lookup.
+        await c2.find('k2');
+        check('k2 isValid after reopen', c2.isValid(), true);
+        var v2 = new Uint8Array(await c2.getValueBytes());
+        check('k2 size', v2.length, big2.length);
+        check('k2 first byte', v2[0], 66);
+        check('k2 last byte', v2[v2.length - 1], 66);
+
+        await c2.find('k1');
+        check('k1 isValid after reopen', c2.isValid(), true);
+        var v1 = new Uint8Array(await c2.getValueBytes());
+        check('k1 size', v1.length, big1.length);
+        check('k1 last byte', v1[v1.length - 1], 65);
+
+        c2.delete();
+        db2.delete();
+        await store2.close();
+        store2.delete();
+        try {
+            await Module2.LeavesStore.deleteStorage(name);
+        } catch (e) {
+            log('WARN: deleteStorage(bigval) failed: ' + e.message);
+        }
+        log('Big value reopen cleanup complete');
+    }
+
     if (window.runReplicationTest) {
         await window.runReplicationTest(log, check);
     }
     await runAspectTest(log, check);
+    await runBigValueReopenTest(log, check);
 
   } catch (e) {
     log('ERROR: ' + e.message + '\n' + e.stack);

@@ -609,16 +609,17 @@ struct _BrowserOperations : _CacheBase {
       (unsigned long long)key, key_buf, (unsigned long long)sub_offset,
       size);
 
-    // Serve from read-ahead buffer if same aligned key
-    if (aligned_key == _read_cache_key && _read_cache_data) {
-      if (sub_offset + size <= static_cast<size_t>(_read_cache_size)) {
-        std::memcpy(data, static_cast<const char*>(_read_cache_data) + sub_offset, size);
-      } else {
-        size_t copy_size = std::min<size_t>(size, static_cast<size_t>(_read_cache_size) - sub_offset);
-        std::memcpy(data, static_cast<const char*>(_read_cache_data) + sub_offset, copy_size);
-        if (copy_size < size) {
-          std::memset(static_cast<char*>(data) + copy_size, 0, size - copy_size);
-        }
+    // Serve from read-ahead buffer if it spans the requested offset
+    if (_read_cache_data && _read_cache_key != UINT64_MAX &&
+        _read_cache_key <= key &&
+        key < _read_cache_key + static_cast<uint64_t>(_read_cache_size)) {
+      const uint64_t off = key - _read_cache_key;
+      const size_t avail = static_cast<size_t>(_read_cache_size) - off;
+      const size_t copy_size = std::min<size_t>(size, avail);
+      std::memcpy(data, static_cast<const char*>(_read_cache_data) + off,
+                  copy_size);
+      if (copy_size < size) {
+        std::memset(static_cast<char*>(data) + copy_size, 0, size - copy_size);
       }
       // Second read consumes the buffer (resolve pattern: header then full)
       _read_cache_key = UINT64_MAX;
@@ -629,11 +630,34 @@ struct _BrowserOperations : _CacheBase {
     int loaded_size = 0;
     int error = 0;
 
-    LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_idb_load_data: key=%llu key_str='%s' sub_offset=%llu size=%zu\n",
-      (unsigned long long)key, key_buf, (unsigned long long)sub_offset,
-      size);
     emscripten_idb_load(_store_name.c_str(), key_buf, &loaded_data,
                         &loaded_size, &error);
+
+    // No item under this key: the offset lies inside a multi-area — walk back
+    // to the item that owns it.  area_0 always exists, so this terminates.
+    if (error || !loaded_data) {
+      uint64_t probe = aligned_key;
+      while (probe >= AREA_ALIGNMENT) {
+        probe -= AREA_ALIGNMENT;
+        idb_key_format(key_buf, 32, probe);
+        loaded_data = nullptr;
+        loaded_size = 0;
+        error = 0;
+        emscripten_idb_load(_store_name.c_str(), key_buf, &loaded_data,
+                            &loaded_size, &error);
+        if (error || !loaded_data) continue;
+        if (probe + static_cast<uint64_t>(loaded_size) > key) {
+          aligned_key = probe;
+          sub_offset = key - probe;
+        } else {
+          // Earlier area ending before the offset: nothing owns this block.
+          free(loaded_data);
+          loaded_data = nullptr;
+          loaded_size = 0;
+        }
+        break;
+      }
+    }
 
     if (error || !loaded_data) {
       LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_idb_load_data: key=%llu key_str='%s' NOT FOUND — returning zeros (size=%zu)\n",
@@ -826,12 +850,6 @@ struct _BrowserStore
           }
         });
     this->flush();
-  }
-
-  // Compatibility method
-  AreaSlice get_area(size_t size) {
-    auto area_ptr = this->alloc_multi_area(size);
-    return *area_ptr;
   }
 
   // Browser-specific: Export database to transferable format
