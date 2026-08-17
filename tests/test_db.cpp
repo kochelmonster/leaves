@@ -449,12 +449,6 @@ struct TestStorage {
     multi_areas.add(head, tail, *this); 
   }
 
-  // Legacy compatibility method
-  AreaSlice get_area(uint64_t size) {
-    auto area_ptr = alloc_multi_area(size);
-    return *area_ptr;  // Convert Area* to AreaSlice
-  }
-
   void flush(bool /* sync */ = false, bool /* force */ = false) {}
   void sync_fd_for_commit() {}
   void prefetch(offset_t /* offset */, Access /* access */ = READ) const {}

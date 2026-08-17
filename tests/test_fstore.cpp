@@ -214,23 +214,23 @@ BOOST_AUTO_TEST_CASE(test_filename_method) {
   BOOST_CHECK_EQUAL(db.filename(), dbFilePath.string());
 }
 
-BOOST_AUTO_TEST_CASE(test_get_area_alignment_and_growth) {
+BOOST_AUTO_TEST_CASE(test_alloc_multi_area_alignment_and_growth) {
   DirPreparation prep;
   std::filesystem::path dbFilePath = prep.tempDir / "areas.lvs";
   DBFileStore db(dbFilePath.c_str());
 
   uint64_t initial = db._header->file_size;
   [[maybe_unused]] size_t header_size = db.calc_header_size();
-  auto a1 = db.get_area(1024);
+  auto a1 = db.alloc_multi_area(1024);
   BOOST_CHECK(a1);
-  BOOST_CHECK_EQUAL(a1.offset() % DBFileStore::AREA_SIZE, 0);
-  BOOST_CHECK_GE(a1.size(), 1024);
+  BOOST_CHECK_EQUAL(a1->offset() % DBFileStore::AREA_SIZE, 0);
+  BOOST_CHECK_GE(a1->size(), 1024);
   BOOST_CHECK_GE(db._header->file_size, initial + 1024);
 
-  auto a2 = db.get_area(2 * 1024);
+  auto a2 = db.alloc_multi_area(2 * 1024);
   BOOST_CHECK(a2);
-  BOOST_CHECK_EQUAL(a2.offset(), a1.end());
-  BOOST_CHECK_EQUAL(a2.offset() % DBFileStore::AREA_SIZE, 0);
+  BOOST_CHECK_EQUAL(a2->offset(), a1->end());
+  BOOST_CHECK_EQUAL(a2->offset() % DBFileStore::AREA_SIZE, 0);
 }
 
 BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
@@ -239,12 +239,12 @@ BOOST_AUTO_TEST_CASE(test_resolve_reads_back_data_and_caches) {
   DBFileStore db(dbFilePath.c_str());
 
   // Allocate an area and write a header + payload into the file directly
-  auto area = db.get_area(4096);
-  const uint64_t base = area.offset();
+  auto area = db.alloc_multi_area(4096);
+  const uint64_t base = area->offset();
 
   // Compose an area buffer: [AreaSlice header][payload...]
-  std::vector<char> buf(area.size());
-  std::memcpy(buf.data(), &area, sizeof(AreaSlice));
+  std::vector<char> buf(area->size());
+  std::memcpy(buf.data(), area.operator->(), sizeof(AreaSlice));
   uint32_t pattern = 0xDEADBEEF;
   size_t payload_off = sizeof(AreaSlice) + 128;
   std::memcpy(buf.data() + payload_off, &pattern, sizeof(pattern));
@@ -276,12 +276,12 @@ BOOST_AUTO_TEST_CASE(test_make_dirty_pushes_and_flushes_once) {
 
   // Prepare a cached area in memory and mark it dirty twice; background loop
   // will clear once
-  auto area = db.get_area(4096);
-  const uint64_t base = area.offset();
+  auto area = db.alloc_multi_area(4096);
+  const uint64_t base = area->offset();
 
   // Write a valid area buffer so resolve can read it
-  std::vector<char> buf(area.size());
-  std::memcpy(buf.data(), &area, sizeof(AreaSlice));
+  std::vector<char> buf(area->size());
+  std::memcpy(buf.data(), area.operator->(), sizeof(AreaSlice));
   db.write(base, buf.data(), buf.size());
 
   // Resolve a location to get a page_ptr

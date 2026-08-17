@@ -152,11 +152,12 @@ struct _CacheStore : public Opers_,
       write_dirty_blocks();
       this->wait_for_writes();
       close();
-      _destroy_state.store(2, std::memory_order_release);
     } catch (...) {
-      _destroy_state.store(0, std::memory_order_release);
+      // Terminal even on failure: a waiter must never see state 0 again.
+      _destroy_state.store(2, std::memory_order_release);
       throw;
     }
+    _destroy_state.store(2, std::memory_order_release);
   }
 
   uint64_t new_cursor_id() {
@@ -242,7 +243,11 @@ struct _CacheStore : public Opers_,
       }
     }
 
-    // Read on-disk header (could be partial / uninitialized)
+    // Read on-disk header (could be partial / uninitialized).
+    // Known _FileStore limitation: if the offset points into a multi-area past
+    // its first AREA_SIZE block and the owning area is not cached, these bytes
+    // are payload, not an area header.  Accepted — _FileStore is a development
+    // stage towards BrowserStore, which keys every area separately.
     AreaSlice disk_header;
     read(area_offset, &disk_header, sizeof(disk_header));
 
@@ -420,8 +425,6 @@ struct _CacheStore : public Opers_,
 
     std::scoped_lock flock_guard(this->_self().file_lock());
 
-    _for_each_db_entry([&](DBEntry& entry) { return true; });
-
     // 1. Check in-memory cache
     auto it = _dbs.find(db_name);
     if (it != _dbs.end()) {
@@ -511,7 +514,8 @@ struct _CacheStore : public Opers_,
         entry.offset = 0;
         _dbs.erase(db_name);
         make_header_dirty();
-        flush(true, true);
+        // Async: a foreground write here would race the background flusher.
+        flush();
         return;
       }
     }
@@ -519,7 +523,7 @@ struct _CacheStore : public Opers_,
     // Check overflow pages
     if (_remove_from_overflow_pages<DBClass>(name)) {
       _dbs.erase(db_name);
-      flush(true, true);
+      flush();
       return;
     }
 
@@ -542,6 +546,15 @@ struct _CacheStore : public Opers_,
                                           offsetof(_DBDirectoryPage, entries));
   }
 
+  // Each overflow page owns one area, so the chain cannot be longer than this.
+  uint64_t _max_directory_pages() const {
+    return (uint64_t)_header->file_size / AREA_SIZE + 1;
+  }
+
+  [[noreturn]] static void _throw_cyclic_directory() {
+    throw WrongValue("cyclic DB directory page chain");
+  }
+
   // Walk all DB entries across all directory pages, calling fn(DBEntry&)
   template <typename Fn>
   void _for_each_db_entry(Fn fn) {
@@ -554,22 +567,14 @@ struct _CacheStore : public Opers_,
 
     // Overflow pages
     offset_t next = _header->db_next_page;
-    LEAVES_INTERNAL_LOG(
-        LEAVES_LOG_DEBUG,
-        "_for_each_db_entry db_next_page=%llu count=%u cap=%u\n",
-        (unsigned long long)(uint64_t)_header->db_next_page,
-        (unsigned)_header->db_entry_count, (unsigned)cap);
+    uint64_t visited = 0;
     while (next) {
+      if (++visited > _max_directory_pages()) _throw_cyclic_directory();
       page_ptr page_block = resolve(&next, READ);
       auto* page =
           reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(page_block));
       uint16_t pcap = _overflow_page_capacity();
       uint16_t pcount = std::min(page->count, pcap);
-      LEAVES_INTERNAL_LOG(
-          LEAVES_LOG_DEBUG,
-          "_for_each_db_entry page=%llu count=%u pcount=%u next=%llu\n",
-          (unsigned long long)(uint64_t)next, (unsigned)page->count,
-          (unsigned)pcount, (unsigned long long)(uint64_t)page->next);
       for (uint16_t i = 0; i < pcount; i++) {
         if (!fn(page->entries[i])) return;
       }
@@ -580,7 +585,9 @@ struct _CacheStore : public Opers_,
   // Search overflow pages for an existing DB by name; return its offset or 0.
   offset_t _find_in_overflow_pages(std::string_view name) {
     offset_t next = _header->db_next_page;
+    uint64_t visited = 0;
     while (next) {
+      if (++visited > _max_directory_pages()) _throw_cyclic_directory();
       page_ptr page_block = resolve(&next, READ);
       auto* page =
           reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(page_block));
@@ -605,15 +612,18 @@ struct _CacheStore : public Opers_,
     const std::string db_name(name);
     offset_t prev_offset = 0;
     offset_t cur = _header->db_next_page;
+    uint64_t visited = 0;
 
     while (cur) {
+      if (++visited > _max_directory_pages()) _throw_cyclic_directory();
       page_ptr cur_block = resolve(&cur, WRITE);
       auto* page =
           reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(cur_block));
       uint16_t pcap = _overflow_page_capacity();
+      uint16_t pcount = std::min(page->count, pcap);
 
       // Re-use a free slot (zeroed offset) in existing entries
-      for (uint16_t i = 0; i < page->count; i++) {
+      for (uint16_t i = 0; i < pcount; i++) {
         if (!page->entries[i].offset) {
           offset_t tmp_offset = 0;
           auto* db =
@@ -703,12 +713,6 @@ struct _CacheStore : public Opers_,
     // if the actual header is a different DB subtype).
     _DBHeader<CacheStore> base_header;
     read((uint64_t)offset, &base_header, sizeof(base_header));
-    LEAVES_INTERNAL_LOG(
-        LEAVES_LOG_DEBUG,
-        "_open_existing '%s' offset=%llu read db_type_id=%u expecting=%u "
-        "read_txn=%llu\n",
-        db_name, (unsigned long long)offset, (unsigned)base_header.db_type_id,
-        (unsigned)DB::DB_TYPE_ID, (unsigned long long)base_header.read_txn);
     if (base_header.db_type_id != DB::DB_TYPE_ID) {
       throw TypeMismatch(
           std::format("Wrong database type while opening {} expected {} got {}",
@@ -716,12 +720,6 @@ struct _CacheStore : public Opers_,
     }
 
     auto* db = new DB(_self(), offset, name, std::forward<Args>(args)...);
-
-    LEAVES_INTERNAL_LOG(
-        LEAVES_LOG_DEBUG,
-        "sanitize db '%s' sanitize_generation=%llu current_generation=%llu\n",
-        db_name, (unsigned long long)db->_header->sanitize_generation,
-        (unsigned long long)_header->sanitize_generation);
 
     // Sanitize if this DB hasn't been sanitized for the current generation
     if (db->_header->sanitize_generation != _header->sanitize_generation) {
@@ -763,7 +761,9 @@ struct _CacheStore : public Opers_,
   template <template <typename> class DBClass = _DB>
   bool _remove_from_overflow_pages(std::string_view name) {
     offset_t next = _header->db_next_page;
+    uint64_t visited = 0;
     while (next) {
+      if (++visited > _max_directory_pages()) _throw_cyclic_directory();
       page_ptr next_block = resolve(&next, WRITE);
       auto* page =
           reinterpret_cast<_DBDirectoryPage*>(static_cast<char*>(next_block));
