@@ -842,9 +842,9 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     // transaction)
     _header->read_txn = _header->prepared_txn;
     make_dirty(_header);
-    flush(sync, true);
-    if (sync && _has_direct_file_write) {
-      _storage.sync_fd_for_commit();
+    if (sync) {
+      flush(sync, true);
+      if (_has_direct_file_write) _storage.sync_fd_for_commit();
     }
     end_transaction();
     return true;

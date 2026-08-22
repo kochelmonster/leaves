@@ -110,7 +110,7 @@ inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
     int fd = open_rw_fd(calibration_file, false);
     if (fd < 0) {
       cleanup();
-      return DEFAULT_COPY_WRITE_PIVOT_BYTES;
+      return COPY_WRITE_PIVOT_DISABLED;
     }
 
     std::vector<char> src(max_chunk, 'p');
@@ -186,12 +186,14 @@ inline uint32_t calibrate_copy_write_pivot_file(const char* calibration_file) {
     cleanup();
 
     if (!found) {
-      return DEFAULT_COPY_WRITE_PIVOT_BYTES;
+      // No chunk beat memcpy; disable the write-path instead of silently
+      // enabling it via the default.
+      return COPY_WRITE_PIVOT_DISABLED;
     }
     return pivot;
   } catch (...) {
     cleanup();
-    return DEFAULT_COPY_WRITE_PIVOT_BYTES;
+    return COPY_WRITE_PIVOT_DISABLED;
   }
 }
 

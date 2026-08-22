@@ -490,6 +490,10 @@ struct _MemoryMapFile
     leaves::prefetch(mem, access);
   }
 
+  uint32_t copy_write_pivot_bytes() const {
+    return _memory->copy_write_pivot_bytes;
+  }
+
   bool copy(void* dest, const void* src, size_t n) {
     if (n == 0) return false;
 
