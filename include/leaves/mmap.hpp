@@ -89,6 +89,11 @@ class MapStorage_ : public std::enable_shared_from_this<MapStorage_<Traits>> {
   // Returns the opened storage filename.
   Slice filename() const { return Slice(_storage->filename()); }
 
+  // Returns the current mmap copy-write pivot threshold in bytes.
+  uint32_t copy_write_pivot_bytes() const {
+    return _storage->copy_write_pivot_bytes();
+  }
+
   // Returns the current on-disk file size in bytes.
   size_t file_size() const { return _storage->file_size(); }
 

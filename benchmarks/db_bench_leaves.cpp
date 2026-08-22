@@ -80,6 +80,9 @@ static bool FLAGS_writemap = false;
 // MapStorage mmap size in GiB. Keep default behavior at 64 GiB.
 static int FLAGS_map_size_gb = 64;
 
+// Override the mmap copy-write pivot in bytes. Zero keeps the default.
+static uint32_t FLAGS_copy_write_pivot = 0;
+
 // don't explicitly sync meta data
 static bool FLAGS_metasync = false;
 
@@ -270,6 +273,7 @@ class Benchmark {
   Random rand_;
   std::vector<char> bench_keys_buf_;
   int bench_key_size_{0};
+  bool progress_enabled_{true};
   // Pre-built generators for WriteImplConfluence threads (constructed before
   // Start() so their 1 MB init cost isn't counted in benchmark time).
   std::vector<RandomGenerator> conf_thread_gens_;
@@ -289,6 +293,10 @@ class Benchmark {
     const int kKeySize = FLAGS_binary_key ? 8 : 16;
     PrintEnvironment();
     std::fprintf(stdout, "Storage:     %s\n", storage_name());
+    if (map_storage_) {
+      std::fprintf(stdout, "CopyWritePivot: %u bytes\n",
+                   map_storage_->copy_write_pivot_bytes());
+    }
     std::fprintf(stdout, "WAL:         %s\n", FLAGS_use_wal ? "enabled" : "disabled");
     std::fprintf(stdout, "Keys:        %d bytes each (%s)\n", kKeySize,
                  FLAGS_binary_key ? "binary uint64 big-endian" : "decimal string");
@@ -387,7 +395,7 @@ class Benchmark {
     }
 
     done_++;
-    if (done_ >= next_report_) {
+    if (progress_enabled_ && done_ >= next_report_) {
       if (next_report_ < 1000)
         next_report_ += 100;
       else if (next_report_ < 5000)
@@ -518,8 +526,8 @@ class Benchmark {
   }
 
   void Run() {
-    PrintHeader();
     Open(false);
+    PrintHeader();
 
     const char* benchmarks = FLAGS_benchmarks;
     while (benchmarks != nullptr) {
@@ -712,11 +720,13 @@ class Benchmark {
     const uint64_t map_size_bytes = static_cast<uint64_t>(FLAGS_map_size_gb) * leaves::G;
 
     if (using_replicating_) {
-      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), map_size_bytes);
+      map_storage_ = leaves::MapStorage::create(
+          test_fname.c_str(), map_size_bytes, FLAGS_copy_write_pivot);
     } else if (using_file_storage_) {
       file_storage_ = leaves::FileStorage::create(test_fname.c_str());
     } else {
-      map_storage_ = leaves::MapStorage::create(test_fname.c_str(), map_size_bytes);
+      map_storage_ = leaves::MapStorage::create(
+          test_fname.c_str(), map_size_bytes, FLAGS_copy_write_pivot);
     }
 
     if (using_confluence_) {
@@ -866,6 +876,10 @@ class Benchmark {
 
   void Write(bool sync, Order order, DBState state, int num_entries,
              int value_size, int entries_per_batch) {
+    // For short runs (e.g. fillrand100K does 1000 ops), progress logging can
+    // materially distort measured micros/op due to stderr/flush overhead.
+    progress_enabled_ = (num_entries > 5000);
+
     // Create new database if state == FRESH
     if (state == FRESH) {
       if (FLAGS_use_existing_db) {
@@ -1046,6 +1060,7 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     double d;
     int n;
+    unsigned long long copy_write_pivot;
     char junk;
     if (leveldb::Slice(argv[i]).starts_with("--benchmarks=")) {
       FLAGS_benchmarks = argv[i] + strlen("--benchmarks=");
@@ -1068,6 +1083,10 @@ int main(int argc, char** argv) {
       FLAGS_page_size = n;
     } else if (sscanf(argv[i], "--map_size_gb=%d%c", &n, &junk) == 1 && n > 0) {
       FLAGS_map_size_gb = n;
+    } else if (sscanf(argv[i], "--copy_write_pivot=%llu%c",
+                      &copy_write_pivot, &junk) == 1 &&
+               copy_write_pivot <= std::numeric_limits<uint32_t>::max()) {
+      FLAGS_copy_write_pivot = static_cast<uint32_t>(copy_write_pivot);
     } else if (sscanf(argv[i], "--use_file_storage=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_use_file_storage = (n == 1) ? true : false;
