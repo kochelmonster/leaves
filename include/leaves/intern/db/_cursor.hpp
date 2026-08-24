@@ -525,7 +525,6 @@ struct _ICursor : public _CursorBase<Traits_, Derived> {
     void* space = reserve(value.size());
     assert(space);
     this->_db->copy(space, value.data(), value.size());
-    this->_db->flush();
   }
 
   Slice value() const {
@@ -770,7 +769,6 @@ struct _TransactionalCursor
     void* space = reserve(transformed.size());
     this->_db->copy(space, transformed.data(), transformed.size());
     this->_wal_log_put(this->key(), value);
-    this->_db->flush();
   }
 
   template <bool callaspect = true>

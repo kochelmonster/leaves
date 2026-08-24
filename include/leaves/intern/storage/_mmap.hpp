@@ -557,7 +557,11 @@ struct _MemoryMapFile
 
   area_ptr alloc_single_area() {
     auto result = _memory->area_pool.alloc_single_area(*this);
-    if (!result) return resize_file(AREA_SIZE);
+    if (!result) result = resize_file(AREA_SIZE);
+    // Prefault the whole Area up front: it backs many small trie/leaf page
+    // allocations, so one bulk populate here replaces scattered per-page
+    // faults later inside reserve().
+    leaves::populate_write((void*)(char*)result, AREA_SIZE);
     return result;
   }
 

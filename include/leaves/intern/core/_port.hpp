@@ -25,6 +25,7 @@ Platform portability macros and compiler-specific compatibility helpers.
 #else
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -601,6 +602,26 @@ FORCE_INLINE void prefetch(const void* ptr, Access access = READ) {
 #else
   // Fallback: do nothing if no prefetch support
   (void)ptr;
+#endif
+}
+
+// Best-effort eager population of writable pages in [ptr, ptr+len), so later
+// first-touch writes (e.g. Area-backed page allocations) don't each fault
+// individually. No-op where the platform hint is unavailable.
+//
+// Note: on Windows this is a working-set hint (like MADV_WILLNEED), not a
+// guaranteed synchronous population like MADV_POPULATE_WRITE on Linux.
+FORCE_INLINE void populate_write(void* ptr, size_t len) {
+#if defined(_WIN32)
+  WIN32_MEMORY_RANGE_ENTRY range;
+  range.VirtualAddress = ptr;
+  range.NumberOfBytes = len;
+  ::PrefetchVirtualMemory(::GetCurrentProcess(), 1, &range, 0);
+#elif defined(__linux__) && defined(MADV_POPULATE_WRITE)
+  ::madvise(ptr, len, MADV_POPULATE_WRITE);
+#else
+  (void)ptr;
+  (void)len;
 #endif
 }
 
