@@ -127,6 +127,33 @@ target_link_libraries(mytarget PRIVATE leaves::replication)
 
 The core `leaves::leaves` target carries the public include paths and the required Boost header dependency. `leaves::replication` is the optional target that adds the BLAKE3 dependency needed by `leaves/replication.hpp`.
 
+### Optimization flags
+
+Leaves does not require architecture-specific optimization flags for
+correctness. It is header-only, so its performance depends on the optimization
+settings of the target that includes it. For portable production binaries, use
+your build system's normal Release configuration and target the oldest CPU that
+the binary must support. CMake Release builds normally enable `-O3` for GCC and
+Clang or `/O2` for MSVC.
+
+For machine-local GCC or Clang builds, `-march=native` enables all instruction
+sets supported by the build host. With MSVC, `/arch:AVX2` or `/arch:AVX512` can
+be used when every deployment machine supports the selected instruction set.
+These flags are optional and should not be used for redistributable binaries
+unless the deployment CPU baseline guarantees them.
+
+When Leaves is configured from its source tree, CMake probes compiler and host
+support for POPCNT, BMI, LZCNT, AVX2, and AVX-512 on GCC and Clang, and for AVX2
+and AVX-512 on MSVC. Supported flags apply within the Leaves CMake directory;
+they are not exported as usage requirements by the `leaves::leaves` target.
+Consumers must therefore choose the appropriate optimization and CPU target
+flags for their own targets.
+
+Leaves' header SIMD paths are selected at compile time and do not perform
+runtime CPU dispatch. A binary compiled with `-march=native` or explicit AVX
+flags can fail with an illegal-instruction error on an older CPU. Bundled BLAKE3
+code performs its own runtime dispatch independently of Leaves' header code.
+
 ## Configuration options
 
 The following CMake options configure either the repository build or library behavior for consumers.

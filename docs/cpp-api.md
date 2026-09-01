@@ -212,7 +212,8 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
   Deletes the current record.
 
 - `void update()`
-  Refreshes cursor view after out-of-band mutation.
+  Refreshes the cursor to the newest committed transaction snapshot. If the
+  tree root changed, re-seeks the cursor's current key in that snapshot.
 
 - `bool start_transaction(bool non_blocking = false, bool use_wal = false)`
   Opens a write transaction and returns `false` if the cursor already owns a transaction, an aspect hook rejects the start, or the storage layer cannot acquire a write transaction. Set `non_blocking = true` to fail instead of waiting. Set `use_wal = true` to enable WAL-based ACID durability for the transaction.
