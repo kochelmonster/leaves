@@ -14,6 +14,18 @@ leaves is a trie-based embedded key-value database. It uses a sparse bitmap trie
 - Multi-database and multi-writer support
 - Native cross-platform support, including WebAssembly and browser targets
 
+## Why Version 3.0.0?
+
+Leaves began development in 2008 as an internal project and has gone through significant architectural evolution:
+
+- **Version 1.x**: Classical C++ interface with virtual functions and classes
+- **Version 2.x**: Complete rewrite as a template library to eliminate performance problems caused by double indirection on modern processors
+- **Version 3.0**: A **complete reimplementation** that meets higher standards for a published library:
+  - **Extensibility**: An Aspects system enables simple extensions (e.g., ReplicationDB, ConfluenceDB) without modifying the core
+  - **User Control**: Aspects give users precise influence over processing and behavior
+  - **Easy Integration**: Header-only design with minimal external dependencies enables straightforward integration into projects
+  - **Cross-Platform**: Native support for Windows, Linux, macOS, WebAssembly, and browser targets
+
 ## Getting started
 
 ```cpp
