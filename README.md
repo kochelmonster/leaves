@@ -21,7 +21,7 @@ Leaves began development in 2008 as an internal project and has gone through sig
 - **Version 1.x**: Classical C++ interface with virtual functions and classes
 - **Version 2.x**: Complete rewrite as a template library to eliminate performance problems caused by double indirection on modern processors
 - **Version 3.0**: A **complete reimplementation** that meets higher standards for a published library:
-  - **Extensibility**: An Aspects system enables simple extensions (e.g., ReplicationDB, ConfluenceDB) without modifying the core
+  - **Extensibility**: An extensible architecture enables creating extensions (e.g., ReplicationDB, ConfluenceDB) without modifying the core
   - **User Control**: Aspects give users precise influence over processing and behavior
   - **Easy Integration**: Header-only design with minimal external dependencies enables straightforward integration into projects
   - **Cross-Platform**: Native support for Windows, Linux, macOS, WebAssembly, and browser targets
