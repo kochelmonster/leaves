@@ -16,12 +16,12 @@ Database wrapper and wiring for replication-capable Leaves instances.
 namespace leaves {
 
 // Replication-specific DB header — extends _DBHeader with:
-// - hash_mem_manager: Separate memory manager for hash trie (independent of
+// - hash_mem_manager: Separate memory manager for _hash trie (independent of
 // data transactions)
-// - hash_root: Root offset of the hash trie
+// - hash_root: Root offset of the _hash trie
 // - replication_slots: Fixed-size slot array for crash-safe big-value anchoring
 //
-// The hash trie uses its own memory manager so hash updates don't interfere
+// The _hash trie uses its own memory manager so _hash updates don't interfere
 // with data trie transactions.
 //
 // MAX_REPLICATION_SLOTS is read from Storage_::Traits if available,
@@ -31,7 +31,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   using Traits = typename Storage_::Traits;
   using offset_e = typename Traits::offset_e;
   // Hash updates are serialized by HashTrieControl::update_lock, so the
-  // hash trie allocator intentionally uses a single manager.
+  // _hash trie allocator intentionally uses a single manager.
   using HashMemManager = _MemManager<Traits>;
 
   // Detect MAX_REPLICATION_SLOTS from Traits, default to 8
@@ -53,7 +53,7 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
   // Hash trie control: synchronization, storage, and root offsets.
   //
   // Protocol: acquire update_lock FIRST, then ref_count++.
-  // This ensures exactly one FSM runs the hash update; all others
+  // This ensures exactly one FSM runs the _hash update; all others
   // wait on the lock and find the trie already current when they enter.
   // The lock is held only for check+update, not during replication.
   //
@@ -63,13 +63,13 @@ struct _ReplicationDBHeader : public _DBHeader<Storage_> {
     SpinLock update_lock;             // TTAS spinlock — safe in shared memory
     std::atomic<uint32_t> ref_count;  // Active replication session count
     std::atomic<uint64_t>
-        hashed_txn_offset;  // Raw offset of txn matching hash trie (0=stale)
-    HashMemManager hash_mem_manager;  // Separate allocator for hash trie nodes
-    offset_e hash_root;               // Root of main hash trie
-    offset_e deletion_hash_root;      // Root of deletion hash trie
+        hashed_txn_offset;  // Raw offset of txn matching _hash trie (0=stale)
+    HashMemManager hash_mem_manager;  // Separate allocator for _hash trie nodes
+    offset_e hash_root;               // Root of main _hash trie
+    offset_e deletion_hash_root;      // Root of deletion _hash trie
 
     // Reset synchronization state after file reopen or sanitize.
-    // hashed_txn_offset is intentionally preserved: the hash trie on disk
+    // hashed_txn_offset is intentionally preserved: the _hash trie on disk
     // is still valid and should not be recomputed unnecessarily.
     void reset() noexcept {
       new (&update_lock) SpinLock();
@@ -156,7 +156,7 @@ struct _ReplicationDB
   typedef std::shared_ptr<Cursor> cursor_ptr;
 
   // HashDB: Minimal DB adapter for _HashUpdater
-  // Provides the interface needed by _HashUpdater to manage the hash trie.
+  // Provides the interface needed by _HashUpdater to manage the _hash trie.
   // Uses hash_mem_manager for allocation (independent of data transactions).
   // Uses the parent _ReplicationDB's storage for offset resolution.
   struct HashDB {
@@ -204,7 +204,7 @@ struct _ReplicationDB
       return NodePtr(page + sizeof(PageHeader));
     }
 
-    // Non-transactional area allocation for the hash mem-manager.
+    // Non-transactional area allocation for the _hash mem-manager.
     // Called by _MemManager when its current area is exhausted.
     // Inserts the new area at the head of area_list_head_single so it is
     // tracked for reclamation on close/reset without requiring _active_txn.
@@ -239,7 +239,7 @@ struct _ReplicationDB
       return true;
     }
 
-    // No transaction tracking needed for hash nodes.
+    // No transaction tracking needed for _hash nodes.
     template <typename T>
     void mark_for_recycle(T&) const {}
 
@@ -250,10 +250,10 @@ struct _ReplicationDB
   // Get HashDB adapter for use with _HashUpdater
   HashDB hash_db() { return HashDB(this); }
 
-  // Get hash root pointer for main trie
+  // Get _hash root pointer for main trie
   auto* hash_root_ptr() { return &this->_header->hash_control.hash_root; }
 
-  // Get hash root pointer for deletion trie
+  // Get _hash root pointer for deletion trie
   auto* deletion_hash_root_ptr() {
     return &this->_header->hash_control.deletion_hash_root;
   }
@@ -293,7 +293,7 @@ struct _ReplicationDB
   void init(offset_t* header) {
     Base::init(header);
 
-    // Allocate a separate area for hash trie memory management
+    // Allocate a separate area for _hash trie memory management
     auto hash_area = this->_storage.alloc_single_area();
     this->_header->hash_control.hash_mem_manager.init(
         hash_area->content_offset(), hash_area->end());
@@ -348,7 +348,7 @@ struct _ReplicationDB
   void sanitize() {
     Base::sanitize();
 
-    // Reset hash trie synchronization primitives (stale lock/ref after reopen)
+    // Reset _hash trie synchronization primitives (stale lock/ref after reopen)
     this->_header->hash_control.reset();
 
     _sanitize_replication_anchors();
@@ -368,7 +368,7 @@ struct _ReplicationDB
 
   // Called under txn_ref_lock just before a stale txn is freed.
   // Zeros hashed_txn_offset if it pointed at the freed txn so that
-  // the next acquire_hash_trie() knows it must recompute the hash trie.
+  // the next acquire_hash_trie() knows it must recompute the _hash trie.
   void _on_txn_freed(txn_ptr t) {
     uint64_t freed_off = (uint64_t)this->resolve(t);
     auto& atom = this->_header->hash_control.hashed_txn_offset;
@@ -376,10 +376,10 @@ struct _ReplicationDB
       atom.store(0, std::memory_order_relaxed);
   }
 
-  // Acquire the hash trie for a replication session.
+  // Acquire the _hash trie for a replication session.
   //
   // Locking order: update_lock FIRST, then ref_count++.
-  // The FSM that wins update_lock is "first" and updates the hash trie
+  // The FSM that wins update_lock is "first" and updates the _hash trie
   // if stale. All subsequent FSMs wait on the lock, then find the trie
   // current and skip the update. The lock is released before replication
   // begins, so it is held only for the check+update phase.
@@ -393,7 +393,7 @@ struct _ReplicationDB
       std::lock_guard<SpinLock> lock(hc.update_lock);
       uint32_t prev = hc.ref_count.fetch_add(1, std::memory_order_acq_rel);
       if (prev == 0) {
-        // First FSM: update hash trie if stale.
+        // First FSM: update _hash trie if stale.
         // Keep the ref on current alive — returning it directly avoids
         // a window where refs==0 lets GC free the page before non-first
         // FSMs can pin it via hashed_txn_offset.
@@ -422,7 +422,7 @@ struct _ReplicationDB
     // First FSM already holds a pinned ref — return it directly.
     if (first_fsm_txn) return first_fsm_txn;
 
-    // Non-first FSMs: pin the txn whose snapshot matches the hash trie.
+    // Non-first FSMs: pin the txn whose snapshot matches the _hash trie.
     // Read hashed_txn_offset inside txn_ref_lock so the GC walk
     // (which zeros it and frees the page under the same lock)
     // cannot free the page between our read and the refs++ pin.

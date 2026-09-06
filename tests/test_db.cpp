@@ -1557,12 +1557,12 @@ static TOffset find_first_leaf(DBHandle db, TOffset root) {
   if (root.type() == LEAF) return root;
   // Root is TRIE — take its first child of type LEAF
   auto trie = db->template resolve<TTrieNode>(&root);
-  auto arr = trie->array();
-  for (int i = 0; i < trie->count(); i++) {
+  auto arr = trie->branch_offsets();
+  for (int i = 0; i < trie->branch_count(); i++) {
     if (arr[i].type() == LEAF) return arr[i];
   }
   // No direct leaf child — recurse into the first trie child
-  for (int i = 0; i < trie->count(); i++) {
+  for (int i = 0; i < trie->branch_count(); i++) {
     if (arr[i].type() == TRIE) return find_first_leaf(db, arr[i]);
   }
   return TOffset(0);
@@ -1742,9 +1742,9 @@ BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_count_zero) {
   auto txn = db->txn();
   BOOST_REQUIRE(txn->root.type() == TRIE);
 
-  // Corrupt _array_len so count() == 0
+  // Corrupt _branch_count so branch_count() == 0
   auto trie = db->template resolve<TTrieNode>(&txn->root);
-  trie->_array_len = 0;  // count = 0 (no NULL_MASK bit)
+  trie->_branch_count = 0;  // count = 0 (no NULL_MASK bit)
   db->make_dirty(trie);
   db->flush(true, true);
 
@@ -1773,7 +1773,7 @@ BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_count_over_max) {
 
   auto trie = db->template resolve<TTrieNode>(&txn->root);
   // Set count > MAX_BRANCH_COUNT (257)
-  trie->_array_len = TTrieNode::MAX_BRANCH_COUNT + 1;  // 258, no NULL_MASK
+  trie->_branch_count = TTrieNode::MAX_BRANCH_COUNT + 1;  // 258, no NULL_MASK
   db->make_dirty(trie);
   db->flush(true, true);
 
@@ -1800,9 +1800,9 @@ BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_lower_start_mismatch) {
   BOOST_REQUIRE(txn->root.type() == TRIE);
 
   auto trie = db->template resolve<TTrieNode>(&txn->root);
-  // Corrupt _lower_offset so lower_start() != calc_lower_start()
-  auto orig = trie->_lower_offset;
-  trie->_lower_offset = orig + 1;
+  // Corrupt _branch_bits_pos so branch_bits_start() != calc_branch_bits_start()
+  auto orig = trie->_branch_bits_pos;
+  trie->_branch_bits_pos = orig + 1;
   db->make_dirty(trie);
   db->flush(true, true);
 
@@ -1829,9 +1829,9 @@ BOOST_AUTO_TEST_CASE(test_check_trie_health_trie_array_start_mismatch) {
   BOOST_REQUIRE(txn->root.type() == TRIE);
 
   auto trie = db->template resolve<TTrieNode>(&txn->root);
-  // Corrupt _array_offset so array_start() != calc_array_start()
-  auto orig = trie->_array_offset;
-  trie->_array_offset = orig + 1;
+  // Corrupt _branch_offsets_pos so branch_offsets_start() != calc_branch_offsets_start()
+  auto orig = trie->_branch_offsets_pos;
+  trie->_branch_offsets_pos = orig + 1;
   db->make_dirty(trie);
   db->flush(true, true);
 
@@ -1924,7 +1924,7 @@ BOOST_AUTO_TEST_CASE(test_check_trie_health_null_child) {
 
   // Null out the first child offset
   auto trie = db->template resolve<TTrieNode>(&txn->root);
-  trie->array()[0] = TOffset(0);
+  trie->branch_offsets()[0] = TOffset(0);
   db->make_dirty(trie);
   db->flush(true, true);
 
@@ -1952,7 +1952,7 @@ BOOST_AUTO_TEST_CASE(test_check_trie_health_unknown_child_type) {
 
   // Set a child's type bits to an invalid value (2 or 3)
   auto trie = db->template resolve<TTrieNode>(&txn->root);
-  auto* child = &trie->array()[0];
+  auto* child = &trie->branch_offsets()[0];
   // Preserve the raw address but set type to a non-TRIE/LEAF value
   child->type((NodeTypes)2);
   db->make_dirty(trie);

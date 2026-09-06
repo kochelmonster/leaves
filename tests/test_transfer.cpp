@@ -80,7 +80,7 @@ std::vector<uint8_t> build_transfer_trie_compat_payload_v1() {
   auto* root_src = reinterpret_cast<WireTrieNode*>(root_mem.data());
   auto root_slots = root_src->create(Slice(), key_a, key_b);
   if constexpr (WireTrieNode::HAS_HASH) {
-    std::memset(root_src->hash, 0xA1, WireTrieNode::HASH_SIZE);
+    std::memset(root_src->_hash, 0xA1, WireTrieNode::HASH_SIZE);
   }
 
   auto build_leaf = [](const char* key_suffix, const char* value,
@@ -92,7 +92,7 @@ std::vector<uint8_t> build_transfer_trie_compat_payload_v1() {
     leaf->set(Slice(key), val.size());
     std::memcpy(leaf->vdata(), val.data(), val.size());
     if constexpr (WireLeafNode::HAS_HASH) {
-      std::memset(leaf->hash, hash_fill, WireLeafNode::HASH_SIZE);
+      std::memset(leaf->_hash, hash_fill, WireLeafNode::HASH_SIZE);
     }
     return leaf_mem;
   };
@@ -112,7 +112,7 @@ std::vector<uint8_t> build_transfer_trie_compat_payload_v1() {
   assert(leaf_alpha_wire != nullptr);
   assert(leaf_beta_wire != nullptr);
 
-  WireOffset* root_array = root_wire->array();
+  WireOffset* root_array = root_wire->branch_offsets();
   root_array[root_slots.first].set_relative(leaf_alpha_wire);
   root_array[root_slots.first].type(LEAF);
   root_array[root_slots.second].set_relative(leaf_beta_wire);
@@ -169,16 +169,16 @@ void validate_transfer_trie_payload(
           uint16_t trie_size = trie->size();
           assert(trie_size >= WireTrieNode::HEADER_SIZE);
           assert(node_ptr + trie_size <= end);
-          assert(trie->array_start() % sizeof(WireOffset) == 0);
-          assert(trie->lower_start() <= trie->lower_end());
-          assert(trie->lower_end() <= trie->array_start());
-          assert(trie->array_end() == trie_size);
+          assert(trie->branch_offsets_start() % sizeof(WireOffset) == 0);
+          assert(trie->branch_bits_start() <= trie->branch_bits_end());
+          assert(trie->branch_bits_end() <= trie->branch_offsets_start());
+          assert(trie->branch_offsets_end() == trie_size);
 
-          const uint8_t* compressed = trie->compressed();
-          assert(compressed + trie->len() <= node_ptr + trie_size);
+          const uint8_t* compressed = trie->prefix();
+          assert(compressed + trie->prefix_len() <= node_ptr + trie_size);
 
           std::string next_path(path);
-          next_path.append(reinterpret_cast<const char*>(compressed), trie->len());
+          next_path.append(reinterpret_cast<const char*>(compressed), trie->prefix_len());
 
           trie->for_each_branch([&](int key, WireOffset* child_off) {
             assert(child_off != nullptr);
@@ -308,26 +308,26 @@ void test_add_raw_nodes() {
   transfer.begin(111, 222, DbType::DB_MAIN, {});
   
   // Create minimally valid fake trie node data
-  // Layout: upper(1), compressed_len(1), lower_offset(1), array_offset(1), array_len(2), hash(32)
+  // Layout: upper(1), compressed_len(1), lower_offset(1), array_offset(1), array_len(2), _hash(32)
   // Minimum size: array_offset must be >= ceil(38/8) = 5, so array_start = 40
   // With 0 children (array_len = 0), size = 40
   uint8_t fake_trie[40] = {};
-  fake_trie[0] = 0x00;  // _upper: no bits set
-  fake_trie[1] = 0x00;  // _compressed_len: 0
-  fake_trie[2] = 0x00;  // _lower_offset: 0
-  fake_trie[3] = 0x05;  // _array_offset: 5 (5*8=40 bytes to array start)
-  fake_trie[4] = 0x00;  // _array_len low byte: 0
-  fake_trie[5] = 0x00;  // _array_len high byte: 0
-  // hash[6..37] = zeros
+  fake_trie[0] = 0x00;  // _branch_bits_index: no bits set
+  fake_trie[1] = 0x00;  // _prefix_len: 0
+  fake_trie[2] = 0x00;  // _branch_bits_pos: 0
+  fake_trie[3] = 0x05;  // _branch_offsets_pos: 5 (5*8=40 bytes to array start)
+  fake_trie[4] = 0x00;  // _branch_count low byte: 0
+  fake_trie[5] = 0x00;  // _branch_count high byte: 0
+  // _hash[6..37] = zeros
   
   // Create minimally valid fake leaf node data
-  // Layout: key_size(1), value_size(2), hash(32), data[key+value]
+  // Layout: key_size(1), value_size(2), _hash(32), data[key+value]
   // With key_size=0, value_size=0: size = 1 + 2 + 32 + 0 = 35
   uint8_t fake_leaf[35] = {};
   fake_leaf[0] = 0x00;  // key_size: 0
   fake_leaf[1] = 0x00;  // value_size low byte: 0  
   fake_leaf[2] = 0x00;  // value_size high byte: 0
-  // hash[3..34] = zeros
+  // _hash[3..34] = zeros
   
   assert(transfer.add_node(TRIE, fake_trie, sizeof(fake_trie)) != nullptr);
   assert(transfer.add_node(LEAF, fake_leaf, sizeof(fake_leaf)) != nullptr);

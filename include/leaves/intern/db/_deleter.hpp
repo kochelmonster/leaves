@@ -77,7 +77,7 @@ struct _Deleter {
     // branch_key is not saved; reduction logic reads parent.branch_key instead
     parent.pop();  // remove trans from stack
     assert(parent.is_trie());
-    switch (parent.trie()->count()) {
+    switch (parent.trie()->branch_count()) {
       case 0:
         assert(false);
         break;  // should never happen
@@ -113,24 +113,24 @@ struct _Deleter {
   void combine(Transition& parent, uint16_t prefix) {
     trie_ptr otrie = parent.trie();
     offset_e* link = parent.link();
-    offset_e* begin = otrie->array();
+    offset_e* begin = otrie->branch_offsets();
     bool go_next = link != begin;
     offset_e* child_remaining = go_next ? begin : begin + 1;
     // go_next == true means the remaining child is before otrie
     // for positioning the cursor we have to move next
 
-    uint8_t len = parent.trie()->len();
+    uint8_t len = parent.trie()->prefix_len();
     uint8_t buffer[256];  // to hold the compressed key
-    memcpy(buffer, parent.trie()->compressed(), len);
+    memcpy(buffer, parent.trie()->prefix(), len);
     if (child_remaining->type() == TRIE) {
       trie_ptr child = resolve<TrieNode>(child_remaining);
-      if (len + child->len() > 255) {
+      if (len + child->prefix_len() > 255) {
         // the compressed part is too big -> keep the parent
         return reduce_array(parent, prefix);
       }
 
-      memcpy(buffer + len, child->compressed(), child->len());
-      len += child->len();
+      memcpy(buffer + len, child->prefix(), child->prefix_len());
+      len += child->prefix_len();
 
       uint16_t trie_size = child->changed_len(len);
       parent.trie() = alloc_node<trie_ptr>(trie_size);

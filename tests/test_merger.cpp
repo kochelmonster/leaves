@@ -2917,7 +2917,7 @@ bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
       return;
     }
     std::string child_path = path;
-    child_path.append((const char*)trie->compressed(), trie->len());
+    child_path.append((const char*)trie->prefix(), trie->prefix_len());
     if (k != TrieNode::NONE) child_path.push_back((char)k);
 
     if (off->type() == LEAF) {
@@ -2927,22 +2927,22 @@ bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
         if (leaf->key_size != 0) {
           std::cerr << "INTEGRITY: NONE branch leaf has key_size="
                     << (int)leaf->key_size << " at path='" << path
-                    << "' parent_prefix_len=" << (int)trie->len() << std::endl;
+                    << "' parent_prefix_len=" << (int)trie->prefix_len() << std::endl;
           ok = false;
         }
       } else {
         if (leaf->key_size == 0 || first != (uint8_t)k) {
           std::cerr << "INTEGRITY: leaf first byte=" << (int)first
                     << " != branch_key=" << k << " at path='" << path
-                    << "' parent_compressed_len=" << (int)trie->len()
-                    << " parent_count=" << trie->count()
+                    << "' parent_compressed_len=" << (int)trie->prefix_len()
+                    << " parent_count=" << trie->branch_count()
                     << " leaf->key_size=" << (int)leaf->key_size
                     << " leaf->vsize=" << leaf->vsize()
                     << " leaf_off=0x" << std::hex << (uint64_t)*off << std::dec
                     << std::endl;
           std::cerr << "  parent_compressed=\"";
-          for (int i = 0; i < trie->len(); i++)
-            std::cerr << "[" << (int)(uint8_t)trie->compressed()[i] << "]";
+          for (int i = 0; i < trie->prefix_len(); i++)
+            std::cerr << "[" << (int)(uint8_t)trie->prefix()[i] << "]";
           std::cerr << "\"" << std::endl;
           std::cerr << "  leaf_key=\"";
           for (int i = 0; i < leaf->key_size; i++)
@@ -2955,16 +2955,16 @@ bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
       // child is trie
       auto child_trie = db.template resolve<TrieNode>(off);
       if (k != TrieNode::NONE) {
-        if (child_trie->len() == 0) {
+        if (child_trie->prefix_len() == 0) {
           std::cerr << "INTEGRITY: child trie has empty compressed at path='"
                     << path << "' branch_key=" << k << std::endl;
           ok = false;
-        } else if (child_trie->compressed()[0] != (uint8_t)k) {
+        } else if (child_trie->prefix()[0] != (uint8_t)k) {
           std::cerr << "INTEGRITY: child trie compressed[0]="
-                    << (int)child_trie->compressed()[0]
+                    << (int)child_trie->prefix()[0]
                     << " != branch_key=" << k << " at path='" << path
-                    << "' child compressed_len=" << (int)child_trie->len()
-                    << " child count=" << child_trie->count() << std::endl;
+                    << "' child compressed_len=" << (int)child_trie->prefix_len()
+                    << " child count=" << child_trie->branch_count() << std::endl;
           ok = false;
         }
       }
@@ -2982,8 +2982,8 @@ bool _check_trie_integrity(DB& db, typename DB::Traits::offset_e* link,
 //   - ASAN: global-buffer-overflow in _MemManager::alloc() at _memory.hpp:269
 //     (PAGE_SIZES[sidx] OOB, sidx=8). Garbage value_size in src_leaf in
 //     merge_leaf_into_trie/fill_leaf -> LeafNode::size(key, 21550) -> sidx=8.
-//   - Without ASAN: assert `trie_.count() < trie_.MAX_BRANCH_COUNT` in
-//     _Transition::find() (cursor.hpp:189) — garbage TrieNode._array_len.
+//   - Without ASAN: assert `trie_.branch_count() < trie_.MAX_BRANCH_COUNT` in
+//     _Transition::find() (cursor.hpp:189) — garbage TrieNode._branch_count.
 //
 // This test mimics the bench workload but routes everything through _Merger
 // directly (no _ConfluenceDB, no tributary, no threads). It does many

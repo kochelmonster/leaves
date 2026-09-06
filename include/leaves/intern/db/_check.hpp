@@ -72,22 +72,22 @@ template <typename T>
 struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
 };
 
-// Helper to detect whether a node type has an inline hash member.
+// Helper to detect whether a node type has an inline _hash member.
 template <typename Node, typename = void>
 struct has_hash_member : std::false_type {};
 
 template <typename Node>
-struct has_hash_member<Node, std::void_t<decltype(std::declval<Node&>().hash)>>
+struct has_hash_member<Node, std::void_t<decltype(std::declval<Node&>()._hash)>>
     : std::true_type {};
 
-// Output hash in hex (used when dump_hash_trie is true)
+// Output _hash in hex (used when dump_hash_trie is true)
 template <typename Node,
           std::enable_if_t<has_hash_member<Node>::value, int> = 0>
 void dump_hash(std::ostream& out, const Node& node) {
-  out << "hash: \"";
-  const auto* bytes = reinterpret_cast<const uint8_t*>(&node.hash);
+  out << "_hash: \"";
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&node._hash);
   char hex[3];
-  for (size_t i = 0; i < sizeof(node.hash); i++) {
+  for (size_t i = 0; i < sizeof(node._hash); i++) {
     snprintf(hex, sizeof(hex), "%02x", bytes[i]);
     out << hex;
   }
@@ -190,7 +190,7 @@ struct _Dumper {
       page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
       dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
     }
-    // Output hash for hash trie nodes
+    // Output _hash for _hash trie nodes
     if constexpr (has_hash_member<LeafNode>::value) {
       dump_hash(out, *leaf);
     }
@@ -249,24 +249,24 @@ struct _Dumper {
       page_ptr header = _db.template resolve<page_ptr>(&header_offset, READ);
       dump_txn_id(out, reinterpret_cast<PageHeader*>(&(*header)));
     }
-    // Output hash for hash trie nodes (BLAKE3 of compressed prefix + child hashes)
+    // Output _hash for _hash trie nodes (BLAKE3 of compressed prefix + child hashes)
     if constexpr (has_hash_member<TrieNode>::value) {
       dump_hash(out, *trie);
     }
     out << "size: " << size << std::endl;
     out << "compressed: " << std::endl;
-    out << "  size: " << (int)trie->len() << std::endl;
+    out << "  size: " << (int)trie->prefix_len() << std::endl;
     out << "  key: \"";
-    for (int i = 0; i < trie->len(); i++) {
-      out << "[" << bitstr(trie->compressed()[i]) << "]";
+    for (int i = 0; i < trie->prefix_len(); i++) {
+      out << "[" << bitstr(trie->prefix()[i]) << "]";
     }
     out << "\"" << std::endl;
 
-    offset_e* start = trie->array();
-    offset_e* end = start + trie->count();
+    offset_e* start = trie->branch_offsets();
+    offset_e* end = start + trie->branch_count();
 
-    assert(trie->count() > 0);
-    assert(trie->count() <= TrieNode::MAX_BRANCH_COUNT);
+    assert(trie->branch_count() > 0);
+    assert(trie->branch_count() <= TrieNode::MAX_BRANCH_COUNT);
     out << "branches: \"";
     trie->for_each_branch([&](int iter, auto*) {
       if (iter != TrieNode::NONE)
@@ -390,8 +390,8 @@ struct _MemoryChecker {
 
     if (offset.type() == TRIE) {
       trie_ptr branch = db.template resolve<TrieNode>(&offset);
-      auto count = branch->count();
-      offset_e* array = branch->array();
+      auto count = branch->branch_count();
+      offset_e* array = branch->branch_offsets();
       for (int i = 0; i < count; i++) {
         mark_trie_memory(array[i]);
       }

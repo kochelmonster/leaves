@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(test_next_bit_at_max_index) {
 
   // 32-bit: index=31 means (uint32_t)1 << 32 — UB
   // This is the case reachable via _TrieNode::next() for byte values
-  // where lbit() returns 31 (bytes: 31, 63, 95, 127, 159, 191, 223, 255)
+  // where branch_bit() returns 31 (bytes: 31, 63, 95, 127, 159, 191, 223, 255)
   {
     uint32_t all_set = 0xFFFFFFFF;
     BOOST_CHECK_EQUAL(next(all_set, 31), -1);  // No next after last bit

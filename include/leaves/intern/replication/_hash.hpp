@@ -40,8 +40,8 @@ struct Blake3Hasher {
     blake3_hasher_update(&_hasher, data, size);
   }
 
-  void finalize(hash_t hash) {
-    blake3_hasher_finalize(&_hasher, hash, BLAKE3_OUT_LEN);
+  void finalize(hash_t _hash) {
+    blake3_hasher_finalize(&_hasher, _hash, BLAKE3_OUT_LEN);
   }
 };
 
@@ -55,7 +55,7 @@ template <typename T>
 struct has_big_memory<T, std::void_t<typename T::BigMemory>> : std::true_type {
 };
 
-// Helper to hash big value data when BigMemory is available
+// Helper to _hash big value data when BigMemory is available
 template <typename DB, typename LeafPtr, typename Hasher>
 void hash_leaf_value_impl(DB* db, LeafPtr leaf, Hasher& hasher,
                           std::true_type /*has_big_memory*/) {
@@ -69,7 +69,7 @@ void hash_leaf_value_impl(DB* db, LeafPtr leaf, Hasher& hasher,
   }
 }
 
-// Helper when BigMemory is not available - just hash inline value
+// Helper when BigMemory is not available - just _hash inline value
 template <typename DB, typename LeafPtr, typename Hasher>
 void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher,
                           std::false_type /*has_big_memory*/) {
@@ -81,13 +81,13 @@ void hash_leaf_value_impl(DB* /*db*/, LeafPtr leaf, Hasher& hasher,
 // Hash Trie Traits
 
 /**
- * @brief Traits for hash trie nodes.
+ * @brief Traits for _hash trie nodes.
  *
- * Hash trie nodes store only the 32-byte hash of the corresponding data node.
+ * Hash trie nodes store only the 32-byte _hash of the corresponding data node.
  * They mirror the data trie structure but contain no values.
  *
  * Uses the same underlying node types (_TrieNode, _LeafNode) but with
- * hash storage enabled. Hash "leaves" have key_size=0, value_size=0.
+ * _hash storage enabled. Hash "leaves" have key_size=0, value_size=0.
  */
 template <typename BaseTraits>
 struct HashTrieTraits : BaseTraits {
@@ -96,27 +96,27 @@ struct HashTrieTraits : BaseTraits {
   using TrieNode = _TrieNode<TrieNodeHeader>;
   using LeafNode = _LeafNode<LeafNodeHeader>;
 
-  // Minimum hash leaf size (NONE-branch: key_size=0, value_size=0).
+  // Minimum _hash leaf size (NONE-branch: key_size=0, value_size=0).
   // Non-NONE branch leaves have key_size=1 (data[0] = branch char) and are
   // allocated as HASH_LEAF_SIZE + 1 bytes.
   static constexpr uint16_t HASH_LEAF_SIZE =
       LeafNode::HEADER_SIZE;  // NONE-branch minimum
 };
 
-// Hash Updater — data/hash trie sync
+// Hash Updater — data/_hash trie sync
 
 /**
- * @brief Updates a separate hash trie to mirror a data trie.
+ * @brief Updates a separate _hash trie to mirror a data trie.
  *
- * Algorithm: Recursive walk of data and hash tries.
+ * Algorithm: Recursive walk of data and _hash tries.
  * - Compare txn_id first: if equal, skip (COW guarantee - subtree unchanged)
  * - Handle prefix alignment by walking into branches as needed
- * - At matching positions: prune hash-only branches, add data-only branches,
+ * - At matching positions: prune _hash-only branches, add data-only branches,
  *   recurse into common branches
  *
  * Template parameters:
  * @tparam DataDB The data database type (with data trie nodes)
- * @tparam HashDB The hash database type (with hash trie nodes)
+ * @tparam HashDB The _hash database type (with _hash trie nodes)
  */
 template <typename DataDB, typename HashDB>
 struct _HashUpdater {
@@ -185,17 +185,17 @@ struct _HashUpdater {
   // ── Core sync logic ────────────────────────────────────────────────────
 
   /**
-   * @brief Sync hash node to match data node.
+   * @brief Sync _hash node to match data node.
    *
   * Main entry point for recursive walk. Handles all cases:
    * - Both empty, one empty, both present
    * - txn_id comparison to skip unchanged subtrees
    *
-   * @param hash_prefix_skip Number of bytes to skip in hash node's prefix.
-   *        Used when hash prefix is longer and we're syncing against data
+   * @param hash_prefix_skip Number of bytes to skip in _hash node's prefix.
+   *        Used when _hash prefix is longer and we're syncing against data
    * child.
    * @param data_prefix_skip Number of bytes to skip in data node's prefix.
-   *        Used when data prefix is longer and we're syncing against hash
+   *        Used when data prefix is longer and we're syncing against _hash
    * child.
    */
   void sync_nodes(std::string& key_path, data_offset_e data_offset,
@@ -213,7 +213,7 @@ struct _HashUpdater {
       return;
     }
 
-    // Case: hash is empty - deep copy entire data subtree
+    // Case: _hash is empty - deep copy entire data subtree
     if (!*hash_offset_ptr) {
       deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
       return;
@@ -253,12 +253,12 @@ struct _HashUpdater {
     key_path.append((const char*)data_leaf->data + data_prefix_skip,
                     data_leaf->key_size - data_prefix_skip);
 
-    // Replace whatever is in hash with a new hash leaf
+    // Replace whatever is in _hash with a new _hash leaf
     if (*hash_offset_ptr) {
       free_hash_subtree(*hash_offset_ptr);
     }
 
-    // Create hash leaf with computed hash
+    // Create _hash leaf with computed _hash
     hash_leaf_ptr hash_leaf = create_leaf_hash(key_path, data_leaf);
     *hash_offset_ptr = _hash_db->resolve(hash_leaf);
 
@@ -268,7 +268,7 @@ struct _HashUpdater {
   /**
    * @brief Sync when data is a trie.
    *
-   * @param hash_prefix_skip Bytes to skip in hash node's prefix (for prefix
+   * @param hash_prefix_skip Bytes to skip in _hash node's prefix (for prefix
    * alignment)
    * @param data_prefix_skip Bytes to skip in data node's prefix (for prefix
    * alignment)
@@ -279,7 +279,7 @@ struct _HashUpdater {
                       uint8_t data_prefix_skip = 0) {
     auto data_trie = _data_db->template resolve<DataTrieNode>(&data_offset);
 
-    // If hash is a leaf, replace entirely
+    // If _hash is a leaf, replace entirely
     if (hash_offset_ptr->type() == LEAF) {
       free_hash_subtree(*hash_offset_ptr);
       *hash_offset_ptr = hash_offset_e();
@@ -290,12 +290,12 @@ struct _HashUpdater {
     auto hash_trie = _hash_db->template resolve<HashTrieNode>(hash_offset_ptr);
 
     // Check prefix alignment (applying skip to both prefixes)
-    uint8_t data_len = data_trie->len();
-    uint8_t hash_len = hash_trie->len();
+    uint8_t data_len = data_trie->prefix_len();
+    uint8_t hash_len = hash_trie->prefix_len();
     uint8_t effective_data_len = data_len - data_prefix_skip;
     uint8_t effective_hash_len = hash_len - hash_prefix_skip;
-    const uint8_t* data_prefix = data_trie->compressed() + data_prefix_skip;
-    const uint8_t* hash_prefix = hash_trie->compressed() + hash_prefix_skip;
+    const uint8_t* data_prefix = data_trie->prefix() + data_prefix_skip;
+    const uint8_t* hash_prefix = hash_trie->prefix() + hash_prefix_skip;
 
     // Find common prefix length
     uint8_t common = 0;
@@ -305,7 +305,7 @@ struct _HashUpdater {
     }
 
     if (common < effective_data_len && common < effective_hash_len) {
-      // Prefixes diverge at position 'common' - replace hash entirely
+      // Prefixes diverge at position 'common' - replace _hash entirely
       free_hash_subtree(*hash_offset_ptr);
       *hash_offset_ptr = hash_offset_e();
       deep_copy_data_to_hash(key_path, data_offset, hash_offset_ptr);
@@ -313,13 +313,13 @@ struct _HashUpdater {
     }
 
     if (common < effective_hash_len) {
-      // Hash prefix is longer - e.g., data effective prefix="ab", hash
+      // Hash prefix is longer - e.g., data effective prefix="ab", _hash
       // effective prefix="abcd" Hash embeds bytes that data has as branches.
-      // diverge_byte is the next byte in the hash prefix after common
+      // diverge_byte is the next byte in the _hash prefix after common
       uint8_t diverge_byte = hash_prefix[common];
 
       if (!(data_trie->isset)(diverge_byte)) {
-        // Data doesn't have a branch matching hash's next prefix byte
+        // Data doesn't have a branch matching _hash's next prefix byte
         // Hash is completely stale - replace entirely
         free_hash_subtree(*hash_offset_ptr);
         *hash_offset_ptr = hash_offset_e();
@@ -327,7 +327,7 @@ struct _HashUpdater {
         return;
       }
 
-      // Build new hash trie mirroring data's structure
+      // Build new _hash trie mirroring data's structure
       size_t saved_len = key_path.size();
       key_path.append((const char*)data_prefix, effective_data_len);
 
@@ -342,10 +342,10 @@ struct _HashUpdater {
 
         hash_offset_e hash_child{};
         if (k == (int)diverge_byte && !hash_consumed) {
-          // This data branch aligns with hash's embedded prefix.
+          // This data branch aligns with _hash's embedded prefix.
           // The child's compressed[0] is the branch char; don't skip it
           // so the recursive call naturally appends it to key_path.
-          // Keep the matching byte in hash's prefix too (no +1).
+          // Keep the matching byte in _hash's prefix too (no +1).
           hash_child = *hash_offset_ptr;
           uint8_t new_hash_skip = hash_prefix_skip + common;
           uint8_t new_data_skip = 0;
@@ -360,18 +360,18 @@ struct _HashUpdater {
 
         offsets_buf[k] = hash_child;
         branch_count++;
-        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::branch_bits_group(k));
       });
 
       if (!hash_consumed) {
         free_hash_subtree(*hash_offset_ptr);
       }
 
-      // Create new hash trie mirroring data's full compressed prefix.
+      // Create new _hash trie mirroring data's full compressed prefix.
       // Must use the FULL compressed (not effective/skipped), because
-      // compute_trie_hash hashes trie->compressed() and it must match
+      // compute_trie_hash hashes trie->prefix() and it must match
       // what compute_node_hash would produce for this data trie node.
-      Slice prefix((const char*)data_trie->compressed(), data_trie->len());
+      Slice prefix((const char*)data_trie->prefix(), data_trie->prefix_len());
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr new_hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
@@ -384,12 +384,12 @@ struct _HashUpdater {
     }
 
     if (common < effective_data_len) {
-      // Data prefix is longer - e.g., data effective prefix="abcd", hash
+      // Data prefix is longer - e.g., data effective prefix="abcd", _hash
       // effective prefix="ab" Hash has branches where data has embedded prefix
-      // bytes. Only the hash branch matching data's next byte is relevant.
+      // bytes. Only the _hash branch matching data's next byte is relevant.
       uint8_t next_byte = data_prefix[common];
 
-      // Free hash branches that don't match
+      // Free _hash branches that don't match
       hash_trie->for_each_branch([&](int k, auto* off) {
         if (k != (int)next_byte) {
           free_hash_subtree(*off);
@@ -397,10 +397,10 @@ struct _HashUpdater {
       });
 
       if ((hash_trie->isset)(next_byte)) {
-        // Sync data with hash's matching branch child.
+        // Sync data with _hash's matching branch child.
         // Don't skip the branch byte on either side — the recursive call
         // will match it in the common prefix and append it to key_path.
-        hash_offset_e hash_child = *hash_trie->offset(next_byte);
+        hash_offset_e hash_child = *hash_trie->branch_offset(next_byte);
         size_t saved_len = key_path.size();
         key_path.append((const char*)data_prefix, common);
 
@@ -409,7 +409,7 @@ struct _HashUpdater {
         sync_nodes(key_path, data_offset, &hash_child, new_hash_skip,
                    new_data_skip);
 
-        // Replace the hash trie with the synced result
+        // Replace the _hash trie with the synced result
         free_hash_node(hash_trie);
         *hash_offset_ptr = hash_child;
 
@@ -433,9 +433,9 @@ struct _HashUpdater {
   }
 
   /**
-   * @brief Sync when data and hash tries have matching prefixes.
+   * @brief Sync when data and _hash tries have matching prefixes.
    *
-   * - Remove branches only in hash
+   * - Remove branches only in _hash
    * - Add branches only in data
    * - Recurse into common branches
    *
@@ -447,13 +447,13 @@ struct _HashUpdater {
                            uint8_t data_prefix_skip = 0) {
     auto hash_trie = _hash_db->template resolve<HashTrieNode>(hash_offset_ptr);
 
-    // Build offset array for new hash trie
+    // Build offset array for new _hash trie
     hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
     hash_offset_e* offsets_buf = &offsets_raw[1];  // -1..255 indexing
     int branch_count = 0;
     uint8_t upper = 0;
 
-    // Track which hash branches exist
+    // Track which _hash branches exist
     bool hash_has[257] = {};
     hash_trie->for_each_branch([&](int k, auto*) {
       hash_has[k + 1] = true;  // +1 because NONE is -1
@@ -463,7 +463,7 @@ struct _HashUpdater {
       data_offset_e data_child = *data_off;
       bool has_hash = hash_has[k + 1];
       hash_offset_e hash_child_init =
-          has_hash ? *hash_trie->offset(k) : hash_offset_e{};
+          has_hash ? *hash_trie->branch_offset(k) : hash_offset_e{};
 
       auto do_branch = [this, k, data_child, has_hash, hash_child_init,
                         offsets_buf](std::string& kp) {
@@ -477,7 +477,7 @@ struct _HashUpdater {
       };
       do_branch(key_path);
       branch_count++;
-      if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+      if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::branch_bits_group(k));
     });
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
@@ -488,15 +488,15 @@ struct _HashUpdater {
       }
     });
 
-    // Create new hash trie mirroring data's full compressed prefix.
-    Slice prefix((const char*)data_trie->compressed(), data_trie->len());
+    // Create new _hash trie mirroring data's full compressed prefix.
+    Slice prefix((const char*)data_trie->prefix(), data_trie->prefix_len());
     data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
     hash_trie_ptr new_hash_trie =
         alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
     new_hash_trie->create(prefix, offsets_buf, upper);
     compute_trie_hash(new_hash_trie);
 
-    // Free old hash trie node and update pointer
+    // Free old _hash trie node and update pointer
     free_hash_node(hash_trie);
     *hash_offset_ptr = _hash_db->resolve(new_hash_trie);
   }
@@ -504,7 +504,7 @@ struct _HashUpdater {
   // ── Deep copy operations ───────────────────────────────────────────────
 
   /**
-   * @brief Deep copy data subtree to hash trie, computing hashes.
+   * @brief Deep copy data subtree to _hash trie, computing hashes.
    */
   void deep_copy_data_to_hash(std::string& key_path, data_offset_e data_offset,
                               hash_offset_e* hash_offset_ptr) {
@@ -525,7 +525,7 @@ struct _HashUpdater {
     } else {
       auto data_trie = _data_db->template resolve<DataTrieNode>(&data_offset);
       size_t saved_len = key_path.size();
-      key_path.append((const char*)data_trie->compressed(), data_trie->len());
+      key_path.append((const char*)data_trie->prefix(), data_trie->prefix_len());
 
       hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
       hash_offset_e* offsets_buf = &offsets_raw[1];
@@ -542,17 +542,17 @@ struct _HashUpdater {
         };
         do_branch(key_path);
         branch_count++;
-        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::ubit(k));
+        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::branch_bits_group(k));
       });
 
-      // Create hash trie
-      Slice prefix((const char*)data_trie->compressed(), data_trie->len());
+      // Create _hash trie
+      Slice prefix((const char*)data_trie->prefix(), data_trie->prefix_len());
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
       hash_trie->create(prefix, offsets_buf, upper);
 
-      // Compute trie hash
+      // Compute trie _hash
       compute_trie_hash(hash_trie);
 
       *hash_offset_ptr = _hash_db->resolve(hash_trie);
@@ -563,7 +563,7 @@ struct _HashUpdater {
   // ── Hash computation ───────────────────────────────────────────────────
 
   /**
-   * @brief Create hash leaf from data leaf.
+   * @brief Create _hash leaf from data leaf.
    */
   hash_leaf_ptr create_leaf_hash(const std::string& key_path,
                                  data_leaf_ptr data_leaf) {
@@ -578,7 +578,7 @@ struct _HashUpdater {
     data_page_ptr data_page = data_leaf - sizeof(DataPageHeader);
     tid_t txn_id = data_page->txn_id;
 
-    // Compute leaf hash: Blake3(full_key || value)
+    // Compute leaf _hash: Blake3(full_key || value)
     Blake3Hasher hasher;
     hasher.update(key_path.data(), key_path.size());
 
@@ -591,29 +591,29 @@ struct _HashUpdater {
     }
 
     hash_leaf_ptr hash_leaf = alloc_hash_leaf(txn_id, branch_key);
-    hasher.finalize(hash_leaf->hash);
+    hasher.finalize(hash_leaf->_hash);
     return hash_leaf;
   }
 
   /**
-   * @brief Compute hash for trie node from children's hashes.
+   * @brief Compute _hash for trie node from children's hashes.
    */
   void compute_trie_hash(hash_trie_ptr trie) {
     Blake3Hasher hasher;
-    hasher.update(trie->compressed(), trie->len());
+    hasher.update(trie->prefix(), trie->prefix_len());
 
     // Hash all child hashes in array order
-    hash_offset_e* children = trie->array();
-    for (int i = 0; i < trie->count(); ++i) {
+    hash_offset_e* children = trie->branch_offsets();
+    for (int i = 0; i < trie->branch_count(); ++i) {
       if (children[i].type() == LEAF) {
         auto child = _hash_db->template resolve<HashLeafNode>(&children[i]);
-        hasher.update(child->hash, sizeof(child->hash));
+        hasher.update(child->_hash, sizeof(child->_hash));
       } else {
         auto child = _hash_db->template resolve<HashTrieNode>(&children[i]);
-        hasher.update(child->hash, sizeof(child->hash));
+        hasher.update(child->_hash, sizeof(child->_hash));
       }
     }
-    hasher.finalize(trie->hash);
+    hasher.finalize(trie->_hash);
   }
 
   // ── Allocation helpers ─────────────────────────────────────────────────
@@ -631,7 +631,7 @@ struct _HashUpdater {
       leaf->data[0] = static_cast<uint8_t>(branch_key);
     }
     leaf->value_size = 0;
-    // Copy txn_id to hash page header
+    // Copy txn_id to _hash page header
     hash_page_ptr page = leaf - sizeof(HashPageHeader);
     page->txn_id = txn_id;
     return leaf;
@@ -641,7 +641,7 @@ struct _HashUpdater {
                                 tid_t txn_id) {
     uint16_t size = HashTrieNode::size(prefix_len, branch_count);
     hash_trie_ptr trie = _hash_db->template alloc_node<hash_trie_ptr>(size);
-    // Copy txn_id to hash page header
+    // Copy txn_id to _hash page header
     hash_page_ptr page = trie - sizeof(HashPageHeader);
     page->txn_id = txn_id;
     return trie;
@@ -672,15 +672,15 @@ struct _HashUpdater {
 };
 
 /**
- * @brief Update hash trie for a data trie.
+ * @brief Update _hash trie for a data trie.
  *
- * Convenience function to update the hash trie to mirror the data trie.
+ * Convenience function to update the _hash trie to mirror the data trie.
  * Uses txn_id comparison to skip unchanged subtrees (COW guarantee).
  *
  * @param data_db Data database
  * @param hash_db Hash database (may be same as data_db)
  * @param data_root Root of data trie
- * @param hash_root_ptr Pointer to hash trie root (modified in place)
+ * @param hash_root_ptr Pointer to _hash trie root (modified in place)
  */
 template <typename DataDB, typename HashDB>
 void update_hash_trie(DataDB* data_db, HashDB* hash_db,
@@ -692,13 +692,13 @@ void update_hash_trie(DataDB* data_db, HashDB* hash_db,
   updater.sync_nodes(key_path, data_root, hash_root_ptr);
 }
 
-// Hash Lookup — cursor-based hash trie navigation
+// Hash Lookup — cursor-based _hash trie navigation
 
 /**
- * @brief Encapsulates cursor-based hash trie lookup.
+ * @brief Encapsulates cursor-based _hash trie lookup.
  *
- * Maintains its own cursor and root pointer for navigating the hash trie.
- * Correctly handles hash tries whose compressed-path structure differs
+ * Maintains its own cursor and root pointer for navigating the _hash trie.
+ * Correctly handles _hash tries whose compressed-path structure differs
  * from the data/wire trie.
  *
  * @tparam DB The database type (provides CursorTraits, Traits)
@@ -723,12 +723,12 @@ struct _HashLookup {
   }
 
   /**
-   * @brief Look up the hash for the node at `path` in the hash trie.
+   * @brief Look up the _hash for the node at `path` in the _hash trie.
    *
    * @param path The key path to look up
-   * @param expected_type LEAF or TRIE — determines which hash-trie node we
+   * @param expected_type LEAF or TRIE — determines which _hash-trie node we
    * expect
-   * @return Pointer to the 32-byte hash, or nullptr if not found
+   * @return Pointer to the 32-byte _hash, or nullptr if not found
    */
   const uint8_t* find(const std::string& path, uint8_t expected_type) {
     if (!*_root) return nullptr;
@@ -750,21 +750,21 @@ struct _HashLookup {
       // && is_leaf()) would wrongly return false.  is_leaf() suffices:
       // the trie navigation already reaches the correct node, and the
       // final BLAKE3 comparison catches mismatches.
-      if (back.is_leaf()) return back.leaf()->hash;
+      if (back.is_leaf()) return back.leaf()->_hash;
       return nullptr;
     }
 
-    // expected_type == TRIE: return the deepest trie node hash the cursor
-    // landed on.  If the path overshoots or undershoots, the hash simply
-    // won't match the wire hash, so the caller treats it as "hashes differ"
+    // expected_type == TRIE: return the deepest trie node _hash the cursor
+    // landed on.  If the path overshoots or undershoots, the _hash simply
+    // won't match the wire _hash, so the caller treats it as "hashes differ"
     // — no incorrect pruning can occur (would require a BLAKE3 collision).
-    if (back.is_trie()) return back.trie()->hash;
+    if (back.is_trie()) return back.trie()->_hash;
 
     // Cursor followed the NONE-branch into a leaf — the trie we want is
     // the parent frame.
     if (_cursor.stack.size >= 2) {
       auto& parent = _cursor.stack.data[_cursor.stack.size - 2];
-      if (parent.is_trie()) return parent.trie()->hash;
+      if (parent.is_trie()) return parent.trie()->_hash;
     }
 
     return nullptr;
