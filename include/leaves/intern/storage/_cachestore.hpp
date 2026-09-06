@@ -149,8 +149,7 @@ struct _CacheStore : public Opers_,
       this->wait_idle();
 
       // Final flush of any remaining dirty blocks
-      write_dirty_blocks();
-      this->wait_for_writes();
+      flush(true, true);
       close();
     } catch (...) {
       // Terminal even on failure: a waiter must never see state 0 again.
