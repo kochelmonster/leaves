@@ -775,6 +775,13 @@ target_compile_options(bench_overwrite_vs_merge PRIVATE -O3 ${LEAVES_BENCH_NATIV
 endif()
 target_compile_definitions(bench_overwrite_vs_merge PRIVATE NDEBUG)
 
+add_executable(bench_memdb_vs_hashtable benchmarks/bench_memdb_vs_hashtable.cpp)
+target_link_libraries(bench_memdb_vs_hashtable PUBLIC core Threads::Threads)
+if (NOT MSVC)
+target_compile_options(bench_memdb_vs_hashtable PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
+endif()
+target_compile_definitions(bench_memdb_vs_hashtable PRIVATE NDEBUG)
+
 if (DEBUG_BENCHMARKS)
     if (MSVC)
     target_compile_options(db_bench_leaves PRIVATE /Zi /Od)
@@ -829,7 +836,8 @@ add_dependencies(leaves_benchmarks
     db_bench_memory
     bench_page_sizes
     bench_merge
-    bench_overwrite_vs_merge)
+    bench_overwrite_vs_merge
+    bench_memdb_vs_hashtable)
 if (TARGET db_bench_mdb)
     add_dependencies(leaves_benchmarks db_bench_mdb)
 endif()
