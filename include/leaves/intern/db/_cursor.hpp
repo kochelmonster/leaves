@@ -69,7 +69,7 @@ struct _Transition {
 
   offset_e* link() {
     assert(link_idx != 0xFFFF);
-    return trie()->array() + link_idx;
+    return trie()->branch_offsets() + link_idx;
   }
 
   bool is_leaf() const { return offset->type() == LEAF; }
@@ -128,7 +128,7 @@ struct _Transition {
 
     auto new_offset = cursor->_db->resolve(trie());
     cursor->_db->free(page_header);
-    assert(trie()->count() < trie()->MAX_BRANCH_COUNT);
+    assert(trie()->branch_count() < trie()->MAX_BRANCH_COUNT);
 
     // Propagate COW upward: grandparent's needs_cow will compare its txn_id
     // with our NEW cloned trie's txn_id. If they match (same transaction), no
@@ -199,16 +199,16 @@ struct _Transition {
     }
 
     TrieNode& trie_ = *trie();
-    assert(trie_.count() < trie_.MAX_BRANCH_COUNT);
-    prefix = get_prefix(key().data(), (char*)trie_.compressed(), key().size(),
-                        trie_.len(), cmp);
+    assert(trie_.branch_count() < trie_.MAX_BRANCH_COUNT);
+    prefix = get_prefix(key().data(), (char*)trie_.prefix(), key().size(),
+                        trie_.prefix_len(), cmp);
     advance_key(prefix);
-    if (prefix < trie_.len()) return;
+    if (prefix < trie_.prefix_len()) return;
 
     if (key().empty()) {
       if (trie_.has_none()) {
         link_idx = 0;
-        cursor->_db->prefetch(&trie_.array()[link_idx]);
+        cursor->_db->prefetch(&trie_.branch_offsets()[link_idx]);
         push().find();
       } else
         cmp = -1;
@@ -216,7 +216,7 @@ struct _Transition {
     }
 
     branch_key = key()[0];
-    int idx = trie_.array_index(branch_key);
+    int idx = trie_.branch_index(branch_key);
     if (idx < 0) {
       cmp = NOT_FOUND;
       return;
@@ -239,8 +239,8 @@ struct _Transition {
   void first() {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
-    append_key(trie_.compressed(), trie_._compressed_len);
-    prefix = trie_._compressed_len;
+    append_key(trie_.prefix(), trie_._prefix_len);
+    prefix = trie_._prefix_len;
     cmp = 0;
     link_idx = 0;
     auto& child = push();
@@ -261,9 +261,9 @@ struct _Transition {
 
     TrieNode& trie_ = *trie();
     if (cmp == 0) {
-      if (++link_idx >= trie_.count()) return false;
+      if (++link_idx >= trie_.branch_count()) return false;
       offset_e* lnk = link();
-      if (link_idx + 1 < trie_.count()) cursor->_db->prefetch(lnk + 1);
+      if (link_idx + 1 < trie_.branch_count()) cursor->_db->prefetch(lnk + 1);
 
       auto& child = push();
       cursor->_db->prefetch(lnk);
@@ -275,19 +275,19 @@ struct _Transition {
     }
 
     resize_key(keypos);
-    if (prefix < trie_._compressed_len) {
+    if (prefix < trie_._prefix_len) {
       if (cmp > 0) return false;
       assert(cmp < 0);
       first();
       return true;
     }
-    append_key(trie_.compressed(), trie_._compressed_len);
+    append_key(trie_.prefix(), trie_._prefix_len);
     int next_ = trie_.next(branch_key);
     if (next_ == TrieNode::OUT_OF_RANGE) return false;
     cmp = 0;
     branch_key = (uint8_t)next_;
-    link_idx = trie_.array_index(next_);
-    assert(link_idx < trie_.count());
+    link_idx = trie_.branch_index(next_);
+    assert(link_idx < trie_.branch_count());
     push().first();
     return true;
   }
@@ -321,19 +321,19 @@ struct _Transition {
     }
 
     resize_key(keypos);
-    if (prefix < trie_._compressed_len) {
+    if (prefix < trie_._prefix_len) {
       if (cmp < 0) return false;
       assert(cmp > 0);
       last();
       return true;
     }
-    append_key(trie_.compressed(), trie_._compressed_len);
+    append_key(trie_.prefix(), trie_._prefix_len);
     int prev_ = trie_.prev(branch_key);
     if (prev_ == TrieNode::OUT_OF_RANGE) return false;
     cmp = 0;
     branch_key = (uint8_t)prev_;
-    link_idx = trie_.array_index(prev_);
-    assert(link_idx < trie_.count());
+    link_idx = trie_.branch_index(prev_);
+    assert(link_idx < trie_.branch_count());
     push().last();
     return true;
   }
@@ -341,10 +341,10 @@ struct _Transition {
   void last() {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
-    append_key(trie_.compressed(), trie_._compressed_len);
-    prefix = trie_._compressed_len;
+    append_key(trie_.prefix(), trie_._prefix_len);
+    prefix = trie_._prefix_len;
     cmp = 0;
-    link_idx = trie_.count() - 1;
+    link_idx = trie_.branch_count() - 1;
     auto& child = push();
     child.last();
     assert(child.keypos < current_key().size());

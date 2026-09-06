@@ -71,7 +71,7 @@ static std::vector<std::string> gen_random_binary(int n) {
   return keys;
 }
 
-// 2. Binary hash (32 bytes): SHA-256 / BLAKE3 style content-addressed keys
+// 2. Binary _hash (32 bytes): SHA-256 / BLAKE3 style content-addressed keys
 static std::vector<std::string> gen_binary_hash(int n) {
   std::mt19937_64 rng(42);
   std::vector<std::string> keys;

@@ -199,7 +199,7 @@ struct TwoQCache {
           _a1in_current_size(0),
           _a1in_size_limit(capacity * kin_ratio),
           _a1out_size_limit(0) {
-        // Pre-allocate hash maps to avoid rehashing during warmup
+        // Pre-allocate _hash maps to avoid rehashing during warmup
         // _a1out_size_limit is an item count (ghost entries carry no value),
         // so convert the byte-based capacity to an estimated item count.
         size_t estimated_total_items = capacity / avg_item_size;

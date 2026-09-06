@@ -22,9 +22,9 @@ struct HashUpdaterPreparation {
 
 BOOST_GLOBAL_FIXTURE(HashUpdaterPreparation);
 
-// For testing, we use the same DB for both data and hash tries.
-// The hash trie is stored in a separate root offset that we manage manually.
-// In production, the hash trie root would be in the DB header.
+// For testing, we use the same DB for both data and _hash tries.
+// The _hash trie is stored in a separate root offset that we manage manually.
+// In production, the _hash trie root would be in the DB header.
 
 typedef MapStorage Storage;
 typedef _ReplicationDB<Storage::StorageImpl> InternalDB;
@@ -73,7 +73,7 @@ int count_data_nodes(DB* db, typename DB::offset_e offset) {
 }
 
 /**
- * Helper to count hash trie nodes (for verification)
+ * Helper to count _hash trie nodes (for verification)
  */
 template <typename DB>
 int count_hash_nodes(DB* db, typename DB::offset_e offset) {
@@ -95,7 +95,7 @@ int count_hash_nodes(DB* db, typename DB::offset_e offset) {
 }
 
 /**
- * Helper to collect all hash node offsets into a set
+ * Helper to collect all _hash node offsets into a set
  */
 template <typename DB>
 void collect_hash_offsets(DB* db, typename DB::offset_e offset,
@@ -130,7 +130,7 @@ inline int count_preserved_offsets(const std::set<uint64_t>& before,
 }
 
 /**
- * Helper to verify hash trie structure matches data trie
+ * Helper to verify _hash trie structure matches data trie
  */
 template <typename DataDB, typename HashDB>
 bool verify_structure(DataDB* data_db, HashDB* hash_db,
@@ -138,7 +138,7 @@ bool verify_structure(DataDB* data_db, HashDB* hash_db,
                       typename HashDB::offset_e hash_offset) {
   using DataTrieNode = typename DataDB::CursorTraits::TrieNode;
   using DataLeafNode = typename DataDB::CursorTraits::LeafNode;
-  // Hash trie uses HashTrieTraits which includes 32-byte hash in nodes
+  // Hash trie uses HashTrieTraits which includes 32-byte _hash in nodes
   using HashTraits = HashTrieTraits<typename HashDB::CursorTraits>;
   using HashTrieNode = typename HashTraits::TrieNode;
   using HashLeafNode = typename HashTraits::LeafNode;
@@ -149,12 +149,12 @@ bool verify_structure(DataDB* data_db, HashDB* hash_db,
   if (data_offset.type() != hash_offset.type()) return false;
 
   if (data_offset.type() == LEAF) {
-    // Both are leaves - check hash is non-zero
+    // Both are leaves - check _hash is non-zero
     auto hash_leaf = hash_db->template resolve<HashLeafNode>(&hash_offset);
     // Hash should be computed (non-zero)
     bool has_hash = false;
-    for (size_t i = 0; i < sizeof(hash_leaf->hash); ++i) {
-      if (hash_leaf->hash[i] != 0) {
+    for (size_t i = 0; i < sizeof(hash_leaf->_hash); ++i) {
+      if (hash_leaf->_hash[i] != 0) {
         has_hash = true;
         break;
       }
@@ -167,7 +167,7 @@ bool verify_structure(DataDB* data_db, HashDB* hash_db,
   auto hash_trie = hash_db->template resolve<HashTrieNode>(&hash_offset);
 
   // Check branch count matches
-  if (data_trie->count() != hash_trie->count()) return false;
+  if (data_trie->branch_count() != hash_trie->branch_count()) return false;
 
   // Check each branch exists in both and recurse
   bool all_valid = true;
@@ -175,16 +175,16 @@ bool verify_structure(DataDB* data_db, HashDB* hash_db,
     if (!all_valid) return;
     if (!hash_trie->isset(k)) { all_valid = false; return; }
     if (!verify_structure(data_db, hash_db, *off,
-                          *hash_trie->offset(k))) {
+                          *hash_trie->branch_offset(k))) {
       all_valid = false;
     }
   });
   if (!all_valid) return false;
 
-  // Check hash trie node has non-zero hash
+  // Check _hash trie node has non-zero _hash
   bool has_hash = false;
-  for (size_t i = 0; i < sizeof(hash_trie->hash); ++i) {
-    if (hash_trie->hash[i] != 0) {
+  for (size_t i = 0; i < sizeof(hash_trie->_hash); ++i) {
+    if (hash_trie->_hash[i] != 0) {
       has_hash = true;
       break;
     }
@@ -229,12 +229,12 @@ BOOST_AUTO_TEST_CASE(single_leaf) {
   BOOST_REQUIRE(hash_root);
   BOOST_CHECK_EQUAL(hash_root.type(), LEAF);
 
-  // Verify hash is non-zero - use HashTrieTraits to access 32-byte hash
+  // Verify _hash is non-zero - use HashTrieTraits to access 32-byte _hash
   using HashLeafNode = HashTrieTraits<Traits>::LeafNode;
   auto hash_leaf = internal_db->template resolve<HashLeafNode>(&hash_root);
   bool has_hash = false;
   for (size_t i = 0; i < HASH_SIZE; ++i) {
-    if (hash_leaf->hash[i] != 0) {
+    if (hash_leaf->_hash[i] != 0) {
       has_hash = true;
       break;
     }
@@ -267,7 +267,7 @@ BOOST_AUTO_TEST_CASE(multiple_keys_structure_match) {
   BOOST_REQUIRE(hash_root);
   BOOST_CHECK(verify_structure(internal_db, internal_db, txn->root, hash_root));
 
-  // Count nodes should match (roughly - hash trie mirrors data trie)
+  // Count nodes should match (roughly - _hash trie mirrors data trie)
   int data_nodes = count_data_nodes(internal_db, txn->root);
   int hash_nodes = count_hash_nodes(internal_db, hash_root);
   BOOST_CHECK_EQUAL(data_nodes, hash_nodes);
@@ -295,19 +295,19 @@ BOOST_AUTO_TEST_CASE(incremental_update) {
   auto txn1 = internal_db->txn();
   tid_t first_txn_id = txn1->txn_id;
 
-  // Initial hash update
+  // Initial _hash update
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
 
   BOOST_REQUIRE(hash_root);
   BOOST_CHECK(verify_structure(internal_db, internal_db, txn1->root, hash_root));
 
-  // Get hash of a known node before modification (use HashTrieTraits)
+  // Get _hash of a known node before modification (use HashTrieTraits)
   using HashTrieNode = HashTrieTraits<Traits>::TrieNode;
   uint8_t old_root_hash[HASH_SIZE];
   {
     auto hash_trie = internal_db->template resolve<HashTrieNode>(&hash_root);
-    memcpy(old_root_hash, hash_trie->hash, HASH_SIZE);
+    memcpy(old_root_hash, hash_trie->_hash, HASH_SIZE);
   }
 
   // Add another key
@@ -320,18 +320,18 @@ BOOST_AUTO_TEST_CASE(incremental_update) {
 
   auto txn2 = internal_db->txn();
 
-  // Incremental update - only hash nodes newer than first_txn_id
+  // Incremental update - only _hash nodes newer than first_txn_id
   run_hash_update(internal_db, txn2->root, &hash_root, first_txn_id);
 
   // Structure should still match
   BOOST_CHECK(verify_structure(internal_db, internal_db, txn2->root, hash_root));
 
-  // Root hash should have changed (new child added)
+  // Root _hash should have changed (new child added)
   {
     auto hash_trie = internal_db->template resolve<HashTrieNode>(&hash_root);
     bool hash_changed = false;
     for (size_t i = 0; i < HASH_SIZE; ++i) {
-      if (hash_trie->hash[i] != old_root_hash[i]) {
+      if (hash_trie->_hash[i] != old_root_hash[i]) {
         hash_changed = true;
         break;
       }
@@ -363,9 +363,9 @@ BOOST_AUTO_TEST_CASE(deterministic_hashes) {
     offset_t hash_root1{};
     run_hash_update(internal_db1, txn1->root, &hash_root1, tid_t(0));
 
-    // Get hash - use HashTrieTraits to access 32-byte hash
+    // Get _hash - use HashTrieTraits to access 32-byte _hash
     auto hash_leaf = internal_db1->template resolve<HashLeafNode>(&hash_root1);
-    memcpy(hash1, hash_leaf->hash, HASH_SIZE);
+    memcpy(hash1, hash_leaf->_hash, HASH_SIZE);
   }
   // storage1 is now closed
 
@@ -390,9 +390,9 @@ BOOST_AUTO_TEST_CASE(deterministic_hashes) {
     offset_t hash_root2{};
     run_hash_update(internal_db2, txn2->root, &hash_root2, tid_t(0));
 
-    // Get hash
+    // Get _hash
     auto hash_leaf = internal_db2->template resolve<HashLeafNode>(&hash_root2);
-    memcpy(hash2, hash_leaf->hash, HASH_SIZE);
+    memcpy(hash2, hash_leaf->_hash, HASH_SIZE);
   }
 
   // Hashes should be identical
@@ -424,7 +424,7 @@ BOOST_AUTO_TEST_CASE(prune_deleted_branches) {
     cursor.commit();
   }
 
-  // Initial hash
+  // Initial _hash
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -440,7 +440,7 @@ BOOST_AUTO_TEST_CASE(prune_deleted_branches) {
     cursor.commit();
   }
 
-  // Update hash trie - should prune the deleted branch
+  // Update _hash trie - should prune the deleted branch
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -453,15 +453,15 @@ BOOST_AUTO_TEST_CASE(prune_deleted_branches) {
 }
 
 /**
- * Test prefix alignment: hash prefix longer than data prefix.
+ * Test prefix alignment: _hash prefix longer than data prefix.
  *
  * Scenario:
  * 1. Create data with long common prefix: "zzzzz_abc" and "zzzzz_def"
  *    → data trie: prefix="zzzzz_", branches 'a' and 'd'
- * 2. Generate hash trie (mirrors data)
+ * 2. Generate _hash trie (mirrors data)
  * 3. Add key "zzzzz_aXX" which splits the 'a' subtree
  *    → 'a' child now has prefix="" with branches 'b' and 'X'
- * 4. Hash update should handle: hash child has prefix="bc" but data child has prefix=""
+ * 4. Hash update should handle: _hash child has prefix="bc" but data child has prefix=""
  *    This triggers common < effective_hash_len
  */
 BOOST_AUTO_TEST_CASE(prefix_alignment_hash_longer) {
@@ -483,7 +483,7 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_hash_longer) {
     cursor.commit();
   }
 
-  // Step 2: Generate initial hash trie
+  // Step 2: Generate initial _hash trie
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -499,7 +499,7 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_hash_longer) {
     cursor.commit();
   }
 
-  // Step 4: Update hash trie - this should trigger hash prefix longer case
+  // Step 4: Update _hash trie - this should trigger _hash prefix longer case
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -513,16 +513,16 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_hash_longer) {
 }
 
 /**
- * Test prefix alignment: data prefix longer than hash prefix.
+ * Test prefix alignment: data prefix longer than _hash prefix.
  *
  * Scenario:
  * 1. Create data with short common prefix: "pre_a" and "pre_b"
  *    → data trie: prefix="pre_", branches 'a' and 'b'
- * 2. Generate hash trie (mirrors data)
+ * 2. Generate _hash trie (mirrors data)
  * 3. Delete "pre_b" and merge "pre_a" into longer prefix
  *    → data might now be single leaf or have different structure
  * 4. Add "pre_abc" and "pre_abd" to create: prefix="pre_ab", branches 'c' and 'd'
- *    → data prefix at that level is now longer than hash child's prefix
+ *    → data prefix at that level is now longer than _hash child's prefix
  *    This triggers common < effective_data_len
  */
 BOOST_AUTO_TEST_CASE(prefix_alignment_data_longer) {
@@ -544,7 +544,7 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_data_longer) {
     cursor.commit();
   }
 
-  // Step 2: Generate initial hash trie
+  // Step 2: Generate initial _hash trie
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -582,7 +582,7 @@ BOOST_AUTO_TEST_CASE(prefix_alignment_data_longer) {
     }
   }
 
-  // Step 4: Update hash trie - should trigger data prefix longer case
+  // Step 4: Update _hash trie - should trigger data prefix longer case
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -621,7 +621,7 @@ BOOST_AUTO_TEST_CASE(deep_prefix_mismatch) {
     cursor.commit();
   }
 
-  // Initial hash
+  // Initial _hash
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -658,7 +658,7 @@ BOOST_AUTO_TEST_CASE(deep_prefix_mismatch) {
  * Test divergent prefixes (no common match).
  *
  * Ensure that when prefixes diverge completely, we properly
- * replace the hash subtree.
+ * replace the _hash subtree.
  */
 BOOST_AUTO_TEST_CASE(divergent_prefixes) {
   auto storage = Storage::create(TEST_FILE);
@@ -679,7 +679,7 @@ BOOST_AUTO_TEST_CASE(divergent_prefixes) {
     cursor.commit();
   }
 
-  // Generate hash
+  // Generate _hash
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -712,7 +712,7 @@ BOOST_AUTO_TEST_CASE(divergent_prefixes) {
     cursor.commit();
   }
 
-  // Update hash - prefixes will diverge ("alpha" vs "beta")
+  // Update _hash - prefixes will diverge ("alpha" vs "beta")
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -724,7 +724,7 @@ BOOST_AUTO_TEST_CASE(divergent_prefixes) {
 }
 
 /**
- * Test hash_prefix_skip: hash prefix is longer than data prefix at root.
+ * Test hash_prefix_skip: _hash prefix is longer than data prefix at root.
  *
  * This test specifically triggers the `common < effective_hash_len` code path
  * where we need to recursively call sync_nodes with hash_prefix_skip > 0.
@@ -732,13 +732,13 @@ BOOST_AUTO_TEST_CASE(divergent_prefixes) {
  * Scenario:
  * 1. Create "abcdef1" and "abcdef2"
  *    → root trie: prefix="abcdef", branches '1' and '2' (both leaves)
- * 2. Generate hash trie (mirrors structure)
+ * 2. Generate _hash trie (mirrors structure)
  * 3. Add "abcXYZ"
  *    → root trie: prefix="abc", branches 'd' and 'X'
  *       - 'd' branch: trie with prefix="ef", branches '1', '2'
  *       - 'X' branch: leaf "YZ"
- * 4. Update hash:
- *    - data prefix="abc" (len=3), hash prefix="abcdef" (len=6)
+ * 4. Update _hash:
+ *    - data prefix="abc" (len=3), _hash prefix="abcdef" (len=6)
  *    - common=3, effective_hash_len=6
  *    - common < effective_hash_len → YES!
  *    - diverge_byte = 'd', data.isset('d') → YES
@@ -763,7 +763,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_root_level) {
     cursor.commit();
   }
 
-  // Step 2: Generate initial hash trie
+  // Step 2: Generate initial _hash trie
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -779,7 +779,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_root_level) {
     cursor.commit();
   }
 
-  // Step 4: Update hash with prefix_skip logic
+  // Step 4: Update _hash with prefix_skip logic
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -792,7 +792,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_root_level) {
 }
 
 /**
- * Test data_prefix_skip: data prefix is longer than hash prefix at root.
+ * Test data_prefix_skip: data prefix is longer than _hash prefix at root.
  *
  * This test specifically triggers the `common < effective_data_len` code path
  * where we need to recursively call sync_nodes with data_prefix_skip > 0.
@@ -800,15 +800,15 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_root_level) {
  * Scenario:
  * 1. Create "abc1" and "abc2"
  *    → root trie: prefix="abc", branches '1' and '2'
- * 2. Generate hash trie
+ * 2. Generate _hash trie
  * 3. Delete "abc2" and add "abc1XYZ" and "abc1ABC"
  *    → root trie: prefix="abc1", branches 'A', 'X' (longer prefix!)
  *       - The root prefix grew from "abc" to "abc1"
- * 4. Update hash:
- *    - data prefix="abc1" (len=4), hash prefix="abc" (len=3)
+ * 4. Update _hash:
+ *    - data prefix="abc1" (len=4), _hash prefix="abc" (len=3)
  *    - common=3, effective_hash_len=3, effective_data_len=4
  *    - common < effective_data_len → YES!
- *    - next_byte = '1', hash.isset('1') → YES
+ *    - next_byte = '1', _hash.isset('1') → YES
  *    - Recurse with data_prefix_skip = 4
  */
 BOOST_AUTO_TEST_CASE(data_prefix_skip_root_level) {
@@ -830,7 +830,7 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_root_level) {
     cursor.commit();
   }
 
-  // Step 2: Generate initial hash trie
+  // Step 2: Generate initial _hash trie
   // Hash: prefix="abc", branches '1' and '2'
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
@@ -868,7 +868,7 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_root_level) {
   // Now data has: prefix="abc1", branches 'A' and 'X'
   // Hash has: prefix="abc", branches '1' and '2'
 
-  // Step 4: Update hash with data_prefix_skip logic
+  // Step 4: Update _hash with data_prefix_skip logic
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -884,19 +884,19 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_root_level) {
  * Test hash_prefix_skip REUSE: verify unchanged subtrees are reused, not deep-copied.
  *
  * This test verifies that when hash_prefix_skip is used correctly, unchanged
- * hash nodes are preserved (same offsets) rather than being recreated.
+ * _hash nodes are preserved (same offsets) rather than being recreated.
  *
  * Scenario:
  * 1. Create "abcdef1" and "abcdef2"
  *    → data: prefix="abcdef", branches '1' and '2' (both leaves)
- *    → hash: prefix="abcdef", branches '1' (hash_leaf1), '2' (hash_leaf2)
+ *    → _hash: prefix="abcdef", branches '1' (hash_leaf1), '2' (hash_leaf2)
  *
  * 2. Add "abcXYZ" which restructures:
  *    → data: prefix="abc", branches 'd' (trie["ef"] with '1','2'), 'X' (leaf)
  *    → The leaves for '1' and '2' are UNCHANGED (same data offsets, same txn_id)
  *
- * 3. Update hash:
- *    - hash prefix="abcdef" (len=6), data prefix="abc" (len=3)
+ * 3. Update _hash:
+ *    - _hash prefix="abcdef" (len=6), data prefix="abc" (len=3)
  *    - common=3 < effective_hash_len=6 → triggers hash_prefix_skip
  *    - With correct skip, hash_leaf1 and hash_leaf2 should be REUSED (same offsets)
  *    - Without correct skip, they would be deep-copied (new offsets)
@@ -930,11 +930,11 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   auto data_trie_before = internal_db->template resolve<DataTrieNode>(&txn_before->root);
   int data_branch1 = data_trie_before->first();
   int data_branch2 = data_trie_before->next(data_branch1);
-  uint64_t data_leaf1_before = data_trie_before->offset(data_branch1)->_offset;
-  uint64_t data_leaf2_before = data_trie_before->offset(data_branch2)->_offset;
+  uint64_t data_leaf1_before = data_trie_before->branch_offset(data_branch1)->_offset;
+  uint64_t data_leaf2_before = data_trie_before->branch_offset(data_branch2)->_offset;
   BOOST_TEST_MESSAGE("Data leaf offsets before: " << data_leaf1_before << ", " << data_leaf2_before);
 
-  // Generate initial hash trie
+  // Generate initial _hash trie
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -942,7 +942,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   BOOST_REQUIRE(hash_root);
   BOOST_REQUIRE_EQUAL(hash_root.type(), TRIE);
 
-  // Collect all hash offsets BEFORE modification
+  // Collect all _hash offsets BEFORE modification
   std::set<uint64_t> offsets_before;
   collect_hash_offsets(internal_db, hash_root, offsets_before);
 
@@ -950,7 +950,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   auto hash_trie = internal_db->template resolve<HashTrieNode>(&hash_root);
   
   // Debug: print what branches exist
-  BOOST_TEST_MESSAGE("Initial hash trie branches:");
+  BOOST_TEST_MESSAGE("Initial _hash trie branches:");
   hash_trie->for_each_branch([&](int k, auto*) {
     BOOST_TEST_MESSAGE("  Branch: " << k << " (char: '" << (char)(k >= 0 ? k : '?') << "')");
   });
@@ -961,8 +961,8 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   BOOST_REQUIRE_NE(branch1, HashTrieNode::OUT_OF_RANGE);
   BOOST_REQUIRE_NE(branch2, HashTrieNode::OUT_OF_RANGE);
   
-  uint64_t leaf1_offset_before = hash_trie->offset(branch1)->_offset;
-  uint64_t leaf2_offset_before = hash_trie->offset(branch2)->_offset;
+  uint64_t leaf1_offset_before = hash_trie->branch_offset(branch1)->_offset;
+  uint64_t leaf2_offset_before = hash_trie->branch_offset(branch2)->_offset;
 
   // Step 2: Add key that shortens root prefix but preserves subtree
   {
@@ -978,15 +978,15 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   auto data_root_after = internal_db->template resolve<DataTrieNode>(&txn2->root);
   // After adding "abcXYZ", root should have branches 'X' and 'd'
   BOOST_REQUIRE(data_root_after->isset('d'));
-  offset_t data_d_branch = *data_root_after->offset('d');
+  offset_t data_d_branch = *data_root_after->branch_offset('d');
   BOOST_REQUIRE_EQUAL(data_d_branch.type(), TRIE);
   auto data_d_trie = internal_db->template resolve<DataTrieNode>(&data_d_branch);
   
   // The 'd' subtrie should have branches '1' and '2' with original leaf offsets
   int d_data_branch1 = data_d_trie->first();
   int d_data_branch2 = data_d_trie->next(d_data_branch1);
-  uint64_t data_leaf1_after = data_d_trie->offset(d_data_branch1)->_offset;
-  uint64_t data_leaf2_after = data_d_trie->offset(d_data_branch2)->_offset;
+  uint64_t data_leaf1_after = data_d_trie->branch_offset(d_data_branch1)->_offset;
+  uint64_t data_leaf2_after = data_d_trie->branch_offset(d_data_branch2)->_offset;
   BOOST_TEST_MESSAGE("Data leaf offsets after: " << data_leaf1_after << ", " << data_leaf2_after);
   
   // Verify data COW: leaf offsets should be PRESERVED
@@ -994,13 +994,13 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
                         (data_leaf1_before == data_leaf2_after && data_leaf2_before == data_leaf1_after);
   BOOST_CHECK_MESSAGE(data_cow_works, "Data COW should preserve leaf offsets");
 
-  // Step 3: Update hash - should trigger hash_prefix_skip
+  // Step 3: Update _hash - should trigger hash_prefix_skip
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
   // Verify structure is correct
   BOOST_CHECK(verify_structure(internal_db, internal_db, txn2->root, hash_root));
 
-  // Collect all hash offsets AFTER modification
+  // Collect all _hash offsets AFTER modification
   std::set<uint64_t> offsets_after;
   collect_hash_offsets(internal_db, hash_root, offsets_after);
 
@@ -1009,8 +1009,8 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   BOOST_REQUIRE_EQUAL(hash_root.type(), TRIE);
   auto new_hash_root = internal_db->template resolve<HashTrieNode>(&hash_root);
   
-  // Debug: print new hash trie branches
-  BOOST_TEST_MESSAGE("New hash trie branches after update:");
+  // Debug: print new _hash trie branches
+  BOOST_TEST_MESSAGE("New _hash trie branches after update:");
   new_hash_root->for_each_branch([&](int k, auto*) {
     BOOST_TEST_MESSAGE("  Branch: " << k << " (char: '" << (char)(k >= 0 ? k : '?') << "')");
   });
@@ -1018,7 +1018,7 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   // Find the 'd' branch which should contain the preserved subtree
   BOOST_REQUIRE(new_hash_root->isset('d'));
 
-  offset_t d_branch = *new_hash_root->offset('d');
+  offset_t d_branch = *new_hash_root->branch_offset('d');
   BOOST_REQUIRE_EQUAL(d_branch.type(), TRIE);
   auto d_trie = internal_db->template resolve<HashTrieNode>(&d_branch);
   
@@ -1034,8 +1034,8 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
   BOOST_REQUIRE_NE(d_branch1, HashTrieNode::OUT_OF_RANGE);
   BOOST_REQUIRE_NE(d_branch2, HashTrieNode::OUT_OF_RANGE);
 
-  uint64_t leaf1_offset_after = d_trie->offset(d_branch1)->_offset;
-  uint64_t leaf2_offset_after = d_trie->offset(d_branch2)->_offset;
+  uint64_t leaf1_offset_after = d_trie->branch_offset(d_branch1)->_offset;
+  uint64_t leaf2_offset_after = d_trie->branch_offset(d_branch2)->_offset;
 
   // KEY ASSERTION: leaf offsets should be PRESERVED (reused, not deep-copied)
   // Note: branch ordering may differ, so check if EITHER matches
@@ -1059,15 +1059,15 @@ BOOST_AUTO_TEST_CASE(hash_prefix_skip_reuse_verification) {
  * Test data_prefix_skip REUSE: verify unchanged subtrees are reused.
  *
  * Scenario:
- * 1. Create "abc1", "abc2" → hash: prefix="abc", branches '1','2' (both leaves)
+ * 1. Create "abc1", "abc2" → _hash: prefix="abc", branches '1','2' (both leaves)
  * 2. Modify to "abc1XYZ", "abc1ABC"
  *    → data: prefix="abc1", branches 'A','X' (data prefix grew longer)
- *    → hash still has: prefix="abc", branches '1','2'
+ *    → _hash still has: prefix="abc", branches '1','2'
  *
- * 3. Update hash:
- *    - data prefix="abc1" (len=4), hash prefix="abc" (len=3)
+ * 3. Update _hash:
+ *    - data prefix="abc1" (len=4), _hash prefix="abc" (len=3)
  *    - common=3 < effective_data_len=4 → triggers data_prefix_skip
- *    - next_byte='1', hash.isset('1')=YES
+ *    - next_byte='1', _hash.isset('1')=YES
  *    - Recurse with data_prefix_skip=4
  *
  * Note: In this case, the original leaves under '1' won't be reused because
@@ -1093,7 +1093,7 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_structural_verification) {
     cursor.commit();
   }
 
-  // Generate initial hash trie
+  // Generate initial _hash trie
   auto txn1 = internal_db->txn();
   offset_t hash_root{};
   run_hash_update(internal_db, txn1->root, &hash_root, tid_t(0));
@@ -1127,7 +1127,7 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_structural_verification) {
     cursor.commit();
   }
 
-  // Step 3: Update hash with data_prefix_skip logic
+  // Step 3: Update _hash with data_prefix_skip logic
   auto txn2 = internal_db->txn();
   run_hash_update(internal_db, txn2->root, &hash_root, tid_t(0));
 
@@ -1144,7 +1144,7 @@ BOOST_AUTO_TEST_CASE(data_prefix_skip_structural_verification) {
 // =============================================================================
 
 BOOST_AUTO_TEST_CASE(hash_sync_delete_all_data) {
-  // Exercises _hash.hpp L208-209 — data empty, hash non-empty (free hash subtree)
+  // Exercises _hash.hpp L208-209 — data empty, _hash non-empty (free _hash subtree)
   // Also L690-696 — free_hash_subtree with trie nodes
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
@@ -1165,7 +1165,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_delete_all_data) {
     c.find("ccc"); c.value("v3"); c.commit();
   }
 
-  // Build hash trie
+  // Build _hash trie
   offset_t hash_root{};
   {
     auto txn = internal_db->txn();
@@ -1188,7 +1188,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_delete_all_data) {
     c.find("ccc"); c.remove(); c.commit();
   }
 
-  // Sync hash — data is now empty, hash has trie+leaf nodes to free
+  // Sync _hash — data is now empty, _hash has trie+leaf nodes to free
   {
     auto txn = internal_db->txn();
     run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
@@ -1199,9 +1199,9 @@ BOOST_AUTO_TEST_CASE(hash_sync_delete_all_data) {
 }
 
 BOOST_AUTO_TEST_CASE(hash_sync_leaf_to_trie_transition) {
-  // Exercises _hash.hpp L307-310 — hash is leaf, data became trie
+  // Exercises _hash.hpp L307-310 — _hash is leaf, data became trie
   // When data changes from single leaf to trie (by adding more keys under
-  // the same prefix), the hash sync must replace the old hash leaf entirely.
+  // the same prefix), the _hash sync must replace the old _hash leaf entirely.
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
@@ -1213,7 +1213,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_leaf_to_trie_transition) {
     c.find("hello"); c.value("world"); c.commit();
   }
 
-  // Build hash trie — root is also a leaf now
+  // Build _hash trie — root is also a leaf now
   offset_t hash_root{};
   {
     auto txn = internal_db->txn();
@@ -1233,7 +1233,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_leaf_to_trie_transition) {
   }
 
   // Now data root is a trie. Hash root is still a leaf.
-  // sync_data_trie will detect hash is leaf and replace entirely (L307-310)
+  // sync_data_trie will detect _hash is leaf and replace entirely (L307-310)
   {
     auto txn = internal_db->txn();
     run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
@@ -1245,11 +1245,11 @@ BOOST_AUTO_TEST_CASE(hash_sync_leaf_to_trie_transition) {
 }
 
 BOOST_AUTO_TEST_CASE(hash_sync_prefix_divergence_no_matching_branch) {
-  // Exercises _hash.hpp L322-325 — hash prefix longer, data doesn't have 
-  // matching branch for hash's next prefix byte.
-  // Also covers L417-419 — data prefix longer, hash doesn't have matching branch.
+  // Exercises _hash.hpp L322-325 — _hash prefix longer, data doesn't have 
+  // matching branch for _hash's next prefix byte.
+  // Also covers L417-419 — data prefix longer, _hash doesn't have matching branch.
   //
-  // Create scenario: build hash for one key pattern, then drastically restructure
+  // Create scenario: build _hash for one key pattern, then drastically restructure
   // the data so trie prefixes diverge.
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
@@ -1266,7 +1266,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_prefix_divergence_no_matching_branch) {
     c.find("abef"); c.value("v2"); c.commit();
   }
 
-  // Build initial hash trie
+  // Build initial _hash trie
   offset_t hash_root{};
   {
     auto txn = internal_db->txn();
@@ -1292,7 +1292,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_prefix_divergence_no_matching_branch) {
     c.find("axwv"); c.value("v4"); c.commit();
   }
 
-  // Sync — hash has "ab" prefix structure, data has "ax" prefix structure
+  // Sync — _hash has "ab" prefix structure, data has "ax" prefix structure
   // This creates prefix divergence at position 1 ('b' vs 'x')
   {
     auto txn = internal_db->txn();
@@ -1305,9 +1305,9 @@ BOOST_AUTO_TEST_CASE(hash_sync_prefix_divergence_no_matching_branch) {
 }
 
 BOOST_AUTO_TEST_CASE(hash_sync_structural_reshape) {
-  // Exercises _hash.hpp L417-419 — data prefix longer than hash, 
-  // hash doesn't have matching branch.
-  // Create: hash built with short-prefix data, then data restructured
+  // Exercises _hash.hpp L417-419 — data prefix longer than _hash, 
+  // _hash doesn't have matching branch.
+  // Create: _hash built with short-prefix data, then data restructured
   // to have longer prefixes in different branches.
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
@@ -1370,7 +1370,7 @@ BOOST_AUTO_TEST_CASE(hash_lookup_external_root_change) {
   auto db = storage->open<Storage::ReplicationDB>("test");
   auto* internal_db = db._internal();
 
-  // Insert keys and build hash trie
+  // Insert keys and build _hash trie
   {
     auto c = db.cursor();
     c.find("apple"); c.value("v1"); c.commit();
@@ -1387,7 +1387,7 @@ BOOST_AUTO_TEST_CASE(hash_lookup_external_root_change) {
   }
   BOOST_REQUIRE(hash_root1);
 
-  // Build a second hash trie with different data
+  // Build a second _hash trie with different data
   {
     auto c = db.cursor();
     c.find("cherry"); c.value("v3"); c.commit();
@@ -1408,23 +1408,23 @@ BOOST_AUTO_TEST_CASE(hash_lookup_external_root_change) {
   lookup._root = &hash_root2;
   // Next find() detects _cursor._root != _root and calls set_root (L778)
   lookup.find("", LEAF);
-  // No assertion on return value — hash trie paths differ from data keys.
+  // No assertion on return value — _hash trie paths differ from data keys.
   // Coverage goal: the _cursor._root != _root branch is exercised.
 }
 
 BOOST_AUTO_TEST_CASE(hash_sync_stale_hash_branch_missing) {
-  // Exercises _hash.hpp L322-325 — hash prefix longer and data doesn't have
+  // Exercises _hash.hpp L322-325 — _hash prefix longer and data doesn't have
   // diverge_byte branch. Hash is completely stale → free + deep copy.
   // Old data: "xya","xyb" → trie(compressed="xy", branches 'a','b')
   // New data: "xa","xb" → trie(compressed="x", branches 'a','b')
-  // Hash sync: hash prefix "xy" vs data prefix "x". diverge_byte='y',
-  // data doesn't have 'y' → stale hash replacement.
+  // Hash sync: _hash prefix "xy" vs data prefix "x". diverge_byte='y',
+  // data doesn't have 'y' → stale _hash replacement.
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
   auto* internal_db = db._internal();
 
-  // Phase 1: create initial data and hash
+  // Phase 1: create initial data and _hash
   {
     auto c = db.cursor();
     c.find("xya"); c.value("v1");
@@ -1454,7 +1454,7 @@ BOOST_AUTO_TEST_CASE(hash_sync_stale_hash_branch_missing) {
     c.commit();
   }
 
-  // Phase 3: hash update encounters stale hash — L322-325
+  // Phase 3: _hash update encounters stale _hash — L322-325
   {
     auto txn = internal_db->txn();
     run_hash_update(internal_db, txn->root, &hash_root, tid_t(0));
@@ -1467,13 +1467,13 @@ BOOST_AUTO_TEST_CASE(hash_sync_stale_hash_branch_missing) {
 }
 
 BOOST_AUTO_TEST_CASE(hash_sync_hash_consumed_false) {
-  // Exercises _hash.hpp L365 — hash prefix longer, data HAS diverge_byte branch,
+  // Exercises _hash.hpp L365 — _hash prefix longer, data HAS diverge_byte branch,
   // but hash_trie does NOT have diverge_byte as a branch → hash_consumed stays false.
   // Old data: "abc1","abc2" → trie(compressed="abc", branches '1','2')
   // New data: "abca","abda" → trie(compressed="ab", branches 'c','d')
-  // Hash sync: hash prefix "abc" (3) vs data prefix "ab" (2).
-  // diverge_byte='c', data->isset('c')=YES. But hash has branches '1','2',
-  // NOT 'c'. So hash_consumed stays false → L365: free old hash subtree.
+  // Hash sync: _hash prefix "abc" (3) vs data prefix "ab" (2).
+  // diverge_byte='c', data->isset('c')=YES. But _hash has branches '1','2',
+  // NOT 'c'. So hash_consumed stays false → L365: free old _hash subtree.
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
@@ -1521,12 +1521,12 @@ BOOST_AUTO_TEST_CASE(hash_sync_hash_consumed_false) {
 }
 
 BOOST_AUTO_TEST_CASE(hash_sync_data_prefix_longer_no_hash_branch) {
-  // Exercises _hash.hpp L417-419 — data prefix longer, hash doesn't have
-  // matching branch → free hash and deep copy from data.
+  // Exercises _hash.hpp L417-419 — data prefix longer, _hash doesn't have
+  // matching branch → free _hash and deep copy from data.
   // Old data: "abc1","abc2" → trie(compressed="abc", branches '1','2')
   // New data: "abcda","abcdb" → trie(compressed="abcd", branches 'a','b')
-  // Hash sync: hash prefix "abc" (3) vs data prefix "abcd" (4).
-  // next_byte='d', hash->isset('d')=NO → L417-419 triggered.
+  // Hash sync: _hash prefix "abc" (3) vs data prefix "abcd" (4).
+  // next_byte='d', _hash->isset('d')=NO → L417-419 triggered.
   std::remove(TEST_FILE);
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
