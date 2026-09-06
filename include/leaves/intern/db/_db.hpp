@@ -902,8 +902,8 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
       stat.branch.add(
           hdr->slot_id, 1,
           PAGE_SIZES[hdr->slot_id] - sizeof(PageHeader) - branch->size());
-      auto count = branch->count();
-      offset_e* array = branch->array();
+      auto count = branch->branch_count();
+      offset_e* array = branch->branch_offsets();
       for (int i = 0; i < count; i++) {
         _node_statistics(stat, array[i]);
       }
@@ -1064,19 +1064,19 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
         return false;
 
       // Trie node structural checks
-      if (node->len() > 255) return false;
-      int cnt = node->count();
+      if (node->prefix_len() > 255) return false;
+      int cnt = node->branch_count();
       if (cnt < 1 || cnt > TrieNode::MAX_BRANCH_COUNT) return false;
 
       // Verify internal layout consistency
-      if (node->lower_start() != node->calc_lower_start()) return false;
-      if (node->array_start() != node->calc_array_start()) return false;
+      if (node->branch_bits_start() != node->calc_branch_bits_start()) return false;
+      if (node->branch_offsets_start() != node->calc_branch_offsets_start()) return false;
 
       // Verify total node size fits within used page space
       if (node->size() > hdr->used) return false;
 
       // Recurse into children
-      offset_e* arr = node->array();
+      offset_e* arr = node->branch_offsets();
       for (int i = 0; i < cnt; i++) {
         if (!arr[i]) return false;
         NodeTypes t = arr[i].type();

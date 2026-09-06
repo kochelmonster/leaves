@@ -844,7 +844,7 @@ class Benchmark {
     uint32_t crc = 0;
     Start();
     for (int i = 0; i < num_; i++) {
-      // Simple hash instead of crc32c
+      // Simple _hash instead of crc32c
       for (int j = 0; j < 4096; j++) {
         crc = crc ^ data[j];
       }

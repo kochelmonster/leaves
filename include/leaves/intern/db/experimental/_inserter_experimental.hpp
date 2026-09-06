@@ -48,7 +48,7 @@ namespace leaves {
 //   auto trie_slot = builder.add(trie_size, TRIE, [&](char* dst) { ... });
 //   auto leaf_slot = builder.add(leaf_size, LEAF, [&](char* dst) { ... });
 //   builder.build(alloc);
-//   builder.set_link(trie->offset(key), leaf_slot, db);
+//   builder.set_link(trie->branch_offset(key), leaf_slot, db);
 //
 // For big keys with paired nodes:
 //   auto result_slot = builder.add_alias(first_trie_slot);  // size=0, shares
@@ -143,7 +143,7 @@ struct _PageBuilder {
   offset_e* root_link(uint16_t idx) {
     NodeSlot& slot = _slots[0];
     assert(slot.type == TRIE);
-    return slot.trie()->array() + idx;
+    return slot.trie()->branch_offsets() + idx;
   }
 
   // Build: allocate pages and run creators
@@ -345,7 +345,7 @@ struct _LocalityInserter {
     // Copy parent trie and siblings (excluding old node)
     builder.add(0, _ptrie->size(), [this](NodeSlot& dst) {
       memcpy((char*)dst.trie(), (char*)_ptrie, _ptrie->size());
-      dst.trie()->array()[_link_idx] = 0;  // skip the old node from copying
+      dst.trie()->branch_offsets()[_link_idx] = 0;  // skip the old node from copying
     });
     add_slot_copy_page_kids();
 
@@ -378,13 +378,13 @@ struct _LocalityInserter {
 
   uint16_t copy_page_kids(trie_ptr from, trie_ptr to,
                           uint16_t skip_idx = 0xffff) {
-    uint16_t count = to->count();
-    assert(count == from->count() ||
-           (count == from->count() + 1 && skip_idx >= 0));
+    uint16_t count = to->branch_count();
+    assert(count == from->branch_count() ||
+           (count == from->branch_count() + 1 && skip_idx >= 0));
 
     char* dest = (char*)to + to->size();
-    auto farray = from->array();
-    auto tarray = to->array();
+    auto farray = from->branch_offsets();
+    auto tarray = to->branch_offsets();
 
     for (uint16_t i = 0, j = 0; i < count; ++i) {
       if (i == skip_idx) continue;
@@ -428,7 +428,7 @@ struct _LocalityInserter {
   }
 
   bool split_compressed() {
-    if (back->is_trie() && back->prefix == back->trie()->len())
+    if (back->is_trie() && back->prefix == back->trie()->prefix_len())
       return false;  // no split
 
     /*
@@ -444,14 +444,14 @@ struct _LocalityInserter {
                        -> [ef] -> table with new value
     */
 
-    assert(back->prefix < back->trie()->len());
+    assert(back->prefix < back->trie()->prefix_len());
 
     _ptrie = back->trie();
-    assert(_ptrie->count() < _ptrie->MAX_BRANCH_COUNT);
+    assert(_ptrie->branch_count() < _ptrie->MAX_BRANCH_COUNT);
 
     // copy the original trie node with second part of compressed
     // to a new slot
-    _suffix_len = _ptrie->len() - back->prefix;
+    _suffix_len = _ptrie->prefix_len() - back->prefix;
     _child_trie_size = _ptrie->changed_len(_suffix_len);
     _pk_size = page_kids();
     _prefix = back->prefix;
@@ -461,7 +461,7 @@ struct _LocalityInserter {
       PageBuilder builder_;
       builder_.add(0, _child_trie_size + _pk_size, [this](NodeSlot& dst) {
         dst.trie()->create(*_ptrie,
-                           Slice(&_ptrie->compressed()[_prefix], _suffix_len));
+                           Slice(&_ptrie->prefix()[_prefix], _suffix_len));
         [[maybe_unused]] auto filled = copy_page_kids(_ptrie, dst.trie());
         assert(filled == _pk_size + _child_trie_size);
       });
@@ -478,19 +478,19 @@ struct _LocalityInserter {
     } else {
       builder.add(2, _child_trie_size, [this](NodeSlot& dst) {
         dst.trie()->create(*_ptrie,
-                           Slice(&_ptrie->compressed()[_prefix], _suffix_len));
+                           Slice(&_ptrie->prefix()[_prefix], _suffix_len));
       });
     }
 
     // replace the original trie node with a two branch trie node
     // and the first part of compressed
     _nkey = key() ? (back->branch_key = (uint8_t)key()[0]) : TrieNode::NONE;
-    _okey = _ptrie->compressed()[_prefix];
+    _okey = _ptrie->prefix()[_prefix];
 
     builder.add(0, TrieNode::size(_prefix, _nkey, _okey),
                 [this](NodeSlot& dst) {
                   _idxs = dst.trie()->create(
-                      Slice(_ptrie->compressed(), _prefix), _nkey, _okey);
+                      Slice(_ptrie->prefix(), _prefix), _nkey, _okey);
                 });
 
     create_leaf(1);
@@ -506,7 +506,7 @@ struct _LocalityInserter {
     _ptrie = back->trie();
     _pk_size = page_kids();
     _idx = 0xffff;
-    assert(back->prefix == _ptrie->len());
+    assert(back->prefix == _ptrie->prefix_len());
 
     _nkey = key() ? (back->branch_key = (uint8_t)key()[0]) : TrieNode::NONE;
     builder.add(0, _ptrie->increment_size(_nkey), [this](NodeSlot& dst) {
@@ -587,7 +587,7 @@ struct _LocalityInserter {
 
     builder.add(0, _ptrie->size(), [this](NodeSlot& dst) {
       memcpy((char*)dst.trie(), (char*)_ptrie, _ptrie->size());
-      dst.trie()->array()[_link_idx] = 0;  // skip old_leaf from copying
+      dst.trie()->branch_offsets()[_link_idx] = 0;  // skip old_leaf from copying
     });
     add_slot_copy_page_kids();
 
@@ -600,7 +600,7 @@ struct _LocalityInserter {
     builder.set_root_link(parent.link_idx, 2, *this);
     parent.update_offset(builder.page_link(*this));
     parent.node = back->cursor->_db->template resolve<_Node>(parent.offset);
-    back->offset = parent.trie()->array() + parent.link_idx;
+    back->offset = parent.trie()->branch_offsets() + parent.link_idx;
     back->node = back->cursor->_db->template resolve<_Node>(back->offset);
     back->cursor->_db->free(old_page);
   }
@@ -651,7 +651,7 @@ struct _LocalityInserter {
       builder_.add(1, TrieNode::size(255, 1), [this](NodeSlot& dst) {
         auto trie = dst.trie();
         auto idx_ = trie->create(_pair2, _chain_key);
-        trie->array()[idx_] = _next;
+        trie->branch_offsets()[idx_] = _next;
       });
       builder_.build(*this);
       builder_.set_root_link(_idx, 1, *this);
@@ -677,7 +677,7 @@ struct _LocalityInserter {
       Slice first_slice = _key.slice(_end);
       auto trie = dst.trie();
       auto idx_ = trie->create(first_slice, _chain_key);
-      trie->array()[idx_] = _next;
+      trie->branch_offsets()[idx_] = _next;
     });
   }
 

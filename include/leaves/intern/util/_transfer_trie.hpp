@@ -19,10 +19,10 @@ namespace leaves {
 // Manages buffer growth and node serialization with endian conversion.
 // Protocol-agnostic - higher-level classes add headers and framing.
 //
-// WIRE_HASH_SIZE: Size of hash in wire format (default 0 = no hash)
+// WIRE_HASH_SIZE: Size of _hash in wire format (default 0 = no _hash)
 // WIRE_MAX_KEY_SIZE: Maximum key size for cursor navigation (default 8192)
 // Nodes are stored in wire format for cross-platform transfer.
-// Source nodes can have different hash sizes - field-by-field copy handles this.
+// Source nodes can have different _hash sizes - field-by-field copy handles this.
 template <size_t WIRE_HASH_SIZE = 0, size_t WIRE_MAX_KEY_SIZE = 8192>
 struct _TransferTrie {
   // Wire format traits for nodes in this TransferTrie
@@ -57,7 +57,7 @@ struct _TransferTrie {
   struct has_hash_member : std::false_type {};
 
   template <typename Node>
-  struct has_hash_member<Node, std::void_t<decltype(&Node::hash)>>
+  struct has_hash_member<Node, std::void_t<decltype(&Node::_hash)>>
       : std::true_type {};
 
   // DBTraits: Traits for navigating DB nodes with _Cursor
@@ -137,62 +137,62 @@ struct _TransferTrie {
   }
 
   // Add a source trie node to the buffer (converts to wire format)
-  // Handles different source/dest hash sizes via field-by-field copy.
+  // Handles different source/dest _hash sizes via field-by-field copy.
   // Returns pointer to copied wire-format node, or nullptr if doesn't fit
   template <typename SrcTrieNode>
   TrieNode* add_trie_node(const SrcTrieNode* src) {
     // Calculate dest size based on wire format, not source size
     // Use src's lower_size/array_size since element sizes (uint32/offset) are same
-    uint16_t prefix_size = padding(sizeof(TrieNode) + src->len(), sizeof(typename Traits::uint32_e));
-    uint16_t dest_size = align(prefix_size + src->lower_size() + src->array_size());
+    uint16_t prefix_size = padding(sizeof(TrieNode) + src->prefix_len(), sizeof(typename Traits::uint32_e));
+    uint16_t dest_size = align(prefix_size + src->branch_bits_size() + src->branch_offsets_size());
 
     uint8_t* dest_ptr = _alloc_node(dest_size);
     if (!dest_ptr) return nullptr;
 
     auto* dest = (TrieNode*)dest_ptr;
 
-    // Copy or zero-init hash depending on size match
+    // Copy or zero-init _hash depending on size match
     if constexpr (WIRE_HASH_SIZE > 0) {
       if constexpr (has_hash_member<SrcTrieNode>::value) {
-        if constexpr (sizeof(src->hash) == WIRE_HASH_SIZE) {
-          std::memcpy(dest->hash, src->hash, WIRE_HASH_SIZE);
+        if constexpr (sizeof(src->_hash) == WIRE_HASH_SIZE) {
+          std::memcpy(dest->_hash, src->_hash, WIRE_HASH_SIZE);
         } else {
-          std::memset(dest->hash, 0, WIRE_HASH_SIZE);
+          std::memset(dest->_hash, 0, WIRE_HASH_SIZE);
         }
       } else {
-        std::memset(dest->hash, 0, WIRE_HASH_SIZE);
+        std::memset(dest->_hash, 0, WIRE_HASH_SIZE);
       }
     }
 
     // Copy fixed fields with endian conversion
-    dest->_array_len = static_cast<uint16_t>(src->_array_len);
-    dest->_upper = src->_upper;
-    dest->_compressed_len = src->_compressed_len;
+    dest->_branch_count = static_cast<uint16_t>(src->_branch_count);
+    dest->_branch_bits_index = src->_branch_bits_index;
+    dest->_prefix_len = src->_prefix_len;
 
     // Copy compressed prefix
-    std::memcpy(dest->_compressed_data, src->compressed(), src->len());
+    std::memcpy(dest->_prefix, src->prefix(), src->prefix_len());
 
-    // Calculate and set dest offsets (may differ from src due to hash size)
-    uint16_t dest_lower_start = padding(sizeof(TrieNode) + dest->_compressed_len, sizeof(typename Traits::uint32_e));
-    uint16_t dest_array_start = align(dest_lower_start + src->lower_size());
-    dest->_lower_offset = dest_lower_start / sizeof(typename Traits::uint32_e);
-    dest->_array_offset = dest_array_start / sizeof(typename Traits::offset_e);
+    // Calculate and set dest offsets (may differ from src due to _hash size)
+    uint16_t dest_lower_start = padding(sizeof(TrieNode) + dest->_prefix_len, sizeof(typename Traits::uint32_e));
+    uint16_t dest_array_start = align(dest_lower_start + src->branch_bits_size());
+    dest->_branch_bits_pos = dest_lower_start / sizeof(typename Traits::uint32_e);
+    dest->_branch_offsets_pos = dest_array_start / sizeof(typename Traits::offset_e);
 
     // Copy lower bitmap with endian conversion
-    auto* src_lower = src->lower();
-    auto* dest_lower = dest->lower();
-    uint16_t lower_count = bits::count(src->_upper);
+    auto* src_lower = src->branch_bits();
+    auto* dest_lower = dest->branch_bits();
+    uint16_t lower_count = bits::count(src->_branch_bits_index);
     for (uint16_t i = 0; i < lower_count; ++i) {
       dest_lower[i] = static_cast<uint32_t>(src_lower[i]);
     }
 
     // Zero out offset array (will be filled by caller)
-    std::memset((void*)dest->array(), 0, src->array_size());
+    std::memset((void*)dest->branch_offsets(), 0, src->branch_offsets_size());
     return dest;
   }
 
   // Add a source leaf node to the buffer (converts to wire format)
-  // Handles different source/dest hash sizes via field-by-field copy.
+  // Handles different source/dest _hash sizes via field-by-field copy.
   // Returns pointer to copied node, or nullptr if doesn't fit
   template <typename SrcLeafNode>
   LeafNode* add_leaf_node(const SrcLeafNode* src) {
@@ -208,16 +208,16 @@ struct _TransferTrie {
     dest->value_size = static_cast<uint16_t>(src->value_size);  // Preserve BIG_VALUE_FLAG
     dest->key_size = src->key_size;
 
-    // Copy or zero-init hash depending on size match
+    // Copy or zero-init _hash depending on size match
     if constexpr (WIRE_HASH_SIZE > 0) {
       if constexpr (has_hash_member<SrcLeafNode>::value) {
-        if constexpr (sizeof(src->hash) == WIRE_HASH_SIZE) {
-          std::memcpy(dest->hash, src->hash, WIRE_HASH_SIZE);
+        if constexpr (sizeof(src->_hash) == WIRE_HASH_SIZE) {
+          std::memcpy(dest->_hash, src->_hash, WIRE_HASH_SIZE);
         } else {
-          std::memset(dest->hash, 0, WIRE_HASH_SIZE);
+          std::memset(dest->_hash, 0, WIRE_HASH_SIZE);
         }
       } else {
-        std::memset(dest->hash, 0, WIRE_HASH_SIZE);
+        std::memset(dest->_hash, 0, WIRE_HASH_SIZE);
       }
     }
 

@@ -41,11 +41,11 @@ using LeafHeaderHash4 = _LeafNodeHeaderHash<TestTraits, 4>;
 static const int OOR = TrieNode::OUT_OF_RANGE;
 
 static_assert(sizeof(_TrieNodeHeaderBase<TestTraits>) == 6);
-static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _array_len) == 0);
-static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _upper) == 2);
-static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _compressed_len) == 3);
-static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _lower_offset) == 4);
-static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _array_offset) == 5);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _branch_count) == 0);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _branch_bits_index) == 2);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _prefix_len) == 3);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _branch_bits_pos) == 4);
+static_assert(offsetof(_TrieNodeHeaderBase<TestTraits>, _branch_offsets_pos) == 5);
 
 static_assert(std::is_base_of_v<_TrieNodeHeaderBase<TestTraits>, TrieHeaderNoHash>);
 static_assert(std::is_base_of_v<_TrieNodeHeaderBase<TestTraits>, TrieHeaderHash4>);
@@ -69,9 +69,9 @@ BOOST_AUTO_TEST_CASE(test_hash_header_offsets) {
   TrieHeaderHash4 trie{};
   LeafHeaderHash4 leaf{};
 
-  const auto trie_hash_offset = reinterpret_cast<const uint8_t*>(trie.hash) - reinterpret_cast<const uint8_t*>(&trie);
-  const auto trie_data_offset = reinterpret_cast<const uint8_t*>(trie._compressed_data) - reinterpret_cast<const uint8_t*>(&trie);
-  const auto leaf_hash_offset = reinterpret_cast<const uint8_t*>(leaf.hash) - reinterpret_cast<const uint8_t*>(&leaf);
+  const auto trie_hash_offset = reinterpret_cast<const uint8_t*>(trie._hash) - reinterpret_cast<const uint8_t*>(&trie);
+  const auto trie_data_offset = reinterpret_cast<const uint8_t*>(trie._prefix) - reinterpret_cast<const uint8_t*>(&trie);
+  const auto leaf_hash_offset = reinterpret_cast<const uint8_t*>(leaf._hash) - reinterpret_cast<const uint8_t*>(&leaf);
 
   BOOST_CHECK_EQUAL(trie_hash_offset, sizeof(_TrieNodeHeaderBase<TestTraits>));
   BOOST_CHECK_EQUAL(trie_data_offset, sizeof(_TrieNodeHeaderBase<TestTraits>) + TrieHeaderHash4::HASH_SIZE);
@@ -87,53 +87,53 @@ void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
   uint16_t idx;
 
   idx = trie1.create(prefix, 130);
-  trie1.array()[idx] = 130;
+  trie1.branch_offsets()[idx] = 130;
   BOOST_CHECK(trie1.isset(130));
-  BOOST_CHECK_EQUAL(*trie1.offset(130), 130);
+  BOOST_CHECK_EQUAL(*trie1.branch_offset(130), 130);
   BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
   BOOST_CHECK_EQUAL(idx, *offsets++);
 
   idx = trie2.create(trie1, 5);
-  trie2.array()[idx] = 5;
+  trie2.branch_offsets()[idx] = 5;
   BOOST_CHECK(trie2.isset(130));
   BOOST_CHECK(trie2.isset(5));
-  BOOST_CHECK_EQUAL(*trie2.offset(5), 5);
+  BOOST_CHECK_EQUAL(*trie2.branch_offset(5), 5);
   BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
   BOOST_CHECK_EQUAL(idx, *offsets++);
 
   idx = trie1.create(trie2, 70);
-  trie1.array()[idx] = 70;
+  trie1.branch_offsets()[idx] = 70;
   BOOST_CHECK(trie1.isset(130));
   BOOST_CHECK(trie1.isset(5));
   BOOST_CHECK(trie1.isset(70));
-  BOOST_CHECK_EQUAL(*trie1.offset(70), 70);
+  BOOST_CHECK_EQUAL(*trie1.branch_offset(70), 70);
   BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
   BOOST_CHECK_EQUAL(idx, *offsets++);
 
   idx = trie2.create(trie1, 7);
-  trie2.array()[idx] = 7;
+  trie2.branch_offsets()[idx] = 7;
   BOOST_CHECK(trie2.isset(130));
   BOOST_CHECK(trie2.isset(5));
   BOOST_CHECK(trie2.isset(70));
   BOOST_CHECK(trie2.isset(7));
-  BOOST_CHECK_EQUAL(*trie2.offset(7), 7);
+  BOOST_CHECK_EQUAL(*trie2.branch_offset(7), 7);
   BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
   BOOST_CHECK_EQUAL(idx, *offsets++);
 
-  BOOST_CHECK_EQUAL(trie2.count(), 4);
+  BOOST_CHECK_EQUAL(trie2.branch_count(), 4);
 
-  BOOST_CHECK_EQUAL(trie2.offset(TrieNode::NONE), nullptr);
+  BOOST_CHECK_EQUAL(trie2.branch_offset(TrieNode::NONE), nullptr);
 
   idx = trie1.create(trie2, TrieNode::NONE);
-  trie1.array()[idx] = 0;
+  trie1.branch_offsets()[idx] = 0;
   BOOST_CHECK(trie1.isset(130));
   BOOST_CHECK(trie1.isset(5));
   BOOST_CHECK(trie1.isset(70));
   BOOST_CHECK(trie1.isset(7));
-  BOOST_CHECK_EQUAL(*trie1.offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(*trie1.branch_offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(trie1.size(), *sizes++);
   BOOST_CHECK_EQUAL(idx, *offsets++);
-  BOOST_CHECK_EQUAL(trie1.count(), 5);
+  BOOST_CHECK_EQUAL(trie1.branch_count(), 5);
 
   BOOST_CHECK(trie1.has_none());
   BOOST_CHECK(trie1.isset(5));
@@ -142,24 +142,24 @@ void set_and_get(const Slice& prefix, uint16_t* sizes, uint16_t* offsets) {
   BOOST_CHECK(!trie1.isset(6));
   BOOST_CHECK(!trie1.isset(71));
   BOOST_CHECK(!trie1.isset(131));
-  BOOST_CHECK_EQUAL(trie1.offset(250), nullptr);
+  BOOST_CHECK_EQUAL(trie1.branch_offset(250), nullptr);
 
-  offset_t* trie_offsets = trie1.array();
+  offset_t* trie_offsets = trie1.branch_offsets();
   BOOST_CHECK_EQUAL(*trie_offsets, 0);
   BOOST_CHECK_EQUAL(*(trie_offsets + 1), 5);
   BOOST_CHECK_EQUAL(*(trie_offsets + 2), 7);
   BOOST_CHECK_EQUAL(*(trie_offsets + 3), 70);
   BOOST_CHECK_EQUAL(*(trie_offsets + 4), 130);
-  BOOST_CHECK(*trie1.offset(5) == 5);
-  BOOST_CHECK(*trie1.offset(70) == 70);
-  BOOST_CHECK(*trie1.offset(130) == 130);
+  BOOST_CHECK(*trie1.branch_offset(5) == 5);
+  BOOST_CHECK(*trie1.branch_offset(70) == 70);
+  BOOST_CHECK(*trie1.branch_offset(130) == 130);
 
   idx = trie2.create(trie1, 250);
-  trie2.array()[idx] = 250;
-  BOOST_CHECK_EQUAL(*trie2.offset(250), 250);
+  trie2.branch_offsets()[idx] = 250;
+  BOOST_CHECK_EQUAL(*trie2.branch_offset(250), 250);
   BOOST_CHECK_EQUAL(trie2.size(), *sizes++);
   BOOST_CHECK_EQUAL(idx, *offsets++);
-  BOOST_CHECK_EQUAL(trie2.count(), 6);
+  BOOST_CHECK_EQUAL(trie2.branch_count(), 6);
 }
 
 BOOST_AUTO_TEST_CASE(test_set_and_get) {
@@ -179,20 +179,20 @@ BOOST_AUTO_TEST_CASE(test_create) {
   Slice prefix("123456");
 
   uint16_t idx = trie.create(prefix, 130);
-  trie.array()[idx] = 130;
-  BOOST_CHECK_EQUAL(*trie.offset(130), 130);
+  trie.branch_offsets()[idx] = 130;
+  BOOST_CHECK_EQUAL(*trie.branch_offset(130), 130);
   BOOST_CHECK_EQUAL(trie.size(), 32);
 
   idx = trie.create(prefix, TrieNode::NONE);
-  trie.array()[idx] = 0;
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
+  trie.branch_offsets()[idx] = 0;
+  BOOST_CHECK_EQUAL(*trie.branch_offset(TrieNode::NONE), 0);
   BOOST_CHECK_EQUAL(trie.size(), 24);
 
   auto indices = trie.create(prefix, 5, TrieNode::NONE);
-  trie.array()[indices.first] = 5;
-  trie.array()[indices.second] = 0;
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 0);
-  BOOST_CHECK_EQUAL(*trie.offset(5), 5);
+  trie.branch_offsets()[indices.first] = 5;
+  trie.branch_offsets()[indices.second] = 0;
+  BOOST_CHECK_EQUAL(*trie.branch_offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(5), 5);
   BOOST_CHECK_EQUAL(trie.size(), 40);
   // NONE (-1) < 5, so keys are swapped internally, result pair is swapped
   BOOST_CHECK_EQUAL(indices.first, 1);
@@ -201,9 +201,9 @@ BOOST_AUTO_TEST_CASE(test_create) {
   char buffer1[AREA_SIZE];
   TrieNode& trie1 = *(TrieNode*)buffer1;
   trie1.create(trie, Slice("123"));
-  BOOST_CHECK(Slice(trie1.compressed(), trie1.len()) == Slice("123"));
-  BOOST_CHECK_EQUAL(*trie1.offset(TrieNode::NONE), 0);
-  BOOST_CHECK_EQUAL(*trie1.offset(5), 5);
+  BOOST_CHECK(Slice(trie1.prefix(), trie1.prefix_len()) == Slice("123"));
+  BOOST_CHECK_EQUAL(*trie1.branch_offset(TrieNode::NONE), 0);
+  BOOST_CHECK_EQUAL(*trie1.branch_offset(5), 5);
 }
 
 void create_trie(TrieNode* fill, int size, int* values) {
@@ -212,11 +212,11 @@ void create_trie(TrieNode* fill, int size, int* values) {
   Slice prefix;
 
   uint16_t idx = fill->create(prefix, values[0]);
-  fill->array()[idx] = 0;
+  fill->branch_offsets()[idx] = 0;
   for (int i = 1; i < size; i++) {
     memcpy(tmp, fill, fill->size());
     idx = fill->create(*tmp, values[i]);
-    fill->array()[idx] = 0;
+    fill->branch_offsets()[idx] = 0;
   }
 }
 
@@ -264,16 +264,16 @@ BOOST_AUTO_TEST_CASE(test_count) {
   TrieNode& trie = *(TrieNode*)buffer;
   int values[] = {5, 70, 130};
   create_trie(&trie, 3, values);
-  BOOST_CHECK_EQUAL(trie.count(), 3);
+  BOOST_CHECK_EQUAL(trie.branch_count(), 3);
 }
 
 void test_add(TrieNode& trie, uint8_t branch) {
   char buffer[AREA_SIZE];
   TrieNode* tmp = (TrieNode*)buffer;
   uint16_t idx = tmp->create(trie, branch);
-  tmp->array()[idx] = branch;
+  tmp->branch_offsets()[idx] = branch;
   memcpy(&trie, tmp, tmp->size());
-  BOOST_CHECK_EQUAL(*trie.offset(branch), branch);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(branch), branch);
 }
 
 BOOST_AUTO_TEST_CASE(test_many_branches) {
@@ -281,7 +281,7 @@ BOOST_AUTO_TEST_CASE(test_many_branches) {
   TrieNode& trie = *(TrieNode*)buffer;
   Slice prefix;
   uint16_t idx = trie.create(prefix, 'a');
-  trie.array()[idx] = 'a';
+  trie.branch_offsets()[idx] = 'a';
   test_add(trie, 'b');
   test_add(trie, 'c');
   test_add(trie, 'd');
@@ -308,39 +308,39 @@ BOOST_AUTO_TEST_CASE(test_remove) {
 
   // Build trie with branches {5, 70, 130}, storing key value as offset
   uint16_t idx = t1.create(prefix, 5);
-  t1.array()[idx] = 5;
+  t1.branch_offsets()[idx] = 5;
 
   idx = t2.create(t1, 70);
-  t2.array()[idx] = 70;
+  t2.branch_offsets()[idx] = 70;
 
   idx = t1.create(t2, 130);
-  t1.array()[idx] = 130;
+  t1.branch_offsets()[idx] = 130;
 
-  BOOST_CHECK_EQUAL(t1.count(), 3);
+  BOOST_CHECK_EQUAL(t1.branch_count(), 3);
 
   // Remove branch 70
   t2.create_remove(t1, 70);
   BOOST_CHECK(t2.isset(5));
   BOOST_CHECK(!t2.isset(70));
   BOOST_CHECK(t2.isset(130));
-  BOOST_CHECK_EQUAL(t2.count(), 2);
-  BOOST_CHECK_EQUAL(*t2.offset(5), 5);
-  BOOST_CHECK_EQUAL(*t2.offset(130), 130);
+  BOOST_CHECK_EQUAL(t2.branch_count(), 2);
+  BOOST_CHECK_EQUAL(*t2.branch_offset(5), 5);
+  BOOST_CHECK_EQUAL(*t2.branch_offset(130), 130);
 
   // Add NONE branch
   idx = t1.create(t2, TrieNode::NONE);
-  t1.array()[idx] = 0;
-  BOOST_CHECK_EQUAL(*t1.offset(TrieNode::NONE), 0);
+  t1.branch_offsets()[idx] = 0;
+  BOOST_CHECK_EQUAL(*t1.branch_offset(TrieNode::NONE), 0);
 
   // Remove NONE branch
   t2.create_remove(t1, TrieNode::NONE);
-  BOOST_CHECK_EQUAL(t2.offset(TrieNode::NONE), nullptr);
+  BOOST_CHECK_EQUAL(t2.branch_offset(TrieNode::NONE), nullptr);
 
   // Remove branch 5
   t1.create_remove(t2, 5);
   BOOST_CHECK(!t1.isset(5));
-  BOOST_CHECK_EQUAL(t1.offset(5), nullptr);
-  BOOST_CHECK_EQUAL(t1.count(), 1);
+  BOOST_CHECK_EQUAL(t1.branch_offset(5), nullptr);
+  BOOST_CHECK_EQUAL(t1.branch_count(), 1);
 }
 
 BOOST_AUTO_TEST_CASE(test_index_bit) {
@@ -467,22 +467,22 @@ BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   // Create a trie node with specific values in the derived fields
   Slice prefix("test");
   auto indices = src.create(prefix, 'a', 'b');
-  src.array()[indices.first] = 100;
-  src.array()[indices.second] = 200;
+  src.branch_offsets()[indices.first] = 100;
+  src.branch_offsets()[indices.second] = 200;
   
   // Add more branches by creating a new node from the existing one
   uint16_t idx = tmp.create(src, 'c');
-  tmp.array()[idx] = 300;
+  tmp.branch_offsets()[idx] = 300;
   memcpy(&src, &tmp, tmp.size());
   
   // Store the original values we want to verify
-  uint8_t orig_upper = src._upper;
-  uint8_t orig_compressed_len = src._compressed_len;
-  uint8_t orig_lower_offset = src._lower_offset;
-  uint8_t orig_array_offset = src._array_offset;
-  uint16_t orig_array_len = src._array_len;
+  uint8_t orig_upper = src._branch_bits_index;
+  uint8_t orig_compressed_len = src._prefix_len;
+  uint8_t orig_lower_offset = src._branch_bits_pos;
+  uint8_t orig_array_offset = src._branch_offsets_pos;
+  uint16_t orig_array_len = src._branch_count;
   uint16_t orig_size = src.size();
-  int orig_count = src.count();
+  int orig_count = src.branch_count();
   
   // Verify the source is set up correctly
   BOOST_CHECK(orig_upper != 0);
@@ -495,19 +495,19 @@ BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   copy(dst, src);
   
   // Verify that all derived class fields were copied correctly
-  // These fields (_upper, _compressed_len, _lower_offset, etc.) 
+  // These fields (_branch_bits_index, _prefix_len, _branch_bits_pos, etc.) 
   // start at offset 5, not offset 8
-  BOOST_CHECK_EQUAL(dst._upper, orig_upper);
-  BOOST_CHECK_EQUAL(dst._compressed_len, orig_compressed_len);
-  BOOST_CHECK_EQUAL(dst._lower_offset, orig_lower_offset);
-  BOOST_CHECK_EQUAL(dst._array_offset, orig_array_offset);
-  BOOST_CHECK_EQUAL(dst._array_len, orig_array_len);
+  BOOST_CHECK_EQUAL(dst._branch_bits_index, orig_upper);
+  BOOST_CHECK_EQUAL(dst._prefix_len, orig_compressed_len);
+  BOOST_CHECK_EQUAL(dst._branch_bits_pos, orig_lower_offset);
+  BOOST_CHECK_EQUAL(dst._branch_offsets_pos, orig_array_offset);
+  BOOST_CHECK_EQUAL(dst._branch_count, orig_array_len);
   BOOST_CHECK_EQUAL(dst.size(), orig_size);
-  BOOST_CHECK_EQUAL(dst.count(), orig_count);
+  BOOST_CHECK_EQUAL(dst.branch_count(), orig_count);
   
   // Verify the compressed data was copied
-  BOOST_CHECK_EQUAL(memcmp(src.compressed(), dst.compressed(), 
-                          src._compressed_len), 0);
+  BOOST_CHECK_EQUAL(memcmp(src.prefix(), dst.prefix(), 
+                          src._prefix_len), 0);
   
   // Verify the branches are correct
   BOOST_CHECK(dst.isset('a'));
@@ -515,9 +515,9 @@ BOOST_AUTO_TEST_CASE(test_copy_trienode) {
   BOOST_CHECK(dst.isset('c'));
   
   // Verify offsets were copied correctly
-  BOOST_CHECK_EQUAL(*dst.offset('a'), 100);
-  BOOST_CHECK_EQUAL(*dst.offset('b'), 200);
-  BOOST_CHECK_EQUAL(*dst.offset('c'), 300);
+  BOOST_CHECK_EQUAL(*dst.branch_offset('a'), 100);
+  BOOST_CHECK_EQUAL(*dst.branch_offset('b'), 200);
+  BOOST_CHECK_EQUAL(*dst.branch_offset('c'), 300);
   
   // The test would fail if copy() used sizeof(PageHeader)=8 instead of
   // the actual start of derived fields at offset 5 (where copy_start() points)
@@ -577,7 +577,7 @@ BOOST_AUTO_TEST_CASE(test_copy_leafnode) {
 }
 
 // Test insert_branch with shift > 0 (array_start moves when lower[] crosses
-// an 8-byte alignment boundary).  With compressed_len=1 and an empty hash,
+// an 8-byte alignment boundary).  With compressed_len=1 and an empty _hash,
 // lower_start=8.  old_bcount=0 → old_as=align(8)=8, new_as=align(12)=16 →
 // shift=8.
 BOOST_AUTO_TEST_CASE(test_insert_branch_shift_positive) {
@@ -585,44 +585,44 @@ BOOST_AUTO_TEST_CASE(test_insert_branch_shift_positive) {
   memset(buf, 0, AREA_SIZE);
   TrieNode& trie = *(TrieNode*)buf;
 
-  // Create a trie with only a NONE branch (old_bcount=0, _upper=0).
+  // Create a trie with only a NONE branch (old_bcount=0, _branch_bits_index=0).
   uint16_t idx = trie.create(Slice("x", 1), TrieNode::NONE);
-  BOOST_CHECK_EQUAL(trie.count(), 1);
+  BOOST_CHECK_EQUAL(trie.branch_count(), 1);
   BOOST_CHECK(trie.has_none());
-  BOOST_CHECK_EQUAL(trie._upper, 0);  // no non-NONE branches
-  trie.array()[idx] = offset_t(100);
+  BOOST_CHECK_EQUAL(trie._branch_bits_index, 0);  // no non-NONE branches
+  trie.branch_offsets()[idx] = offset_t(100);
 
-  // insert_branch(5) adds upper group 0 (ubit(5)=0).
+  // insert_branch(5) adds upper group 0 (branch_bits_group(5)=0).
   // old_bcount=0, shift = align(8+4) - align(8) = 16 - 8 = 8.
   // oidx=1 (NONE branch at index 0), so the prefix-move path (oidx>0) fires.
   uint16_t idx2 = trie.insert_branch(5);
-  BOOST_CHECK_EQUAL(trie.count(), 2);
+  BOOST_CHECK_EQUAL(trie.branch_count(), 2);
   BOOST_CHECK(trie.isset(5));
   BOOST_CHECK(trie.has_none());
   // NONE branch (idx 0) must have survived the shift
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 100);
-  trie.array()[idx2] = offset_t(200);
-  BOOST_CHECK_EQUAL(*trie.offset(5), 200);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(TrieNode::NONE), 100);
+  trie.branch_offsets()[idx2] = offset_t(200);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(5), 200);
 
   // Second shift test: old_bcount=1 → shift=0 (no shift).
   // Then add a 3rd upper group: old_bcount=2 → shift=8 again.
   // Add key 70 (ubit=2, group 2) — old_bcount=1, shift=0.
   uint16_t idx3 = trie.insert_branch(70);
-  trie.array()[idx3] = offset_t(300);
-  BOOST_CHECK_EQUAL(trie.count(), 3);
-  BOOST_CHECK_EQUAL(*trie.offset(70), 300);
-  BOOST_CHECK_EQUAL(*trie.offset(5), 200);
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 100);
+  trie.branch_offsets()[idx3] = offset_t(300);
+  BOOST_CHECK_EQUAL(trie.branch_count(), 3);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(70), 300);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(5), 200);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(TrieNode::NONE), 100);
 
   // Add key 130 (ubit=4, group 4) — old_bcount=2, shift=8.
   // oidx = 1(NONE) + count(lower[0]) + count(lower[1]) = 1 + 1 + 1 = 3
   // old_count = 3, so suffix = old_count - oidx = 0 (no suffix to move).
   // prefix = oidx = 3 > 0, so prefix-move fires again.
   uint16_t idx4 = trie.insert_branch(130);
-  trie.array()[idx4] = offset_t(400);
-  BOOST_CHECK_EQUAL(trie.count(), 4);
-  BOOST_CHECK_EQUAL(*trie.offset(130), 400);
-  BOOST_CHECK_EQUAL(*trie.offset(70), 300);
-  BOOST_CHECK_EQUAL(*trie.offset(5), 200);
-  BOOST_CHECK_EQUAL(*trie.offset(TrieNode::NONE), 100);
+  trie.branch_offsets()[idx4] = offset_t(400);
+  BOOST_CHECK_EQUAL(trie.branch_count(), 4);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(130), 400);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(70), 300);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(5), 200);
+  BOOST_CHECK_EQUAL(*trie.branch_offset(TrieNode::NONE), 100);
 }

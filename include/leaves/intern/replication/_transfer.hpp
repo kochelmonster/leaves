@@ -443,8 +443,8 @@ struct PendingBigValue {
 // Sender for transferring trie nodes with relative offsets
 // Uses pre-order DFS where children set their relative offsets in parent's
 // array
-// Walks the hash trie structure, but for leaf nodes looks up actual data
-// from the data trie via cursor (combining hash + key/value).
+// Walks the _hash trie structure, but for leaf nodes looks up actual data
+// from the data trie via cursor (combining _hash + key/value).
 template <typename DB>
 struct TransferTrieSender {
   using Traits = typename DB::Traits;
@@ -577,7 +577,7 @@ struct TransferTrieSender {
     _pending.splice(_pending.end(), _last_batch);
     _last_batch.clear();
 
-    // Remove big values whose containing leaf was pruned (hash matched).
+    // Remove big values whose containing leaf was pruned (_hash matched).
     // Trie ACKs prune all descendant big values; leaf ACKs prune exact matches.
     for (auto bv_it = _last_big_values.begin();
          bv_it != _last_big_values.end();) {
@@ -637,7 +637,7 @@ struct TransferTrieSender {
   // If _pending is empty, writes the root trie
   // If _pending has nodes, picks the first and writes a subtrie of its next
   // child as root All written nodes go to _last_batch
-  // Walks the hash trie structure, looking up data via cursor for leaves.
+  // Walks the _hash trie structure, looking up data via cursor for leaves.
   size_t fill_buffer() {
     if (_pending.empty()) {
       // First transmission - write root node and its descendants up to
@@ -645,7 +645,7 @@ struct TransferTrieSender {
       _path_buffer.clear();
       _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
 
-      // Select hash root based on db_type
+      // Select _hash root based on db_type
       hash_offset_e* hash_root = _db->hash_root_ptr();
       if (_db_type == DbType::DB_DELETION) {
         hash_root = _db->deletion_hash_root_ptr();
@@ -663,7 +663,7 @@ struct TransferTrieSender {
     auto& pending = _pending.back();
     auto hash_trie = _db->template resolve<HashTrieNode>(pending.offset);
     assert(hash_trie);  // Should always resolve since it was transmitted before
-    assert(pending.next_child < hash_trie->count());
+    assert(pending.next_child < hash_trie->branch_count());
 
     // pending.path already includes the trie node's full compressed,
     // so _path_buffer is the complete parent path for the subtrie.
@@ -672,22 +672,22 @@ struct TransferTrieSender {
     // _path_buffer holds the parent trie's full path.  Use it as the
     // subtrie_path so the receiver knows where this subtrie attaches.
     // The child's own compressed/key is NOT included — the receiver
-    // unconditionally appends it from the wire node during hash comparison.
+    // unconditionally appends it from the wire node during _hash comparison.
     _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
     // Note: root=false because we're writing a CHILD of the pending node, not
     // the root. The leaf case in _write_subtree handles branch-char push/pop.
-    _write_subtree(_path_buffer, hash_trie->array() + pending.next_child, 0,
+    _write_subtree(_path_buffer, hash_trie->branch_offsets() + pending.next_child, 0,
                    nullptr, false);
 
     // the child as the TransferTrie root is guaranteed to be written.
-    if (++pending.next_child >= hash_trie->count()) {
+    if (++pending.next_child >= hash_trie->branch_count()) {
       _pending.pop_back();
     }
     return _transfer.node_count();
   }
 
   // Write a subtrie with DFS up to max_depth
-  // Walks the hash trie structure, looking up data via cursor for leaves.
+  // Walks the _hash trie structure, looking up data via cursor for leaves.
   // All written nodes are added to _last_batch for ACK tracking
   // Nodes at max_depth have their children NOT written (will be handled later
   // if not pruned)
@@ -699,7 +699,7 @@ struct TransferTrieSender {
     size_t path_len = path.size();
 
     if (hash_offset->type() == LEAF) {
-      // Hash leaf: need to combine hash + data from data trie
+      // Hash leaf: need to combine _hash + data from data trie
       auto hash_leaf = _db->template resolve<HashLeafNode>(hash_offset);
       assert(hash_leaf);
 
@@ -713,24 +713,24 @@ struct TransferTrieSender {
       // without an exact match (is_valid()==false).
       _cursor->find(Slice(path.data(), path.size()));
       assert(_cursor->stack.size && _cursor->stack.back().is_leaf() &&
-             "hash trie entry missing from data trie - corruption");
+             "_hash trie entry missing from data trie - corruption");
       assert(_cursor->key().size() >= path.size() &&
              memcmp(_cursor->key().data(), path.data(), path.size()) == 0 &&
-             "cursor landed on wrong leaf - hash/data trie mismatch");
+             "cursor landed on wrong leaf - _hash/data trie mismatch");
 
       // Get the data leaf from cursor's stack
       auto& data_trans = _cursor->stack.back();
       auto& data_leaf = *data_trans.leaf();
 
-      // Add data leaf to wire buffer (copies key/value, zeroes hash)
+      // Add data leaf to wire buffer (copies key/value, zeroes _hash)
       auto* dest = _transfer.add_leaf_node(&data_leaf);
       if (!dest) {
         path.resize(path_len);
         return false;
       }
 
-      // Copy hash from hash trie leaf into wire leaf
-      std::memcpy(dest->hash, hash_leaf->hash, HASH_SIZE);
+      // Copy _hash from _hash trie leaf into wire leaf
+      std::memcpy(dest->_hash, hash_leaf->_hash, HASH_SIZE);
 
       // Track big values for later transmission
       if (data_leaf.is_big()) {
@@ -750,7 +750,7 @@ struct TransferTrieSender {
       return true;
     }
 
-    // Hash trie node: add directly (hash is in the node)
+    // Hash trie node: add directly (_hash is in the node)
     auto hash_trie = _db->template resolve<HashTrieNode>(hash_offset);
     assert(hash_trie);
 
@@ -764,23 +764,23 @@ struct TransferTrieSender {
 
     // Get wire array for setting child offsets
     auto* wire_trie = const_cast<typename Transfer::TrieNode*>(dest);
-    WireOffset* wire_array = wire_trie->array();
+    WireOffset* wire_array = wire_trie->branch_offsets();
 
     // Process children
-    path.append((char*)hash_trie->compressed(), hash_trie->len());
+    path.append((char*)hash_trie->prefix(), hash_trie->prefix_len());
 
     if (depth >= _max_depth) {
       // path already includes the full compressed (appended above).
       // Store the complete path so _is_pruned_by_ack sees the same
-      // path the receiver uses during hash comparison.
+      // path the receiver uses during _hash comparison.
       auto arena_path = _path_arena.allocate(path);
       _last_batch.emplace_back(arena_path, hash_offset, 0);
       path.resize(path_len);
       return true;
     }
 
-    int count = hash_trie->count(), i;
-    hash_offset_e* children = hash_trie->array();
+    int count = hash_trie->branch_count(), i;
+    hash_offset_e* children = hash_trie->branch_offsets();
     // Hash leaves carry their branch char in data[0] (key_size > 0);
     // _write_subtree pushes it before find() and restores path on return.
     for (i = 0; i < count && !_transfer.full;) {
@@ -791,8 +791,8 @@ struct TransferTrieSender {
     path.resize(path_len);
     if (i < count) {
       // Re-append full compressed so _last_batch stores the complete
-      // path that matches the receiver's hash-comparison path.
-      path.append((char*)hash_trie->compressed(), hash_trie->len());
+      // path that matches the receiver's _hash-comparison path.
+      path.append((char*)hash_trie->prefix(), hash_trie->prefix_len());
       auto arena_path = _path_arena.allocate(path);
       _last_batch.emplace_back(arena_path, hash_offset, i);
       path.resize(path_len);
