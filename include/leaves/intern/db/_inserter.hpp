@@ -87,7 +87,7 @@ struct _Inserter {
   }
 
   bool split_compressed() {
-    if (back->is_trie() && back->prefix == back->trie()->len())
+    if (back->is_trie() && back->prefix == back->trie()->prefix_len())
       return false;  // no split
 
     /*
@@ -103,34 +103,34 @@ struct _Inserter {
                        -> [ef] -> table with new value
     */
 
-    assert(back->prefix < back->trie()->len());
+    assert(back->prefix < back->trie()->prefix_len());
 
     trie_ptr otrie = back->trie();
-    assert(otrie->count() < otrie->MAX_BRANCH_COUNT);
+    assert(otrie->branch_count() < otrie->MAX_BRANCH_COUNT);
 
     // copy the original trie node with second part of compressed
     // to a new slot
-    uint8_t suffix_len = otrie->len() - back->prefix;
+    uint8_t suffix_len = otrie->prefix_len() - back->prefix;
     uint16_t trie_size = otrie->changed_len(suffix_len);
     trie_ptr child_trie = alloc_node<trie_ptr>(trie_size);
     child_trie->create(*otrie,
-                       Slice(&otrie->compressed()[back->prefix], suffix_len));
+                       Slice(&otrie->prefix()[back->prefix], suffix_len));
     assert(child_trie->size() == trie_size);
 
     // replace the original trie node with a two branch trie node
     // and the first part of compressed
     int key = back->key() ? (back->branch_key = (uint8_t)back->key()[0])
                           : TrieNode::NONE;
-    int okey = otrie->compressed()[back->prefix];
+    int okey = otrie->prefix()[back->prefix];
     trie_ptr trie =
         alloc_node<trie_ptr>(TrieNode::size(back->prefix, okey, key));
 
     back->trie() = trie;
     auto idxs =
-        trie->create(Slice(otrie->compressed(), back->prefix), okey, key);
+        trie->create(Slice(otrie->prefix(), back->prefix), okey, key);
 
     back->link_idx = idxs.second;
-    trie->array()[idxs.first] = resolve(child_trie);
+    trie->branch_offsets()[idxs.first] = resolve(child_trie);
     assert((trie->isset)(okey));
     assert((trie->isset)(key));
 
@@ -252,7 +252,7 @@ struct _Inserter {
     assert((new_trie->isset)(nkey));
 
     back->link_idx = idxs.second;
-    new_trie->array()[idxs.first] = resolve(copy);
+    new_trie->branch_offsets()[idxs.first] = resolve(copy);
 
     back->cmp = 0;
 

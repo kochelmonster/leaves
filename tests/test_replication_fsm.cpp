@@ -155,7 +155,7 @@ struct ReplicationFixture {
 
   ~ReplicationFixture() { std::filesystem::remove_all(test_temp_dir); }
 
-  // Hashing is now synchronous: acquire_hash_trie() always updates the hash
+  // Hashing is now synchronous: acquire_hash_trie() always updates the _hash
   // trie before returning, so there is nothing to poll for.
   template <typename DB>
   static void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
@@ -852,7 +852,7 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   auto receiver_db = receiver_storage->open<Storage::ReplicationDB>("testdb");
 
   // Insert keys with varied prefixes so that completed subtrees can be
-  // pruned by hash comparison on subsequent fraction rounds.
+  // pruned by _hash comparison on subsequent fraction rounds.
   // 26 letters × 8 keys each = 208 keys spread across distinct root branches.
   constexpr int KEYS_PER_PREFIX = 8;
   constexpr int TOTAL_KEYS = 26 * KEYS_PER_PREFIX;  // 208
@@ -3029,8 +3029,8 @@ BOOST_FIXTURE_TEST_CASE(test_cross_storage_mmap_to_file_replication,
 // Test that replicating a populated trie to a completely empty receiver works.
 // This exercises the fix for Finding 4: _get_original_node must return nullptr
 // when the DB root is zero (empty DB), not a non-null pointer to offset 0.
-// Before the fix, the receiver would resolve offset 0 and read garbage hash
-// bytes from the DB header, potentially causing incorrect hash comparisons.
+// Before the fix, the receiver would resolve offset 0 and read garbage _hash
+// bytes from the DB header, potentially causing incorrect _hash comparisons.
 BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie,
                         ReplicationFixture) {
   auto sender_path = test_temp_dir / "sender_empty_root.lvs";
@@ -3046,7 +3046,7 @@ BOOST_FIXTURE_TEST_CASE(test_replication_to_empty_db_with_trie,
 
   // Populate sender with enough keys to create a multi-level trie
   // (branch nodes with compressed paths) — this ensures the root is a
-  // trie node whose hash is compared against the receiver's empty root.
+  // trie node whose _hash is compared against the receiver's empty root.
   {
     auto cursor = sender_db.cursor();
     for (int i = 0; i < 20; ++i) {
@@ -3490,11 +3490,11 @@ BOOST_FIXTURE_TEST_CASE(test_last_activity_timeout, ReplicationFixture) {
   // Should have been active within the last second (generous margin)
   BOOST_CHECK_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
                      sender_since_complete)
-                     .count(),
+             .count(),
                  1000);
   BOOST_CHECK_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
                      receiver_since_complete)
-                     .count(),
+             .count(),
                  1000);
 }
 
@@ -5586,7 +5586,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer,
   receiver.begin(&r2s, &re);
 
   // Need: remaining >= sizeof(TempTrieNode)==38 but < trie->size().
-  // Set remaining=40, and trie _array_offset=6 _array_len=3 → size=6*8+3*8=72 >
+  // Set remaining=40, and trie _branch_offsets_pos=6 _branch_count=3 → size=6*8+3*8=72 >
   // 40
   size_t aligned_hdr = (sizeof(TransferTrieHeader) + 7) & ~size_t(7);
   size_t node_data_size = 40;
@@ -5608,9 +5608,9 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_size_exceeds_buffer,
   // Set the TempTrieNode fields to make size() exceed remaining
   using TempTrieNode = _TransferTrie<32>::TrieNode;
   auto* trie = reinterpret_cast<TempTrieNode*>(payload.data() + aligned_hdr);
-  trie->_array_offset = 6;  // array_start = 48
-  trie->_array_len = 3;     // array_size = 24, size = 72 > 40
-  trie->_compressed_len = 0;
+  trie->_branch_offsets_pos = 6;  // array_start = 48
+  trie->_branch_count = 3;     // array_size = 24, size = 72 > 40
+  trie->_prefix_len = 0;
 
   auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
                            payload.size());
@@ -5637,7 +5637,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small,
   using TempLeafNode = _TransferTrie<32>::LeafNode;
   size_t aligned_hdr = (sizeof(TransferTrieHeader) + 7) & ~size_t(7);
   // Leaf needs: header(35) + key_size + vsize bytes. Use key_size=1, vsize=2
-  // (with BIG flag) The hash at the leaf must NOT match local so we reach the
+  // (with BIG flag) The _hash at the leaf must NOT match local so we reach the
   // is_big() check.
   size_t leaf_total = sizeof(TempLeafNode) + 1 + 2;       // 38
   size_t node_data_size = (leaf_total + 7) & ~size_t(7);  // 40
@@ -5659,8 +5659,8 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_vsize_too_small,
   auto* leaf = reinterpret_cast<TempLeafNode*>(payload.data() + aligned_hdr);
   leaf->key_size = 1;
   leaf->value_size = 2 | (1 << 15);  // BIG_VALUE_FLAG set, vsize=2
-  // non-zero hash so it won't match any local hash
-  leaf->hash[0] = 0xFF;
+  // non-zero _hash so it won't match any local _hash
+  leaf->_hash[0] = 0xFF;
   leaf->data[0] = 'A';  // key byte
 
   auto msg = build_raw_msg(ReplicationMsgType::TRIE_DATA, 1, payload.data(),
@@ -5711,7 +5711,7 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_big_value_leaf_value_size_too_large,
   auto* leaf = reinterpret_cast<TempLeafNode*>(payload.data() + aligned_hdr);
   leaf->key_size = 1;
   leaf->value_size = 12 | (1 << 15);  // BIG_VALUE_FLAG set, vsize=12
-  leaf->hash[0] = 0xFF;               // non-matching hash
+  leaf->_hash[0] = 0xFF;               // non-matching _hash
   leaf->data[0] = 'A';                // key byte
 
   // Set BigValueDataHeader at the value position with enormous value_size
@@ -5750,13 +5750,13 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer,
   // (so we enter the child iteration) AND the array extends beyond buffer_end.
   // But L1469 already checks trie->size() >= remaining. So L1494 is only
   // reachable if trie->size() passes but the array calculation overflows or
-  // differs. Actually, array() returns (offset_e*)((uint8_t*)this +
-  // array_start()), while buffer_end is an absolute address. If the trie's hash
-  // DOESN'T match the local hash, we proceed to iterate children. The check at
+  // differs. Actually, branch_offsets() returns (offset_e*)((uint8_t*)this +
+  // branch_offsets_start()), while buffer_end is an absolute address. If the trie's _hash
+  // DOESN'T match the local _hash, we proceed to iterate children. The check at
   // L1494 is:
   //   (char*)(wire_array + count) > buffer_end
-  // Since wire_array = trie->array() = (offset_e*)((char*)trie + array_start())
-  // And count = trie->count(), this equals:
+  // Since wire_array = trie->branch_offsets() = (offset_e*)((char*)trie + branch_offsets_start())
+  // And count = trie->branch_count(), this equals:
   //   (char*)trie + array_start + count*8 > buffer_end
   //   i.e. (char*)trie + trie->size() > buffer_end
   // Which is the same check as L1469. So L1494 is ONLY reachable if L1469
@@ -5776,10 +5776,10 @@ BOOST_FIXTURE_TEST_CASE(test_receiver_trie_array_extends_past_buffer,
   //   _compare_wire_with_local(parent) → passes L1464-1470
   //   → iterates children → _compare_wire_with_local(child)
   //   → child is a TRIE, child passes L1464-1470
-  //   → child's hash doesn't match → iterate child's children → L1494
+  //   → child's _hash doesn't match → iterate child's children → L1494
   //
   // For L1494 to fire, child_trie->size() must fit in buffer (passes L1469)
-  // BUT (wire_array + count) > buffer_end. Since size() == array_end() ==
+  // BUT (wire_array + count) > buffer_end. Since size() == branch_offsets_end() ==
   // array_start + count*8, and wire_array starts at (char*)trie + array_start,
   // (wire_array + count) == (char*)trie + array_start + count*8 == (char*)trie
   // + size(). So the check is (char*)trie + size() > buffer_end — same as

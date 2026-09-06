@@ -67,7 +67,7 @@ void insert(TDB<Storage, _ReplicationDB>& db, const std::string& key,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Recursive verifier: walks data+hash tries in parallel, building the path
+// Recursive verifier: walks data+_hash tries in parallel, building the path
 // by only concatenating compressed prefixes and the leaf key.
 //
 // Branch bytes are NOT pushed separately — every child's first compressed
@@ -76,10 +76,10 @@ void insert(TDB<Storage, _ReplicationDB>& db, const std::string& key,
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @brief Walk data/hash trie in parallel, verify _HashLookup at every node.
+ * @brief Walk data/_hash trie in parallel, verify _HashLookup at every node.
  *
  * Path is built by concatenating compressed prefixes from each trie level.
- * At a leaf, the hash leaf key (0 or 1 bytes) is appended — it contains the
+ * At a leaf, the _hash leaf key (0 or 1 bytes) is appended — it contains the
  * branch byte (or nothing for NONE).  No separate branch-byte push needed.
  */
 template <typename DB>
@@ -92,7 +92,7 @@ void verify_lookup_recursive(DB* db,
   if (!data_offset) return;
 
   if (data_offset.type() == LEAF) {
-    // Append hash leaf key (0 bytes for NONE, 1 byte = branch char otherwise).
+    // Append _hash leaf key (0 bytes for NONE, 1 byte = branch char otherwise).
     // This completes the path: concat(compressed parts) + leaf_key.
     auto hash_leaf = db->template resolve<HLeafNode>(&hash_offset);
     size_t saved = path.size();
@@ -100,9 +100,9 @@ void verify_lookup_recursive(DB* db,
 
     const uint8_t* h = lookup.find(path, LEAF);
     BOOST_CHECK_MESSAGE(h != nullptr,
-                        "Leaf hash not found at path '" << path << "'");
+                        "Leaf _hash not found at path '" << path << "'");
     if (h) {
-      BOOST_CHECK_MESSAGE(memcmp(h, hash_leaf->hash, HASH_SIZE) == 0,
+      BOOST_CHECK_MESSAGE(memcmp(h, hash_leaf->_hash, HASH_SIZE) == 0,
                           "Hash mismatch at path '" << path << "'");
     }
     ++checked;
@@ -116,23 +116,23 @@ void verify_lookup_recursive(DB* db,
   auto hash_trie = db->template resolve<HTrieNode>(&hash_offset);
 
   size_t saved = path.size();
-  path.append((const char*)data_trie->compressed(), data_trie->len());
+  path.append((const char*)data_trie->prefix(), data_trie->prefix_len());
 
-  // Verify TRIE hash lookup: path is now the full accumulated compressed
+  // Verify TRIE _hash lookup: path is now the full accumulated compressed
   // from root to this trie node.
   {
     const uint8_t* h = lookup.find(path, TRIE);
     BOOST_CHECK_MESSAGE(h != nullptr,
-                        "Trie hash not found at path '" << path << "'");
+                        "Trie _hash not found at path '" << path << "'");
     if (h) {
-      BOOST_CHECK_MESSAGE(memcmp(h, hash_trie->hash, HASH_SIZE) == 0,
-                          "Trie hash mismatch at path '" << path << "'");
+      BOOST_CHECK_MESSAGE(memcmp(h, hash_trie->_hash, HASH_SIZE) == 0,
+                          "Trie _hash mismatch at path '" << path << "'");
     }
   }
 
   data_trie->for_each_branch([&](int k, auto* off) {
     auto data_child = *off;
-    auto hash_child = *hash_trie->offset(k);
+    auto hash_child = *hash_trie->branch_offset(k);
 
     // No branch byte push — child's compressed[0] or leaf key[0] IS it
     verify_lookup_recursive(db, data_child, hash_child, lookup, path, checked);
@@ -155,14 +155,14 @@ int verify_all_lookups(DB* db,
   if (!data_root) return 0;
 
   if (data_root.type() == LEAF) {
-    // Root is a leaf — path is just the hash leaf key (branch byte or empty).
+    // Root is a leaf — path is just the _hash leaf key (branch byte or empty).
     auto hash_leaf = db->template resolve<HLeafNode>(&hash_root);
     path.append((const char*)hash_leaf->data, hash_leaf->key_size);
 
     const uint8_t* h = lookup.find(path, LEAF);
-    BOOST_CHECK_MESSAGE(h != nullptr, "Root leaf hash not found");
+    BOOST_CHECK_MESSAGE(h != nullptr, "Root leaf _hash not found");
     if (h) {
-      BOOST_CHECK(memcmp(h, hash_leaf->hash, HASH_SIZE) == 0);
+      BOOST_CHECK(memcmp(h, hash_leaf->_hash, HASH_SIZE) == 0);
     }
     ++checked;
   } else {
@@ -306,7 +306,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_deterministic_hash, FreshFile) {
 
     _HashLookup<InternalDB> lookup(idb, &hash_root);
 
-    // Root is single leaf — hash leaf key = first byte of data key
+    // Root is single leaf — _hash leaf key = first byte of data key
     auto hash_leaf = idb->template resolve<HLeafNode>(&hash_root);
     std::string path((const char*)hash_leaf->data, hash_leaf->key_size);
     auto* h = lookup.find(path, LEAF);
@@ -356,14 +356,14 @@ BOOST_FIXTURE_TEST_CASE(lookup_different_values_different_hashes, FreshFile) {
   if (txn->root.type() == TRIE) {
     auto trie = idb->template resolve<DTrieNode>(&txn->root);
     auto htrie = idb->template resolve<HTrieNode>(&hash_root);
-    std::string base((const char*)trie->compressed(), trie->len());
+    std::string base((const char*)trie->prefix(), trie->prefix_len());
 
     std::vector<const uint8_t*> hashes;
     trie->for_each_branch([&](int k, auto* off) {
       auto data_child = *off;
-      auto hash_child = *htrie->offset(k);
+      auto hash_child = *htrie->branch_offset(k);
       if (data_child.type() == LEAF) {
-        // Build path: compressed + hash leaf key
+        // Build path: compressed + _hash leaf key
         auto hleaf = idb->template resolve<HLeafNode>(&hash_child);
         std::string p = base;
         p.append((const char*)hleaf->data, hleaf->key_size);
@@ -391,7 +391,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_after_update, FreshFile) {
   int n1 = verify_all_lookups(idb, idb->txn()->root, hash_root, lookup);
   BOOST_CHECK_EQUAL(n1, 2);
 
-  // Insert a 3rd key, rebuild hash trie
+  // Insert a 3rd key, rebuild _hash trie
   insert(db, "gamma", "v3");
   build_hash_trie(idb, idb->txn()->root, &hash_root);
 
@@ -448,7 +448,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_set_root, FreshFile) {
   int n1 = verify_all_lookups(idb1, idb1->txn()->root, hash_root1, lookup);
   BOOST_CHECK_EQUAL(n1, 1);
 
-  // Switch to db2's hash trie
+  // Switch to db2's _hash trie
   lookup.set_root(&hash_root2);
   int n2 = verify_all_lookups(idb2, idb2->txn()->root, hash_root2, lookup);
   BOOST_CHECK_EQUAL(n2, 1);
@@ -501,7 +501,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_repeated_calls, FreshFile) {
 
 BOOST_FIXTURE_TEST_CASE(lookup_trie_root_hash, FreshFile) {
   // When the root trie has empty compressed prefix, find("", TRIE)
-  // should return its hash.
+  // should return its _hash.
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
 
@@ -520,19 +520,19 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_root_hash, FreshFile) {
   auto htrie = idb->template resolve<HTrieNode>(&hash_root);
 
   // Root trie with empty compressed: find("", TRIE) should work
-  if (htrie->len() == 0) {
+  if (htrie->prefix_len() == 0) {
     const uint8_t* h = lookup.find("", TRIE);
     BOOST_CHECK_MESSAGE(h != nullptr,
-                        "Root trie hash with empty compressed not found");
+                        "Root trie _hash with empty compressed not found");
     if (h) {
-      BOOST_CHECK(memcmp(h, htrie->hash, HASH_SIZE) == 0);
+      BOOST_CHECK(memcmp(h, htrie->_hash, HASH_SIZE) == 0);
     }
   }
 }
 
 BOOST_FIXTURE_TEST_CASE(lookup_leaf_key_longer_than_one, FreshFile) {
   // Regression: when a data leaf has key_size > 1 (e.g. "ication" after
-  // splitting "application"), the hash leaf key is still only 1 byte
+  // splitting "application"), the _hash leaf key is still only 1 byte
   // (the branch byte 'i'). The lookup path must use that 1 byte, not
   // the full data leaf key.
   auto storage = Storage::create(TEST_FILE);
@@ -540,7 +540,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_leaf_key_longer_than_one, FreshFile) {
 
   // "apple" and "application" share prefix "appl", branch 'e' vs 'i'.
   // Leaf for "application" has data key "ication" (7 bytes) in data trie
-  // but hash leaf key is just "i" (1 byte).
+  // but _hash leaf key is just "i" (1 byte).
   insert(db, "apple", "v1");
   insert(db, "application", "v2");
 
@@ -558,7 +558,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_leaf_key_longer_than_one, FreshFile) {
 
 BOOST_FIXTURE_TEST_CASE(lookup_trie_with_shared_prefix, FreshFile) {
   // Two keys sharing a prefix produce a trie node with multi-byte compressed.
-  // find(accumulated_compressed, TRIE) must return that trie's hash.
+  // find(accumulated_compressed, TRIE) must return that trie's _hash.
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
 
@@ -574,16 +574,16 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_with_shared_prefix, FreshFile) {
   BOOST_REQUIRE(hash_root.type() == TRIE);
 
   auto htrie = idb->template resolve<HTrieNode>(&hash_root);
-  std::string root_compressed((const char*)htrie->compressed(), htrie->len());
+  std::string root_compressed((const char*)htrie->prefix(), htrie->prefix_len());
 
   _HashLookup<InternalDB> lookup(idb, &hash_root);
 
-  // find(full_compressed, TRIE) should return the root trie hash
+  // find(full_compressed, TRIE) should return the root trie _hash
   const uint8_t* h = lookup.find(root_compressed, TRIE);
   BOOST_CHECK_MESSAGE(h != nullptr,
-                      "Trie hash not found for compressed='" << root_compressed << "'");
+                      "Trie _hash not found for compressed='" << root_compressed << "'");
   if (h) {
-    BOOST_CHECK(memcmp(h, htrie->hash, HASH_SIZE) == 0);
+    BOOST_CHECK(memcmp(h, htrie->_hash, HASH_SIZE) == 0);
   }
 }
 
@@ -609,25 +609,25 @@ BOOST_FIXTURE_TEST_CASE(lookup_nested_trie_hashes, FreshFile) {
 
   // Root trie
   auto htrie = idb->template resolve<HTrieNode>(&hash_root);
-  std::string root_comp((const char*)htrie->compressed(), htrie->len());
+  std::string root_comp((const char*)htrie->prefix(), htrie->prefix_len());
 
   const uint8_t* h = lookup.find(root_comp, TRIE);
-  BOOST_REQUIRE_MESSAGE(h != nullptr, "Root trie hash not found");
-  BOOST_CHECK(memcmp(h, htrie->hash, HASH_SIZE) == 0);
+  BOOST_REQUIRE_MESSAGE(h != nullptr, "Root trie _hash not found");
+  BOOST_CHECK(memcmp(h, htrie->_hash, HASH_SIZE) == 0);
 
   // Walk to the 'a' branch sub-trie (should be compressed "ab")
   if (htrie->isset('a')) {
-    auto child_off = *htrie->offset('a');
+    auto child_off = *htrie->branch_offset('a');
     if (child_off.type() == TRIE) {
       auto sub_trie = idb->template resolve<HTrieNode>(&child_off);
       std::string sub_path = root_comp;
-      sub_path.append((const char*)sub_trie->compressed(), sub_trie->len());
+      sub_path.append((const char*)sub_trie->prefix(), sub_trie->prefix_len());
 
       const uint8_t* h2 = lookup.find(sub_path, TRIE);
       BOOST_CHECK_MESSAGE(h2 != nullptr,
-                          "Sub-trie hash not found at path '" << sub_path << "'");
+                          "Sub-trie _hash not found at path '" << sub_path << "'");
       if (h2) {
-        BOOST_CHECK(memcmp(h2, sub_trie->hash, HASH_SIZE) == 0);
+        BOOST_CHECK(memcmp(h2, sub_trie->_hash, HASH_SIZE) == 0);
       }
     }
   }
@@ -655,16 +655,16 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_with_none_branch, FreshFile) {
   _HashLookup<InternalDB> lookup(idb, &hash_root);
 
   // The root trie compressed should be "ab" with a NONE-branch leaf.
-  // find("ab", TRIE) must return the trie hash via Case 2 (NONE→leaf→parent).
+  // find("ab", TRIE) must return the trie _hash via Case 2 (NONE→leaf→parent).
   auto htrie = idb->template resolve<HTrieNode>(&hash_root);
-  std::string comp((const char*)htrie->compressed(), htrie->len());
+  std::string comp((const char*)htrie->prefix(), htrie->prefix_len());
   BOOST_REQUIRE_EQUAL(comp, "ab");
 
   const uint8_t* h = lookup.find("ab", TRIE);
   BOOST_CHECK_MESSAGE(h != nullptr,
-                      "Trie hash with NONE branch not found at 'ab'");
+                      "Trie _hash with NONE branch not found at 'ab'");
   if (h) {
-    BOOST_CHECK(memcmp(h, htrie->hash, HASH_SIZE) == 0);
+    BOOST_CHECK(memcmp(h, htrie->_hash, HASH_SIZE) == 0);
   }
 
   // Full walk should verify both leaves and the trie
@@ -674,9 +674,9 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_with_none_branch, FreshFile) {
 
 BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
   // find(path, TRIE) for a path that doesn't correspond to any trie
-  // boundary may return a non-matching hash (harmlessly rejected by the
-  // caller's hash comparison) or nullptr.  Either way, the caller won't
-  // incorrectly prune because the hash won't match.
+  // boundary may return a non-matching _hash (harmlessly rejected by the
+  // caller's _hash comparison) or nullptr.  Either way, the caller won't
+  // incorrectly prune because the _hash won't match.
   auto storage = Storage::create(TEST_FILE);
   auto db = storage->open<Storage::ReplicationDB>("test");
   insert(db, "apple", "v1");
@@ -688,13 +688,13 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
 
   _HashLookup<InternalDB> lookup(idb, &hash_root);
 
-  // Compute the actual trie hash at "appl" for comparison
+  // Compute the actual trie _hash at "appl" for comparison
   auto htrie = idb->template resolve<HTrieNode>(&hash_root);
-  const uint8_t* trie_hash = htrie->hash;
+  const uint8_t* trie_hash = htrie->_hash;
 
   // "ap" is mid-compressed of "appl" → not a trie boundary.
-  // Returns the "appl" trie hash (nearest trie), which won't match any
-  // wire hash for path "ap".
+  // Returns the "appl" trie _hash (nearest trie), which won't match any
+  // wire _hash for path "ap".
   const uint8_t* h_ap = lookup.find("ap", TRIE);
   if (h_ap) {
     BOOST_CHECK(memcmp(h_ap, trie_hash, HASH_SIZE) == 0);
@@ -713,7 +713,7 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
 
 /**
  * Test that _HashLookup::find(path, LEAF) works when the remaining search
- * key is longer than the hash leaf's 1-byte key.
+ * key is longer than the _hash leaf's 1-byte key.
  *
  * Hash leaves store only the branch char (data[0], key_size=1) for memory
  * efficiency.  When the cursor reaches such a leaf, _Transition::find()
@@ -723,9 +723,9 @@ BOOST_FIXTURE_TEST_CASE(lookup_trie_nonexistent_path, FreshFile) {
  *
  * Scenario:
  *   Keys "abc" (NONE leaf) and "abcXYZ" (branch 'X' leaf with key_size=1)
- *   → hash trie: root compressed="abc", branches NONE and 'X'
+ *   → _hash trie: root compressed="abc", branches NONE and 'X'
  *   → find("abcXYZ", LEAF) navigates "abc" (3 bytes consumed), then branch 'X'
- *     → hash leaf has data[0]='X', key_size=1
+ *     → _hash leaf has data[0]='X', key_size=1
  *     → remaining key "XYZ" (3 bytes) vs leaf key "X" (1 byte) → cmp=1
  *     → back.success() == false, but cursor correctly reached the leaf
  */
@@ -743,14 +743,14 @@ BOOST_FIXTURE_TEST_CASE(lookup_leaf_with_multi_byte_suffix, FreshFile) {
 
   _HashLookup<InternalDB> lookup(idb, &hash_root);
 
-  // Look up "abcXYZ" — the remaining key "XYZ" is longer than the hash
+  // Look up "abcXYZ" — the remaining key "XYZ" is longer than the _hash
   // leaf's key_size=1 (data[0]='X').  With the old back.success() check
-  // this would return nullptr.  With back.is_leaf() it returns the hash.
+  // this would return nullptr.  With back.is_leaf() it returns the _hash.
   auto* abcxyz_hash = lookup.find("abcXYZ", LEAF);
   BOOST_REQUIRE_MESSAGE(abcxyz_hash != nullptr,
-                        "Leaf hash for 'abcXYZ' found via is_leaf()");
+                        "Leaf _hash for 'abcXYZ' found via is_leaf()");
 
-  // Verify the returned hash is non-zero
+  // Verify the returned _hash is non-zero
   bool non_zero = false;
   for (size_t i = 0; i < HASH_SIZE; ++i) {
     if (abcxyz_hash[i] != 0) { non_zero = true; break; }
@@ -760,6 +760,6 @@ BOOST_FIXTURE_TEST_CASE(lookup_leaf_with_multi_byte_suffix, FreshFile) {
   // NONE-branch leaf for "abc" should still work
   auto* abc_hash = lookup.find("abc", LEAF);
   BOOST_REQUIRE_MESSAGE(abc_hash != nullptr,
-                        "Leaf hash for 'abc' (NONE-branch) found");
+                        "Leaf _hash for 'abc' (NONE-branch) found");
   BOOST_CHECK(abc_hash != abcxyz_hash);  // different keys → different hashes
 }

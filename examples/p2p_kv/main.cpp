@@ -94,7 +94,7 @@ static uint64_t utc_epoch_ms_now() {
   using namespace std::chrono;
   return static_cast<uint64_t>(
       duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-          .count());
+        .count());
 }
 
 static bool decode_timestamped_value(const Slice& encoded, uint64_t* out_ts,

@@ -23,7 +23,7 @@ using namespace leaves;
 
 // Wait for background hashing to catch up to the current transaction.
 // Call after commit() and before begin() to ensure hashes are available.
-// Hashing is now synchronous: acquire_hash_trie() always updates the hash
+// Hashing is now synchronous: acquire_hash_trie() always updates the _hash
 // trie before returning, so there is nothing to poll for.
 template <typename DB>
 void wait_for_hashing(DB* db, int /*timeout_ms*/ = 5000) {
@@ -239,7 +239,7 @@ struct _BigMetaTraits : public _MemoryMapTraits {
   typedef BigMetaAspect Aspect;
 };
 
-// For replication tests — uses plain _MemoryMapTraits (no hash on data nodes)
+// For replication tests — uses plain _MemoryMapTraits (no _hash on data nodes)
 struct _ReplicationAspectTraits : public _MemoryMapTraits {
   typedef TestAspect Aspect;
 };

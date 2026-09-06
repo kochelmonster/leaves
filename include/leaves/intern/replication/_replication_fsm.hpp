@@ -263,7 +263,7 @@ struct ReplicationSenderFSM {
     _transport = transport;
     _events = events;
 
-    // Acquire the hash trie — updates it synchronously if stale, then pins
+    // Acquire the _hash trie — updates it synchronously if stale, then pins
     // the matching txn for the duration of this replication session.
     _txn = _db->acquire_hash_trie();
     _sender._txn = _txn;
@@ -374,7 +374,7 @@ struct ReplicationSenderFSM {
                             "session_id=%llu restarting round\n",
                             (unsigned long long)_session_id);
         // Receiver merged what it had and wants a fresh round.
-        // Re-acquire hash trie so the sender reads an updated snapshot.
+        // Re-acquire _hash trie so the sender reads an updated snapshot.
         _db->release_hash_trie(_txn);
         _txn = _db->acquire_hash_trie();
         _sender._txn = _txn;
@@ -899,7 +899,7 @@ struct ReplicationReceiverFSM {
   using TempTrieNode = typename WireTempTraits::TrieNode;
   using TempLeafNode = typename WireTempTraits::LeafNode;
   using LocalCursor = typename DB::Cursor;
-  // Hash trie node types (hash stored outside data trie)
+  // Hash trie node types (_hash stored outside data trie)
   using HashTraits_ = HashTrieTraits<Traits>;
   using HashTrieNode_ = typename HashTraits_::TrieNode;
   using HashLeafNode_ = typename HashTraits_::LeafNode;
@@ -1081,7 +1081,7 @@ struct ReplicationReceiverFSM {
     _transport = transport;
     _events = events;
 
-    // Acquire the hash trie — updates it synchronously if stale, then pins
+    // Acquire the _hash trie — updates it synchronously if stale, then pins
     // the matching txn for the duration of this replication session.
     _txn = _db->acquire_hash_trie();
     _state = State::RECEIVING;
@@ -1099,7 +1099,7 @@ struct ReplicationReceiverFSM {
     _alloc_receive_buffer();
     _temp_root = 0;
 
-    // Reset hash lookup for fresh session (root may have changed)
+    // Reset _hash lookup for fresh session (root may have changed)
     _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
 
     // Reset big value state
@@ -1396,14 +1396,14 @@ struct ReplicationReceiverFSM {
     }
 
     // Beginning of a new round — refresh cursor to latest committed
-    // state so hash comparisons see previously merged data.
+    // state so _hash comparisons see previously merged data.
     if (path.empty()) {
       _cursor->update();
       _ensure_cursor_root();
     }
 
     // Compare wire nodes with local nodes *before* connecting to
-    // the temp trie.  If the subtrie root's hash already matches
+    // the temp trie.  If the subtrie root's _hash already matches
     // local, _compare_wire_with_local zeroes it and there is
     // nothing to connect (avoids feeding skeleton/identical data
     // to the merger).
@@ -1439,7 +1439,7 @@ struct ReplicationReceiverFSM {
         size_t parent_len = _path_buffer.size();
         if (transfer_hdr->root.type() == TRIE) {
           auto* trie = transfer_hdr->root.template resolve<TempTrieNode>();
-          _path_buffer.append((char*)trie->compressed(), trie->len());
+          _path_buffer.append((char*)trie->prefix(), trie->prefix_len());
         } else {
           auto* leaf = transfer_hdr->root.template resolve<TempLeafNode>();
           auto key = leaf->key();
@@ -1476,7 +1476,7 @@ struct ReplicationReceiverFSM {
     }
 
     // If temp DB exceeds memory budget, merge what we have and ask the
-    // sender to restart from root.  The next round's hash comparisons
+    // sender to restart from root.  The next round's _hash comparisons
     // will prune already-replicated subtrees automatically.
     // Guard: at least one new leaf must have been received, otherwise
     // a fraction merge would make no progress and loop forever.
@@ -1531,7 +1531,7 @@ struct ReplicationReceiverFSM {
     return _parent_cursor.stack.back().offset;
   }
 
-  // Handle a wire leaf node: bounds-check, hash compare, prune/mismatch.
+  // Handle a wire leaf node: bounds-check, _hash compare, prune/mismatch.
   // Only adds to _prune_paths for big-value leaves — small leaves are fully
   // contained in wire data so there is nothing for the sender to skip.
   // Called after _compare_wire_with_local has validated wire_node pointer and
@@ -1552,13 +1552,13 @@ struct ReplicationReceiverFSM {
     }
 
     size_t path_len = path.size();
-    const uint8_t* wire_hash = leaf->hash;
+    const uint8_t* wire_hash = leaf->_hash;
     {
       auto key = leaf->key();
       path.append(key.data(), key.size());
     }
 
-    // Compare hash from hash trie at this path
+    // Compare _hash from _hash trie at this path
     const uint8_t* local_hash = _hash_lookup.find(path, LEAF);
     if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
       // Hashes match — zero wire node to avoid merging.
@@ -1598,8 +1598,8 @@ struct ReplicationReceiverFSM {
     return true;
   }
 
-  // Handle a wire trie node: bounds-check, hash compare, prune or recurse.
-  // Always adds to _prune_paths on hash match (trie ACK tells sender to
+  // Handle a wire trie node: bounds-check, _hash compare, prune or recurse.
+  // Always adds to _prune_paths on _hash match (trie ACK tells sender to
   // prune entire subtree).
   // Called after _compare_wire_with_local has validated wire_node pointer and
   // resolved-pointer bounds.
@@ -1620,10 +1620,10 @@ struct ReplicationReceiverFSM {
     }
 
     size_t path_len = path.size();
-    const uint8_t* wire_hash = trie->hash;
-    path.append((char*)trie->compressed(), trie->len());
+    const uint8_t* wire_hash = trie->_hash;
+    path.append((char*)trie->prefix(), trie->prefix_len());
 
-    // Compare hash from hash trie at this path
+    // Compare _hash from _hash trie at this path
     const uint8_t* local_hash = _hash_lookup.find(path, TRIE);
     if (local_hash && std::memcmp(wire_hash, local_hash, HASH_SIZE) == 0) {
       // Hashes match — zero wire node and tell sender to prune subtree
@@ -1634,8 +1634,8 @@ struct ReplicationReceiverFSM {
     }
 
     // Hashes differ — iterate through children
-    TempOffset* wire_array = trie->array();
-    int count = trie->count();
+    TempOffset* wire_array = trie->branch_offsets();
+    int count = trie->branch_count();
 
     // Bounds-check the trie's child array against the buffer
     if ((char*)(wire_array + count) >
@@ -1650,7 +1650,7 @@ struct ReplicationReceiverFSM {
     _pending_children += count;
 
     // path already includes the full compressed prefix (appended above
-    // during hash lookup).  Children will append their own key/compressed.
+    // during _hash lookup).  Children will append their own key/compressed.
 
     for (int i = 0; i < count; ++i) {
       TempOffset* child_offset = wire_array + i;
@@ -1728,7 +1728,7 @@ struct ReplicationReceiverFSM {
 
     _current_db_type = new_db_type;
 
-    // Point hash lookup at the correct hash trie root for the new db type
+    // Point _hash lookup at the correct _hash trie root for the new db type
     auto& hc = _db->_header->hash_control;
     auto* root = (new_db_type == DbType::DB_DELETION) ? &hc.deletion_hash_root
                                                       : &hc.hash_root;
@@ -1834,7 +1834,7 @@ struct ReplicationReceiverFSM {
   // Clear merge-related state after a successful merge or when aborting
   // a replication session.  Leaves _merge_policy intact for the next
   // round.  Callers are responsible for freeing temp buffers and
-  // releasing the hash trie / replication slot.
+  // releasing the _hash trie / replication slot.
   void _clear_merge_state() {
     LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
                         "Receiver clear_merge_state: session_id=%llu\n",
@@ -1947,11 +1947,11 @@ struct ReplicationReceiverFSM {
     if (!_merge_all_phases()) return;  // error already reported
     _clear_merge_state();
 
-    // Re-acquire hash trie so next round sees the freshly merged state.
+    // Re-acquire _hash trie so next round sees the freshly merged state.
     _db->release_hash_trie(_txn);
     _txn = _db->acquire_hash_trie();
 
-    // Reset hash lookup cursor — the old hash trie pages may have been
+    // Reset _hash lookup cursor — the old _hash trie pages may have been
     // freed/reused, so the cursor's keep_stack() cache is stale.
     _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
 
