@@ -1,162 +1,153 @@
-# A new concept for key value stores
+# A New Concept for Key-Value Stores
 
 Most embedded key-value stores are built around a small family of storage
-structures: B-trees, B+ trees, LSM trees, and hash tables. Tries are usually
-left for routing tables, dictionaries, autocomplete, and specialist string
-indexes. That is not because tries are bad at lookup. It is because the obvious
-way to store a trie is too sparse for a database.
+structures: B-trees, B+ trees, LSM trees, and _hash tables. Tries are usually
+reserved for routing tables, dictionaries, autocomplete, and specialized
+string indexes.
 
-Leaves explores a different point in the design space: a persistent,
-copy-on-write trie whose nodes are compressed enough to live directly in durable
-storage. The important claim is not merely that tries can search by key bytes.
-The important claim is that a trie can become a practical database structure if
-the node format solves the space problem that made traditional tries unattractive
-for general-purpose storage.
+This article examines whether a suitable trie variant can outperform
+conventional key-value-store layouts.
 
-This article explains that argument in three parts:
+## Why tries are not used as databases
 
-1. why tries are not usually used as databases;
-2. how Leaves solves the space problem with compressed persistent trie nodes;
-3. why tries give replication a natural Merkle-tree shape.
+A [trie](https://en.wikipedia.org/wiki/Trie) is a search tree whose path is determined by the symbols of a key. For byte strings, each step consumes one byte. This gives tries several appealing properties for key-value storage.
 
-## Chapter 1: Why tries are not used as databases
+Lookup depends on key length, $O(k)$, rather than directly on the number of stored records. A search does not compare the requested key with separator keys at every tree level or rely on collision handling. Common prefixes are shared structurally, and ordered traversal follows naturally when child edges are kept in byte order.
 
-![257 links](links.svg)
+Those properties alone do not make a practical database.
 
-A trie is a search tree where the path through the tree is determined by the
-symbols of the key. For byte strings, each step consumes a byte. That gives tries
-several appealing properties for key-value storage.
+The conventional database answer is the [B-tree](https://en.wikipedia.org/wiki/B-tree), or, more commonly, the [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree). B-trees were designed around slow storage and fixed-size pages. Each internal page stores many separator keys and child pointers, producing a high fanout and a small height. A lookup may therefore require only a few page reads, each of which brings in many useful keys. B-trees also support sorted iteration well because neighboring keys are packed into pages. Decades of database engineering have built concurrency, recovery, bulk loading, and cache behavior around this page-oriented model. A simple comparison-based characterization of lookup is $O(k \log n)$.
 
-Lookup depends on key length, not on the number of stored records. A search does
-not compare the requested key against separator keys at each tree level, and it
-does not need a hash table with collision handling. Common prefixes are shared
-structurally. Ordered traversal also follows naturally when child edges are kept
-in byte order.
+A naive trie loses this comparison. A byte trie can have up to 256 children per internal node. If every node stores a full 256-entry pointer array, most entries will usually be empty. The database then pays for absence: memory and disk space are reserved for branches that do not exist. A 256-entry array of 8-byte links uses 2 KiB per node, even when only a few children are present.
 
-Those properties are good. They are also not enough.
+A linked-list or map-of-children representation saves space, but gives back much of the lookup advantage through extra pointer chasing, variable node layouts, and poorer locality. Long keys can also create chains of single-child nodes, turning one logical key into many stored nodes.
 
-The conventional database answer is the B-tree, or more commonly the B+ tree.
-B-trees were designed around slow storage and fixed-size pages. Each internal
-page stores many separator keys and child pointers, which gives the tree a high
-fanout and a small height. A database lookup may need only a few page reads, and
-each page read brings in many useful keys at once. B-trees also handle sorted
-iteration well because neighboring keys are packed into pages, and decades of
-database engineering have built concurrency, recovery, bulk loading, and cache
-behavior around this page-oriented model.
+The central problem is therefore space. The direct addressing that makes a trie attractive also creates a sparse node representation. This can be acceptable for in-memory dictionaries, and prefix semantics can justify the cost in specialized domains such as IP routing. For a general persistent key-value store, unused child slots and extra node reads are a substantial tax.
 
-The trie loses this comparison if it is implemented naively. A byte trie can have
-up to 256 possible children per internal node. If every node stores a full
-256-entry pointer array, most entries are usually empty. The database then pays
-for absence: memory and disk space are spent on branches that do not exist. A
-linked-list or map-of-children representation saves space, but it gives back much
-of the lookup advantage through extra pointer chasing, variable node layouts, and
-worse locality. Long keys can also create long chains of single-child nodes,
-turning one logical key into many stored nodes.
+Compressed tries, radix trees, Patricia trees, and adaptive radix trees address this weakness by compressing empty paths, reducing child storage, or selecting node formats according to density.
 
-So the blunt answer is: tries are not commonly used as databases because of
-space. The direct addressing that makes a trie attractive also creates a sparse
-node representation. For in-memory dictionaries that may be acceptable, and for
-special domains like IP routing the prefix semantics can justify the cost. For a
-general persistent key-value store, unused child slots and extra node reads are a
-heavy tax.
+## Two-Level Bitmap Compression Solves the Space Problem
 
-Compressed tries, radix trees, Patricia trees, and adaptive radix trees all try
-to attack this weakness. They compress empty paths, reduce child storage, or
-choose different node formats depending on density. Leaves belongs to that family
-of ideas, but applies the compression to a durable, mmap-friendly,
-copy-on-write database layout rather than to a transient in-memory index.
-
-## Chapter 2: How Leaves solves the space problem
-
-Leaves stores the database as a persistent trie. Nodes are allocated in pages by
-the Leaves memory manager and updates use copy-on-write: committed nodes are
-immutable, and a write transaction creates new nodes for the parts of the trie it
-changes. This makes the trie suitable for ACID-style snapshots and memory-mapped
-storage, but it also raises the bar for node compactness. If every updated trie
-node were a large 256-pointer object, persistence would amplify the classic trie
-space problem.
+Instead of using a fixed-size child-pointer array, a two-level bitmap can represent sparse children compactly while preserving direct byte selection. Modern CPUs provide efficient population-count operations for this layout.
 
 ![Compression](compress.svg)
 
-The core Leaves node is `_TrieNode`. It uses two forms of compression at the
-same time.
+Consider a node with children at byte values 5, 70, and 130. A naive representation allocates one child-link slot for every possible byte, retaining 256 offsets although only three are used. The first compression extracts those three offsets into a packed array in byte order: offset 0 belongs to byte 5, offset 1 to byte 70, and offset 2 to byte 130. A 256-bit presence bitmap, held as eight 32-bit words for ranges 0-31 through 224-255, records which byte values have an offset. With 4-byte offsets, this reduces the example from a 1,024-byte offset array to three offsets and 32 bytes of bitmap data, or 44 bytes.
 
-The first form is prefix compression. Each internal trie node stores a compressed
-key segment in `_compressed_data`, with its length in `_compressed_len`. This
-means a sequence of bytes with no branch point does not need one node per byte.
-The cursor first checks this compressed prefix against the remaining lookup key;
-only after the prefix matches does traversal continue to the next branch byte.
-This is the usual radix-tree idea, but built into the persistent node format.
+The second compression removes bitmap words that contain no set bits. Bytes 5, 70, and 130 lie in groups 0, 2, and 4, so only those three 32-bit words remain. They are packed into the lower-bitmap array, while an 8-bit upper bitmap records the groups that survived: `0b00010101` has bits 0, 2, and 4 set. The resulting node stores three offsets, three lower bitmap words, and the one-byte upper bitmap: 25 bytes before header and alignment costs.
 
-The second form is sparse child compression. Leaves still treats a byte as a
-direct branch selector, but it does not store 256 child offsets. Instead, it uses
-a two-level bitmap index:
+To find a child for byte `c`, first compute its group as `c >> 5` and test the corresponding bit in the upper bitmap. The population count of the preceding set upper bits identifies that group's packed lower bitmap. Then use `c & 0x1f` to test the bit within the 32-bit word. If that bit is set, population counts over the preceding lower bits determine the child's position in the packed offset array. This preserves a predictable, compact lookup path without reserving storage for absent children.
 
-1. `_upper` is an 8-bit bitmap. Each bit represents one group of 32 possible
-   byte values: 0-31, 32-63, and so on up to 224-255.
-2. `_lower[]` contains one 32-bit bitmap for each active group. A bit in a lower
-   bitmap marks that the exact byte value exists as a branch.
-3. the offset array stores only the child offsets for branches that actually
-   exist.
+The trie is also a radix trie: sequences of nodes with a single child are collapsed into a prefix stored at one node.
 
-Lookup stays direct. For a byte `c`, Leaves computes `ubit(c) = c >> 5` to find
-the upper group and `lbit(c) = c & 0x1F` to find the bit inside that group. If
-the upper bit is absent, the child does not exist. If the lower bit is absent,
-the child does not exist. If both are present, Leaves uses a popcount over the
-preceding set bits to find the index in the compact offset array. The result is
-still O(1) child selection for one byte, but the node pays for existing branches,
-not for all 256 possible branches.
+Conceptually, the variable-sized portion of a `_TrieNode` follows its fixed
+header:
 
-This is the main shift. Leaves keeps the property that made tries attractive:
-following the key through the structure without comparator-heavy tree descent.
-But it removes the representation that made tries unattractive: the full child
-pointer array. A sparse node with three children stores three offsets, not 256.
-The upper and lower bitmaps are small enough to make the mapping fast, and the
-offset array is dense enough to be persistent-storage friendly.
+```cpp
+struct _TrieNode {
+    uint16_t _branch_count;       // number of packed branch offsets
+    uint8_t _branch_bits_index;   // populated 32-byte groups
+    uint8_t _prefix_len;          // radix-prefix length
+    uint8_t _branch_bits_pos;     // start of branch_bits[], in uint32_t units
+    uint8_t _branch_offsets_pos;  // start of branch_offsets[], in offset_t units
+    uint8_t _prefix[];            // compressed key bytes
+    uint32_t _branch_bits[];      // one word per populated group
+    offset_t _branch_offsets[];   // packed child links in byte order
+};
+```
 
-Leaves separates internal navigation nodes from value nodes. `_LeafNode` stores
-the actual key and value bytes. Small values are stored inline. Large values can
-be stored out of line by the memory manager, with a reference kept in the leaf.
-That matters because a database node layout must handle both common tiny records
-and occasional large values without making every normal lookup drag a large value
-payload through the trie.
+The sketch shows the layout rather than literal C++. A concrete implementation uses one variable-sized allocation; `_branch_bits_pos` and `_branch_offsets_pos` locate the packed bitmap and child-link regions after the compressed prefix. Padding preserves the alignment required by the bitmap words and link type.
 
-The performance result is not only theoretical. The benchmark article
-[Can Persistent Tries Beat LMDB? Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked)
-compares Leaves against LMDB and other engines with YCSB-style workloads. In
-that benchmark, Leaves is faster than LMDB in several read-heavy, mixed,
-batched-update, ACID, and concurrent scenarios. That is important because LMDB is
-a strong B+ tree baseline: it is memory-mapped, copy-on-write, and highly tuned.
-The result supports the architectural claim that a compact persistent trie can
-beat a B-tree design on lookup-heavy and update-heavy workloads.
+A separate leaf node stores key and value data:
 
-The same benchmark also shows the boundary. LMDB can still win on longer range
-scans. That is exactly where B-tree page locality is strongest: once the start
-key is found, adjacent records tend to sit near each other in leaf pages. Leaves'
-advantage is not that tries magically dominate every workload. The advantage is
-that the old objection to tries, excessive space and indirection, is no longer
-fatal when the trie node is compressed and stored with a suitable memory manager.
+```cpp
+struct LeafNode {
+    uint8_t key_length;
+    uint8_t key[];
+    uint64_t value;
+};
+```
 
-That conclusion also matches Leaves' development history. Several locality
-experiments were tried: placing allocations near parent nodes, clustering child
-nodes with their parent during insertion, and clustering neighboring leaves in a
-single memory block. These ideas looked plausible, but in practice they did not
-pay for themselves. The extra work, especially the copying required during
-clustering and page splits, cost more than the locality improvement returned.
-The durable win came from a compact node representation, copy-on-write updates,
-and allocator behavior that fits the persistent trie rather than trying to patch
-a sparse trie after the fact.
+## Trie Compression Is Only Half the Story: Memory Layout Is Crucial
 
-## Chapter 3: Bonus: Replication
+Compact nodes must also be allocated and reclaimed efficiently. Rather than  using one arbitrary allocation size, the memory manager places each node in a fixed page class. The classes are calculated from the node layout and cover common fanouts: 2, 3, 4, 10, 16, 64, and 256 branches, with additional classes for pages with larger leaves.
+
+![Page-class allocation and transaction-safe recycling](memory-manager.svg)
+
+The memory manager stores one recycling pool for every page class in a compact array. Selecting a class therefore also selects its pool directly. A released page enters the matching FIFO queue together with the transaction that released it. The allocator may reuse the oldest queued page only after all older reader snapshots have advanced beyond that transaction; until then, the page remains in the pool but cannot be repurposed.
+
+An allocation first tries an eligible page from the selected pool. If no page is available, it uses retained leftover space from an earlier area, then bump allocates from the active fixed-size area, and finally obtains a new area. This keeps allocation fast, reuses pages of the correct size, and avoids discarding the useful tail of an exhausted area.
+
+Copy-on-write makes this page layout persistent. An update writes replacement
+pages instead of modifying pages reachable from an active snapshot. A commit
+publishes the new root only after its replacement pages are complete, allowing
+readers to continue from their previous root while old pages wait for safe
+recycling.
+
+## How Does It Perform?
+
+Leaves implements the preceding ideas: radix-compressed trie nodes, two-level bitmap-indexed children, page-oriented allocation and recycling, and copy-on-write updates for its persistent storage. The following measurements describe one local run, not a universal ranking. Storage hardware, processor architecture, compiler options, value sizes, and access patterns all affect the result.
+
+### In-Memory Comparison
+
+`bench_memdb_vs_hashtable` compares Leaves' in-memory trie with `std::unordered_map` and `std::map`. The test used one million randomly generated 32-byte binary keys, 100-byte values, and two rounds on Linux 6.8, GCC 13.3, and an Intel Core i7-12700KF. The figures below are microseconds per operation; lower is better.
+
+| Workload | Leaves `_MemoryDB` | `std::unordered_map` | `std::map` |
+| --- | ---: | ---: | ---: |
+| Sequential fill | 0.162 | 0.442 | 0.202 |
+| Random fill | 0.179 | 0.272 | 0.907 |
+| Random read | 0.176 | 0.078 | 1.084 |
+| Sequential read | 0.068 | 0.065 | 0.089 |
+| Overwrite | 0.192 | 0.125 | 1.183 |
+| Erase | 0.314 | 0.172 | 1.021 |
+
+![In-memory key-value store benchmark](memorydb-benchmark.svg)
+
+The same run reported 195.0 MiB for `_MemoryDB`, 212.1 MiB for
+`std::unordered_map`, and 219.3 MiB for `std::map` after filling the dataset.
+Those numbers are allocator-specific process or container measurements, so they
+are useful as a local comparison rather than as a portable memory-use guarantee.
+The trie performed particularly well on insertion and ordered traversal, while
+the _hash table retained its expected advantage for random reads and overwrites.
+
+### Persistent Comparison
+
+For persistent storage, `db_bench_leaves` was compared with
+`db_bench_mdb --wmap`. Both programs used one million 16-byte decimal keys,
+100-byte values, one million reads, 1,000-operation write batches, and the
+workloads `fillseq`, `fillrandom`, `overwrite`, `readrandom`, and `readseq`.
+Leaves used `MapStorage` with its write-ahead log disabled; LMDB used writable
+memory mapping with asynchronous map updates. The table reports one local run
+on the same Linux, compiler, and processor configuration as above.
+
+| Workload | Leaves (microseconds/op) | LMDB `--wmap` (microseconds/op) |
+| --- | ---: | ---: |
+| Sequential fill | 0.093 | 0.088 |
+| Random fill | 0.336 | 0.815 |
+| Overwrite | 0.358 | 0.886 |
+| Random read | 0.262 | 0.494 |
+| Sequential read | 0.042 | 0.016 |
+
+On this workload, Leaves was faster for random writes and random reads, while
+LMDB was faster for sequential insertion and sequential traversal. The result
+should be treated as a workload-specific observation: neither configuration
+includes durable write-ahead logging, and a production evaluation should also
+test the required durability mode, dataset size, storage device, and concurrent
+access pattern.
+
+For a broader performance discussion, see [Can Persistent Tries Beat LMDB?
+Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
+
+## Bonus: Replication
 
 Tries have another property that B-trees do not expose as naturally: every
 subtree has a semantic name. The path to a node is a key prefix. All keys below
-that node share that prefix. If the database stores a hash for each subtree, then
-that hash becomes a compact statement about all key-value pairs below the prefix.
+that node share that prefix. If the database stores a _hash for each subtree, then
+that _hash becomes a compact statement about all key-value pairs below the prefix.
 
 That is the Merkle-trie idea. A Merkle tree hashes data at the leaves and hashes
-children into parent hashes, producing a root hash that summarizes the whole
-structure. If two peers have the same root hash, they have the same state under
+children into parent hashes, producing a root _hash that summarizes the whole
+structure. If two peers have the same root _hash, they have the same state under
 that root. If the root hashes differ, the peers can descend into child hashes and
 find the differing subtrees without transferring the entire database. Systems
 such as Dynamo-inspired stores, Cassandra, and Riak use this style of
@@ -169,11 +160,11 @@ the normal database with replication-specific state:
 
 - the main trie stores current key-value data;
 - the deletion trie stores deleted keys so removals can be replicated;
-- hash tries cache subtree hashes for both the main trie and the deletion trie.
+- _hash tries cache subtree hashes for both the main trie and the deletion trie.
 
 During a replication session, the sender and receiver do not blindly copy the
-whole database. The sender transmits hash subtries. The receiver compares those
-hashes with its local hash trie. Matching subtrees can be acknowledged and
+whole database. The sender transmits _hash subtries. The receiver compares those
+hashes with its local _hash trie. Matching subtrees can be acknowledged and
 skipped. Divergent or missing subtrees are expanded and transferred. The process
 uses explicit protocol messages such as trie data, subtree acknowledgments,
 big-value chunks, fraction completion, and final completion, driven by the
@@ -184,17 +175,18 @@ trie. Second, it synchronizes the deletion trie. Third, it streams deferred larg
 values. When the receiver has the necessary data, it applies the received state
 through a staged merge and commits it atomically. For very large sessions, the
 receiver can enter fraction mode: it commits a bounded chunk, asks the sender to
-restart from the root, and then relies on hash comparison to skip everything that
+restart from the root, and then relies on _hash comparison to skip everything that
 has already converged.
 
 This design keeps the mechanism and policy separate. Leaves provides the trie
-structure, deterministic message flow, hash-based pruning, staged apply, and
+structure, deterministic message flow, _hash-based pruning, staged apply, and
 atomic commit. Applications still decide the consistency model, peer topology,
 retry behavior, and conflict-resolution policy.
 
-The reason this fits so well is that a trie already divides the keyspace into
-prefix subtrees. Adding hashes does not require inventing a second partitioning
-scheme. The replication structure follows the storage structure.
+The performance-oriented node layout and the replication design reinforce one
+another. A trie already divides the keyspace into prefix subtrees, so adding
+hashes does not require a separate partitioning scheme. The replication
+structure follows the storage structure.
 
 ## Conclusion
 
@@ -203,11 +195,11 @@ were kept out because their obvious representation was too sparse. B-trees won
 because they make economical use of pages, keep height low, and behave well on
 storage hardware.
 
-Leaves attacks the trie problem at the node layout. Prefix compression removes
-long one-child chains. The two-level bitmap removes the 256-pointer array while
-preserving fast byte selection. Copy-on-write pages make the structure
-persistent. Once those pieces are in place, a trie stops being only a memory data
-structure and becomes a viable database layout.
+Leaves addresses the trie problem at the node-layout level. Prefix compression
+removes long single-child chains. The two-level bitmap removes the 256-pointer
+array while preserving fast byte selection. Copy-on-write pages make the
+structure persistent. Together, those techniques turn a trie from an in-memory
+data structure into a viable database layout.
 
 The bonus is replication. A compact persistent trie can also be a Merkle trie:
 hashes summarize prefix subtrees, peers compare structure before transferring
@@ -215,12 +207,14 @@ data, and replication sends the differences rather than the database. That is
 the larger concept behind Leaves: one structure for lookup, persistence,
 copy-on-write updates, and synchronization.
 
-## Sources and further reading
+## Addendum: Ordering
 
-- [Can Persistent Tries Beat LMDB? Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked)
-- [NIST Dictionary of Algorithms and Data Structures: trie](https://xlinux.nist.gov/dads/HTML/trie.html)
-- [NIST Dictionary of Algorithms and Data Structures: B-tree](https://xlinux.nist.gov/dads/HTML/btree.html)
-- [Wikipedia: Trie](https://en.wikipedia.org/wiki/Trie)
-- [Wikipedia: B-tree](https://en.wikipedia.org/wiki/B-tree)
-- [Wikipedia: Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree)
-- [Ethereum: Merkle Patricia Trie](https://ethereum.org/en/developers/docs/data-structures-and-encoding/patricia-merkle-trie/)
+Tries order keys lexicographically, whereas a B-tree can be parameterized with
+an arbitrary comparison function. This distinction matters when an application
+requires an order that cannot be represented in the key encoding.
+
+Many practical orderings can, however, be expressed by encoding keys into a
+lexicographically sortable binary form. Fixed-width integers can use big-endian
+encoding; composite keys can concatenate sortable components. This approach
+preserves trie traversal order and avoids the cost of invoking an application
+defined comparator during each structural comparison.

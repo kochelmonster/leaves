@@ -62,14 +62,14 @@ The `_TrieNode` is the internal navigation node of the trie tree. It uses a **tw
 #### Structure
 
 - **Header (8-11 bytes)**:
-  - `hash`: optional inline hash for validation.
-  - `_array_len`: branch count in upper 15 bits; bit 15 is NULL_MASK flag.
-  - `_upper`: 8-bit bitmap indicating which of 8 groups (ranges 0-31, 32-63, …, 224-255) have branches.
-  - `_compressed_len`: length of the compressed prefix.
-  - `_lower_offset`, `_array_offset`: byte offsets to variable sections.
-  - `_compressed_data[]`: variable-length prefix bytes.
+  - `_hash`: optional inline _hash for validation.
+  - `_branch_count`: branch count in upper 15 bits; bit 15 is NULL_MASK flag.
+  - `_branch_bits_index`: 8-bit bitmap indicating which of 8 groups (ranges 0-31, 32-63, …, 224-255) have branches.
+  - `_prefix_len`: length of the compressed prefix.
+  - `_branch_bits_pos`, `_branch_offsets_pos`: byte offsets to variable sections.
+  - `_prefix[]`: variable-length prefix bytes.
 
-- **Lower bitmaps (0-64 bytes)**: Up to 8 × 32-bit bitmaps, one per active group in `_upper`.
+- **Lower bitmaps (0-64 bytes)**: Up to 8 × 32-bit bitmaps, one per active group in `_branch_bits_index`.
 
 - **Offset array (0-2KB)**: Only entries for branches that actually exist (sparse).
 
@@ -77,17 +77,17 @@ The `_TrieNode` is the internal navigation node of the trie tree. It uses a **tw
 
 - **Sparse indexing**: Stores offsets only for branches that exist, avoiding the 2KB overhead of a full 256-entry array per node.
 - **Two-level bitmaps**:
-  - `_upper` (8-bit): Which of 8 groups are present.
-  - `_lower[]` (32-bit each): For each active group, which of the 32 bytes within that group have branches.
+  - `_branch_bits_index` (8-bit): Which of 8 groups are present.
+  - `_branch_bits_pos[]` (32-bit each): For each active group, which of the 32 bytes within that group have branches.
 - **Compressed prefix**: Each node stores a prefix string to reduce tree depth and avoid redundant branching.
 - **Alignment optimization**: The lower bitmap array is padded to align the offset array, improving cache locality during lookups.
 
 #### Navigation (O(1) lookup)
 
-1. Extract upper index: `ubit(c) = c >> 5` (which of 8 groups).
-2. Check if the group exists in `_upper`.
-3. If yes, extract lower index: `lbit(c) = c & 0x1F` (which of 32 bits in the group).
-4. Check the bit in the corresponding `_lower[]` entry.
+1. Extract upper index: `branch_bits_group(c) = c >> 5` (which of 8 groups).
+2. Check if the group exists in `_branch_bits_index`.
+3. If yes, extract lower index: `branch_bit(c) = c & 0x1F` (which of 32 bits in the group).
+4. Check the bit in the corresponding `_branch_bits_pos[]` entry.
 5. If set, compute the array index using popcount on preceding lower bitmaps.
 6. Return the offset from the offset array.
 
@@ -102,7 +102,7 @@ The `_LeafNode` stores the actual key-value pairs at the leaves of the trie.
 - **Header (4-6 bytes)**:
   - `value_size`: 16-bit size; high bit (`BIG_VALUE_FLAG`) indicates out-of-line storage.
   - `key_size`: 8-bit key length.
-  - `hash`: optional inline hash for validation.
+  - `_hash`: optional inline _hash for validation.
 
 - **Data (variable)**:
   - `key[key_size]`: raw key bytes.
@@ -193,7 +193,7 @@ This design is analogous to LMDB's freelist but uses per-size-class FIFO queues 
 
 After an unclean shutdown the in-memory `AreaPool` lists are gone. `_recover_areas` rebuilds them by:
 
-1. **Phase 1** — Walking every live DB's owned area chains and collecting all occupied `AREA_SIZE` blocks into a hash set.
+1. **Phase 1** — Walking every live DB's owned area chains and collecting all occupied `AREA_SIZE` blocks into a _hash set.
 2. **Phase 2** — Scanning the file in `AREA_SIZE` steps. Contiguous free blocks are coalesced: single blocks go to `single_areas`, multi-block runs go to `multi_areas`.
 
 The `_PageContainer` queues and the `_MemManager` bump pointers do not need recovery because they are embedded in the committed transaction header and are therefore consistent after a clean transaction commit.
