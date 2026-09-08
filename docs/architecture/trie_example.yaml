@@ -1,0 +1,87 @@
+type: trie
+id: 1000
+page: 1000
+freespace: 100
+size: 0
+txn: 0
+compressed:
+  size: 0
+  key: ""
+branches: "[c][d]"
+children:
+  - 2000
+  - 5000
+---
+type: trie
+id: 2000
+page: 2000
+freespace: 100
+size: 0
+txn: 1
+compressed:
+  size: 1
+  key: "[c]"
+branches: "[a]"
+children:
+  - 3000
+---
+type: trie
+id: 3000
+page: 3000
+freespace: 100
+size: 0
+txn: 2
+compressed:
+  size: 2
+  key: "[c][a]"
+branches: "[t][r]"
+children:
+  - 4000
+  - 4001
+---
+type: leaf
+id: 4000
+page: 4000
+freespace: 100
+size: 11
+txn: 3
+keysize: 1
+key: "[t]"
+valuesize: 3
+value: "cat"
+---
+type: leaf
+id: 4001
+page: 4001
+freespace: 100
+size: 11
+txn: 3
+keysize: 1
+key: "[r]"
+valuesize: 3
+value: "car"
+---
+type: trie
+id: 5000
+page: 5000
+freespace: 100
+size: 0
+txn: 4
+compressed:
+  size: 1
+  key: "[d]"
+branches: "[o]"
+children:
+  - 6000
+---
+type: leaf
+id: 6000
+page: 6000
+freespace: 100
+size: 11
+txn: 5
+keysize: 1
+key: "[o]"
+valuesize: 3
+value: "dog"
+---
