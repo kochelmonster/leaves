@@ -1,0 +1,61 @@
+<mxfile host="65bd71144e">
+    <diagram id="memory-concept-recycling-slots" name="Memory Concept Recycling Slots">
+        <mxGraphModel dx="941" dy="581" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="1600" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="tier1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#cbd5e1;strokeWidth=2;arcSize=12;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="95" width="1020" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier1head" value="_MemManager::slots[] - PER-SIZE-CLASS RECYCLING QUEUES" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=16;fillColor=#f8fafc;strokeColor=#cbd5e1;fontSize=12;fontStyle=1;fontColor=#334155;arcSize=12;strokeWidth=2;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="95" width="1020" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="q0" value="slots[0]&lt;br&gt;&lt;font color=&#39;#047857&#39;&gt;104 B&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#64748b&#39;&gt;2-branch nodes&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontSize=11;fontStyle=1;fontColor=#1e293b;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="137" width="110" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1" value="slots[1]&lt;br&gt;&lt;font color=&#39;#047857&#39;&gt;160 B&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#64748b&#39;&gt;3-branch nodes&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontSize=11;fontStyle=1;fontColor=#1e293b;" parent="1" vertex="1">
+                    <mxGeometry x="182" y="137" width="110" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B82F6;dashed=1;" parent="1" source="q2" target="tier2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2" value="slots[2] (568 B) - _GarbageSlot&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#1e40af&#39;&gt;ostart: 0x2000 | oend: 0x6000&lt;br&gt;istart: 2 | iend: 1 | count: 5&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#2563eb;strokeWidth=2;fontSize=11;fontStyle=1;fontColor=#1e40af;" parent="1" vertex="1">
+                    <mxGeometry x="304" y="137" width="280" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3" value="slots[3]&lt;br&gt;&lt;font color=&#39;#047857&#39;&gt;1056 B&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#64748b&#39;&gt;10-br / Leaves&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontSize=11;fontStyle=1;fontColor=#1e293b;" parent="1" vertex="1">
+                    <mxGeometry x="596" y="137" width="105" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4" value="slots[...]&lt;br&gt;&lt;font color=&#39;#047857&#39;&gt;2088 B&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#64748b&#39;&gt;16-br nodes&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontSize=11;fontStyle=1;fontColor=#1e293b;" parent="1" vertex="1">
+                    <mxGeometry x="713" y="137" width="105" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="qContainer" value="slots[PAGE_CONTAINER_ID]&lt;br&gt;&lt;font color=&#39;#9333ea&#39;&gt;4 KB _PageContainer Slabs&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#7e22ce&#39;&gt;(Queue Bookkeeping Pages)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf4ff;strokeColor=#a855f7;fontSize=11;fontStyle=1;fontColor=#7e22ce;" parent="1" vertex="1">
+                    <mxGeometry x="830" y="137" width="205" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#cbd5e1;strokeWidth=2;perimeterSpacing=0;glass=0;shadow=0;arcSize=12;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="260" width="1020" height="315" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier2head" value="INSIDE _GarbageSlot: LINKED _PageContainer PAGES (4 KB DATABASE SLABS)" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=16;fillColor=#f8fafc;strokeColor=#cbd5e1;fontSize=12;fontStyle=1;fontColor=#334155;strokeWidth=2;perimeterSpacing=0;arcSize=12;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="260" width="1020" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="frontPanel" value="Front Container @ 0x2000&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#2563eb&#39;&gt;next = 0x6000&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#2563eb;strokeWidth=2;fontSize=11;fontStyle=1;fontColor=#1e40af;" parent="1" vertex="1">
+                    <mxGeometry x="75" y="305" width="380" height="245" as="geometry"/>
+                </mxCell>
+                <mxCell id="tailPanel" value="Tail Container @ 0x6000&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#7c3aed&#39;&gt;next = 0 (end)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#7c3aed;strokeWidth=2;fontSize=11;fontStyle=1;fontColor=#6b21a8;" parent="1" vertex="1">
+                    <mxGeometry x="645" y="305" width="380" height="245" as="geometry"/>
+                </mxCell>
+                <mxCell id="nextLink" value="next" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#2563eb;strokeWidth=2;endArrow=block;endFill=1;fontColor=#2563eb;fontFamily=monospace;" parent="1" source="frontPanel" target="tailPanel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="frontRows" value="&lt;font face=&#39;monospace&#39; color=&#39;#94a3b8&#39;&gt;[0] (consumed / recycled)&lt;/font&gt;&lt;br&gt;&lt;font color=&#39;#94a3b8&#39;&gt;POPPED&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; color=&#39;#94a3b8&#39;&gt;[1] (consumed / recycled)&lt;/font&gt;&lt;br&gt;&lt;font color=&#39;#94a3b8&#39;&gt;POPPED&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; color=&#39;#065f46&#39;&gt;[2] link: 0x4100 (568B Page)&lt;/font&gt;&lt;br&gt;&lt;font color=&#39;#047857&#39;&gt;istart (NEXT POP)&lt;/font&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; color=&#39;#334155&#39;&gt;[3] link: 0x4800 (568B Page)&lt;/font&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; color=&#39;#334155&#39;&gt;[4] link: 0x5200 (568B Page)&lt;/font&gt;&lt;br&gt;... remaining BlockItems [5 .. COUNT-1]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#cbd5e1;fontSize=10;align=left;verticalAlign=top;spacing=10;fontColor=#334155;" parent="1" vertex="1">
+                    <mxGeometry x="90" y="345" width="350" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="tailRows" value="&lt;font face=&#39;monospace&#39; color=&#39;#334155&#39;&gt;[0] link: 0x8900 (568B Page)&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; color=&#39;#94a3b8&#39;&gt;[1] (empty free-slot)&lt;/font&gt;&lt;br&gt;&lt;font color=&#39;#7c3aed&#39;&gt;iend (NEXT PUSH)&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; color=&#39;#94a3b8&#39;&gt;[2] (unallocated slot)&lt;br&gt;[3] (unallocated slot)&lt;/font&gt;&lt;br&gt;... remaining empty slots [4 .. COUNT-1]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf4ff;strokeColor=#e2e8f0;fontSize=10;align=left;verticalAlign=top;spacing=10;fontColor=#334155;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="345" width="350" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="pointerLabel" value="next pointer" style="text;html=1;strokeColor=none;fillColor=none;fontFamily=monospace;fontSize=10;fontColor=#64748b;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="320" width="120" height="20" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

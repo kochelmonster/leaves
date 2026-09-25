@@ -1,47 +1,44 @@
 # A New Concept for Key-Value Stores
 
-Most embedded key-value stores are built around a small family of storage
-structures: B-trees, B+ trees, LSM trees, and _hash tables. Tries are usually
-reserved for routing tables, dictionaries, autocomplete, and specialized
-string indexes.
+Most embedded key-value stores are built around a small family of storage structures: B-trees, B+ trees, LSM trees, and hash tables. Tries are usually reserved for routing tables, dictionaries, autocomplete, and specialized string indexes.
 
-This article examines whether a suitable trie variant can outperform
-conventional key-value-store layouts.
+This article examines whether a suitable trie variant can outperform conventional key-value-store layouts.
 
 ## Why tries are not used as databases
 
 A [trie](https://en.wikipedia.org/wiki/Trie) is a search tree whose path is determined by the symbols of a key. For byte strings, each step consumes one byte. This gives tries several appealing properties for key-value storage.
 
-Lookup depends on key length, $O(k)$, rather than directly on the number of stored records. A search does not compare the requested key with separator keys at every tree level or rely on collision handling. Common prefixes are shared structurally, and ordered traversal follows naturally when child edges are kept in byte order.
+Lookup depends on key length only, $O(k)$, rather than directly on the number of stored records. A search does not compare the requested key with separator keys at every tree level or rely on collision handling. Common prefixes are shared structurally, and ordered traversal follows naturally when child edges are kept in byte order.
 
 Those properties alone do not make a practical database.
 
-The conventional database answer is the [B-tree](https://en.wikipedia.org/wiki/B-tree), or, more commonly, the [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree). B-trees were designed around slow storage and fixed-size pages. Each internal page stores many separator keys and child pointers, producing a high fanout and a small height. A lookup may therefore require only a few page reads, each of which brings in many useful keys. B-trees also support sorted iteration well because neighboring keys are packed into pages. Decades of database engineering have built concurrency, recovery, bulk loading, and cache behavior around this page-oriented model. A simple comparison-based characterization of lookup is $O(k \log n)$.
+The conventional database answer is the [B-tree](https://en.wikipedia.org/wiki/B-tree), or, more commonly, the [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree). A lookup typically takes $O(\log n)$ page-level comparisons, and only a few page reads when each internal page holds many separator keys and child pointers. This high fanout keeps the tree shallow, while packed neighboring keys make sorted iteration efficient. B-trees were designed around slow storage and fixed-size pages, so each page is organized to bring many useful keys into memory at once rather than paying for one record at a time. Their strength is therefore not only predictable access time but also economical use of each page: most of the space fetched from storage contributes to the search.
 
-A naive trie loses this comparison. A byte trie can have up to 256 children per internal node. If every node stores a full 256-entry pointer array, most entries will usually be empty. The database then pays for absence: memory and disk space are reserved for branches that do not exist. A 256-entry array of 8-byte links uses 2 KiB per node, even when only a few children are present.
-
-A linked-list or map-of-children representation saves space, but gives back much of the lookup advantage through extra pointer chasing, variable node layouts, and poorer locality. Long keys can also create chains of single-child nodes, turning one logical key into many stored nodes.
+A naive trie loses this comparison. A byte trie can have up to 256 branches per internal node. If every node stores a full 256-entry pointer array, most entries will usually be empty. The database then pays for absence: memory and disk space are reserved for byte values that have no branch. A 256-entry array of 8-byte links uses 2 KiB per node, even when only a few branches are present.
 
 The central problem is therefore space. The direct addressing that makes a trie attractive also creates a sparse node representation. This can be acceptable for in-memory dictionaries, and prefix semantics can justify the cost in specialized domains such as IP routing. For a general persistent key-value store, unused child slots and extra node reads are a substantial tax.
 
-Compressed tries, radix trees, Patricia trees, and adaptive radix trees address this weakness by compressing empty paths, reducing child storage, or selecting node formats according to density.
+Compressed tries, radix trees, Patricia trees, and adaptive radix trees address parts of this problem by compressing empty paths, reducing child storage, or selecting node formats according to density. These techniques do not solve the general space problem on their own: linked-list or map-of-children representations avoid reserving unused child slots, but introduce pointer chasing, variable node layouts, and poorer locality, while long keys can still create chains of single-child nodes that turn one logical key into many stored nodes.
+
+
 
 ## Two-Level Bitmap Compression Solves the Space Problem
 
-Instead of using a fixed-size child-pointer array, a two-level bitmap can represent sparse children compactly while preserving direct byte selection. Modern CPUs provide efficient population-count operations for this layout.
+A new variant of trie node is a hybrid structure that combines a radix trie with two-level bitmap compression. This can represent sparse children compactly while preserving direct byte selection:
 
 ![Compression](compress.svg)
 
-Consider a node with children at byte values 5, 70, and 130. A naive representation allocates one child-link slot for every possible byte, retaining 256 offsets although only three are used. The first compression extracts those three offsets into a packed array in byte order: offset 0 belongs to byte 5, offset 1 to byte 70, and offset 2 to byte 130. A 256-bit presence bitmap, held as eight 32-bit words for ranges 0-31 through 224-255, records which byte values have an offset. With 4-byte offsets, this reduces the example from a 1,024-byte offset array to three offsets and 32 bytes of bitmap data, or 44 bytes.
+Consider a node with branches labeled by byte values 5, 70, and 130. A naive representation allocates one branch-link slot for every possible byte value, retaining 256 offsets although only three branches are used. With 8-byte offsets, that array occupies 256 * 8 = 2,048 bytes. The first compression extracts those three offsets into a packed branch-offset array in byte-label order: offset 0 belongs to byte 5, offset 1 to byte 70, and offset 2 to byte 130. A 256-bit presence bitmap, held as eight 32-bit words for ranges 0-31 through 224-255, records which byte values have a branch. The compressed representation uses three offsets and 32 bytes of bitmap data, or 3 * 8 + 32 = 56 bytes before header and alignment costs.
 
-The second compression removes bitmap words that contain no set bits. Bytes 5, 70, and 130 lie in groups 0, 2, and 4, so only those three 32-bit words remain. They are packed into the lower-bitmap array, while an 8-bit upper bitmap records the groups that survived: `0b00010101` has bits 0, 2, and 4 set. The resulting node stores three offsets, three lower bitmap words, and the one-byte upper bitmap: 25 bytes before header and alignment costs.
+The second compression removes bitmap words that contain no set bits. Byte values 5, 70, and 130 lie in groups 0, 2, and 4, so only those three 32-bit words remain. They are packed into the lower-bitmap array, while an 8-bit upper bitmap records the groups that contain branches: `0b00010101` has bits 0, 2, and 4 set. The resulting node stores three branch offsets, three lower bitmap words, and the one-byte upper bitmap: `3 * 8 + 3 * 4 + 1 = 37` bytes before header and alignment costs.
 
-To find a child for byte `c`, first compute its group as `c >> 5` and test the corresponding bit in the upper bitmap. The population count of the preceding set upper bits identifies that group's packed lower bitmap. Then use `c & 0x1f` to test the bit within the 32-bit word. If that bit is set, population counts over the preceding lower bits determine the child's position in the packed offset array. This preserves a predictable, compact lookup path without reserving storage for absent children.
+To find the branch for byte `c`, first compute its group as `c >> 5` and test the corresponding bit in the upper bitmap. The population count of the preceding set upper bits identifies that branch group's packed lower bitmap. Then use `c & 0x1f` to test the bit within the 32-bit word. If that bit is set, population counts over the preceding lower bits determine the branch's position in the packed offset array. This preserves a predictable, compact lookup path without reserving storage for absent branches.
 
-The trie is also a radix trie: sequences of nodes with a single child are collapsed into a prefix stored at one node.
+Modern CPUs provide efficient population-count operations for this layout.
 
-Conceptually, the variable-sized portion of a `_TrieNode` follows its fixed
-header:
+The trie is also a radix trie: sequences of nodes with a single branch are collapsed into a prefix stored at one node.
+
+Conceptually, the variable-sized portion of a `_TrieNode` looks like the following c++ pseudo-structure:
 
 ```cpp
 struct _TrieNode {
@@ -68,21 +65,27 @@ struct LeafNode {
 };
 ```
 
-## Trie Compression Is Only Half the Story: Memory Layout Is Crucial
+## Memory Managment Is Crucial
 
-Compact nodes must also be allocated and reclaimed efficiently. Rather than  using one arbitrary allocation size, the memory manager places each node in a fixed page class. The classes are calculated from the node layout and cover common fanouts: 2, 3, 4, 10, 16, 64, and 256 branches, with additional classes for pages with larger leaves.
+While the data access for tries is very fast, memory allocation can easily become the bottleneck when mutating the trie. It is essential that the allocation time must be as fast as the trie access time. The goal is an O(1) allocation.
 
-![Page-class allocation and transaction-safe recycling](memory-manager.svg)
+The solutions is a selection of fixed page sizes for common node layouts, ensuring that most allocations fit into a predefined class.
+The classes cover fanouts of 2, 3, 4, 10, 16, 64, and 256 branches, with additional classes for pages with larger leaves. A class gives an allocation a stable size and therefore lets the allocator reuse space without splitting or coalescing variable-sized blocks.
 
-The memory manager stores one recycling pool for every page class in a compact array. Selecting a class therefore also selects its pool directly. A released page enters the matching FIFO queue together with the transaction that released it. The allocator may reuse the oldest queued page only after all older reader snapshots have advanced beyond that transaction; until then, the page remains in the pool but cannot be repurposed.
+The memory is hierarchically partitioned: The biggest units are areas of 2 megabytes, which are subdivided into pages according to their class. Allocation simply sequentially consumes space from the active area's pages, the O(1) allocation goal is maintained.
 
-An allocation first tries an eligible page from the selected pool. If no page is available, it uses retained leftover space from an earlier area, then bump allocates from the active fixed-size area, and finally obtains a new area. This keeps allocation fast, reuses pages of the correct size, and avoids discarding the useful tail of an exhausted area.
+![Memory Layout](memory_spatial_blueprint.svg)
 
-Copy-on-write makes this page layout persistent. An update writes replacement
-pages instead of modifying pages reachable from an active snapshot. A commit
-publishes the new root only after its replacement pages are complete, allowing
-readers to continue from their previous root while old pages wait for safe
-recycling.
+The spatial blueprint shows how those classes fit inside the database's area-based storage: First partitioning are the areas, keeps one area as the active bump-allocation region, Within an area, pages are carved from the active region according to their class, so a node uses only the space required by its layout while nearby allocations remain easy to address and persist.
+
+### Page Recycling
+
+If and when mutating pages are freed, they must be registered for reuse. For each page class, the memory manager maintains a memory pool that acts as a FIFO queue. When a page becomes obsolete due to copy-on-write, it is appended to the appropriate class's queue along with the transaction that released it. The page remains in the queue until it is safe to reuse, ensuring that no active reader snapshot can still reference it.
+
+![Memory Recycling](memory_recycling_slots.svg)
+
+The queue is a hybrid of a an array and a linked list. If the array overflows another array is added and linked to the previous one, forming a chain of arrays that can grow dynamically while maintaining the FIFO order. Page recycling also keeps an O(1) complexity for both enqueue and dequeue operations, ensuring efficient memory management.
+
 
 ## How Does It Perform?
 
@@ -90,70 +93,52 @@ Leaves implements the preceding ideas: radix-compressed trie nodes, two-level bi
 
 ### In-Memory Comparison
 
-`bench_memdb_vs_hashtable` compares Leaves' in-memory trie with `std::unordered_map` and `std::map`. The test used one million randomly generated 32-byte binary keys, 100-byte values, and two rounds on Linux 6.8, GCC 13.3, and an Intel Core i7-12700KF. The figures below are microseconds per operation; lower is better.
+`bench_memdb_vs_hashtable` compares Leaves' in-memory trie with `std::unordered_map` and `std::map`. The run used one million randomly generated 32-byte binary keys, 100-byte values, and three rounds on Linux 6.8, GCC 13.3, and an Intel Core i7-12700KF. The benchmark ran every workload except `erase`; `readmissing` measures lookups for keys that are not present.
+
+The table reports throughput relative to Leaves `_MemoryDB` for the same workload, so Leaves is `1.000x` in every workload row and higher is better. These are ratios of the benchmark's reported ops/sec, not absolute rates. Memory is shown once as an absolute post-fill summary because it is unchanged across the measured workloads.
 
 | Workload | Leaves `_MemoryDB` | `std::unordered_map` | `std::map` |
 | --- | ---: | ---: | ---: |
-| Sequential fill | 0.162 | 0.442 | 0.202 |
-| Random fill | 0.179 | 0.272 | 0.907 |
-| Random read | 0.176 | 0.078 | 1.084 |
-| Sequential read | 0.068 | 0.065 | 0.089 |
-| Overwrite | 0.192 | 0.125 | 1.183 |
-| Erase | 0.314 | 0.172 | 1.021 |
+| Sequential fill | 1.000x | 0.306x | 0.669x |
+| Random fill | 1.000x | 0.575x | 0.182x |
+| Random read | 1.000x | 2.243x | 0.172x |
+| Missing-key read | 1.000x | 0.850x | 0.095x |
+| Sequential read | 1.000x | 1.176x | 1.002x |
+| Overwrite | 1.000x | 1.019x | 0.170x |
+| Memory (MB) | 195.0 | 212.1 | 219.3 |
 
-![In-memory key-value store benchmark](memorydb-benchmark.svg)
+![In-memory key-value store benchmark](memory_db-benchmark.svg)
 
-The same run reported 195.0 MiB for `_MemoryDB`, 212.1 MiB for
-`std::unordered_map`, and 219.3 MiB for `std::map` after filling the dataset.
-Those numbers are allocator-specific process or container measurements, so they
-are useful as a local comparison rather than as a portable memory-use guarantee.
-The trie performed particularly well on insertion and ordered traversal, while
-the _hash table retained its expected advantage for random reads and overwrites.
+As expected _std::unordered_map excels at random reads but falls behind by all insert operations, due to a slower memory management. The binary tree of `std::map` always falls behind, with one exception: Sequential reads. However, even the expected locality advantage does not make the performance gain significant. Interestingly leaves needs less memory than the maps of the stl.
 
 ### Persistent Comparison
 
-For persistent storage, `db_bench_leaves` was compared with
-`db_bench_mdb --wmap`. Both programs used one million 16-byte decimal keys,
-100-byte values, one million reads, 1,000-operation write batches, and the
-workloads `fillseq`, `fillrandom`, `overwrite`, `readrandom`, and `readseq`.
-Leaves used `MapStorage` with its write-ahead log disabled; LMDB used writable
-memory mapping with asynchronous map updates. The table reports one local run
-on the same Linux, compiler, and processor configuration as above.
+For persistent storage, `db_bench_leaves` was compared with `db_bench_mdb --wmap`. Both programs used one million 16-byte decimal keys, 100-byte values, one million reads, 1,000-operation write batches, and three rounds for the workloads `fillseq`, `fillrandom`, `overwrite`, `readrandom`, and `readseq`. Leaves used `MapStorage` with its write-ahead log disabled; LMDB used writable memory mapping with asynchronous map updates. The table reports one local run on the same Linux, compiler, and processor configuration as above.
 
-| Workload | Leaves (microseconds/op) | LMDB `--wmap` (microseconds/op) |
+The table reports throughput relative to Leaves `MapStorage` for the same workload, so Leaves is `1.000x` in every workload row and higher is better. Memory is shown once as a peak resident set size summary in MB.
+
+| Workload | Leaves `MapStorage` | LMDB `--wmap` |
 | --- | ---: | ---: |
-| Sequential fill | 0.093 | 0.088 |
-| Random fill | 0.336 | 0.815 |
-| Overwrite | 0.358 | 0.886 |
-| Random read | 0.262 | 0.494 |
-| Sequential read | 0.042 | 0.016 |
+| Sequential fill | 1.000x | 1.451x |
+| Random fill | 1.000x | 0.395x |
+| Overwrite | 1.000x | 0.398x |
+| Random read | 1.000x | 0.512x |
+| Sequential read | 1.000x | 2.000x |
+| Memory (MB) | 157.1 | 188.3 |
 
-On this workload, Leaves was faster for random writes and random reads, while
-LMDB was faster for sequential insertion and sequential traversal. The result
-should be treated as a workload-specific observation: neither configuration
-includes durable write-ahead logging, and a production evaluation should also
-test the required durability mode, dataset size, storage device, and concurrent
-access pattern.
+![Persistent key-value store benchmark](persistent_db-benchmark.svg)
 
-For a broader performance discussion, see [Can Persistent Tries Beat LMDB?
-Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
+LMDB is faster in sequential fill which has an only
+
+On this workload, Leaves was faster for random writes and random reads, while LMDB was faster for sequential insertion and sequential traversal. The result should be treated as a workload-specific observation: neither configuration includes durable write-ahead logging, and a production evaluation should also test the required durability mode, dataset size, storage device, and concurrent access pattern.
+
+For a broader performance discussion, see [Can Persistent Tries Beat LMDB? Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
 
 ## Bonus: Replication
 
-Tries have another property that B-trees do not expose as naturally: every
-subtree has a semantic name. The path to a node is a key prefix. All keys below
-that node share that prefix. If the database stores a _hash for each subtree, then
-that _hash becomes a compact statement about all key-value pairs below the prefix.
+Tries have another property that B-trees do not expose as naturally: every subtree has a semantic name. The path to a node is a key prefix. All keys below that node share that prefix. If the database stores a _hash for each subtree, then that _hash becomes a compact statement about all key-value pairs below the prefix.
 
-That is the Merkle-trie idea. A Merkle tree hashes data at the leaves and hashes
-children into parent hashes, producing a root _hash that summarizes the whole
-structure. If two peers have the same root _hash, they have the same state under
-that root. If the root hashes differ, the peers can descend into child hashes and
-find the differing subtrees without transferring the entire database. Systems
-such as Dynamo-inspired stores, Cassandra, and Riak use this style of
-anti-entropy synchronization to avoid sending data that replicas already share.
-Ethereum's Merkle Patricia Trie applies a related idea to blockchain state:
-paths identify state entries, and hashes make the structure verifiable.
+That is the Merkle-trie idea. A Merkle tree hashes data at the leaves and hashes children into parent hashes, producing a root _hash that summarizes the whole structure. If two peers have the same root _hash, they have the same state under that root. If the root hashes differ, the peers can descend into child hashes and find the differing subtrees without transferring the entire database. Systems such as Dynamo-inspired stores, Cassandra, and Riak use this style of anti-entropy synchronization to avoid sending data that replicas already share. Ethereum's Merkle Patricia Trie applies a related idea to blockchain state: paths identify state entries, and hashes make the structure verifiable.
 
 Leaves' replication uses the same structural advantage. `ReplicationDB` extends
 the normal database with replication-specific state:
