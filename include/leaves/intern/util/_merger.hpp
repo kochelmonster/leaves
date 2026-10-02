@@ -590,8 +590,10 @@ struct _Merger {
     // Shared branches are merged recursively after building the new trie.
 
     // +1 offset so offsets_buf[-1] (NONE) is valid
-    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT];
     offset_e* offsets_buf = &offsets_raw[1];
+    offsets_buf[TrieNode::NONE] = offset_e();
+    uint32_t branch_bitmap[8] = {};
 
     struct SharedBranch {
       int key;
@@ -601,16 +603,19 @@ struct _Merger {
     SharedBranch shared[257];
     int shared_count = 0;
     int branch_count = 0;
+    uint8_t upper = dst_trie->_branch_bits_index;
 
     // Copy all dst branches (they all survive)
     dst_trie->for_each_branch([&](int k, auto* off) {
       offsets_buf[k] = *off;
       branch_count++;
+      if (k != TrieNode::NONE) {
+        branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+      }
     });
 
     // Process src branches: record shared for later merge, selectively copy
     // src-only. Count src-only survivors inline to avoid a second bitmap walk.
-    uint8_t upper = dst_trie->_branch_bits_index;
     size_t source_branch_index = 0;
     src_trie->for_each_branch([&](int k, auto* src_off) {
       prefetch_source_branch_window(src_trie, src_off,
@@ -628,7 +633,10 @@ struct _Merger {
         if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
           offsets_buf[k] = child_offset;
           branch_count++;
-          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::branch_bits_group(k));
+          if (k != SrcTrieNode::NONE) {
+            branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+            upper |= (1u << TrieNode::branch_bits_group(k));
+          }
         }
       }
     });
@@ -637,7 +645,7 @@ struct _Merger {
     Slice prefix((const char*)dst_trie->prefix(), dst_trie->prefix_len());
     trie_ptr new_trie =
         alloc_node<trie_ptr>(DstTrieNode::size(prefix.size(), branch_count));
-    new_trie->create(prefix, offsets_buf, upper);
+    new_trie->create(prefix, offsets_buf, branch_bitmap, upper);
 
     dst.trie() = new_trie;
     dst.update_trie_offset();

@@ -577,6 +577,56 @@ void create(const Slice& prefix, offset_e* offsets,
   }
 }
 
+/**
+ * Build a trie from offsets selected by an 8-word bitmap, one bit per byte
+ * branch. Offset slots whose bits are clear are not read. The group mask
+ * preserves groups already present in the source node, including empty ones.
+ */
+void create(const Slice& prefix, offset_e* offsets,
+            const uint32_t* branch_bitmap,
+            uint8_t precomputed_branch_bits_index) {
+  assert(prefix.size() < 256);
+  _prefix_len = prefix.size();
+  memcpy(_prefix, prefix.data(), _prefix_len);
+
+  _branch_bits_index = precomputed_branch_bits_index;
+
+  _branch_bits_pos = calc_branch_bits_start() / sizeof(uint32_e);
+  _branch_offsets_pos = calc_branch_offsets_start() / sizeof(offset_e);
+
+  offset_e* branch_offsets_ = branch_offsets();
+  uint32_e* branch_bits_ = branch_bits();
+  memset(branch_bits_, 0, branch_bits_size());
+
+  if (offsets[NONE]) {
+    _branch_count = 1 | TrieNode::NULL_MASK;
+    *branch_offsets_++ = offsets[NONE];
+  } else {
+    _branch_count = 0;
+  }
+
+  uint8_t remaining_groups = _branch_bits_index;
+  int branch_bits_index = 0;
+  while (remaining_groups) {
+    int grp = bits::first(remaining_groups);
+    remaining_groups &= remaining_groups - 1;
+
+    uint32_t remaining_branches = branch_bitmap[grp];
+    uint32_t active_branches = 0;
+    int base = grp << 5;
+    while (remaining_branches) {
+      int bit = bits::first(remaining_branches);
+      remaining_branches &= remaining_branches - 1;
+      if (offsets[base + bit]) {
+        active_branches |= (1u << bit);
+        *branch_offsets_++ = offsets[base + bit];
+        _branch_count++;
+      }
+    }
+    branch_bits_[branch_bits_index++] = active_branches;
+  }
+}
+
 // check if the index exists
 bool isset(int nchar) const {
   if (nchar == NONE) return has_none();
