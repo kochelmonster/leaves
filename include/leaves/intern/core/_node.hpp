@@ -519,72 +519,25 @@ struct _TrieNode : Header_ {
     return (uint16_t)oidx;
   }
 
-/**
- * @brief Creates a TrieNode from an array of offsets for all possible byte
- * values.
- *
- * This method builds a complete trie node by iterating through all 256
- * possible byte values plus the NONE branch, creating the bitmap structure
- * for only the branches that have non-zero offsets. This is useful for bulk
- * creation of nodes where you have a pre-computed array of child offsets.
- *
- * @param prefix The compressed prefix data to store in the node.
- * @param offsets Array of 257 offsets indexed by byte value (0-255) plus NONE
- * at index -1. Non-zero values indicate branches to create; zero values are
- * skipped.
- *
- * @note The offsets array must have NONE at index -1, accessible as
- * offsets[NONE].
- */
-void create(const Slice& prefix, offset_e* offsets,
-            uint8_t precomputed_branch_bits_index) {
-  assert(prefix.size() < 256);
-  _prefix_len = prefix.size();
-  memcpy(_prefix, prefix.data(), _prefix_len);
-
-  _branch_bits_index = precomputed_branch_bits_index;
-
-  // Now we can correctly calculate offsets
-  _branch_bits_pos = calc_branch_bits_start() / sizeof(uint32_e);
-  _branch_offsets_pos = calc_branch_offsets_start() / sizeof(offset_e);
-
-  offset_e* branch_offsets_ = branch_offsets();
-  uint32_e* branch_bits_ = branch_bits();
-  memset(branch_bits_, 0, branch_bits_size());
-
-  if (offsets[NONE]) {
-    _branch_count = 1 | TrieNode::NULL_MASK;
-    *branch_offsets_++ = offsets[NONE];
-  } else {
-    _branch_count = 0;
-  }
-
-  // Iterate only groups with bits set in _branch_bits_index
-  uint8_t remaining = _branch_bits_index;
-  while (remaining) {
-    int grp = bits::first(remaining);
-    remaining &= remaining - 1;  // clear lowest set bit
-    int base = grp << 5;
-    uint32_t lbits = 0;
-    for (int j = 0; j < 32; j++) {
-      if (offsets[base + j]) {
-        _branch_count++;
-        *branch_offsets_++ = offsets[base + j];
-        lbits |= 1u << j;
-      }
-    }
-    branch_bits_[bits::index(_branch_bits_index, grp)] = lbits;
-  }
-}
-
-/**
- * Build a trie from offsets selected by an 8-word bitmap, one bit per byte
- * branch. Offset slots whose bits are clear are not read. The group mask
- * preserves groups already present in the source node, including empty ones.
- */
-void create(const Slice& prefix, offset_e* offsets,
-            const uint32_t* branch_bitmap,
-            uint8_t precomputed_branch_bits_index) {
+  /**
+   * @brief Creates a trie node from offsets selected by a byte-branch bitmap.
+   *
+   * Bit @c b in word @c g of @p branch_bitmap selects byte branch
+   * @c (32 * g + b). A selected branch with a zero offset is omitted. The
+   * @c NONE branch is handled separately from @c offsets[NONE].
+   *
+   * @param prefix Compressed prefix stored in the node; must be smaller than
+   * 256 bytes.
+   * @param offsets Offsets indexed by byte value (0-255), with the @c NONE
+   * offset at index -1. Initialize @c offsets[NONE] and every selected offset.
+   * @param branch_bitmap Eight 32-bit words selecting byte-branch offsets.
+   * @param precomputed_branch_bits_index Eight-bit group mask for the node's
+   * packed bitmap layout. It must include every group selected by
+   * @p branch_bitmap and may include empty groups retained from the source.
+   */
+  void create(const Slice& prefix, offset_e* offsets,
+              const uint32_t* branch_bitmap,
+              uint8_t precomputed_branch_bits_index) {
   assert(prefix.size() < 256);
   _prefix_len = prefix.size();
   memcpy(_prefix, prefix.data(), _prefix_len);
