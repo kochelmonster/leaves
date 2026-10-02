@@ -14,10 +14,13 @@
 #include <rocksdb/write_batch.h>
 #include <rocksdb/slice_transform.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "../leveldb/util/histogram.h"
 #include "../leveldb/util/random.h"
@@ -46,6 +49,9 @@ using WriteOptions = rocksdb::WriteOptions;
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
 //   compact       -- Compact the entire database
+//   mergetwo      -- fill two databases with N/2 partially overlapping keys
+//                    each, then merge the second into the first (only the
+//                    merge is timed)
 static const char* FLAGS_benchmarks =
     "fillseq,"
     "fillrandom,"
@@ -132,6 +138,9 @@ static int FLAGS_max_background_flushes = 2;
 
 // Number of writes per WriteBatch (1 = no batching)
 static int FLAGS_batch_size = 1000;
+
+// Fraction of the mergetwo source keys that already exist in the destination
+static double FLAGS_merge_overlap = 0.5;
 
 // Disable auto-compactions during write benchmarks
 static bool FLAGS_disable_autocompact = false;
@@ -371,6 +380,34 @@ class Benchmark {
     return rocksdb::Slice(bench_keys_buf_.data() + i * bench_key_size_, bench_key_size_);
   }
 
+  void encode_key(char* buf, int k) const {
+    if (FLAGS_binary_key) {
+      uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+      memcpy(buf, &bk, sizeof(uint64_t));
+    } else {
+      snprintf(buf, bench_key_size_ + 1, "%016d", k);
+    }
+  }
+
+  // Key block for one of the two mergetwo databases, in shuffled insert order.
+  void prepare_merge_keys(std::vector<char>& buf, const std::vector<int>& key_ids,
+                          int m, int dup, bool second) {
+    std::vector<int> idx(key_ids.begin(),
+                         key_ids.begin() + (second ? dup : m));
+    if (second) {
+      idx.insert(idx.end(), key_ids.begin() + m,
+                 key_ids.begin() + 2 * m - dup);
+    }
+    for (int i = m - 1; i > 0; i--) {
+      std::swap(idx[i], idx[rand_.Next() % (i + 1)]);
+    }
+
+    buf.assign((size_t)m * bench_key_size_ + 1, 0);
+    for (int i = 0; i < m; i++) {
+      encode_key(buf.data() + (size_t)i * bench_key_size_, idx[i]);
+    }
+  }
+
   Benchmark()
       : cache_(rocksdb::NewLRUCache(FLAGS_cache_size)),
         filter_policy_(FLAGS_bloom_bits ? rocksdb::NewBloomFilterPolicy(FLAGS_bloom_bits_per_key)
@@ -484,6 +521,8 @@ class Benchmark {
         method = &Benchmark::ReadRandom;
       } else if (name == Slice("compact")) {
         method = &Benchmark::Compact;
+      } else if (name == Slice("mergetwo")) {
+        method = &Benchmark::MergeTwo;
       } else if (name == Slice("crc32c")) {
         method = &Benchmark::Crc32c;
       } else if (name == Slice("acquireload")) {
@@ -546,9 +585,7 @@ class Benchmark {
     (this->*method)(name);
   }
 
-  void Open() {
-    assert(db_ == nullptr);
-
+  rocksdb::Options MakeOptions() {
     rocksdb::Options options;
     options.create_if_missing = true;
     
@@ -624,6 +661,23 @@ class Benchmark {
 
     options.disable_auto_compactions = FLAGS_disable_autocompact;
 
+    return options;
+  }
+
+  rocksdb::DB* OpenAt(const char* path) {
+    rocksdb::Options options = MakeOptions();
+    rocksdb::DB* db = nullptr;
+    rocksdb::Status s = rocksdb::DB::Open(options, path, &db);
+    if (!s.ok()) {
+      std::fprintf(stderr, "open error: %s\n", s.ToString().c_str());
+      exit(1);
+    }
+    return db;
+  }
+
+  void Open() {
+    assert(db_ == nullptr);
+
     char file_name[100];
     db_num_++;
     std::string test_dir;
@@ -631,11 +685,7 @@ class Benchmark {
     std::snprintf(file_name, sizeof(file_name), "%s/dbbench_rocksdb-%d",
                   test_dir.c_str(), db_num_);
 
-    rocksdb::Status s = rocksdb::DB::Open(options, file_name, &db_);
-    if (!s.ok()) {
-      std::fprintf(stderr, "open error: %s\n", s.ToString().c_str());
-      exit(1);
-    }
+    db_ = OpenAt(file_name);
   }
 
   void WriteSeq(Slice name) {
@@ -910,6 +960,110 @@ class Benchmark {
     Stop(name);
   }
 
+  void FillMergeDB(rocksdb::DB* db, const std::vector<char>& keys, int n) {
+    rocksdb::WriteOptions write_options;
+    write_options.disableWAL = FLAGS_disable_wal;
+
+    const int batch_size = FLAGS_batch_size > 0 ? FLAGS_batch_size : 1;
+    rocksdb::WriteBatch batch;
+    for (int i = 0; i < n; i++) {
+      batch.Put(rocksdb::Slice(keys.data() + (size_t)i * bench_key_size_,
+                               bench_key_size_),
+                gen_.Generate(FLAGS_value_size));
+      if ((i + 1) % batch_size == 0) {
+        db->Write(write_options, &batch);
+        batch.Clear();
+      }
+    }
+    if (batch.Count() > 0) db->Write(write_options, &batch);
+  }
+
+  // Fills two databases with partially overlapping keys, then merges the
+  // second into the first. Source wins on conflicts; only the merge is timed.
+  void MergeTwo(Slice name) {
+    const int m = num_ / 2;
+    if (m <= 0) {
+      message_ = "skipping (--num too small)";
+      Stop(name);
+      return;
+    }
+
+    const double overlap = std::min(1.0, std::max(0.0, FLAGS_merge_overlap));
+    const int dup = (int)(overlap * m + 0.5);
+
+    bench_key_size_ = FLAGS_binary_key ? 8 : 16;
+    std::vector<int> key_ids(num_);
+    for (int i = 0; i < num_; i++) key_ids[i] = i;
+    for (int i = num_ - 1; i > 0; i--) {
+      std::swap(key_ids[i], key_ids[rand_.Next() % (i + 1)]);
+    }
+    std::vector<char> keys_a, keys_b;
+    prepare_merge_keys(keys_a, key_ids, m, dup, false);
+    prepare_merge_keys(keys_b, key_ids, m, dup, true);
+
+    std::string test_dir;
+    Env::Default()->GetTestDirectory(&test_dir);
+    const std::string path_a = test_dir + "/dbbench_rocksdb_merge-a";
+    const std::string path_b = test_dir + "/dbbench_rocksdb_merge-b";
+    rocksdb::Options destroy_options;
+    rocksdb::DestroyDB(path_a, destroy_options);
+    rocksdb::DestroyDB(path_b, destroy_options);
+
+    rocksdb::DB* db_a = OpenAt(path_a.c_str());
+    rocksdb::DB* db_b = OpenAt(path_b.c_str());
+    FillMergeDB(db_a, keys_a, m);
+    FillMergeDB(db_b, keys_b, m);
+
+    Start();
+    char msg[100];
+    std::snprintf(msg, sizeof(msg), "(%d ops, overlap %.2f)", m, overlap);
+    message_ = msg;
+
+    rocksdb::WriteOptions write_options;
+    write_options.disableWAL = FLAGS_disable_wal;
+
+    const int batch_size = FLAGS_batch_size > 0 ? FLAGS_batch_size : 1;
+    rocksdb::WriteBatch batch;
+    rocksdb::Iterator* iter = db_b->NewIterator(rocksdb::ReadOptions());
+    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+      bytes_ += iter->key().size() + iter->value().size();
+      batch.Put(iter->key(), iter->value());
+      if (batch.Count() >= (uint32_t)batch_size) {
+        rocksdb::Status s = db_a->Write(write_options, &batch);
+        if (!s.ok()) {
+          std::fprintf(stderr, "merge error: %s\n", s.ToString().c_str());
+        }
+        batch.Clear();
+      }
+      FinishedSingleOp();
+    }
+    if (batch.Count() > 0) {
+      rocksdb::Status s = db_a->Write(write_options, &batch);
+      if (!s.ok()) {
+        std::fprintf(stderr, "merge error: %s\n", s.ToString().c_str());
+      }
+    }
+    delete iter;
+
+    Stop(name);
+
+    int64_t actual = 0;
+    rocksdb::Iterator* verify = db_a->NewIterator(rocksdb::ReadOptions());
+    for (verify->SeekToFirst(); verify->Valid(); verify->Next()) actual++;
+    delete verify;
+    const int64_t expected = (int64_t)m + (m - dup);
+    if (actual != expected) {
+      std::fprintf(stderr,
+                   "warning: mergetwo result has %lld entries, expected %lld\n",
+                   (long long)actual, (long long)expected);
+    }
+
+    delete db_a;
+    delete db_b;
+    rocksdb::DestroyDB(path_a, destroy_options);
+    rocksdb::DestroyDB(path_b, destroy_options);
+  }
+
   void DestroyDB() {
     char file_name[100];
     db_num_++;
@@ -959,6 +1113,8 @@ int main(int argc, char** argv) {
       FLAGS_disable_autocompact = n;
     } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
       FLAGS_batch_size = n;
+    } else if (sscanf(argv[i], "--merge_overlap=%lf%c", &d, &junk) == 1) {
+      FLAGS_merge_overlap = d;
     } else if (sscanf(argv[i], "--binary_key=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_binary_key = (n == 1);

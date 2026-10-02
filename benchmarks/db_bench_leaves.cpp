@@ -7,9 +7,12 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <thread>
+#include <utility>
 
 #include <boost/endian/conversion.hpp>
 #include <cstdio>
@@ -19,9 +22,17 @@
 #include <sstream>
 #include <type_traits>
 
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<valgrind/callgrind.h>)
+#include <valgrind/callgrind.h>
+#define LEAVES_HAS_CALLGRIND 1
+#endif
+#endif
+
 #include "leaves/fstore.hpp"
 #include "leaves/intern/replication/_replication_db.hpp"
 #include "leaves/intern/db/_check.hpp"
+#include "leaves/merger.hpp"
 #include "leaves/confluence.hpp"
 #include "leaves/mmap.hpp"
 #include "leaves/replication.hpp"
@@ -49,6 +60,11 @@ static bool FLAGS_binary_key = false;
 //   readseq100K   -- read N/1000 100K values in sequential order in async mode
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
+//   mergetwo      -- fill two databases with N/2 partially overlapping keys
+//                    each, then merge the second into the first (only the
+//                    merge is timed)
+//   mergetwo_insert -- same setup, sequentially insert source entries into
+//                      the destination instead of using the trie merger
 static const char* FLAGS_benchmarks =
     "fillseq,"
     //    "fillseqsync,"
@@ -73,6 +89,9 @@ static const char* FLAGS_benchmarks1 =
 
 // Batch size for write operations. Default 1000
 static int FLAGS_batch_size = 1000;
+
+// Fraction of the mergetwo source keys that already exist in the destination
+static double FLAGS_merge_overlap = 0.5;
 
 // Use writable MMAP
 static bool FLAGS_writemap = false;
@@ -249,6 +268,61 @@ static Slice TrimSpace(Slice s) {
   }
   return Slice(s.data() + start, limit - start);
 }
+
+struct FindProfile {
+  uint64_t count{0};
+  std::chrono::nanoseconds elapsed{0};
+
+  template <typename Function>
+  void measure(Function&& function) {
+    ++count;
+    const auto start = std::chrono::steady_clock::now();
+    function();
+    elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start);
+  }
+};
+
+struct PerfRecordingControl {
+  std::ofstream control_;
+
+  PerfRecordingControl() {
+#if defined(__linux__)
+    const char* path = std::getenv("LEAVES_PERF_CONTROL");
+    if (path && *path) {
+      control_.open(path);
+      if (!control_) {
+        std::fprintf(stderr, "cannot open perf control FIFO: %s\n", path);
+        std::exit(EXIT_FAILURE);
+      }
+    }
+#endif
+  }
+
+  void enable() {
+#ifdef LEAVES_HAS_CALLGRIND
+    if (RUNNING_ON_VALGRIND) CALLGRIND_START_INSTRUMENTATION;
+#endif
+    send("enable");
+  }
+
+  void disable() {
+    send("disable");
+#ifdef LEAVES_HAS_CALLGRIND
+    if (RUNNING_ON_VALGRIND) CALLGRIND_STOP_INSTRUMENTATION;
+#endif
+  }
+
+  void send(const char* command) {
+    if (!control_.is_open()) return;
+    control_ << command << '\n' << std::flush;
+    if (!control_) {
+      std::fprintf(stderr, "failed writing perf control command: %s\n",
+                   command);
+      std::exit(EXIT_FAILURE);
+    }
+  }
+};
 
 }  // namespace
 
@@ -489,6 +563,34 @@ class Benchmark {
     return leaves::Slice(bench_keys_buf_.data() + i * bench_key_size_, bench_key_size_);
   }
 
+  void encode_key(char* buf, int k) const {
+    if (FLAGS_binary_key) {
+      uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+      memcpy(buf, &bk, sizeof(uint64_t));
+    } else {
+      snprintf(buf, bench_key_size_ + 1, "%016d", k);
+    }
+  }
+
+  // Key block for one of the two mergetwo databases, in shuffled insert order.
+  void prepare_merge_keys(std::vector<char>& buf, const std::vector<int>& key_ids,
+                          int m, int dup, bool second) {
+    std::vector<int> idx(key_ids.begin(),
+                         key_ids.begin() + (second ? dup : m));
+    if (second) {
+      idx.insert(idx.end(), key_ids.begin() + m,
+                 key_ids.begin() + 2 * m - dup);
+    }
+    for (int i = m - 1; i > 0; i--) {
+      std::swap(idx[i], idx[rand_.Next() % (i + 1)]);
+    }
+
+    buf.assign((size_t)m * bench_key_size_ + 1, 0);
+    for (int i = 0; i < m; i++) {
+      encode_key(buf.data() + (size_t)i * bench_key_size_, idx[i]);
+    }
+  }
+
   Benchmark()
       : file_storage_(nullptr),
         map_storage_(nullptr),
@@ -556,6 +658,7 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       bool is_write = false;
+      bool self_timed = false;  // benchmark calls Start()/Stop() itself
       if (name == Slice("fillseq")) {
         is_write = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size,
@@ -602,6 +705,12 @@ class Benchmark {
         reads_ /= 1000;
         ReadSequential();
         reads_ = n;
+      } else if (name == Slice("mergetwo")) {
+        MergeTwo(name, false);
+        self_timed = true;
+      } else if (name == Slice("mergetwo_insert")) {
+        MergeTwo(name, true);
+        self_timed = true;
       } else {
         known = false;
         if (name != Slice()) {  // No error message for empty name
@@ -610,7 +719,7 @@ class Benchmark {
         }
       }
       if (known) {
-        Stop(name);
+        if (!self_timed) Stop(name);
         // Optionally flush all tributaries into the main DB after a write
         // benchmark (not timed, so it does not affect the reported rate).
         if (is_write && FLAGS_merge_after_write && confluence_db_) {
@@ -1051,6 +1160,155 @@ class Benchmark {
       ReadRandomImpl(*map_storage_);
     }
   }
+
+  template <typename StorageType>
+  void fill_merge_db(StorageType& storage, const std::vector<char>& keys,
+                     int n) {
+    auto db = open_bench_db<StorageType, leaves::_DB>(storage);
+    auto cursor = db.cursor();
+    const int batch = FLAGS_batch_size > 0 ? FLAGS_batch_size : 1;
+    for (int i = 0; i < n; i += batch) {
+      cursor.start_transaction(false, FLAGS_use_wal);
+      const int end = std::min(i + batch, n);
+      for (int j = i; j < end; j++) {
+        cursor.find(leaves::Slice(keys.data() + (size_t)j * bench_key_size_,
+                                  bench_key_size_));
+        cursor.value(gen_.Generate(FLAGS_value_size));
+      }
+      cursor.commit(false);
+    }
+  }
+
+  template <typename StorageType>
+  void MergeTwoImpl(const leveldb::Slice& name,
+                    std::shared_ptr<StorageType> storage_a,
+                    std::shared_ptr<StorageType> storage_b, int m, int dup,
+                    double overlap, const std::vector<char>& keys_a,
+                    const std::vector<char>& keys_b,
+                    bool sequential_insert) {
+    fill_merge_db(*storage_a, keys_a, m);
+    fill_merge_db(*storage_b, keys_b, m);
+
+    auto dst_db = open_bench_db<StorageType, leaves::_DB>(*storage_a);
+    auto src_db = open_bench_db<StorageType, leaves::_DB>(*storage_b);
+
+            PerfRecordingControl perf_control;
+    Start();
+            perf_control.enable();
+    FindProfile find_profile;
+    auto dst_cursor = dst_db.cursor();
+    auto src_cursor = src_db.cursor();
+    if (!dst_cursor.start_transaction()) {
+      throw std::runtime_error("mergetwo: cannot start destination transaction");
+    }
+
+    if (sequential_insert) {
+      for (src_cursor.first(); src_cursor.is_valid(); src_cursor.next()) {
+        find_profile.measure([&] { dst_cursor.find(src_cursor.key()); });
+        dst_cursor.value(src_cursor.value());
+      }
+    } else {
+      leaves::Merger merger(dst_cursor, src_cursor);
+      if (!merger.exec()) {
+        throw std::runtime_error("mergetwo: merge failed");
+      }
+    }
+    if (!dst_cursor.commit(false)) {
+      throw std::runtime_error("mergetwo: commit failed");
+    }
+
+    char msg[160];
+    if (sequential_insert) {
+      std::snprintf(msg, sizeof(msg),
+                    "(%d ops, overlap %.2f, %llu finds, %.3f us in find)", m,
+                    overlap, (unsigned long long)find_profile.count,
+                    find_profile.elapsed.count() / 1000.0);
+    } else {
+      std::snprintf(msg, sizeof(msg), "(%d ops, overlap %.2f)", m, overlap);
+    }
+    message_ = msg;
+
+    // The merger works on whole subtrees, so ops are accounted in bulk.
+    done_ = m;
+    bytes_ = (int64_t)m * (bench_key_size_ + FLAGS_value_size);
+    perf_control.disable();
+    Stop(name);
+
+    auto verify_db = open_bench_db<StorageType, leaves::_DB>(*storage_a);
+    auto verify = verify_db.cursor();
+    int64_t actual = 0;
+    for (verify.first(); verify.is_valid(); verify.next()) actual++;
+    const int64_t expected = (int64_t)m + (m - dup);
+    if (actual != expected) {
+      std::fprintf(stderr,
+                   "warning: mergetwo result has %lld entries, expected %lld\n",
+                   (long long)actual, (long long)expected);
+    }
+  }
+
+  // Fills two databases with partially overlapping keys, then merges the
+  // second into the first. Source wins on conflicts; only the merge is timed.
+  void MergeTwo(const leveldb::Slice& name, bool sequential_insert) {
+    Start();
+    if (using_confluence_ || using_replicating_) {
+      message_ = "skipping (not supported with confluence/replicating)";
+      Stop(name);
+      return;
+    }
+
+    const int m = num_ / 2;
+    if (m <= 0) {
+      message_ = "skipping (--num too small)";
+      Stop(name);
+      return;
+    }
+
+    const double overlap = std::min(1.0, std::max(0.0, FLAGS_merge_overlap));
+    const int dup = (int)(overlap * m + 0.5);
+
+    bench_key_size_ = FLAGS_binary_key ? 8 : 16;
+    std::vector<int> key_ids(num_);
+    for (int i = 0; i < num_; i++) key_ids[i] = i;
+    for (int i = num_ - 1; i > 0; i--) {
+      std::swap(key_ids[i], key_ids[rand_.Next() % (i + 1)]);
+    }
+    std::vector<char> keys_a, keys_b;
+    prepare_merge_keys(keys_a, key_ids, m, dup, false);
+    prepare_merge_keys(keys_b, key_ids, m, dup, true);
+
+    std::string test_dir;
+    leveldb::Env::Default()->GetTestDirectory(&test_dir);
+    const fs::path dir = fs::path(test_dir) / "dbbench_merge";
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    if (ec) {
+      std::fprintf(stderr, "merge: cannot create %s: %s\n",
+                   dir.string().c_str(), ec.message().c_str());
+      return;
+    }
+
+    const std::string path_a = (dir / "a.lvs").string();
+    const std::string path_b = (dir / "b.lvs").string();
+
+    if (using_file_storage_) {
+      MergeTwoImpl(name, leaves::FileStorage::create(path_a.c_str()),
+                   leaves::FileStorage::create(path_b.c_str()), m, dup, overlap,
+                   keys_a, keys_b, sequential_insert);
+    } else {
+      const uint64_t map_size_bytes =
+          static_cast<uint64_t>(FLAGS_map_size_gb) * leaves::G;
+      MergeTwoImpl(name,
+                   leaves::MapStorage::create(path_a.c_str(), map_size_bytes,
+                                              FLAGS_copy_write_pivot),
+                   leaves::MapStorage::create(path_b.c_str(), map_size_bytes,
+                                              FLAGS_copy_write_pivot),
+                   m, dup, overlap, keys_a, keys_b, sequential_insert);
+    }
+
+    fs::remove_all(dir, ec);
+  }
 };
 
 }  // namespace leveldb
@@ -1077,6 +1335,8 @@ int main(int argc, char** argv) {
       FLAGS_value_size = n;
     } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
       FLAGS_batch_size = n;
+    } else if (sscanf(argv[i], "--merge_overlap=%lf%c", &d, &junk) == 1) {
+      FLAGS_merge_overlap = d;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {

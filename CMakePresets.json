@@ -40,7 +40,7 @@
     {
       "name": "default-linux",
       "displayName": "Default Linux Multi-Config",
-      "description": "Default profile for Debug tests and Release benchmarks",
+      "description": "Default profile: tests Debug, benchmarks Release (nested build)",
       "generator": "Ninja Multi-Config",
       "binaryDir": "${sourceDir}/build-default",
       "cacheVariables": {
@@ -80,52 +80,16 @@
       "configurePreset": "linux-release"
     },
     {
-      "name": "default-tests-debug",
+      "name": "default",
+      "displayName": "Default (tests Debug, benchmarks Release)",
       "configurePreset": "default-linux",
-      "configuration": "Debug",
-      "targets": [
-        "leaves_tests"
-      ]
+      "configuration": "Debug"
     },
     {
-      "name": "default-benchmarks-release",
-      "configurePreset": "default-linux",
-      "configuration": "Release",
-      "targets": [
-        "leaves_benchmarks"
-      ]
-    },
-    {
-      "name": "windows-vs18-x64-default-tests-debug",
-      "configurePreset": "windows-vs18-x64",
-      "configuration": "Debug",
-      "targets": [
-        "leaves_tests"
-      ]
-    },
-    {
-      "name": "windows-vs18-x64-default-benchmarks-release",
-      "configurePreset": "windows-vs18-x64",
-      "configuration": "Release",
-      "targets": [
-        "leaves_benchmarks"
-      ]
-    },
-    {
-      "name": "default-windows-tests-debug",
+      "name": "default-windows",
+      "displayName": "Default Windows (tests Debug, benchmarks Release)",
       "configurePreset": "default-windows",
-      "configuration": "Debug",
-      "targets": [
-        "leaves_tests"
-      ]
-    },
-    {
-      "name": "default-windows-benchmarks-release",
-      "configurePreset": "default-windows",
-      "configuration": "Release",
-      "targets": [
-        "leaves_benchmarks"
-      ]
+      "configuration": "Debug"
     }
   ],
   "testPresets": [
@@ -144,7 +108,7 @@
     {
       "name": "default",
       "displayName": "Default",
-      "description": "Configure once, build tests in Debug, then benchmarks in Release",
+      "description": "Configure once, build tests in Debug and benchmarks in Release",
       "steps": [
         {
           "type": "configure",
@@ -152,18 +116,14 @@
         },
         {
           "type": "build",
-          "name": "default-tests-debug"
-        },
-        {
-          "type": "build",
-          "name": "default-benchmarks-release"
+          "name": "default"
         }
       ]
     },
     {
       "name": "default-windows",
       "displayName": "Default Windows",
-      "description": "Configure once, build tests in Debug, then benchmarks in Release",
+      "description": "Configure once, build tests in Debug and benchmarks in Release",
       "steps": [
         {
           "type": "configure",
@@ -171,11 +131,7 @@
         },
         {
           "type": "build",
-          "name": "default-windows-tests-debug"
-        },
-        {
-          "type": "build",
-          "name": "default-windows-benchmarks-release"
+          "name": "default-windows"
         }
       ]
     }

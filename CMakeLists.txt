@@ -189,6 +189,9 @@ option(LEAVES_ASAN "Build tests with AddressSanitizer" ${LEAVES_REPOSITORY_OPTIO
 option(LEAVES_BUILD_TESTS "Build leaves' unit tests" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_BUILD_BENCHMARKS "Build leaves' benchmarks" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
 option(LEAVES_LOG "Enable leaves logging macros for consumers" OFF)
+option(LEAVES_BENCHMARKS_RELEASE_SUBBUILD "Build benchmarks in a nested Release build when the main build is not Release" ${LEAVES_REPOSITORY_OPTION_DEFAULT})
+set(DEBUG_BENCHMARKS OFF CACHE BOOL "Build benchmarks with debug info")
+set(LEAVES_BENCHMARK_NATIVE_ARCH ON CACHE BOOL "Enable -march=native for benchmark targets")
 
 if (MSVC AND LEAVES_GCOV)
     message(STATUS "LEAVES_GCOV is not supported with MSVC; disabling it")
@@ -707,7 +710,57 @@ set(LEAVES_GTEST_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/third_party/googletest/googletest/include
     ${CMAKE_CURRENT_SOURCE_DIR}/leveldb/third_party/googletest/googletest)
 
-if (LEAVES_BUILD_BENCHMARKS) 
+get_property(_leaves_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+set(_leaves_bench_subbuild OFF)
+if (LEAVES_BUILD_BENCHMARKS AND LEAVES_BENCHMARKS_RELEASE_SUBBUILD
+    AND (_leaves_multi_config OR NOT CMAKE_BUILD_TYPE STREQUAL "Release"))
+    set(_leaves_bench_subbuild ON)
+endif()
+
+if (_leaves_bench_subbuild)
+include(ExternalProject)
+
+string(REPLACE ";" "|" _leaves_bench_prefix_path "${CMAKE_PREFIX_PATH}")
+set(_leaves_bench_args
+    -DLEAVES_BUILD_TESTS=OFF
+    -DLEAVES_BUILD_BENCHMARKS=ON
+    -DLEAVES_BENCHMARKS_RELEASE_SUBBUILD=OFF
+    -DLEAVES_GCOV=OFF
+    -DLEAVES_ASAN=OFF
+    -DLEAVES_LOG=${LEAVES_LOG}
+    -DDEBUG_BENCHMARKS=${DEBUG_BENCHMARKS}
+    -DLEAVES_BENCHMARK_NATIVE_ARCH=${LEAVES_BENCHMARK_NATIVE_ARCH}
+    -DCMAKE_PREFIX_PATH=${_leaves_bench_prefix_path}
+    -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_BINARY_DIR}
+    -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${CMAKE_BINARY_DIR})
+if (NOT _leaves_multi_config)
+    list(APPEND _leaves_bench_args -DCMAKE_BUILD_TYPE=Release)
+endif()
+set(_leaves_bench_forward_vars CMAKE_TOOLCHAIN_FILE VCPKG_TARGET_TRIPLET VCPKG_MANIFEST_MODE VCPKG_INSTALLED_DIR)
+if (NOT CMAKE_GENERATOR MATCHES "Visual Studio")
+    list(APPEND _leaves_bench_forward_vars CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_MAKE_PROGRAM)
+endif()
+foreach(_var IN LISTS _leaves_bench_forward_vars)
+    if (DEFINED ${_var})
+        list(APPEND _leaves_bench_args "-D${_var}=${${_var}}")
+    endif()
+endforeach()
+
+ExternalProject_Add(leaves_benchmarks_release
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+    BINARY_DIR "${CMAKE_BINARY_DIR}/benchmarks-release"
+    LIST_SEPARATOR |
+    CMAKE_ARGS ${_leaves_bench_args}
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target leaves_benchmarks --parallel
+    INSTALL_COMMAND ""
+    BUILD_ALWAYS ON
+    USES_TERMINAL_CONFIGURE ON
+    USES_TERMINAL_BUILD ON)
+
+add_custom_target(leaves_benchmarks)
+add_dependencies(leaves_benchmarks leaves_benchmarks_release)
+
+elseif (LEAVES_BUILD_BENCHMARKS)
 set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Build LevelDB's unit tests" FORCE)
 set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "Build LevelDB's benchmarks" FORCE)
 set(LEVELDB_INSTALL OFF CACHE BOOL "Install LevelDB's header and library" FORCE)
@@ -716,9 +769,6 @@ set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Enable testing of the benchmark lib
 include_directories(SYSTEM ${LEAVES_GTEST_INCLUDE_DIRS})
 add_subdirectory("leveldb/third_party/benchmark")
 add_subdirectory("leveldb")
-
-set(DEBUG_BENCHMARKS OFF CACHE BOOL "Build benchmarks with debug info")
-set(LEAVES_BENCHMARK_NATIVE_ARCH ON CACHE BOOL "Enable -march=native for benchmark targets")
 
 set(LEAVES_BENCH_NATIVE_FLAG "")
 if (LEAVES_BENCHMARK_NATIVE_ARCH AND NOT MSVC)
@@ -736,7 +786,7 @@ target_sources(lbench INTERFACE
 
 add_executable(db_bench_leaves benchmarks/db_bench_leaves.cpp)
 target_link_libraries(db_bench_leaves PUBLIC core lbench benchmark leveldb Threads::Threads blake3)
-if (MSVC)
+if (MSVC AND NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE)
 set_target_properties(db_bench_leaves PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_BINARY_DIR}")
 endif()
@@ -846,7 +896,7 @@ if (TARGET db_bench_rocksdb)
 endif()
 
 
-endif (LEAVES_BUILD_BENCHMARKS) 
+endif ()
 
 install(TARGETS leaves EXPORT leavesTargets
     INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
