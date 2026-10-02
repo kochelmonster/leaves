@@ -112,6 +112,7 @@ struct _TransferTrie {
 
       // Prefetch is a no-op for temp DB
       void prefetch(const offset_e*, int = 0) const {}
+      void prefetch(const void*, Access = READ) const {}
     };
   };
 
