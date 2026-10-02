@@ -3087,6 +3087,95 @@ BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_with_shared_and_srconly) {
   BOOST_CHECK_EQUAL(verify.value(), Slice("dst_x"));
 }
 
+BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_sparse_branch_groups) {
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+  auto src_db = src_storage->open("test");
+  auto dest_db = dest_storage->open("test");
+
+  const std::string prefix = "sparse-prefix";
+  auto make_key = [&](uint8_t branch, char suffix) {
+    std::string key = prefix;
+    key.push_back(static_cast<char>(branch));
+    key.push_back(suffix);
+    return key;
+  };
+
+  auto src_cursor = src_db.cursor();
+  src_cursor.find(prefix);
+  src_cursor.value("src_prefix");
+  for (char suffix : {'a', 'b'}) {
+    auto key = make_key(0x41, suffix);
+    src_cursor.find(key);
+    src_cursor.value("src_shared");
+    key = make_key(0xe1, suffix);
+    src_cursor.find(key);
+    src_cursor.value("src_only");
+  }
+  src_cursor.commit();
+
+  auto dest_cursor = dest_db.cursor();
+  dest_cursor.find(prefix);
+  dest_cursor.value("dst_prefix");
+  for (char suffix : {'a', 'b'}) {
+    auto key = make_key(0x20, suffix);
+    dest_cursor.find(key);
+    dest_cursor.value("dst_only");
+    key = make_key(0x41, suffix);
+    dest_cursor.find(key);
+    dest_cursor.value("dst_shared");
+    key = make_key(0x70, suffix);
+    dest_cursor.find(key);
+    dest_cursor.value("dst_kept");
+  }
+  dest_cursor.commit();
+
+  using TrieNode = typename InternalDB::Traits::TrieNode;
+  auto dest_internal = dest_db._internal();
+  auto incomplete_root = dest_internal->template resolve<TrieNode>(
+      &dest_internal->txn()->root);
+  BOOST_REQUIRE(incomplete_root->isset(0x20));
+  *incomplete_root->branch_offset(0x20) = 0;
+
+  StandardMergePolicy handler;
+  exec_merger(*dest_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find(prefix);
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_prefix"));
+  for (char suffix : {'a', 'b'}) {
+    auto key = make_key(0x20, suffix);
+    verify.find(key);
+    BOOST_CHECK(!verify.is_valid());
+    key = make_key(0x41, suffix);
+    verify.find(key);
+    BOOST_REQUIRE(verify.is_valid());
+    BOOST_CHECK_EQUAL(verify.value(), Slice("src_shared"));
+    key = make_key(0x70, suffix);
+    verify.find(key);
+    BOOST_REQUIRE(verify.is_valid());
+    BOOST_CHECK_EQUAL(verify.value(), Slice("dst_kept"));
+    key = make_key(0xe1, suffix);
+    verify.find(key);
+    BOOST_REQUIRE(verify.is_valid());
+    BOOST_CHECK_EQUAL(verify.value(), Slice("src_only"));
+  }
+
+  BOOST_REQUIRE(dest_internal->txn()->root.type() == TRIE);
+  auto root = dest_internal->template resolve<TrieNode>(
+      &dest_internal->txn()->root);
+  BOOST_CHECK(root->has_none());
+  BOOST_CHECK_EQUAL(root->branch_count(), 4);
+  const uint8_t expected_groups =
+      (1u << TrieNode::branch_bits_group(0x20)) |
+      (1u << TrieNode::branch_bits_group(0x41)) |
+      (1u << TrieNode::branch_bits_group(0x70)) |
+      (1u << TrieNode::branch_bits_group(0xe1));
+  BOOST_CHECK_EQUAL(root->_branch_bits_index, expected_groups);
+}
+
 BOOST_AUTO_TEST_CASE(test_merger_leaf_into_existing_trie) {
   // Exercises merge_leaf_into_trie and expand_trie_with_branch
   MergerPreparation p;

@@ -389,10 +389,12 @@ struct _Merger {
 
       // Collect surviving children into a flat offset array
       // +1 offset so offsets_buf[-1] (NONE) is valid
-      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT];
       offset_e* offsets_buf = &offsets_raw[1];
+      offsets_buf[TrieNode::NONE] = offset_e();
       int surviving = 0;
       uint8_t upper = 0;
+      uint32_t branch_bitmap[8] = {};
       size_t branch_index = 0;
       src_trie->for_each_branch([&](int k, auto* src_off) {
         prefetch_source_branch_window(src_trie, src_off, branch_index++);
@@ -400,7 +402,10 @@ struct _Merger {
         if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
           offsets_buf[k] = child_offset;
           surviving++;
-          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::branch_bits_group(k));
+          if (k != SrcTrieNode::NONE) {
+            upper |= (1u << TrieNode::branch_bits_group(k));
+            branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+          }
         }
       });
 
@@ -413,7 +418,7 @@ struct _Merger {
       // Build suffix trie from survivors
       trie_ptr suffix_trie =
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
-      suffix_trie->create(suffix_prefix, offsets_buf, upper);
+      suffix_trie->create(suffix_prefix, offsets_buf, branch_bitmap, upper);
 
       // Compute _hash for suffix_trie - children have valid hashes from deep copy
       handler.after_trie_merged(suffix_trie, dst_cursor._db);
@@ -443,14 +448,19 @@ struct _Merger {
       // We need to merge that branch recursively, and selectively
       // copy all other src branches.
 
-      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT];
       offset_e* offsets_buf = &offsets_raw[1];
+      offsets_buf[TrieNode::NONE] = offset_e();
       int branch_count = 1;  // key1 branch
 
       offsets_buf[key1] = child1;
+      uint32_t branch_bitmap[8] = {};
 
       // Selectively deep copy all other src branches, count survivors inline
       uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::branch_bits_group(key1)) : 0;
+      if (key1 != TrieNode::NONE) {
+        branch_bitmap[key1 >> 5] |= uint32_t(1) << (key1 & 31);
+      }
       size_t branch_index = 0;
       src_trie->for_each_branch([&](int k, auto* src_off) {
         prefetch_source_branch_window(src_trie, src_off, branch_index++);
@@ -459,14 +469,17 @@ struct _Merger {
         if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
           offsets_buf[k] = child_offset;
           branch_count++;
-          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::branch_bits_group(k));
+          if (k != SrcTrieNode::NONE) {
+            upper |= (1u << TrieNode::branch_bits_group(k));
+            branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+          }
         }
       });
 
       Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
-      new_trie->create(prefix, offsets_buf, upper);
+      new_trie->create(prefix, offsets_buf, branch_bitmap, upper);
 
       dst.trie() = new_trie;
       dst.update_trie_offset();
@@ -495,11 +508,16 @@ struct _Merger {
     // Src trie does not have key1 — add key1 as a new branch in src's
     // structure, and selectively copy src's existing branches.
     {
-      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT];
       offset_e* offsets_buf = &offsets_raw[1];
+      offsets_buf[TrieNode::NONE] = offset_e();
       int branch_count = 1;  // key1 branch
 
       offsets_buf[key1] = child1;
+      uint32_t branch_bitmap[8] = {};
+      if (key1 != TrieNode::NONE) {
+        branch_bitmap[key1 >> 5] |= uint32_t(1) << (key1 & 31);
+      }
 
       uint8_t upper = (key1 != TrieNode::NONE) ? (1u << TrieNode::branch_bits_group(key1)) : 0;
       size_t branch_index = 0;
@@ -509,14 +527,17 @@ struct _Merger {
         if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
           offsets_buf[k] = child_offset;
           branch_count++;
-          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::branch_bits_group(k));
+          if (k != SrcTrieNode::NONE) {
+            upper |= (1u << TrieNode::branch_bits_group(k));
+            branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+          }
         }
       });
 
       Slice prefix(current_key.data() + dst.keypos, dst.prefix);
       trie_ptr new_trie =
           alloc_node<trie_ptr>(TrieNode::size(prefix.size(), branch_count));
-      new_trie->create(prefix, offsets_buf, upper);
+      new_trie->create(prefix, offsets_buf, branch_bitmap, upper);
 
       dst.trie() = new_trie;
       dst.update_trie_offset();
@@ -545,10 +566,12 @@ struct _Merger {
       // src prefix is longer -> selectively copy children, then build
       // a correctly-sized suffix trie from survivors only.
 
-      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+      offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT];
       offset_e* offsets_buf = &offsets_raw[1];
+      offsets_buf[TrieNode::NONE] = offset_e();
       int surviving = 0;
       uint8_t upper = 0;
+      uint32_t branch_bitmap[8] = {};
       size_t branch_index = 0;
       src_trie->for_each_branch([&](int k, auto* src_off) {
         prefetch_source_branch_window(src_trie, src_off, branch_index++);
@@ -556,7 +579,10 @@ struct _Merger {
         if (selective_deep_copy_subtree(src_off, &child_offset, current_key)) {
           offsets_buf[k] = child_offset;
           surviving++;
-          if (k != SrcTrieNode::NONE) upper |= (1u << TrieNode::branch_bits_group(k));
+          if (k != SrcTrieNode::NONE) {
+            upper |= (1u << TrieNode::branch_bits_group(k));
+            branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+          }
         }
       });
 
@@ -567,7 +593,7 @@ struct _Merger {
           suffix_len);
       trie_ptr suffix_trie =
           alloc_node<trie_ptr>(TrieNode::size(suffix_prefix.size(), surviving));
-      suffix_trie->create(suffix_prefix, offsets_buf, upper);
+      suffix_trie->create(suffix_prefix, offsets_buf, branch_bitmap, upper);
 
       uint16_t loffset;
       trie_ptr new_trie =
@@ -776,8 +802,10 @@ struct _Merger {
   }
 
   bool clean_filtered_trie(trie_ptr& trie) {
-    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT] = {};
+    offset_e offsets_raw[TrieNode::MAX_BRANCH_COUNT];
     offset_e* offsets = &offsets_raw[1];
+    offsets[TrieNode::NONE] = offset_e();
+    uint32_t branch_bitmap[8] = {};
     uint16_t surviving = 0;
     uint8_t branch_bits_index = 0;
 
@@ -787,6 +815,7 @@ struct _Merger {
       surviving++;
       if (key != TrieNode::NONE) {
         branch_bits_index |= 1u << TrieNode::branch_bits_group(key);
+        branch_bitmap[key >> 5] |= uint32_t(1) << (key & 31);
       }
     });
 
@@ -801,7 +830,7 @@ struct _Merger {
     page_ptr new_page = dst_cursor._db->alloc_slot(old_page->slot_id);
     new_page->used = old_page->used;
     trie_ptr cleaned = new_page + sizeof(PageHeader);
-    cleaned->create(prefix, offsets, branch_bits_index);
+    cleaned->create(prefix, offsets, branch_bitmap, branch_bits_index);
     free_node(trie);
     trie = cleaned;
     return true;
