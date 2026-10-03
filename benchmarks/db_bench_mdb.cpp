@@ -8,8 +8,13 @@
 #include <lmdb.h>
 
 #include <boost/endian/conversion.hpp>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
 
 #include "util/histogram.h"
 #include "util/random.h"
@@ -34,6 +39,9 @@ static bool FLAGS_binary_key = false;
 //   readseq100K   -- read N/1000 100K values in sequential order in async mode
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
+//   mergetwo      -- fill two databases with N/2 partially overlapping keys
+//                    each, then merge the second into the first (only the
+//                    merge is timed)
 static const char* FLAGS_benchmarks =
     "fillseq,"
 //    "fillseqsync,"
@@ -49,6 +57,9 @@ static const char* FLAGS_benchmarks =
 
 // Batch size for write operations. Default 1000
 static int FLAGS_batch_size = 1000;
+
+// Fraction of the mergetwo source keys that already exist in the destination
+static double FLAGS_merge_overlap = 0.5;
 
 // Use writable MMAP
 static bool FLAGS_writemap = false;
@@ -327,6 +338,34 @@ class Benchmark {
     return bench_keys_buf_.data() + i * bench_key_size_;
   }
 
+  void encode_key(char* buf, int k) const {
+    if (FLAGS_binary_key) {
+      uint64_t bk = native_to_big((uint64_t)(uint32_t)k);
+      memcpy(buf, &bk, sizeof(uint64_t));
+    } else {
+      snprintf(buf, bench_key_size_ + 1, "%016d", k);
+    }
+  }
+
+  // Key block for one of the two mergetwo databases, in shuffled insert order.
+  void prepare_merge_keys(std::vector<char>& buf, const std::vector<int>& key_ids,
+                          int m, int dup, bool second) {
+    std::vector<int> idx(key_ids.begin(),
+                         key_ids.begin() + (second ? dup : m));
+    if (second) {
+      idx.insert(idx.end(), key_ids.begin() + m,
+                 key_ids.begin() + 2 * m - dup);
+    }
+    for (int i = m - 1; i > 0; i--) {
+      std::swap(idx[i], idx[rand_.Next() % (i + 1)]);
+    }
+
+    buf.assign((size_t)m * bench_key_size_ + 1, 0);
+    for (int i = 0; i < m; i++) {
+      encode_key(buf.data() + (size_t)i * bench_key_size_, idx[i]);
+    }
+  }
+
   Benchmark()
       : db_(nullptr),
         num_(FLAGS_num),
@@ -381,6 +420,7 @@ class Benchmark {
 
       bool known = true;
       bool write_sync = false;
+      bool self_timed = false;  // benchmark calls Start()/Stop() itself
       if (name == Slice("fillseq")) {
         Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size, FLAGS_batch_size);
       } else if (name == Slice("fillrandom")) {
@@ -411,6 +451,9 @@ class Benchmark {
         reads_ /= 1000;
         ReadSequential();
         reads_ = n;
+      } else if (name == Slice("mergetwo")) {
+        MergeTwo(name);
+        self_timed = true;
       } else {
         known = false;
         if (name != Slice()) {  // No error message for empty name
@@ -418,7 +461,7 @@ class Benchmark {
                        name.ToString().c_str());
         }
       }
-      if (known) {
+      if (known && !self_timed) {
         Stop(name);
       }
     }
@@ -559,6 +602,169 @@ class Benchmark {
     mdb_cursor_close(cursor);
     mdb_txn_abort(txn);
   }
+
+  bool open_merge_env(const std::string& dir, MDB_env** env, MDB_dbi* dbi) {
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+      std::fprintf(stderr, "merge: cannot create %s: %s\n", dir.c_str(),
+                   ec.message().c_str());
+      return false;
+    }
+
+    int env_opt = MDB_NOSYNC;
+    if (FLAGS_writemap) env_opt |= MDB_WRITEMAP | MDB_MAPASYNC;
+
+    int rc = mdb_env_create(env);
+    if (!rc)
+      rc = mdb_env_set_mapsize(
+          *env, (size_t)FLAGS_num * (size_t)FLAGS_value_size * 32L);
+    if (!rc) rc = mdb_env_open(*env, dir.c_str(), env_opt, 0664);
+    if (rc) {
+      std::fprintf(stderr, "merge open error: %s %s\n", mdb_strerror(rc),
+                   dir.c_str());
+      return false;
+    }
+
+    MDB_txn* txn;
+    rc = mdb_txn_begin(*env, NULL, 0, &txn);
+    if (!rc) rc = mdb_open(txn, NULL, 0, dbi);
+    if (!rc) rc = mdb_txn_commit(txn);
+    if (rc) {
+      std::fprintf(stderr, "merge dbi error: %s\n", mdb_strerror(rc));
+      return false;
+    }
+    return true;
+  }
+
+  void fill_merge_env(MDB_env* env, MDB_dbi dbi, const std::vector<char>& keys,
+                      int n) {
+    const int batch = FLAGS_batch_size > 0 ? FLAGS_batch_size : 1;
+    for (int i = 0; i < n; i += batch) {
+      MDB_txn* txn;
+      MDB_cursor* mc;
+      mdb_txn_begin(env, NULL, 0, &txn);
+      mdb_cursor_open(txn, dbi, &mc);
+
+      const int end = std::min(i + batch, n);
+      for (int j = i; j < end; j++) {
+        MDB_val mkey, mval;
+        mkey.mv_data =
+            const_cast<char*>(keys.data() + (size_t)j * bench_key_size_);
+        mkey.mv_size = bench_key_size_;
+        Slice value = gen_.Generate(FLAGS_value_size);
+        mval.mv_data = const_cast<char*>(value.data());
+        mval.mv_size = value.size();
+        int rc = mdb_cursor_put(mc, &mkey, &mval, 0);
+        if (rc) {
+          std::fprintf(stderr, "merge fill error: %s\n", mdb_strerror(rc));
+        }
+      }
+
+      mdb_cursor_close(mc);
+      mdb_txn_commit(txn);
+    }
+  }
+
+  int64_t count_entries(MDB_env* env, MDB_dbi dbi) {
+    MDB_txn* txn;
+    MDB_stat stat;
+    mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+    mdb_stat(txn, dbi, &stat);
+    mdb_txn_abort(txn);
+    return (int64_t)stat.ms_entries;
+  }
+
+  // Fills two databases with partially overlapping keys, then merges the
+  // second into the first. Source wins on conflicts; only the merge is timed.
+  // MDB_APPEND is not usable here: the source keys interleave with the ones
+  // already present in the destination, which LMDB rejects with MDB_KEYEXIST.
+  void MergeTwo(const Slice& name) {
+    const int m = num_ / 2;
+    if (m <= 0) {
+      Start();
+      message_ = "skipping (--num too small)";
+      Stop(name);
+      return;
+    }
+
+    const double overlap = std::min(1.0, std::max(0.0, FLAGS_merge_overlap));
+    const int dup = (int)(overlap * m + 0.5);
+
+    bench_key_size_ = FLAGS_binary_key ? 8 : 16;
+    std::vector<int> key_ids(num_);
+    for (int i = 0; i < num_; i++) key_ids[i] = i;
+    for (int i = num_ - 1; i > 0; i--) {
+      std::swap(key_ids[i], key_ids[rand_.Next() % (i + 1)]);
+    }
+    std::vector<char> keys_a, keys_b;
+    prepare_merge_keys(keys_a, key_ids, m, dup, false);
+    prepare_merge_keys(keys_b, key_ids, m, dup, true);
+
+    std::string test_dir;
+    Env::Default()->GetTestDirectory(&test_dir);
+    const std::string dir_a = test_dir + "/dbbench_mdb_merge-a";
+    const std::string dir_b = test_dir + "/dbbench_mdb_merge-b";
+
+    MDB_env* env_a = nullptr;
+    MDB_env* env_b = nullptr;
+    MDB_dbi dbi_a = 0, dbi_b = 0;
+    if (!open_merge_env(dir_a, &env_a, &dbi_a) ||
+        !open_merge_env(dir_b, &env_b, &dbi_b)) {
+      mdb_env_close(env_a);
+      mdb_env_close(env_b);
+      return;
+    }
+
+    fill_merge_env(env_a, dbi_a, keys_a, m);
+    fill_merge_env(env_b, dbi_b, keys_b, m);
+
+    Start();
+    char msg[100];
+    std::snprintf(msg, sizeof(msg), "(%d ops, overlap %.2f)", m, overlap);
+    message_ = msg;
+
+    MDB_txn* wtxn;
+    MDB_txn* rtxn;
+    MDB_cursor* wcursor;
+    MDB_cursor* rcursor;
+    mdb_txn_begin(env_a, NULL, 0, &wtxn);
+    mdb_cursor_open(wtxn, dbi_a, &wcursor);
+    mdb_txn_begin(env_b, NULL, MDB_RDONLY, &rtxn);
+    mdb_cursor_open(rtxn, dbi_b, &rcursor);
+
+    MDB_val key, data;
+    while (mdb_cursor_get(rcursor, &key, &data, MDB_NEXT) == 0) {
+      bytes_ += key.mv_size + data.mv_size;
+      int rc = mdb_cursor_put(wcursor, &key, &data, 0);
+      if (rc) {
+        std::fprintf(stderr, "merge error: %s\n", mdb_strerror(rc));
+      }
+      FinishedSingleOp();
+    }
+
+    mdb_cursor_close(rcursor);
+    mdb_txn_abort(rtxn);
+    mdb_cursor_close(wcursor);
+    mdb_txn_commit(wtxn);
+
+    Stop(name);
+
+    const int64_t expected = (int64_t)m + (m - dup);
+    const int64_t actual = count_entries(env_a, dbi_a);
+    if (actual != expected) {
+      std::fprintf(stderr,
+                   "warning: mergetwo result has %lld entries, expected %lld\n",
+                   (long long)actual, (long long)expected);
+    }
+
+    mdb_env_close(env_a);
+    mdb_env_close(env_b);
+    std::error_code ec;
+    std::filesystem::remove_all(dir_a, ec);
+    std::filesystem::remove_all(dir_b, ec);
+  }
 };
 
 }  // namespace leveldb
@@ -586,6 +792,8 @@ int main(int argc, char** argv) {
       FLAGS_value_size = n;
     } else if (sscanf(argv[i], "--batch_size=%d%c", &n, &junk) == 1) {
       FLAGS_batch_size = n;
+    } else if (sscanf(argv[i], "--merge_overlap=%lf%c", &d, &junk) == 1) {
+      FLAGS_merge_overlap = d;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;
     } else if (sscanf(argv[i], "--page_size=%d%c", &n, &junk) == 1) {
