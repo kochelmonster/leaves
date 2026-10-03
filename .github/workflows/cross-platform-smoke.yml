@@ -17,12 +17,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
-
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
 
       - name: Toolchain diagnostics (Linux/macOS)
         if: runner.os != 'Windows'
@@ -86,7 +83,10 @@ jobs:
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: compnerd/gha-setup-vsdevenv@v7
+        with:
+          arch: amd64
+          host_arch: amd64
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
