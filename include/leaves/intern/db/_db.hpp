@@ -621,6 +621,10 @@ struct _DB : public _WalDbMixin<_DB<Storage_, Transaction_, Header_, Self_>> {
     _storage.prefetch(offset, access);
   }
 
+  void prefetch(const void* mem, Access access = READ) const {
+    _storage.prefetch(const_cast<void*>(mem), access);
+  }
+
   area_ptr alloc_single_area() {
     assert(bool(_active_txn));
     std::scoped_lock lock(_storage.file_lock());

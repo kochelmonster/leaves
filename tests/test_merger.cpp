@@ -7,10 +7,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 #include "../include/leaves/intern/db/_cursor.hpp"
 #include "../include/leaves/intern/util/_merger.hpp"
 #include "../include/leaves/confluence.hpp"
+#include <leaves/fstore.hpp>
+#include <leaves/merger.hpp>
 #include "test.hpp"
 
 using namespace leaves;
@@ -69,12 +72,364 @@ struct MergerPreparation {
   MergerPreparation() {
     std::remove(TEST_FILE);
     std::remove(TEST_FILE "2");
+    std::remove(TEST_FILE ".destination.wal.0");
+    std::remove(TEST_FILE ".destination.wal.1");
   }
   ~MergerPreparation() {
     std::remove(TEST_FILE);
     std::remove(TEST_FILE "2");
+    std::remove(TEST_FILE ".destination.wal.0");
+    std::remove(TEST_FILE ".destination.wal.1");
   }
 };
+
+BOOST_AUTO_TEST_CASE(test_public_merger_commit) {
+  MergerPreparation preparation;
+  auto storage = Storage::create(TEST_FILE);
+  auto source_db = storage->open("source");
+  auto destination_db = storage->open("destination");
+  auto source = source_db.cursor();
+  source.find("alpha");
+  source.value("source alpha");
+  source.find("beta");
+  source.value("source beta");
+  BOOST_REQUIRE(source.commit());
+  source.find("beta");
+  auto source_txn = source.txn_id();
+
+  auto destination = destination_db.cursor();
+  destination.find("alpha");
+  destination.value("old alpha");
+  destination.find("destination only");
+  destination.value("kept");
+  BOOST_REQUIRE(destination.commit());
+  auto observer = destination_db.cursor();
+  BOOST_REQUIRE(destination.start_transaction());
+
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec());
+  BOOST_CHECK(destination.is_transaction_active());
+  BOOST_CHECK(!destination.is_valid());
+  BOOST_REQUIRE(source.is_valid());
+  BOOST_CHECK_EQUAL(source.key(), Slice("beta"));
+  BOOST_CHECK_EQUAL(source.value(), Slice("source beta"));
+  BOOST_CHECK(source.txn_id() == source_txn);
+  observer.find("alpha");
+  BOOST_CHECK_EQUAL(observer.value(), Slice("old alpha"));
+  observer.find("beta");
+  BOOST_CHECK(!observer.is_valid());
+
+  BOOST_REQUIRE(destination.commit());
+  auto result = destination_db.cursor();
+  result.find("alpha");
+  BOOST_REQUIRE(result.is_valid());
+  BOOST_CHECK_EQUAL(result.value(), Slice("source alpha"));
+  result.find("beta");
+  BOOST_REQUIRE(result.is_valid());
+  BOOST_CHECK_EQUAL(result.value(), Slice("source beta"));
+  result.find("destination only");
+  BOOST_REQUIRE(result.is_valid());
+  BOOST_CHECK_EQUAL(result.value(), Slice("kept"));
+}
+
+struct PublicMergerFixture : MergerPreparation {
+  Storage::storage_ptr storage = Storage::create(TEST_FILE);
+  Storage::DB source_db = storage->open("source");
+  Storage::DB destination_db = storage->open("destination");
+  Storage::DB::Cursor source = source_db.cursor();
+  Storage::DB::Cursor destination = destination_db.cursor();
+
+  template <typename Cursor>
+  static void put(Cursor& cursor, const Slice& key, const Slice& value) {
+    cursor.find(key);
+    cursor.value(value);
+  }
+
+  template <typename Cursor>
+  static void check_value(Cursor& cursor, const Slice& key, const Slice& value) {
+    cursor.find(key);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.value(), value);
+  }
+};
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_rollback, PublicMergerFixture) {
+  put(source, "incoming", "source");
+  BOOST_REQUIRE(source.commit());
+  put(destination, "existing", "committed");
+  BOOST_REQUIRE(destination.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  put(destination, "before merge", "pending");
+
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec());
+  check_value(destination, "incoming", "source");
+  BOOST_REQUIRE(destination.rollback());
+  BOOST_CHECK(!destination.is_transaction_active());
+  auto result = destination_db.cursor();
+  check_value(result, "existing", "committed");
+  result.find("incoming");
+  BOOST_CHECK(!result.is_valid());
+  result.find("before merge");
+  BOOST_CHECK(!result.is_valid());
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_transaction_composition,
+                        PublicMergerFixture) {
+  put(source, "shared", "source");
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  put(destination, "before", "first write");
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec());
+  put(destination, "after", "second write");
+  BOOST_REQUIRE(merger.exec());
+  check_value(destination, "before", "first write");
+  check_value(destination, "after", "second write");
+  check_value(destination, "shared", "source");
+  BOOST_REQUIRE(destination.commit());
+  auto result = destination_db.cursor();
+  check_value(result, "before", "first write");
+  check_value(result, "after", "second write");
+  check_value(result, "shared", "source");
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_empty_source, PublicMergerFixture) {
+  BOOST_REQUIRE(destination.start_transaction());
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec());
+  BOOST_CHECK(destination.is_transaction_active());
+  destination.first();
+  BOOST_CHECK(!destination.is_valid());
+  put(destination, "local", "kept");
+  BOOST_REQUIRE(merger.exec());
+  check_value(destination, "local", "kept");
+  BOOST_REQUIRE(destination.commit());
+}
+
+struct PublicMergePolicy : StandardMergePolicy {
+  size_t overwrites = 0;
+  size_t leaves = 0;
+  size_t tries = 0;
+
+  PublicMergePolicy() = default;
+  PublicMergePolicy(const PublicMergePolicy&) = delete;
+
+  bool may_overwrite(const std::string&, const Slice&, const Slice&, bool, bool) {
+    overwrites++;
+    return false;
+  }
+
+  bool may_add_leaf(const std::string& key, const Slice&, bool) {
+    leaves++;
+    return key != "allowed/drop";
+  }
+
+  bool may_add_trie(const std::string& key) {
+    tries++;
+    return key.compare(0, 8, "blocked/") != 0;
+  }
+};
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_custom_policy, PublicMergerFixture) {
+  put(source, "allowed/keep", "added");
+  put(source, "allowed/drop", "rejected");
+  put(source, "blocked/one", "rejected");
+  put(source, "blocked/two", "rejected");
+  put(source, "shared", "source");
+  BOOST_REQUIRE(source.commit());
+  put(destination, "shared", "destination");
+
+  PublicMergePolicy policy;
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec(policy));
+  BOOST_CHECK_EQUAL(policy.overwrites, 1u);
+  BOOST_CHECK_GT(policy.leaves, 0u);
+  BOOST_CHECK_GT(policy.tries, 0u);
+  BOOST_REQUIRE(destination.commit());
+  auto result = destination_db.cursor();
+  check_value(result, "shared", "destination");
+  check_value(result, "allowed/keep", "added");
+  for (const char* key : {"allowed/drop", "blocked/one", "blocked/two"}) {
+    result.find(key);
+    BOOST_CHECK(!result.is_valid());
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_big_values_and_keys,
+                        PublicMergerFixture) {
+  const std::string big_value(12000, 'B');
+  const std::string old_big_value(8000, 'D');
+  const std::string long_key(300, 'K');
+  put(source, "", "empty key");
+  put(source, "prefix", "short key");
+  put(source, "prefix/child", "longer key");
+  put(source, long_key, big_value);
+  put(source, "shared", big_value);
+  BOOST_REQUIRE(source.commit());
+  put(destination, "shared", old_big_value);
+  BOOST_REQUIRE(destination.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec());
+  BOOST_REQUIRE(destination.commit());
+  auto result = destination_db.cursor();
+  check_value(result, "", "empty key");
+  check_value(result, "prefix", "short key");
+  check_value(result, "prefix/child", "longer key");
+  check_value(result, long_key, big_value);
+  check_value(result, "shared", big_value);
+  check_value(source, "shared", big_value);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_source_snapshot, PublicMergerFixture) {
+  put(source, "key", "old snapshot");
+  BOOST_REQUIRE(source.commit());
+  source.find("key");
+  const auto snapshot = source.txn_id();
+  auto writer = source_db.cursor();
+  put(writer, "key", "new snapshot");
+  put(writer, "new key", "new value");
+  BOOST_REQUIRE(writer.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec());
+  BOOST_CHECK(source.txn_id() == snapshot);
+  check_value(source, "key", "old snapshot");
+  check_value(destination, "key", "old snapshot");
+  destination.find("new key");
+  BOOST_CHECK(!destination.is_valid());
+  BOOST_REQUIRE(destination.rollback());
+
+  source.update();
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(merger.exec());
+  check_value(destination, "key", "new snapshot");
+  check_value(destination, "new key", "new value");
+  BOOST_REQUIRE(destination.commit());
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_guards, PublicMergerFixture) {
+  put(source, "incoming", "source");
+  BOOST_REQUIRE(source.commit());
+  source.find("incoming");
+  Merger merger(destination, source);
+  BOOST_CHECK(!merger.exec());
+  put(destination, "local", "pending");
+  Storage::DB::Cursor empty;
+  Merger empty_destination(empty, source);
+  Merger empty_source(destination, empty);
+  BOOST_CHECK(!empty_destination.exec());
+  BOOST_CHECK(!empty_source.exec());
+  auto same_db_source = destination_db.cursor();
+  Merger same_database(destination, same_db_source);
+  Merger same_cursor(destination, destination);
+  BOOST_CHECK(!same_database.exec());
+  BOOST_CHECK(!same_cursor.exec());
+  put(source, "pending source", "uncommitted");
+  BOOST_CHECK(!merger.exec());
+  BOOST_REQUIRE(destination.is_valid());
+  BOOST_CHECK_EQUAL(destination.key(), Slice("local"));
+  BOOST_CHECK_EQUAL(destination.value(), Slice("pending"));
+  BOOST_CHECK_EQUAL(source.key(), Slice("pending source"));
+  BOOST_REQUIRE(source.rollback());
+  BOOST_REQUIRE(destination.rollback());
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_wal_guard, PublicMergerFixture) {
+  put(source, "incoming", "source");
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(destination.start_transaction(false, true));
+  put(destination, "local", "pending");
+  Merger merger(destination, source);
+  BOOST_CHECK(!merger.exec());
+  BOOST_REQUIRE(destination.is_valid());
+  BOOST_CHECK_EQUAL(destination.key(), Slice("local"));
+  BOOST_CHECK_EQUAL(destination.value(), Slice("pending"));
+  BOOST_REQUIRE(destination.rollback());
+  BOOST_REQUIRE(destination.start_transaction(false, false));
+  BOOST_REQUIRE(merger.exec());
+  check_value(destination, "incoming", "source");
+  BOOST_REQUIRE(destination.commit());
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_throwing_policy,
+                        PublicMergerFixture) {
+  struct ThrowingPolicy : StandardMergePolicy {
+    size_t calls = 0;
+    bool may_add_leaf(const std::string&, const Slice&, bool) {
+      if (++calls == 2) throw std::runtime_error("merge rejected");
+      return true;
+    }
+  } policy;
+  put(source, "one", "source one");
+  put(source, "two", "source two");
+  BOOST_REQUIRE(source.commit());
+  source.find("two");
+  BOOST_REQUIRE(destination.start_transaction());
+  Merger merger(destination, source);
+  BOOST_CHECK_THROW(merger.exec(policy), std::runtime_error);
+  BOOST_CHECK_EQUAL(policy.calls, 2u);
+  BOOST_CHECK(destination.is_transaction_active());
+  BOOST_CHECK(!destination.is_valid());
+  BOOST_CHECK(destination.key().empty());
+  BOOST_REQUIRE(source.is_valid());
+  BOOST_CHECK_EQUAL(source.key(), Slice("two"));
+  BOOST_REQUIRE(destination.rollback());
+  auto result = destination_db.cursor();
+  result.first();
+  BOOST_CHECK(!result.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(test_public_merger_handle_lifetime) {
+  MergerPreparation preparation;
+  Storage::DB::Cursor destination;
+  std::weak_ptr<Storage> owner;
+  auto merger = [&]() {
+    auto storage = Storage::create(TEST_FILE);
+    owner = storage;
+    auto source_db = storage->open("source");
+    auto destination_db = storage->open("destination");
+    auto source = source_db.cursor();
+    PublicMergerFixture::put(source, "key", "value");
+    BOOST_REQUIRE(source.commit());
+    destination = destination_db.cursor();
+    BOOST_REQUIRE(destination.start_transaction());
+    return Merger(destination, source);
+  }();
+  BOOST_CHECK(!owner.expired());
+  BOOST_REQUIRE(merger.exec());
+  PublicMergerFixture::check_value(destination, "key", "value");
+  BOOST_REQUIRE(destination.commit());
+  destination = Storage::DB::Cursor();
+  BOOST_CHECK(!owner.expired());
+}
+
+BOOST_AUTO_TEST_CASE(test_public_merger_cross_backend) {
+  MergerPreparation preparation;
+  auto mapped_storage = Storage::create(TEST_FILE);
+  auto file_storage = FileStorage::create(TEST_FILE "2", 8 * M);
+  auto source = mapped_storage->open("source").cursor();
+  auto cached = file_storage->open("cached").cursor();
+  const std::string big_value(12000, 'B');
+  PublicMergerFixture::put(source, "inline", "small value");
+  PublicMergerFixture::put(source, "big", big_value);
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(cached.start_transaction());
+  Merger to_file(cached, source);
+  BOOST_REQUIRE(to_file.exec());
+  BOOST_REQUIRE(cached.commit());
+  PublicMergerFixture::check_value(cached, "inline", "small value");
+  PublicMergerFixture::check_value(cached, "big", big_value);
+
+  auto destination = mapped_storage->open("destination").cursor();
+  BOOST_REQUIRE(destination.start_transaction());
+  Merger to_map(destination, cached);
+  BOOST_REQUIRE(to_map.exec());
+  BOOST_REQUIRE(destination.commit());
+  PublicMergerFixture::check_value(destination, "inline", "small value");
+  PublicMergerFixture::check_value(destination, "big", big_value);
+}
 
 // Simple handler for testing - always overwrites
 struct OverwritePolicy {
@@ -2642,6 +2997,55 @@ BOOST_AUTO_TEST_CASE(test_merger_selective_reject_add) {
   BOOST_CHECK(!verify.is_valid());
 }
 
+BOOST_AUTO_TEST_CASE(test_merger_selective_copy_cleans_filtered_branches) {
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+
+  std::string high_branch = "ab";
+  high_branch.push_back((char)0xe0);
+
+  auto src_db = src_storage->open("test");
+  auto src_cursor = src_db.cursor();
+  src_cursor.find("ab");
+  src_cursor.value("prefix");
+  src_cursor.find("aba");
+  src_cursor.value("a");
+  src_cursor.find("abb");
+  src_cursor.value("b");
+  src_cursor.find(high_branch);
+  src_cursor.value("high");
+  src_cursor.commit();
+
+  auto dst_db = dest_storage->open("test");
+  SelectivePolicy handler;
+  handler.rejected_keys.insert("ab");
+  handler.rejected_keys.insert(high_branch);
+  exec_merger(*dst_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dst_db.cursor();
+  verify.find("ab");
+  BOOST_CHECK(!verify.is_valid());
+  verify.find("aba");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("a"));
+  verify.find("abb");
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("b"));
+  verify.find(high_branch);
+  BOOST_CHECK(!verify.is_valid());
+
+  auto dst_internal = dst_db._internal();
+  using TrieNode = typename InternalDB::Traits::TrieNode;
+  BOOST_REQUIRE(dst_internal->txn()->root.type() == TRIE);
+  auto root = dst_internal->template resolve<TrieNode>(
+      &dst_internal->txn()->root);
+  BOOST_CHECK_EQUAL(root->branch_count(), 2);
+  BOOST_CHECK(!root->has_none());
+  root->for_each_branch(
+      [&](int, auto* child) { BOOST_CHECK(*child != 0); });
+}
+
 BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_with_shared_and_srconly) {
   // Exercises merge_into_trie: shared branches merged + src-only deep-copied
   MergerPreparation p;
@@ -2681,6 +3085,95 @@ BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_with_shared_and_srconly) {
   verify.find("xsuffix");
   BOOST_REQUIRE(verify.is_valid());
   BOOST_CHECK_EQUAL(verify.value(), Slice("dst_x"));
+}
+
+BOOST_AUTO_TEST_CASE(test_merger_trie_into_trie_sparse_branch_groups) {
+  MergerPreparation p;
+  auto src_storage = Storage::create(TEST_FILE);
+  auto dest_storage = Storage::create(TEST_FILE "2");
+  auto src_db = src_storage->open("test");
+  auto dest_db = dest_storage->open("test");
+
+  const std::string prefix = "sparse-prefix";
+  auto make_key = [&](uint8_t branch, char suffix) {
+    std::string key = prefix;
+    key.push_back(static_cast<char>(branch));
+    key.push_back(suffix);
+    return key;
+  };
+
+  auto src_cursor = src_db.cursor();
+  src_cursor.find(prefix);
+  src_cursor.value("src_prefix");
+  for (char suffix : {'a', 'b'}) {
+    auto key = make_key(0x41, suffix);
+    src_cursor.find(key);
+    src_cursor.value("src_shared");
+    key = make_key(0xe1, suffix);
+    src_cursor.find(key);
+    src_cursor.value("src_only");
+  }
+  src_cursor.commit();
+
+  auto dest_cursor = dest_db.cursor();
+  dest_cursor.find(prefix);
+  dest_cursor.value("dst_prefix");
+  for (char suffix : {'a', 'b'}) {
+    auto key = make_key(0x20, suffix);
+    dest_cursor.find(key);
+    dest_cursor.value("dst_only");
+    key = make_key(0x41, suffix);
+    dest_cursor.find(key);
+    dest_cursor.value("dst_shared");
+    key = make_key(0x70, suffix);
+    dest_cursor.find(key);
+    dest_cursor.value("dst_kept");
+  }
+  dest_cursor.commit();
+
+  using TrieNode = typename InternalDB::Traits::TrieNode;
+  auto dest_internal = dest_db._internal();
+  auto incomplete_root = dest_internal->template resolve<TrieNode>(
+      &dest_internal->txn()->root);
+  BOOST_REQUIRE(incomplete_root->isset(0x20));
+  *incomplete_root->branch_offset(0x20) = 0;
+
+  StandardMergePolicy handler;
+  exec_merger(*dest_db._internal(), *src_db._internal(), handler);
+
+  auto verify = dest_storage->open("test").cursor();
+  verify.find(prefix);
+  BOOST_REQUIRE(verify.is_valid());
+  BOOST_CHECK_EQUAL(verify.value(), Slice("src_prefix"));
+  for (char suffix : {'a', 'b'}) {
+    auto key = make_key(0x20, suffix);
+    verify.find(key);
+    BOOST_CHECK(!verify.is_valid());
+    key = make_key(0x41, suffix);
+    verify.find(key);
+    BOOST_REQUIRE(verify.is_valid());
+    BOOST_CHECK_EQUAL(verify.value(), Slice("src_shared"));
+    key = make_key(0x70, suffix);
+    verify.find(key);
+    BOOST_REQUIRE(verify.is_valid());
+    BOOST_CHECK_EQUAL(verify.value(), Slice("dst_kept"));
+    key = make_key(0xe1, suffix);
+    verify.find(key);
+    BOOST_REQUIRE(verify.is_valid());
+    BOOST_CHECK_EQUAL(verify.value(), Slice("src_only"));
+  }
+
+  BOOST_REQUIRE(dest_internal->txn()->root.type() == TRIE);
+  auto root = dest_internal->template resolve<TrieNode>(
+      &dest_internal->txn()->root);
+  BOOST_CHECK(root->has_none());
+  BOOST_CHECK_EQUAL(root->branch_count(), 4);
+  const uint8_t expected_groups =
+      (1u << TrieNode::branch_bits_group(0x20)) |
+      (1u << TrieNode::branch_bits_group(0x41)) |
+      (1u << TrieNode::branch_bits_group(0x70)) |
+      (1u << TrieNode::branch_bits_group(0xe1));
+  BOOST_CHECK_EQUAL(root->_branch_bits_index, expected_groups);
 }
 
 BOOST_AUTO_TEST_CASE(test_merger_leaf_into_existing_trie) {

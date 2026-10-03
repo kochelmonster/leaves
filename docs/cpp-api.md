@@ -2,6 +2,8 @@
 
 Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and cursor). Add `<leaves/confluence.hpp>` for Confluence, `<leaves/replication.hpp>` for replication, and `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
 
+Include `<leaves/merger.hpp>` separately for the serial, cursor-based merger.
+
 `MapStorage::ReplicationDB` is available only on native targets (`__EMSCRIPTEN__` builds exclude it).
 
 For an architectural overview see [docs/architecture/architecture.md](/docs/architecture/architecture.md)
@@ -245,6 +247,119 @@ The cursor is the workhorse of the API. Every read and write goes through a curs
 
 - `const auto& aspect_context() const`
   Returns read-only cursor-level aspect context (see [Aspects](#aspects)).
+
+---
+
+## `Merger`
+
+`Merger<DestinationCursor, SourceCursor>` merges one `DB` cursor into another.
+Include `<leaves/merger.hpp>` alongside the relevant storage header. Template
+arguments are deduced from the supplied cursors:
+
+```cpp
+#include <leaves/mmap.hpp>
+#include <leaves/merger.hpp>
+
+int main() {
+    auto storage = leaves::MapStorage::create("merge.lvs");
+    auto source_db = storage->open("source");
+    auto destination_db = storage->open("destination");
+    auto source = source_db.cursor();
+    auto destination = destination_db.cursor();
+
+    source.find("key");
+    source.value("source value");
+    if (!source.commit()) return 1;
+    if (!destination.start_transaction()) return 1;
+
+    leaves::Merger merger(destination, source);
+    try {
+        if (!merger.exec() || !destination.commit(true)) {
+            destination.rollback();
+            return 1;
+        }
+    } catch (...) {
+        destination.rollback();
+        throw;
+    }
+}
+```
+
+- `Merger(const DestinationCursor& destination, const SourceCursor& source)`
+  Retains shared copies of both cursor handles and their owning storage.
+  These copies share the caller's cursor state, not independent cursors.
+
+- `bool exec()`
+  Merges the entire source cursor snapshot using `StandardMergePolicy`.
+  Source values overwrite conflicts, destination-only keys survive, and big
+  values are copied into destination storage. An empty source is a successful
+  no-op.
+
+- `template <typename MergePolicy> bool exec(MergePolicy& policy)`
+  Uses the supplied policy synchronously by reference, without copying or
+  retaining it. Derive from `StandardMergePolicy` to customize only selected
+  hooks:
+
+```cpp
+struct KeepDestination : leaves::StandardMergePolicy {
+    bool may_overwrite(const std::string&, const leaves::Slice&,
+                       const leaves::Slice&, bool, bool) {
+        return false;
+    }
+};
+
+// With an already-active destination transaction:
+KeepDestination policy;
+leaves::Merger merger(destination, source);
+bool merged = merger.exec(policy);
+```
+
+The policy hooks are `may_overwrite(key, dst, src, dst_is_big, src_is_big)`,
+`may_add_leaf(key, src, is_big)`, and `may_add_trie(prefix)`. Keys and prefixes
+are reconstructed full byte strings. The default policy also provides the
+advanced `free_big`, `migrate_big_value`, and `after_trie_merged` hooks. Migration
+returns `MigratedValue`, containing a `Slice data` and `bool is_big`.
+
+### Transactions and snapshots
+
+The destination cursor must already own a non-WAL write transaction. `exec()`
+never starts, prepares, commits, or rolls back a transaction. Earlier writes,
+later writes, and repeated merges can all be part of that transaction. Perform
+all merges before calling `prepare_commit()`. Use `commit(true)` when a
+synchronous durable commit is required.
+
+The source must be a read-only cursor on a distinct database. Execution uses
+its existing snapshot, regardless of its position; it does not refresh the
+snapshot or change its position, validity, or transaction ID. Call
+`source.update()` beforehand when the latest committed snapshot is wanted.
+
+On success or an exception, destination positioning is cleared. Call
+`find()`, `first()`, or `last()` before further record operations. Both cursors,
+including all copies, must remain confined to one thread and must not be
+modified concurrently or from policy callbacks during execution.
+
+### Failures and limitations
+
+`exec()` returns `false` before mutation if either cursor is uninitialized,
+the destination does not own a transaction, the destination transaction uses
+WAL, the source owns a write transaction, or both cursors refer to the same
+internal database. Rejected calls preserve cursor positioning and transaction
+state. Do not merge the same logical database opened through separate storage
+mappings; such aliases are not detected.
+
+Policy and allocation exceptions propagate. The destination transaction
+remains active and may contain partial changes; roll it back before reuse.
+
+This interface supports ordinary `DB` cursors with compatible storage traits.
+Replication and Confluence cursors are rejected at compile time. Execution is
+serial; no parallel or WAL merge path is provided.
+
+Merging copies stored representations directly. Normal aspect `on_read` and
+`on_write` transformations and aspect merge gates are not invoked; customization
+is through the supplied merge policy. Source and destination representations
+must therefore be compatible. Policy value slices for big leaves describe the
+stored big-value descriptor, not the materialized payload. Policies must not
+retain non-owning slices or node references after their callback returns.
 
 ---
 

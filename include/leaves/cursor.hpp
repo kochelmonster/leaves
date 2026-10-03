@@ -9,6 +9,9 @@
 
 namespace leaves {
 
+template <typename DestinationCursor, typename SourceCursor>
+class Merger;
+
 template <typename Storage, template <typename> class DBClass = _DB>
 class TCursor {
  public:
@@ -115,6 +118,9 @@ class TCursor {
   const auto& aspect_context() const { return _cursor->_aspect_context; }
 
  private:
+  template <typename, typename>
+  friend class Merger;
+
   storage_ptr _storage;
   cursor_ptr _cursor;
 };

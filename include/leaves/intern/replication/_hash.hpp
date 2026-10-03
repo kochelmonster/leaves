@@ -331,10 +331,12 @@ struct _HashUpdater {
       size_t saved_len = key_path.size();
       key_path.append((const char*)data_prefix, effective_data_len);
 
-      hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
+      hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT];
       hash_offset_e* offsets_buf = &offsets_raw[1];
+      offsets_buf[HashTrieNode::NONE] = hash_offset_e();
       int branch_count = 0;
       uint8_t upper = 0;
+      uint32_t branch_bitmap[8] = {};
       bool hash_consumed = false;
 
       data_trie->for_each_branch([&](int k, auto* data_off) {
@@ -360,7 +362,10 @@ struct _HashUpdater {
 
         offsets_buf[k] = hash_child;
         branch_count++;
-        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::branch_bits_group(k));
+        if (k != DataTrieNode::NONE) {
+          upper |= (1u << HashTrieNode::branch_bits_group(k));
+          branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+        }
       });
 
       if (!hash_consumed) {
@@ -375,7 +380,7 @@ struct _HashUpdater {
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr new_hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-      new_hash_trie->create(prefix, offsets_buf, upper);
+      new_hash_trie->create(prefix, offsets_buf, branch_bitmap, upper);
       compute_trie_hash(new_hash_trie);
       *hash_offset_ptr = _hash_db->resolve(new_hash_trie);
 
@@ -448,10 +453,12 @@ struct _HashUpdater {
     auto hash_trie = _hash_db->template resolve<HashTrieNode>(hash_offset_ptr);
 
     // Build offset array for new _hash trie
-    hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
+    hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT];
     hash_offset_e* offsets_buf = &offsets_raw[1];  // -1..255 indexing
+    offsets_buf[HashTrieNode::NONE] = hash_offset_e();
     int branch_count = 0;
     uint8_t upper = 0;
+    uint32_t branch_bitmap[8] = {};
 
     // Track which _hash branches exist
     bool hash_has[257] = {};
@@ -477,7 +484,10 @@ struct _HashUpdater {
       };
       do_branch(key_path);
       branch_count++;
-      if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::branch_bits_group(k));
+      if (k != DataTrieNode::NONE) {
+        upper |= (1u << HashTrieNode::branch_bits_group(k));
+        branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+      }
     });
 
     // Hash-only branches are implicitly pruned (not in offsets_buf)
@@ -493,7 +503,7 @@ struct _HashUpdater {
     data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
     hash_trie_ptr new_hash_trie =
         alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-    new_hash_trie->create(prefix, offsets_buf, upper);
+    new_hash_trie->create(prefix, offsets_buf, branch_bitmap, upper);
     compute_trie_hash(new_hash_trie);
 
     // Free old _hash trie node and update pointer
@@ -527,10 +537,12 @@ struct _HashUpdater {
       size_t saved_len = key_path.size();
       key_path.append((const char*)data_trie->prefix(), data_trie->prefix_len());
 
-      hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT] = {};
+      hash_offset_e offsets_raw[HashTrieNode::MAX_BRANCH_COUNT];
       hash_offset_e* offsets_buf = &offsets_raw[1];
+      offsets_buf[HashTrieNode::NONE] = hash_offset_e();
       int branch_count = 0;
       uint8_t upper = 0;
+      uint32_t branch_bitmap[8] = {};
 
       data_trie->for_each_branch([&](int k, auto* data_off) {
         data_offset_e data_child = *data_off;
@@ -542,7 +554,10 @@ struct _HashUpdater {
         };
         do_branch(key_path);
         branch_count++;
-        if (k != DataTrieNode::NONE) upper |= (1u << HashTrieNode::branch_bits_group(k));
+        if (k != DataTrieNode::NONE) {
+          upper |= (1u << HashTrieNode::branch_bits_group(k));
+          branch_bitmap[k >> 5] |= uint32_t(1) << (k & 31);
+        }
       });
 
       // Create _hash trie
@@ -550,7 +565,7 @@ struct _HashUpdater {
       data_page_ptr data_page = data_trie - sizeof(DataPageHeader);
       hash_trie_ptr hash_trie =
           alloc_hash_trie(prefix.size(), branch_count, data_page->txn_id);
-      hash_trie->create(prefix, offsets_buf, upper);
+      hash_trie->create(prefix, offsets_buf, branch_bitmap, upper);
 
       // Compute trie _hash
       compute_trie_hash(hash_trie);
