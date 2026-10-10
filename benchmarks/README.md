@@ -25,6 +25,7 @@ The `db_bench_leaves` program benchmarks various operations with the Leaves data
 - `--reads=<n>`: Number of read operations to do (default: same as --num)
 - `--value_size=<n>`: Size of each value in bytes (default: 100)
 - `--use_file_storage=<0|1>`: Use FileStorage instead of MapStorage (default: 0)
+- `--move_after_fill=<0|1>`: After each fresh fill, merge into a new database and remove the original (default: 0). The merge is not included in fill timing. Supported with MapStorage and FileStorage; not supported with replication or ConfluenceDB.
 - `--compression=<0|1>`: Enable compression (default: 1)
 - `--compression_ratio=<n>`: Target compression ratio (default: 0.5)
 - `--page_size=<n>`: Page size in bytes (default: 1024)
@@ -40,6 +41,9 @@ The `db_bench_leaves` program benchmarks various operations with the Leaves data
 
 # Run benchmarks with FileStorage
 ./build/db_bench_leaves --benchmarks=fillseq,readseq --num=10000 --use_file_storage=1
+
+# Merge the filled database into a new database before running reads
+./build/db_bench_leaves --benchmarks=fillseq,readseq --num=10000 --move_after_fill=1
 
 # Run all benchmarks with a larger value size
 ./build/db_bench_leaves --value_size=4096
