@@ -72,6 +72,38 @@ int main() {
 - `ConfluenceReplicationDB`
     Combines Confluence multi-writer behavior with replication support. Use it when you need both concurrent writers and replication in one database.
 
+## Q&A
+
+### How can I spread a transaction across multiple databases?
+
+Leaves supports two-phase commit. A transaction monitor can coordinate a transaction across multiple named Leaves databases in one storage. It can also coordinate Leaves with other data stores that support two-phase commit by adapting their prepare, commit, and rollback operations to the same participant interface.
+
+The runnable [TransactionMonitor example](examples/transaction_monitor/main.cpp) coordinates two named databases, prepares both transactions, commits the chosen decision, and verifies the committed records. Its [README](examples/transaction_monitor/README.md) contains the configure, build, and run commands.
+
+The monitor pattern can also adapt another data store by giving it the same prepare, commit, and rollback participant operations. A production monitor should persist its commit decision before phase two so that a later retry can finish any participant that was not reached before a failure.
+
+### Why doesn't the database support custom comparators?
+
+Because for persistent key-value storage, a custom comparator is usually not necessary. If you need a custom ordering, encode your values into **order-preserving binary keys** instead.
+
+A sortable key encoding transforms a value into bytes such that:
+
+```text
+a < b  ⟺  encode(a) < lexicographically encode(b)
+```
+
+The database can then use the same fast byte-wise comparison for every key. This has several advantages over executing user-defined comparison code inside the storage engine:
+
+- **Performance**: byte-wise comparison is extremely cheap and can use highly optimized memcmp-style operations. A custom comparator may require parsing, decoding, normalization, or application-level logic for every comparison.
+- **Correctness**: the ordering is part of the stored key itself. A custom comparator must satisfy strict consistency requirements; if its behavior is incorrect or changes after data has been written, the assumptions of the persistent index can be violated.
+- **Stability**: once a sortable key has been written, its ordering does not depend on application code, library versions, locale settings, or runtime configuration.
+- **Portability**: sortable keys can be read and compared without loading application-specific comparator code.
+- **Multiple orderings**: different indexes can simply use different key encodings. For example, the same record can have indexes ordered by name, timestamp, or (customer_id, timestamp).
+- **Deterministic tie-breaking**: if a primary sort field is not unique, the encoding can append a unique identifier to produce a deterministic total order.
+
+For a persistent KV database, a sortable key encoding is generally a simpler, safer, and faster interface.
+
+
 ## Using leaves in your own project
 
 To use Leaves, you need:
@@ -141,30 +173,13 @@ The core `leaves::leaves` target carries the public include paths and the requir
 
 ### Optimization flags
 
-Leaves does not require architecture-specific optimization flags for
-correctness. It is header-only, so its performance depends on the optimization
-settings of the target that includes it. For portable production binaries, use
-your build system's normal Release configuration and target the oldest CPU that
-the binary must support. CMake Release builds normally enable `-O3` for GCC and
-Clang or `/O2` for MSVC.
+Leaves does not require architecture-specific optimization flags for correctness. It is header-only, so its performance depends on the optimization settings of the target that includes it. For portable production binaries, use your build system's normal Release configuration and target the oldest CPU that the binary must support. CMake Release builds normally enable `-O3` for GCC and Clang or `/O2` for MSVC.
 
-For machine-local GCC or Clang builds, `-march=native` enables all instruction
-sets supported by the build host. With MSVC, `/arch:AVX2` or `/arch:AVX512` can
-be used when every deployment machine supports the selected instruction set.
-These flags are optional and should not be used for redistributable binaries
-unless the deployment CPU baseline guarantees them.
+For machine-local GCC or Clang builds, `-march=native` enables all instruction sets supported by the build host. With MSVC, `/arch:AVX2` or `/arch:AVX512` can be used when every deployment machine supports the selected instruction set. These flags are optional and should not be used for redistributable binaries unless the deployment CPU baseline guarantees them.
 
-When Leaves is configured from its source tree, CMake probes compiler and host
-support for POPCNT, BMI, LZCNT, AVX2, and AVX-512 on GCC and Clang, and for AVX2
-and AVX-512 on MSVC. Supported flags apply within the Leaves CMake directory;
-they are not exported as usage requirements by the `leaves::leaves` target.
-Consumers must therefore choose the appropriate optimization and CPU target
-flags for their own targets.
+When Leaves is configured from its source tree, CMake probes compiler and host support for POPCNT, BMI, LZCNT, AVX2, and AVX-512 on GCC and Clang, and for AVX2 and AVX-512 on MSVC. Supported flags apply within the Leaves CMake directory; they are not exported as usage requirements by the `leaves::leaves` target. Consumers must therefore choose the appropriate optimization and CPU target flags for their own targets.
 
-Leaves' header SIMD paths are selected at compile time and do not perform
-runtime CPU dispatch. A binary compiled with `-march=native` or explicit AVX
-flags can fail with an illegal-instruction error on an older CPU. Bundled BLAKE3
-code performs its own runtime dispatch independently of Leaves' header code.
+Leaves' header SIMD paths are selected at compile time and do not perform runtime CPU dispatch. A binary compiled with `-march=native` or explicit AVX flags can fail with an illegal-instruction error on an older CPU. Bundled BLAKE3 code performs its own runtime dispatch independently of Leaves' header code.
 
 ## Configuration options
 
@@ -176,6 +191,7 @@ The following CMake options configure either the repository build or library beh
 | `LEAVES_ASYNC_BACKEND` | `JSPI` | Repository build only | Select the async WASM backend: `JSPI` or `ASYNCIFY`. |
 | `LEAVES_BUILD_TESTS` | `ON` | Repository build only | Build the repository test executables. |
 | `LEAVES_BUILD_BENCHMARKS` | `ON` | Repository build only | Build the repository benchmark applications. |
+| `LEAVES_BENCHMARKS_RELEASE_SUBBUILD` | `ON` | Repository build only | If the main build is not a single-config Release build, build the benchmarks in a nested Release build (`<build>/benchmarks-release`). The benchmark executables are placed in `<build>/`. |
 | `LEAVES_GCOV` | `ON` | Repository build only | Enable coverage instrumentation for repository builds. |
 | `LEAVES_ASAN` | `ON` | Repository build only | Enable AddressSanitizer when coverage is disabled. |
 | `LEAVES_LOG` | `OFF` | Repository build and library consumers | Enable Leaves logging macros. |
@@ -204,7 +220,7 @@ Building the repository is only required to run the included tests and benchmark
 
 ### Default profile: tests in Debug, benchmarks in Release
 
-Use the default workflow preset to configure once and build tests in Debug mode followed by benchmarks in Release mode.
+Use the default workflow preset to configure and build everything in one step. Tests are built in Debug mode. Benchmarks are always built in Release mode by a nested build in `build-default/benchmarks-release`, and their executables are placed in `build-default/`.
 
 Linux:
 
@@ -217,10 +233,12 @@ Windows:
 
 ```powershell
 cmake --workflow --preset default-windows
-ctest --test-dir build -C Debug --output-on-failure
+ctest --test-dir build-default -C Debug --output-on-failure
 ```
 
-The Linux default profile uses the `Ninja Multi-Config` generator to support Debug and Release builds from one configure step.
+The Linux default profile uses the `Ninja Multi-Config` generator.
+
+In VS Code with CMake Tools, select the configure preset `default-linux` (or `default-windows`) and the build preset `default` (or `default-windows`). `CMake: Build` (F7) then builds tests in Debug and benchmarks in Release.
 
 ### Windows (out-of-box)
 

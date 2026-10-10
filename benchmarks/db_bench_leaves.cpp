@@ -125,6 +125,10 @@ static uint32_t FLAGS_merge_threshold = 0;
 // after each write benchmark completes (not included in the benchmark timing).
 static bool FLAGS_merge_after_write = false;
 
+// After each fresh fill, merge the result into a new database and remove the
+// original database.
+static bool FLAGS_move_after_fill = false;
+
 // When non-empty, append the exact key & value sequence used by each write
 // phase to this file (binary format). Used by test_merger to replay the
 // crashing benchmark workload deterministically in a single thread.
@@ -335,7 +339,8 @@ class Benchmark {
   bool using_file_storage_;
   bool using_replicating_;
   bool using_confluence_;
-  int db_num_;
+  int db_num_{0};
+  fs::path current_storage_dir_;
   int num_;
   int reads_;
   double start_;
@@ -658,17 +663,21 @@ class Benchmark {
       bool known = true;
       bool write_sync = false;
       bool is_write = false;
+      bool is_fresh_fill = false;
       bool self_timed = false;  // benchmark calls Start()/Stop() itself
       if (name == Slice("fillseq")) {
         is_write = true;
+        is_fresh_fill = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillbatch")) {
         is_write = true;
+        is_fresh_fill = true;
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillrandom")) {
         is_write = true;
+        is_fresh_fill = true;
         Write(write_sync, RANDOM, FRESH, num_, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("overwrite")) {
@@ -677,19 +686,23 @@ class Benchmark {
               FLAGS_batch_size);
       } else if (name == Slice("fillrandsync")) {
         is_write = true;
+        is_fresh_fill = true;
         write_sync = true;
         Write(write_sync, RANDOM, FRESH, num_ / 100, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillseqsync")) {
         is_write = true;
+        is_fresh_fill = true;
         write_sync = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_ / 100, FLAGS_value_size,
               FLAGS_batch_size);
       } else if (name == Slice("fillrand100K")) {
         is_write = true;
+        is_fresh_fill = true;
         Write(write_sync, RANDOM, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("fillseq100K")) {
         is_write = true;
+        is_fresh_fill = true;
         Write(write_sync, SEQUENTIAL, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("readseq")) {
         ReadSequential();
@@ -724,6 +737,9 @@ class Benchmark {
         // benchmark (not timed, so it does not affect the reported rate).
         if (is_write && FLAGS_merge_after_write && confluence_db_) {
           confluence_db_->merge_all_now();
+        }
+        if (is_fresh_fill && FLAGS_move_after_fill && !FLAGS_use_existing_db) {
+          MoveFilledDatabase();
         }
 #if 0  // old STATISTICS block - moved to WriteImpl
         if (using_replicating_ && map_storage_) {
@@ -805,38 +821,38 @@ class Benchmark {
   }
 
  private:
+  fs::path NextDatabasePath() {
+    std::string test_dir;
+    leveldb::Env::Default()->GetTestDirectory(&test_dir);
+    ++db_num_;
+    return fs::path(test_dir) /
+           ("dbbench_mdb-" + std::to_string(db_num_)) / "bench.lvs";
+  }
+
   void Open(bool sync) {
     assert(file_storage_ == nullptr && map_storage_ == nullptr);
 
-    // Initialize db_
-    char file_name[100];
-    db_num_++;
-    std::string test_dir;
-    leveldb::Env::Default()->GetTestDirectory(&test_dir);
-    std::snprintf(file_name, sizeof(file_name), "%s/dbbench_mdb-%d",
-                  test_dir.c_str(), db_num_);
+    const fs::path database_path = NextDatabasePath();
 
     std::error_code ec;
-    fs::create_directories(fs::path(file_name), ec);
+    fs::create_directories(database_path.parent_path(), ec);
     if (ec) {
       throw std::runtime_error("failed to create benchmark directory: " +
                                ec.message());
     }
 
-    std::string test_fname(file_name);
-    test_fname.append("/bench.lvs");
-
     const uint64_t map_size_bytes = static_cast<uint64_t>(FLAGS_map_size_gb) * leaves::G;
 
     if (using_replicating_) {
       map_storage_ = leaves::MapStorage::create(
-          test_fname.c_str(), map_size_bytes, FLAGS_copy_write_pivot);
+          database_path, map_size_bytes, FLAGS_copy_write_pivot);
     } else if (using_file_storage_) {
-      file_storage_ = leaves::FileStorage::create(test_fname.c_str());
+      file_storage_ = leaves::FileStorage::create(database_path);
     } else {
       map_storage_ = leaves::MapStorage::create(
-          test_fname.c_str(), map_size_bytes, FLAGS_copy_write_pivot);
+          database_path, map_size_bytes, FLAGS_copy_write_pivot);
     }
+    current_storage_dir_ = database_path.parent_path();
 
     if (using_confluence_) {
       confluence_db_ =
@@ -844,6 +860,84 @@ class Benchmark {
               map_storage_, "benchmark");
       if (FLAGS_merge_threshold)
         confluence_db_->set_merge_write_threshold(FLAGS_merge_threshold);
+    }
+  }
+
+  template <typename StorageType>
+  void MergeFilledDatabase(StorageType& source_storage,
+                           StorageType& destination_storage) {
+    auto destination_db = open_bench_db<StorageType, leaves::_DB>(
+        destination_storage);
+    auto source_db =
+        open_bench_db<StorageType, leaves::_DB>(source_storage);
+    auto destination_cursor = destination_db.cursor();
+    auto source_cursor = source_db.cursor();
+
+    if (!destination_cursor.start_transaction(false, false)) {
+      throw std::runtime_error("move_after_fill: cannot start destination transaction");
+    }
+    leaves::Merger merger(destination_cursor, source_cursor);
+    if (!merger.exec()) {
+      throw std::runtime_error("move_after_fill: merge failed");
+    }
+    if (!destination_cursor.commit(false)) {
+      throw std::runtime_error("move_after_fill: destination commit failed");
+    }
+  }
+
+  void MoveFilledDatabase() {
+    if (current_storage_dir_.empty()) {
+      throw std::runtime_error("move_after_fill: active database path is unknown");
+    }
+
+    const fs::path old_directory = current_storage_dir_;
+    const fs::path destination_path = NextDatabasePath();
+    const fs::path destination_directory = destination_path.parent_path();
+    std::error_code ec;
+    fs::create_directories(destination_directory, ec);
+    if (ec) {
+      throw std::runtime_error("move_after_fill: cannot create destination: " +
+                               ec.message());
+    }
+
+    if (using_file_storage_) {
+      std::shared_ptr<leaves::FileStorage> destination_storage;
+      try {
+        destination_storage = leaves::FileStorage::create(destination_path);
+        MergeFilledDatabase(*file_storage_, *destination_storage);
+      } catch (...) {
+        destination_storage.reset();
+        std::error_code cleanup_error;
+        fs::remove_all(destination_directory, cleanup_error);
+        throw;
+      }
+      auto source_storage = std::move(file_storage_);
+      file_storage_ = std::move(destination_storage);
+      source_storage.reset();
+    } else {
+      std::shared_ptr<leaves::MapStorage> destination_storage;
+      try {
+        const uint64_t map_size_bytes =
+            static_cast<uint64_t>(FLAGS_map_size_gb) * leaves::G;
+        destination_storage = leaves::MapStorage::create(
+            destination_path, map_size_bytes, FLAGS_copy_write_pivot);
+        MergeFilledDatabase(*map_storage_, *destination_storage);
+      } catch (...) {
+        destination_storage.reset();
+        std::error_code cleanup_error;
+        fs::remove_all(destination_directory, cleanup_error);
+        throw;
+      }
+      auto source_storage = std::move(map_storage_);
+      map_storage_ = std::move(destination_storage);
+      source_storage.reset();
+    }
+
+    current_storage_dir_ = destination_directory;
+    fs::remove_all(old_directory, ec);
+    if (ec) {
+      throw std::runtime_error("move_after_fill: cannot remove source database: " +
+                               ec.message());
     }
   }
 
@@ -1370,6 +1464,9 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--merge_after_write=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_merge_after_write = (n == 1) ? true : false;
+    } else if (sscanf(argv[i], "--move_after_fill=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_move_after_fill = (n == 1);
     } else if (sscanf(argv[i], "--compression=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_compression = (n == 1) ? true : false;
@@ -1391,6 +1488,14 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
     }
+  }
+
+  if (FLAGS_move_after_fill &&
+      (FLAGS_use_replicating || FLAGS_use_confluence > 0)) {
+    std::fprintf(stderr,
+                 "--move_after_fill is not supported with replication or "
+                 "ConfluenceDB\n");
+    return 1;
   }
 
   // Choose a location for the test database if none given with --db=<path>
