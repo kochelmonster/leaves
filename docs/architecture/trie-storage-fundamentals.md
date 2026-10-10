@@ -86,7 +86,6 @@ If and when mutating pages are freed, they must be registered for reuse. For eac
 
 The queue is a hybrid of a an array and a linked list. If the array overflows another array is added and linked to the previous one, forming a chain of arrays that can grow dynamically while maintaining the FIFO order. Page recycling also keeps an O(1) complexity for both enqueue and dequeue operations, ensuring efficient memory management.
 
-
 ## How Does It Perform?
 
 Leaves implements the preceding ideas: radix-compressed trie nodes, two-level bitmap-indexed children, page-oriented allocation and recycling, and copy-on-write updates for its persistent storage. The following measurements describe one local run, not a universal ranking. Storage hardware, processor architecture, compiler options, value sizes, and access patterns all affect the result.
@@ -109,7 +108,7 @@ The table reports throughput relative to Leaves `_MemoryDB` for the same workloa
 
 ![In-memory key-value store benchmark](memory_db-benchmark.svg)
 
-As expected _std::unordered_map excels at random reads but falls behind by all insert operations, due to a slower memory management. The binary tree of `std::map` always falls behind, with one exception: Sequential reads. However, even the expected locality advantage does not make the performance gain significant. Interestingly leaves needs less memory than the maps of the stl.
+The most striking result is `_MemoryDB`'s much higher throughput when filling: `std::unordered_map` reaches only 0.306x on sequential fill and 0.575x on random fill, while `std::map` reaches 0.669x and 0.182x. This insertion lead can be explained by Leaves' more efficient memory management. Overwrite is the notable exception: `std::unordered_map` is marginally faster at 1.019x, so its memory-management disadvantage during fill is much less apparent when replacing existing values; `std::map` remains far slower at 0.170x. As expected, `std::unordered_map` is fastest for random reads at 2.243x. A less expected result is that `_MemoryDB` and `std::map` are effectively tied on sequential reads (1.000x and 1.002x). That is a striking contrast with the persistent comparison: LMDB's page-oriented B+ tree reaches 2.000x Leaves' sequential-read throughput, where its better data locality appears to pay off. For memory, `_MemoryDB` is the clear winner at 195.0 MB; `std::map` uses more than `std::unordered_map` (219.3 MB versus 212.1 MB), and both use more than Leaves.
 
 ### Persistent Comparison
 
@@ -128,50 +127,10 @@ The table reports throughput relative to Leaves `MapStorage` for the same worklo
 
 ![Persistent key-value store benchmark](persistent_db-benchmark.svg)
 
-LMDB is faster in sequential fill which has an only
+Leaves is significantly faster in all random-access benchmarks: random fill, overwrite, and random read. LMDB reaches only 0.395x, 0.398x, and 0.512x of Leaves' throughput in those workloads, respectively. LMDB is faster on sequential fill at 1.451x because the benchmark uses `MDB_APPEND` for the already sorted keys. This append-specific path does not split full B-tree pages, making sequential insertion cheaper. On sequential reads, LMDB reaches 2.000x Leaves' throughput and appears to benefit from better memory locality. 
 
-On this workload, Leaves was faster for random writes and random reads, while LMDB was faster for sequential insertion and sequential traversal. The result should be treated as a workload-specific observation: neither configuration includes durable write-ahead logging, and a production evaluation should also test the required durability mode, dataset size, storage device, and concurrent access pattern.
+For a broader performance discussion with more realistic workloads, see [Can Persistent Tries Beat LMDB? Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
 
-For a broader performance discussion, see [Can Persistent Tries Beat LMDB? Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
-
-## Bonus: Replication
-
-Tries have another property that B-trees do not expose as naturally: every subtree has a semantic name. The path to a node is a key prefix. All keys below that node share that prefix. If the database stores a _hash for each subtree, then that _hash becomes a compact statement about all key-value pairs below the prefix.
-
-That is the Merkle-trie idea. A Merkle tree hashes data at the leaves and hashes children into parent hashes, producing a root _hash that summarizes the whole structure. If two peers have the same root _hash, they have the same state under that root. If the root hashes differ, the peers can descend into child hashes and find the differing subtrees without transferring the entire database. Systems such as Dynamo-inspired stores, Cassandra, and Riak use this style of anti-entropy synchronization to avoid sending data that replicas already share. Ethereum's Merkle Patricia Trie applies a related idea to blockchain state: paths identify state entries, and hashes make the structure verifiable.
-
-Leaves' replication uses the same structural advantage. `ReplicationDB` extends
-the normal database with replication-specific state:
-
-- the main trie stores current key-value data;
-- the deletion trie stores deleted keys so removals can be replicated;
-- _hash tries cache subtree hashes for both the main trie and the deletion trie.
-
-During a replication session, the sender and receiver do not blindly copy the
-whole database. The sender transmits _hash subtries. The receiver compares those
-hashes with its local _hash trie. Matching subtrees can be acknowledged and
-skipped. Divergent or missing subtrees are expanded and transferred. The process
-uses explicit protocol messages such as trie data, subtree acknowledgments,
-big-value chunks, fraction completion, and final completion, driven by the
-sender and receiver FSMs.
-
-Leaves separates replication into phases. First, it synchronizes the main data
-trie. Second, it synchronizes the deletion trie. Third, it streams deferred large
-values. When the receiver has the necessary data, it applies the received state
-through a staged merge and commits it atomically. For very large sessions, the
-receiver can enter fraction mode: it commits a bounded chunk, asks the sender to
-restart from the root, and then relies on _hash comparison to skip everything that
-has already converged.
-
-This design keeps the mechanism and policy separate. Leaves provides the trie
-structure, deterministic message flow, _hash-based pruning, staged apply, and
-atomic commit. Applications still decide the consistency model, peer topology,
-retry behavior, and conflict-resolution policy.
-
-The performance-oriented node layout and the replication design reinforce one
-another. A trie already divides the keyspace into prefix subtrees, so adding
-hashes does not require a separate partitioning scheme. The replication
-structure follows the storage structure.
 
 ## Conclusion
 
@@ -192,14 +151,3 @@ data, and replication sends the differences rather than the database. That is
 the larger concept behind Leaves: one structure for lookup, persistence,
 copy-on-write updates, and synchronization.
 
-## Addendum: Ordering
-
-Tries order keys lexicographically, whereas a B-tree can be parameterized with
-an arbitrary comparison function. This distinction matters when an application
-requires an order that cannot be represented in the key encoding.
-
-Many practical orderings can, however, be expressed by encoding keys into a
-lexicographically sortable binary form. Fixed-width integers can use big-endian
-encoding; composite keys can concatenate sortable components. This approach
-preserves trie traversal order and avoids the cost of invoking an application
-defined comparator during each structural comparison.
