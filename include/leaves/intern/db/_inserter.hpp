@@ -181,6 +181,19 @@ struct _Inserter {
 
   const uint16_t MAX_SIZE = TrieNode::MAX_SIZE;
 
+  /*
+  Operation:
+
+    Before:
+      parent -> [ab] -> {a, b}
+
+    Insert: [ab][c...]
+
+    After:
+      parent -> [ab] -> {a, b, c} -> child for [c...]
+
+  The branch selects the child; its byte remains in the child's key.
+  */
   void add_to_array() {
     int key = back->key() ? (uint8_t)back->branch_key : TrieNode::NONE;
     trie_ptr otrie = back->trie();
