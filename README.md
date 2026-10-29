@@ -282,6 +282,26 @@ cmake -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-debug -j4
 ```
 
+### Code coverage
+
+On Ubuntu, install `lcov` and build a separate coverage-instrumented Debug tree:
+
+```bash
+sudo apt install lcov
+cmake -S . -B build-coverage -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DLEAVES_GCOV=ON \
+  -DLEAVES_ASAN=OFF \
+  -DLEAVES_BUILD_TESTS=ON \
+  -DLEAVES_BUILD_BENCHMARKS=OFF \
+  -DLEAVES_BENCHMARKS_RELEASE_SUBBUILD=OFF
+cmake --build build-coverage --target cov --parallel 4
+```
+
+The `cov` target builds and runs the registered tests through CTest before capturing coverage. Its output streams directly to the terminal, showing each test as it starts and its result when it finishes. Tests run sequentially; `--parallel 4` controls compilation, not test execution. Coverage-instrumented tests can take several minutes, and CTest enforces the registered per-test timeouts. Open `build-coverage/lcov-report/index.html` to view the generated report.
+
+GCC coverage data can contain inconsistent function and line counts. Report generation keeps these as warnings rather than aborting; affected function coverage counts should be interpreted with caution.
+
 ## Documentation index
 
 - C++ API: [docs/cpp-api.md](docs/cpp-api.md)
