@@ -20,8 +20,6 @@ The central problem is therefore space. The direct addressing that makes a trie 
 
 Compressed tries, radix trees, Patricia trees, and adaptive radix trees address parts of this problem by compressing empty paths, reducing child storage, or selecting node formats according to density. These techniques do not solve the general space problem on their own: linked-list or map-of-children representations avoid reserving unused child slots, but introduce pointer chasing, variable node layouts, and poorer locality, while long keys can still create chains of single-child nodes that turn one logical key into many stored nodes.
 
-
-
 ## Two-Level Bitmap Compression Solves the Space Problem
 
 A new variant of trie node is a hybrid structure that combines a radix trie with two-level bitmap compression. This can represent sparse children compactly while preserving direct byte selection:
@@ -89,7 +87,7 @@ Leaves implements the preceding ideas: radix-compressed trie nodes, two-level bi
 
 ### In-Memory Comparison
 
-`bench_memdb_vs_hashtable` compares Leaves' in-memory trie with `std::unordered_map` and `std::map`. The test used one million randomly generated 32-byte binary keys, 100-byte values, and two rounds on Linux 6.8, GCC 13.3, and an Intel Core i7-12700KF. The figures below are microseconds per operation; lower is better.
+The following table compares Leaves' in-memory trie with `std::unordered_map` and `std::map`. The test used one million randomly generated 32-byte binary keys, 100-byte values, and two rounds on Linux 6.8, GCC 13.3, and an Intel Core i7-12700KF. The figures below are microseconds per operation; lower is better.
 
 | Workload | Leaves `_MemoryDB` | `std::unordered_map` | `std::map` |
 | --- | ---: | ---: | ---: |
@@ -102,22 +100,11 @@ Leaves implements the preceding ideas: radix-compressed trie nodes, two-level bi
 
 ![In-memory key-value store benchmark](memorydb-benchmark.svg)
 
-The same run reported 195.0 MiB for `_MemoryDB`, 212.1 MiB for
-`std::unordered_map`, and 219.3 MiB for `std::map` after filling the dataset.
-Those numbers are allocator-specific process or container measurements, so they
-are useful as a local comparison rather than as a portable memory-use guarantee.
-The trie performed particularly well on insertion and ordered traversal, while
-the _hash table retained its expected advantage for random reads and overwrites.
+The same run reported 195.0 MiB for `_MemoryDB`, 212.1 MiB for `std::unordered_map`, and 219.3 MiB for `std::map` after filling the dataset. Those numbers are allocator-specific process or container measurements, so they are useful as a local comparison rather than as a portable memory-use guarantee. The trie performed particularly well on insertion and ordered traversal, while the _hash table retained its expected advantage for random reads and overwrites.
 
 ### Persistent Comparison
 
-For persistent storage, `db_bench_leaves` was compared with
-`db_bench_mdb --wmap`. Both programs used one million 16-byte decimal keys,
-100-byte values, one million reads, 1,000-operation write batches, and the
-workloads `fillseq`, `fillrandom`, `overwrite`, `readrandom`, and `readseq`.
-Leaves used `MapStorage` with its write-ahead log disabled; LMDB used writable
-memory mapping with asynchronous map updates. The table reports one local run
-on the same Linux, compiler, and processor configuration as above.
+For persistent storage, leaves is compared with lmdb with `MDB_WRITEMAP` and `MDB_MAPASYNC` switches enabled. The benchmarks use one million 16-byte decimal keys, 100-byte values, one million reads, 1,000-operation write batches. The table reports one local run on the same Linux, compiler, and processor configuration as above.
 
 | Workload | Leaves (microseconds/op) | LMDB `--wmap` (microseconds/op) |
 | --- | ---: | ---: |
@@ -127,93 +114,82 @@ on the same Linux, compiler, and processor configuration as above.
 | Random read | 0.262 | 0.494 |
 | Sequential read | 0.042 | 0.016 |
 
-On this workload, Leaves was faster for random writes and random reads, while
-LMDB was faster for sequential insertion and sequential traversal. The result
-should be treated as a workload-specific observation: neither configuration
-includes durable write-ahead logging, and a production evaluation should also
-test the required durability mode, dataset size, storage device, and concurrent
-access pattern.
+On this workload, Leaves was faster for random writes and random reads, while LMDB was faster for sequential insertion and sequential traversal.
 
-For a broader performance discussion, see [Can Persistent Tries Beat LMDB?
-Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
+The better sequential read performance for LMDB is because of its better data locality. If a leaves database is copied to a new one the resulting layout improves data locality. And the sequential read performance is comparable to LMDB's:
 
-## Bonus: Replication
+| Workload | After random fill (microseconds/op) | After Merger copy (microseconds/op) | Speedup |
+| --- | ---: | ---: | ---: |
+| Random read | 0.249 | 0.227 | 1.10x |
+| Sequential read | 0.048 | 0.019 | 2.53x |
 
-Tries have another property that B-trees do not expose as naturally: every
-subtree has a semantic name. The path to a node is a key prefix. All keys below
-that node share that prefix. If the database stores a _hash for each subtree, then
-that _hash becomes a compact statement about all key-value pairs below the prefix.
+For a broader performance discussion, see [Can Persistent Tries Beat LMDB? Leaves Database Benchmarked](https://hackernoon.com/can-persistent-tries-beat-lmdb-leaves-database-benchmarked).
 
-That is the Merkle-trie idea. A Merkle tree hashes data at the leaves and hashes
-children into parent hashes, producing a root _hash that summarizes the whole
-structure. If two peers have the same root _hash, they have the same state under
-that root. If the root hashes differ, the peers can descend into child hashes and
-find the differing subtrees without transferring the entire database. Systems
-such as Dynamo-inspired stores, Cassandra, and Riak use this style of
-anti-entropy synchronization to avoid sending data that replicas already share.
-Ethereum's Merkle Patricia Trie applies a related idea to blockchain state:
-paths identify state entries, and hashes make the structure verifiable.
+## Set Operation
 
-Leaves' replication uses the same structural advantage. `ReplicationDB` extends
-the normal database with replication-specific state:
+Trie structure can make set operations more than a sequence of independent key lookups. Keys with common byte prefixes already occupy common paths, so union can merge matching paths and their child branches directly. Intersection can compare those paths and skip a whole subtree as soon as one input has no matching branch. This avoids repeatedly searching from each root for every key and can reduce key comparisons and intermediate work, especially when keys share prefixes or the input sets have substantial overlap. The result remains in lexicographic key order.
 
-- the main trie stores current key-value data;
-- the deletion trie stores deleted keys so removals can be replicated;
-- _hash tries cache subtree hashes for both the main trie and the deletion trie.
+The following benchmark results compare Leaves' in-memory trie with `std::set` and `std::unordered_set`. Each input has 100,000 unique 16-byte binary keys and empty values, with 50% overlap; the benchmark uses seed 301 and five rounds. Random and sequential layouts use the same key counts and overlap, but sequential keys share more trie paths. Timings are median milliseconds for the operation only, including result growth and excluding setup, verification, and destruction; lower is better. The benchmark verifies every result and its cardinality. This local run used Linux 7.0.0-42-generic and GCC 15.2.0.
 
-During a replication session, the sender and receiver do not blindly copy the
-whole database. The sender transmits _hash subtries. The receiver compares those
-hashes with its local _hash trie. Matching subtrees can be acknowledged and
-skipped. Divergent or missing subtrees are expanded and transferred. The process
-uses explicit protocol messages such as trie data, subtree acknowledgments,
-big-value chunks, fraction completion, and final completion, driven by the
-sender and receiver FSMs.
+| Layout | Operation | Result keys | Leaves `_MemoryDB` median (best) ms | `std::set` median (best) ms | `std::unordered_set` median (best) ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Random | Union | 150,000 | 11.921 (11.331) | 25.159 (23.055) | 13.083 (11.062) |
+| Random | Intersection | 50,000 | 7.128 (5.994) | 16.392 (16.151) | 18.502 (17.546) |
+| Sequential | Union | 150,000 | 3.886 (3.097) | 16.550 (15.379) | 11.989 (11.049) |
+| Sequential | Intersection | 50,000 | 3.248 (2.654) | 14.263 (13.962) | 18.665 (18.031) |
 
-Leaves separates replication into phases. First, it synchronizes the main data
-trie. Second, it synchronizes the deletion trie. Third, it streams deferred large
-values. When the receiver has the necessary data, it applies the received state
-through a staged merge and commits it atomically. For very large sessions, the
-receiver can enter fraction mode: it commits a bounded chunk, asks the sender to
-restart from the root, and then relies on _hash comparison to skip everything that
-has already converged.
+Median-time charts (milliseconds; lower is better):
 
-This design keeps the mechanism and policy separate. Leaves provides the trie
-structure, deterministic message flow, _hash-based pruning, staged apply, and
-atomic commit. Applications still decide the consistency model, peer topology,
-retry behavior, and conflict-resolution policy.
+![Random key layout set-operation benchmark](set-operations-random.svg)
 
-The performance-oriented node layout and the replication design reinforce one
-another. A trie already divides the keyspace into prefix subtrees, so adding
-hashes does not require a separate partitioning scheme. The replication
-structure follows the storage structure.
+![Sequential key layout set-operation benchmark](set-operations-sequential.svg)
+
+The trie is competitive with the hash set for random-layout union, faster than both standard containers for random-layout intersection, and faster for both operations with the sequential layout. The sequential case illustrates the benefit of shared trie paths; the different timings also show why these results should not be generalized to other key layouts, overlap ratios, or machines. See [the benchmark documentation](../../benchmarks/README.md#set-operations) for how to build and run it.
+
+## How to Reproduce the Results
+
+Clone Leaves and configure an optimized build with the benchmark targets enabled. Run these commands from the repository root; they require CMake and a supported C++ compiler:
+
+```bash
+git clone --recurse-submodules https://github.com/kochelmonster/leaves.git
+cd leaves
+cmake -S . -B build/bench-repro -DCMAKE_BUILD_TYPE=Release \
+    -DLEAVES_BUILD_TESTS=OFF -DLEAVES_BUILD_BENCHMARKS=ON -DLEAVES_GCOV=OFF
+cmake --build build/bench-repro --target bench_memdb_vs_hashtable db_bench_leaves bench_set_operations --config Release -j4
+```
+
+The in-memory table and memory measurements come from `bench_memdb_vs_hashtable`:
+
+```bash
+./build/bench-repro/bench_memdb_vs_hashtable --num=1000000 --key_size=32 --val_size=100 --rounds=2 --benchmarks=fillseq,fillrandom,readrandom,readseq,overwrite,erase
+```
+
+For the persistent comparison, `db_bench_leaves` uses MapStorage with WAL disabled, and `db_bench_mdb --wmap` enables LMDB's `MDB_WRITEMAP` and `MDB_MAPASYNC`. The LMDB target is available on non-MSVC builds when CMake finds the LMDB headers and library. Both commands use decimal keys, 100-byte values, one million reads, 1,000-operation batches, and the benchmark defaults for compression and cache size:
+
+```bash
+cmake --build build/bench-repro --target db_bench_mdb --config Release -j4
+./build/bench-repro/db_bench_leaves --benchmarks=fillseq,fillrandom,overwrite,readrandom,readseq --num=1000000 --reads=1000000 --value_size=100 --batch_size=1000 --use_wal=0 --db=build/bench-repro/leaves-persistent
+./build/bench-repro/db_bench_mdb --wmap --benchmarks=fillseq,fillrandom,overwrite,readrandom,readseq --num=1000000 --reads=1000000 --value_size=100 --batch_size=1000 --db=build/bench-repro/lmdb-persistent
+```
+
+To compare reads before and after the merger copy, run the same random-fill workload with and without `--move_after_fill=1`. The copy happens after the fill and is not included in its timing; the subsequent reads use the resulting database:
+
+```bash
+./build/bench-repro/db_bench_leaves --benchmarks=fillrandom,readrandom,readseq --num=1000000 --reads=1000000 --value_size=100 --batch_size=1000 --use_wal=0 --db=build/bench-repro/leaves-before-copy
+./build/bench-repro/db_bench_leaves --benchmarks=fillrandom,readrandom,readseq --num=1000000 --reads=1000000 --value_size=100 --batch_size=1000 --use_wal=0 --move_after_fill=1 --db=build/bench-repro/leaves-after-copy
+```
+
+The set-operation results use 100,000 keys per input, 50% overlap, seed 301, and five rounds. Run both key layouts:
+
+```bash
+./build/bench-repro/bench_set_operations --num=100000 --rounds=5 --overlap=50 --seed=301 --layout=random
+./build/bench-repro/bench_set_operations --num=100000 --rounds=5 --overlap=50 --seed=301 --layout=sequential
+```
+
+These commands reproduce the workloads and report timings for the local machine; they do not guarantee identical numbers. The in-memory and set-operation benchmarks verify their results outside the timed region. For additional flags and timing details, see the [benchmark documentation](../../benchmarks/README.md).
 
 ## Conclusion
 
-Tries were not kept out of databases because their lookup model was weak. They
-were kept out because their obvious representation was too sparse. B-trees won
-because they make economical use of pages, keep height low, and behave well on
-storage hardware.
+The main obstacle to using tries as general-purpose databases is not their lookup model but the cost of representing sparse branches and long single-child paths. An effective approach can be a radix-prefix compression and a two-level bitmap that packs only present child links. Page classes, area-based allocation, copy-on-write updates, and transaction-aware recycling extend that compact node representation into a persistent storage design.
 
-Leaves addresses the trie problem at the node-layout level. Prefix compression
-removes long single-child chains. The two-level bitmap removes the 256-pointer
-array while preserving fast byte selection. Copy-on-write pages make the
-structure persistent. Together, those techniques turn a trie from an in-memory
-data structure into a viable database layout.
-
-The bonus is replication. A compact persistent trie can also be a Merkle trie:
-hashes summarize prefix subtrees, peers compare structure before transferring
-data, and replication sends the differences rather than the database. That is
-the larger concept behind Leaves: one structure for lookup, persistence,
-copy-on-write updates, and synchronization.
-
-## Addendum: Ordering
-
-Tries order keys lexicographically, whereas a B-tree can be parameterized with
-an arbitrary comparison function. This distinction matters when an application
-requires an order that cannot be represented in the key encoding.
-
-Many practical orderings can, however, be expressed by encoding keys into a
-lexicographically sortable binary form. Fixed-width integers can use big-endian
-encoding; composite keys can concatenate sortable components. This approach
-preserves trie traversal order and avoids the cost of invoking an application
-defined comparator during each structural comparison.
+In these measurements, the trie outperformed the B-tree-based LMDB on random fills, overwrites, and random reads, and it also beat `std::unordered_map` on the in-memory random-fill workload. This suggests that for write-intensive workloads, allocation and memory management can matter more than the lookup algorithm alone. Sequential reads benefited substantially from improved data locality: copying a randomly filled Leaves database brought read time close to LMDB in this run. Leaves also outperformed `std::set` and `std::unordered_set` in every set-operation workload tested.

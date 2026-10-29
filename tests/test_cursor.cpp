@@ -6,6 +6,10 @@ Test the the cursor with without burst table
 
 #include <boost/endian/conversion.hpp>
 
+#include <map>
+#include <string>
+#include <vector>
+
 #include "test.hpp"
 
 using boost::endian::big_to_native;
@@ -445,6 +449,129 @@ BOOST_AUTO_TEST_CASE(insert_null_leaf) {
   auto storage = Storage::create(TEST_FILE);
   const char *keys[] = {"aba", "abb", "abc", "ab", NULL};
   test_insertion(storage, "insert_null_leaf", keys);
+}
+
+namespace {
+
+typedef std::map<std::string, std::string> Contents;
+
+template <typename Cursor>
+void check_contents(Cursor &cursor, const Contents &expected) {
+  for (const auto &[key, value] : expected) {
+    cursor.find(key);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.key().string(), key);
+    BOOST_CHECK_EQUAL(cursor.value().string(), value);
+  }
+  auto entry = expected.begin();
+  for (cursor.first(); cursor.is_valid(); cursor.next()) {
+    BOOST_REQUIRE(entry != expected.end());
+    BOOST_CHECK_EQUAL(cursor.key().string(), entry->first);
+    BOOST_CHECK_EQUAL(cursor.value().string(), entry->second);
+    ++entry;
+  }
+  BOOST_CHECK(entry == expected.end());
+}
+
+void insert_and_check(const std::vector<std::string> &keys,
+                      const std::string &inserted) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("test");
+  auto cursor = db.cursor();
+  Contents expected;
+  for (const auto &key : keys) {
+    cursor.find(key);
+    cursor.value("old");
+    expected[key] = "old";
+  }
+  if (!keys.empty()) cursor.commit();
+
+  cursor.find(inserted);
+  BOOST_CHECK(!cursor.is_valid());
+  cursor.value("new");
+  expected[inserted] = "new";
+  cursor.commit();
+  check_contents(cursor, expected);
+}
+
+enum class BranchPath { IN_PLACE, COW, GROW };
+
+// Adds the last byte of |inserted| as a new branch to the root trie and checks
+// which inserter path is taken: in-place when the page belongs to the active
+// transaction and has room, otherwise a new root trie.
+void insert_branch(const std::vector<std::string> &keys,
+                   const std::string &inserted, BranchPath path) {
+  typedef _MemoryMapTraits Traits;
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("test");
+  auto cursor = db.cursor();
+  Contents expected;
+  for (const auto &key : keys) {
+    cursor.find(key);
+    cursor.value("old");
+    expected[key] = "old";
+  }
+  if (path == BranchPath::COW) cursor.commit();
+
+  auto internal = db._internal();
+  auto root_before = internal->_active_txn ? internal->_active_txn->root
+                                           : internal->txn()->root;
+  auto trie = internal->template resolve<Traits::TrieNode>(&root_before);
+  Traits::ptr page = trie - sizeof(Traits::PageHeader);
+  const auto needed =
+      trie->increment_size(static_cast<unsigned char>(inserted.back()));
+  const auto budget =
+      Traits::PAGE_SIZES[page->slot_id] - sizeof(Traits::PageHeader);
+  BOOST_REQUIRE_EQUAL(page->needs_cow(internal), path == BranchPath::COW);
+  if (path == BranchPath::GROW)
+    BOOST_REQUIRE_GT(needed, budget);
+  else
+    BOOST_REQUIRE_LE(needed, budget);
+
+  cursor.find(inserted);
+  BOOST_CHECK(!cursor.is_valid());
+  cursor.value("new");
+  expected[inserted] = "new";
+  if (path == BranchPath::IN_PLACE)
+    BOOST_CHECK(internal->_active_txn->root == root_before);
+  else
+    BOOST_CHECK(internal->_active_txn->root != root_before);
+
+  cursor.commit();
+  check_contents(cursor, expected);
+}
+
+}  // namespace
+
+BOOST_AUTO_TEST_CASE(insert_branch_in_place) {
+  insert_branch({"aba", "abb", "abc", "abd", "abe", "abf"}, "abg",
+                BranchPath::IN_PLACE);
+}
+
+BOOST_AUTO_TEST_CASE(insert_branch_cow) {
+  insert_branch({"aba", "abb", "abc", "abd", "abe", "abf"}, "abg",
+                BranchPath::COW);
+}
+
+BOOST_AUTO_TEST_CASE(insert_branch_grow) {
+  insert_branch({"aba", "abb"}, "abc", BranchPath::GROW);
+}
+
+BOOST_AUTO_TEST_CASE(insert_max_leaf_key) {
+  // 255 bytes is the longest key that still fits into a single leaf
+  insert_and_check({}, std::string(255, 'a'));
+}
+
+BOOST_AUTO_TEST_CASE(insert_chained_key) {
+  // Needs two chained compressed tries before the final leaf
+  insert_and_check({}, std::string(255, 'a') + std::string(255, 'b') + "tail");
+}
+
+BOOST_AUTO_TEST_CASE(insert_chained_key_below_branch) {
+  insert_and_check({"xb", "xc"},
+                   "x" + std::string(255, 'a') + std::string(255, 'b') + "tail");
 }
 
 BOOST_AUTO_TEST_CASE(insert_value) {
