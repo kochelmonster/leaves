@@ -8,12 +8,15 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <set>
 
 #include "../include/leaves/intern/db/_cursor.hpp"
 #include "../include/leaves/intern/util/_merger.hpp"
+#include "../include/leaves/intern/storage/_memstore.hpp"
 #include "../include/leaves/confluence.hpp"
 #include <leaves/fstore.hpp>
 #include <leaves/merger.hpp>
+#include <leaves/set_operations.hpp>
 #include "test.hpp"
 
 using namespace leaves;
@@ -153,6 +156,484 @@ struct PublicMergerFixture : MergerPreparation {
   }
 };
 
+BOOST_AUTO_TEST_SUITE(set_operations)
+
+template <typename Cursor>
+void check_intersection_keys(Cursor& cursor, const std::set<std::string>& expected) {
+  auto entry = expected.begin();
+  for (cursor.first(); cursor.is_valid(); cursor.next()) {
+    BOOST_REQUIRE(entry != expected.end());
+    BOOST_CHECK_EQUAL(cursor.key(), Slice(*entry));
+    BOOST_CHECK_EQUAL(cursor.value().size(), 0u);
+    ++entry;
+  }
+  BOOST_CHECK(entry == expected.end());
+}
+
+struct OperationStats : _SetOperationObserver {
+  size_t first_nodes = 0;
+  size_t second_nodes = 0;
+  size_t validation_nodes = 0;
+  size_t allocations = 0;
+  size_t frees = 0;
+  size_t throw_after = SIZE_MAX;
+
+  void on_first() { ++first_nodes; }
+  void on_second() { ++second_nodes; }
+  void on_validation() { ++validation_nodes; }
+  void on_allocate() {
+    if (allocations == throw_after) throw std::runtime_error("allocation rejected");
+    ++allocations;
+  }
+  void on_free() noexcept { ++frees; }
+};
+
+struct SetAspect : DefaultAspect {
+  bool reject_values = false;
+
+  Slice on_read(const Slice&, const Slice& value, const Slice&, CursorContext&) {
+    if (reject_values) throw std::runtime_error("unexpected read hook");
+    return value;
+  }
+  Slice on_write(const Slice&, const Slice&, CursorContext&) {
+    if (reject_values) throw std::runtime_error("unexpected write hook");
+    return Slice("transformed value");
+  }
+};
+
+struct SetAspectTraits : MapTraits {
+  using Aspect = SetAspect;
+};
+
+BOOST_FIXTURE_TEST_CASE(union_overlap_and_rollback, PublicMergerFixture) {
+  put(source, "shared", "incoming");
+  put(source, "added", "source");
+  BOOST_REQUIRE(source.commit());
+  source.find("shared");
+  const auto snapshot = source.txn_id();
+  put(destination, "shared", "old");
+  put(destination, "kept", "destination");
+  BOOST_REQUIRE(destination.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(leaves::set_union(destination, source));
+  check_value(destination, "shared", "incoming");
+  check_value(destination, "added", "source");
+  check_value(destination, "kept", "destination");
+  BOOST_CHECK_EQUAL(source.key(), Slice("shared"));
+  BOOST_CHECK(source.txn_id() == snapshot);
+  BOOST_REQUIRE(destination.rollback());
+  check_value(destination, "shared", "old");
+  destination.find("added");
+  BOOST_CHECK(!destination.is_valid());
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_prefix_group, PublicMergerFixture) {
+  auto second = storage->open("second").cursor();
+  auto encode = [](uint64_t value) {
+    std::string result(8, '\0');
+    for (size_t index = 0; index < result.size(); ++index)
+      result[index] = static_cast<char>(value >> ((7 - index) * 8));
+    return result;
+  };
+  const auto first_key = encode(7) + encode(10);
+  const auto next_key = encode(7) + encode(11);
+  put(source, first_key, "ignored");
+  put(source, next_key, std::string(12000, 'B'));
+  put(source, encode(9) + encode(12), "ignored");
+  BOOST_REQUIRE(source.commit());
+  put(second, encode(7) + encode(100), "ignored");
+  put(second, encode(7) + encode(101), "ignored");
+  BOOST_REQUIRE(second.commit());
+  source.find(next_key);
+  const auto snapshot = source.txn_id();
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(leaves::intersect(destination, source, second, 8));
+  BOOST_CHECK(!destination.is_valid());
+  BOOST_CHECK_EQUAL(source.key(), Slice(next_key));
+  BOOST_CHECK(source.txn_id() == snapshot);
+  check_value(destination, first_key, "");
+  check_value(destination, next_key, "");
+  destination.first();
+  BOOST_REQUIRE(destination.is_valid());
+  BOOST_CHECK_EQUAL(destination.key(), Slice(first_key));
+  destination.next();
+  BOOST_REQUIRE(destination.is_valid());
+  BOOST_CHECK_EQUAL(destination.key(), Slice(next_key));
+  destination.next();
+  BOOST_CHECK(!destination.is_valid());
+  BOOST_REQUIRE(destination.commit());
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_reference_matrix, PublicMergerFixture) {
+  std::mt19937 random(91437);
+  size_t scenario = 0;
+  for (size_t key_size : {0u, 1u, 8u, 12u, 255u, 256u, 300u, 310u}) {
+    auto left = storage->open("left" + std::to_string(scenario)).cursor();
+    auto right = storage->open("right" + std::to_string(scenario)).cursor();
+    auto result = storage->open("result" + std::to_string(scenario++)).cursor();
+    std::set<std::string> left_keys, right_keys, expected;
+    for (size_t index = 0; index < 240; ++index) {
+      std::string key;
+      if (key_size == 0) {
+        key.assign(random() % 24, '\0');
+        for (auto& byte : key) byte = static_cast<char>(random() % 8);
+        if (index % 7 == 0) key.assign(600, 'L');
+      } else {
+        key.assign(std::max(key_size, size_t(12)), 'P');
+        key[0] = static_cast<char>(index % 16);
+        key[std::min(key_size - 1, size_t(7))] = static_cast<char>(index % 8);
+        key.append(random() % 7, static_cast<char>(random() % 256));
+      }
+      if (index % 3 != 0) left_keys.insert(key);
+      if (index % 4 != 0) right_keys.insert(key);
+    }
+    if (key_size == 0) {
+      for (const auto& key : {std::string(), std::string("a"), std::string("ab"),
+                              std::string("a\0", 2), std::string("\xff", 1)}) {
+        left_keys.insert(key);
+        right_keys.insert(key);
+      }
+    }
+    for (const auto& key : left_keys) put(left, key, "left value");
+    for (const auto& key : right_keys) put(right, key, "different right value");
+    BOOST_REQUIRE(left.commit());
+    BOOST_REQUIRE(right.commit());
+    std::set<std::string> right_prefixes;
+    for (const auto& key : right_keys)
+      right_prefixes.insert(key_size ? key.substr(0, key_size) : key);
+    for (const auto& key : left_keys) {
+      if (right_prefixes.count(key_size ? key.substr(0, key_size) : key))
+        expected.insert(key);
+    }
+    BOOST_REQUIRE(result.start_transaction());
+    BOOST_REQUIRE(leaves::intersect(result, left, right, key_size));
+    check_intersection_keys(result, expected);
+    BOOST_REQUIRE(result.commit());
+    check_intersection_keys(result, expected);
+    auto reverse = storage->open("reverse" + std::to_string(scenario)).cursor();
+    std::set<std::string> left_prefixes;
+    for (const auto& key : left_keys)
+      left_prefixes.insert(key_size ? key.substr(0, key_size) : key);
+    expected.clear();
+    for (const auto& key : right_keys) {
+      if (left_prefixes.count(key_size ? key.substr(0, key_size) : key))
+        expected.insert(key);
+    }
+    BOOST_REQUIRE(reverse.start_transaction());
+    BOOST_REQUIRE(leaves::intersect(reverse, right, left, key_size));
+    check_intersection_keys(reverse, expected);
+    BOOST_REQUIRE(reverse.rollback());
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_prunes_disjoint_subtrees, PublicMergerFixture) {
+  auto second = storage->open("second").cursor();
+  for (size_t index = 0; index < 128; ++index) {
+    put(source, "a/" + std::to_string(index), "ignored");
+    put(second, "z/" + std::to_string(index), "ignored");
+  }
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(second.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  OperationStats stats;
+  BOOST_REQUIRE(_SetOperations::intersect(destination, source, second, 0, stats));
+  BOOST_CHECK_EQUAL(stats.first_nodes, 1u);
+  BOOST_CHECK_EQUAL(stats.second_nodes, 1u);
+  BOOST_CHECK_EQUAL(stats.allocations, 0u);
+  BOOST_REQUIRE(destination.rollback());
+
+  auto left = storage->open("left bitmap").cursor();
+  auto right = storage->open("right bitmap").cursor();
+  for (size_t index = 0; index < 128; ++index) {
+    put(left, std::string(1, static_cast<char>(index)) + "suffix", "ignored");
+    put(right, std::string(1, static_cast<char>(index + 128)) + "suffix", "ignored");
+  }
+  BOOST_REQUIRE(left.commit());
+  BOOST_REQUIRE(right.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  OperationStats bitmap_stats;
+  BOOST_REQUIRE(_SetOperations::intersect(destination, left, right, 0, bitmap_stats));
+  BOOST_CHECK_EQUAL(bitmap_stats.first_nodes, 1u);
+  BOOST_CHECK_EQUAL(bitmap_stats.second_nodes, 1u);
+  BOOST_CHECK_EQUAL(bitmap_stats.allocations, 0u);
+  BOOST_REQUIRE(destination.rollback());
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_accepts_prefix_subtree, PublicMergerFixture) {
+  auto second = storage->open("second").cursor();
+  const std::string prefix(40, 'P');
+  std::set<std::string> expected;
+  for (size_t index = 0; index < 128; ++index) {
+    auto key = prefix + static_cast<char>(index);
+    put(source, key, "ignored");
+    put(second, key + "right suffix", "ignored");
+    expected.insert(key);
+  }
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(second.commit());
+  for (size_t key_size : {8u, 40u}) {
+    BOOST_REQUIRE(destination.start_transaction());
+    OperationStats stats;
+    BOOST_REQUIRE(_SetOperations::intersect(destination, source, second, key_size, stats));
+    BOOST_CHECK_EQUAL(stats.second_nodes, 1u);
+    BOOST_CHECK_EQUAL(stats.validation_nodes, 2u);
+    check_intersection_keys(destination, expected);
+    BOOST_REQUIRE(destination.rollback());
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_empty_and_identical_inputs, PublicMergerFixture) {
+  auto empty = storage->open("empty").cursor();
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(leaves::intersect(destination, source, empty, 0));
+  check_intersection_keys(destination, {});
+  BOOST_REQUIRE(destination.rollback());
+  for (const auto& key : {"", "prefix", "prefix/child", "other"})
+    put(source, key, "ignored");
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(leaves::intersect(destination, source, empty, 0));
+  check_intersection_keys(destination, {});
+  BOOST_REQUIRE(leaves::intersect(destination, source, source, 0));
+  check_intersection_keys(destination, {"", "prefix", "prefix/child", "other"});
+  BOOST_REQUIRE(destination.rollback());
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_guards, PublicMergerFixture) {
+  auto second = storage->open("second").cursor();
+  auto empty_source = storage->open("empty source").cursor();
+  Storage::DB::Cursor uninitialized;
+  put(source, "a", "ignored");
+  put(source, "alpha", "ignored");
+  put(second, "alpha", "ignored");
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(second.commit());
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 0));
+  BOOST_REQUIRE(destination.start_transaction());
+  destination.find("position");
+  const std::string position(destination.key().data(), destination.key().size());
+  BOOST_CHECK(!leaves::intersect(uninitialized, source, second, 0));
+  BOOST_CHECK(!leaves::intersect(destination, uninitialized, second, 0));
+  BOOST_CHECK(!leaves::intersect(destination, source, uninitialized, 0));
+  source.find("a");
+  second.find("alpha");
+  OperationStats stats;
+  BOOST_CHECK(!_SetOperations::intersect(destination, source, second, 2, stats));
+  BOOST_CHECK_EQUAL(stats.allocations, 0u);
+  BOOST_CHECK_EQUAL(destination.key(), Slice(position));
+  BOOST_CHECK_EQUAL(source.key(), Slice("a"));
+  BOOST_CHECK_EQUAL(second.key(), Slice("alpha"));
+  BOOST_CHECK(!leaves::intersect(destination, source, empty_source, 2));
+  BOOST_CHECK(!leaves::intersect(destination, source, second, SIZE_MAX));
+  source.remove();
+  BOOST_REQUIRE(source.commit());
+  put(second, "z", "short unmatched key");
+  BOOST_REQUIRE(second.commit());
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 2));
+  BOOST_CHECK(!leaves::intersect(destination, empty_source, second, 2));
+  put(source, "pending", "write");
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 0));
+  BOOST_REQUIRE(source.rollback());
+  put(second, "pending", "write");
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 0));
+  BOOST_REQUIRE(second.rollback());
+  BOOST_CHECK(!leaves::intersect(destination, destination, second, 0));
+  BOOST_CHECK(!leaves::intersect(destination, source, destination, 0));
+  put(destination, "existing", "kept");
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 0));
+  check_value(destination, "existing", "kept");
+  BOOST_REQUIRE(destination.rollback());
+  BOOST_REQUIRE(destination.start_transaction(false, true));
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 0));
+  BOOST_REQUIRE(destination.rollback());
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(destination.prepare_commit(false));
+  BOOST_CHECK(!leaves::intersect(destination, source, second, 0));
+  BOOST_REQUIRE(destination.rollback());
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_exception_cleanup, PublicMergerFixture) {
+  for (size_t index = 0; index < 40; ++index)
+    put(source, std::to_string(index), "ignored");
+  BOOST_REQUIRE(source.commit());
+  source.find("1");
+  BOOST_REQUIRE(destination.start_transaction());
+  OperationStats stats;
+  stats.throw_after = 7;
+  BOOST_CHECK_THROW(_SetOperations::intersect(destination, source, source, 0, stats),
+                    std::runtime_error);
+  BOOST_CHECK_EQUAL(stats.allocations, 7u);
+  BOOST_CHECK_EQUAL(stats.frees, stats.allocations);
+  BOOST_CHECK(destination.is_transaction_active());
+  BOOST_CHECK(!destination.is_valid());
+  BOOST_CHECK_EQUAL(source.key(), Slice("1"));
+  BOOST_REQUIRE(leaves::intersect(destination, source, source, 0));
+  BOOST_REQUIRE(destination.rollback());
+  check_intersection_keys(destination, {});
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_source_snapshot, PublicMergerFixture) {
+  put(source, "old", "ignored");
+  BOOST_REQUIRE(source.commit());
+  source.find("old");
+  const auto snapshot = source.txn_id();
+  auto writer = source_db.cursor();
+  put(writer, "new", "ignored");
+  BOOST_REQUIRE(writer.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(leaves::intersect(destination, source, writer, 0));
+  BOOST_CHECK(source.txn_id() == snapshot);
+  BOOST_CHECK_EQUAL(source.key(), Slice("old"));
+  check_intersection_keys(destination, {"old"});
+  auto observer = destination_db.cursor();
+  check_intersection_keys(observer, {});
+  put(destination, "later", "composed write");
+  BOOST_REQUIRE(destination.commit());
+  observer.update();
+  check_value(observer, "old", "");
+  check_value(observer, "later", "composed write");
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_shape_boundaries, PublicMergerFixture) {
+  struct Scenario {
+    std::vector<std::string> left;
+    std::vector<std::string> right;
+    size_t key_size;
+    std::set<std::string> expected;
+  };
+  const std::vector<Scenario> scenarios = {
+      {{"prefix"}, {"prefix", "prefix/child"}, 0, {"prefix"}},
+      {{"prefix", "prefix/child"}, {"prefix"}, 0, {"prefix"}},
+      {{"prefix/child"}, {"prefix", "prefix/child"}, 0, {"prefix/child"}},
+      {{"abx", "aby"}, {"a", "abx", "abz"}, 0, {"abx"}},
+      {{"longX/one", "longX/two"}, {"longY/one"}, 4, {"longX/one", "longX/two"}},
+      {{"longX/one", "longX/two"}, {"longY/one"}, 5, {}},
+      {{"longX/one"}, {"longY/one", "longY/two"}, 4, {"longX/one"}},
+      {{"longX/one"}, {"longX/one", "longY/two"}, 5, {"longX/one"}},
+  };
+  size_t index = 0;
+  for (const auto& scenario : scenarios) {
+    const auto suffix = std::to_string(index++);
+    auto left = storage->open("left " + suffix).cursor();
+    auto right = storage->open("right " + suffix).cursor();
+    for (const auto& key : scenario.left) put(left, key, "left");
+    for (const auto& key : scenario.right) put(right, key, "right");
+    BOOST_REQUIRE(left.commit());
+    BOOST_REQUIRE(right.commit());
+    BOOST_REQUIRE(destination.start_transaction());
+    BOOST_REQUIRE(leaves::intersect(destination, left, right, scenario.key_size));
+    check_intersection_keys(destination, scenario.expected);
+    BOOST_REQUIRE(destination.rollback());
+  }
+}
+
+BOOST_AUTO_TEST_CASE(intersection_does_not_transform_values) {
+  MergerPreparation preparation;
+  auto storage = MapStorage_<SetAspectTraits>::create(TEST_FILE);
+  auto left_db = storage->open("left");
+  auto right_db = storage->open("right");
+  auto result_db = storage->open("result");
+  auto left = left_db.cursor();
+  auto right = right_db.cursor();
+  auto result = result_db.cursor();
+  PublicMergerFixture::put(left, "key", "ignored");
+  PublicMergerFixture::put(right, "key", "ignored");
+  BOOST_REQUIRE(left.commit());
+  BOOST_REQUIRE(right.commit());
+  left_db.aspect().reject_values = true;
+  right_db.aspect().reject_values = true;
+  result_db.aspect().reject_values = true;
+  BOOST_REQUIRE(result.start_transaction());
+  BOOST_REQUIRE(leaves::intersect(result, left, right, 0));
+  BOOST_REQUIRE(result.commit());
+  result_db.aspect().reject_values = false;
+  check_intersection_keys(result, {"key"});
+  left_db.aspect().reject_values = false;
+  PublicMergerFixture::check_value(left, "key", "transformed value");
+}
+
+BOOST_AUTO_TEST_CASE(intersection_cross_backend_and_reopen) {
+  MergerPreparation preparation;
+  const std::string big_value(12000, 'B');
+  std::set<std::string> expected;
+  {
+    auto mapped = Storage::create(TEST_FILE);
+    auto file = FileStorage::create(TEST_FILE "2", 8 * M);
+    auto left = mapped->open("left").cursor();
+    auto right = file->open("right").cursor();
+    auto cached_result = file->open("result").cursor();
+    for (size_t index = 0; index < 200; ++index) {
+      const auto key = std::string(320, 'P') + std::to_string(index);
+      PublicMergerFixture::put(left, key, index == 0 ? big_value : "left");
+      if (index % 2 == 0) {
+        PublicMergerFixture::put(right, key, "right");
+        expected.insert(key);
+      }
+    }
+    BOOST_REQUIRE(left.commit());
+    BOOST_REQUIRE(right.commit());
+    BOOST_REQUIRE(cached_result.start_transaction());
+    BOOST_REQUIRE(leaves::intersect(cached_result, left, right, 0));
+    BOOST_REQUIRE(cached_result.commit(true));
+    check_intersection_keys(cached_result, expected);
+    auto mapped_result = mapped->open("result").cursor();
+    BOOST_REQUIRE(mapped_result.start_transaction());
+    BOOST_REQUIRE(leaves::intersect(mapped_result, cached_result, left, 0));
+    BOOST_REQUIRE(mapped_result.commit(true));
+    check_intersection_keys(mapped_result, expected);
+    PublicMergerFixture::check_value(left, std::string(320, 'P') + "0", big_value);
+  }
+  {
+    auto mapped = Storage::create(TEST_FILE);
+    auto file = FileStorage::create(TEST_FILE "2", 8 * M);
+    auto mapped_result = mapped->open("result").cursor();
+    auto cached_result = file->open("result").cursor();
+    check_intersection_keys(mapped_result, expected);
+    check_intersection_keys(cached_result, expected);
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(intersection_shared_storage_growth, PublicMergerFixture) {
+  std::set<std::string> expected;
+  for (size_t index = 0; index < 16000; ++index) {
+    auto key = std::to_string(index) + std::string(600, 'P');
+    put(source, key, "ignored");
+    expected.insert(std::move(key));
+  }
+  BOOST_REQUIRE(source.commit());
+  const auto original_size = storage->file_size();
+  BOOST_REQUIRE(destination.start_transaction());
+  BOOST_REQUIRE(leaves::intersect(destination, source, source, 0));
+  BOOST_CHECK_GT(storage->file_size(), original_size);
+  check_intersection_keys(destination, expected);
+  BOOST_REQUIRE(destination.commit());
+  check_value(source, "0" + std::string(600, 'P'), "ignored");
+}
+
+BOOST_AUTO_TEST_CASE(intersection_memory_engine) {
+  _MemoryStorage left_storage, right_storage, result_storage;
+  auto left = left_storage.create_cursor();
+  auto right = right_storage.create_cursor();
+  auto result = result_storage.create_cursor();
+  std::set<std::string> expected;
+  for (size_t index = 0; index < 80; ++index) {
+    const auto key = std::string(320, 'P') + std::to_string(index);
+    PublicMergerFixture::put(*left, key, "ignored");
+    if (index % 2 == 0) {
+      PublicMergerFixture::put(*right, key, "other value");
+      expected.insert(key);
+    }
+  }
+  using Cursor = _MemoryStorage::DB::Cursor;
+  OperationStats stats;
+  _Intersector<Cursor, Cursor, Cursor, OperationStats> operation(
+      *result, *left, *right, 0, stats);
+  operation.exec();
+  check_intersection_keys(*result, expected);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 BOOST_FIXTURE_TEST_CASE(test_public_merger_rollback, PublicMergerFixture) {
   put(source, "incoming", "source");
   BOOST_REQUIRE(source.commit());
@@ -256,6 +737,29 @@ BOOST_FIXTURE_TEST_CASE(test_public_merger_custom_policy, PublicMergerFixture) {
   }
 }
 
+BOOST_FIXTURE_TEST_CASE(test_public_merger_equal_value_preserves_leaf,
+                        PublicMergerFixture) {
+  struct EqualValuePolicy : StandardMergePolicy {
+    size_t overwrites = 0;
+    bool may_overwrite(const std::string&, const Slice&, const Slice&, bool, bool) {
+      ++overwrites;
+      return true;
+    }
+  } policy;
+  put(source, "shared", "same value");
+  put(destination, "shared", "same value");
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(destination.commit());
+  BOOST_REQUIRE(destination.start_transaction());
+  const auto root = destination_db._internal()->_active_txn->root;
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec(policy));
+  BOOST_CHECK_EQUAL(policy.overwrites, 1u);
+  BOOST_CHECK(destination_db._internal()->_active_txn->root == root);
+  check_value(destination, "shared", "same value");
+  BOOST_REQUIRE(destination.commit());
+}
+
 BOOST_FIXTURE_TEST_CASE(test_public_merger_big_values_and_keys,
                         PublicMergerFixture) {
   const std::string big_value(12000, 'B');
@@ -280,6 +784,44 @@ BOOST_FIXTURE_TEST_CASE(test_public_merger_big_values_and_keys,
   check_value(result, long_key, big_value);
   check_value(result, "shared", big_value);
   check_value(source, "shared", big_value);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_public_merger_shared_leaf_policy_and_snapshot,
+                        PublicMergerFixture) {
+  struct SharedLeafPolicy : StandardMergePolicy {
+    std::vector<std::string> keys;
+    bool may_overwrite(const std::string& key, const Slice&, const Slice&, bool, bool) {
+      keys.push_back(key);
+      return key != "common/deny";
+    }
+  } policy;
+  const std::string old_big(12000, 'D');
+  const std::string new_big(14000, 'S');
+  put(source, "common/a", "new a");
+  put(source, "common/b", new_big);
+  put(source, "common/deny", "rejected");
+  put(destination, "common/a", "old a");
+  put(destination, "common/b", old_big);
+  put(destination, "common/deny", "kept");
+  BOOST_REQUIRE(source.commit());
+  BOOST_REQUIRE(destination.commit());
+  auto observer = destination_db.cursor();
+  BOOST_REQUIRE(destination.start_transaction());
+  Merger merger(destination, source);
+  BOOST_REQUIRE(merger.exec(policy));
+  const auto root = destination_db._internal()->_active_txn->root;
+  BOOST_REQUIRE(merger.exec(policy));
+  BOOST_CHECK(destination_db._internal()->_active_txn->root == root);
+  BOOST_CHECK_EQUAL(policy.keys.size(), 6u);
+  const std::set<std::string> seen(policy.keys.begin(), policy.keys.end());
+  BOOST_CHECK(seen == std::set<std::string>({"common/a", "common/b", "common/deny"}));
+  check_value(destination, "common/a", "new a");
+  check_value(destination, "common/b", new_big);
+  check_value(destination, "common/deny", "kept");
+  check_value(observer, "common/a", "old a");
+  check_value(observer, "common/b", old_big);
+  BOOST_REQUIRE(destination.rollback());
+  check_value(destination, "common/b", old_big);
 }
 
 BOOST_FIXTURE_TEST_CASE(test_public_merger_source_snapshot, PublicMergerFixture) {

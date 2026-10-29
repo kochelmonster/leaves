@@ -1,13 +1,22 @@
 #!/usr/bin/env python
 # Uses graphviz to create a svg image of a graph specified by a yaml file
 #
-# python tests/graph.py tests/cmpfiles/*
+# python3 tests/graph.py tests/cmpfiles/*.yaml
+import argparse
+import subprocess
 import sys
 import yaml
-import sarge
 from pathlib import Path
 
 MAX_VAL_SIZE = 27
+MAX_KEY_SIZE = 60
+
+
+def display_key(key):
+    if len(key) > MAX_KEY_SIZE:
+        return key[:MAX_KEY_SIZE // 2] + "..." + key[-MAX_KEY_SIZE // 2:]
+    return key
+
 
 LNODE = ('"{id}" [fillcolor=darkolivegreen1 label="(({id})|({keysize}-{key})|'
          '({valuesize}-{value}))"]').replace("(", "{{").replace(")", "}}")
@@ -27,6 +36,9 @@ class Graph:
                  "node [shape=record style=filled]"]
         add = lines.append
 
+        if not nodes:
+            add('empty [shape=plaintext style="" label="Empty trie (null root)"]')
+
         # group nodes
         pages = {}
         for n in nodes:
@@ -35,16 +47,19 @@ class Graph:
             pages.setdefault(page, []).append(n)
 
         for k, pnodes in pages.items():
-            free = pnodes[0]["freespace"]
-            size = pnodes[0]["size"]
-            txn = pnodes[0]["txn"]
-            add(f"subgraph cluster_Page{k} {{")
-            add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
+            with_headers = "page" in pnodes[0]
+            if with_headers:
+                free = pnodes[0]["freespace"]
+                size = pnodes[0]["size"]
+                txn = pnodes[0]["txn"]
+                add(f"subgraph cluster_Page{k} {{")
+                add(f'label = "{k}\\nsize: {size} free: {free} txn: {txn}"')
             # add nodes
             for n in pnodes:
                 type_ = n["type"]
                 add(getattr(self, "handle_" + type_)(n))
-            add("}")
+            if with_headers:
+                add("}")
 
         # add connections
         for n in nodes:
@@ -60,7 +75,7 @@ class Graph:
 
     def handle_trie(self, node):
         compress = "{" + str(node["compressed"]["size"]) + \
-            "-" + node["compressed"]["key"] + "}|"
+            "-" + display_key(node["compressed"]["key"]) + "}|"
 
         children = []
         keys = filter(bool, node.get("branches", ""). split("]["))
@@ -73,7 +88,7 @@ class Graph:
     def handle_leaf(self, node):
         if len(node["value"]) > MAX_VAL_SIZE:
             node["value"] = node["value"][:MAX_VAL_SIZE] + "..."
-        return LNODE.format(**node)
+        return LNODE.format(**{**node, "key": display_key(node["key"])})
 
     def handle_burst(self, node):
         items = []
@@ -83,28 +98,42 @@ class Graph:
         return BNODE.format(sitems=items, **node)
 
 
-def main(paths):
+def main(paths, output_dir=None):
+    sources = []
     for p in paths:
         src = Path(p)
-        dest = Path(__file__).parent / "graphs" / (src.stem + ".svg")
+        if src.is_dir():
+            sources.extend(sorted(src.glob("*.yaml")))
+        else:
+            sources.append(src)
+    if not sources:
+        raise ValueError("No YAML dumps found")
+
+    output_dir = Path(output_dir) if output_dir is not None else (
+        Path(__file__).parent / "graphs"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for src in sources:
+        dest = output_dir / (src.stem + ".svg")
         print("dest", src, dest)
 
         with open(src, "r") as f:
             nodes = yaml.load_all(f.read(), Loader=yaml.FullLoader)
-            # print(Graph().make_graph(list(filter(bool, nodes))))
-            # return 0
-            sarge.run(
-                f"dot -Tsvg > {dest}",
+            subprocess.run(
+                ["dot", "-Tsvg", "-o", str(dest)],
                 input=Graph().make_graph(list(filter(bool, nodes))),
+                text=True,
+                check=True,
             )
 
     return 0
 
 
 if __name__ == "__main__":
-    debug = [
-        "cmpfiles/insert_compress_split_1_abddef.yaml"
-    ]
-
-    debug = [Path(__file__).parent / d for d in debug]
-    sys.exit(main(sys.argv[1:] or debug))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("paths", nargs="+",
+                        help="YAML dumps from _Dumper, or directories of dumps")
+    parser.add_argument("--output-dir", type=Path,
+                        help="SVG directory (default: tests/graphs)")
+    args = parser.parse_args()
+    sys.exit(main(args.paths, args.output_dir))

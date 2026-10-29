@@ -292,16 +292,26 @@ cmake --build build-debug -j4
 - Performance: [docs/performance/performance.md](docs/performance/performance.md)
 
 
+## Set Operations
+
+Include `<leaves/set_operations.hpp>` for:
+
+- `leaves::set_union(dst_cursor, src_cursor)`: merger-backed in-place union;
+    source values win on shared keys.
+- `leaves::intersect(dst_cursor, first_cursor, second_cursor, key_size)`:
+    optimized structural trie intersection into an empty destination, retaining
+    full matching keys from the first input with empty values. Use `key_size = 0`
+    for exact keys or a positive byte width for fixed-ID prefix matching.
+
+Both operations use caller-owned transactions. See the
+[C++ set-operation API](docs/cpp-api.md#set-operations) for contracts and examples.
+
 ## Future Extensions
 
 ### Set Findings
 
 - Find all keys in a given range, returns a TransferTrie
 - Find all keys suiting a FSM (e.g. regular expression), returns a TransferTrie
-
-### Set Operations
-
-- intersection of tries
 
 ## License
 
