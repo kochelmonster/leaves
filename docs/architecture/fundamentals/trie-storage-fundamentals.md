@@ -140,9 +140,9 @@ The following benchmark results compare Leaves' in-memory trie with [`std::set`]
 
 Median-time charts (milliseconds; lower is better):
 
-![Random key layout set-operation benchmark](set-operations-random.svg)
+![set-operation benchmark](set-operations.svg)
 
-![Sequential key layout set-operation benchmark](set-operations-sequential.svg)
+
 
 The trie is competitive with the hash set for random-layout union, faster than both standard containers for random-layout intersection, and faster for both operations with the sequential layout. The sequential case illustrates the benefit of shared trie paths; the different timings also show why these results should not be generalized to other key layouts, overlap ratios, or machines. See [the benchmark documentation](../../benchmarks/README.md#set-operations) for how to build and run it.
 
