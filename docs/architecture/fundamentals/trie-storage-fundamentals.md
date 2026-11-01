@@ -186,8 +186,6 @@ The set-operation results use 100,000 keys per input, 50% overlap, seed 301, and
 ./build/bench-repro/bench_set_operations --num=100000 --rounds=5 --overlap=50 --seed=301 --layout=sequential
 ```
 
-These commands reproduce the workloads and report timings for the local machine; they do not guarantee identical numbers. The in-memory and set-operation benchmarks verify their results outside the timed region. For additional flags and timing details, see the [benchmark documentation](../../benchmarks/README.md).
-
 ## Conclusion
 
 The main obstacle to using tries as general-purpose databases is not their lookup model but the cost of representing sparse branches and long single-child paths. An effective approach can be a radix-prefix compression and a two-level bitmap that packs only present child links. Page classes, area-based allocation, copy-on-write updates, and transaction-aware recycling extend that compact node representation into a persistent storage design.
