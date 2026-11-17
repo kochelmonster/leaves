@@ -134,20 +134,12 @@ For a broader performance discussion with more realistic workloads, see [Can Per
 
 ## Conclusion
 
-Tries were not kept out of databases because their lookup model was weak. They
-were kept out because their obvious representation was too sparse. B-trees won
-because they make economical use of pages, keep height low, and behave well on
+Tries were not kept out of databases because their lookup model was weak. They were kept out because their obvious representation was too sparse. B-trees won because they make economical use of pages, keep height low, and behave well on
 storage hardware.
 
-Leaves addresses the trie problem at the node-layout level. Prefix compression
-removes long single-child chains. The two-level bitmap removes the 256-pointer
-array while preserving fast byte selection. Copy-on-write pages make the
-structure persistent. Together, those techniques turn a trie from an in-memory
-data structure into a viable database layout.
+Leaves addresses the trie problem at the node-layout level. Prefix compression removes long single-child chains. The two-level bitmap removes the 256-pointer array while preserving fast byte selection. Copy-on-write pages make the
+structure persistent. Together, those techniques turn a trie from an in-memory data structure into a viable database layout.
 
-The bonus is replication. A compact persistent trie can also be a Merkle trie:
-hashes summarize prefix subtrees, peers compare structure before transferring
-data, and replication sends the differences rather than the database. That is
-the larger concept behind Leaves: one structure for lookup, persistence,
-copy-on-write updates, and synchronization.
+The bonus is replication. A compact persistent trie can also be a Merkle trie: hashes summarize prefix subtrees, peers compare structure before transferring data, and replication sends the differences rather than the database. That is
+the larger concept behind Leaves: one structure for lookup, persistence, copy-on-write updates, and synchronization.
 
