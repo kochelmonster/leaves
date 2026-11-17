@@ -184,47 +184,51 @@ struct _Transition {
   bool is_root() const { return this - &cursor->stack.data[0] == 0; }
 
   void find() {
-    if (!node) {
-      cmp = NOT_FOUND;
-      return;
-    }
+    Transition* current = this;
+    for (;;) {
+      if (!current->node) {
+        current->cmp = NOT_FOUND;
+        return;
+      }
 
-    // find the next node
-    if (is_leaf()) {
-      LeafNode& leaf_ = *leaf();
-      prefix = get_prefix(key().data(), (char*)leaf_.data, key().size(),
-                          leaf_.key_size, cmp);
-      advance_key(prefix);
-      return;
-    }
+      if (current->is_leaf()) {
+        LeafNode& leaf_ = *current->leaf();
+        current->prefix =
+            get_prefix(current->key().data(), (char*)leaf_.data,
+                       current->key().size(), leaf_.key_size, current->cmp);
+        current->advance_key(current->prefix);
+        return;
+      }
 
-    TrieNode& trie_ = *trie();
-    assert(trie_.branch_count() < trie_.MAX_BRANCH_COUNT);
-    prefix = get_prefix(key().data(), (char*)trie_.prefix(), key().size(),
-                        trie_.prefix_len(), cmp);
-    advance_key(prefix);
-    if (prefix < trie_.prefix_len()) return;
+      TrieNode& trie_ = *current->trie();
+      assert(trie_.branch_count() < trie_.MAX_BRANCH_COUNT);
+      current->prefix =
+          get_prefix(current->key().data(), (char*)trie_.prefix(),
+                     current->key().size(), trie_.prefix_len(), current->cmp);
+      current->advance_key(current->prefix);
+      if (current->prefix < trie_.prefix_len()) return;
 
-    if (key().empty()) {
-      if (trie_.has_none()) {
-        link_idx = 0;
-        cursor->_db->prefetch(&trie_.branch_offsets()[link_idx]);
-        push().find();
-      } else
-        cmp = -1;
-      return;
+      if (current->key().empty()) {
+        if (!trie_.has_none()) {
+          current->cmp = -1;
+          return;
+        }
+        current->link_idx = 0;
+        current->cursor->_db->prefetch(
+            &trie_.branch_offsets()[current->link_idx]);
+      } else {
+        current->branch_key = current->key()[0];
+        int idx = trie_.branch_index(current->branch_key);
+        if (idx < 0) {
+          current->cmp = NOT_FOUND;
+          return;
+        }
+        current->cmp = 0;
+        current->link_idx = idx;
+        current->cursor->_db->prefetch(current->link());
+      }
+      current = &current->push();
     }
-
-    branch_key = key()[0];
-    int idx = trie_.branch_index(branch_key);
-    if (idx < 0) {
-      cmp = NOT_FOUND;
-      return;
-    }
-    cmp = 0;
-    link_idx = idx;
-    cursor->_db->prefetch(link());
-    push().find();
   }
 
   void leaf_step() {
@@ -236,6 +240,22 @@ struct _Transition {
     cmp = 0;
   }
 
+  void prefetch_next_siblings() {
+    TrieNode& trie_ = *trie();
+    offset_e* offsets = trie_.branch_offsets();
+    for (int i = link_idx + 1; i < trie_.branch_count(); ++i) {
+      cursor->_db->prefetch(offsets + i);
+    }
+  }
+
+  void prefetch_prev_siblings() {
+    TrieNode& trie_ = *trie();
+    offset_e* offsets = trie_.branch_offsets();
+    for (int i = link_idx; i > 0; --i) {
+      cursor->_db->prefetch(offsets + i - 1);
+    }
+  }
+
   void first() {
     if (is_leaf()) return leaf_step();
     TrieNode& trie_ = *trie();
@@ -243,6 +263,7 @@ struct _Transition {
     prefix = trie_._prefix_len;
     cmp = 0;
     link_idx = 0;
+    prefetch_next_siblings();
     auto& child = push();
     child.first();
     if (child.keypos < current_key().size()) {
@@ -263,7 +284,7 @@ struct _Transition {
     if (cmp == 0) {
       if (++link_idx >= trie_.branch_count()) return false;
       offset_e* lnk = link();
-      if (link_idx + 1 < trie_.branch_count()) cursor->_db->prefetch(lnk + 1);
+      prefetch_next_siblings();
 
       auto& child = push();
       cursor->_db->prefetch(lnk);
@@ -288,6 +309,7 @@ struct _Transition {
     branch_key = (uint8_t)next_;
     link_idx = trie_.branch_index(next_);
     assert(link_idx < trie_.branch_count());
+    prefetch_next_siblings();
     push().first();
     return true;
   }
@@ -305,7 +327,7 @@ struct _Transition {
     if (cmp == 0) {
       if (!link_idx--) return false;
       offset_e* lnk = link();
-      if (link_idx > 0) cursor->_db->prefetch(lnk - 1);
+      prefetch_prev_siblings();
 
       auto& child = push();
       cursor->_db->prefetch(lnk);
@@ -334,6 +356,7 @@ struct _Transition {
     branch_key = (uint8_t)prev_;
     link_idx = trie_.branch_index(prev_);
     assert(link_idx < trie_.branch_count());
+    prefetch_prev_siblings();
     push().last();
     return true;
   }
@@ -345,6 +368,7 @@ struct _Transition {
     prefix = trie_._prefix_len;
     cmp = 0;
     link_idx = trie_.branch_count() - 1;
+    prefetch_prev_siblings();
     auto& child = push();
     child.last();
     assert(child.keypos < current_key().size());

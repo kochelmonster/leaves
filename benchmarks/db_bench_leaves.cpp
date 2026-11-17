@@ -57,6 +57,7 @@ static bool FLAGS_binary_key = false;
 //   fillrand100K  -- write N/1000 100K values in random order in async mode
 //   fillseq100K   -- write N/1000 100K values in seq order in async mode
 //   readseq       -- read N times sequentially
+//   readreverse   -- read all entries in reverse order
 //   readseq100K   -- read N/1000 100K values in sequential order in async mode
 //   readrand100K  -- read N/1000 100K values in sequential order in async mode
 //   readrandom    -- read N times in random order
@@ -706,6 +707,8 @@ class Benchmark {
         Write(write_sync, SEQUENTIAL, FRESH, num_ / 1000, 100 * 1000, 1);
       } else if (name == Slice("readseq")) {
         ReadSequential();
+      } else if (name == Slice("readreverse")) {
+        ReadReverse();
       } else if (name == Slice("readrandom")) {
         ReadRandom();
       } else if (name == Slice("readrand100K")) {
@@ -1186,6 +1189,38 @@ class Benchmark {
         throw std::runtime_error("Map storage pointer is null");
       }
       ReadSequentialImpl(*map_storage_);
+    }
+  }
+
+  template <typename Cursor>
+  void ReadReverseCursor(Cursor& cursor) {
+    for (cursor.last(); cursor.is_valid(); cursor.prev()) {
+      bytes_ += cursor.key().size() + cursor.value().size();
+      FinishedSingleOp();
+    }
+  }
+
+  template <typename StorageType, template<typename> class DBClass = leaves::_DB>
+  void ReadReverseImpl(StorageType& storage) {
+    auto db = open_bench_db<StorageType, DBClass>(storage);
+    auto cursor = db.cursor();
+    ReadReverseCursor(cursor);
+  }
+
+  void ReadReverse() {
+    if (using_confluence_) {
+      if (!map_storage_) throw std::runtime_error("Map storage pointer is null");
+      auto cursor = confluence_db_->cursor();
+      ReadReverseCursor(cursor);
+    } else if (using_replicating_) {
+      if (!map_storage_) throw std::runtime_error("Map storage pointer is null");
+      ReadReverseImpl<leaves::MapStorage, leaves::_ReplicationDB>(*map_storage_);
+    } else if (using_file_storage_) {
+      if (!file_storage_) throw std::runtime_error("File storage pointer is null");
+      ReadReverseImpl(*file_storage_);
+    } else {
+      if (!map_storage_) throw std::runtime_error("Map storage pointer is null");
+      ReadReverseImpl(*map_storage_);
     }
   }
 

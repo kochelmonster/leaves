@@ -356,6 +356,138 @@ BOOST_AUTO_TEST_CASE(insert_big_stack) {
 #endif
 }
 
+BOOST_AUTO_TEST_CASE(find_deep_stack) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("test");
+  auto writer = db.cursor();
+  for (size_t length = 0; length <= 140; ++length) {
+    std::string key(length, 'a');
+    writer.find(key);
+    BOOST_REQUIRE(!writer.is_valid());
+    writer.value(key);
+  }
+  writer.commit();
+
+  auto internal_cursor = db._internal()->create_cursor();
+  internal_cursor->find(std::string(140, 'a'));
+  BOOST_REQUIRE(internal_cursor->is_valid());
+  BOOST_REQUIRE_GT(internal_cursor->stack.size, 100u);
+
+  auto cursor = db.cursor();
+  std::string longest(140, 'a');
+  cursor.find(longest);
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(longest));
+  BOOST_CHECK_EQUAL(cursor.value(), Slice(longest));
+
+  cursor.find(std::string(120, 'a'));
+  BOOST_REQUIRE(cursor.is_valid());
+  cursor.next();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(std::string(121, 'a')));
+
+  std::string missing(120, 'a');
+  missing += 'b';
+  cursor.find(missing);
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.prev();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(longest));
+
+  cursor.find("");
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(""));
+}
+
+BOOST_AUTO_TEST_CASE(iteration_wide_branches) {
+  Preparation p;
+  auto storage = Storage::create(TEST_FILE);
+  auto db = storage->open("test");
+  auto writer = db.cursor();
+  writer.find("");
+  writer.value("v");
+  for (int i = 0; i < 256; ++i) {
+    std::string key("p");
+    key += static_cast<char>(i);
+    writer.find(key);
+    writer.value("v");
+  }
+  for (int i = 0; i < 256; i += 2) {
+    std::string key("s");
+    key += static_cast<char>(i);
+    writer.find(key);
+    writer.value("v");
+  }
+  writer.commit();
+
+  auto cursor = db.cursor();
+  cursor.first();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(""));
+  cursor.next();
+  for (int i = 0; i < 256; ++i) {
+    std::string key("p");
+    key += static_cast<char>(i);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.key(), Slice(key));
+    BOOST_CHECK_EQUAL(cursor.value(), Slice("v"));
+    cursor.next();
+  }
+  for (int i = 0; i < 256; i += 2) {
+    std::string key("s");
+    key += static_cast<char>(i);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.key(), Slice(key));
+    cursor.next();
+  }
+  BOOST_CHECK(!cursor.is_valid());
+
+  std::string missing("s");
+  missing += static_cast<char>(3);
+  cursor.find(missing);
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.next();
+  BOOST_REQUIRE(cursor.is_valid());
+  std::string expected("s");
+  expected += static_cast<char>(4);
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(expected));
+
+  cursor.prev();
+  BOOST_REQUIRE(cursor.is_valid());
+  expected = "s";
+  expected += static_cast<char>(2);
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(expected));
+
+  cursor.find(missing);
+  BOOST_REQUIRE(!cursor.is_valid());
+  cursor.prev();
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(expected));
+
+  cursor.last();
+  for (int i = 254; i >= 0; i -= 2) {
+    std::string key("s");
+    key += static_cast<char>(i);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.key(), Slice(key));
+    BOOST_CHECK_EQUAL(cursor.value(), Slice("v"));
+    cursor.prev();
+  }
+  for (int i = 255; i >= 0; --i) {
+    std::string key("p");
+    key += static_cast<char>(i);
+    BOOST_REQUIRE(cursor.is_valid());
+    BOOST_CHECK_EQUAL(cursor.key(), Slice(key));
+    BOOST_CHECK_EQUAL(cursor.value(), Slice("v"));
+    cursor.prev();
+  }
+  BOOST_REQUIRE(cursor.is_valid());
+  BOOST_CHECK_EQUAL(cursor.key(), Slice(""));
+  cursor.prev();
+  BOOST_CHECK(!cursor.is_valid());
+}
+
 BOOST_AUTO_TEST_CASE(insert_leaf_split) {
   Preparation p;
   auto storage = Storage::create(TEST_FILE);
@@ -1132,4 +1264,3 @@ BOOST_AUTO_TEST_CASE(test_delete_big_compressed_key) {
     BOOST_CHECK(!c.is_valid());
   }
 }
-
