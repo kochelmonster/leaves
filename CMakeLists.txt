@@ -668,37 +668,15 @@ endif()
 
 add_custom_target(cov
 COMMAND lcov --gcov-tool "${LEAVES_GCOV_TOOL}" -d . --zerocounters
-COMMAND rm -rf lcov-report
-COMMAND mkdir lcov-report
-COMMAND ./test_twoquecache
-COMMAND ./test_cursor
-COMMAND ./test_node
-COMMAND ./test_memory
-COMMAND ./test_bits
-COMMAND ./test_mmap
-COMMAND ./test_db
-COMMAND ./test_bigmemory
-COMMAND ./test_string_insert
-COMMAND ./test_multithread
-COMMAND ./test_merger
-COMMAND ./test_tributary
-COMMAND ./test_serial
-COMMAND ./test_transfer
-COMMAND ./test_replication_fsm
-COMMAND ./test_replication_api
-COMMAND ./test_replication_multiclient
-COMMAND ./test_hash_lookup
-COMMAND ./test_hash_updater
-COMMAND ./test_fstore
-COMMAND ./test_wal
-COMMAND ./test_memstore
-COMMAND ./test_map_storage
-COMMAND ./test_file_storage
-COMMAND ./test_aspect
-COMMAND lcov --gcov-tool "${LEAVES_GCOV_TOOL}" -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include '${CMAKE_CURRENT_SOURCE_DIR}/include/*' --exclude '*/third_party/*'
-COMMAND genhtml -o lcov-report lcov-report/report.info
-COMMENT &quot;Generated Coverage Report Successfully!&quot;
-DEPENDS test_cursor test_memory test_bits test_mmap test_db test_node test_bigmemory test_string_insert test_multithread test_merger test_tributary test_serial test_twoquecache test_transfer test_replication_fsm test_replication_api test_replication_multiclient test_hash_lookup test_hash_updater test_fstore test_memstore test_map_storage test_file_storage test_aspect
+COMMAND ${CMAKE_COMMAND} -E rm -rf lcov-report
+COMMAND ${CMAKE_COMMAND} -E make_directory lcov-report
+COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${CMAKE_CURRENT_BINARY_DIR}" -C "$<CONFIG>" --output-on-failure
+COMMAND lcov --gcov-tool "${LEAVES_GCOV_TOOL}" -c -d . -o lcov-report/report.info -b . --ignore-errors mismatch,negative --include "${CMAKE_CURRENT_SOURCE_DIR}/include/*" --exclude "*/third_party/*"
+COMMAND genhtml --ignore-errors inconsistent -o lcov-report lcov-report/report.info
+COMMENT "Running tests and generating coverage report"
+DEPENDS leaves_tests
+USES_TERMINAL
+VERBATIM
 )
 endif()
 
@@ -832,6 +810,13 @@ target_compile_options(bench_memdb_vs_hashtable PRIVATE -O3 ${LEAVES_BENCH_NATIV
 endif()
 target_compile_definitions(bench_memdb_vs_hashtable PRIVATE NDEBUG)
 
+add_executable(bench_set_operations benchmarks/bench_set_operations.cpp)
+target_link_libraries(bench_set_operations PRIVATE core Threads::Threads)
+if (NOT MSVC)
+target_compile_options(bench_set_operations PRIVATE -O3 ${LEAVES_BENCH_NATIVE_FLAG} -funroll-loops -flto=auto)
+endif()
+target_compile_definitions(bench_set_operations PRIVATE NDEBUG)
+
 if (DEBUG_BENCHMARKS)
     if (MSVC)
     target_compile_options(db_bench_leaves PRIVATE /Zi /Od)
@@ -887,7 +872,8 @@ add_dependencies(leaves_benchmarks
     bench_page_sizes
     bench_merge
     bench_overwrite_vs_merge
-    bench_memdb_vs_hashtable)
+    bench_memdb_vs_hashtable
+    bench_set_operations)
 if (TARGET db_bench_mdb)
     add_dependencies(leaves_benchmarks db_bench_mdb)
 endif()

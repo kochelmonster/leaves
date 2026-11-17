@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title description">
+  <title id="title">Set operations with random and sequential key layouts</title>
+  <desc id="description">Median milliseconds for union and intersection of 100,000-key inputs with 50 percent overlap. Random and sequential layouts compare Leaves MemoryDB, std::set, and std::unordered_set on a shared zero-to-30 millisecond scale. Lower is better.</desc>
+  <style>
+    .title { font: 700 28px sans-serif; fill: #17202a; }
+    .subtitle { font: 400 16px sans-serif; fill: #52616b; }
+    .axis { font: 400 13px sans-serif; fill: #52616b; }
+    .group { font: 700 17px sans-serif; fill: #263238; }
+    .series { font: 600 13px sans-serif; fill: #52616b; }
+    .value { font: 700 12px sans-serif; fill: #263238; }
+    .legend { font: 600 14px sans-serif; fill: #263238; }
+    .grid { stroke: #d7dfe2; stroke-width: 1; }
+    .baseline { stroke: #8fa2ab; stroke-width: 1.2; }
+    .leaves { fill: #2c8c87; }
+    .set { fill: #d76a4d; }
+    .unordered { fill: #d5a13a; }
+  </style>
+  <rect width="1200" height="720" fill="#f5f7f7"/>
+  <text x="70" y="55" class="title">Set operations: random and sequential key layouts</text>
+  <text x="70" y="82" class="subtitle">Median milliseconds; lower is better. 100,000 16-byte keys per input, 50% overlap.</text>
+  <rect x="555" y="108" width="16" height="16" class="leaves"/>
+  <text x="579" y="121" class="legend">Leaves _MemoryDB</text>
+  <rect x="755" y="108" width="16" height="16" class="set"/>
+  <text x="779" y="121" class="legend">std::set</text>
+  <rect x="890" y="108" width="16" height="16" class="unordered"/>
+  <text x="914" y="121" class="legend">std::unordered_set</text>
+  <g class="grid">
+    <line x1="320" y1="150" x2="320" y2="620"/>
+    <line x1="451.7" y1="150" x2="451.7" y2="620"/>
+    <line x1="583.3" y1="150" x2="583.3" y2="620"/>
+    <line x1="715" y1="150" x2="715" y2="620"/>
+    <line x1="846.7" y1="150" x2="846.7" y2="620"/>
+    <line x1="978.3" y1="150" x2="978.3" y2="620"/>
+    <line x1="1110" y1="150" x2="1110" y2="620"/>
+  </g>
+  <line x1="320" y1="620" x2="1110" y2="620" class="baseline"/>
+  <g class="axis" text-anchor="middle">
+    <text x="320" y="644">0</text>
+    <text x="451.7" y="644">5</text>
+    <text x="583.3" y="644">10</text>
+    <text x="715" y="644">15</text>
+    <text x="846.7" y="644">20</text>
+    <text x="978.3" y="644">25</text>
+    <text x="1110" y="644">30</text>
+  </g>
+  <text x="715" y="680" text-anchor="middle" class="axis">median milliseconds</text>
+  <g>
+    <text x="70" y="187" class="group">Random</text>
+    <text x="70" y="211" class="series">Union</text>
+    <text x="300" y="176" text-anchor="end" class="series">Leaves</text>
+    <rect x="320" y="162" width="313.9" height="16" class="leaves"/>
+    <text x="643" y="175" class="value">11.921</text>
+    <text x="300" y="200" text-anchor="end" class="series">std::set</text>
+    <rect x="320" y="186" width="662.5" height="16" class="set"/>
+    <text x="992" y="199" class="value">25.159</text>
+    <text x="300" y="224" text-anchor="end" class="series">unordered_set</text>
+    <rect x="320" y="210" width="344.5" height="16" class="unordered"/>
+    <text x="674" y="223" class="value">13.083</text>
+
+    <text x="70" y="311" class="group">Random</text>
+    <text x="70" y="335" class="series">Intersection</text>
+    <text x="300" y="300" text-anchor="end" class="series">Leaves</text>
+    <rect x="320" y="286" width="187.7" height="16" class="leaves"/>
+    <text x="517" y="299" class="value">7.128</text>
+    <text x="300" y="324" text-anchor="end" class="series">std::set</text>
+    <rect x="320" y="310" width="431.7" height="16" class="set"/>
+    <text x="761" y="323" class="value">16.392</text>
+    <text x="300" y="348" text-anchor="end" class="series">unordered_set</text>
+    <rect x="320" y="334" width="487.2" height="16" class="unordered"/>
+    <text x="817" y="347" class="value">18.502</text>
+
+    <text x="70" y="435" class="group">Sequential</text>
+    <text x="70" y="459" class="series">Union</text>
+    <text x="300" y="424" text-anchor="end" class="series">Leaves</text>
+    <rect x="320" y="410" width="102.3" height="16" class="leaves"/>
+    <text x="432" y="423" class="value">3.886</text>
+    <text x="300" y="448" text-anchor="end" class="series">std::set</text>
+    <rect x="320" y="434" width="435.8" height="16" class="set"/>
+    <text x="765" y="447" class="value">16.550</text>
+    <text x="300" y="472" text-anchor="end" class="series">unordered_set</text>
+    <rect x="320" y="458" width="315.7" height="16" class="unordered"/>
+    <text x="645" y="471" class="value">11.989</text>
+
+    <text x="70" y="559" class="group">Sequential</text>
+    <text x="70" y="583" class="series">Intersection</text>
+    <text x="300" y="548" text-anchor="end" class="series">Leaves</text>
+    <rect x="320" y="534" width="85.5" height="16" class="leaves"/>
+    <text x="415" y="547" class="value">3.248</text>
+    <text x="300" y="572" text-anchor="end" class="series">std::set</text>
+    <rect x="320" y="558" width="375.6" height="16" class="set"/>
+    <text x="705" y="571" class="value">14.263</text>
+    <text x="300" y="596" text-anchor="end" class="series">unordered_set</text>
+    <rect x="320" y="582" width="491.5" height="16" class="unordered"/>
+    <text x="821" y="595" class="value">18.665</text>
+  </g>
+</svg>

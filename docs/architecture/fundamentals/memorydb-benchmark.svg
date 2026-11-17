@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="720" viewBox="0 0 1360 720" role="img" aria-labelledby="title description">
+  <title id="title">In-memory key-value store benchmark</title>
+  <desc id="description">Grouped horizontal bar chart comparing operation time in microseconds for Leaves MemoryDB, std unordered map, and std map across six workloads. Lower values are better.</desc>
+  <style>
+    .title { font: 700 28px sans-serif; fill: #17202a; }
+    .subtitle { font: 400 16px sans-serif; fill: #52616b; }
+    .axis { font: 400 13px sans-serif; fill: #52616b; }
+    .workload { font: 700 15px sans-serif; fill: #263238; }
+    .value { font: 700 12px sans-serif; fill: #263238; }
+    .legend { font: 600 14px sans-serif; fill: #263238; }
+    .grid { stroke: #d7dfe2; stroke-width: 1; }
+    .baseline { stroke: #8fa2ab; stroke-width: 1.2; }
+    .leaves { fill: #2c8c87; }
+    .unordered { fill: #d76a4d; }
+    .map { fill: #d5a13a; }
+  </style>
+
+  <rect width="1360" height="720" fill="#f5f7f7"/>
+  <text x="70" y="55" class="title">In-memory key-value store benchmark</text>
+  <text x="70" y="82" class="subtitle">Microseconds per operation; lower is better. One million 32-byte binary keys with 100-byte values.</text>
+
+  <rect x="730" y="108" width="16" height="16" class="leaves"/>
+  <text x="754" y="121" class="legend">Leaves _MemoryDB</text>
+  <rect x="920" y="108" width="16" height="16" class="unordered"/>
+  <text x="944" y="121" class="legend">std::unordered_map</text>
+  <rect x="1155" y="108" width="16" height="16" class="map"/>
+  <text x="1179" y="121" class="legend">std::map</text>
+
+  <g class="grid">
+    <line x1="310" y1="155" x2="310" y2="654"/>
+    <line x1="430" y1="155" x2="430" y2="654"/>
+    <line x1="550" y1="155" x2="550" y2="654"/>
+    <line x1="670" y1="155" x2="670" y2="654"/>
+    <line x1="790" y1="155" x2="790" y2="654"/>
+    <line x1="910" y1="155" x2="910" y2="654"/>
+    <line x1="1030" y1="155" x2="1030" y2="654"/>
+    <line x1="1150" y1="155" x2="1150" y2="654"/>
+  </g>
+  <line x1="310" y1="654" x2="1150" y2="654" class="baseline"/>
+  <g class="axis" text-anchor="middle">
+    <text x="310" y="680">0.0</text>
+    <text x="430" y="680">0.2</text>
+    <text x="550" y="680">0.4</text>
+    <text x="670" y="680">0.6</text>
+    <text x="790" y="680">0.8</text>
+    <text x="910" y="680">1.0</text>
+    <text x="1030" y="680">1.2</text>
+    <text x="1150" y="680">1.4</text>
+  </g>
+  <text x="730" y="708" text-anchor="middle" class="axis">microseconds per operation</text>
+
+  <g>
+    <text x="285" y="188" text-anchor="end" class="workload">Sequential fill</text>
+    <rect x="310" y="166" width="97.2" height="14" class="leaves"/>
+    <text x="415" y="178" class="value">0.162</text>
+    <rect x="310" y="184" width="265.2" height="14" class="unordered"/>
+    <text x="583" y="196" class="value">0.442</text>
+    <rect x="310" y="202" width="121.2" height="14" class="map"/>
+    <text x="439" y="214" class="value">0.202</text>
+
+    <text x="285" y="268" text-anchor="end" class="workload">Random fill</text>
+    <rect x="310" y="246" width="107.4" height="14" class="leaves"/>
+    <text x="425" y="258" class="value">0.179</text>
+    <rect x="310" y="264" width="163.2" height="14" class="unordered"/>
+    <text x="481" y="276" class="value">0.272</text>
+    <rect x="310" y="282" width="544.2" height="14" class="map"/>
+    <text x="862" y="294" class="value">0.907</text>
+
+    <text x="285" y="348" text-anchor="end" class="workload">Random read</text>
+    <rect x="310" y="326" width="105.6" height="14" class="leaves"/>
+    <text x="423" y="338" class="value">0.176</text>
+    <rect x="310" y="344" width="46.8" height="14" class="unordered"/>
+    <text x="365" y="356" class="value">0.078</text>
+    <rect x="310" y="362" width="650.4" height="14" class="map"/>
+    <text x="968" y="374" class="value">1.084</text>
+
+    <text x="285" y="428" text-anchor="end" class="workload">Sequential read</text>
+    <rect x="310" y="406" width="40.8" height="14" class="leaves"/>
+    <text x="359" y="418" class="value">0.068</text>
+    <rect x="310" y="424" width="39" height="14" class="unordered"/>
+    <text x="357" y="436" class="value">0.065</text>
+    <rect x="310" y="442" width="53.4" height="14" class="map"/>
+    <text x="371" y="454" class="value">0.089</text>
+
+    <text x="285" y="508" text-anchor="end" class="workload">Overwrite</text>
+    <rect x="310" y="486" width="115.2" height="14" class="leaves"/>
+    <text x="433" y="498" class="value">0.192</text>
+    <rect x="310" y="504" width="75" height="14" class="unordered"/>
+    <text x="393" y="516" class="value">0.125</text>
+    <rect x="310" y="522" width="709.8" height="14" class="map"/>
+    <text x="1028" y="534" class="value">1.183</text>
+
+    <text x="285" y="588" text-anchor="end" class="workload">Erase</text>
+    <rect x="310" y="566" width="188.4" height="14" class="leaves"/>
+    <text x="506" y="578" class="value">0.314</text>
+    <rect x="310" y="584" width="103.2" height="14" class="unordered"/>
+    <text x="421" y="596" class="value">0.172</text>
+    <rect x="310" y="602" width="612.6" height="14" class="map"/>
+    <text x="931" y="614" class="value">1.021</text>
+  </g>
+</svg>

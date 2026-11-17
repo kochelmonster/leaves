@@ -195,7 +195,7 @@ struct _MemoryDB {
   void prefetch(const offset_t& offset) const { prefetch(&offset); }
   void prefetch(const offset_t* /*offset_ptr*/,
                 Access /*access*/ = READ) const {}
-  void prefetch(void* /*mem*/, Access /*access*/ = READ) const {}
+  void prefetch(const void* /*mem*/, Access /*access*/ = READ) const {}
 
   void flush(bool /*sync*/ = false, bool /*force*/ = false) {}
 

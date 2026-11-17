@@ -1,0 +1,97 @@
+<mxfile host="65bd71144e">
+    <diagram id="memory-concept1-spatial-blueprint" name="Memory Concept 1 Spatial Blueprint">
+        <mxGraphModel dx="941" dy="581" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="840" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="tier1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#cbd5e1;strokeWidth=2;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="95" width="1020" height="135" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier1head" value="TIER 1: DATABASE FILE / MMAP STORAGE (COARSE AREA_SIZE = 2 MB CHUNKS)" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=16;fillColor=#f8fafc;strokeColor=#cbd5e1;fontSize=12;fontStyle=1;fontColor=#334155;absoluteArcSize=1;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="95" width="1020" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="area0" value="Area 0&lt;br&gt;&lt;font color=&#39;#64748b&#39;&gt;DB Header &amp;amp; State&lt;/font&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#94a3b8&#39;&gt;offset: 0x0&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontSize=12;fontColor=#1e293b;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="143" width="140" height="68" as="geometry"/>
+                </mxCell>
+                <mxCell id="activeArea" value="&lt;font color=&#39;#ffffff&#39;&gt;ACTIVE SLAB AREA (2 MB)&lt;/font&gt;&lt;br&gt;&lt;font color=&#39;#1d4ed8&#39;&gt;_MemManager Active Area&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#3b82f6&#39;&gt;Sequential bump allocation&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#3b82f6;strokeWidth=2;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="215" y="143" width="220" height="68" as="geometry"/>
+                </mxCell>
+                <mxCell id="area2" value="Area 2 (2 MB)&lt;br&gt;&lt;font color=&#39;#64748b&#39;&gt;AreaPool (Free)&lt;/font&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#94a3b8&#39;&gt;offset: 0x400000&lt;/font&gt;" style="rounded=1;dashed=1;dashPattern=4 2;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;fontSize=12;fontStyle=1;fontColor=#334155;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="143" width="140" height="68" as="geometry"/>
+                </mxCell>
+                <mxCell id="area3" value="Area 3 (2 MB)&lt;br&gt;&lt;font color=&#39;#64748b&#39;&gt;AreaPool (Free)&lt;/font&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#94a3b8&#39;&gt;offset: 0x600000&lt;/font&gt;" style="rounded=1;dashed=1;dashPattern=4 2;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;fontSize=12;fontStyle=1;fontColor=#334155;" parent="1" vertex="1">
+                    <mxGeometry x="605" y="143" width="140" height="68" as="geometry"/>
+                </mxCell>
+                <mxCell id="area4" value="Area 4 (2 MB)&lt;br&gt;&lt;font color=&#39;#64748b&#39;&gt;AreaPool (Free)&lt;/font&gt;&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#94a3b8&#39;&gt;offset: 0x800000&lt;/font&gt;" style="rounded=1;dashed=1;dashPattern=4 2;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;fontSize=12;fontStyle=1;fontColor=#334155;" parent="1" vertex="1">
+                    <mxGeometry x="760" y="143" width="140" height="68" as="geometry"/>
+                </mxCell>
+                <mxCell id="areasEllipsis" value=". . ." style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;fontColor=#94a3b8;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="920" y="160" width="80" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="zoom1" style="edgeStyle=orthogonalEdgeStyle;dashed=1;dashPattern=3 3;strokeColor=#3b82f6;endArrow=block;endFill=1;" parent="1" source="activeArea" target="tier2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3b82f6;strokeWidth=2;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="285" width="1020" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier2head" value="TIER 2: ANATOMY OF AN ACTIVE 2 MB AREA (SLAB SUB-ALLOCATION &amp;amp; BUMP WINDOW)" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=16;fillColor=#eff6ff;strokeColor=#3b82f6;fontSize=12;fontStyle=1;fontColor=#1e40af;absoluteArcSize=1;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="285" width="1020" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="slabHdr" value="Area Hdr&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#475569&#39;&gt;next, size&lt;br&gt;ref count&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="335" width="85" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="slot0" value="104 B&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#065f46&#39;&gt;Slot 0&lt;br&gt;2-br node&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#10b981;fontSize=10;fontStyle=1;fontColor=#047857;" parent="1" vertex="1">
+                    <mxGeometry x="155" y="335" width="55" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="slot1" value="160 B&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#065f46&#39;&gt;Slot 1&lt;br&gt;3-br node&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#10b981;fontSize=10;fontStyle=1;fontColor=#047857;" parent="1" vertex="1">
+                    <mxGeometry x="218" y="335" width="70" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="slot2" value="568 B Page&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#1d4ed8&#39;&gt;Slot 2 (4-br node)&lt;br&gt;PageHeader + Node&lt;br&gt;[ZOOM TARGET]&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontSize=11;fontStyle=1;fontColor=#1e40af;" parent="1" vertex="1">
+                    <mxGeometry x="296" y="335" width="110" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="slot3" value="1056 B Page&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#065f46&#39;&gt;Slot 3 (10-br node)&lt;br&gt;PageHeader + Leaf&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#10b981;fontSize=11;fontStyle=1;fontColor=#047857;" parent="1" vertex="1">
+                    <mxGeometry x="414" y="335" width="140" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="slot4" value="2088 B Page&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#065f46&#39;&gt;Slot 4 (16-br node)&lt;br&gt;High fanout node&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#10b981;fontSize=11;fontStyle=1;fontColor=#047857;" parent="1" vertex="1">
+                    <mxGeometry x="562" y="335" width="170" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="freeSpace" value="Free Bump Allocation Space&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#64748b&#39;&gt;Sequential pointer advance window&lt;/font&gt;" style="rounded=1;dashed=1;dashPattern=6 3;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;fontSize=13;fontStyle=1;fontColor=#475569;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="335" width="298" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="contentOffset" value="content_offset()" style="text;html=1;strokeColor=none;fillColor=none;fontFamily=monospace;fontSize=10;fontColor=#475569;" parent="1" vertex="1">
+                    <mxGeometry x="75" y="475" width="110" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="allocationStart" value="allocation_start&lt;br&gt;&lt;font color=&#39;#64748b&#39;&gt;(Current Bump Head)&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;fontFamily=monospace;fontSize=11;fontStyle=1;fontColor=#2563eb;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="675" y="475" width="130" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="allocationEnd" value="allocation_end&lt;br&gt;&lt;font color=&#39;#64748b&#39;&gt;(2 MB Area Boundary)&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;fontFamily=monospace;fontSize=11;fontStyle=1;fontColor=#dc2626;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="920" y="475" width="130" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#10b981;strokeWidth=2;absoluteArcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="585" width="1020" height="215" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier3head" value="TIER 3: INDIVIDUAL PAGE ANATOMY (PAGEHEADER + PACKED TRIE NODE)" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=16;fillColor=#ecfdf5;strokeColor=#10b981;fontSize=12;fontStyle=1;fontColor=#065f46;absoluteArcSize=1;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="585" width="1020" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="pageHeader" value="PageHeader (8 Bytes)&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#78350f&#39;&gt;uint8_t slot_id (2)&lt;br&gt;uint16_t used (540 B)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=11;fontStyle=1;fontColor=#92400e;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="635" width="160" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="trieHeader" value="_TrieNode Fixed Header&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#312e81&#39;&gt;branch_count (4), prefix_len&lt;br&gt;branch_bits_pos, offsets_pos&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0e7ff;strokeColor=#4f46e5;fontSize=11;fontStyle=1;fontColor=#3730a3;" parent="1" vertex="1">
+                    <mxGeometry x="230" y="635" width="230" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="bitmaps" value="Prefix &amp;amp; Two-Level Bitmaps&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#4c1d95&#39;&gt;uint8_t prefix[]&lt;br&gt;uint32_t branch_bits[]&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=11;fontStyle=1;fontColor=#5b21b6;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="635" width="220" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="offsets" value="Packed Child Offsets&lt;br&gt;&lt;font face=&#39;monospace&#39; size=&#39;1&#39; color=&#39;#134e4a&#39;&gt;offset_t branch_offsets[4]&lt;/font&gt;&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#0f766e&#39;&gt;Aligned child pointers&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ccfbf1;strokeColor=#0d9488;fontSize=11;fontStyle=1;fontColor=#115e59;" parent="1" vertex="1">
+                    <mxGeometry x="700" y="635" width="220" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="slack" value="Slack (28 B)&lt;br&gt;&lt;font size=&#39;1&#39; color=&#39;#94a3b8&#39;&gt;Tuned by&lt;br&gt;&lt;font face=&#39;monospace&#39;&gt;PAGE_SIZES&lt;/font&gt;&lt;/font&gt;" style="rounded=1;dashed=1;dashPattern=3 3;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;fontSize=10;fontStyle=1;fontColor=#64748b;" parent="1" vertex="1">
+                    <mxGeometry x="930" y="635" width="105" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="tier3note" value="• Total slot size = 568 Bytes. Every allocation maps to a deterministic compile-time size class, completely eliminating external heap fragmentation." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#475569;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="76" y="755" width="900" height="30" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

@@ -22,3 +22,4 @@ tests/ws_replication/node_modules
 vcpkg_installed
 vcpkg-manifest-install.log
 error.yaml
+*.pdf

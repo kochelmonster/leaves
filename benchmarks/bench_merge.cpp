@@ -40,6 +40,8 @@ struct Flags {
   uint64_t prefill = 0;       // keys preloaded into main before timing
   double del_frac = 0.0;      // fraction of tributary ops that are deletes
   bool random = true;         // random vs sequential keys
+  bool overlap = false;       // every tributary writes the same prefilled keys
+  bool same_values = false;   // prefill with the value written by tributaries
 };
 
 uint64_t parse_u64(const char* s) { return std::strtoull(s, nullptr, 10); }
@@ -84,6 +86,8 @@ Result run_round(const Flags& f) {
 
     std::string key;
     std::string value(f.value_size, 'v');
+    std::string prefill_value(
+        f.value_size, f.overlap && !f.same_values ? 'p' : 'v');
 
     // Optional: preload the main DB so merges hit a non-empty target (the
     // realistic, slower path). Untimed.
@@ -93,7 +97,7 @@ Result run_round(const Flags& f) {
       for (uint64_t i = 0; i < f.prefill; ++i) {
         make_key(key, i, f.key_size, f.random);
         c.find(Slice(key));
-        c.value(Slice(value));
+        c.value(Slice(prefill_value));
       }
       c.commit();
       db.merge_all_now();
@@ -119,7 +123,9 @@ Result run_round(const Flags& f) {
         auto& c = cursors.back();
         c.start_transaction();
         for (uint64_t i = 0; i < per_trib; ++i) {
-          uint64_t n = f.prefill + t * per_trib + i;
+          uint64_t n = f.overlap
+                           ? (i % std::max<uint64_t>(f.prefill, 1))
+                           : f.prefill + t * per_trib + i;
           make_key(key, n, f.key_size, f.random);
           c.find(Slice(key));
           if (f.del_frac > 0.0 &&
@@ -155,7 +161,7 @@ Result run_round(const Flags& f) {
     // Sanity: a key written through a tributary must now be readable from main.
     {
       auto c = db.cursor();
-      make_key(key, f.prefill, f.key_size, f.random);
+      make_key(key, f.overlap ? 0 : f.prefill, f.key_size, f.random);
       c.find(Slice(key));
       if (!c.is_valid() && f.del_frac == 0.0) {
         std::fprintf(stderr, "WARNING: sanity check failed (key not found)\n");
@@ -184,6 +190,8 @@ int main(int argc, char** argv) {
     else if (name == "--prefill") f.prefill = parse_u64(val);
     else if (name == "--del_frac") f.del_frac = std::strtod(val, nullptr);
     else if (name == "--random") f.random = parse_u64(val) != 0;
+    else if (name == "--overlap") f.overlap = parse_u64(val) != 0;
+    else if (name == "--same_values") f.same_values = parse_u64(val) != 0;
     else {
       std::fprintf(stderr, "unknown flag: %s\n", a);
       return 2;
@@ -192,11 +200,12 @@ int main(int argc, char** argv) {
 
   std::printf(
       "bench_merge: num=%llu tribs=%llu key_size=%llu value_size=%llu "
-      "prefill=%llu del_frac=%.2f random=%d rounds=%llu\n",
+      "prefill=%llu del_frac=%.2f random=%d overlap=%d same_values=%d "
+      "rounds=%llu\n",
       (unsigned long long)f.num, (unsigned long long)f.tribs,
       (unsigned long long)f.key_size, (unsigned long long)f.value_size,
       (unsigned long long)f.prefill, f.del_frac, (int)f.random,
-      (unsigned long long)f.rounds);
+      (int)f.overlap, (int)f.same_values, (unsigned long long)f.rounds);
 
   Result best;
   best.merge_seconds = 1e300;

@@ -12,6 +12,8 @@ namespace leaves {
 template <typename DestinationCursor, typename SourceCursor>
 class Merger;
 
+struct _SetOperations;
+
 template <typename Storage, template <typename> class DBClass = _DB>
 class TCursor {
  public:
@@ -120,6 +122,7 @@ class TCursor {
  private:
   template <typename, typename>
   friend class Merger;
+  friend struct _SetOperations;
 
   storage_ptr _storage;
   cursor_ptr _cursor;

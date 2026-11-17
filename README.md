@@ -282,6 +282,26 @@ cmake -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-debug -j4
 ```
 
+### Code coverage
+
+On Ubuntu, install `lcov` and build a separate coverage-instrumented Debug tree:
+
+```bash
+sudo apt install lcov
+cmake -S . -B build-coverage -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DLEAVES_GCOV=ON \
+  -DLEAVES_ASAN=OFF \
+  -DLEAVES_BUILD_TESTS=ON \
+  -DLEAVES_BUILD_BENCHMARKS=OFF \
+  -DLEAVES_BENCHMARKS_RELEASE_SUBBUILD=OFF
+cmake --build build-coverage --target cov --parallel 4
+```
+
+The `cov` target builds and runs the registered tests through CTest before capturing coverage. Its output streams directly to the terminal, showing each test as it starts and its result when it finishes. Tests run sequentially; `--parallel 4` controls compilation, not test execution. Coverage-instrumented tests can take several minutes, and CTest enforces the registered per-test timeouts. Open `build-coverage/lcov-report/index.html` to view the generated report.
+
+GCC coverage data can contain inconsistent function and line counts. Report generation keeps these as warnings rather than aborting; affected function coverage counts should be interpreted with caution.
+
 ## Documentation index
 
 - C++ API: [docs/cpp-api.md](docs/cpp-api.md)
@@ -292,16 +312,26 @@ cmake --build build-debug -j4
 - Performance: [docs/performance/performance.md](docs/performance/performance.md)
 
 
+## Set Operations
+
+Include `<leaves/set_operations.hpp>` for:
+
+- `leaves::set_union(dst_cursor, src_cursor)`: merger-backed in-place union;
+    source values win on shared keys.
+- `leaves::intersect(dst_cursor, first_cursor, second_cursor, key_size)`:
+    optimized structural trie intersection into an empty destination, retaining
+    full matching keys from the first input with empty values. Use `key_size = 0`
+    for exact keys or a positive byte width for fixed-ID prefix matching.
+
+Both operations use caller-owned transactions. See the
+[C++ set-operation API](docs/cpp-api.md#set-operations) for contracts and examples.
+
 ## Future Extensions
 
 ### Set Findings
 
 - Find all keys in a given range, returns a TransferTrie
 - Find all keys suiting a FSM (e.g. regular expression), returns a TransferTrie
-
-### Set Operations
-
-- intersection of tries
 
 ## License
 

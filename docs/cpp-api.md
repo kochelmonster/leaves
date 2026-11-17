@@ -3,6 +3,8 @@
 Include `<leaves/mmap.hpp>` for the core key-value API (storage, database, and cursor). Add `<leaves/confluence.hpp>` for Confluence, `<leaves/replication.hpp>` for replication, and `<leaves/replication_confluence.hpp>` for `MapStorage::ConfluenceReplicationDB`.
 
 Include `<leaves/merger.hpp>` separately for the serial, cursor-based merger.
+Include `<leaves/set_operations.hpp>` for in-place union and structural trie
+intersection.
 
 `MapStorage::ReplicationDB` is available only on native targets (`__EMSCRIPTEN__` builds exclude it).
 
@@ -360,6 +362,113 @@ is through the supplied merge policy. Source and destination representations
 must therefore be compatible. Policy value slices for big leaves describe the
 stored big-value descriptor, not the materialized payload. Policies must not
 retain non-owning slices or node references after their callback returns.
+
+## Set operations
+
+Include `<leaves/set_operations.hpp>` alongside the relevant storage header.
+The public functions accept ordinary `DB` cursors, including compatible mmap
+and cached-file storage combinations. Replication and Confluence cursors are
+rejected at compile time. The nontransactional internal memory DB is not a
+public cursor target for this API.
+
+### Union
+
+```cpp
+template <typename DestinationCursor, typename SourceCursor>
+bool set_union(const DestinationCursor& destination, const SourceCursor& source);
+```
+
+`leaves::set_union(destination, source)` delegates to `Merger::exec()`: source
+records are added to the existing destination, destination-only keys remain,
+and source values overwrite values at shared keys. All merger transaction,
+snapshot, aspect and failure rules above apply. Use `Merger` directly when a
+custom policy is needed. The C++ keyword `union` cannot be a function name.
+
+### Intersection
+
+```cpp
+template <typename DestinationCursor, typename FirstCursor, typename SecondCursor>
+bool intersect(const DestinationCursor& destination, const FirstCursor& first,
+               const SecondCursor& second, size_t key_size);
+```
+
+The destination must be empty. The function retains the **complete keys from
+the first input** whose comparison keys occur in the second input. Every
+output value has zero bytes; source values are never read or copied.
+
+- `key_size == 0` compares complete keys, including their lengths.
+- `key_size > 0` compares exactly the first `key_size` bytes. All keys in both
+  inputs must be at least that long, including keys in unmatched subtrees.
+- All matching first-input suffixes survive. Multiple second-input records
+  sharing a comparison prefix do not multiply the output.
+- Swapping inputs can change full output keys in prefix mode. The second input
+  is a membership filter, not a source of output records or joined values.
+
+For fixed-width unsigned 64-bit IDs encoded big-endian, an index key
+`BE64(customer_id) || BE64(order_id)` is 16 bytes and a customer primary key is
+8 bytes. With `key_size = 8`, matching customer IDs retain all corresponding
+complete order-index keys, with empty values. Index keys `(7,10), (7,11), (9,12)`
+and customer key `7` produce `(7,10), (7,11)`. Encoding is caller-owned.
+
+```cpp
+bool select_orders(const leaves::MapStorage::storage_ptr& storage) {
+    auto index = storage->open("orders_by_customer").cursor();
+    auto customers = storage->open("selected_customers").cursor();
+    auto result = storage->open("selected_orders").cursor();
+    if (!result.start_transaction()) return false;
+    try {
+        if (!leaves::intersect(result, index, customers, 8)) {
+            result.rollback();
+            return false;
+        }
+        return result.commit();
+    } catch (...) {
+        result.rollback();
+        throw;
+    }
+}
+```
+
+The intersection walks compressed trie nodes directly. It rejects mismatched
+prefixes as whole subtrees and intersects branch bitmaps at aligned branch
+points. When a comparison prefix is proven, it copies the selected first-input
+structure without comparing second-input descendants below the boundary.
+Destination nodes and zero-valued leaves are constructed directly, not through
+record iteration or per-key cursor insertion. Source child offsets, value
+descriptors, metadata and cached hashes are not copied into destination nodes.
+Aspect `on_read`, `on_write` and merge gates are not invoked.
+
+### Intersection lifecycle
+
+The destination must own an active, unprepared, non-WAL transaction and must
+refer to a different DB from both inputs. Inputs must be read-only; they may
+refer to the same DB or even the same cursor. No transaction is automatically
+started, prepared, committed or rolled back.
+
+Execution uses the existing input snapshots regardless of cursor positions and
+preserves their positions, validity and transaction IDs. It never refreshes the
+inputs. Keep all cursors confined to one thread during execution. Consistent
+snapshots across independently updated databases are the caller's responsibility.
+Aliases of the same logical destination DB through separate storage mappings
+are unsupported and are not detected.
+
+The function returns `false` before destination mutation for uninitialized
+cursors, invalid transaction states, destination/input aliases, a nonempty
+destination, or short input keys. Rejected calls preserve cursor positioning.
+Short-key validation is structural and stops below any path already proven
+long enough. Both input sets are validated even when one is empty.
+
+On success, including an empty intersection, destination positioning is cleared;
+call `find()`, `first()` or `last()` before further record operations. Allocation
+and storage exceptions propagate and clear destination positioning once
+execution has started. Unlinked output nodes are reclaimed by ownership guards;
+the result root is installed only when construction completes. The transaction
+remains active, and the caller controls rollback or subsequent work.
+
+Work depends on structural validation, candidate node pairs, compared prefix
+bytes and materialized output nodes. Disjoint subtrees are skipped, but worst-case
+work may still be linear in input structure, and every result node must be
+created. No flattened input sets or source payload buffers are constructed.
 
 ---
 
