@@ -923,6 +923,119 @@ BOOST_FIXTURE_TEST_CASE(test_fractional_replication_basic, ReplicationFixture) {
   }
 }
 
+BOOST_FIXTURE_TEST_CASE(test_fractional_prefix_replication, ReplicationFixture) {
+  auto src_path = test_temp_dir / "prefix-frac-src.lvs";
+  auto dst_path = test_temp_dir / "prefix-frac-dst.lvs";
+  auto src_storage = Storage::create(src_path.c_str());
+  auto dst_storage = Storage::create(dst_path.c_str());
+  auto src = src_storage->open<Storage::ReplicationDB>("test");
+  auto dst = dst_storage->open<Storage::ReplicationDB>("test");
+  {
+    auto c = src.cursor();
+    c.start_transaction();
+    for (int i = 0; i < 400; ++i) {
+      std::string key = "selected/" + std::to_string(i / 10) + "/" +
+                        std::to_string(i);
+      std::string value(200, 'a' + i % 26);
+      c.find(Slice(key));
+      c.value(Slice(value));
+    }
+    c.find(Slice("outside"));
+    c.value(Slice("not transferred"));
+    c.commit();
+  }
+
+  struct FractionTransport : TestTransport {
+    size_t fractions = 0;
+    void send(const uint8_t* data, size_t size) override {
+      if (size >= sizeof(ReplicationMsgHeader)) {
+        const auto* hdr = reinterpret_cast<const ReplicationMsgHeader*>(data);
+        if (hdr->msg_type ==
+            static_cast<uint8_t>(ReplicationMsgType::FRACTION_COMPLETE)) {
+          ++fractions;
+        }
+      }
+      TestTransport::send(data, size);
+    }
+  };
+  TestTransport st;
+  FractionTransport rt;
+  st.set_peer(&rt);
+  rt.set_peer(&st);
+  TestEvents se, re;
+  SenderFSM sender(src._internal(), 4096);
+  ReceiverFSM receiver(dst._internal(), ReplicationMergePolicy<DBImpl>{},
+                       4096, 8192);
+  receiver.begin(&rt, &re);
+  sender.begin(&st, &se, DbType::DB_MAIN, Slice("selected/"));
+  run_protocol(sender, receiver, st, rt, 100000);
+  BOOST_REQUIRE(se.completed);
+  BOOST_REQUIRE(re.completed);
+  BOOST_CHECK_GT(rt.fractions, 0u);
+
+  auto c = dst.cursor();
+  for (int i = 0; i < 400; ++i) {
+    std::string key = "selected/" + std::to_string(i / 10) + "/" +
+                      std::to_string(i);
+    std::string value(200, 'a' + i % 26);
+    c.find(Slice(key));
+    BOOST_REQUIRE_MESSAGE(c.is_valid(), key);
+    BOOST_CHECK(c.value() == Slice(value));
+  }
+  c.find(Slice("outside"));
+  BOOST_CHECK(!c.is_valid());
+
+  {
+    auto writer = src.cursor();
+    writer.start_transaction();
+    for (int i = 0; i < 400; ++i) {
+      std::string key = "selected/" + std::to_string(i / 10) + "/" +
+                        std::to_string(i);
+      writer.find(Slice(key));
+      BOOST_REQUIRE(writer.is_valid());
+      writer.remove();
+    }
+    writer.commit();
+  }
+  se.reset();
+  re.reset();
+  rt.fractions = 0;
+  receiver.begin(&rt, &re);
+  sender.begin(&st, &se, DbType::DB_MAIN, Slice("selected/"));
+  run_protocol(sender, receiver, st, rt, 100000);
+  BOOST_REQUIRE(se.completed);
+  BOOST_REQUIRE(re.completed);
+  BOOST_CHECK_GT(rt.fractions, 0u);
+  c.update();
+  for (int i = 0; i < 400; ++i) {
+    std::string key = "selected/" + std::to_string(i / 10) + "/" +
+                      std::to_string(i);
+    c.find(Slice(key));
+    BOOST_CHECK_MESSAGE(!c.is_valid(), key);
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_ack_path_limit, ReplicationFixture) {
+  auto path = test_temp_dir / "ack-limit.lvs";
+  auto storage = Storage::create(path.c_str());
+  auto db = storage->open<Storage::ReplicationDB>("test");
+  TestTransport receiver_transport, peer;
+  receiver_transport.set_peer(&peer);
+  TestEvents events;
+  ReceiverFSM receiver(db._internal());
+  receiver.begin(&receiver_transport, &events);
+
+  receiver._prune_paths.emplace_back(std::string(0x7fffu, 'x'), false);
+  receiver._send_prune_ack();
+  BOOST_CHECK(!events.errored);
+  BOOST_CHECK(peer.has_message());
+
+  receiver._prune_paths.emplace_back(std::string(0x8000u, 'x'), false);
+  receiver._send_prune_ack();
+  BOOST_CHECK(events.errored);
+  BOOST_CHECK(events.error == ReplicationError::RESOURCE_LIMIT);
+}
+
 BOOST_FIXTURE_TEST_CASE(test_fractional_replication_differential,
                         ReplicationFixture) {
   // Both sides share some data, differ on other data.
@@ -3732,6 +3845,37 @@ BOOST_FIXTURE_TEST_CASE(test_purge_interrupt_forces_immediate_reschedule_hint,
 
   BOOST_CHECK_EQUAL(result.purged, 1);
   BOOST_CHECK_EQUAL(result.oldest_remaining_ts, older_than);
+}
+
+BOOST_FIXTURE_TEST_CASE(test_big_value_hash, ReplicationFixture) {
+  auto path = (test_temp_dir / "big_value_hash.lvs").string();
+  auto storage = Storage::create(path.c_str());
+  auto db = storage->open<Storage::ReplicationDB>("test", false);
+  auto* impl = db._internal();
+  const std::string key = "audio/001";
+  std::string value(100000, '\x5a');
+  value[50000] = '\0';
+  {
+    auto cursor = db.cursor();
+    cursor.start_transaction();
+    cursor.find(Slice(key));
+    cursor.value(Slice(value));
+    cursor.commit();
+  }
+
+  auto& hc = impl->_header->hash_control;
+  auto txn = impl->acquire_hash_trie();
+  Blake3Hasher hasher;
+  hasher.update(key.data(), key.size());
+  hasher.update(value.data(), value.size());
+  uint8_t expected[HASH_SIZE];
+  hasher.finalize(expected);
+
+  _HashLookup<DBImpl> lookup(impl, &hc.hash_root);
+  auto* hash = lookup.find(key, LEAF);
+  BOOST_REQUIRE(hash);
+  BOOST_CHECK_EQUAL(std::memcmp(hash, expected, HASH_SIZE), 0);
+  impl->release_hash_trie(txn);
 }
 
 BOOST_FIXTURE_TEST_CASE(test_acquire_hash_trie_fallback_when_offset_missing,

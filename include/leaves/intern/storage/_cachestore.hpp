@@ -169,14 +169,22 @@ struct _CacheStore : public Opers_,
       std::lock_guard<SpinLock> lock(_dirty_mutex);
       if (!_dirty_pending.empty()) {
         has_pending = true;
-        _dirty_committed.insert(_dirty_pending.begin(), _dirty_pending.end());
+        for (auto& [offset, page] : _dirty_pending) {
+          _dirty_committed.insert_or_assign(offset, std::move(page));
+        }
         _dirty_pending.clear();
       }
     }
 
     if (sync) {
-      write_dirty_blocks();
-      this->wait_for_writes();
+      // Pages whose previous write is still in flight are deferred. Drain
+      // those too before reporting that a synchronous flush completed.
+      while (true) {
+        write_dirty_blocks();
+        this->wait_for_writes();
+        std::lock_guard<SpinLock> lock(_dirty_mutex);
+        if (_dirty_committed.empty() && !_header_dirty.load(std::memory_order_acquire)) break;
+      }
     } else if (has_pending || _header_dirty.load(std::memory_order_acquire)) {
       if (this->has_workers()) {
         // Native: thread pool coalescing via _flush_pending
@@ -242,13 +250,16 @@ struct _CacheStore : public Opers_,
       }
     }
 
-    // Read on-disk header (could be partial / uninitialized).
-    // Known _FileStore limitation: if the offset points into a multi-area past
-    // its first AREA_SIZE block and the owning area is not cached, these bytes
-    // are payload, not an area header.  Accepted — _FileStore is a development
-    // stage towards BrowserStore, which keys every area separately.
+    // IndexedDB keys whole areas; offsets into a multi-area can point
+    // beyond its first aligned block.
+    if constexpr (requires(const Opers_& ops) { ops.area_start(raw_offset); }) {
+      area_offset = this->area_start(raw_offset);
+    }
     AreaSlice disk_header;
     read(area_offset, &disk_header, sizeof(disk_header));
+    if (disk_header.size() < sizeof(Area) || raw_offset - area_offset >= disk_header.size()) {
+      throw WrongValue("Invalid persisted area header");
+    }
 
     // Allocate full region (header + payload)
     AreaSlice* slice = (AreaSlice*)::operator new(disk_header.size());

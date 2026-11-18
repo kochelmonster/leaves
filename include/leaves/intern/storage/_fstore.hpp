@@ -341,9 +341,8 @@ struct _FileStore : _CacheStore<Traits_, _FileOperations, _FileStore<Traits_>> {
         [self](uint64_t pos, void* buf, size_t size) {
           self->read(pos, buf, size);
         },
-        [self](uint64_t pos, const void* buf, size_t size) {
-          if (size == 0) return;
-          self->write(static_cast<offset_t>(pos), buf, size);
+        [self](uint64_t pos, const Area& header, bool) {
+          self->write(static_cast<offset_t>(pos), &header, sizeof(header));
         },
         [self](auto&& mark_occupied_range) {
           struct DirectoryPageHeader {

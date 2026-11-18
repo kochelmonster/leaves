@@ -210,6 +210,169 @@ BOOST_FIXTURE_TEST_CASE(test_mmap_replicate_basic, APIFixture) {
 // Test: empty DB replication
 // ============================================================================
 
+BOOST_FIXTURE_TEST_CASE(test_prefix_replication, APIFixture) {
+  auto src_path = temp_dir / "prefix-src.lvs";
+  auto dst_path = temp_dir / "prefix-dst.lvs";
+  auto src_storage = MapStorage::create(src_path.c_str());
+  auto dst_storage = MapStorage::create(dst_path.c_str());
+  auto src = src_storage->open<MapStorage::ReplicationDB>("test");
+  auto dst = dst_storage->open<MapStorage::ReplicationDB>("test");
+  const std::string binary_prefix("tenant/\0", 8);
+  const std::string long_prefix(600, 'x');
+  const std::string big_value(20000, 'v');
+  const std::string apple = binary_prefix + "apple";
+  const std::string apricot = binary_prefix + "apricot";
+  const std::string banana = binary_prefix + "banana";
+  const std::string big_key = binary_prefix + "big";
+  const std::string long_key = long_prefix + "apple";
+  const std::string long_other = long_prefix + "banana";
+
+  {
+    auto c = src.cursor();
+    c.start_transaction();
+    for (const std::string& key :
+         {binary_prefix, apple, apricot, banana, std::string("outside")}) {
+      c.find(Slice(key));
+      c.value(Slice(key));
+    }
+    std::string shorter_key = std::string(300, 'x') + "other";
+    c.find(Slice(big_key));
+    c.value(Slice(big_value));
+    c.find(Slice(long_key));
+    c.value(Slice("long-key"));
+    c.find(Slice(long_other));
+    c.value(Slice("not-selected"));
+    c.find(Slice(shorter_key));
+    c.value(Slice("not-selected"));
+    c.commit();
+  }
+  {
+    auto c = dst.cursor();
+    c.start_transaction();
+    c.find(Slice("outside"));
+    c.value(Slice("local"));
+    c.commit();
+  }
+
+  auto sync = [&](const std::string& prefix) {
+    LoopbackTransport st, rt;
+    st.set_peer(&rt);
+    rt.set_peer(&st);
+    EventTracker se, re;
+    ReplicationSender<MapStorage> sender(src);
+    ReplicationReceiver<MapStorage> receiver(dst);
+    receiver.begin(&rt, &re);
+    sender.begin(&st, &se, Slice(prefix));
+    run_replication(sender, receiver, st, rt, 100000);
+    BOOST_REQUIRE(se.completed);
+    BOOST_REQUIRE(re.completed);
+  };
+
+  sync(binary_prefix + "ap");
+  {
+    auto c = dst.cursor();
+    for (const auto& key : {apple, apricot}) {
+      c.find(Slice(key));
+      BOOST_REQUIRE(c.is_valid());
+      BOOST_CHECK(c.value() == Slice(key));
+    }
+    c.find(Slice(binary_prefix));
+    BOOST_CHECK(!c.is_valid());
+    c.find(Slice(banana));
+    BOOST_CHECK(!c.is_valid());
+    c.find(Slice("outside"));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().string(), "local");
+  }
+  sync(binary_prefix);
+  sync(binary_prefix);
+  {
+    auto c = dst.cursor();
+    c.find(Slice(binary_prefix));
+    BOOST_REQUIRE(c.is_valid());
+    c.find(Slice(banana));
+    BOOST_REQUIRE(c.is_valid());
+    c.find(Slice(big_key));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK(c.value() == Slice(big_value));
+  }
+  {
+    auto c = src.cursor();
+    c.start_transaction();
+    c.find(Slice(apple));
+    c.remove();
+    c.find(Slice(apricot));
+    c.value(Slice("updated"));
+    c.find(Slice("outside"));
+    c.remove();
+    c.commit();
+  }
+  sync(binary_prefix);
+  {
+    auto c = dst.cursor();
+    c.find(Slice(apple));
+    BOOST_CHECK(!c.is_valid());
+    c.find(Slice(apricot));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().string(), "updated");
+    c.find(Slice("outside"));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().string(), "local");
+  }
+  sync("not-present");
+  sync(binary_prefix + "bigger-than-any-key");
+  sync(long_prefix + "a");
+  {
+    auto c = dst.cursor();
+    c.find(Slice(long_key));
+    BOOST_REQUIRE(c.is_valid());
+    BOOST_CHECK_EQUAL(c.value().string(), "long-key");
+    c.find(Slice(long_other));
+    BOOST_CHECK(!c.is_valid());
+  }
+}
+
+BOOST_FIXTURE_TEST_CASE(test_file_prefix_single_big_leaf, APIFixture) {
+  auto src_path = temp_dir / "prefix-src.fst";
+  auto dst_path = temp_dir / "prefix-dst.fst";
+  auto src_storage = FileStorage::create(src_path.c_str());
+  auto dst_storage = FileStorage::create(dst_path.c_str());
+  auto src = src_storage->open<_ReplicationDB>("test");
+  auto dst = dst_storage->open<_ReplicationDB>("test");
+  const std::string value(20000, 'v');
+  {
+    auto c = src.cursor();
+    c.start_transaction();
+    c.find(Slice("prefix/large"));
+    c.value(Slice(value));
+    c.find(Slice("other"));
+    c.value(Slice("other"));
+    c.commit();
+  }
+
+  for (int i = 0; i < 2; ++i) {
+    LoopbackTransport st, rt;
+    st.set_peer(&rt);
+    rt.set_peer(&st);
+    EventTracker se, re;
+    ReplicationSender<FileStorage> sender(src);
+    ReplicationReceiver<FileStorage> receiver(dst);
+    receiver.begin(&rt, &re);
+    sender.begin(&st, &se, Slice("prefix/large"));
+    run_replication(sender, receiver, st, rt);
+    BOOST_REQUIRE(se.completed);
+    BOOST_REQUIRE(re.completed);
+    if (i == 1) BOOST_CHECK_LT(sender.bytes_transferred(), value.size());
+  }
+
+  auto c = dst.cursor();
+  c.find(Slice("prefix/large"));
+  BOOST_REQUIRE(c.is_valid());
+  BOOST_CHECK(c.value() == Slice(value));
+  c.find(Slice("other"));
+  BOOST_CHECK(!c.is_valid());
+}
+
 BOOST_FIXTURE_TEST_CASE(test_empty_db_replication, APIFixture) {
   auto src_path = temp_dir / "src_empty.lvs";
   auto dst_path = temp_dir / "dst_empty.lvs";

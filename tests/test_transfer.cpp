@@ -301,6 +301,25 @@ void test_empty_subtrie_path() {
   std::cout << "OK\n";
 }
 
+void test_subtrie_path_limit() {
+  std::cout << "test_subtrie_path_limit... ";
+  TransferBuffer transfer;
+  std::string path(0xffffu, 'x');
+  transfer.begin(1, 2, DbType::DB_MAIN, Slice(path));
+  Slice parsed_path;
+  assert(TransferBuffer::parse_header(transfer.finalize(), &parsed_path));
+  assert(parsed_path.size() == path.size());
+  path.push_back('x');
+  bool rejected = false;
+  try {
+    transfer.begin(1, 2, DbType::DB_MAIN, Slice(path));
+  } catch (const std::length_error&) {
+    rejected = true;
+  }
+  assert(rejected);
+  std::cout << "OK\n";
+}
+
 void test_add_raw_nodes() {
   std::cout << "test_add_raw_nodes... ";
   
@@ -822,6 +841,7 @@ int main() {
   test_generate_session_id();
   test_header_roundtrip();
   test_empty_subtrie_path();
+  test_subtrie_path_limit();
   test_add_raw_nodes();
   test_capacity_limit();
   test_request_children_builder();

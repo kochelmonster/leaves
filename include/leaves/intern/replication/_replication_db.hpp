@@ -154,6 +154,7 @@ struct _ReplicationDB
   // Override cursor types to use _ReplicationCursor
   typedef _ReplicationCursor<CursorTraits> Cursor;
   typedef std::shared_ptr<Cursor> cursor_ptr;
+  using BigMemory = _BigMemory<_Cursor<CursorTraits>>;
 
   // HashDB: Minimal DB adapter for _HashUpdater
   // Provides the interface needed by _HashUpdater to manage the _hash trie.
@@ -367,7 +368,7 @@ struct _ReplicationDB
   }
 
   // Called under txn_ref_lock just before a stale txn is freed.
-  // Zeros hashed_txn_offset if it pointed at the freed txn so that
+  // Clears the snapshot offset if the txn was freed so that
   // the next acquire_hash_trie() knows it must recompute the _hash trie.
   void _on_txn_freed(txn_ptr t) {
     uint64_t freed_off = (uint64_t)this->resolve(t);
@@ -414,6 +415,7 @@ struct _ReplicationDB
                            &hc.deletion_hash_root);
           hc.hashed_txn_offset.store((uint64_t)this->resolve(first_fsm_txn),
                                      std::memory_order_release);
+          this->make_dirty(this->_header);
         }
         // Do NOT drop the ref here — first_fsm_txn keeps it alive.
       }
@@ -424,7 +426,7 @@ struct _ReplicationDB
 
     // Non-first FSMs: pin the txn whose snapshot matches the _hash trie.
     // Read hashed_txn_offset inside txn_ref_lock so the GC walk
-    // (which zeros it and frees the page under the same lock)
+    // (which clears it and frees the page under the same lock)
     // cannot free the page between our read and the refs++ pin.
     txn_ptr pinned;
     {
@@ -437,7 +439,6 @@ struct _ReplicationDB
       }
     }
     if (!pinned) {
-      hc.hashed_txn_offset.store(0, std::memory_order_relaxed);
       pinned = this->txn_ref();
     }
     return pinned;

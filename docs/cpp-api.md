@@ -821,8 +821,14 @@ The replication wrappers operate on two public callback interfaces:
 - `explicit ReplicationSender(DB& db)`
   Constructs a sender bound to source replication database `db`.
 
-- `void begin(ReplicationTransport* transport, ReplicationEvents* events, DbType db_type = DbType::DB_MAIN)`
-  Starts replication using `transport` and optional `events`, with selected DB type.
+- `void begin(ReplicationTransport* transport, ReplicationEvents* events, DbType db_type = DbType::DB_MAIN, const Slice& prefix = Slice())`
+- `void begin(ReplicationTransport* transport, ReplicationEvents* events, const Slice& prefix)`
+  Starts replication using `transport` and optional `events`. A nonempty
+  byte prefix limits replication to matching keys, preserving their full keys
+  and the usual update and deletion semantics. An empty prefix replicates the
+  whole selected database. The prefix is copied when the session starts.
+  Protocol paths are limited to 65,535 bytes in trie messages and 32,767 bytes
+  in acknowledgments; exceeding either limit reports `RESOURCE_LIMIT`.
 
 - `void on_message_received(const uint8_t* data, size_t size)`
   Feeds receiver responses into the sender FSM.

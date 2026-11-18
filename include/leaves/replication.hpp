@@ -61,11 +61,17 @@ class ReplicationSender {
 
   explicit ReplicationSender(DB& db) : _fsm(db._internal()) {}
 
-  // Starts replication using transport and optional events, with selected
-  // database type.
+  // Starts replication for the selected database and byte prefix. An empty
+  // prefix selects the whole database.
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
-             DbType db_type = DbType::DB_MAIN) {
-    _fsm.begin(transport, events, db_type);
+             DbType db_type = DbType::DB_MAIN,
+             const Slice& prefix = Slice()) {
+    _fsm.begin(transport, events, db_type, prefix);
+  }
+
+  void begin(ReplicationTransport* transport, ReplicationEvents* events,
+             const Slice& prefix) {
+    _fsm.begin(transport, events, DbType::DB_MAIN, prefix);
   }
 
   // Feeds receiver responses into the sender FSM.

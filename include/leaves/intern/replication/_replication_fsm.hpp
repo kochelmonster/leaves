@@ -225,6 +225,7 @@ struct ReplicationSenderFSM {
   size_t _total_bytes;
   ReplicationError _error;
   DbType _db_type;
+  std::string _prefix;
 
   // Big value streaming state
   size_t _bv_current_idx;        // Current big value index being sent
@@ -259,9 +260,12 @@ struct ReplicationSenderFSM {
 
   // Start replication
   void begin(ReplicationTransport* transport, ReplicationEvents* events,
-             DbType db_type = DbType::DB_MAIN) {
+             DbType db_type = DbType::DB_MAIN,
+             const Slice& prefix = Slice()) {
     _transport = transport;
     _events = events;
+    _prefix.clear();
+    if (!prefix.empty()) _prefix.assign(prefix.data(), prefix.size());
 
     // Acquire the _hash trie — updates it synchronously if stale, then pins
     // the matching txn for the duration of this replication session.
@@ -274,7 +278,7 @@ struct ReplicationSenderFSM {
     _db_type = db_type;
     _last_activity = std::chrono::steady_clock::now();
 
-    _sender.begin(db_type);
+    _sender.begin(db_type, Slice(_prefix));
     _session_id = _sender.session_id();
 
     LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG,
@@ -378,7 +382,7 @@ struct ReplicationSenderFSM {
         _db->release_hash_trie(_txn);
         _txn = _db->acquire_hash_trie();
         _sender._txn = _txn;
-        _sender.begin(_db_type);
+        _sender.begin(_db_type, Slice(_prefix));
         _state = State::SENDING;
         _send_next_buffer();
         break;
@@ -449,7 +453,13 @@ struct ReplicationSenderFSM {
     // With the new strategy, each fill_buffer() produces exactly one complete
     // subtrie The subtrie_path in the header identifies where it connects to
     // the parent
-    size_t node_count = _sender.fill_buffer();
+    size_t node_count;
+    try {
+      node_count = _sender.fill_buffer();
+    } catch (const std::length_error& e) {
+      _transition_to_error(ReplicationError::RESOURCE_LIMIT, e.what());
+      return;
+    }
     Slice buffer = _sender.finalize();
 
     _total_nodes += node_count;
@@ -672,7 +682,7 @@ struct ReplicationSenderFSM {
                             "Sender starting deletion phase: session_id=%llu\n",
                             (unsigned long long)_session_id);
         _db_type = DbType::DB_DELETION;
-        _sender.begin(_db_type);
+        _sender.begin(_db_type, Slice(_prefix));
         _state = State::SENDING;
         _send_next_buffer();
         return true;
@@ -886,7 +896,7 @@ struct ReplicationMergePolicy : public StandardMergePolicy {
 template <typename DB, typename MergePolicy = ReplicationMergePolicy<DB>>
 struct ReplicationReceiverFSM {
   using Traits = typename DB::Traits;
-  using Transfer = ReplicationTransferTrie<>;
+  using Transfer = ReplicationTransferTrie<Traits::MAX_KEY_SIZE>;
   using WireTempTraits = typename Transfer::DBTraits;
   using WireTempDB = typename Transfer::DB;
   using TrieNode = typename Traits::TrieNode;
@@ -933,6 +943,7 @@ struct ReplicationReceiverFSM {
                      // sender from discarding pending trie continuations
                      // stored at an identical path.
   std::string _path_buffer;  // Reusable buffer for path construction
+  bool _first_trie;
   size_t _pending_children;  // Count of 0 offsets not yet connected (receiver
                              // completion tracking)
   size_t _new_leaves;        // Count of new/changed leaf nodes in current
@@ -1012,6 +1023,7 @@ struct ReplicationReceiverFSM {
         _total_bytes(0),
         _error(ReplicationError::NONE),
         _current_db_type(DbType::DB_MAIN),
+        _first_trie(true),
         _memory_budget(memory_budget),
         _max_payload_size(max_payload_size),
         _initial_buffer_size(receive_buffer_size),
@@ -1092,6 +1104,8 @@ struct ReplicationReceiverFSM {
     _prune_paths.clear();
     _pending_children = 0;
     _new_leaves = 0;
+    _first_trie = true;
+    _current_db_type = DbType::DB_MAIN;
     _last_activity = std::chrono::steady_clock::now();
 
     // Reset temp buffers from any previous session
@@ -1377,6 +1391,56 @@ struct ReplicationReceiverFSM {
     _transport->send(_msg_builder.data(), _msg_builder.size());
   }
 
+  // Restore the scoped root's ancestors for the wire cursor and merger.
+  void _anchor_root(const Slice& path) {
+    using Anchor = typename Transfer::Base;
+    using AnchorTrie = typename Anchor::TrieNode;
+    const size_t count = (path.size() + 254) / 255;
+    _temp_buffers.emplace_back();
+    auto& buffer = _temp_buffers.back();
+    buffer.reserve(count * AnchorTrie::size(255, 1));
+    Anchor anchor(buffer, 0);
+    TempOffset* link = nullptr;
+
+    for (size_t pos = 0; pos < path.size();) {
+      size_t length = (std::min)(size_t(255), path.size() - pos);
+      size_t next = pos + length;
+      int branch;
+      if (next < path.size()) {
+        branch = static_cast<uint8_t>(path.data()[next]);
+      } else if (_temp_root.type() == TRIE) {
+        auto* root = _temp_root.template resolve<TempTrieNode>();
+        if (!root->prefix_len()) {
+          _transition_to_error(ReplicationError::INVALID_MESSAGE,
+                               "Scoped trie root has an empty prefix");
+          return;
+        }
+        branch = root->prefix()[0];
+      } else {
+        auto* root = _temp_root.template resolve<TempLeafNode>();
+        branch = root->key_size ? root->data[0] : AnchorTrie::NONE;
+      }
+
+      auto* trie = reinterpret_cast<AnchorTrie*>(
+          anchor._alloc_node(AnchorTrie::size(length, 1)));
+      assert(trie);
+      trie->create(Slice(path.data() + pos, length), branch);
+      if (link) {
+        link->set_relative(trie);
+        link->type(TRIE);
+      }
+      link = trie->branch_offsets();
+      if (next == path.size()) {
+        link->set_relative(_temp_root.template resolve<char>());
+        link->type(_temp_root.type());
+      }
+      pos = next;
+    }
+
+    _temp_root.set_relative(buffer.data());
+    _temp_root.type(TRIE);
+  }
+
   void _process_received_nodes(const Slice& payload,
                                const TransferTrieHeader& hdr,
                                const Slice& path) {
@@ -1397,7 +1461,9 @@ struct ReplicationReceiverFSM {
 
     // Beginning of a new round — refresh cursor to latest committed
     // state so _hash comparisons see previously merged data.
-    if (path.empty()) {
+    bool first_trie = _first_trie;
+    _first_trie = false;
+    if (first_trie) {
       _cursor->update();
       _ensure_cursor_root();
     }
@@ -1412,7 +1478,7 @@ struct ReplicationReceiverFSM {
     // For the root subtrie, count it as pending so the decrement at
     // _compare_wire_with_local entry balances. Subsequent subtries were
     // already counted as pending children of their parent trie.
-    if (path.empty()) {
+    if (first_trie) {
       ++_pending_children;
     }
 
@@ -1427,11 +1493,15 @@ struct ReplicationReceiverFSM {
 
     // Now connect to temp DB — but only if the root wasn't pruned.
     if (transfer_hdr->root) {
-      if (path.empty()) {
+      if (first_trie) {
         // First subtrie - this becomes the temp DB root
         char* wire_root = transfer_hdr->root.resolve<char>();
         _temp_root.set_relative(wire_root);
         _temp_root.type(transfer_hdr->root.type());
+        if (!path.empty()) {
+          _anchor_root(path);
+          if (_state == State::ERR) return;
+        }
       } else {
         // Subsequent subtrie - connect to parent in temp DB.
         // subtrie_path is the parent path; append child's compressed/key
@@ -1723,6 +1793,7 @@ struct ReplicationReceiverFSM {
     // Reset state for the new phase
     _pending_children = 0;
     _new_leaves = 0;
+    _first_trie = true;
     _prune_paths.clear();
     _big_value.reset_trie_count();
 
@@ -1920,6 +1991,11 @@ struct ReplicationReceiverFSM {
 
     // Add all paths where hashes matched (sender should prune these)
     for (const auto& [path, is_leaf] : _prune_paths) {
+      if (path.size() > 0x7fffu) {
+        _transition_to_error(ReplicationError::RESOURCE_LIMIT,
+                             "Replication ACK path exceeds wire limit");
+        return;
+      }
       _request_builder.add_path(path, is_leaf);
     }
 
@@ -1953,12 +2029,16 @@ struct ReplicationReceiverFSM {
 
     // Reset _hash lookup cursor — the old _hash trie pages may have been
     // freed/reused, so the cursor's keep_stack() cache is stale.
-    _hash_lookup.set_root(&_db->_header->hash_control.hash_root);
+    auto& hc = _db->_header->hash_control;
+    _hash_lookup.set_root(_current_db_type == DbType::DB_DELETION
+                              ? &hc.deletion_hash_root
+                              : &hc.hash_root);
 
     // Reset temp DB for the next fraction
     _free_temp_buffers();
     _pending_children = 0;
     _new_leaves = 0;
+    _first_trie = true;
     _prune_paths.clear();
     _msg_builder.begin(ReplicationMsgType::FRACTION_COMPLETE, _session_id);
     _transport->send(_msg_builder.data(), _msg_builder.size());

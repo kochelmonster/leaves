@@ -6,6 +6,7 @@ Transfer buffer helpers for serializing and moving replication payloads.
 
 #include <list>
 #include <random>
+#include <stdexcept>
 #include <unordered_set>
 
 #include "_hash.hpp"
@@ -91,6 +92,9 @@ struct ReplicationTransferTrie
   // Initialize buffer with header for sending
   void begin(uint64_t session_id, uint64_t snapshot_id, DbType db_type,
              const Slice& subtrie_path) {
+    if (subtrie_path.size() > 0xffffu) {
+      throw std::length_error("Replication subtrie path exceeds wire limit");
+    }
     Base::clear();
     _finalized = false;
     full = false;
@@ -487,6 +491,8 @@ struct TransferTrieSender {
       _last_big_values;      // Big values from last batch, awaiting ACK
   PathArena _path_arena;     // Arena allocator for path strings
   std::string _path_buffer;  // Reusable buffer for path manipulation
+  std::string _prefix;
+  hash_offset_e _selected_root;
   uint64_t _session_id;
   uint64_t _snapshot_id;
   DbType _db_type;
@@ -507,8 +513,11 @@ struct TransferTrieSender {
   }
 
   // Start from root
-  void begin(DbType db_type = DbType::DB_MAIN) {
+  void begin(DbType db_type = DbType::DB_MAIN,
+             const Slice& prefix = Slice()) {
     _db_type = db_type;
+    _prefix.clear();
+    if (!prefix.empty()) _prefix.assign(prefix.data(), prefix.size());
     _snapshot_id = _txn->txn_id;  // Update snapshot for potentially new txn
     _pending.clear();
     _last_batch.clear();
@@ -633,6 +642,46 @@ struct TransferTrieSender {
     return {data_ptr, bv.value_size};
   }
 
+  // Return the highest hash node whose entire subtree matches the prefix.
+  // path receives the absolute path to the node's parent.
+  bool _find_prefix_root(hash_offset_e* root, std::string& path) {
+    assert(!root->is_relative());
+    _selected_root = *root;
+    while (_selected_root && !_prefix.empty()) {
+      if (_selected_root.type() == LEAF) {
+        auto leaf = _db->template resolve<HashLeafNode>(&_selected_root);
+        std::string probe = path;
+        if (leaf->key_size) probe.push_back(static_cast<char>(leaf->data[0]));
+        _cursor->find(Slice(probe));
+        assert(_cursor->stack.size && _cursor->stack.back().is_leaf());
+        auto& transition = _cursor->stack.back();
+        auto& data_leaf = *transition.leaf();
+        std::string key(_cursor->key().data(), transition.keypos);
+        key.append(reinterpret_cast<const char*>(data_leaf.data),
+                   data_leaf.key_size);
+        return key.size() >= _prefix.size() &&
+               key.compare(0, _prefix.size(), _prefix) == 0;
+      }
+
+      auto trie = _db->template resolve<HashTrieNode>(&_selected_root);
+      size_t parent_size = path.size();
+      path.append(reinterpret_cast<const char*>(trie->prefix()),
+                  trie->prefix_len());
+      size_t common = (std::min)(path.size(), _prefix.size());
+      if (path.compare(0, common, _prefix, 0, common) != 0) return false;
+      if (path.size() >= _prefix.size()) {
+        path.resize(parent_size);
+        return true;
+      }
+      auto* child =
+          trie->branch_offset(static_cast<uint8_t>(_prefix[path.size()]));
+      if (!child) return false;
+      assert(!child->is_relative());
+      _selected_root = *child;
+    }
+    return bool(_selected_root);
+  }
+
   // Fill buffer - writes a complete trie structure to the buffer
   // If _pending is empty, writes the root trie
   // If _pending has nodes, picks the first and writes a subtrie of its next
@@ -643,16 +692,18 @@ struct TransferTrieSender {
       // First transmission - write root node and its descendants up to
       // max_depth
       _path_buffer.clear();
-      _transfer.begin(_session_id, _snapshot_id, _db_type, Slice());
 
       // Select _hash root based on db_type
       hash_offset_e* hash_root = _db->hash_root_ptr();
       if (_db_type == DbType::DB_DELETION) {
         hash_root = _db->deletion_hash_root_ptr();
       }
-      
-      if (*hash_root)
-        _write_subtree(_path_buffer, hash_root, 0, nullptr, true);
+
+      bool found = _find_prefix_root(hash_root, _path_buffer);
+      if (!found) _path_buffer.clear();
+      _transfer.begin(_session_id, _snapshot_id, _db_type, Slice(_path_buffer));
+      if (found)
+        _write_subtree(_path_buffer, &_selected_root, 0, nullptr, true);
       return _transfer.node_count();
     }
 
@@ -735,7 +786,10 @@ struct TransferTrieSender {
       // Track big values for later transmission
       if (data_leaf.is_big()) {
         BigValue* bv = (BigValue*)data_leaf.vdata();
-        auto arena_path = _path_arena.allocate(path);
+        std::string full_key(_cursor->key().data(), data_trans.keypos);
+        full_key.append(reinterpret_cast<const char*>(data_leaf.data),
+                        data_leaf.key_size);
+        auto arena_path = _path_arena.allocate(full_key);
         _last_big_values.emplace_back(*data_trans.offset, bv->chunk_offset,
                                       bv->value_size, arena_path);
       }

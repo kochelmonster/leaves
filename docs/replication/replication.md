@@ -119,6 +119,19 @@ It has three explicit phases:
 
 After phase 3, sender emits `COMPLETE`; receiver then performs final merge/apply and commit.
 
+### Replicating a byte prefix
+
+Pass a `Slice` prefix to `sender.begin(&transport, &events, prefix)` to
+replicate only keys beginning with those bytes. Keys retain their full names;
+updates, deletion markers, and big values follow the same rules as whole-trie
+replication. Keys outside the prefix are unaffected. An empty prefix selects
+the whole trie. The sender copies the prefix for the session, including
+fraction restarts.
+
+Trie-message paths are limited to 65,535 bytes and acknowledgment paths to
+32,767 bytes. If a path needed by the protocol exceeds its limit, replication
+reports `ReplicationError::RESOURCE_LIMIT`.
+
 ## Message exchange
 
 Protocol message inventory (independent of section narrative):
@@ -158,6 +171,7 @@ transfer sizing, and session driving strategy.
 |---|---|---|---|
 | `set_retention(seconds)` | `ReplicationDB` | Controls how long deletion markers are retained before purge. | Larger values improve late-peer catch-up safety but increase deletion-trie footprint and purge work. Smaller values reduce footprint but shorten offline recovery windows. |
 | `db_type` in `sender.begin(...)` | `ReplicationSender` | Selects which logical trie family is synchronized in a session. | Narrower scope can reduce transfer size and duration. |
+| `prefix` in `sender.begin(...)` | `ReplicationSender` | Limits synchronization to keys starting with a byte prefix. | A narrower prefix can reduce transfer size and duration. |
 | `max_rounds` in `run_replication(...)` | In-process replication helper | Bounds loop work before exit. | Higher values reduce premature exit on large sessions; lower values reduce worst-case loop time per call. |
 
 ### Internal receiver limits (not exposed by public `ReplicationReceiver` wrapper)

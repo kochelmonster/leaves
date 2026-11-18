@@ -63,7 +63,7 @@ void hash_leaf_value_impl(DB* db, LeafPtr leaf, Hasher& hasher,
     using BigValue = typename DB::BigMemory::BigValue;
     BigValue* bvalue = (BigValue*)leaf->vdata();
     auto data_ptr = bvalue->data(db);
-    hasher.update(data_ptr, bvalue->value_size);
+    hasher.update((const uint8_t*)data_ptr, bvalue->value_size);
   } else {
     hasher.update(leaf->vdata(), leaf->vsize());
   }

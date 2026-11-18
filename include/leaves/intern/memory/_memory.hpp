@@ -558,11 +558,23 @@ struct AreaPool {
   }
 };
 
-// Rebuild the free area pool by scanning the file.
-// Unified implementation used by all storage backends (mmap, fstore,
-// browserstore). ReadFn:  void(uint64_t pos, void* buf, size_t size) WriteFn:
-// void(uint64_t pos, const void* buf, size_t size) ForEachDBFn:
-// void(Fn) where Fn is void(offset_t db_offset) — calls Fn for each active DB
+// Rebuild the free area pool by scanning the file. Used by mmap, fstore, and
+// browserstore backends.
+//
+// Callback contracts:
+// - for_each_db(fn) invokes fn(db_offset) for each active database, where
+//   db_offset is that database's file offset.
+// - read_bytes(pos, buf, size) reads size bytes at file offset pos into buf.
+// - write_bytes(pos, header, initialize) writes an Area header at file offset
+//   pos. initialize is true for a newly recovered free area (the backend may
+//   need to create its backing storage) and false when updating an existing
+//   area.
+// - mark_extra_occupied(mark_range) reports occupied storage outside database
+//   area chains by invoking mark_range(start, size), where start is a file
+//   offset and size is the number of bytes to mark occupied.
+//
+// file_size is the end of the scan, and first_area_pos is the first area
+// offset to scan; both are byte offsets.
 template <typename DBHeader, size_t AREA_SIZE, typename ReadFn,
           typename WriteFn, typename ForEachDBFn, typename MarkExtraOccupiedFn>
 void _recover_areas(AreaPool& pool, ForEachDBFn for_each_db, uint64_t file_size,
@@ -607,7 +619,7 @@ void _recover_areas(AreaPool& pool, ForEachDBFn for_each_db, uint64_t file_size,
           if (!area_hdr._offset.compare_exchange_strong(
                   expected, expected, std::memory_order_relaxed)) {
             area_hdr._offset.store((uint64_t)head, std::memory_order_relaxed);
-            write_bytes((uint64_t)head, &area_hdr, sizeof(Area));
+            write_bytes((uint64_t)head, area_hdr, false);
           }
         }
 
@@ -633,14 +645,14 @@ void _recover_areas(AreaPool& pool, ForEachDBFn for_each_db, uint64_t file_size,
     Area area_hdr;
     area_hdr.init(pos, size, 0);
     area_hdr._ref.store(0, std::memory_order_relaxed);
-    write_bytes(pos, &area_hdr, sizeof(Area));
+    write_bytes(pos, area_hdr, true);
     if (!head) {
       head = pos;
     } else {
       Area tail_hdr;
       read_bytes((uint64_t)tail, &tail_hdr, sizeof(Area));
       tail_hdr.next = pos;
-      write_bytes((uint64_t)tail, &tail_hdr, sizeof(Area));
+      write_bytes((uint64_t)tail, tail_hdr, false);
     }
     tail = pos;
   };

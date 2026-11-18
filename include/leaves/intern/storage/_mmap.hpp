@@ -381,8 +381,8 @@ struct _MemoryMapFile
         [base](uint64_t pos, void* buf, size_t size) {
           memcpy(buf, base + pos, size);
         },
-        [base](uint64_t pos, const void* buf, size_t size) {
-          memcpy(base + pos, buf, size);
+        [base](uint64_t pos, const Area& header, bool) {
+          memcpy(base + pos, &header, sizeof(header));
         },
         [](auto&& /*mark_occupied_range*/) {
           // no overflow areas

@@ -21,6 +21,7 @@ async function runReplicationTest(log, check) {
     let c2 = null;
     let sender = null;
     let receiver = null;
+    let receiverComplete = false;
 
     try {
         // Create a storage (IndexedDB store name = 'repl_storage1_...')
@@ -46,7 +47,6 @@ async function runReplicationTest(log, check) {
 
     // Use separate events objects so sender's onComplete doesn't mask
     // the receiver still needing to process the COMPLETE message.
-    let receiverComplete = false;
     let receivedError = null;
     let senderComplete = false;
 
@@ -170,6 +170,25 @@ async function runReplicationTest(log, check) {
                 store2.delete();
             } catch (e) {
                 log('WARN: store2.delete failed: ' + e.message);
+            }
+        }
+
+        if (receiverComplete) {
+            const reopened = await Module.LeavesStore.create(store2Name, 100 * 1024 * 1024);
+            try {
+                const db = await reopened.openReplication('repl_db');
+                const cursor = db.createCursor();
+                try {
+                    await cursor.find('key1');
+                    check('replicated data survives reopen', cursor.isValid(), true);
+                    if (cursor.isValid()) check('reopened replica value', await cursor.getValue(), 'value1');
+                } finally {
+                    cursor.delete();
+                    db.delete();
+                }
+            } finally {
+                await reopened.close();
+                reopened.delete();
             }
         }
 
@@ -484,11 +503,10 @@ async function runTest() {
         db2.delete();
         await store2.close();
         store2.delete();
-        try {
-            await Module2.LeavesStore.deleteStorage(name);
-        } catch (e) {
-            log('WARN: deleteStorage(bigval) failed: ' + e.message);
-        }
+        // Deleting from this module must not be blocked by the closed store in Module2.
+        await Module.LeavesStore.deleteStorage(name);
+        check('closed store can be deleted across modules',
+              (await indexedDB.databases()).some(db => db.name === name), false);
         log('Big value reopen cleanup complete');
     }
 

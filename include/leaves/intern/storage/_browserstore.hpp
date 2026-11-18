@@ -96,6 +96,15 @@ EM_JS(void, leaves_idb_cpp_queued_delta, (int delta), {
   }
 });
 
+EM_JS(void, leaves_idb_close_connection, (const char* name), {
+  const dbName = UTF8ToString(name);
+  const db = IDBStore.dbs[dbName];
+  if (db) {
+    db.close();
+    delete IDBStore.dbs[dbName];
+  }
+});
+
 // Start one async IDB write and return a request id for polling.
 // Returns 0 only if write state is unavailable.
 EM_JS(uint32_t, leaves_idb_async_write_start,
@@ -396,14 +405,23 @@ struct _BrowserOperations : _CacheBase {
   }
 
   void close() {
-    // IndexedDB connections auto-close; flush any pending data
     _flush_to_idb();
+    // Emscripten caches connections, which otherwise block deletion in other tabs.
+    leaves_idb_close_connection(_store_name.c_str());
   }
 
   // Read data from IndexedDB
   void read(offset_t offset, void* ptr, size_t size) const {
     std::lock_guard<std::mutex> lock(_io_mutex);
     _idb_load_data(offset, ptr, size);
+  }
+
+  uint64_t area_start(uint64_t offset) const {
+    std::lock_guard<std::mutex> lock(_io_mutex);
+    uint64_t start = offset - offset % AREA_ALIGNMENT;
+    // Load the containing IndexedDB item without copying any payload.
+    _idb_load_data(offset, nullptr, 0, &start);
+    return start;
   }
 
   // Resize is a no-op for IndexedDB (no fixed file size)
@@ -598,7 +616,8 @@ struct _BrowserOperations : _CacheBase {
   // arbitrary content offset (e.g. a DB header at area_base + sizeof(Area)),
   // we align the key to AREA_ALIGNMENT, load the full area, then copy the
   // requested sub-range.  The header at offset 0 is stored as "area_0".
-  void _idb_load_data(uint64_t key, void* data, size_t size) const {
+  void _idb_load_data(uint64_t key, void* data, size_t size,
+                      uint64_t* containing_start = nullptr) const {
     // Align the key down to AREA_ALIGNMENT.
     uint64_t aligned_key = key - (key % AREA_ALIGNMENT);
     uint64_t sub_offset = key - aligned_key;  // offset within the loaded area
@@ -616,13 +635,16 @@ struct _BrowserOperations : _CacheBase {
       const uint64_t off = key - _read_cache_key;
       const size_t avail = static_cast<size_t>(_read_cache_size) - off;
       const size_t copy_size = std::min<size_t>(size, avail);
-      std::memcpy(data, static_cast<const char*>(_read_cache_data) + off,
-                  copy_size);
+      if (copy_size) {
+        std::memcpy(data, static_cast<const char*>(_read_cache_data) + off,
+                    copy_size);
+      }
       if (copy_size < size) {
         std::memset(static_cast<char*>(data) + copy_size, 0, size - copy_size);
       }
       // Second read consumes the buffer (resolve pattern: header then full)
-      _read_cache_key = UINT64_MAX;
+      if (size) _read_cache_key = UINT64_MAX;
+      if (containing_start) *containing_start = _read_cache_key;
       return;
     }
 
@@ -663,15 +685,16 @@ struct _BrowserOperations : _CacheBase {
       LEAVES_INTERNAL_LOG(LEAVES_LOG_DEBUG, "_idb_load_data: key=%llu key_str='%s' NOT FOUND — returning zeros (size=%zu)\n",
              (unsigned long long)key, key_buf, size);
       // Key not found - return zeros (new area)
-      std::memset(data, 0, size);
+      if (size) std::memset(data, 0, size);
       return;
     }
+    if (containing_start) *containing_start = aligned_key;
 
     // Copy the requested sub-range from the loaded area.
     // sub_offset + size may exceed loaded_size for a partial read at the
     // end of the area; clamp to available bytes and zero-fill the rest.
     size_t copy_from_area = 0;
-    if (static_cast<size_t>(loaded_size) > sub_offset) {
+    if (size && static_cast<size_t>(loaded_size) > sub_offset) {
       copy_from_area = std::min<size_t>(size, static_cast<size_t>(loaded_size) - sub_offset);
       std::memcpy(data, static_cast<const char*>(loaded_data) + sub_offset, copy_from_area);
     }
@@ -804,6 +827,7 @@ struct _BrowserStore
 
   void _recover_areas() {
     auto* self = this;
+    std::unordered_map<uint64_t, typename base_t::area_ptr> recovered;
     _recover_areas<_DBHeader<base_t>, traits_t::AREA_SIZE>(
         this->_header->area_pool,
         [self](auto fn) {
@@ -814,15 +838,29 @@ struct _BrowserStore
         },
         this->_header->file_size,
         leaves::padding(this->calc_header_size(), traits_t::AREA_SIZE),
-        [self](uint64_t pos, void* buf, size_t size) {
-          self->read(pos, buf, size);
+        [self, &recovered](uint64_t pos, void* buf, size_t size) {
+          if (auto it = recovered.find(pos); it != recovered.end() && size == sizeof(Area)) {
+            std::memcpy(buf, it->second.operator->(), size);
+          } else {
+            self->read(pos, buf, size);
+          }
         },
-        [self](uint64_t pos, const void* buf, size_t size) {
-          offset_t write_offset = static_cast<offset_t>(pos);
-          auto block = self->resolve(&write_offset, WRITE);
-          const uint64_t rel = pos - block.area()->offset();
-          assert(rel + size <= block.area()->size());
-          std::memcpy(static_cast<char*>(block), buf, size);
+        [self, &recovered](uint64_t pos, const Area& header, bool initialize) {
+          auto& block = recovered[pos];
+          if (initialize) {
+            // A free run need not have an existing IndexedDB record at its start.
+            auto* area = new (::operator new(header.size())) Area();
+            area->init(pos, header.size());
+            std::memset(reinterpret_cast<char*>(area) + sizeof(Area), 0,
+                        header.size() - sizeof(Area));
+            block = typename base_t::area_ptr(area);
+          } else if (!block) {
+            offset_t offset = static_cast<offset_t>(pos);
+            block = self->resolve(&offset, WRITE);
+          }
+          // Keep the live reference count owned by SmartPointer.
+          block->offset(pos);
+          block->next = header.next;
           self->make_dirty(block);
         },
         [self](auto&& mark_occupied_range) {
